@@ -3388,3 +3388,342 @@ async fn the_earliest_turn_does_not_claim_earlier_items() {
         "the earliest turn is on screen: {blocks:?}"
     );
 }
+
+fn key(code: crossterm::event::KeyCode) -> crossterm::event::KeyEvent {
+    crossterm::event::KeyEvent::new(code, crossterm::event::KeyModifiers::NONE)
+}
+
+fn type_text(app: &mut App, text: &str) {
+    for character in text.chars() {
+        app.on_key(key(crossterm::event::KeyCode::Char(character)));
+    }
+}
+
+/// Esc on the palette takes the half-typed command with it, so the next
+/// command does not start with `//`.
+#[tokio::test]
+async fn escape_on_the_palette_discards_the_command_being_typed() {
+    use crossterm::event::KeyCode;
+    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+    let (_fake, mut app) = FakeAgent::start(tx);
+
+    type_text(&mut app, "/di");
+    assert!(matches!(app.overlay, Overlay::Palette { .. }));
+    app.on_key(key(KeyCode::Esc));
+    assert!(app.overlay.is_none());
+    assert_eq!(app.composer.text(), "", "the lone command is gone");
+
+    type_text(&mut app, "/");
+    assert_eq!(app.composer.text(), "/", "a fresh command, not `//`");
+    app.on_key(key(KeyCode::Esc));
+    assert_eq!(app.composer.text(), "");
+}
+
+/// Esc on the `@` picker removes the `@` token it was opened from and keeps
+/// the rest of the draft.
+#[tokio::test]
+async fn escape_on_the_file_picker_removes_only_the_mention() {
+    use crossterm::event::KeyCode;
+    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+    let (_fake, mut app) = FakeAgent::start(tx);
+
+    app.composer.set_text("fix the bug in ");
+    type_text(&mut app, "@ap");
+    assert!(matches!(app.overlay, Overlay::Files { .. }));
+    app.on_key(key(KeyCode::Esc));
+    assert!(app.overlay.is_none());
+    assert_eq!(app.composer.text(), "fix the bug in ");
+
+    // Accepting replaces the `@` it was opened from: one `@`, not `@@`. The
+    // candidate store is global, so this is the set the files tests use.
+    crate::ui::files::set_candidates(vec!["src/main.rs".into(), "README.md".into()]);
+    type_text(&mut app, "@zzz");
+    app.on_key(key(KeyCode::Enter));
+    assert!(
+        matches!(app.overlay, Overlay::Files { .. }),
+        "no match keeps the picker open"
+    );
+    app.on_key(key(KeyCode::Esc));
+    type_text(&mut app, "@main");
+    app.on_key(key(KeyCode::Enter));
+    assert_eq!(app.composer.text(), "fix the bug in @src/main.rs");
+}
+
+fn tool_card(id: &str, name: &str) -> Block {
+    Block::Tool(Box::new(crate::transcript::ToolCall::new(
+        crate::protocol::ToolRef {
+            session_id: "s1".into(),
+            loop_id: "l1".into(),
+            request_index: 0,
+            tool_call_id: id.into(),
+        },
+        name,
+    )))
+}
+
+fn shown_tool(app: &App) -> Option<String> {
+    match &app.overlay {
+        Overlay::Tool(key) => Some(key.tool_call_id.clone()),
+        _ => None,
+    }
+}
+
+/// `/tool` opens the newest card, or the first one at the top of a scrolled
+/// view; `[` and `]` step between cards, and the view pages each stream.
+#[tokio::test]
+async fn slash_tool_opens_a_card_and_brackets_step_between_cards() {
+    use crossterm::event::KeyCode;
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    fake.script("session.read", display_read(0, 0));
+    fake.script(
+        "tool.output",
+        json!({"stream": "stdout", "encoding": "base64", "base_offset": 0,
+               "next_offset": 6, "observed_end": 6, "eof": true, "data": "aGVsbG8K"}),
+    );
+    open(&mut app, &mut rx, &fake, &tx).await;
+    {
+        let transcript = &mut app.session.as_mut().unwrap().transcript;
+        transcript.push(Block::User {
+            text: "go".into(),
+            kind: UserKind::Prompt,
+        });
+        transcript.push(tool_card("c1", "bash"));
+        transcript.push(tool_card("c2", "read"));
+    }
+
+    type_text(&mut app, "/tool");
+    let input = app.on_key(key(KeyCode::Enter));
+    assert_eq!(input, crate::app::keys::Input::Action(Action::ShowTool));
+    app.on_action(Action::ShowTool);
+    assert_eq!(shown_tool(&app).as_deref(), Some("c2"), "the newest card");
+    assert_eq!(app.tool_view.position, Some((1, 2)));
+    pump(&mut app, &mut rx, |app| {
+        app.tool_view.text().contains("hello")
+    })
+    .await;
+    assert_eq!(app.tool_view.text(), "hello\n", "one stream, no sections");
+
+    app.on_key(key(KeyCode::Char('[')));
+    assert_eq!(shown_tool(&app).as_deref(), Some("c1"));
+    pump(&mut app, &mut rx, |app| {
+        app.tool_view.text().contains("stderr")
+    })
+    .await;
+    assert_eq!(
+        app.tool_view.text(),
+        "── stdout ──\nhello\n\n── stderr ──\nhello\n",
+        "bash shows each stream as a section"
+    );
+    let streams: Vec<Value> = fake
+        .calls("tool.output")
+        .iter()
+        .map(|params| params["stream"].clone())
+        .collect();
+    for stream in ["output", "stdout", "stderr"] {
+        assert!(streams.contains(&json!(stream)), "{stream}: {streams:?}");
+    }
+    app.on_key(key(KeyCode::Char('[')));
+    assert_eq!(
+        shown_tool(&app).as_deref(),
+        Some("c1"),
+        "stops at the first"
+    );
+    app.on_key(key(KeyCode::Right));
+    assert_eq!(shown_tool(&app).as_deref(), Some("c2"));
+
+    // Scrolled up, `/tool` opens the first card at the top of the view.
+    app.on_key(key(KeyCode::Esc));
+    app.scroll = Scroll::Anchor {
+        block: 1,
+        offset: 0,
+    };
+    app.on_action(Action::ShowTool);
+    assert_eq!(shown_tool(&app).as_deref(), Some("c1"));
+}
+
+/// Several records of one file are separate comparisons: each gets a
+/// separator, hunk headers are 1-based, and the row counts every record.
+#[tokio::test]
+async fn a_file_changed_twice_shows_each_record_under_its_own_separator() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    fake.script("session.read", display_read(0, 0));
+    fake.script(
+        "changes.list",
+        json!({"records": [
+            {"change_ref": "r1", "path": "app.py", "kind": "modified", "details_available": true},
+            {"change_ref": "r2", "path": "app.py", "kind": "modified", "details_available": true}
+        ]}),
+    );
+    fake.script_sequence(
+        "changes.diff",
+        vec![
+            json!({"path": "app.py", "complete": true,
+                   "tool_ref": {"session_id": "s1", "loop_id": "l1", "request_index": 0,
+                                "tool_call_id": "c1"},
+                   "hunks": [{"old_start": 0, "old_count": 1, "new_start": 0, "new_count": 1,
+                              "lines": [
+                                {"kind": "removed", "old_index": 0, "text": "old\n", "line_complete": true},
+                                {"kind": "added", "new_index": 0, "text": "new\n", "line_complete": true}]}]}),
+            json!({"path": "app.py", "complete": true,
+                   "hunks": [{"old_start": 1, "old_count": 0, "new_start": 1, "new_count": 1,
+                              "lines": [
+                                {"kind": "added", "new_index": 1, "text": "more\n", "line_complete": true}]}]}),
+        ],
+    );
+    open(&mut app, &mut rx, &fake, &tx).await;
+    app.session
+        .as_mut()
+        .unwrap()
+        .transcript
+        .push(tool_card("c1", "edit"));
+
+    app.open_panel(crate::app::Panel::Diff(crate::app::DiffScope::Session));
+    pump(&mut app, &mut rx, |app| !app.diff.hunks.is_empty()).await;
+    let rows: Vec<String> = app.diff.hunks.iter().map(|line| line.to_string()).collect();
+    assert_eq!(
+        rows,
+        [
+            "── edit · change 1 of 2 ──",
+            "@@ -1,1 +1,1 @@",
+            "1   -old",
+            "  1 +new",
+            "",
+            "── change 2 of 2 ──",
+            "@@ -1,0 +2,1 @@",
+            "  2 +more",
+        ]
+    );
+    assert_eq!(app.diff.files[0].lines, Some((2, 1)), "both records count");
+}
+
+/// The loaded session is named by its first prompt until it has a title; the
+/// filter matches that name too.
+#[tokio::test]
+async fn the_sessions_picker_names_the_untitled_loaded_session_by_its_prompt() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    fake.script("session.read", display_read(0, 0));
+    open(&mut app, &mut rx, &fake, &tx).await;
+    app.session.as_mut().unwrap().transcript.push(Block::User {
+        text: "fix the greeting\nand run the tests".into(),
+        kind: UserKind::Prompt,
+    });
+
+    app.open_panel(crate::app::Panel::Sessions);
+    let sheet = crate::ui::screens::sheet(&app, &app.palette).expect("sessions sheet");
+    assert_eq!(sheet.rows[0].label, "fix the greeting");
+    assert_eq!(
+        sheet.rows[0].mark,
+        Some(true),
+        "the loaded session is marked"
+    );
+    assert_eq!(app.filtered_sessions("greet").len(), 1);
+
+    // Another, closed and untitled session can only show its short id.
+    let mut other: crate::protocol::SessionInfo =
+        serde_json::from_value(session_info("ses_abcdef0123456789")).unwrap();
+    other.loaded = false;
+    assert_eq!(app.session_label(&other), "ses_abcdef");
+}
+
+/// Ctrl+D acts on the row the filtered sheet shows, not on the unfiltered
+/// list's row at the same index.
+#[tokio::test]
+async fn deleting_from_a_filtered_picker_targets_the_shown_row() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+    let (_fake, mut app) = FakeAgent::start(tx);
+    let mut alpha: crate::protocol::SessionInfo =
+        serde_json::from_value(session_info("s_alpha")).unwrap();
+    alpha.title = Some("alpha".into());
+    let mut beta = alpha.clone();
+    beta.session_id = "s_beta".into();
+    beta.title = Some("beta".into());
+    app.sessions = vec![alpha, beta];
+    app.open_panel(crate::app::Panel::Sessions);
+    type_text(&mut app, "beta");
+    app.on_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
+    assert_eq!(app.delete_pending.as_deref(), Some("s_beta"));
+}
+
+#[test]
+fn turn_end_lines_read_as_sentences_and_count_correctly() {
+    let failed: crate::protocol::LoopOutcome = serde_json::from_value(json!({
+        "type": "failed", "kind": "model", "model_error": {"kind": "provider_unavailable"}
+    }))
+    .unwrap();
+    assert_eq!(
+        crate::app::turn_end_line(&failed, Some(Duration::from_millis(20)), 1, 0, None),
+        "failed · model error: provider unavailable · 0.0s"
+    );
+    let changes = crate::transcript::ChangeSummary {
+        files: 1,
+        lines: Some((2, 1)),
+    };
+    assert_eq!(
+        crate::app::turn_end_line(
+            &crate::protocol::LoopOutcome::Completed,
+            Some(Duration::from_secs(5)),
+            1,
+            1,
+            Some(&changes),
+        ),
+        "completed in 5.0s · 1 request · 1 tool · 1 file changed (+2 −1)"
+    );
+    assert_eq!(
+        crate::app::turn_end_line(&crate::protocol::LoopOutcome::Completed, None, 8, 7, None),
+        "completed · 8 requests · 7 tools"
+    );
+}
+
+/// `/diff` defaults to the turn scope: it lists the newest finished turn's
+/// records, not the whole session's.
+#[tokio::test]
+async fn the_turn_diff_lists_only_the_newest_turn() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    fake.script("session.read", display_read(0, 0));
+    fake.script("changes.list", json!({"records": []}));
+    open(&mut app, &mut rx, &fake, &tx).await;
+
+    app.open_panel(crate::app::Panel::Diff(crate::app::DiffScope::Turn));
+    settle(&mut app, &mut rx).await;
+    assert!(
+        fake.calls("changes.list").is_empty(),
+        "no finished turn, nothing to ask for"
+    );
+    assert!(
+        app.diff.status.contains("No turn has finished"),
+        "{}",
+        app.diff.status
+    );
+
+    app.session
+        .as_mut()
+        .unwrap()
+        .transcript
+        .push(Block::TurnEnd {
+            loop_id: "l7".into(),
+            outcome: crate::protocol::LoopOutcome::Completed,
+            duration: None,
+            requests: 1,
+            tool_rounds: 0,
+            usage: Default::default(),
+            changes: None,
+        });
+    app.open_panel(crate::app::Panel::Diff(crate::app::DiffScope::Turn));
+    settle(&mut app, &mut rx).await;
+    let calls = fake.calls("changes.list");
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0]["scope"], json!({"turn": {"loop_id": "l7"}}));
+}

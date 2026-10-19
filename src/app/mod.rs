@@ -108,7 +108,8 @@ pub enum OpKind {
         ToolRef,
         Result<crate::protocol::tool::ToolReadResult, RpcError>,
     ),
-    ToolOutput(ToolRef, String, Result<String, RpcError>),
+    /// One stream of a tool call's full output, for the tool view.
+    ToolOutput(ToolRef, String, Result<tasks::StreamText, RpcError>),
     Copied(Result<crate::clipboard::Copied, String>),
     Exported(Result<String, String>),
     /// `session.state` poll while waiting for post-turn compaction.
@@ -118,10 +119,11 @@ pub enum OpKind {
         DiffScope,
         Result<Vec<crate::protocol::ChangeRecord>, RpcError>,
     ),
-    /// The hunks of one changed path, read for one scope.
+    /// The pages of one changed path, one per change record, read for one
+    /// scope.
     DiffFile(
         DiffQuery,
-        Result<crate::protocol::changes::DiffPage, RpcError>,
+        Result<Vec<crate::protocol::changes::DiffPage>, RpcError>,
     ),
     /// Workspace paths for the `@` picker.
     Files(Result<Vec<String>, RpcError>),
@@ -278,25 +280,30 @@ impl App {
         if !features::needs_auto_title(&session.info) {
             return;
         }
-        let Some(prompt) = session
-            .transcript
-            .blocks()
-            .iter()
-            .find_map(|block| match block {
-                Block::User {
-                    text,
-                    kind: crate::protocol::read::UserKind::Prompt,
-                } => Some(text.as_str()),
-                _ => None,
-            })
-        else {
-            return;
-        };
-        let Some(title) = features::auto_title(prompt) else {
+        let Some(title) = first_prompt(&session.transcript).and_then(features::auto_title) else {
             return;
         };
         let session_id = session.info.session_id.clone();
         tasks::rename(self.client.clone(), self.tx.clone(), session_id, title);
+    }
+
+    /// A session's name in the picker: its title, else (for the loaded session)
+    /// its first prompt, else its short id. A closed session cannot be read, so
+    /// it has no prompt to borrow.
+    pub fn session_label(&self, info: &SessionInfo) -> String {
+        if let Some(title) = info
+            .title
+            .as_deref()
+            .filter(|title| !title.trim().is_empty())
+        {
+            return title.to_owned();
+        }
+        self.session
+            .as_ref()
+            .filter(|session| session.info.session_id == info.session_id)
+            .and_then(|session| first_prompt(&session.transcript))
+            .and_then(features::auto_title)
+            .unwrap_or_else(|| short_session_id(&info.session_id).to_owned())
     }
 
     /// Sessions picker rows matching `filter`, in display order.
@@ -305,7 +312,8 @@ impl App {
         self.session_rows
             .iter()
             .filter(|info| {
-                filter.is_empty() || crate::ui::picker::fuzzy_match(&session_label(info), filter)
+                filter.is_empty()
+                    || crate::ui::picker::fuzzy_match(&self.session_label(info), filter)
             })
             .cloned()
             .collect()
@@ -352,10 +360,21 @@ impl App {
         };
         let mut view = crate::ui::views::DiffView::new(title);
         view.scope = scope;
-        if let Some(loop_id) = latest_loop(session) {
-            let files = collect_changed_files(&session.transcript, &loop_id);
-            view.set_files(files);
-        }
+        let latest = latest_loop(session);
+        let wire = match (scope, latest) {
+            (DiffScope::Turn, Some(loop_id)) => {
+                // The cards preview the turn's files until the list answers.
+                view.set_files(collect_changed_files(&session.transcript, &loop_id));
+                crate::protocol::ChangeScope::Turn(loop_id)
+            }
+            (DiffScope::Turn, None) => {
+                view.status = "No turn has finished yet; tab shows the session.".into();
+                self.diff = view;
+                return;
+            }
+            (DiffScope::Session, _) => crate::protocol::ChangeScope::Session,
+            (DiffScope::Workspace, _) => crate::protocol::ChangeScope::Workspace,
+        };
         if view.files.is_empty() {
             view.status = "No file changes are recorded for this scope.".into();
         }
@@ -365,10 +384,12 @@ impl App {
             self.tx.clone(),
             session.info.session_id.clone(),
             scope,
+            wire,
         );
     }
 
-    /// Fills the tool view from the card, then pages the full output.
+    /// Fills the tool view from the card, then pages the full output of every
+    /// stream: stdout and stderr for bash, the result text otherwise.
     fn open_tool(&mut self, key: ToolRef) {
         let Some(call) = self
             .session
@@ -377,35 +398,116 @@ impl App {
         else {
             return;
         };
-        let palette = self.palette;
-        self.tool_view = crate::ui::views::ToolView {
-            title: call.name.clone(),
-            detail: call.detail.clone(),
-            state: crate::ui::views::tool_state_label(call.state).to_owned(),
-            input: call
-                .expanded_input
-                .as_deref()
-                .map(|input| {
-                    input
-                        .lines()
-                        .map(|line| {
-                            ratatui::text::Line::styled(
-                                line.to_owned(),
-                                ratatui::style::Style::default().fg(palette.dim),
-                            )
-                        })
-                        .collect()
-                })
-                .unwrap_or_default(),
-            output: call
-                .view_body()
-                .lines()
-                .map(|line| ratatui::text::Line::raw(line.to_owned()))
-                .collect(),
-            scroll: 0,
-            status: String::new(),
+        let streams: &[&str] = if call.name == "bash" {
+            &["stdout", "stderr"]
+        } else {
+            &["output"]
         };
-        tasks::read_tool(self.client.clone(), self.tx.clone(), key);
+        self.tool_view = crate::ui::views::ToolView {
+            key: Some(key.clone()),
+            output: crate::ui::views::ToolView::text_lines(&call.output.join("\n")),
+            streams: streams
+                .iter()
+                .map(|stream| ((*stream).to_owned(), None))
+                .collect(),
+            status: "loading the full output…".into(),
+            ..Default::default()
+        };
+        self.refresh_tool_header();
+        tasks::read_tool(self.client.clone(), self.tx.clone(), key.clone());
+        for stream in streams {
+            tasks::read_tool_output(
+                self.client.clone(),
+                self.tx.clone(),
+                key.clone(),
+                (*stream).to_owned(),
+            );
+        }
+    }
+
+    /// Copies the shown card's name, state, detail and input into the tool
+    /// view, which `tool.read` may have just refreshed.
+    fn refresh_tool_header(&mut self) {
+        let Some(key) = self.tool_view.key.clone() else {
+            return;
+        };
+        let keys = self.tool_keys();
+        let Some(call) = self
+            .session
+            .as_ref()
+            .and_then(|session| session.transcript.find_tool(&key))
+        else {
+            return;
+        };
+        let view = &mut self.tool_view;
+        view.title = call.name.clone();
+        view.detail = call.detail.clone();
+        view.state = crate::ui::views::tool_state_label(call.state).to_owned();
+        view.position = keys
+            .iter()
+            .position(|known| *known == key)
+            .map(|index| (index, keys.len()));
+        let dim = ratatui::style::Style::default().fg(self.palette.dim);
+        // A one-line input that is the detail (a bash command) is not repeated.
+        let input = call
+            .expanded_input
+            .as_deref()
+            .filter(|input| input.trim() != call.detail.trim())
+            .unwrap_or_default();
+        view.input = crate::ui::views::ToolView::text_lines(input)
+            .into_iter()
+            .map(|line| line.style(dim))
+            .collect();
+    }
+
+    /// Every tool card of the transcript, in order.
+    fn tool_keys(&self) -> Vec<ToolRef> {
+        self.transcript_blocks()
+            .iter()
+            .filter_map(|block| match block {
+                Block::Tool(call) => Some(call.key.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// `[` / `]` in the tool view: show the previous or next tool card.
+    pub fn step_tool(&mut self, delta: isize) {
+        let Overlay::Tool(current) = &self.overlay else {
+            return;
+        };
+        let keys = self.tool_keys();
+        let Some(index) = keys.iter().position(|key| key == current) else {
+            return;
+        };
+        let next = index.saturating_add_signed(delta).min(keys.len() - 1);
+        if next != index {
+            self.open_panel(Panel::Tool(keys[next].clone()));
+        }
+    }
+
+    /// `/tool`: the card at the top of the viewport when scrolled, else the
+    /// newest one.
+    fn show_tool(&mut self) {
+        let blocks = self.transcript_blocks();
+        let is_tool = |block: &Block| matches!(block, Block::Tool(_));
+        let index = match self.scroll {
+            Scroll::Anchor { block, .. } => blocks
+                .iter()
+                .skip(block)
+                .position(is_tool)
+                .map(|offset| block + offset)
+                .or_else(|| blocks[..block.min(blocks.len())].iter().rposition(is_tool)),
+            Scroll::Follow => blocks.iter().rposition(is_tool),
+        };
+        let key = index.and_then(|index| match &blocks[index] {
+            Block::Tool(call) => Some(call.key.clone()),
+            _ => None,
+        });
+        match key {
+            Some(key) => self.open_panel(Panel::Tool(key)),
+            None => self.notice(NoticeLevel::Info, "No tool calls to show yet"),
+        }
     }
 }
 
@@ -547,15 +649,7 @@ impl App {
             last_answer: None,
             diff: crate::ui::views::DiffView::new("Diff"),
             context_view: crate::ui::views::ContextView::default(),
-            tool_view: crate::ui::views::ToolView {
-                title: String::new(),
-                detail: String::new(),
-                state: String::new(),
-                input: Vec::new(),
-                output: Vec::new(),
-                scroll: 0,
-                status: String::new(),
-            },
+            tool_view: crate::ui::views::ToolView::default(),
             help_scroll: 0,
             session_rows: Vec::new(),
             delete_pending: None,
@@ -630,9 +724,9 @@ impl App {
         self.notices.retain(|notice| {
             notice.level == NoticeLevel::Error || notice.at.elapsed() < NOTICE_TTL
         });
-        // How often this runs is the main loop's business; a busy turn needs a
-        // clock tick, an idle app does not.
-        self.notices.len() != before || self.is_busy() || self.compacting()
+        // How often this runs is the main loop's business; anything the status
+        // line shows needs a clock tick for its time and spinner.
+        self.notices.len() != before || self.status_label().is_some()
     }
 
     /// Whether a periodic tick is needed at all.
@@ -779,6 +873,10 @@ impl App {
             }
             Action::LoadOlder => {
                 self.load_older();
+                true
+            }
+            Action::ShowTool => {
+                self.show_tool();
                 true
             }
             Action::RecallQueued => {
@@ -1360,22 +1458,24 @@ impl App {
             OpKind::Updated(result) | OpKind::Renamed(result) => self.on_session_info(result),
             OpKind::Changes(loop_id, result) => self.on_changes(loop_id, result),
             OpKind::ToolRead(key, result) => self.on_tool_read(key, result),
-            OpKind::ToolOutput(key, stream, result) => match result {
-                Ok(text) => {
-                    if let Some(call) = self
-                        .session
-                        .as_mut()
-                        .and_then(|session| session.transcript.find_tool_mut(key))
-                    {
-                        call.set_full_output(stream, text.clone());
+            OpKind::ToolOutput(key, stream, result) => {
+                // Pages for a call the view no longer shows are dropped.
+                if self.tool_view.key.as_ref() != Some(key) {
+                    return false;
+                }
+                match result {
+                    Ok(text) => self
+                        .tool_view
+                        .set_stream(stream, text.clone(), &self.palette),
+                    // The other streams still show; the view says what failed.
+                    Err(error) => {
+                        self.tool_view
+                            .set_stream(stream, Default::default(), &self.palette);
+                        self.tool_view.status = error.message.clone();
                     }
-                    true
                 }
-                Err(error) => {
-                    self.error(error);
-                    true
-                }
-            },
+                true
+            }
             OpKind::Files(result) => self.on_files(result),
             OpKind::ChangeFiles(scope, result) => self.on_change_files(*scope, result),
             OpKind::DiffFile(path, result) => self.on_diff_file(path, result),
@@ -2243,7 +2343,7 @@ impl App {
     fn on_diff_file(
         &mut self,
         query: &DiffQuery,
-        result: &Result<crate::protocol::changes::DiffPage, RpcError>,
+        result: &Result<Vec<crate::protocol::changes::DiffPage>, RpcError>,
     ) -> bool {
         let shown = self.diff.scope == query.scope
             && self
@@ -2256,9 +2356,13 @@ impl App {
             .iter_mut()
             .find(|file| file.path == query.path);
         match result {
-            Ok(page) => {
-                let lines = crate::ui::views::hunk_lines(page, &self.palette);
-                let (added, removed) = count_hunks(&lines);
+            Ok(pages) => {
+                // Each record is counted on its own: fragments are deduplicated
+                // by line index, which only identifies a line within a record.
+                let (added, removed) = pages
+                    .iter()
+                    .map(|page| crate::protocol::changes::count_lines(std::slice::from_ref(page)))
+                    .fold((0, 0), |sum, count| (sum.0 + count.0, sum.1 + count.1));
                 if let Some(file) = file {
                     file.lines = Some((added, removed));
                     file.failed = false;
@@ -2268,11 +2372,22 @@ impl App {
                 }
                 self.measure_next_diff_row();
                 if shown {
-                    self.diff.hunks = lines;
+                    let tools: Vec<Option<String>> = pages
+                        .iter()
+                        .map(|page| {
+                            let key = page.tool_ref.as_ref()?;
+                            let call = self.session.as_ref()?.transcript.find_tool(key)?;
+                            Some(call.name.clone())
+                        })
+                        .collect();
+                    self.diff.hunks = crate::ui::views::records_lines(pages, &tools, &self.palette);
                     self.diff.scroll = 0;
                     // A record whose before and after content match has no
                     // hunks at all: say that instead of implying a diff.
-                    self.diff.status = if page.hunks.is_empty() && !page.binary {
+                    let unchanged = pages
+                        .iter()
+                        .all(|page| page.hunks.is_empty() && !page.binary);
+                    self.diff.status = if unchanged {
                         "No line changes in these records (content unchanged).".into()
                     } else {
                         String::new()
@@ -2341,6 +2456,9 @@ impl App {
                             call.apply_command(command);
                         }
                     }
+                }
+                if self.tool_view.key.as_ref() == Some(key) {
+                    self.refresh_tool_header();
                 }
                 true
             }
@@ -2645,12 +2763,7 @@ impl App {
             AgentEvent::InteractionRequested {
                 turn, interaction, ..
             } => {
-                let detail = session
-                    .transcript
-                    .find_tool_by_call_id(&interaction.tool_call_id)
-                    .map(|call| call.detail.clone());
-                session.interaction =
-                    Some(PendingInteraction::from_wire(turn, &interaction, detail));
+                session.interaction = Some(PendingInteraction::from_wire(turn, &interaction));
                 self.interaction_choice = 0;
                 true
             }
@@ -2740,7 +2853,19 @@ pub fn format_tokens(tokens: u64) -> String {
     }
 }
 
-/// Turn-end summary: outcome, duration, request/tool counts and changes.
+/// `1 request`, `2 requests`.
+pub fn plural(count: impl Into<u64>, noun: &str) -> String {
+    let count = count.into();
+    if count == 1 {
+        format!("1 {noun}")
+    } else {
+        format!("{count} {noun}s")
+    }
+}
+
+/// Turn-end summary: `completed in 3m07s · 12 requests · 11 tools · 3 files
+/// changed (+40 −7)`, or for a turn that did not complete its reason first:
+/// `failed · model error: provider unavailable · 0.4s`.
 pub fn turn_end_line(
     outcome: &LoopOutcome,
     duration: Option<Duration>,
@@ -2748,25 +2873,28 @@ pub fn turn_end_line(
     tool_rounds: u64,
     changes: Option<&ChangeSummary>,
 ) -> String {
+    let completed = outcome.is_completed();
     let mut parts: Vec<String> = Vec::new();
-    parts.push(outcome.label());
-    if let Some(duration) = duration {
-        parts.push(format!("in {}", format_duration(duration)));
+    match (completed, duration) {
+        (true, Some(duration)) => parts.push(format!("completed in {}", format_duration(duration))),
+        (true, None) => parts.push("completed".into()),
+        (false, duration) => {
+            parts.push(outcome.label());
+            parts.extend(duration.map(format_duration));
+        }
     }
-    if requests > 0 {
-        parts.push(format!("{requests} requests"));
+    // The request count describes how a finished turn went; for one that
+    // stopped, the reason is what matters.
+    if completed && requests > 0 {
+        parts.push(plural(requests, "request"));
     }
     if tool_rounds > 0 {
-        parts.push(format!("{tool_rounds} tools"));
+        parts.push(plural(tool_rounds, "tool"));
     }
     if let Some(changes) = changes
         && !changes.is_empty()
     {
-        let files = if changes.files == 1 {
-            "1 file changed".to_owned()
-        } else {
-            format!("{} files changed", changes.files)
-        };
+        let files = format!("{} changed", plural(changes.files as u64, "file"));
         match changes.lines {
             Some((added, removed)) => parts.push(format!("{files} (+{added} −{removed})")),
             None => parts.push(files),
@@ -2881,33 +3009,6 @@ impl App {
             })
     }
 
-    /// Rows of the interaction prompt.
-    pub fn interaction_lines(&self) -> Vec<String> {
-        let Some(interaction) = self
-            .session
-            .as_ref()
-            .and_then(|session| session.interaction.as_ref())
-        else {
-            return Vec::new();
-        };
-        let mut lines = vec![format!(
-            "{} wants to run {}",
-            interaction.tool_name, interaction.prompt
-        )];
-        if let Some(detail) = &interaction.detail {
-            lines.push(detail.clone());
-        }
-        for (index, option) in interaction.options().iter().enumerate() {
-            let marker = if index == self.interaction_choice {
-                "▶"
-            } else {
-                " "
-            };
-            lines.push(format!("{marker} {option}"));
-        }
-        lines
-    }
-
     pub fn context_budget(&self) -> Option<&ContextBudget> {
         self.session.as_ref().and_then(|s| s.context.as_ref())
     }
@@ -2959,32 +3060,15 @@ fn writes_files(name: &str) -> bool {
     matches!(name, "write" | "edit" | "apply_patch" | "patch")
 }
 
-/// Added and removed line counts of a rendered diff.
-fn count_hunks(lines: &[ratatui::text::Line<'static>]) -> (usize, usize) {
-    let mut added = 0;
-    let mut removed = 0;
-    for line in lines {
-        let Some(span) = line.spans.first() else {
-            continue;
-        };
-        let text = span.content.as_ref();
-        if text.starts_with('+') {
-            added += 1;
-        } else if text.starts_with('-') {
-            removed += 1;
-        }
-    }
-    (added, removed)
-}
-
-/// What the sessions picker filters on: the title, or the id while untitled.
-fn session_label(info: &SessionInfo) -> String {
-    match info.title.as_deref() {
-        Some(title) if !title.trim().is_empty() => title.to_owned(),
-        // Untitled sessions get their short id, never the 32-hex one: a closed
-        // session cannot be read, so there is no first prompt to borrow.
-        _ => short_session_id(&info.session_id).to_owned(),
-    }
+/// The first prompt the user typed in a transcript.
+fn first_prompt(transcript: &Transcript) -> Option<&str> {
+    transcript.blocks().iter().find_map(|block| match block {
+        Block::User {
+            text,
+            kind: crate::protocol::read::UserKind::Prompt,
+        } => Some(text.as_str()),
+        _ => None,
+    })
 }
 
 /// `ses_8ca3c4cf...` → `ses_8ca3c4`, enough to tell sessions apart in a row.

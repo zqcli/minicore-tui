@@ -92,6 +92,9 @@ pub struct DiffPage {
     pub change_ref: String,
     #[serde(default)]
     pub path: String,
+    /// The tool call that made a `tool:` change; absent for workspace records.
+    #[serde(default)]
+    pub tool_ref: Option<super::ToolRef>,
     #[serde(default)]
     pub hunks: Vec<DiffHunk>,
     #[serde(default)]

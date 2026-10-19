@@ -92,11 +92,18 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         screens::sheet(app, &app.palette)
     };
     let sheet_rows = sheet.as_ref().map_or(0, |sheet| sheet.height());
+    // One blank row keeps the last transcript line off the stack below it,
+    // when the terminal has the room.
+    let gap = u16::from(area.height > 8);
     let bottom = (band_height(app, area.width) + sheet_rows)
-        .min(area.height.saturating_sub(1))
+        .min(area.height.saturating_sub(1 + gap))
         .max(1);
-    let [transcript, bottom] =
-        Layout::vertical([Constraint::Min(1), Constraint::Length(bottom)]).areas(area);
+    let [transcript, _, bottom] = Layout::vertical([
+        Constraint::Min(1),
+        Constraint::Length(gap),
+        Constraint::Length(bottom),
+    ])
+    .areas(area);
     if !screens::draw_view(frame, transcript, app) {
         draw_transcript(frame, transcript, app, styles);
     }
@@ -110,7 +117,22 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         bottom
     };
     let rows = status::lines(app, styles, band.width);
-    frame.render_widget(ratatui::widgets::Paragraph::new(rows), band);
+    // Row by row: a `Line` widget paints its style across the whole row, so
+    // the composer's tint is a full-width band, not just the typed cells.
+    for (index, line) in rows.iter().enumerate() {
+        let y = band.y + index as u16;
+        if y >= band.bottom() {
+            break;
+        }
+        frame.render_widget(
+            line,
+            Rect {
+                y,
+                height: 1,
+                ..band
+            },
+        );
+    }
     if app.overlay.is_none() && !app.has_interaction() {
         let (row, column) = status::cursor(app, styles, band.width);
         frame.set_cursor_position((

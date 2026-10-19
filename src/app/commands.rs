@@ -53,6 +53,11 @@ pub const COMMANDS: &[Command] = &[
         arg: Some("turn|session|workspace"),
     },
     Command {
+        name: "tool",
+        description: "Show the full output of a tool call",
+        arg: None,
+    },
+    Command {
         name: "context",
         description: "Show context usage",
         arg: None,
@@ -174,6 +179,7 @@ pub fn execute(name: &str, arg: &str) -> Option<Executed> {
             _ => super::DiffScope::Turn,
         })),
         "context" => Executed::Panel(super::Panel::Context),
+        "tool" => Executed::Action(Action::ShowTool),
         "copy" => Executed::Action(Action::CopyLastAnswer),
         "export" => Executed::Action(Action::Export((!arg.is_empty()).then(|| arg.to_owned()))),
         // No argument toggles between the two palettes; an explicit argument

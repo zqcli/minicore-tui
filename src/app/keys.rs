@@ -82,11 +82,43 @@ impl App {
 
     fn on_overlay_key(&mut self, key: KeyEvent) -> Input {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let tool_view = matches!(self.overlay, Overlay::Tool(_));
+        let scrolling_view = tool_view || matches!(self.overlay, Overlay::Diff { .. });
         match key.code {
             KeyCode::Esc => {
                 self.delete_pending = None;
-                self.overlay = Overlay::None;
+                match std::mem::replace(&mut self.overlay, Overlay::None) {
+                    Overlay::Palette { .. } => self.discard_command_draft(),
+                    Overlay::Files { .. } => self.discard_mention(),
+                    _ => {}
+                }
                 Input::Consumed
+            }
+            KeyCode::Char('[') | KeyCode::Left if tool_view => {
+                self.step_tool(-1);
+                Input::Consumed
+            }
+            KeyCode::Char(']') | KeyCode::Right if tool_view => {
+                self.step_tool(1);
+                Input::Consumed
+            }
+            KeyCode::PageUp | KeyCode::PageDown if scrolling_view => {
+                self.page_view(if key.code == KeyCode::PageUp { -1 } else { 1 });
+                Input::Consumed
+            }
+            KeyCode::Home | KeyCode::End if scrolling_view => {
+                // Far enough to reach either end; scrolling clamps.
+                self.page_view(if key.code == KeyCode::Home {
+                    -isize::MAX
+                } else {
+                    isize::MAX
+                });
+                Input::Consumed
+            }
+            KeyCode::Char('c')
+                if !ctrl && (scrolling_view || matches!(self.overlay, Overlay::Context)) =>
+            {
+                self.copy_view()
             }
             KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => {
                 self.find_step(false);
@@ -163,10 +195,11 @@ impl App {
     /// Ctrl+D in the sessions picker: the first press arms the delete, the
     /// second deletes the selected session.
     fn delete_confirm(&mut self) {
-        let Overlay::Sessions { selected, .. } = &self.overlay else {
+        let Overlay::Sessions { selected, filter } = &self.overlay else {
             return;
         };
-        let Some(info) = self.session_rows.get(*selected) else {
+        // The selection indexes the filtered rows the sheet shows.
+        let Some(info) = self.filtered_sessions(filter).get(*selected).cloned() else {
             return;
         };
         let id = info.session_id.clone();
@@ -181,10 +214,7 @@ impl App {
                 "Open another session before deleting this one",
             ),
             features::DeleteStep::Arm => {
-                let label = info
-                    .title
-                    .clone()
-                    .unwrap_or_else(|| "this session".to_owned());
+                let label = self.session_label(&info);
                 self.delete_pending = Some(id);
                 self.notice(
                     crate::transcript::block::NoticeLevel::Info,
@@ -230,6 +260,7 @@ impl App {
             Overlay::Sessions { filter, .. } => self.filtered_sessions(filter).len(),
             _ => self.session_rows.len(),
         };
+        let rows = self.viewport_rows();
         match &mut self.overlay {
             Overlay::Palette { selected, filter } => {
                 let len = commands::filter(filter).len();
@@ -255,6 +286,7 @@ impl App {
             Overlay::Help => {
                 self.help_scroll = self.help_scroll.saturating_add_signed(delta * 3);
             }
+            Overlay::Tool(_) => self.tool_view.scroll_by(delta, rows),
             Overlay::Find {
                 current, matches, ..
             } => {
@@ -269,6 +301,49 @@ impl App {
                 self.interaction_choice = step(self.interaction_choice, options);
             }
             _ => {}
+        }
+    }
+
+    /// PgUp/PgDn in the diff and tool views: scroll the content by a page.
+    fn page_view(&mut self, direction: isize) {
+        // The view's title and hint rows are not content.
+        let rows = self.viewport_rows().saturating_sub(2).max(1);
+        let delta = direction.saturating_mul(rows as isize);
+        match &mut self.overlay {
+            Overlay::Diff { scroll, .. } => {
+                self.diff.scroll_by(delta, rows);
+                *scroll = self.diff.scroll.min(u16::MAX as usize) as u16;
+            }
+            Overlay::Tool(_) => self.tool_view.scroll_by(delta, rows),
+            _ => {}
+        }
+    }
+
+    /// Esc on the palette: a draft that is only the command being typed goes
+    /// with it, so the next `/` does not start `//`.
+    fn discard_command_draft(&mut self) {
+        if commands::opens_palette(self.composer.text(), true) {
+            self.composer.clear();
+        }
+    }
+
+    /// Esc on the `@` picker: the `@query` token it was opened from goes, the
+    /// rest of the draft stays.
+    fn discard_mention(&mut self) {
+        let head = &self.composer.text()[..self.composer.cursor()];
+        let start = head
+            .char_indices()
+            .rfind(|(_, ch)| ch.is_whitespace())
+            .map_or(0, |(at, ch)| at + ch.len_utf8());
+        if !head[start..].starts_with('@') {
+            return;
+        }
+        while self.composer.cursor() > start {
+            let before = self.composer.cursor();
+            self.composer.backspace();
+            if self.composer.cursor() >= before {
+                break;
+            }
         }
     }
 
@@ -395,10 +470,16 @@ impl App {
                 Input::Action(Action::SetReasoning(*level))
             }
             Overlay::Files { filter, selected } => {
-                let path = crate::ui::files::filtered(&filter)
-                    [selected.min(crate::ui::files::filter_count(&filter).saturating_sub(1))]
-                .clone();
-                self.composer.insert(&path);
+                let paths = crate::ui::files::filtered(&filter);
+                // No match keeps the picker open rather than inserting nothing.
+                let Some(path) = paths.get(selected).or(paths.last()) else {
+                    self.overlay = Overlay::Files { filter, selected };
+                    return Input::Consumed;
+                };
+                // The row is `@path`; it replaces the `@` token it was opened
+                // from instead of following it.
+                self.discard_mention();
+                self.composer.insert(path);
                 Input::Edited
             }
             Overlay::Interaction => {

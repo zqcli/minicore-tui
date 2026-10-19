@@ -685,18 +685,20 @@ async fn read_diff(
 /// Attempts at one diff page before a capacity refusal is reported.
 const DIFF_RETRIES: u32 = 2;
 
-/// Lists the change records for one scope and, for the first file, its hunks.
-/// The diff view gets files first, then hunks, so a huge workspace never blocks
-/// the panel from opening.
-pub fn list_changes(client: Arc<Client>, tx: Tx, session_id: String, scope: crate::app::DiffScope) {
+/// Lists the change records of one diff scope; `wire` is that scope as
+/// `changes.list` takes it. The diff view gets files first, then hunks, so a
+/// huge workspace never blocks the panel from opening.
+pub fn list_changes(
+    client: Arc<Client>,
+    tx: Tx,
+    session_id: String,
+    scope: crate::app::DiffScope,
+    wire: protocol::ChangeScope,
+) {
     tokio::spawn(async move {
         let params = json!({
             "session_id": session_id,
-            "scope": match scope {
-                crate::app::DiffScope::Turn => json!("session"),
-                crate::app::DiffScope::Session => json!("session"),
-                crate::app::DiffScope::Workspace => json!("workspace"),
-            },
+            "scope": wire.value(),
             "limit": 200,
             "max_bytes": 262_144,
         });
@@ -711,9 +713,9 @@ pub fn list_changes(client: Arc<Client>, tx: Tx, session_id: String, scope: crat
     });
 }
 
-/// Pages the hunks of one change record for the diff view.
-/// Pages every change record of one path and merges the hunks, so a file that
-/// a turn changed several times shows one combined diff.
+/// Pages every change record of one path for the diff view, one page per
+/// record in list order. The records stay separate: each one is its own
+/// before/after comparison, so their hunks do not form one diff.
 pub fn load_diff(
     client: Arc<Client>,
     tx: Tx,
@@ -722,10 +724,10 @@ pub fn load_diff(
     change_refs: Vec<String>,
 ) {
     tokio::spawn(async move {
-        let mut merged: Option<protocol::changes::DiffPage> = None;
+        let mut pages = Vec::with_capacity(change_refs.len());
         for change_ref in change_refs {
-            let page = match page_diff(&client, &session_id, change_ref).await {
-                Ok(page) => page,
+            match page_diff(&client, &session_id, change_ref).await {
+                Ok(page) => pages.push(page),
                 Err(error) => {
                     post(
                         &tx,
@@ -734,28 +736,9 @@ pub fn load_diff(
                     );
                     return;
                 }
-            };
-            match merged.as_mut() {
-                Some(merged) => {
-                    merged.hunks.extend(page.hunks);
-                    merged.binary |= page.binary;
-                    merged.complete &= page.complete;
-                }
-                None => merged = Some(page),
             }
         }
-        let page = merged.unwrap_or_else(|| protocol::changes::DiffPage {
-            change_ref: String::new(),
-            path: query.path.clone(),
-            hunks: Vec::new(),
-            next_cursor: None,
-            complete: true,
-            binary: false,
-            truncated: false,
-            availability: None,
-            stale: false,
-        });
-        post(&tx, Some(&session_id), OpKind::DiffFile(query, Ok(page)));
+        post(&tx, Some(&session_id), OpKind::DiffFile(query, Ok(pages)));
     });
 }
 
@@ -852,8 +835,9 @@ async fn read_output(
     client: &Client,
     key: &ToolRef,
     stream: &str,
-) -> Result<String, protocol::RpcError> {
-    let mut text = String::new();
+) -> Result<StreamText, protocol::RpcError> {
+    let mut bytes = Vec::new();
+    let mut result = StreamText::default();
     let mut offset = 0u64;
     loop {
         let params = json!({
@@ -868,13 +852,37 @@ async fn read_output(
         let page: ToolOutputPage = client
             .call::<Value, ToolOutputPage>(protocol::METHOD_TOOL_OUTPUT, &params, true)
             .await?;
-        text.push_str(&String::from_utf8_lossy(&page.bytes()));
-        if page.eof || page.next_offset <= offset || text.len() >= MAX_TOOL_VIEW_BYTES {
+        // The Agent keeps a bounded tail: a first page that starts past zero
+        // means the head of the stream is gone.
+        if offset == 0 && (page.base_offset > 0 || page.truncated) {
+            result.dropped_head = true;
+        }
+        result.expired |= page.availability.as_deref() == Some("expired");
+        bytes.extend_from_slice(&page.bytes());
+        if bytes.len() >= MAX_TOOL_VIEW_BYTES {
+            result.cut = true;
+            break;
+        }
+        if page.eof || page.next_offset <= offset {
             break;
         }
         offset = page.next_offset;
     }
-    Ok(text)
+    // Decoded once: a multi-byte character can straddle two pages.
+    result.text = String::from_utf8_lossy(&bytes).into_owned();
+    Ok(result)
+}
+
+/// One stream of a tool call's full output, as the tool view shows it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct StreamText {
+    pub text: String,
+    /// The Agent no longer retains the start of the stream.
+    pub dropped_head: bool,
+    /// The retained bytes were evicted; empty text does not mean no output.
+    pub expired: bool,
+    /// Reading stopped at [`MAX_TOOL_VIEW_BYTES`].
+    pub cut: bool,
 }
 
 /// Ceiling for one tool view; the Agent keeps 1 MiB per stream anyway.

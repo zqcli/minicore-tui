@@ -858,20 +858,37 @@ impl LoopOutcome {
         matches!(self, Self::Completed)
     }
 
+    /// How the turn ended, in words: `interrupted`, `failed · model error:
+    /// provider unavailable`.
     pub fn label(&self) -> String {
         match self {
             Self::Completed => "completed".into(),
             Self::Cancelled { reason } => match reason {
                 CancelReason::User => "interrupted".into(),
-                CancelReason::Shutdown => "cancelled: session closed".into(),
-                CancelReason::OwnerDropped => "cancelled: owner dropped".into(),
-                CancelReason::Deadline => "cancelled: deadline".into(),
+                CancelReason::Shutdown => "cancelled · session closed".into(),
+                CancelReason::OwnerDropped => "cancelled · owner went away".into(),
+                CancelReason::Deadline => "cancelled · deadline reached".into(),
                 CancelReason::Unknown => "cancelled".into(),
             },
-            Self::Failed { kind, model_error } => match model_error {
-                Some(error) if !error.kind.is_empty() => format!("failed: {kind} ({})", error.kind),
-                _ => format!("failed: {kind}"),
-            },
+            Self::Failed { kind, model_error } => {
+                let reason = match kind.as_str() {
+                    "model" => "model error".to_owned(),
+                    "prompt" => "prompt error".to_owned(),
+                    "output_limit" => "output limit reached".to_owned(),
+                    "refused" => "the model refused".to_owned(),
+                    "policy" => "blocked by policy".to_owned(),
+                    "interaction" => "interaction failed".to_owned(),
+                    "max_tool_rounds" => "too many tool rounds".to_owned(),
+                    "internal" | "" => "internal error".to_owned(),
+                    other => other.replace('_', " "),
+                };
+                match model_error {
+                    Some(error) if !error.kind.is_empty() => {
+                        format!("failed · {reason}: {}", error.kind.replace('_', " "))
+                    }
+                    _ => format!("failed · {reason}"),
+                }
+            }
             Self::Unknown => "unknown outcome".into(),
         }
     }

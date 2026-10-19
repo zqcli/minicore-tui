@@ -61,7 +61,10 @@ fn sessions_sheet(app: &App, filter: &str, selected: usize) -> Sheet {
     let rows = app
         .filtered_sessions(filter)
         .iter()
-        .map(|info| sheets::session_row(info, resident == Some(info.session_id.as_str()), now))
+        .map(|info| {
+            let current = resident == Some(info.session_id.as_str());
+            sheets::session_row(info, app.session_label(info), current, now)
+        })
         .collect();
     let hint = if app.delete_pending.is_some() {
         "ctrl+d again deletes · esc cancels"
@@ -69,8 +72,14 @@ fn sessions_sheet(app: &App, filter: &str, selected: usize) -> Sheet {
         "enter open · type filter · ctrl+d delete · esc close"
     };
     Sheet::new("Sessions", hint)
+        .subtitle(filter_subtitle(filter))
         .rows(rows)
         .selected(Some(selected))
+}
+
+/// The typed filter, shown after a picker's title so it is visible somewhere.
+fn filter_subtitle(filter: &str) -> Option<String> {
+    (!filter.is_empty()).then(|| filter.to_owned())
 }
 
 fn models_sheet(app: &App, selected: usize) -> Sheet {
@@ -82,18 +91,14 @@ fn models_sheet(app: &App, selected: usize) -> Sheet {
         .models
         .iter()
         .map(|model| {
-            let mark = if Some(&model.id) == current.as_ref() {
-                "● "
-            } else {
-                "  "
-            };
             Row::new(
-                format!("{mark}{}", model.id),
+                model.id.clone(),
                 match model.supported_reasoning.len() {
                     0 => String::new(),
                     count => format!("{count} reasoning levels"),
                 },
             )
+            .mark(Some(&model.id) == current.as_ref())
         })
         .collect();
     Sheet::new("Model", "enter switch · esc close")
@@ -106,14 +111,7 @@ fn reasoning_sheet(app: &App, selected: usize) -> Sheet {
     let current = app.session.as_ref().map(|session| session.info.reasoning);
     let rows = levels
         .iter()
-        .map(|level| {
-            let mark = if Some(*level) == current {
-                "● "
-            } else {
-                "  "
-            };
-            Row::new(format!("{mark}{}", level.label()), String::new())
-        })
+        .map(|level| Row::new(level.label(), String::new()).mark(Some(*level) == current))
         .collect();
     Sheet::new("Reasoning", "enter apply · shift+tab cycles · esc close")
         .rows(rows)
@@ -129,6 +127,7 @@ fn files_sheet(filter: &str, selected: usize) -> Sheet {
         "Files",
         "enter insert the path · type to filter · esc close",
     )
+    .subtitle(filter_subtitle(filter))
     .rows(rows)
     .selected(Some(selected))
 }
@@ -145,9 +144,19 @@ fn interaction_sheet(app: &App, palette: &Palette) -> Sheet {
         return Sheet::new("Approval", "esc closes");
     };
     let options = interaction.options();
+    // The card is read at draw time: its detail and input can arrive after
+    // the prompt does.
+    let call = session
+        .transcript
+        .find_tool_by_call_id(&interaction.tool_call_id);
+    let subject = sheets::Subject {
+        tool: call.map_or(interaction.tool_name.as_str(), |call| call.name.as_str()),
+        detail: call.map_or("", |call| call.detail.as_str()),
+        input: call.and_then(|call| call.expanded_input.as_deref()),
+    };
     sheets::interaction_sheet(
         &interaction.prompt,
-        interaction.detail.as_deref(),
+        &subject,
         &options,
         app.interaction_choice,
         palette,

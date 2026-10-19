@@ -8,7 +8,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
-use crate::protocol::changes::{DiffPage, LineKind};
+use crate::protocol::changes::{DiffLine, DiffPage, LineKind};
 use crate::protocol::{ChangeKind, SessionContext, SessionPresentation};
 use crate::theme::Palette;
 
@@ -36,15 +36,18 @@ pub struct DiffFile {
     pub change_refs: Vec<String>,
 }
 
-/// The change records of the row at `path`, for a caller that does not keep
-/// them (a preview row built from tool cards has none).
 impl DiffFile {
-    /// The row's line column: the measured total, or a marker while unknown.
-    fn count(&self) -> String {
+    /// The row's line column: `+a −b` once measured, `?` when the read failed
+    /// and `·` while unknown.
+    fn count_spans(&self, palette: &Palette) -> Vec<Span<'static>> {
         match self.lines {
-            Some((added, removed)) => format!("{}", added + removed),
-            None if self.failed => "?".into(),
-            None => "·".into(),
+            Some((added, removed)) => vec![
+                Span::styled(format!("+{added}"), Style::default().fg(palette.added)),
+                Span::raw(" "),
+                Span::styled(format!("−{removed}"), Style::default().fg(palette.removed)),
+            ],
+            None if self.failed => vec![Span::styled("?", Style::default().fg(palette.dim))],
+            None => vec![Span::styled("·", Style::default().fg(palette.dim))],
         }
     }
 
@@ -118,12 +121,15 @@ impl DiffView {
 
     pub fn scroll_by(&mut self, delta: isize, rows: usize) {
         let max = self.hunks.len().saturating_sub(rows);
-        let next = (self.scroll as isize + delta).clamp(0, max as isize);
+        let next = (self.scroll as isize)
+            .saturating_add(delta)
+            .clamp(0, max as isize);
         self.scroll = next as usize;
     }
 }
 
-/// The plain-text body `/copy` and the `c` key use.
+/// The plain-text body `/copy` and the `c` key use. A row's last span is its
+/// content; earlier spans are the line-number gutter, which is not copied.
 pub fn diff_text(view: &DiffView) -> String {
     let mut out = String::new();
     if let Some(file) = view.current() {
@@ -131,20 +137,47 @@ pub fn diff_text(view: &DiffView) -> String {
         out.push('\n');
     }
     for line in &view.hunks {
-        out.push_str(
-            &line
-                .spans
-                .iter()
-                .map(|span| span.content.as_ref())
-                .collect::<String>(),
-        );
+        if let Some(body) = line.spans.last() {
+            out.push_str(&body.content);
+        }
         out.push('\n');
     }
     out
 }
 
-/// Turns one `changes.diff` page into Styled lines. Hunk headers keep their
-/// real `@@` form, added and removed lines take the diff colors.
+/// Rows for every change record of one file. Several records (several edits
+/// of the file) are separate comparisons, so each gets a dim separator naming
+/// the tool that made it; reading their hunks as one diff would be wrong.
+pub fn records_lines(
+    pages: &[DiffPage],
+    tools: &[Option<String>],
+    palette: &Palette,
+) -> Vec<Line<'static>> {
+    if pages.len() <= 1 {
+        return match pages.first() {
+            Some(page) => hunk_lines(page, palette),
+            None => vec![dim("No differences.", palette)],
+        };
+    }
+    let mut lines = Vec::new();
+    for (index, page) in pages.iter().enumerate() {
+        let position = format!("change {} of {}", index + 1, pages.len());
+        let label = match tools.get(index).and_then(Option::as_deref) {
+            Some(tool) => format!("── {tool} · {position} ──"),
+            None => format!("── {position} ──"),
+        };
+        if index > 0 {
+            lines.push(Line::from(""));
+        }
+        lines.push(dim(&label, palette));
+        lines.extend(hunk_lines(page, palette));
+    }
+    lines
+}
+
+/// Turns one `changes.diff` page into styled rows: `[gutter, body]` for diff
+/// lines, one span for hunk headers. Header numbers are unified-diff 1-based;
+/// the Agent's starts are 0-based line indexes.
 pub fn hunk_lines(page: &DiffPage, palette: &Palette) -> Vec<Line<'static>> {
     if page.binary {
         return vec![dim("Binary file: the diff is not shown.", palette)];
@@ -157,31 +190,84 @@ pub fn hunk_lines(page: &DiffPage, palette: &Palette) -> Vec<Line<'static>> {
         };
         return vec![dim(note, palette)];
     }
+    let digits = page
+        .hunks
+        .iter()
+        .flat_map(|hunk| {
+            [
+                hunk.old_start + hunk.old_count,
+                hunk.new_start + hunk.new_count,
+            ]
+        })
+        .max()
+        .unwrap_or(0)
+        .to_string()
+        .len();
     let mut lines = Vec::new();
     for hunk in &page.hunks {
         lines.push(Line::from(Span::styled(
             format!(
                 "@@ -{},{} +{},{} @@",
-                hunk.old_start, hunk.old_count, hunk.new_start, hunk.new_count
+                unified_start(hunk.old_start, hunk.old_count),
+                hunk.old_count,
+                unified_start(hunk.new_start, hunk.new_count),
+                hunk.new_count
             ),
             Style::default().fg(palette.hunk),
         )));
+        // A long line arrives as several fragments; only the last one is
+        // `line_complete`. They are joined back into one row.
+        let mut pending: Option<(&DiffLine, String)> = None;
         for line in &hunk.lines {
-            let (sign, style) = match line.kind {
-                LineKind::Added => ("+", Style::default().fg(palette.added)),
-                LineKind::Removed => ("-", Style::default().fg(palette.removed)),
-                LineKind::Context | LineKind::Unknown => (" ", Style::default().fg(palette.dim)),
+            let text = match pending.take() {
+                Some((first, mut text)) => {
+                    text.push_str(&line.text);
+                    (first, text)
+                }
+                None => (line, line.text.clone()),
             };
-            // Diff text carries the original line terminator; the row already
-            // ends, so only the trailing newline is dropped.
-            let text = clean(line.text.trim_end_matches(['\n', '\r']));
-            lines.push(Line::from(Span::styled(format!("{sign}{text}"), style)));
+            if line.line_complete {
+                lines.push(diff_row(text.0, &text.1, digits, palette));
+            } else {
+                pending = Some(text);
+            }
+        }
+        if let Some((first, text)) = pending {
+            lines.push(diff_row(first, &text, digits, palette));
         }
     }
     if !page.complete {
         lines.push(dim("… the diff continues", palette));
     }
     lines
+}
+
+/// A hunk start as unified diff prints it: the first line's 1-based number, or
+/// the line before an empty range.
+fn unified_start(start: u64, count: u64) -> u64 {
+    if count > 0 { start + 1 } else { start }
+}
+
+/// One diff row: a dim `old new` line-number gutter, then the signed text.
+fn diff_row(line: &DiffLine, text: &str, digits: usize, palette: &Palette) -> Line<'static> {
+    let (sign, style) = match line.kind {
+        LineKind::Added => ("+", Style::default().fg(palette.added)),
+        LineKind::Removed => ("-", Style::default().fg(palette.removed)),
+        LineKind::Context | LineKind::Unknown => (" ", Style::default().fg(palette.dim)),
+    };
+    let number = |index: Option<u64>| index.map_or(String::new(), |index| (index + 1).to_string());
+    let gutter = format!(
+        "{:>digits$} {:>digits$} ",
+        number(line.old_index),
+        number(line.new_index)
+    );
+    // Diff text carries the original line terminator; the row already ends,
+    // so only the trailing newline is dropped.
+    let text = clean(text.trim_end_matches(['\n', '\r']));
+    Line::from(vec![
+        Span::styled(gutter, Style::default().fg(palette.faint)),
+        Span::styled(format!("{sign}{text}"), style),
+    ])
 }
 
 /// Terminal-safe text, borrowing from either `sanitize` signature.
@@ -260,6 +346,17 @@ pub fn render_diff(frame: &mut Frame, area: Rect, palette: &Palette, view: &Diff
 fn render_file_list(frame: &mut Frame, area: Rect, palette: &Palette, view: &DiffView) {
     let rows = area.height as usize;
     let first = view.selected.saturating_sub(rows.saturating_sub(1));
+    let counts: Vec<Vec<Span<'static>>> = view
+        .files
+        .iter()
+        .map(|file| file.count_spans(palette))
+        .collect();
+    let span_width = |spans: &[Span<'static>]| spans.iter().map(|span| width(&span.content)).sum();
+    let column = counts
+        .iter()
+        .map(|spans| span_width(spans))
+        .max()
+        .unwrap_or(1);
     for (row, (index, file)) in view
         .files
         .iter()
@@ -270,12 +367,6 @@ fn render_file_list(frame: &mut Frame, area: Rect, palette: &Palette, view: &Dif
     {
         let y = area.y + row as u16;
         let selected = index == view.selected;
-        let label = format!(
-            "{} {:>4} {}",
-            file.marker(),
-            file.count(),
-            truncate(&file.path, area.width as usize - 8)
-        );
         let style = if selected {
             let band = Rect { height: 1, ..area };
             let band = Rect { y, ..band };
@@ -288,12 +379,15 @@ fn render_file_list(frame: &mut Frame, area: Rect, palette: &Palette, view: &Dif
         } else {
             Style::default().fg(palette.dim)
         };
-        frame.buffer_mut().set_line(
-            area.x,
-            y,
-            &Line::from(Span::styled(label, style)),
-            area.width,
-        );
+        let count = &counts[index];
+        let mut spans = vec![Span::styled(format!("{} ", file.marker()), style)];
+        spans.extend(count.iter().cloned());
+        let path_width = (area.width as usize).saturating_sub(column + 3);
+        spans.push(Span::raw(" ".repeat(column - span_width(count) + 1)));
+        spans.push(Span::styled(truncate(&file.path, path_width), style));
+        frame
+            .buffer_mut()
+            .set_line(area.x, y, &Line::from(spans), area.width);
     }
     if let Some(file) = view.current()
         && area.height > 1
@@ -330,28 +424,30 @@ fn render_hunks(frame: &mut Frame, area: Rect, palette: &Palette, view: &DiffVie
             .set_line(area.x, area.y, &dim(message, palette), area.width);
         return;
     }
-    for (row, line) in view.visible_hunks(area.height as usize).iter().enumerate() {
-        let text = line
-            .spans
-            .iter()
-            .map(|span| span.content.as_ref())
-            .collect::<String>();
-        let style = line
-            .spans
-            .first()
-            .map(|span| span.style)
-            .unwrap_or_default();
-        let y = area.y + row as u16;
-        for (index, chunk) in wrap(&text, area.width as usize).into_iter().enumerate() {
-            if area.y + row as u16 + index as u16 >= area.bottom() {
+    // The last span is the content and wraps; earlier spans are the gutter,
+    // drawn on the first row and left blank on continuation rows.
+    let mut y = area.y;
+    for line in view.visible_hunks(area.height as usize) {
+        let Some((body, gutter)) = line.spans.split_last() else {
+            y += 1;
+            continue;
+        };
+        let indent: usize = gutter.iter().map(|span| width(&span.content)).sum();
+        let room = (area.width as usize).saturating_sub(indent).max(1);
+        for (index, chunk) in wrap(&body.content, room).into_iter().enumerate() {
+            if y >= area.bottom() {
                 return;
             }
-            frame.buffer_mut().set_line(
-                area.x,
-                y + index as u16,
-                &Line::from(Span::styled(chunk, style)),
-                area.width,
-            );
+            let mut spans = if index == 0 {
+                gutter.to_vec()
+            } else {
+                vec![Span::raw(" ".repeat(indent))]
+            };
+            spans.push(Span::styled(chunk, body.style));
+            frame
+                .buffer_mut()
+                .set_line(area.x, y, &Line::from(spans), area.width);
+            y += 1;
         }
     }
 }
@@ -369,18 +465,95 @@ pub fn tool_state_label(state: crate::transcript::ToolState) -> &'static str {
 }
 
 /// The tool output view: the call's input on top, then the paged output.
-#[derive(Clone, Debug)]
+/// Until every stream's pages arrive the output is the card's bounded tail.
+#[derive(Clone, Debug, Default)]
 pub struct ToolView {
+    /// The call shown; a page for any other call is ignored.
+    pub key: Option<crate::protocol::ToolRef>,
     pub title: String,
     pub detail: String,
     pub state: String,
+    /// This call's place among the session's tool cards: `(index, count)`.
+    pub position: Option<(usize, usize)>,
     pub input: Vec<Line<'static>>,
     pub output: Vec<Line<'static>>,
+    /// Full output per stream, in display order; `None` while loading. Bash
+    /// has stdout and stderr, which carry no total order between them, so
+    /// they are shown as separate sections rather than interleaved.
+    pub streams: Vec<(String, Option<crate::app::tasks::StreamText>)>,
     pub scroll: usize,
     pub status: String,
 }
 
 impl ToolView {
+    /// Lines of a plain text body, made safe for the terminal.
+    pub fn text_lines(text: &str) -> Vec<Line<'static>> {
+        let text = text.strip_suffix('\n').unwrap_or(text);
+        if text.is_empty() {
+            return Vec::new();
+        }
+        text.split('\n')
+            .map(|line| Line::raw(clean(line.strip_suffix('\r').unwrap_or(line))))
+            .collect()
+    }
+
+    /// Records one stream's full text. The output is rebuilt once every stream
+    /// has answered, so the tail is not replaced by half of the result.
+    pub fn set_stream(
+        &mut self,
+        name: &str,
+        text: crate::app::tasks::StreamText,
+        palette: &Palette,
+    ) {
+        let Some(slot) = self.streams.iter_mut().find(|(stream, _)| stream == name) else {
+            return;
+        };
+        slot.1 = Some(text);
+        if self.streams.iter().all(|(_, text)| text.is_some()) {
+            self.output = self.stream_lines(palette);
+            self.status.clear();
+            self.scroll = self.scroll.min(self.output.len().saturating_sub(1));
+        }
+    }
+
+    fn stream_lines(&self, palette: &Palette) -> Vec<Line<'static>> {
+        let sections = self.streams.len() > 1;
+        let mut lines = Vec::new();
+        for (name, text) in &self.streams {
+            let Some(text) = text else { continue };
+            let body = Self::text_lines(&text.text);
+            let noted = text.dropped_head || text.expired || text.cut;
+            if body.is_empty() && !noted {
+                continue;
+            }
+            if sections {
+                if !lines.is_empty() {
+                    lines.push(Line::from(""));
+                }
+                let color = if name == "stderr" {
+                    palette.warning
+                } else {
+                    palette.dim
+                };
+                lines.push(Line::styled(
+                    format!("── {name} ──"),
+                    Style::default().fg(color),
+                ));
+            }
+            if text.dropped_head {
+                lines.push(dim("… earlier output is no longer retained", palette));
+            }
+            if text.expired && body.is_empty() {
+                lines.push(dim("… this output has expired from the agent", palette));
+            }
+            lines.extend(body);
+            if text.cut {
+                lines.push(dim("… cut at 1 MiB", palette));
+            }
+        }
+        lines
+    }
+
     pub fn visible_output(&self, rows: usize) -> &[Line<'static>] {
         let start = self.scroll.min(self.output.len());
         let end = (start + rows).min(self.output.len());
@@ -389,7 +562,9 @@ impl ToolView {
 
     pub fn scroll_by(&mut self, delta: isize, rows: usize) {
         let max = self.output.len().saturating_sub(rows);
-        self.scroll = (self.scroll as isize + delta).clamp(0, max as isize) as usize;
+        self.scroll = (self.scroll as isize)
+            .saturating_add(delta)
+            .clamp(0, max as isize) as usize;
     }
 
     /// `input` plus `output`, so `c` copies everything the user can see.
@@ -404,13 +579,19 @@ impl ToolView {
 }
 
 pub fn render_tool(frame: &mut Frame, area: Rect, palette: &Palette, view: &ToolView) {
-    let title = format!("← {} · {}", view.title, view.state);
+    let mut title = format!("← {} · {}", view.title, view.state);
+    if let Some((index, count)) = view.position {
+        title.push_str(&format!(" · tool {} of {count}", index + 1));
+    }
+    if !view.status.is_empty() && !view.output.is_empty() {
+        title.push_str(&format!(" · {}", view.status));
+    }
     chrome(
         frame,
         area,
         palette,
         &title,
-        "PgUp/PgDn scroll · c copy · esc back",
+        "[ ] previous/next tool · ↑↓ PgUp/PgDn scroll · c copy · esc back",
     );
     let mut y = area.y + 1;
     let bottom = area.bottom().saturating_sub(1);
@@ -889,41 +1070,106 @@ mod tests {
     fn page() -> DiffPage {
         serde_json::from_value(json!({
             "change_ref": "tool:abc", "path": "src/main.rs", "complete": true,
-            "hunks": [{"old_start": 10, "old_count": 2, "new_start": 10, "new_count": 3,
+            "hunks": [{"old_start": 9, "old_count": 2, "new_start": 9, "new_count": 3,
                        "lines": [
-                         {"kind": "context", "text": " fn main() {", "line_complete": true},
-                         {"kind": "removed", "text": "  old();", "line_complete": true},
-                         {"kind": "added", "text": "  new();", "line_complete": true},
+                         {"kind": "context", "old_index": 9, "new_index": 9,
+                          "text": " fn main() {", "line_complete": true},
+                         {"kind": "removed", "old_index": 10, "text": "  old();",
+                          "line_complete": true},
+                         {"kind": "added", "new_index": 10, "text": "  new();",
+                          "line_complete": true},
                        ]}]
         }))
         .unwrap()
+    }
+
+    fn row_text(line: &Line<'_>) -> String {
+        line.spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect()
     }
 
     #[test]
     fn hunk_lines_keep_the_diff_shape_and_colors() {
         let palette = Palette::dark();
         let lines = hunk_lines(&page(), &palette);
-        let text: Vec<String> = lines
-            .iter()
-            .map(|line| {
-                line.spans
-                    .iter()
-                    .map(|span| span.content.as_ref())
-                    .collect()
-            })
-            .collect();
+        let text: Vec<String> = lines.iter().map(row_text).collect();
         assert_eq!(
             text,
             [
                 "@@ -10,2 +10,3 @@",
-                "  fn main() {",
-                "-  old();",
-                "+  new();"
+                "10 10   fn main() {",
+                "11    -  old();",
+                "   11 +  new();"
             ]
         );
         assert_eq!(lines[0].spans[0].style.fg, Some(palette.hunk));
-        assert_eq!(lines[2].spans[0].style.fg, Some(palette.removed));
-        assert_eq!(lines[3].spans[0].style.fg, Some(palette.added));
+        assert_eq!(lines[1].spans[0].style.fg, Some(palette.faint), "gutter");
+        assert_eq!(lines[2].spans[1].style.fg, Some(palette.removed));
+        assert_eq!(lines[3].spans[1].style.fg, Some(palette.added));
+    }
+
+    /// The Agent's starts are 0-based indexes; a header prints the 1-based
+    /// first line, or the line before an empty range, as unified diff does.
+    #[test]
+    fn hunk_headers_use_unified_one_based_numbers() {
+        let palette = Palette::dark();
+        let page: DiffPage = serde_json::from_value(json!({
+            "change_ref": "tool:a", "path": "a.py", "complete": true,
+            "hunks": [
+                {"old_start": 0, "old_count": 2, "new_start": 0, "new_count": 2, "lines": []},
+                {"old_start": 5, "old_count": 0, "new_start": 5, "new_count": 1, "lines": []}
+            ]
+        }))
+        .unwrap();
+        let text: Vec<String> = hunk_lines(&page, &palette).iter().map(row_text).collect();
+        assert_eq!(text, ["@@ -1,2 +1,2 @@", "@@ -5,0 +6,1 @@"]);
+    }
+
+    #[test]
+    fn a_line_split_into_fragments_is_one_row() {
+        let palette = Palette::dark();
+        let page: DiffPage = serde_json::from_value(json!({
+            "change_ref": "tool:a", "path": "a.py", "complete": true,
+            "hunks": [{"old_start": 0, "old_count": 0, "new_start": 0, "new_count": 1,
+                       "lines": [
+                         {"kind": "added", "new_index": 0, "text": "long ", "line_complete": false},
+                         {"kind": "added", "new_index": 0, "text": "line\n", "line_complete": true}
+                       ]}]
+        }))
+        .unwrap();
+        let text: Vec<String> = hunk_lines(&page, &palette).iter().map(row_text).collect();
+        assert_eq!(text[1..], ["  1 +long line"]);
+    }
+
+    #[test]
+    fn several_records_of_one_file_are_separated_and_named() {
+        let palette = Palette::dark();
+        let pages = [page(), page(), page()];
+        let tools = [Some("write".to_owned()), Some("edit".to_owned()), None];
+        let text: Vec<String> = records_lines(&pages, &tools, &palette)
+            .iter()
+            .map(row_text)
+            .collect();
+        let separators: Vec<&String> = text.iter().filter(|row| row.starts_with("──")).collect();
+        assert_eq!(
+            separators,
+            [
+                "── write · change 1 of 3 ──",
+                "── edit · change 2 of 3 ──",
+                "── change 3 of 3 ──"
+            ]
+        );
+        // A single record needs no separator.
+        let single: Vec<String> = records_lines(&pages[..1], &tools[..1], &palette)
+            .iter()
+            .map(row_text)
+            .collect();
+        assert!(
+            !single.iter().any(|row| row.starts_with("──")),
+            "{single:?}"
+        );
     }
 
     #[test]
@@ -941,12 +1187,7 @@ mod tests {
         let lines = hunk_lines(&page, &palette);
         let text: Vec<String> = lines
             .iter()
-            .map(|line| {
-                line.spans
-                    .iter()
-                    .map(|span| span.content.as_ref())
-                    .collect()
-            })
+            .map(|line| line.spans.last().unwrap().content.to_string())
             .collect();
         assert_eq!(text[1], "+added();");
         assert_eq!(text[2], "-gone();");
@@ -1003,15 +1244,38 @@ mod tests {
         );
         assert!(text[0].contains("a.rs"), "{}", text[0]);
         assert!(
-            text.iter().any(|row| row.contains("M    4 a.rs")),
+            text.iter().any(|row| row.starts_with("M +3 −1 a.rs")),
+            "{text:?}"
+        );
+        assert!(
+            text.iter().any(|row| row.starts_with("A +9 −0 b.rs")),
             "{text:?}"
         );
         assert!(
             text.iter().any(|row| row.contains("@@ -10,2 +10,3 @@")),
             "{text:?}"
         );
-        assert!(text.iter().any(|row| row.contains("-  old();")), "{text:?}");
+        assert!(
+            text.iter().any(|row| row.contains("11    -  old();")),
+            "{text:?}"
+        );
         assert!(text.last().unwrap().contains("esc back"), "{text:?}");
+    }
+
+    #[test]
+    fn an_unmeasured_file_row_shows_a_dot_instead_of_a_number() {
+        let palette = Palette::dark();
+        let mut view = view();
+        view.files[1].lines = None;
+        let text = capture(
+            |frame| render_diff(frame, frame.area(), &palette, &view),
+            100,
+            20,
+        );
+        assert!(
+            text.iter().any(|row| row.starts_with("A ·     b.rs")),
+            "{text:?}"
+        );
     }
 
     #[test]
@@ -1026,7 +1290,7 @@ mod tests {
         );
         assert!(text[0].contains("Diff · session · 2 files"), "{}", text[0]);
         assert!(
-            !text.iter().any(|row| row.contains("M    4 a.rs")),
+            !text.iter().any(|row| row.contains("+3 −1 a.rs")),
             "{text:?}"
         );
         assert!(text.iter().any(|row| row.contains("+  new();")), "{text:?}");
@@ -1248,8 +1512,7 @@ mod tests {
             state: "succeeded".into(),
             input: vec![Line::from("$ python3 -m unittest")],
             output: vec![Line::from("OK"), Line::from("Ran 30 tests")],
-            scroll: 0,
-            status: String::new(),
+            ..ToolView::default()
         };
         assert_eq!(view.text(), "$ python3 -m unittest\nOK\nRan 30 tests\n");
     }
@@ -1258,18 +1521,79 @@ mod tests {
     fn the_tool_view_scrolls_within_the_output() {
         let mut view = ToolView {
             title: "bash".into(),
-            detail: String::new(),
             state: "succeeded".into(),
-            input: Vec::new(),
             output: (0..10).map(|index| Line::from(index.to_string())).collect(),
-            scroll: 0,
-            status: String::new(),
+            ..ToolView::default()
         };
         view.scroll_by(4, 5);
         assert_eq!(view.scroll, 4);
         assert_eq!(view.visible_output(5).len(), 5);
         view.scroll_by(99, 5);
         assert_eq!(view.scroll, 5);
+        // Home and End scroll by the largest step there is.
+        view.scroll_by(-isize::MAX, 5);
+        assert_eq!(view.scroll, 0);
+        view.scroll_by(isize::MAX, 5);
+        assert_eq!(view.scroll, 5);
+    }
+
+    fn stream(text: &str) -> crate::app::tasks::StreamText {
+        crate::app::tasks::StreamText {
+            text: text.into(),
+            ..Default::default()
+        }
+    }
+
+    /// Bash streams have no total order, so they are separate sections, and
+    /// the card's tail stays until both have answered.
+    #[test]
+    fn bash_output_shows_stdout_and_stderr_sections_once_both_arrive() {
+        let palette = Palette::dark();
+        let mut view = ToolView {
+            output: vec![Line::from("tail")],
+            streams: vec![("stdout".into(), None), ("stderr".into(), None)],
+            status: "loading the full output…".into(),
+            ..ToolView::default()
+        };
+        view.set_stream("stdout", stream("ok 1\nok 2\n"), &palette);
+        assert_eq!(
+            view.text(),
+            "tail\n",
+            "half a result does not replace the tail"
+        );
+        view.set_stream("stderr", stream("warn\u{1b}[31m!\n"), &palette);
+        assert_eq!(
+            view.text(),
+            "── stdout ──\nok 1\nok 2\n\n── stderr ──\nwarn!\n"
+        );
+        assert!(view.status.is_empty());
+    }
+
+    #[test]
+    fn an_empty_stream_is_omitted_and_retention_is_explained() {
+        let palette = Palette::dark();
+        let mut view = ToolView {
+            streams: vec![("stdout".into(), None), ("stderr".into(), None)],
+            ..ToolView::default()
+        };
+        let mut stdout = stream("last line\n");
+        stdout.dropped_head = true;
+        view.set_stream("stdout", stdout, &palette);
+        view.set_stream("stderr", stream(""), &palette);
+        let text = view.text();
+        assert!(!text.contains("stderr"), "{text}");
+        assert!(text.contains("no longer retained\nlast line"), "{text}");
+
+        let mut view = ToolView {
+            streams: vec![("output".into(), None)],
+            ..ToolView::default()
+        };
+        view.set_stream("output", stream("result\n"), &palette);
+        assert_eq!(
+            view.text(),
+            "result\n",
+            "one stream needs no section header"
+        );
     }
 
     #[test]

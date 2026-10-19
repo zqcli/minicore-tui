@@ -2,27 +2,64 @@
 //! the find bar. Both are built here from app state so the reducer and the
 //! renderer agree on rows, hints and key handling.
 
-use ratatui::style::Style;
-use ratatui::text::Line;
+use ratatui::style::{Modifier, Style};
+use ratatui::text::{Line, Span};
 
 use crate::theme::Palette;
 
 use super::panel::{Row, Sheet, Tone, body_lines};
 
-/// The sheet for a pending interaction: an approval with two rows, or a
-/// choice list. A text answer is not offered because the Agent's tool-input
-/// interactions are choices; the composer stays available when one appears.
+/// What an interaction is about: the tool, its one-line detail (a path, a
+/// command) and the start of its input (the content or script it would run).
+pub struct Subject<'a> {
+    pub tool: &'a str,
+    pub detail: &'a str,
+    pub input: Option<&'a str>,
+}
+
+/// Input lines an approval shows before it says how many more there are.
+const INPUT_PREVIEW: usize = 6;
+
+/// The sheet for a pending interaction: the question, what would run, then an
+/// approval with two rows or a choice list. A text answer is not offered
+/// because the Agent's tool-input interactions are choices.
 pub fn interaction_sheet(
     prompt: &str,
-    detail: Option<&str>,
+    subject: &Subject<'_>,
     options: &[String],
     selected: usize,
     palette: &Palette,
 ) -> Sheet {
     let mut body = body_lines(prompt, 72, Style::default().fg(palette.text));
-    if let Some(detail) = detail {
-        body.push(Line::from(""));
-        body.extend(body_lines(detail, 72, Style::default().fg(palette.dim)));
+    if !subject.tool.is_empty() {
+        body.push(Line::from(vec![
+            Span::styled(
+                format!("{}  ", subject.tool),
+                Style::default()
+                    .fg(palette.accent)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                super::panel::truncate(subject.detail.lines().next().unwrap_or(""), 100),
+                Style::default().fg(palette.text),
+            ),
+        ]));
+    }
+    if let Some(input) = subject.input.filter(|input| !input.trim().is_empty()) {
+        let style = Style::default().fg(palette.dim);
+        let lines: Vec<&str> = input.lines().collect();
+        for line in lines.iter().take(INPUT_PREVIEW) {
+            body.push(Line::styled(
+                format!("  {}", super::panel::truncate(line, 100)),
+                style,
+            ));
+        }
+        if lines.len() > INPUT_PREVIEW {
+            body.push(Line::styled(
+                format!("  … {} more lines", lines.len() - INPUT_PREVIEW),
+                Style::default().fg(palette.faint),
+            ));
+        }
     }
     let rows = options
         .iter()
@@ -63,18 +100,21 @@ pub fn find_title(query: &str) -> String {
     }
 }
 
-/// One sessions-picker row: the title (or the first prompt), marked when it is
-/// the resident session, with model and age on the right.
-pub fn session_row(info: &crate::protocol::SessionInfo, resident: bool, now_seconds: u64) -> Row {
-    let title = info
-        .title
-        .clone()
-        .filter(|title| !title.trim().is_empty())
-        .unwrap_or_else(|| crate::app::short_session_id(&info.session_id).to_owned());
-    let label = format!("{}{}", if resident { "● " } else { "  " }, title);
+/// One sessions-picker row: `label` (the title, or the first prompt), marked
+/// when it is the resident session, with model and age on the right.
+pub fn session_row(
+    info: &crate::protocol::SessionInfo,
+    label: String,
+    resident: bool,
+    now_seconds: u64,
+) -> Row {
     let age = age_label(&info.updated_at, now_seconds);
-    let detail = format!("{} · {age}", info.model);
-    Row::new(label, detail)
+    let detail = if age.is_empty() {
+        info.model.clone()
+    } else {
+        format!("{} · {age}", info.model)
+    };
+    Row::new(label, detail).mark(resident)
 }
 
 /// `3h ago`, `2d ago`, or the empty string when the timestamp is not RFC 3339.
@@ -149,11 +189,30 @@ mod tests {
         parse_unix_seconds("2026-01-02T06:04:05.006Z").unwrap()
     }
 
+    const NO_SUBJECT: Subject<'static> = Subject {
+        tool: "",
+        detail: "",
+        input: None,
+    };
+
+    fn body_text(sheet: &Sheet) -> Vec<String> {
+        sheet
+            .body
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect()
+            })
+            .collect()
+    }
+
     #[test]
     fn the_approval_sheet_offers_allow_then_deny() {
         let palette = Palette::dark();
         let options = vec!["Allow once".to_owned(), "Deny".to_owned()];
-        let sheet = interaction_sheet("Write src/main.rs?", None, &options, 0, &palette);
+        let sheet = interaction_sheet("Write src/main.rs?", &NO_SUBJECT, &options, 0, &palette);
         assert_eq!(sheet.title, "Approval");
         assert_eq!(sheet.rows.len(), 2);
         assert_eq!(sheet.rows[0].label, "Allow once");
@@ -168,19 +227,53 @@ mod tests {
         let options = vec!["Allow once".to_owned()];
         let sheet = interaction_sheet(
             "The agent wants to write a file that already exists and will be replaced entirely",
-            Some("src/main.rs"),
+            &Subject {
+                tool: "write",
+                detail: "src/main.rs",
+                input: None,
+            },
             &options,
             0,
             &palette,
         );
-        assert!(sheet.body.len() > 3, "{:?}", sheet.body);
+        let body = body_text(&sheet);
+        assert!(body.len() >= 3, "the prompt wraps: {body:?}");
+        assert_eq!(body.last().unwrap(), "write  src/main.rs");
+    }
+
+    /// An approval says what would run: the command or the content, bounded.
+    #[test]
+    fn the_approval_sheet_previews_the_input_it_would_run() {
+        let palette = Palette::dark();
+        let options = vec!["Allow once".to_owned(), "Deny".to_owned()];
+        let input = (1..=9)
+            .map(|n| format!("line {n}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let sheet = interaction_sheet(
+            "Allow tool `write` for this call?",
+            &Subject {
+                tool: "write",
+                detail: "notes.txt",
+                input: Some(&input),
+            },
+            &options,
+            0,
+            &palette,
+        );
+        let body = body_text(&sheet);
+        assert_eq!(body[1], "write  notes.txt");
+        assert_eq!(body[2], "  line 1");
+        assert_eq!(body[7], "  line 6");
+        assert_eq!(body[8], "  … 3 more lines");
+        assert_eq!(body.len(), 9);
     }
 
     #[test]
     fn a_selection_past_the_end_still_selects_a_row() {
         let palette = Palette::dark();
         let options = vec!["a".to_owned(), "b".to_owned()];
-        let sheet = interaction_sheet("choose", None, &options, 9, &palette);
+        let sheet = interaction_sheet("choose", &NO_SUBJECT, &options, 9, &palette);
         assert_eq!(sheet.selected, Some(1));
     }
 
@@ -201,24 +294,33 @@ mod tests {
 
     #[test]
     fn a_session_row_marks_the_resident_session_and_shows_its_age() {
-        let row = session_row(&info(), true, now());
-        assert!(row.label.starts_with("● Fix the parser"), "{:?}", row.label);
+        let row = session_row(&info(), "Fix the parser".into(), true, now());
+        assert_eq!(row.label, "Fix the parser");
+        assert_eq!(row.mark, Some(true));
         assert_eq!(row.detail, "gpt-6-luna · 3h ago");
-        let row = session_row(&info(), false, now());
-        assert!(row.label.starts_with("  Fix the parser"), "{:?}", row.label);
+        let row = session_row(&info(), "Fix the parser".into(), false, now());
+        assert_eq!(row.mark, Some(false));
     }
 
     #[test]
-    fn an_untitled_session_falls_back_to_its_short_id() {
-        let mut info = info();
-        info.title = None;
-        let row = session_row(&info, false, now());
-        assert_eq!(row.label, "  ses_1acdef", "{:?}", row.label);
-        assert!(
-            !row.label.contains("0123456789"),
-            "a 32-hex id is unreadable as a row label: {:?}",
-            row.label
-        );
+    fn the_resident_row_draws_an_accent_dot_and_others_stay_aligned() {
+        let palette = Palette::dark();
+        let sheet = Sheet::new("Sessions", "hint")
+            .rows(vec![
+                session_row(&info(), "Fix the parser".into(), true, now()),
+                session_row(&info(), "Other".into(), false, now()),
+            ])
+            .selected(Some(1));
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(60, 4)).unwrap();
+        terminal
+            .draw(|frame| super::super::panel::render(frame, frame.area(), &palette, &sheet))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let row = |y: u16| -> String { (0..60).map(|x| buffer[(x, y)].symbol()).collect() };
+        assert!(row(1).starts_with(" ● Fix the parser"), "{:?}", row(1));
+        assert!(row(2).starts_with("   Other"), "{:?}", row(2));
+        assert_eq!(buffer[(1u16, 1u16)].fg, palette.accent);
     }
 
     #[test]

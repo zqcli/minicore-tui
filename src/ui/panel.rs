@@ -32,6 +32,10 @@ pub struct Row {
     pub label: String,
     pub detail: String,
     pub tone: Tone,
+    /// A marker column before the label: `Some(true)` draws an accent `●` for
+    /// the current item (the loaded session, the active model), `Some(false)`
+    /// keeps the column blank so labels stay aligned.
+    pub mark: Option<bool>,
 }
 
 impl Row {
@@ -40,11 +44,17 @@ impl Row {
             label: label.into(),
             detail: detail.into(),
             tone: Tone::Plain,
+            mark: None,
         }
     }
 
     pub fn tone(mut self, tone: Tone) -> Self {
         self.tone = tone;
+        self
+    }
+
+    pub fn mark(mut self, current: bool) -> Self {
+        self.mark = Some(current);
         self
     }
 }
@@ -207,7 +217,13 @@ fn render_row(frame: &mut Frame, area: Rect, palette: &Palette, row: &Row, highl
     }
 
     let detail = clean(&row.detail);
-    let content = area.width.saturating_sub(2 * PAD) as usize;
+    let marker = match row.mark {
+        Some(true) => Span::styled("● ", Style::default().fg(palette.accent)),
+        Some(false) => Span::raw("  "),
+        None => Span::raw(""),
+    };
+    let content =
+        (area.width.saturating_sub(2 * PAD) as usize).saturating_sub(width(&marker.content));
     let detail_width = width(&detail);
     let label = truncate(&row.label, content.saturating_sub(detail_width + 2));
     let gap = content
@@ -223,6 +239,7 @@ fn render_row(frame: &mut Frame, area: Rect, palette: &Palette, row: &Row, highl
     });
     let line = Line::from(vec![
         Span::styled(" ".repeat(PAD as usize), Style::default()),
+        marker,
         Span::styled(label, label_style),
         Span::styled(" ".repeat(gap), Style::default()),
         Span::styled(detail, detail_style),
