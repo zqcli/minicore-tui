@@ -1531,6 +1531,59 @@ async fn an_automatic_compaction_after_a_turn_is_reported() {
 }
 
 #[tokio::test]
+async fn a_replayed_compaction_summary_gets_the_durable_counts() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    // The display projection starts with the stored summary item, which carries
+    // only its text; the counts live in `session.context.coverage`.
+    fake.script(
+        "session.read",
+        json!({
+            "session": session_info("s1"),
+            "items": [crate::testing::chunk(0, json!({"type": "summary", "data": {
+                "content": "the earlier work, summarised"}}))],
+            "next_cursor": null,
+            "total": 1,
+            "history_revision": "h1",
+            "captured_end": 1,
+            "projection": {"revision": "p1", "first_item": 0, "covered_item_count": 0},
+        }),
+    );
+    open(&mut app, &mut rx, &fake, &tx).await;
+
+    app.on_msg(Msg::Op(Box::new(OpDone {
+        session: Some("s1".into()),
+        epoch: app.session.as_ref().unwrap().epoch,
+        kind: OpKind::Context(Ok(serde_json::from_value(json!({
+            "session_id": "s1",
+            "coverage": {"covered_loop_count": 4, "covered_item_count": 332,
+                         "retained_item_count": 2},
+        }))
+        .unwrap())),
+    })));
+
+    let coverage: Vec<_> = app
+        .session
+        .as_ref()
+        .unwrap()
+        .transcript
+        .blocks()
+        .iter()
+        .filter_map(|block| match block {
+            Block::Compaction { coverage, .. } => Some(*coverage),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        coverage,
+        vec![Some((Some(332), Some(2)))],
+        "the replayed summary reports what the context ledger knows"
+    );
+}
+
+#[tokio::test]
 async fn one_compaction_is_reported_once_however_often_it_is_seen() {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let (fake, mut app) = FakeAgent::start(tx.clone());

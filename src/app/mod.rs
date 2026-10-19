@@ -1773,6 +1773,23 @@ impl App {
                             });
                         session.push_compaction(&operation_id, result, coverage);
                     }
+                    if let Some(coverage) = &context.coverage
+                        && coverage.covered_item_count > 0
+                    {
+                        session.cover_replayed_compaction((
+                            coverage.covered_item_count,
+                            coverage.retained_item_count,
+                        ));
+                    }
+                    // History may land after this reply; the counts are
+                    // remembered on the session and applied when it does.
+                    if let Some(coverage) = session.summary_coverage
+                        && session.transcript.blocks().iter().any(|block| {
+                            matches!(block, Block::Compaction { coverage, .. } if coverage.is_none())
+                        })
+                    {
+                        session.cover_replayed_compaction(coverage);
+                    }
                 }
                 let context = context.clone();
                 if let Some(session) = self.session.as_ref() {

@@ -21,6 +21,9 @@ pub struct Session {
     pub presentation: Option<SessionPresentation>,
     pub context: Option<ContextBudget>,
     pub compaction: Option<CompactionProgress>,
+    /// The durable coverage of the current summary, from `session.context`.
+    /// A summary replayed from the store carries no figures of its own.
+    pub summary_coverage: Option<(usize, usize)>,
     pub interaction: Option<PendingInteraction>,
     /// The `first_item` boundary of the display projection: older items are
     /// behind the compaction summary.
@@ -195,6 +198,7 @@ impl Session {
             presentation: None,
             context: None,
             compaction: None,
+            summary_coverage: None,
             interaction: None,
             first_item: 0,
             loaded_from: 0,
@@ -427,6 +431,24 @@ impl Session {
 
     /// Adds the one-line compaction marker. Loaded blocks are never removed,
     /// and one operation is reported once: the manual response, the auto
+    /// Fills the counts on a compaction marker that was rebuilt from history.
+    ///
+    /// A summary item replayed from the store carries only its text, so the
+    /// marker it becomes knows no figures. `session.context` does, and it
+    /// describes that same summary, so the counts are attached once.
+    pub fn cover_replayed_compaction(&mut self, coverage: (usize, usize)) {
+        self.summary_coverage = Some(coverage);
+        let Some(block) = self.transcript.blocks_mut().iter_mut().rev().find(|block| {
+            matches!(block, Block::Compaction { operation_id, coverage, .. }
+                    if operation_id.is_empty() && coverage.is_none())
+        }) else {
+            return;
+        };
+        if let Block::Compaction { coverage: slot, .. } = block {
+            *slot = Some((Some(coverage.0), Some(coverage.1)));
+        }
+    }
+
     /// report and a state refresh can all describe the same compaction.
     pub fn push_compaction(
         &mut self,
