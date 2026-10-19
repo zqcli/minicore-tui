@@ -117,7 +117,7 @@ fn status_line(app: &App, styles: Styles, label: &str) -> Line<'static> {
     }
     if let Some(elapsed) = app.busy_elapsed() {
         text.push_str(" · ");
-        text.push_str(&crate::app::format_duration(elapsed));
+        text.push_str(&super::blocks::format_duration(elapsed));
     }
     if let Some(live) = live {
         if live.requests > 1 {
@@ -125,7 +125,7 @@ fn status_line(app: &App, styles: Styles, label: &str) -> Line<'static> {
         }
         if live.tool_rounds > 0 {
             text.push_str(" · ");
-            text.push_str(&crate::app::plural(live.tool_rounds, "tool"));
+            text.push_str(&super::blocks::plural(live.tool_rounds, "tool"));
         }
     }
     if app.has_interaction() {
@@ -177,7 +177,7 @@ fn footer(app: &App, styles: Styles, width: u16) -> Line<'static> {
             session.info.reasoning.label()
         )
     });
-    let context = app.context_usage().percent.map_or_else(
+    let context = session.and_then(super::views::context_percent).map_or_else(
         || "ctx ?".to_owned(),
         |percent| format!("ctx {percent:.0}%"),
     );
@@ -187,11 +187,11 @@ fn footer(app: &App, styles: Styles, width: u16) -> Line<'static> {
         if usage.input + usage.output > 0 {
             text.push_str(&format!(
                 "↑{} ↓{} ",
-                crate::ui::tokens(usage.input),
-                crate::ui::tokens(usage.output)
+                crate::ui::format_tokens(usage.input),
+                crate::ui::format_tokens(usage.output)
             ));
             if usage.cached > 0 {
-                text.push_str(&format!("R{} ", crate::ui::tokens(usage.cached)));
+                text.push_str(&format!("R{} ", crate::ui::format_tokens(usage.cached)));
             }
             text.push_str("· ");
         }

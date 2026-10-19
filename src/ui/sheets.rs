@@ -5,6 +5,9 @@
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
+use crate::app::Session;
+use crate::app::session::auto_title;
+use crate::protocol::SessionInfo;
 use crate::theme::Palette;
 
 use super::panel::{Row, Sheet, Tone, body_lines};
@@ -76,7 +79,7 @@ pub fn interaction_sheet(
     Sheet::new("Approval", "enter confirm · y allow · n deny · esc deny")
         .body(body)
         .rows(rows)
-        .selected(Some(selected.min(options.len().saturating_sub(1))))
+        .selected(Some(selected))
 }
 
 /// Hint row of the find bar, which changes with the match count.
@@ -100,14 +103,35 @@ pub fn find_title(query: &str) -> String {
     }
 }
 
+/// A session's name in the picker: its title, else (for the resident session)
+/// its first prompt, else its short id.
+pub fn session_label(info: &SessionInfo, resident: Option<&Session>) -> String {
+    let title = info
+        .title
+        .as_deref()
+        .filter(|title| !title.trim().is_empty());
+    title
+        .map(str::to_owned)
+        .or_else(|| {
+            let resident = resident.filter(|session| session.info.session_id == info.session_id)?;
+            auto_title(resident.first_prompt()?)
+        })
+        .unwrap_or_else(|| short_session_id(&info.session_id).to_owned())
+}
+
+/// `ses_8ca3c4cf...` → `ses_8ca3c4`, enough to tell sessions apart in a row.
+fn short_session_id(session_id: &str) -> &str {
+    let body = session_id.strip_prefix("ses_").unwrap_or(session_id);
+    let cut = body
+        .char_indices()
+        .nth(6)
+        .map_or(body.len(), |(index, _)| index);
+    &session_id[..session_id.len() - body.len() + cut]
+}
+
 /// One sessions-picker row: `label` (the title, or the first prompt), marked
 /// when it is the resident session, with model and age on the right.
-pub fn session_row(
-    info: &crate::protocol::SessionInfo,
-    label: String,
-    resident: bool,
-    now_seconds: u64,
-) -> Row {
+pub fn session_row(info: &SessionInfo, label: String, resident: bool, now_seconds: u64) -> Row {
     let age = age_label(&info.updated_at, now_seconds);
     let detail = if age.is_empty() {
         info.model.clone()
@@ -162,7 +186,6 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::SessionInfo;
     use serde_json::json;
 
     fn info() -> SessionInfo {
@@ -256,14 +279,6 @@ mod tests {
         assert_eq!(body[7], "  line 6");
         assert_eq!(body[8], "  … 3 more lines");
         assert_eq!(body.len(), 9);
-    }
-
-    #[test]
-    fn a_selection_past_the_end_still_selects_a_row() {
-        let palette = Palette::dark();
-        let options = vec!["a".to_owned(), "b".to_owned()];
-        let sheet = interaction_sheet("choose", &NO_SUBJECT, &options, 9, &palette);
-        assert_eq!(sheet.selected, Some(1));
     }
 
     #[test]

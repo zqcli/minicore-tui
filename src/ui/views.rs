@@ -8,6 +8,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
+use crate::app::Session;
 use crate::protocol::changes::{DiffLine, DiffPage, LineKind};
 use crate::protocol::{ChangeKind, SessionContext, SessionPresentation};
 use crate::theme::Palette;
@@ -635,21 +636,58 @@ pub fn render_tool(frame: &mut Frame, area: Rect, palette: &Palette, view: &Tool
     }
 }
 
-/// The context view: one readable summary, not a ledger of twenty numbers.
-#[derive(Clone, Debug, Default)]
-pub struct ContextView {
-    pub title: String,
-    pub lines: Vec<Line<'static>>,
+/// The context view's lines: one readable summary, not a ledger of numbers.
+pub fn context_lines(session: Option<&Session>, palette: &Palette) -> Vec<Line<'static>> {
+    summary_lines(
+        session.and_then(|session| session.context.as_ref()),
+        session.and_then(|session| session.presentation.as_ref()),
+        palette,
+    )
+}
+
+/// The context view as plain text, for `c`.
+pub fn context_text(session: Option<&Session>, palette: &Palette) -> String {
+    let lines = context_lines(session, palette);
+    lines
+        .iter()
+        .map(Line::to_string)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// How full the context is, in percent: as the Agent reported it after the
+/// last request, else estimated against the input budget.
+pub fn context_percent(session: &Session) -> Option<f64> {
+    let reported = session
+        .presentation
+        .as_ref()
+        .and_then(|presentation| presentation.context.as_ref())
+        .filter(|usage| usage.tokens.is_some());
+    if let Some(usage) = reported {
+        return usage
+            .percent
+            .or_else(|| match (usage.tokens, usage.window) {
+                (Some(tokens), Some(window)) if window > 0 => {
+                    Some(tokens as f64 / window as f64 * 100.0)
+                }
+                _ => None,
+            });
+    }
+    let budget = session.context.as_ref()?.budget.as_ref()?;
+    let tokens = budget
+        .estimated_request_context_tokens
+        .or(budget.estimated_history_tokens)?;
+    let limit = budget.input_budget_tokens.filter(|limit| *limit > 0)?;
+    Some(tokens as f64 / limit as f64 * 100.0)
 }
 
 /// Builds the summary from the two authoritative views, labelling estimates
 /// as estimates and keeping unknowns as `?` instead of zero.
-pub fn context_view(
-    title: impl Into<String>,
+fn summary_lines(
     context: Option<&SessionContext>,
     presentation: Option<&SessionPresentation>,
     palette: &Palette,
-) -> ContextView {
+) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let usage = presentation.and_then(|view| view.context.as_ref());
 
@@ -660,8 +698,8 @@ pub fn context_view(
                 .unwrap_or(tokens as f64 / window as f64 * 100.0);
             Some(format!(
                 "Context: {} of {} tokens ({percent:.0}%) — reported by the last request",
-                super::tokens(tokens),
-                super::tokens(window)
+                super::format_tokens(tokens),
+                super::format_tokens(window)
             ))
         }
         _ => None,
@@ -679,8 +717,8 @@ pub fn context_view(
         };
         Some(format!(
             "History estimate: {} of {} input tokens{percent}",
-            super::tokens(used),
-            super::tokens(limit)
+            super::format_tokens(used),
+            super::format_tokens(limit)
         ))
     });
     match reported.or(estimated) {
@@ -701,9 +739,9 @@ pub fn context_view(
             lines.push(dim(
                 &format!(
                     "Auto-compacts at {} tokens{percent}{}",
-                    super::tokens(trigger),
+                    super::format_tokens(trigger),
                     match budget.target_tokens {
-                        Some(target) => format!(", keeping about {}", super::tokens(target)),
+                        Some(target) => format!(", keeping about {}", super::format_tokens(target)),
                         None => String::new(),
                     }
                 ),
@@ -735,13 +773,13 @@ pub fn context_view(
                 (Some(before), Some(after)) => match origin {
                     "last" => format!(
                         "Last compaction: {} → {} tokens",
-                        super::tokens(before),
-                        super::tokens(after)
+                        super::format_tokens(before),
+                        super::format_tokens(after)
                     ),
                     other => format!(
                         "Last compaction ({other}): {} → {} tokens",
-                        super::tokens(before),
-                        super::tokens(after)
+                        super::format_tokens(before),
+                        super::format_tokens(after)
                     ),
                 },
                 _ => format!("Last compaction: {}", compact_status(last.status)),
@@ -785,10 +823,7 @@ pub fn context_view(
         palette,
     ));
 
-    ContextView {
-        title: title.into(),
-        lines,
-    }
+    lines
 }
 
 fn phase_counts(operation: &crate::protocol::CompactionProgress) -> String {
@@ -818,17 +853,11 @@ fn compact_status(status: crate::protocol::CompactStatus) -> &'static str {
     }
 }
 
-pub fn render_context(frame: &mut Frame, area: Rect, palette: &Palette, view: &ContextView) {
-    chrome(
-        frame,
-        area,
-        palette,
-        &format!("← {}", view.title),
-        "r refresh · esc back",
-    );
+pub fn render_context(frame: &mut Frame, area: Rect, palette: &Palette, lines: &[Line<'static>]) {
+    chrome(frame, area, palette, "← Context", "r refresh · esc back");
     let bottom = area.bottom().saturating_sub(1);
     let mut y = area.y + 1;
-    for line in &view.lines {
+    for line in lines {
         if y >= bottom {
             break;
         }
@@ -1310,9 +1339,8 @@ mod tests {
                             "before_tokens": 4200, "after_tokens": 900, "covered_loop_count": 6}
         }))
         .unwrap();
-        let view = context_view("Context", Some(&context), Some(&presentation), &palette);
-        let text: Vec<String> = view
-            .lines
+        let lines = summary_lines(Some(&context), Some(&presentation), &palette);
+        let text: Vec<String> = lines
             .iter()
             .map(|line| {
                 line.spans
@@ -1348,9 +1376,8 @@ mod tests {
             "budget": {"estimated_history_tokens": 1000, "input_budget_tokens": 4000}
         }))
         .unwrap();
-        let view = context_view("Context", Some(&context), None, &palette);
-        let text: Vec<String> = view
-            .lines
+        let lines = summary_lines(Some(&context), None, &palette);
+        let text: Vec<String> = lines
             .iter()
             .map(|line| {
                 line.spans
@@ -1380,9 +1407,8 @@ mod tests {
                             "before_tokens": 32100, "after_tokens": 2700}
         }))
         .unwrap();
-        let view = context_view("Context", Some(&context), None, &palette);
-        let text: String = view
-            .lines
+        let lines = summary_lines(Some(&context), None, &palette);
+        let text: String = lines
             .iter()
             .map(|line| {
                 line.spans
@@ -1407,9 +1433,8 @@ mod tests {
             "automatic": {}
         }))
         .unwrap();
-        let view = context_view("Context", Some(&context), None, &palette);
-        let text: String = view
-            .lines
+        let lines = summary_lines(Some(&context), None, &palette);
+        let text: String = lines
             .iter()
             .map(|line| {
                 line.spans
@@ -1432,9 +1457,8 @@ mod tests {
                                   "covered_item_count": 12, "retained_item_count": 0}
         }))
         .unwrap();
-        let view = context_view("Context", Some(&context), None, &palette);
-        let text: String = view
-            .lines
+        let lines = summary_lines(Some(&context), None, &palette);
+        let text: String = lines
             .iter()
             .map(|line| {
                 line.spans
@@ -1600,9 +1624,8 @@ mod tests {
             "last_prepare_failure": "context_uncompressible"
         }))
         .unwrap();
-        let view = context_view("Context", Some(&context), None, &palette);
-        let failure = view
-            .lines
+        let lines = summary_lines(Some(&context), None, &palette);
+        let failure = lines
             .iter()
             .find(|line| {
                 line.spans
@@ -1621,9 +1644,8 @@ mod tests {
             "last_result": {"operation_id": "auto-1", "status": "failed", "failure_kind": "no_progress"}
         }))
         .unwrap();
-        let view = context_view("Context", Some(&context), None, &palette);
-        let text: String = view
-            .lines
+        let lines = summary_lines(Some(&context), None, &palette);
+        let text: String = lines
             .iter()
             .map(|line| {
                 line.spans

@@ -8,8 +8,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde_json::{Value, json};
 use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 
-use crate::app::keys::Input;
-use crate::app::{Action, App, Msg, OpDone, OpKind};
+use crate::app::{Action, App, Msg, SessionOp};
 use crate::testing::FakeAgent;
 use crate::transcript::Block;
 
@@ -136,7 +135,7 @@ impl Harness {
 
     /// One key press; the action it resolves to runs as the main loop runs it.
     pub fn key(&mut self, code: KeyCode, modifiers: KeyModifiers) {
-        if let Input::Action(action) = self.app.on_key(KeyEvent::new(code, modifiers)) {
+        if let Some(action) = self.app.on_key(KeyEvent::new(code, modifiers)) {
             self.app.on_action(action);
         }
     }
@@ -165,23 +164,19 @@ impl Harness {
 
     /// A `session.state` answer arriving for the open session.
     pub fn state(&mut self, state: Value) {
-        self.op(OpKind::State(Ok(serde_json::from_value(state).unwrap())));
+        self.op(SessionOp::State(Ok(serde_json::from_value(state).unwrap())));
     }
 
     /// A `session.context` answer arriving for the open session.
     pub fn context(&mut self, context: Value) {
-        self.op(OpKind::Context(
-            Ok(serde_json::from_value(context).unwrap()),
-        ));
+        self.op(SessionOp::Context(Ok(
+            serde_json::from_value(context).unwrap()
+        )));
     }
 
-    fn op(&mut self, kind: OpKind) {
+    fn op(&mut self, op: SessionOp) {
         let epoch = self.app.session.as_ref().map_or(0, |session| session.epoch);
-        self.app.on_msg(Msg::Op(Box::new(OpDone {
-            session: Some("s1".into()),
-            epoch,
-            kind,
-        })));
+        self.app.on_msg(Msg::Session(epoch, Box::new(op)));
     }
 
     pub fn blocks(&self) -> &[Block] {

@@ -8,7 +8,6 @@ use crossterm::event::{Event as TermEvent, EventStream};
 use futures_util::StreamExt;
 use tokio::sync::mpsc;
 
-use minicore_tui::app::keys::Input;
 use minicore_tui::app::{App, Msg};
 use minicore_tui::cli::{Args, USAGE};
 use minicore_tui::config::Config;
@@ -133,20 +132,14 @@ async fn run() -> i32 {
                 match maybe_event {
                     Some(Ok(TermEvent::Key(key))) => {
                         if key.is_press() {
-                            match app.on_key(key) {
-                                Input::Action(action) => {
-                                    app.on_action(action);
-                                }
-                                Input::Edited | Input::Consumed => {}
-                                Input::Ignored => {}
+                            if let Some(action) = app.on_key(key) {
+                                app.on_action(action);
                             }
                             dirty = true;
                         }
                     }
                     Some(Ok(TermEvent::Mouse(mouse))) => {
-                        if let Input::Action(action) = app.on_mouse(mouse) {
-                            app.on_action(action);
-                        }
+                        app.on_mouse(mouse);
                         dirty = true;
                     }
                     Some(Ok(TermEvent::Paste(text))) => {

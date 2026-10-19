@@ -1,534 +1,256 @@
-//! Async operations. Each function performs one RPC exchange (or a small chain)
-//! and posts exactly one [`OpDone`]; nothing here mutates `App`.
+//! Async operations. Each spawns, awaits the Agent and posts one message;
+//! nothing here touches `App` state.
 
 use std::sync::Arc;
 
+use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
-use super::{BUSY_RETRY, Msg, OpDone, OpKind};
+use super::{App, BUSY_RETRY, Msg, SessionOp};
+use crate::protocol::changes::{ChangeList, DiffPage};
+use crate::protocol::read::RawHistoryItem;
+use crate::protocol::tool::ToolOutputPage;
 use crate::protocol::{
-    self, CompactionResult, ModelListResult, OkResult, PingResult, ProfileListResult,
-    ReadSessionResult, SessionContext, SessionInfo, SessionListResult, SessionPresentation,
-    SessionResult, SessionState, SessionUpdateResult, SteerResult, ToolRef, TurnRef,
-    TurnResultPage, TurnSendResult, TurnWaitResult, changes::ChangeList, tool::ToolOutputPage,
-    tool::ToolReadResult,
+    self, ChunkAssembler, ChunkOutcome, ModelListResult, PingResult, ProfileListResult, ReadCursor,
+    ReadSessionResult, RpcError, SessionInfo, SessionListResult, SessionResult, SnapshotPin,
+    ToolRef, TurnRef, TurnResultPage, TurnWaitResult,
 };
 use crate::rpc::Client;
-use crate::transcript::ChangeSummary;
+use crate::transcript::{ChangeSummary, NoticeLevel};
 
 pub type Tx = mpsc::UnboundedSender<Msg>;
 
-fn post(tx: &Tx, session: Option<&str>, kind: OpKind) {
-    let _ = tx.send(Msg::Op(Box::new(OpDone {
-        session: session.map(str::to_owned),
-        epoch: 0,
-        kind,
-    })));
-}
-
-/// One assembled history page.
+/// An assembled history window.
 pub struct History {
-    /// Source item index paired with its decoded body, in ascending order.
-    pub items: Vec<(usize, protocol::read::RawHistoryItem)>,
+    /// Decoded items in source order.
+    pub items: Vec<RawHistoryItem>,
+    /// The first source item of the window.
     pub from: usize,
-    pub to: usize,
-    /// The display projection's `first_item`: the boundary the Agent itself
-    /// reports, which is where the visible history starts. It is not the same
-    /// as `from`, the first item this page happens to contain.
+    /// The display projection's `first_item`: older items are behind the
+    /// compaction summary.
     pub floor: usize,
     pub has_more: bool,
+    pub canonical: bool,
 }
 
-/// Handshake, capability check and catalogs. Posts `Msg::Ready`, or a terminal
+/// Which part of the history to read.
+#[derive(Clone, Copy)]
+pub enum Window {
+    Tail,
+    /// The display page just before this item.
+    Before(usize),
+    /// The canonical page just before this item, below the display floor.
+    CanonicalBefore(usize),
+}
+
+impl App {
+    /// Runs `work` and posts its result for the session resident now.
+    pub(super) fn spawn(&self, work: impl Future<Output = SessionOp> + Send + 'static) {
+        let Some(epoch) = self.session.as_ref().map(|session| session.epoch) else {
+            return;
+        };
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let _ = tx.send(Msg::Session(epoch, Box::new(work.await)));
+        });
+    }
+
+    /// One call for the resident session, whose id joins `fields`; `wrap` turns
+    /// the result into the op to post.
+    pub(super) fn call<R: DeserializeOwned + Send + 'static>(
+        &self,
+        method: &'static str,
+        mut fields: Value,
+        wrap: impl FnOnce(Result<R, RpcError>) -> SessionOp + Send + 'static,
+    ) {
+        if let Some(session) = self.session.as_ref() {
+            fields["session_id"] = json!(session.info.session_id);
+        }
+        let client = self.client.clone();
+        self.spawn(async move { wrap(client.call(method, &fields).await) });
+    }
+
+    /// Runs `work` and posts the message it produces, whatever session is open.
+    pub(super) fn spawn_msg(&self, work: impl Future<Output = Msg> + Send + 'static) {
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let _ = tx.send(work.await);
+        });
+    }
+}
+
+/// Handshake, capability check and catalogs. Posts `Msg::Ready`, or
 /// `Msg::AgentClosed` when the backend cannot be used.
 pub async fn bootstrap(client: Arc<Client>, tx: Tx) {
-    let ping = match client
-        .call::<Value, PingResult>(protocol::METHOD_PING, &Value::Null)
-        .await
-    {
-        Ok(ping) => ping,
-        Err(error) => return closed(&tx, error.message),
+    let ready = async {
+        let ping: PingResult = client.call(protocol::METHOD_PING, &Value::Null).await?;
+        protocol::validate_backend(&ping).map_err(|error| RpcError::closed(error.to_string()))?;
+        let models: ModelListResult = client.call(protocol::METHOD_MODELS, &Value::Null).await?;
+        let profiles: ProfileListResult =
+            client.call(protocol::METHOD_PROFILES, &Value::Null).await?;
+        let sessions: SessionListResult = client
+            .call(protocol::METHOD_SESSION_LIST, &Value::Null)
+            .await?;
+        Ok::<_, RpcError>(super::Ready {
+            models: models.models,
+            profiles: profiles.profiles,
+            sessions: sessions.sessions,
+        })
     };
-    if let Err(error) = protocol::validate_backend(&ping) {
-        return closed(&tx, error.to_string());
-    }
-    let models = match client
-        .call::<Value, ModelListResult>(protocol::METHOD_MODELS, &Value::Null)
-        .await
-    {
-        Ok(list) => list.models,
-        Err(error) => return closed(&tx, error.message),
-    };
-    let profiles = match client
-        .call::<Value, ProfileListResult>(protocol::METHOD_PROFILES, &Value::Null)
-        .await
-    {
-        Ok(list) => list.profiles,
-        Err(error) => return closed(&tx, error.message),
-    };
-    let sessions = match list_sessions(client.as_ref()).await {
-        Ok(sessions) => sessions,
-        Err(error) => return closed(&tx, error.message),
-    };
-    let _ = tx.send(Msg::Ready(Box::new(super::Ready {
-        models,
-        profiles,
-        sessions,
-    })));
-}
-
-fn closed(tx: &Tx, reason: String) {
-    let _ = tx.send(Msg::AgentClosed(reason));
-}
-
-pub async fn list_sessions(client: &Client) -> Result<Vec<SessionInfo>, protocol::RpcError> {
-    let list: SessionListResult = client
-        .call::<Value, SessionListResult>(protocol::METHOD_SESSION_LIST, &Value::Null)
-        .await?;
-    Ok(list.sessions)
-}
-
-pub fn reload_sessions(client: Arc<Client>, tx: Tx) {
-    tokio::spawn(async move {
-        match list_sessions(client.as_ref()).await {
-            Ok(sessions) => {
-                let _ = tx.send(Msg::Sessions(sessions));
-            }
-            Err(error) => {
-                let _ = tx.send(Msg::Notice(
-                    crate::transcript::block::NoticeLevel::Error,
-                    error.message,
-                ));
-            }
-        }
+    let _ = tx.send(match ready.await {
+        Ok(ready) => Msg::Ready(Box::new(ready)),
+        Err(error) => Msg::AgentClosed(error.message),
     });
 }
 
-pub fn open_session(client: Arc<Client>, tx: Tx, session_id: String) {
-    tokio::spawn(async move {
-        let params = json!({ "session_id": session_id });
-        let result: Result<SessionResult, _> = client
-            .call::<Value, SessionResult>(protocol::METHOD_SESSION_OPEN, &params)
-            .await;
-        post(
-            &tx,
-            Some(&session_id),
-            OpKind::Opened(result.map(|result| result.session)),
-        );
-    });
+/// `session.open` or `session.create`; both answer with the session.
+pub async fn session(
+    client: Arc<Client>,
+    method: &'static str,
+    params: Value,
+) -> Result<SessionInfo, RpcError> {
+    let result: SessionResult = client.call(method, &params).await?;
+    Ok(result.session)
 }
 
-pub fn create_session(client: Arc<Client>, tx: Tx, params: Value) {
-    tokio::spawn(async move {
-        let result: Result<SessionResult, _> = client
-            .call::<Value, SessionResult>(protocol::METHOD_SESSION_CREATE, &params)
-            .await;
-        post(
-            &tx,
-            None,
-            OpKind::Created(result.map(|result| result.session)),
-        );
-    });
-}
-
-/// Closes (if the Agent still holds it) and deletes one stored session. The
-/// picker only deletes sessions the TUI is not running, so a close here is
-/// normally a no-op; it is what makes delete work for a session another client
-/// left loaded.
-pub fn delete_session(client: Arc<Client>, tx: Tx, session_id: String) {
-    tokio::spawn(async move {
-        let params = json!({ "session_id": session_id });
-        let result = async {
-            match client
-                .call::<Value, OkResult>(protocol::METHOD_SESSION_CLOSE, &params)
-                .await
-            {
-                // A closed row is what the picker deletes, so this is normal.
-                Ok(_) => {}
-                Err(error) if error.code == protocol::SESSION_NOT_LOADED => {}
-                Err(error) => return Err(error),
-            }
-            client
-                .call::<Value, OkResult>(protocol::METHOD_SESSION_DELETE, &params)
-                .await
-                .map(|_| ())
-        }
-        .await;
-        post(&tx, None, OpKind::Deleted(session_id, result));
-    });
-}
-
-pub fn session_state(client: Arc<Client>, tx: Tx, session_id: String, epoch: u64) {
-    tokio::spawn(async move {
-        let params = json!({ "session_id": session_id });
-        let result = client
-            .call::<Value, SessionState>(protocol::METHOD_SESSION_STATE, &params)
-            .await;
-        let _ = tx.send(Msg::Op(Box::new(OpDone {
-            session: Some(session_id),
-            epoch,
-            kind: OpKind::State(result),
-        })));
-    });
-}
-
-pub fn presentation(client: Arc<Client>, tx: Tx, session_id: String, epoch: u64) {
-    tokio::spawn(async move {
-        let params = json!({ "session_id": session_id });
-        let result = client
-            .call::<Value, SessionPresentation>(protocol::METHOD_SESSION_PRESENTATION, &params)
-            .await;
-        let _ = tx.send(Msg::Op(Box::new(OpDone {
-            session: Some(session_id),
-            epoch,
-            kind: OpKind::Presentation(result),
-        })));
-    });
-}
-
-pub fn context(client: Arc<Client>, tx: Tx, session_id: String) {
-    tokio::spawn(async move {
-        let params = json!({ "session_id": session_id });
-        let result = client
-            .call::<Value, SessionContext>(protocol::METHOD_SESSION_CONTEXT, &params)
-            .await;
-        post(&tx, Some(&session_id), OpKind::Context(result));
-    });
-}
-
-pub fn rename(client: Arc<Client>, tx: Tx, session_id: String, title: String) {
-    tokio::spawn(async move {
-        let params = json!({"session_id": session_id, "title": title});
-        let result: Result<SessionResult, _> = client
-            .call::<Value, SessionResult>(protocol::METHOD_SESSION_RENAME, &params)
-            .await;
-        post(
-            &tx,
-            Some(&session_id),
-            OpKind::Renamed(result.map(|result| result.session)),
-        );
-    });
-}
-
-pub fn update_session(client: Arc<Client>, tx: Tx, params: Value, session_id: String) {
-    tokio::spawn(async move {
-        let result: Result<SessionUpdateResult, _> = client
-            .call::<Value, SessionUpdateResult>(protocol::METHOD_SESSION_UPDATE, &params)
-            .await;
-        post(
-            &tx,
-            Some(&session_id),
-            OpKind::Updated(result.map(|result| result.session)),
-        );
-    });
-}
-
-pub fn send_turn(client: Arc<Client>, tx: Tx, session_id: String, text: String, epoch: u64) {
-    tokio::spawn(async move {
-        let params = json!({"session_id": session_id, "text": text});
-        let result = client
-            .call::<Value, TurnSendResult>(protocol::METHOD_TURN_SEND, &params)
+/// Closes (when another client left it loaded) and deletes a stored session.
+pub async fn delete_session(client: Arc<Client>, session_id: String) -> Msg {
+    let params = json!({ "session_id": session_id });
+    let result = async {
+        match client
+            .call::<_, Value>(protocol::METHOD_SESSION_CLOSE, &params)
             .await
-            .map(|sent| sent.turn);
-        let _ = tx.send(Msg::Op(Box::new(OpDone {
-            session: Some(session_id),
-            epoch,
-            kind: OpKind::Sent(text, result),
-        })));
-    });
+        {
+            Err(error) if error.code != protocol::SESSION_NOT_LOADED => return Err(error),
+            _ => {}
+        }
+        client
+            .call::<_, Value>(protocol::METHOD_SESSION_DELETE, &params)
+            .await
+            .map(drop)
+    }
+    .await;
+    Msg::Deleted(session_id, result)
 }
 
 /// Waits for the turn to end. A full deferred queue or a busy session is a
 /// condition, not an outcome, so the wait is registered again.
-pub fn wait_turn(client: Arc<Client>, tx: Tx, turn: TurnRef, epoch: u64) {
-    tokio::spawn(async move {
-        let params = json!({"session_id": turn.session_id, "loop_id": turn.loop_id});
-        let result = loop {
-            match client
-                .call::<Value, TurnWaitResult>(protocol::METHOD_TURN_WAIT, &params)
-                .await
-            {
-                Err(error) if error.is_capacity() || error.is_busy() => {
-                    tokio::time::sleep(BUSY_RETRY).await;
-                }
-                result => break result,
+pub async fn wait_turn(client: Arc<Client>, turn: TurnRef) -> SessionOp {
+    let params = json!({"session_id": turn.session_id, "loop_id": turn.loop_id});
+    loop {
+        match client
+            .call::<_, TurnWaitResult>(protocol::METHOD_TURN_WAIT, &params)
+            .await
+        {
+            Err(error) if error.is_capacity() || error.is_busy() => {
+                tokio::time::sleep(BUSY_RETRY).await;
             }
+            result => return SessionOp::Waited(result),
+        }
+    }
+}
+
+/// Reads one history window. A stale pin means the history moved while it was
+/// paged; the read starts over once with a fresh probe.
+pub async fn read_history(
+    client: Arc<Client>,
+    session_id: String,
+    window: Window,
+) -> Result<History, RpcError> {
+    let read = async || -> Result<History, RpcError> {
+        let canonical = matches!(window, Window::CanonicalBefore(_));
+        let view = if canonical { "canonical" } else { "display" };
+        let pin = probe(&client, &session_id, view).await?;
+        let (start, end) = match window {
+            Window::Tail => (
+                pin.total
+                    .saturating_sub(protocol::TAIL_ITEMS)
+                    .max(pin.first_item),
+                pin.total,
+            ),
+            Window::Before(end) => (
+                end.saturating_sub(protocol::PAGE_LIMIT).max(pin.first_item),
+                end,
+            ),
+            Window::CanonicalBefore(end) => (end.saturating_sub(protocol::PAGE_LIMIT), end),
         };
-        let _ = tx.send(Msg::Op(Box::new(OpDone {
-            session: Some(turn.session_id),
-            epoch,
-            kind: OpKind::Waited(Box::new(result)),
-        })));
-    });
-}
-
-pub fn steer(client: Arc<Client>, tx: Tx, turn: TurnRef, text: String) {
-    tokio::spawn(async move {
-        let params = json!({
-            "session_id": turn.session_id.clone(),
-            "loop_id": turn.loop_id.clone(),
-            "text": text,
-        });
-        let result: Result<SteerResult, _> = client
-            .call::<Value, SteerResult>(protocol::METHOD_TURN_STEER, &params)
-            .await;
-        let _ = tx.send(Msg::Op(Box::new(OpDone {
-            session: Some(turn.session_id),
-            epoch: 0,
-            kind: OpKind::Steered(result.map(|result| result.steer_index.unwrap_or(0))),
-        })));
-    });
-}
-
-pub fn cancel_turn(client: Arc<Client>, tx: Tx, turn: TurnRef) {
-    tokio::spawn(async move {
-        let params = json!({"session_id": turn.session_id, "loop_id": turn.loop_id});
-        let result: Result<protocol::CancelledResult, _> = client
-            .call::<Value, protocol::CancelledResult>(protocol::METHOD_TURN_CANCEL, &params)
-            .await;
-        let _ = tx.send(Msg::Op(Box::new(OpDone {
-            session: Some(turn.session_id),
-            epoch: 0,
-            kind: OpKind::Cancelled(result.map(|_| ())),
-        })));
-    });
-}
-
-pub fn answer(client: Arc<Client>, tx: Tx, params: Value, session_id: String) {
-    tokio::spawn(async move {
-        let result: Result<OkResult, _> = client
-            .call::<Value, OkResult>(protocol::METHOD_INTERACTION_ANSWER, &params)
-            .await;
-        post(&tx, Some(&session_id), OpKind::Answered(result.map(|_| ())));
-    });
-}
-
-pub fn compact(client: Arc<Client>, tx: Tx, session_id: String, operation_id: String) {
-    tokio::spawn(async move {
-        let params = json!({"session_id": session_id, "operation_id": operation_id});
-        let result: Result<CompactionResult, _> = client
-            .call::<Value, CompactionResult>(protocol::METHOD_SESSION_COMPACT, &params)
-            .await;
-        post(&tx, Some(&session_id), OpKind::Compacted(result));
-    });
-}
-
-/// Reads the tail of the display projection. A fresh probe always comes first,
-/// so a pin is never cached across operations.
-pub fn load_tail(client: Arc<Client>, tx: Tx, session_id: String) {
-    tokio::spawn(async move {
-        let result = tail(client.as_ref(), &session_id).await;
-        post(&tx, Some(&session_id), OpKind::History(result));
-    });
-}
-
-/// The tail window, retried once with a fresh pin: a page continuation can be
-/// refused with a stale pin while the Agent is appending, and restarting with
-/// a new probe is the documented recovery.
-async fn tail(client: &Client, session_id: &str) -> Result<History, protocol::RpcError> {
-    match read_tail(client, session_id).await {
-        Err(error) if error.code == protocol::INVALID_STATE => read_tail(client, session_id).await,
+        let items = read_window(&client, &session_id, view, &pin, start, end).await?;
+        Ok(History {
+            items,
+            from: start,
+            floor: pin.first_item,
+            has_more: start > pin.first_item,
+            canonical,
+        })
+    };
+    match read().await {
+        Err(error) if error.is_stale_pin() => read().await,
         result => result,
     }
 }
 
-async fn read_tail(client: &Client, session_id: &str) -> Result<History, protocol::RpcError> {
-    let probe = probe(client, session_id, "display").await?;
-    let total = probe.total;
-    let start = total
-        .saturating_sub(protocol::TAIL_ITEMS)
-        .max(probe.first_item);
-    read_window(client, session_id, "display", probe, start, total).await
-}
-
-/// Reads the page immediately older than `before`.
-pub fn load_older(client: Arc<Client>, tx: Tx, session_id: String, before: usize) {
-    tokio::spawn(async move {
-        let result = older(client.as_ref(), &session_id, before).await;
-        post(&tx, Some(&session_id), OpKind::Older(result));
-    });
-}
-
-/// An older page, retried once with a fresh pin: a turn appending while the page
-/// is read moves the captured end, and a refused pin is the documented signal to
-/// probe again rather than to give up on what is already loaded.
-async fn older(
-    client: &Client,
-    session_id: &str,
-    before: usize,
-) -> Result<History, protocol::RpcError> {
-    match read_older(client, session_id, before).await {
-        Err(error) if error.code == protocol::INVALID_STATE => {
-            read_older(client, session_id, before).await
-        }
-        result => result,
-    }
-}
-
-async fn read_older(
-    client: &Client,
-    session_id: &str,
-    before: usize,
-) -> Result<History, protocol::RpcError> {
-    let probe = probe(client, session_id, "display").await?;
-    let start = before
-        .saturating_sub(protocol::PAGE_LIMIT)
-        .max(probe.first_item);
-    read_window(client, session_id, "display", probe, start, before).await
-}
-
-/// Reads the page immediately older than `before` in the canonical view: the
-/// items the display projection collapsed into the compaction summary. A fresh
-/// pin with its own boundary is required, because the canonical history has
-/// items below the display `first_item`.
-pub fn load_canonical(client: Arc<Client>, tx: Tx, session_id: String, before: usize) {
-    tokio::spawn(async move {
-        let result = canonical(client.as_ref(), &session_id, before).await;
-        post(&tx, Some(&session_id), OpKind::Canonical(result));
-    });
-}
-
-/// A page below the display floor, retried once with a fresh pin like the
-/// display pages: the same stale-pin race applies to the canonical view.
-async fn canonical(
-    client: &Client,
-    session_id: &str,
-    before: usize,
-) -> Result<History, protocol::RpcError> {
-    match read_canonical(client, session_id, before).await {
-        Err(error) if error.code == protocol::INVALID_STATE => {
-            read_canonical(client, session_id, before).await
-        }
-        result => result,
-    }
-}
-
-async fn read_canonical(
-    client: &Client,
-    session_id: &str,
-    before: usize,
-) -> Result<History, protocol::RpcError> {
-    let probe = probe(client, session_id, "canonical").await?;
-    let start = before.saturating_sub(protocol::PAGE_LIMIT);
-    read_window(client, session_id, "canonical", probe, start, before).await
-}
-
-/// Result of the one-item probe that establishes a pin and the window bounds.
-#[derive(Clone)]
-struct Probe {
-    pin: protocol::SnapshotPin,
-    total: usize,
-    first_item: usize,
-}
-
-async fn probe(client: &Client, session_id: &str, view: &str) -> Result<Probe, protocol::RpcError> {
+/// A one-item read that pins the snapshot the window is read from.
+async fn probe(client: &Client, session_id: &str, view: &str) -> Result<SnapshotPin, RpcError> {
     let params = json!({
         "session_id": session_id,
         "limit": protocol::PROBE_LIMIT,
         "max_bytes": protocol::PROBE_MAX_BYTES,
         "view": view,
     });
-    let page: ReadSessionResult = client
-        .call::<Value, ReadSessionResult>(protocol::METHOD_SESSION_READ, &params)
-        .await?;
-    let pin = page.pin();
-    Ok(Probe {
-        total: pin.total,
-        first_item: pin.first_item,
-        pin,
-    })
+    let page: ReadSessionResult = client.call(protocol::METHOD_SESSION_READ, &params).await?;
+    Ok(page.pin())
 }
 
-/// Reads `[start, end)` and assembles every complete item in it.
+/// Reads `[start, end)` against `pin` and decodes every complete item.
 async fn read_window(
     client: &Client,
     session_id: &str,
     view: &str,
-    probe: Probe,
+    pin: &SnapshotPin,
     start: usize,
     end: usize,
-) -> Result<History, protocol::RpcError> {
-    let mut assembler = protocol::ChunkAssembler::new();
+) -> Result<Vec<RawHistoryItem>, RpcError> {
+    let mut assembler = ChunkAssembler::new();
     let mut items = Vec::new();
-    let mut cursor = Some(protocol::ReadCursor {
+    let mut cursor = Some(ReadCursor {
         item: start,
         offset: 0,
     });
-    while let Some(position) = cursor {
-        if position.item >= end {
-            break;
-        }
+    while let Some(position) = cursor.filter(|position| position.item < end) {
         let mut params = json!({
             "session_id": session_id,
             "limit": protocol::PAGE_LIMIT,
             "max_bytes": protocol::PAGE_MAX_BYTES,
             "view": view,
             "cursor": position.value(),
-            "captured_end": probe.pin.captured_end,
-            "history_revision": probe.pin.history_revision,
+            "captured_end": pin.captured_end,
+            "history_revision": pin.history_revision,
         });
-        if let Some(projection) = &probe.pin.projection_revision {
+        if let Some(projection) = &pin.projection_revision {
             params["projection_revision"] = json!(projection);
         }
-        let page: ReadSessionResult = client
-            .call::<Value, ReadSessionResult>(protocol::METHOD_SESSION_READ, &params)
-            .await?;
-        let mut advanced = false;
+        let page: ReadSessionResult = client.call(protocol::METHOD_SESSION_READ, &params).await?;
         for chunk in page.items {
             let index = chunk.index;
-            match assembler.push(chunk) {
-                Ok(protocol::ChunkOutcome::Item(item)) => {
-                    if index < end
-                        && let Ok(decoded) = protocol::read::decode_item(&item.data)
-                    {
-                        items.push((index, decoded));
-                    }
-                    advanced = true;
-                }
-                Ok(protocol::ChunkOutcome::Pending | protocol::ChunkOutcome::Oversized { .. }) => {}
-                Err(_) => {
-                    advanced = true;
-                }
+            if let Ok(ChunkOutcome::Item(item)) = assembler.push(chunk)
+                && index < end
+                && let Ok(decoded) = protocol::read::decode_item(&item.data)
+            {
+                items.push(decoded);
             }
         }
-        let next = page
-            .next_cursor
-            .as_ref()
-            .and_then(protocol::ReadCursor::from_value);
-        cursor = next;
-        if !advanced && cursor.is_none() {
-            break;
-        }
+        cursor = page.next_cursor.as_ref().and_then(ReadCursor::from_value);
     }
-    Ok(History {
-        from: start,
-        to: end,
-        floor: probe.first_item,
-        has_more: start > probe.first_item,
-        items,
-    })
+    Ok(items)
 }
 
-/// Re-reads one turn's durable items, used after a gap or a non-completed
-/// outcome. The live region is replaced by these.
-pub fn load_turn_result(client: Arc<Client>, tx: Tx, turn: TurnRef, epoch: u64) {
-    tokio::spawn(async move {
-        let session_id = turn.session_id.clone();
-        let result = read_turn_result(client.as_ref(), &turn).await;
-        let _ = tx.send(Msg::Op(Box::new(OpDone {
-            session: Some(session_id),
-            epoch,
-            kind: OpKind::TurnItems(result),
-        })));
-    });
-}
-
-async fn read_turn_result(
-    client: &Client,
-    turn: &TurnRef,
-) -> Result<Vec<(usize, protocol::read::RawHistoryItem)>, protocol::RpcError> {
-    let mut assembler = protocol::ChunkAssembler::new();
+/// One turn's durable items, read after a gap or an unfinished outcome.
+pub async fn read_turn(
+    client: Arc<Client>,
+    turn: TurnRef,
+) -> Result<Vec<RawHistoryItem>, RpcError> {
+    let mut assembler = ChunkAssembler::new();
     let mut items = Vec::new();
     let mut cursor: Option<Value> = None;
     loop {
@@ -541,91 +263,82 @@ async fn read_turn_result(
         if let Some(cursor) = cursor.take() {
             params["cursor"] = cursor;
         }
-        let page: TurnResultPage = client
-            .call::<Value, TurnResultPage>(protocol::METHOD_TURN_RESULT, &params)
-            .await?;
+        let page: TurnResultPage = client.call(protocol::METHOD_TURN_RESULT, &params).await?;
         for chunk in page.items {
-            let index = chunk.index;
-            match assembler.push(chunk) {
-                Ok(protocol::ChunkOutcome::Item(item)) => {
-                    if let Ok(decoded) = protocol::read::decode_item(&item.data) {
-                        items.push((index, decoded));
-                    }
-                }
-                Ok(protocol::ChunkOutcome::Pending | protocol::ChunkOutcome::Oversized { .. }) => {}
-                Err(_) => break,
+            if let Ok(ChunkOutcome::Item(item)) = assembler.push(chunk)
+                && let Ok(decoded) = protocol::read::decode_item(&item.data)
+            {
+                items.push(decoded);
             }
         }
-        match page.next_cursor {
-            Some(next) => cursor = Some(next),
-            None => break,
+        cursor = page.next_cursor;
+        if cursor.is_none() {
+            return Ok(items);
         }
     }
-    Ok(items)
 }
 
-/// One turn's change list and its line counts, for the turn-end summary line.
-pub fn load_changes(client: Arc<Client>, tx: Tx, session_id: String, loop_id: String) {
-    tokio::spawn(async move {
-        let result = session_changes(client.as_ref(), &session_id, &loop_id).await;
-        post(&tx, Some(&session_id), OpKind::Changes(loop_id, result));
-    });
-}
-
-async fn session_changes(
-    client: &Client,
-    session_id: &str,
-    loop_id: &str,
-) -> Result<ChangeSummary, protocol::RpcError> {
+/// How many files a turn changed and, when every diff can be counted, its
+/// added and removed lines.
+pub async fn turn_changes(
+    client: Arc<Client>,
+    session_id: String,
+    loop_id: String,
+) -> Result<ChangeSummary, RpcError> {
     let params = json!({
         "session_id": session_id,
         "scope": {"turn": {"loop_id": loop_id}},
         "limit": 100,
-        "max_bytes": 65536,
+        "max_bytes": 65_536,
     });
-    let list: ChangeList = client
-        .call::<Value, ChangeList>(protocol::METHOD_CHANGES_LIST, &params)
-        .await?;
-    let files = list.files();
-    if files == 0 {
-        return Ok(ChangeSummary {
-            files: 0,
-            lines: Some((0, 0)),
-        });
-    }
-    // Line counts come from the per-file diffs. Each record is counted on its
-    // own, because line indexes are per file. One uncountable record makes the
-    // pair unknown: a partial sum would read as if only some files changed.
-    let (mut added, mut removed) = (0, 0);
+    let list: ChangeList = client.call(protocol::METHOD_CHANGES_LIST, &params).await?;
+    let mut lines = Some((0, 0));
     for record in &list.records {
-        if !record.details_available {
-            return Ok(ChangeSummary { files, lines: None });
-        }
-        let Some((record_added, record_removed)) =
-            read_diff(client, session_id, &record.change_ref).await?
-        else {
-            return Ok(ChangeSummary { files, lines: None });
+        let Some((added, removed)) = lines else {
+            break;
         };
-        added += record_added;
-        removed += record_removed;
+        lines = None;
+        if record.details_available {
+            let page = read_diff(&client, &session_id, &record.change_ref).await?;
+            let available = page
+                .availability
+                .as_deref()
+                .is_none_or(|state| state == "available");
+            // An uncountable record makes the total unknown rather than partial.
+            if available && !page.binary && !page.truncated && !page.stale {
+                let (more, fewer) = protocol::changes::count_lines(std::slice::from_ref(&page));
+                lines = Some((added + more, removed + fewer));
+            }
+        }
     }
     Ok(ChangeSummary {
-        files,
-        lines: Some((added, removed)),
+        files: list.files(),
+        lines,
     })
 }
 
-/// Counts one file's added and removed lines, paging its diff to exhaustion.
-/// `None` means the diff exists but cannot be counted (unavailable, partial,
-/// truncated, stale or binary), which is reported as an unknown count rather
-/// than as zero. A capacity refusal is retried briefly: the Agent admits a
-/// bounded number of concurrent reads and other clients share that allowance.
+/// Pages of one path's change records, one merged page per record.
+pub async fn read_diffs(
+    client: Arc<Client>,
+    session_id: String,
+    change_refs: Vec<String>,
+) -> Result<Vec<DiffPage>, RpcError> {
+    let mut pages = Vec::with_capacity(change_refs.len());
+    for change_ref in change_refs {
+        pages.push(read_diff(&client, &session_id, &change_ref).await?);
+    }
+    Ok(pages)
+}
+
+/// One change record's diff, paged to the end into one page. The Agent admits
+/// few concurrent reads and other clients share them, so a capacity refusal
+/// is retried briefly.
 async fn read_diff(
     client: &Client,
     session_id: &str,
     change_ref: &str,
-) -> Result<Option<(usize, usize)>, protocol::RpcError> {
-    let mut pages = Vec::new();
+) -> Result<DiffPage, RpcError> {
+    let mut hunks = Vec::new();
     let mut cursor: Option<Value> = None;
     loop {
         let params = json!({
@@ -635,114 +348,17 @@ async fn read_diff(
             "max_bytes": protocol::PAGE_MAX_BYTES,
         });
         let mut attempt = 0;
-        let page = loop {
-            let result = client
-                .call::<Value, protocol::changes::DiffPage>(protocol::METHOD_CHANGES_DIFF, &params)
-                .await;
-            match result {
-                Ok(page) => break page,
+        let mut page: DiffPage = loop {
+            match client.call(protocol::METHOD_CHANGES_DIFF, &params).await {
                 Err(error) if error.is_capacity() && attempt < DIFF_RETRIES => {
                     attempt += 1;
                     tokio::time::sleep(BUSY_RETRY * attempt).await;
                 }
-                Err(error) => return Err(error),
+                result => break result?,
             }
         };
-        let unavailable = page
-            .availability
-            .as_deref()
-            .is_some_and(|state| state != "available");
-        if page.binary || unavailable || page.truncated || page.stale {
-            return Ok(None);
-        }
-        cursor = page.next_cursor.clone();
-        pages.push(page);
-        if cursor.is_none() {
-            return Ok(Some(protocol::changes::count_lines(&pages)));
-        }
-    }
-}
-
-/// Attempts at one diff page before a capacity refusal is reported.
-const DIFF_RETRIES: u32 = 2;
-
-/// Lists the change records of one diff scope; `wire` is that scope as
-/// `changes.list` takes it. The diff view gets files first, then hunks, so a
-/// huge workspace never blocks the panel from opening.
-pub fn list_changes(
-    client: Arc<Client>,
-    tx: Tx,
-    session_id: String,
-    scope: crate::app::DiffScope,
-    wire: protocol::ChangeScope,
-) {
-    tokio::spawn(async move {
-        let params = json!({
-            "session_id": session_id,
-            "scope": wire.value(),
-            "limit": 200,
-            "max_bytes": 262_144,
-        });
-        let result: Result<ChangeList, _> = client
-            .call::<Value, ChangeList>(protocol::METHOD_CHANGES_LIST, &params)
-            .await;
-        post(
-            &tx,
-            Some(&session_id),
-            OpKind::ChangeFiles(scope, result.map(|list| list.records)),
-        );
-    });
-}
-
-/// Pages every change record of one path for the diff view, one page per
-/// record in list order. The records stay separate: each one is its own
-/// before/after comparison, so their hunks do not form one diff.
-pub fn load_diff(
-    client: Arc<Client>,
-    tx: Tx,
-    session_id: String,
-    query: crate::app::DiffQuery,
-    change_refs: Vec<String>,
-) {
-    tokio::spawn(async move {
-        let mut pages = Vec::with_capacity(change_refs.len());
-        for change_ref in change_refs {
-            match page_diff(&client, &session_id, change_ref).await {
-                Ok(page) => pages.push(page),
-                Err(error) => {
-                    post(
-                        &tx,
-                        Some(&session_id),
-                        OpKind::DiffFile(query.clone(), Err(error)),
-                    );
-                    return;
-                }
-            }
-        }
-        post(&tx, Some(&session_id), OpKind::DiffFile(query, Ok(pages)));
-    });
-}
-
-/// One record's hunks, following `next_cursor` to the end.
-async fn page_diff(
-    client: &Client,
-    session_id: &str,
-    change_ref: String,
-) -> Result<protocol::changes::DiffPage, protocol::RpcError> {
-    let mut hunks = Vec::new();
-    let mut cursor: Option<Value> = None;
-    loop {
-        let params = json!({
-            "session_id": session_id,
-            "change_ref": change_ref,
-            "cursor": cursor,
-            "max_bytes": 262_144,
-        });
-        let mut page: protocol::changes::DiffPage = client
-            .call::<Value, protocol::changes::DiffPage>(protocol::METHOD_CHANGES_DIFF, &params)
-            .await?;
-        cursor.clone_from(&page.next_cursor);
         hunks.append(&mut page.hunks);
+        cursor.clone_from(&page.next_cursor);
         if cursor.is_none() {
             page.hunks = hunks;
             return Ok(page);
@@ -750,69 +366,28 @@ async fn page_diff(
     }
 }
 
-/// Fetches workspace paths for the `@` picker: one recursive `workspace.files`
-/// page filtered by the current query, capped by the Agent's own limits.
-pub fn list_files(client: Arc<Client>, tx: Tx, session_id: String, query: String) {
-    tokio::spawn(async move {
-        let params = json!({
-            "session_id": session_id,
-            "recursive": true,
-            "query": query,
-            "limit": 500,
-            "max_bytes": 262_144,
-        });
-        let result: Result<protocol::FilesPage, _> = client
-            .call::<Value, protocol::FilesPage>(protocol::METHOD_WORKSPACE_FILES, &params)
-            .await;
-        post(
-            &tx,
-            Some(&session_id),
-            OpKind::Files(result.map(|page| {
-                page.entries
-                    .into_iter()
-                    .filter(|entry| entry.kind == protocol::FileKind::File)
-                    .map(|entry| entry.path)
-                    .collect()
-            })),
-        );
-    });
+const DIFF_RETRIES: u32 = 2;
+
+/// One stream of a tool call's full output, as the tool view shows it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct StreamText {
+    pub text: String,
+    /// The Agent no longer retains the start of the stream.
+    pub dropped_head: bool,
+    /// The retained bytes were evicted; empty text does not mean no output.
+    pub expired: bool,
+    /// Reading stopped at [`MAX_TOOL_VIEW_BYTES`].
+    pub cut: bool,
 }
 
-pub fn read_tool(client: Arc<Client>, tx: Tx, key: ToolRef) {
-    tokio::spawn(async move {
-        let params = json!({
-            "session_id": key.session_id,
-            "loop_id": key.loop_id,
-            "request_index": key.request_index,
-            "tool_call_id": key.tool_call_id,
-            "display": true,
-        });
-        let result: Result<ToolReadResult, _> = client
-            .call::<Value, ToolReadResult>(protocol::METHOD_TOOL_READ, &params)
-            .await;
-        let session_id = key.session_id.clone();
-        post(&tx, Some(&session_id), OpKind::ToolRead(key, result));
-    });
-}
+/// Ceiling for one tool view; the Agent keeps 1 MiB per stream anyway.
+pub const MAX_TOOL_VIEW_BYTES: usize = 1024 * 1024;
 
-/// Pages the full output of one tool call for the tool view.
-pub fn read_tool_output(client: Arc<Client>, tx: Tx, key: ToolRef, stream: String) {
-    tokio::spawn(async move {
-        let result = read_output(client.as_ref(), &key, &stream).await;
-        let session_id = key.session_id.clone();
-        post(
-            &tx,
-            Some(&session_id),
-            OpKind::ToolOutput(key, stream, result),
-        );
-    });
-}
-
-async fn read_output(
-    client: &Client,
-    key: &ToolRef,
-    stream: &str,
-) -> Result<StreamText, protocol::RpcError> {
+pub async fn read_output(
+    client: Arc<Client>,
+    key: ToolRef,
+    stream: String,
+) -> Result<StreamText, RpcError> {
     let mut bytes = Vec::new();
     let mut result = StreamText::default();
     let mut offset = 0u64;
@@ -824,13 +399,9 @@ async fn read_output(
             "tool_call_id": key.tool_call_id,
             "stream": stream,
             "offset": offset,
-            "max_bytes": 262144,
+            "max_bytes": protocol::PAGE_MAX_BYTES,
         });
-        let page: ToolOutputPage = client
-            .call::<Value, ToolOutputPage>(protocol::METHOD_TOOL_OUTPUT, &params)
-            .await?;
-        // The Agent keeps a bounded tail: a first page that starts past zero
-        // means the head of the stream is gone.
+        let page: ToolOutputPage = client.call(protocol::METHOD_TOOL_OUTPUT, &params).await?;
         if offset == 0 && (page.base_offset > 0 || page.truncated) {
             result.dropped_head = true;
         }
@@ -850,79 +421,26 @@ async fn read_output(
     Ok(result)
 }
 
-/// One stream of a tool call's full output, as the tool view shows it.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct StreamText {
-    pub text: String,
-    /// The Agent no longer retains the start of the stream.
-    pub dropped_head: bool,
-    /// The retained bytes were evicted; empty text does not mean no output.
-    pub expired: bool,
-    /// Reading stopped at [`MAX_TOOL_VIEW_BYTES`].
-    pub cut: bool,
-}
-
-/// Ceiling for one tool view; the Agent keeps 1 MiB per stream anyway.
-pub const MAX_TOOL_VIEW_BYTES: usize = 1024 * 1024;
-
-/// Exports the conversation from canonical history as Markdown.
-pub fn export(client: Arc<Client>, tx: Tx, session_id: String, path: Option<String>) {
-    tokio::spawn(async move {
-        let session_id_for_post = session_id.clone();
-        let result = export_markdown(client.as_ref(), &session_id, path).await;
-        post(&tx, Some(&session_id_for_post), OpKind::Exported(result));
-    });
-}
-
-async fn export_markdown(
-    client: &Client,
-    session_id: &str,
-    path: Option<String>,
-) -> Result<String, String> {
-    let probe: ReadSessionResult = client
-        .call::<Value, ReadSessionResult>(
-            protocol::METHOD_SESSION_READ,
-            &json!({
-                "session_id": session_id,
-                "limit": protocol::PROBE_LIMIT,
-                "max_bytes": protocol::PROBE_MAX_BYTES,
-            }),
-        )
-        .await
-        .map_err(|error| error.message)?;
-    let pin = probe.pin();
-    let mut assembler = protocol::ChunkAssembler::new();
-    let mut items = Vec::new();
-    let mut cursor = Some(protocol::ReadCursor::start());
-    while let Some(position) = cursor {
-        let params = json!({
-            "session_id": session_id,
-            "limit": protocol::PAGE_LIMIT,
-            "max_bytes": protocol::PAGE_MAX_BYTES,
-            "cursor": position.value(),
-            "captured_end": pin.captured_end,
-            "history_revision": pin.history_revision,
-        });
-        let page: ReadSessionResult = client
-            .call::<Value, ReadSessionResult>(protocol::METHOD_SESSION_READ, &params)
-            .await
-            .map_err(|error| error.message)?;
-        for chunk in page.items {
-            if let Ok(protocol::ChunkOutcome::Item(item)) = assembler.push(chunk)
-                && let Ok(decoded) = protocol::read::decode_item(&item.data)
-            {
-                items.push(decoded);
-            }
+/// Writes the canonical conversation as Markdown and reports where.
+pub async fn export(client: Arc<Client>, session_id: String, path: Option<String>) -> Msg {
+    let path = path.unwrap_or_else(|| default_export_path(&session_id));
+    let written = async {
+        let items = async || {
+            let pin = probe(&client, &session_id, "canonical").await?;
+            read_window(&client, &session_id, "canonical", &pin, 0, pin.total).await
+        };
+        let items = match items().await {
+            Err(error) if error.is_stale_pin() => items().await,
+            result => result,
         }
-        cursor = page
-            .next_cursor
-            .as_ref()
-            .and_then(protocol::ReadCursor::from_value);
+        .map_err(|error| error.message)?;
+        std::fs::write(&path, crate::transcript::block::to_markdown(&items))
+            .map_err(|error| format!("{path}: {error}"))
+    };
+    match written.await {
+        Ok(()) => Msg::Notice(NoticeLevel::Info, format!("Exported to {path}")),
+        Err(error) => Msg::Notice(NoticeLevel::Error, error),
     }
-    let path = path.unwrap_or_else(|| default_export_path(session_id));
-    std::fs::write(&path, crate::transcript::block::to_markdown(&items))
-        .map_err(|error| format!("{path}: {error}"))?;
-    Ok(path)
 }
 
 /// `minicore-<session>-<date>.md`, in the directory the user started from.

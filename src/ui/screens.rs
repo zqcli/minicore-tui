@@ -16,10 +16,11 @@ use super::panel::{Row, Sheet};
 use super::sheets;
 use super::views;
 
-/// The sheet for the current overlay, or `None` when no sheet is open.
+/// The sheet for the current overlay, or `None` when no sheet is open. A
+/// pending interaction is a sheet too: it owns the keyboard until answered.
 pub fn sheet(app: &App, palette: &Palette) -> Option<Sheet> {
     Some(match &app.overlay {
-        Overlay::None => return None,
+        Overlay::None => return interaction_sheet(app, palette),
         Overlay::Palette { filter, selected } => palette_sheet(filter, *selected),
         Overlay::Sessions { filter, selected } => sessions_sheet(app, filter, *selected),
         Overlay::Models { selected } => models_sheet(app, *selected),
@@ -33,7 +34,6 @@ pub fn sheet(app: &App, palette: &Palette) -> Option<Sheet> {
             sheets::find_title(query),
             sheets::find_hint(matches.len(), *current),
         ),
-        Overlay::Interaction => interaction_sheet(app, palette),
         // Views own the transcript area instead of a sheet.
         Overlay::Context | Overlay::Help | Overlay::Diff { .. } | Overlay::Tool(_) => return None,
     })
@@ -63,7 +63,12 @@ fn sessions_sheet(app: &App, filter: &str, selected: usize) -> Sheet {
         .iter()
         .map(|info| {
             let current = resident == Some(info.session_id.as_str());
-            sheets::session_row(info, app.session_label(info), current, now)
+            sheets::session_row(
+                info,
+                sheets::session_label(info, app.session.as_ref()),
+                current,
+                now,
+            )
         })
         .collect();
     let hint = if app.delete_pending.is_some() {
@@ -132,17 +137,9 @@ fn files_sheet(filter: &str, selected: usize) -> Sheet {
     .selected(Some(selected))
 }
 
-pub fn approval(app: &App, palette: &Palette) -> Sheet {
-    interaction_sheet(app, palette)
-}
-
-fn interaction_sheet(app: &App, palette: &Palette) -> Sheet {
-    let Some(session) = app.session.as_ref() else {
-        return Sheet::new("Approval", "esc closes");
-    };
-    let Some(interaction) = session.interaction.as_ref() else {
-        return Sheet::new("Approval", "esc closes");
-    };
+fn interaction_sheet(app: &App, palette: &Palette) -> Option<Sheet> {
+    let session = app.session.as_ref()?;
+    let interaction = session.interaction.as_ref()?;
     let options = interaction.options();
     // The card is read at draw time: its detail and input can arrive after
     // the prompt does.
@@ -154,13 +151,13 @@ fn interaction_sheet(app: &App, palette: &Palette) -> Sheet {
         detail: call.map_or("", |call| call.detail.as_str()),
         input: call.and_then(|call| call.expanded_input.as_deref()),
     };
-    sheets::interaction_sheet(
+    Some(sheets::interaction_sheet(
         &interaction.prompt,
         &subject,
         &options,
-        app.interaction_choice,
+        interaction.selected,
         palette,
-    )
+    ))
 }
 
 /// Draws whichever full-screen view owns the transcript area. Returns false
@@ -170,7 +167,11 @@ pub fn draw_view(frame: &mut ratatui::Frame, area: ratatui::layout::Rect, app: &
     match &app.overlay {
         Overlay::Diff { .. } => views::render_diff(frame, area, &palette, &app.diff),
         Overlay::Tool(_) => views::render_tool(frame, area, &palette, &app.tool_view),
-        Overlay::Context => views::render_context(frame, area, &palette, &app.context_view),
+        Overlay::Context => {
+            let session = app.session.as_ref();
+            let lines = views::context_lines(session, &palette);
+            views::render_context(frame, area, &palette, &lines);
+        }
         Overlay::Help => {
             let help = views::help_view(commands::COMMANDS, &palette);
             views::render_help(frame, area, &palette, &help, app.help_scroll);

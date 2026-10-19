@@ -8,7 +8,6 @@ use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use tokio::sync::mpsc;
 
-use crate::app::keys::Input;
 use crate::app::{App, Msg, Overlay, Scroll, Session};
 use crate::protocol::read::UserKind;
 use crate::protocol::{LoopOutcome, Reasoning, SessionInfo, ToolRef, TurnRef};
@@ -57,7 +56,7 @@ fn app() -> Fixture {
     let mut app = App::new(client, tx, PathBuf::from("/work/minicore-tui"));
     app.palette = Palette::for_kind(ThemeKind::Dark);
     app.ready = true;
-    let mut session = Session::new(info());
+    let mut session = Session::new(info(), 1);
     session.transcript = Transcript::default();
     app.session = Some(session);
     Fixture {
@@ -405,13 +404,11 @@ fn a_narrow_terminal_keeps_every_row_within_the_width() {
 fn typing_keeps_the_draft_visible_and_marked_with_the_rail() {
     let mut app = app();
     for character in "hello".chars() {
-        assert_eq!(
-            app.on_key(crossterm::event::KeyEvent::new(
-                crossterm::event::KeyCode::Char(character),
-                crossterm::event::KeyModifiers::NONE,
-            )),
-            Input::Edited
+        let key = crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char(character),
+            crossterm::event::KeyModifiers::NONE,
         );
+        assert_eq!(app.on_key(key), None);
     }
     let rendered = render(&mut app, 40, 10);
     assert!(rendered.contains("▎ hello"), "{rendered}");
@@ -594,6 +591,7 @@ fn an_approval_shows_the_tool_its_target_and_its_input() {
         tool_name: "write".into(),
         prompt: "Allow tool `write` for this call?".into(),
         kind: crate::app::InteractionKind::Approval,
+        selected: 0,
     });
     let rendered = render(&mut app, 80, 24);
     assert!(rendered.contains("write  notes/approval.txt"), "{rendered}");

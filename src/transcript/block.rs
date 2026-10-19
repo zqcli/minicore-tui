@@ -5,8 +5,9 @@ use std::time::{Duration, Instant};
 
 use crate::protocol::event::{CommandResult, ProcessChunk, ProcessStream};
 use crate::protocol::{
-    LoopOutcome, ToolDisplay, ToolExecutionState, ToolInvocation, ToolRef, ToolSummary, Usage,
-    read::RawHistoryItem, read::RuntimeAssistantPart, read::RuntimeItem, read::UserKind,
+    LoopOutcome, ToolDisplay, ToolExecution, ToolExecutionState, ToolInvocation, ToolReadResult,
+    ToolRef, ToolSummary, Usage, read::RawHistoryItem, read::RuntimeAssistantPart,
+    read::RuntimeItem, read::UserKind,
 };
 
 /// One rendered unit of the conversation.
@@ -222,6 +223,29 @@ impl ToolCall {
     /// later record without one never erases it.
     pub fn apply_command(&mut self, command: &CommandResult) {
         self.exit_code = command.exit_code.or(self.exit_code);
+    }
+
+    /// An execution record: state, counts and the command's exit code.
+    pub fn apply_execution(&mut self, execution: &ToolExecution) {
+        self.set_state(ToolState::from_execution(execution.state));
+        self.output_lines = execution.output_line_count.or(self.output_lines);
+        self.truncated |= execution.result_truncated;
+        if let Some(command) = &execution.command {
+            self.apply_command(command);
+        }
+    }
+
+    /// A `tool.read` answer: whatever of display, invocation and execution it holds.
+    pub fn apply_read(&mut self, read: &ToolReadResult) {
+        if let Some(display) = &read.display {
+            self.apply_display(display);
+        }
+        if let Some(invocation) = &read.invocation {
+            self.apply_invocation(invocation);
+        }
+        if let Some(execution) = &read.execution {
+            self.apply_execution(execution);
+        }
     }
 
     /// The model-facing result text, from `tool_finished` or history. It only

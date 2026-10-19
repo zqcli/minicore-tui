@@ -83,14 +83,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         return;
     }
     let styles = Styles::of(app.palette);
-    // An approval prompt is a sheet even though it does not open an overlay:
-    // it owns the keyboard until answered, so it must be visible.
-    let approval = app.overlay.is_none() && app.has_interaction();
-    let sheet = if approval {
-        Some(screens::approval(app, &app.palette))
-    } else {
-        screens::sheet(app, &app.palette)
-    };
+    let sheet = screens::sheet(app, &app.palette);
     let sheet_rows = sheet.as_ref().map_or(0, |sheet| sheet.height());
     // One blank row keeps the last transcript line off the stack below it,
     // when the terminal has the room.
@@ -144,7 +137,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
 /// A token count for the UI: `950`, `12.3k`, `200k`, `1.8M`. Whole thousands and
 /// millions drop the `.0` so a budget reads as `200k`, not `200.0k`.
-pub fn tokens(value: u64) -> String {
+pub fn format_tokens(value: u64) -> String {
     fn scaled(value: f64, suffix: &str) -> String {
         let text = format!("{value:.1}");
         let text = text.strip_suffix(".0").unwrap_or(&text);
@@ -182,7 +175,6 @@ fn draw_transcript(frame: &mut Frame, area: Rect, app: &mut App, styles: Styles)
         expanded_tools: app.tools_expanded,
         show_reasoning: app.show_reasoning,
     };
-    app.viewport = area.height as usize;
     let blocks = session.transcript.blocks();
     app.layout.cache.state.prepare(width, fold, blocks, styles);
     let transcript = self::transcript::Transcript {
@@ -237,13 +229,13 @@ fn draw_fatal(frame: &mut Frame, area: Rect, fatal: &crate::app::Fatal) {
 
 #[cfg(test)]
 mod tests {
-    use super::tokens;
+    use super::format_tokens;
 
     #[test]
     fn token_counts_drop_a_trailing_zero() {
-        assert_eq!(tokens(950), "950");
-        assert_eq!(tokens(12_300), "12.3k");
-        assert_eq!(tokens(200_000), "200k");
-        assert_eq!(tokens(1_800_000), "1.8M");
+        assert_eq!(format_tokens(950), "950");
+        assert_eq!(format_tokens(12_300), "12.3k");
+        assert_eq!(format_tokens(200_000), "200k");
+        assert_eq!(format_tokens(1_800_000), "1.8M");
     }
 }
