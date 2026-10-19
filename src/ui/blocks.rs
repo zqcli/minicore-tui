@@ -44,14 +44,14 @@ pub fn render(block: &Block, styles: Styles, width: u16, fold: Fold) -> Vec<Line
             outcome,
             duration,
             requests,
-            tool_rounds,
+            tools,
             changes,
             ..
         } => vec![turn_end(
             outcome,
             *duration,
             *requests,
-            *tool_rounds,
+            *tools,
             changes.as_ref(),
             styles,
             width,
@@ -451,7 +451,7 @@ pub fn turn_end_line(
     outcome: &crate::protocol::LoopOutcome,
     duration: Option<std::time::Duration>,
     requests: u32,
-    tool_rounds: u64,
+    tools: u64,
     changes: Option<&crate::transcript::ChangeSummary>,
 ) -> String {
     let completed = outcome.is_completed();
@@ -467,8 +467,8 @@ pub fn turn_end_line(
     if completed && requests > 0 {
         parts.push(plural(u64::from(requests), "request"));
     }
-    if tool_rounds > 0 {
-        parts.push(plural(tool_rounds, "tool"));
+    if tools > 0 {
+        parts.push(plural(tools, "tool"));
     }
     if let Some(changes) = changes.filter(|changes| !changes.is_empty()) {
         let files = format!("{} changed", plural(changes.files as u64, "file"));
@@ -484,12 +484,12 @@ fn turn_end(
     outcome: &crate::protocol::LoopOutcome,
     duration: Option<std::time::Duration>,
     requests: u32,
-    tool_rounds: u64,
+    tools: u64,
     changes: Option<&crate::transcript::ChangeSummary>,
     styles: Styles,
     width: usize,
 ) -> Line<'static> {
-    let text = turn_end_line(outcome, duration, requests, tool_rounds, changes);
+    let text = turn_end_line(outcome, duration, requests, tools, changes);
     let labeled = format!("── {text} ──");
     let style = match outcome {
         crate::protocol::LoopOutcome::Completed => styles.dim(),
@@ -887,7 +887,7 @@ mod tests {
             outcome: LoopOutcome::Completed,
             duration: Some(Duration::from_secs(187)),
             requests: 12,
-            tool_rounds: 11,
+            tools: 11,
             usage: Default::default(),
             changes: Some(ChangeSummary {
                 files: 3,

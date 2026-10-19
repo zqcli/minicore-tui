@@ -53,7 +53,6 @@ pub struct LiveTurn {
     pub turn: TurnRef,
     pub started: Instant,
     pub requests: u32,
-    pub tool_rounds: u64,
     pub phase: Phase,
     /// Index in the transcript where this turn's blocks start.
     pub start: usize,
@@ -88,7 +87,6 @@ impl LiveTurn {
             turn,
             started: Instant::now(),
             requests: 1,
-            tool_rounds: 0,
             phase: Phase::Thinking,
             start,
             gap: false,
@@ -462,6 +460,15 @@ impl Session {
         self.transcript.push(Block::Tool(Box::new(card)));
     }
 
+    /// Tool calls shown from `start` on, which is what the turn's counts mean
+    /// to a reader; the Agent's `tool_rounds` counts requests with tools.
+    pub fn tools_since(&self, start: usize) -> u64 {
+        self.transcript.blocks()[start.min(self.transcript.len())..]
+            .iter()
+            .filter(|block| matches!(block, Block::Tool(_)))
+            .count() as u64
+    }
+
     /// Records a tool's end on its card and in the live turn.
     fn finish_tool(&mut self, key: &ToolRef) {
         if let Some(card) = self.transcript.find_tool_mut(key)
@@ -472,7 +479,6 @@ impl Session {
         if let Some(live) = self.live.as_mut()
             && live.turn.loop_id == key.loop_id
         {
-            live.tool_rounds += 1;
             live.running_tool = None;
             live.phase = Phase::Thinking;
         }
@@ -495,12 +501,13 @@ impl Session {
         }
         let usage = wait.usage.clone().unwrap_or_default();
         self.usage.add(&usage);
+        let tools = self.tools_since(live.start);
         self.transcript.push(Block::TurnEnd {
             loop_id: wait.turn.loop_id.clone(),
             outcome: wait.outcome.clone(),
             duration: Some(live.started.elapsed()),
             requests: wait.requests.unwrap_or(live.requests),
-            tool_rounds: wait.tool_rounds.unwrap_or(live.tool_rounds),
+            tools,
             usage,
             changes: None,
         });

@@ -118,7 +118,7 @@ fn conversation(app: &mut App) {
         outcome: LoopOutcome::Completed,
         duration: Some(std::time::Duration::from_secs(12)),
         requests: 2,
-        tool_rounds: 1,
+        tools: 1,
         usage: Default::default(),
         changes: Some(ChangeSummary {
             files: 2,

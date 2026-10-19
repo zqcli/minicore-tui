@@ -29,7 +29,7 @@ pub enum Block {
         outcome: LoopOutcome,
         duration: Option<Duration>,
         requests: u32,
-        tool_rounds: u64,
+        tools: u64,
         usage: Usage,
         changes: Option<ChangeSummary>,
     },

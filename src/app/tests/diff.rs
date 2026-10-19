@@ -191,7 +191,7 @@ async fn the_turn_diff_lists_the_newest_turn_and_tab_widens_the_scope() {
         outcome: crate::protocol::LoopOutcome::Completed,
         duration: None,
         requests: 1,
-        tool_rounds: 0,
+        tools: 0,
         usage: Default::default(),
         changes: None,
     });

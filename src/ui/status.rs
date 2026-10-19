@@ -100,9 +100,13 @@ fn status_line(app: &App, styles: Styles, label: &str) -> Line<'static> {
         if live.requests > 1 {
             text.push_str(&format!(" · request {}", live.requests));
         }
-        if live.tool_rounds > 0 {
+        let tools = app
+            .session
+            .as_ref()
+            .map_or(0, |s| s.tools_since(live.start));
+        if tools > 0 {
             text.push_str(" · ");
-            text.push_str(&super::blocks::plural(live.tool_rounds, "tool"));
+            text.push_str(&super::blocks::plural(tools, "tool"));
         }
     }
     if app.has_interaction() {

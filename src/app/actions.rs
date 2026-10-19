@@ -275,6 +275,7 @@ impl App {
         }
         self.theme = kind;
         self.styles = Styles::of(Palette::for_kind(kind));
+        self.layout.clear();
     }
 
     /// The editor command: config first, then `$VISUAL`/`$EDITOR`.

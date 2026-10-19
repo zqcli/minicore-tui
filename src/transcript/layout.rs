@@ -72,6 +72,12 @@ impl<S: Default> Default for Layout<S> {
 }
 
 impl<S> Layout<S> {
+    /// Drops every cached block, for changes the cache key cannot see (theme).
+    pub fn clear(&mut self) {
+        self.cached.clear();
+        self.invalid = true;
+    }
+
     /// Brings the cache up to date. `render_block` runs only for blocks that
     /// changed or are new.
     pub fn prepare<F>(

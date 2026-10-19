@@ -56,8 +56,17 @@ async fn a_turn_streams_tool_facts_and_ends_on_its_wait() {
             "command": {"status": "exited", "exit_code": 1, "termination_confirmed": true}}}),
     )
     .await;
+    // A second terminal fact for the same call must not count it twice.
+    h.emit(
+        "tool_finished",
+        json!({"turn": turn("l1"), "request_index": 0, "tool_call_id": "c1",
+               "result": {"outcome": "success", "content_bytes": 0}}),
+    )
+    .await;
     h.settle().await;
     let screen = h.screen(80, 20);
+    assert!(screen.contains("1 tool"), "{screen}");
+    assert!(!screen.contains("2 tools"), "{screen}");
     assert!(screen.contains("bash  $ cargo test"), "{screen}");
     assert!(screen.contains("esc to interrupt"), "{screen}");
 
@@ -79,9 +88,9 @@ async fn a_turn_streams_tool_facts_and_ends_on_its_wait() {
         Block::TurnEnd {
             outcome,
             requests,
-            tool_rounds,
+            tools,
             ..
-        } => Some((outcome.is_completed(), *requests, *tool_rounds)),
+        } => Some((outcome.is_completed(), *requests, *tools)),
         _ => None,
     });
     assert_eq!(end, Some((true, 2, 1)));
