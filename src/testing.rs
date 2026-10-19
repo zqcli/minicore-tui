@@ -367,8 +367,9 @@ struct Responder {
     reader_task: tokio::task::JoinHandle<()>,
 }
 
-impl Drop for FakeAgent {
-    fn drop(&mut self) {
+impl FakeAgent {
+    /// Ends the Agent side of the pipe, the way a dying child process does.
+    pub fn close(&mut self) {
         if let Some(responder) = self.responder.take() {
             let _ = responder.stop.send(());
             responder.writer_task.abort();
@@ -377,6 +378,12 @@ impl Drop for FakeAgent {
             // only handle to the Agent side of the pipe.
             self.outbox.take();
         }
+    }
+}
+
+impl Drop for FakeAgent {
+    fn drop(&mut self) {
+        self.close();
     }
 }
 
@@ -443,15 +450,10 @@ mod tests {
         fake.script_held("waiting", json!({"done": true}));
         let client = fake.client.clone();
         let quick =
-            tokio::spawn(
-                async move { client.call::<Value, Value>("echo", &json!({}), false).await },
-            );
+            tokio::spawn(async move { client.call::<Value, Value>("echo", &json!({})).await });
         let client = fake.client.clone();
-        let slow = tokio::spawn(async move {
-            client
-                .call::<Value, Value>("waiting", &json!({}), false)
-                .await
-        });
+        let slow =
+            tokio::spawn(async move { client.call::<Value, Value>("waiting", &json!({})).await });
         let quick = tokio::time::timeout(Duration::from_secs(1), quick)
             .await
             .expect("the quick call is not blocked by the held one")

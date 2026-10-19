@@ -5,9 +5,13 @@
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
+use crate::app::Session;
+use crate::app::session::auto_title;
+use crate::protocol::SessionInfo;
 use crate::theme::Palette;
 
 use super::panel::{Row, Sheet, Tone, body_lines};
+use super::picker::fuzzy_match;
 
 /// What an interaction is about: the tool, its one-line detail (a path, a
 /// command) and the start of its input (the content or script it would run).
@@ -20,9 +24,8 @@ pub struct Subject<'a> {
 /// Input lines an approval shows before it says how many more there are.
 const INPUT_PREVIEW: usize = 6;
 
-/// The sheet for a pending interaction: the question, what would run, then an
-/// approval with two rows or a choice list. A text answer is not offered
-/// because the Agent's tool-input interactions are choices.
+/// The sheet for a pending interaction: the question, what would run, then
+/// the approval's two rows or the choice list.
 pub fn interaction_sheet(
     prompt: &str,
     subject: &Subject<'_>,
@@ -76,7 +79,7 @@ pub fn interaction_sheet(
     Sheet::new("Approval", "enter confirm · y allow · n deny · esc deny")
         .body(body)
         .rows(rows)
-        .selected(Some(selected.min(options.len().saturating_sub(1))))
+        .selected(Some(selected))
 }
 
 /// Hint row of the find bar, which changes with the match count.
@@ -100,14 +103,47 @@ pub fn find_title(query: &str) -> String {
     }
 }
 
+/// A session's name in the picker: its title, else (for the resident session)
+/// its first prompt, else its short id.
+pub fn session_label(info: &SessionInfo, resident: Option<&Session>) -> String {
+    let title = info
+        .title
+        .as_deref()
+        .filter(|title| !title.trim().is_empty());
+    title
+        .map(str::to_owned)
+        .or_else(|| {
+            let resident = resident.filter(|session| session.info.session_id == info.session_id)?;
+            auto_title(resident.first_prompt()?)
+        })
+        .unwrap_or_else(|| short_session_id(&info.session_id).to_owned())
+}
+
+/// `ses_8ca3c4cf...` → `ses_8ca3c4`, enough to tell sessions apart in a row.
+fn short_session_id(session_id: &str) -> &str {
+    let body = session_id.strip_prefix("ses_").unwrap_or(session_id);
+    let cut = body
+        .char_indices()
+        .nth(6)
+        .map_or(body.len(), |(index, _)| index);
+    &session_id[..session_id.len() - body.len() + cut]
+}
+
+/// The picker rows whose label fuzzy-matches `filter`, in order.
+pub fn filtered_sessions<'a>(
+    rows: &'a [SessionInfo],
+    filter: &str,
+    resident: Option<&Session>,
+) -> Vec<&'a SessionInfo> {
+    let filter = filter.trim();
+    rows.iter()
+        .filter(|info| filter.is_empty() || fuzzy_match(&session_label(info, resident), filter))
+        .collect()
+}
+
 /// One sessions-picker row: `label` (the title, or the first prompt), marked
 /// when it is the resident session, with model and age on the right.
-pub fn session_row(
-    info: &crate::protocol::SessionInfo,
-    label: String,
-    resident: bool,
-    now_seconds: u64,
-) -> Row {
+pub fn session_row(info: &SessionInfo, label: String, resident: bool, now_seconds: u64) -> Row {
     let age = age_label(&info.updated_at, now_seconds);
     let detail = if age.is_empty() {
         info.model.clone()
@@ -148,8 +184,7 @@ fn parse_unix_seconds(stamp: &str) -> Option<u64> {
     u64::try_from(seconds).ok()
 }
 
-/// Howard Hinnant's days-from-civil, the inverse of the algorithm in
-/// [`super::super::app::commands::today`].
+/// Days since the Unix epoch for a civil date (Howard Hinnant's algorithm).
 fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
     let year = if month <= 2 { year - 1 } else { year };
     let era = if year >= 0 { year } else { year - 399 } / 400;
@@ -160,20 +195,9 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
     era * 146_097 + doe - 719_468
 }
 
-/// `3m07s`, `1h02m`, `12s`. The status line and the turn-end line share this.
-pub fn duration_label(duration: std::time::Duration) -> String {
-    let seconds = duration.as_secs();
-    match seconds {
-        0..=59 => format!("{seconds}s"),
-        60..=3599 => format!("{}m{:02}s", seconds / 60, seconds % 60),
-        _ => format!("{}h{:02}m", seconds / 3600, (seconds % 3600) / 60),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::SessionInfo;
     use serde_json::json;
 
     fn info() -> SessionInfo {
@@ -270,14 +294,6 @@ mod tests {
     }
 
     #[test]
-    fn a_selection_past_the_end_still_selects_a_row() {
-        let palette = Palette::dark();
-        let options = vec!["a".to_owned(), "b".to_owned()];
-        let sheet = interaction_sheet("choose", &NO_SUBJECT, &options, 9, &palette);
-        assert_eq!(sheet.selected, Some(1));
-    }
-
-    #[test]
     fn the_find_hint_counts_the_matches() {
         assert_eq!(find_hint(0, 0), "no matches · enter next · esc close");
         assert_eq!(
@@ -339,13 +355,5 @@ mod tests {
         assert_eq!(seconds, 1_767_323_045);
         assert_eq!(parse_unix_seconds("1767323045"), None);
         assert_eq!(parse_unix_seconds("2026-13-02T03:04:05Z"), None);
-    }
-
-    #[test]
-    fn durations_switch_units_at_a_minute_and_an_hour() {
-        use std::time::Duration;
-        assert_eq!(duration_label(Duration::from_secs(12)), "12s");
-        assert_eq!(duration_label(Duration::from_secs(187)), "3m07s");
-        assert_eq!(duration_label(Duration::from_secs(3720)), "1h02m");
     }
 }

@@ -5,8 +5,9 @@ use std::time::{Duration, Instant};
 
 use crate::protocol::event::{CommandResult, ProcessChunk, ProcessStream};
 use crate::protocol::{
-    LoopOutcome, ToolDisplay, ToolExecutionState, ToolInvocation, ToolRef, ToolSummary, Usage,
-    read::RawHistoryItem, read::RuntimeAssistantPart, read::RuntimeItem, read::UserKind,
+    LoopOutcome, ToolDisplay, ToolExecution, ToolExecutionState, ToolInvocation, ToolReadResult,
+    ToolRef, ToolSummary, Usage, read::RawHistoryItem, read::RuntimeAssistantPart,
+    read::RuntimeItem, read::UserKind,
 };
 
 /// One rendered unit of the conversation.
@@ -129,8 +130,6 @@ pub struct ToolCall {
     /// Next expected byte offset per stream. `None` until the first chunk, so
     /// the first chunk establishes the cursor whatever its base offset is.
     pub stream_offsets: [Option<u64>; 2],
-    /// Full output fetched for the tool view, keyed by stream name.
-    pub full_output: Option<(String, String)>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -186,7 +185,6 @@ impl ToolCall {
             truncated: false,
             expanded: None,
             stream_offsets: [None, None],
-            full_output: None,
         }
     }
 
@@ -197,19 +195,6 @@ impl ToolCall {
             return;
         }
         self.state = state;
-    }
-
-    /// Stores the paged full output of one stream for the tool view.
-    pub fn set_full_output(&mut self, stream: &str, text: String) {
-        self.full_output = Some((stream.to_owned(), text));
-    }
-
-    /// The body shown in the tool view: full output when loaded, else the tail.
-    pub fn view_body(&self) -> String {
-        match &self.full_output {
-            Some((_, text)) => text.clone(),
-            None => self.output.join("\n"),
-        }
     }
 
     pub fn apply_display(&mut self, display: &ToolDisplay) {
@@ -238,6 +223,29 @@ impl ToolCall {
     /// later record without one never erases it.
     pub fn apply_command(&mut self, command: &CommandResult) {
         self.exit_code = command.exit_code.or(self.exit_code);
+    }
+
+    /// An execution record: state, counts and the command's exit code.
+    pub fn apply_execution(&mut self, execution: &ToolExecution) {
+        self.set_state(ToolState::from_execution(execution.state));
+        self.output_lines = execution.output_line_count.or(self.output_lines);
+        self.truncated |= execution.result_truncated;
+        if let Some(command) = &execution.command {
+            self.apply_command(command);
+        }
+    }
+
+    /// A `tool.read` answer: whatever of display, invocation and execution it holds.
+    pub fn apply_read(&mut self, read: &ToolReadResult) {
+        if let Some(display) = &read.display {
+            self.apply_display(display);
+        }
+        if let Some(invocation) = &read.invocation {
+            self.apply_invocation(invocation);
+        }
+        if let Some(execution) = &read.execution {
+            self.apply_execution(execution);
+        }
     }
 
     /// The model-facing result text, from `tool_finished` or history. It only
@@ -631,6 +639,14 @@ impl Transcript {
         self.blocks
     }
 
+    /// Every tool card, in order.
+    pub fn tool_calls(&self) -> impl Iterator<Item = &ToolCall> {
+        self.blocks.iter().filter_map(|block| match block {
+            Block::Tool(call) => Some(call.as_ref()),
+            _ => None,
+        })
+    }
+
     pub fn find_tool_by_call_id(&self, tool_call_id: &str) -> Option<&ToolCall> {
         self.blocks.iter().find_map(|block| match block {
             Block::Tool(call) if call.key.tool_call_id == tool_call_id => Some(call.as_ref()),
@@ -692,29 +708,10 @@ impl Transcript {
             _ => None,
         })
     }
-
-    /// The index of the newest live tool card.
-    pub fn last_tool_block(&self) -> Option<usize> {
-        self.blocks
-            .iter()
-            .rposition(|block| matches!(block, Block::Tool(_)))
-    }
-
-    pub fn live_turn_start(&self, loop_id: &str) -> Option<usize> {
-        self.blocks
-            .iter()
-            .position(|block| block.loop_id() == Some(loop_id))
-    }
 }
 
 /// Converts one decoded history item into blocks appended to the transcript.
-/// Returns how many blocks were appended.
-pub fn append_history_item(
-    transcript: &mut Transcript,
-    item: &RawHistoryItem,
-    session_id: &str,
-) -> usize {
-    let start = transcript.len();
+pub fn append_history_item(transcript: &mut Transcript, item: &RawHistoryItem, session_id: &str) {
     match &item.item {
         RuntimeItem::User(user) => {
             transcript.push(Block::User {
@@ -779,7 +776,7 @@ pub fn append_history_item(
                 }
                 _ => None,
             }) else {
-                return transcript.len() - start;
+                return;
             };
             call.state = match result.outcome.as_str() {
                 "success" => ToolState::Succeeded,
@@ -801,7 +798,6 @@ pub fn append_history_item(
             });
         }
     }
-    transcript.len() - start
 }
 
 /// Renders decoded canonical items as a Markdown conversation.
@@ -892,6 +888,18 @@ mod tests {
         call.set_state(ToolState::Pending);
         call.set_state(ToolState::Running);
         assert_eq!(call.state, ToolState::Running);
+    }
+
+    #[test]
+    fn execution_state_maps_to_card_state() {
+        assert_eq!(
+            ToolState::from_execution(ToolExecutionState::AwaitingPolicy),
+            ToolState::Running
+        );
+        assert_eq!(
+            ToolState::from_execution(ToolExecutionState::Denied),
+            ToolState::Denied
+        );
     }
 
     #[test]

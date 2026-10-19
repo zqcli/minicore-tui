@@ -1,179 +1,90 @@
 //! Key and mouse dispatch: the single place that turns terminal input into
-//! [`Action`]s or composer edits.
+//! [`Action`]s or direct edits of the composer and the views.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
-use super::{Action, App, Overlay, features};
+use super::overlay::matching_paths;
+use super::{Action, Answer, App, Overlay, Panel, Scroll, find};
 use crate::app::commands::{self, Executed};
-
-/// What one input event resolved to.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Input {
-    Action(Action),
-    Edited,
-    /// The overlay consumed the event; redraw.
-    Consumed,
-    /// Nothing to do.
-    Ignored,
-}
+use crate::protocol::Reasoning;
+use crate::transcript::{Block, NoticeLevel};
+use crate::ui::{blocks, selection, sheets};
 
 impl App {
-    /// Routes a key event to the focused surface.
-    pub fn on_key(&mut self, key: KeyEvent) -> Input {
+    /// Routes a key event to the focused surface; the action it asks for, if any.
+    pub fn on_key(&mut self, key: KeyEvent) -> Option<Action> {
+        self.notices.clear();
         if self.fatal.is_some() {
-            return match key.code {
-                KeyCode::Char('q') | KeyCode::Esc => Input::Action(Action::Quit),
-                _ => Input::Ignored,
-            };
-        }
-        if self.overlay.is_none() && self.has_interaction() {
-            return self.on_interaction_key(key);
+            return matches!(key.code, KeyCode::Char('q') | KeyCode::Esc).then_some(Action::Quit);
         }
         if !self.overlay.is_none() {
             return self.on_overlay_key(key);
         }
+        if self.has_interaction() {
+            return self.on_interaction_key(key);
+        }
         self.on_composer_key(key)
     }
 
-    /// Approval prompts own the keyboard until answered. Anything else is
+    /// Approval prompts own the keyboard until answered; other keys are
     /// swallowed rather than reaching the draft behind the prompt.
-    fn on_interaction_key(&mut self, key: KeyEvent) -> Input {
+    fn on_interaction_key(&mut self, key: KeyEvent) -> Option<Action> {
+        let interaction = self.session.as_mut()?.interaction.as_mut()?;
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        let options = self
-            .session
-            .as_ref()
-            .and_then(|session| session.interaction.as_ref())
-            .map_or(0, |interaction| interaction.options().len());
-        match key.code {
-            KeyCode::Char('y') if !ctrl => Input::Action(Action::Answer(super::Answer::Allow)),
-            KeyCode::Char('n') if !ctrl => Input::Action(Action::Answer(super::Answer::Deny)),
-            KeyCode::Esc => Input::Action(Action::Answer(super::Answer::Deny)),
-            KeyCode::Enter => {
-                let choice = self.interaction_choice;
-                let is_approval = self
-                    .session
-                    .as_ref()
-                    .and_then(|session| session.interaction.as_ref())
-                    .is_some_and(|interaction| {
-                        matches!(interaction.kind, crate::app::InteractionKind::Approval)
-                    });
-                Input::Action(Action::Answer(if is_approval {
-                    if choice == 0 {
-                        super::Answer::Allow
-                    } else {
-                        super::Answer::Deny
-                    }
-                } else {
-                    super::Answer::Choice(choice)
-                }))
-            }
-            KeyCode::Up | KeyCode::Down => {
-                if options > 0 {
-                    let delta = if key.code == KeyCode::Up { -1 } else { 1 };
-                    let next =
-                        (self.interaction_choice as isize + delta).clamp(0, options as isize - 1);
-                    self.interaction_choice = next as usize;
-                }
-                Input::Consumed
-            }
-            _ => Input::Ignored,
-        }
-    }
-
-    fn on_overlay_key(&mut self, key: KeyEvent) -> Input {
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        let tool_view = matches!(self.overlay, Overlay::Tool(_));
-        let scrolling_view = tool_view || matches!(self.overlay, Overlay::Diff { .. });
-        match key.code {
-            KeyCode::Esc => {
-                self.delete_pending = None;
-                match std::mem::replace(&mut self.overlay, Overlay::None) {
-                    Overlay::Palette { .. } => self.discard_command_draft(),
-                    Overlay::Files { .. } => self.discard_mention(),
-                    _ => {}
-                }
-                Input::Consumed
-            }
-            KeyCode::Char('[') | KeyCode::Left if tool_view => {
-                self.step_tool(-1);
-                Input::Consumed
-            }
-            KeyCode::Char(']') | KeyCode::Right if tool_view => {
-                self.step_tool(1);
-                Input::Consumed
-            }
-            KeyCode::PageUp | KeyCode::PageDown if scrolling_view => {
-                self.page_view(if key.code == KeyCode::PageUp { -1 } else { 1 });
-                Input::Consumed
-            }
-            KeyCode::Home | KeyCode::End if scrolling_view => {
-                // Far enough to reach either end; scrolling clamps.
-                self.page_view(if key.code == KeyCode::Home {
-                    -isize::MAX
-                } else {
-                    isize::MAX
-                });
-                Input::Consumed
-            }
-            KeyCode::Char('c')
-                if !ctrl && (scrolling_view || matches!(self.overlay, Overlay::Context)) =>
-            {
-                self.copy_view()
-            }
-            KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => {
-                self.find_step(false);
-                Input::Consumed
-            }
-            KeyCode::Enter => self.on_overlay_accept(),
+        let answer = match key.code {
+            KeyCode::Char('y') if !ctrl => Answer::Allow,
+            KeyCode::Char('n') if !ctrl => Answer::Deny,
+            KeyCode::Esc => Answer::Deny,
+            KeyCode::Enter => Answer::Choice(interaction.selected),
             KeyCode::Up => {
-                self.overlay_move(-1);
-                Input::Consumed
-            }
-            KeyCode::Tab if matches!(self.overlay, Overlay::Diff { .. }) => {
-                self.diff_cycle_scope();
-                Input::Consumed
-            }
-            KeyCode::Tab => {
-                self.overlay_move(1);
-                Input::Consumed
+                interaction.selected = interaction.selected.saturating_sub(1);
+                return None;
             }
             KeyCode::Down => {
-                self.overlay_move(1);
-                Input::Consumed
+                let last = interaction.options().len() - 1;
+                interaction.selected = (interaction.selected + 1).min(last);
+                return None;
             }
-            KeyCode::Char('c') if ctrl => self.copy_view(),
-            KeyCode::PageUp => {
-                self.overlay_move(-10);
-                Input::Consumed
+            _ => return None,
+        };
+        Some(Action::Answer(answer))
+    }
+
+    fn on_overlay_key(&mut self, key: KeyEvent) -> Option<Action> {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let tool = matches!(self.overlay, Overlay::Tool(_));
+        let scrolling = tool || matches!(self.overlay, Overlay::Diff(_));
+        let page = self.viewport_rows().saturating_sub(2) as isize;
+        match key.code {
+            KeyCode::Esc => match std::mem::replace(&mut self.overlay, Overlay::None) {
+                Overlay::Palette { .. } => self.discard_command_draft(),
+                Overlay::Files { .. } => self.discard_mention(),
+                _ => {}
+            },
+            KeyCode::Char('[') | KeyCode::Left if tool => self.step_tool(-1),
+            KeyCode::Char(']') | KeyCode::Right if tool => self.step_tool(1),
+            KeyCode::PageUp if scrolling => self.scroll_view(-page),
+            KeyCode::PageDown if scrolling => self.scroll_view(page),
+            KeyCode::Home if scrolling => self.scroll_view(isize::MIN),
+            KeyCode::End if scrolling => self.scroll_view(isize::MAX),
+            KeyCode::Char('c') if scrolling || matches!(self.overlay, Overlay::Context) => {
+                self.copy_view();
             }
-            KeyCode::PageDown => {
-                self.overlay_move(10);
-                Input::Consumed
-            }
+            KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => self.find_step(false),
+            KeyCode::Enter => return self.on_overlay_accept(),
+            KeyCode::Up => self.overlay_move(-1),
+            KeyCode::Tab if matches!(self.overlay, Overlay::Diff(_)) => self.diff_cycle_scope(),
+            KeyCode::Tab | KeyCode::Down => self.overlay_move(1),
+            KeyCode::PageUp => self.overlay_move(-10),
+            KeyCode::PageDown => self.overlay_move(10),
             KeyCode::Backspace if matches!(self.overlay, Overlay::Palette { .. }) => {
                 self.composer.backspace();
                 self.refresh_palette();
-                Input::Edited
             }
-            KeyCode::Backspace => {
-                self.overlay_filter_push(None);
-                Input::Consumed
-            }
-            KeyCode::Char('d') if ctrl => {
-                self.delete_confirm();
-                Input::Consumed
-            }
+            KeyCode::Backspace => self.overlay_filter_push(None),
+            KeyCode::Char('d') if ctrl => self.delete_confirm(),
             KeyCode::Char('r') if matches!(self.overlay, Overlay::Context) => {
                 self.refresh_context();
-                Input::Consumed
-            }
-            KeyCode::Char('y') if matches!(self.overlay, Overlay::Interaction) => {
-                self.interaction_choice = 0;
-                self.on_overlay_accept()
-            }
-            KeyCode::Char('n') if matches!(self.overlay, Overlay::Interaction) => {
-                self.interaction_choice = 1;
-                self.on_overlay_accept()
             }
             // The palette is driven by the composer line, so its arguments
             // (`/rename <title>`, `/export <path>`) stay typable.
@@ -182,49 +93,48 @@ impl App {
             {
                 self.composer.type_char(character);
                 self.refresh_palette();
-                Input::Edited
             }
-            KeyCode::Char(character) if !ctrl => {
-                self.overlay_filter_push(Some(character));
-                Input::Consumed
-            }
-            _ => Input::Ignored,
+            KeyCode::Char(character) if !ctrl => self.overlay_filter_push(Some(character)),
+            _ => {}
         }
+        None
     }
 
     /// Ctrl+D in the sessions picker: the first press arms the delete, the
     /// second deletes the selected session.
     fn delete_confirm(&mut self) {
-        let Overlay::Sessions { selected, filter } = &self.overlay else {
+        let Overlay::Sessions {
+            rows,
+            filter,
+            selected,
+            armed,
+        } = &mut self.overlay
+        else {
             return;
         };
-        // The selection indexes the filtered rows the sheet shows.
-        let Some(info) = self.filtered_sessions(filter).get(*selected).cloned() else {
+        let resident = self.session.as_ref();
+        let Some(info) = sheets::filtered_sessions(rows, filter, resident)
+            .get(*selected)
+            .copied()
+        else {
             return;
         };
         let id = info.session_id.clone();
-        let resident = self
-            .session
-            .as_ref()
-            .is_some_and(|session| session.info.session_id == id);
-        match features::delete_step(self.delete_pending.as_deref(), &id, resident) {
-            features::DeleteStep::Ignore => {}
-            features::DeleteStep::Resident => self.notice(
-                crate::transcript::block::NoticeLevel::Error,
+        if resident.is_some_and(|session| session.info.session_id == id) {
+            self.notice(
+                NoticeLevel::Error,
                 "Open another session before deleting this one",
-            ),
-            features::DeleteStep::Arm => {
-                let label = self.session_label(&info);
-                self.delete_pending = Some(id);
-                self.notice(
-                    crate::transcript::block::NoticeLevel::Info,
-                    format!("Press Ctrl+D again to delete \"{label}\" permanently"),
-                );
-            }
-            features::DeleteStep::Delete => {
-                self.delete_pending = None;
-                self.on_action(Action::DeleteSession(id));
-            }
+            );
+        } else if armed.as_deref() == Some(id.as_str()) {
+            *armed = None;
+            self.on_action(Action::DeleteSession(id));
+        } else {
+            let label = sheets::session_label(info, resident);
+            *armed = Some(id);
+            self.notice(
+                NoticeLevel::Info,
+                format!("Press Ctrl+D again to delete \"{label}\" permanently"),
+            );
         }
     }
 
@@ -239,82 +149,54 @@ impl App {
         if matches.is_empty() {
             return;
         }
-        let next = super::features::step_match(*current, matches.len(), forward);
-        *current = next;
-        let block = matches[next].block;
-        self.scroll = super::Scroll::Anchor { block, offset: 0 };
+        *current = find::step_match(*current, matches.len(), forward);
+        let block = matches[*current].block;
+        self.scroll = Scroll::Anchor { block, offset: 0 };
     }
 
     /// Moves the selected row of the active overlay by `delta`.
     pub fn overlay_move(&mut self, delta: isize) {
-        let step = |selected: usize, len: usize| -> usize {
-            if len == 0 {
-                return 0;
+        let len = match &self.overlay {
+            Overlay::Palette { filter, .. } => commands::filter(filter).len(),
+            Overlay::Sessions { rows, filter, .. } => {
+                sheets::filtered_sessions(rows, filter, self.session.as_ref()).len()
             }
-            let next = selected as isize + delta;
-            next.clamp(0, len as isize - 1) as usize
+            Overlay::Models { .. } => self.models.len(),
+            Overlay::Reasoning { .. } => self.reasoning_levels().len(),
+            Overlay::Files { paths, filter, .. } => matching_paths(paths, filter).len(),
+            Overlay::Diff(diff) => diff.files.len(),
+            _ => 0,
         };
-        let models = self.models.len();
-        let reasoning = self.reasoning_levels().len();
-        let sessions = match &self.overlay {
-            Overlay::Sessions { filter, .. } => self.filtered_sessions(filter).len(),
-            _ => self.session_rows.len(),
+        let step = |selected: usize| {
+            (selected as isize + delta).clamp(0, len.saturating_sub(1) as isize) as usize
         };
-        let rows = self.viewport_rows();
         match &mut self.overlay {
-            Overlay::Palette { selected, filter } => {
-                let len = commands::filter(filter).len();
-                *selected = step(*selected, len);
-            }
-            Overlay::Sessions { selected, .. } => *selected = step(*selected, sessions),
-            Overlay::Models { selected } => *selected = step(*selected, models),
-            Overlay::Reasoning { selected } => *selected = step(*selected, reasoning),
-            Overlay::Files { selected, filter } => {
-                let len = crate::ui::files::filter_count(filter);
-                *selected = step(*selected, len);
-            }
-            Overlay::Diff { file, scroll, .. } => {
-                let next = step(*file, self.diff.files.len());
-                if next != *file {
-                    *file = next;
-                    *scroll = 0;
-                    self.diff.select(next);
-                    // The hunks of the newly selected file are paged in.
+            Overlay::Palette { selected, .. }
+            | Overlay::Sessions { selected, .. }
+            | Overlay::Models { selected }
+            | Overlay::Reasoning { selected }
+            | Overlay::Files { selected, .. } => *selected = step(*selected),
+            Overlay::Diff(diff) => {
+                let next = step(diff.selected);
+                if next != diff.selected {
+                    diff.select(next);
                     self.load_selected_diff();
                 }
             }
-            Overlay::Help => {
-                self.help_scroll = self.help_scroll.saturating_add_signed(delta * 3);
-            }
-            Overlay::Tool(_) => self.tool_view.scroll_by(delta, rows),
-            Overlay::Find {
-                current, matches, ..
-            } => {
-                *current = super::features::step_match(*current, matches.len(), delta > 0);
-            }
-            Overlay::Interaction => {
-                let options = self
-                    .session
-                    .as_ref()
-                    .and_then(|session| session.interaction.as_ref())
-                    .map_or(0, |interaction| interaction.options().len());
-                self.interaction_choice = step(self.interaction_choice, options);
-            }
-            _ => {}
+            Overlay::Help { scroll } => *scroll = scroll.saturating_add_signed(delta * 3),
+            Overlay::Tool(_) => self.scroll_view(delta),
+            Overlay::Find { .. } => self.find_step(delta > 0),
+            Overlay::Context | Overlay::None => {}
         }
     }
 
-    /// PgUp/PgDn in the diff and tool views: scroll the content by a page.
-    fn page_view(&mut self, direction: isize) {
+    /// Scrolls the diff or tool view by `delta` rows; they clamp at the ends.
+    fn scroll_view(&mut self, delta: isize) {
         // The view's title and hint rows are not content.
-        let rows = self.viewport_rows().saturating_sub(2).max(1);
-        let delta = direction.saturating_mul(rows as isize);
+        let rows = self.viewport_rows().saturating_sub(2);
         match &mut self.overlay {
-            Overlay::Diff { scroll, .. } => {
-                self.diff.scroll_by(delta, rows);
-                *scroll = self.diff.scroll.min(u16::MAX as usize) as u16;
-            }
-            Overlay::Tool(_) => self.tool_view.scroll_by(delta, rows),
+            Overlay::Diff(diff) => diff.scroll_by(delta, rows),
+            Overlay::Tool(tool) => tool.scroll_by(delta, rows),
             _ => {}
         }
     }
@@ -322,7 +204,7 @@ impl App {
     /// Esc on the palette: a draft that is only the command being typed goes
     /// with it, so the next `/` does not start `//`.
     fn discard_command_draft(&mut self) {
-        if commands::opens_palette(self.composer.text(), true) {
+        if commands::opens_palette(self.composer.text()) {
             self.composer.clear();
         }
     }
@@ -335,66 +217,44 @@ impl App {
             .char_indices()
             .rfind(|(_, ch)| ch.is_whitespace())
             .map_or(0, |(at, ch)| at + ch.len_utf8());
-        if !head[start..].starts_with('@') {
-            return;
-        }
-        while self.composer.cursor() > start {
-            let before = self.composer.cursor();
-            self.composer.backspace();
-            if self.composer.cursor() >= before {
-                break;
+        if head[start..].starts_with('@') {
+            while self.composer.cursor() > start {
+                self.composer.backspace();
             }
         }
     }
 
+    /// Types `character` into the overlay's filter, or deletes the last one.
     fn overlay_filter_push(&mut self, character: Option<char>) {
-        if let Overlay::Find { query, .. } = &mut self.overlay {
-            match character {
-                Some(character) => query.push(character),
-                None => {
-                    query.pop();
-                }
+        let edit = |text: &mut String| match character {
+            Some(character) => text.push(character),
+            None => {
+                text.pop();
             }
-            let trimmed = query.trim().to_owned();
-            // Recompute outside the overlay borrow: the blocks live in the
-            // session, which `self` still owns.
-            let found = features::find_matches(self.transcript_blocks(), &trimmed);
-            if let Overlay::Find {
-                matches, current, ..
-            } = &mut self.overlay
-            {
-                *matches = found;
-                *current = 0;
-            }
-            return;
-        }
+        };
+        let blocks = self
+            .session
+            .as_ref()
+            .map_or(&[][..], |session| session.transcript.blocks());
         match &mut self.overlay {
-            Overlay::Palette { filter, selected } => {
-                if let Some(character) = character {
-                    filter.push(character);
-                } else {
-                    filter.pop();
-                }
-                *selected = 0;
+            Overlay::Palette { filter, selected }
+            | Overlay::Sessions {
+                filter, selected, ..
             }
-            Overlay::Sessions {
+            | Overlay::Files {
                 filter, selected, ..
             } => {
-                if let Some(character) = character {
-                    filter.push(character);
-                } else {
-                    filter.pop();
-                }
+                edit(filter);
                 *selected = 0;
             }
-            Overlay::Find { .. } => {}
-            Overlay::Files { filter, selected } => {
-                if let Some(character) = character {
-                    filter.push(character);
-                } else {
-                    filter.pop();
-                }
-                *selected = 0;
+            Overlay::Find {
+                query,
+                matches,
+                current,
+            } => {
+                edit(query);
+                *matches = find::find_matches(blocks, query);
+                *current = 0;
             }
             _ => {}
         }
@@ -407,105 +267,84 @@ impl App {
             self.overlay = Overlay::None;
             return;
         };
-        let Overlay::Palette { filter, selected } = &mut self.overlay else {
-            return;
-        };
-        *filter = name.to_owned();
-        *selected = 0;
+        if let Overlay::Palette { filter, selected } = &mut self.overlay {
+            *filter = name.to_owned();
+            *selected = 0;
+        }
     }
 
-    fn on_overlay_accept(&mut self) -> Input {
-        let overlay = std::mem::replace(&mut self.overlay, Overlay::None);
-        match overlay {
+    fn on_overlay_accept(&mut self) -> Option<Action> {
+        match std::mem::replace(&mut self.overlay, Overlay::None) {
             Overlay::Palette { selected, filter } => {
-                let matches = commands::filter(&filter);
-                let Some(command) = matches.get(selected).or_else(|| matches.first()) else {
-                    self.composer.clear();
-                    return Input::Consumed;
-                };
-                // The composer holds the whole command line, so an argument
-                // typed after the name reaches the command. The accepted row
-                // can be another fuzzy match than the typed name (`/res` lists
-                // resume and reasoning), but the argument is still the user's
-                // and belongs to whichever command they accepted.
+                let command = commands::filter(&filter).get(selected).copied();
+                // The argument typed after the name goes to the command accepted,
+                // which can be another fuzzy match than the typed name.
                 let arg = commands::parse(self.composer.text())
                     .map_or("", |(_, arg)| arg)
                     .to_owned();
                 self.composer.clear();
-                match commands::execute(command.name, &arg) {
-                    Some(Executed::Action(action)) => Input::Action(action),
+                match commands::execute(command?.name, &arg) {
+                    Some(Executed::Action(action)) => Some(action),
                     Some(Executed::Panel(panel)) => {
                         self.open_panel(panel);
-                        Input::Consumed
+                        None
                     }
-                    _ => Input::Consumed,
+                    _ => None,
                 }
             }
             Overlay::Sessions {
-                selected, filter, ..
-            } => {
-                let rows = self.filtered_sessions(&filter);
-                let Some(info) = rows.get(selected) else {
-                    return Input::Consumed;
-                };
-                let id = info.session_id.clone();
-                Input::Action(Action::OpenSession(id))
-            }
-            Overlay::Find { .. } => {
-                // Enter is "next match"; the bar stays open.
+                selected,
+                filter,
+                rows,
+                ..
+            } => sheets::filtered_sessions(&rows, &filter, self.session.as_ref())
+                .get(selected)
+                .map(|info| Action::OpenSession(info.session_id.clone())),
+            find @ Overlay::Find { .. } => {
+                self.overlay = find;
                 self.find_step(true);
-                Input::Consumed
+                None
             }
-            Overlay::Models { selected } => {
-                let Some(model) = self.models.get(selected) else {
-                    return Input::Consumed;
-                };
-                Input::Action(Action::SetModel(model.id.clone()))
-            }
-            Overlay::Reasoning { selected } => {
-                let levels = self.reasoning_levels();
-                let Some(level) = levels.get(selected) else {
-                    return Input::Consumed;
-                };
-                Input::Action(Action::SetReasoning(*level))
-            }
-            Overlay::Files { filter, selected } => {
-                let paths = crate::ui::files::filtered(&filter);
+            Overlay::Models { selected } => self
+                .models
+                .get(selected)
+                .map(|model| Action::SetModel(model.id.clone())),
+            Overlay::Reasoning { selected } => self
+                .reasoning_levels()
+                .get(selected)
+                .map(|level| Action::SetReasoning(*level)),
+            Overlay::Files {
+                filter,
+                selected,
+                paths,
+            } => {
                 // No match keeps the picker open rather than inserting nothing.
-                let Some(path) = paths.get(selected).or(paths.last()) else {
-                    self.overlay = Overlay::Files { filter, selected };
-                    return Input::Consumed;
+                let Some(path) = matching_paths(&paths, &filter)
+                    .get(selected)
+                    .copied()
+                    .cloned()
+                else {
+                    self.overlay = Overlay::Files {
+                        filter,
+                        selected,
+                        paths,
+                    };
+                    return None;
                 };
-                // The row is `@path`; it replaces the `@` token it was opened
-                // from instead of following it.
+                // The path replaces the `@` token the picker was opened from.
                 self.discard_mention();
-                self.composer.insert(path);
-                Input::Edited
+                self.composer.insert(&format!("@{path}"));
+                None
             }
-            Overlay::Interaction => {
-                let choice = self.interaction_choice;
-                let is_approval = self
-                    .session
-                    .as_ref()
-                    .and_then(|session| session.interaction.as_ref())
-                    .is_some_and(|interaction| {
-                        matches!(interaction.kind, crate::app::InteractionKind::Approval)
-                    });
-                Input::Action(Action::Answer(if is_approval {
-                    if choice == 0 {
-                        super::Answer::Allow
-                    } else {
-                        super::Answer::Deny
-                    }
-                } else {
-                    super::Answer::Choice(choice)
-                }))
-            }
-            _ => Input::Consumed,
+            Overlay::Context
+            | Overlay::Help { .. }
+            | Overlay::Diff(_)
+            | Overlay::Tool(_)
+            | Overlay::None => None,
         }
     }
 
-    fn on_composer_key(&mut self, key: KeyEvent) -> Input {
+    fn on_composer_key(&mut self, key: KeyEvent) -> Option<Action> {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
         let shift = key.modifiers.contains(KeyModifiers::SHIFT);
@@ -513,282 +352,198 @@ impl App {
             self.quit_armed = false;
         }
         match key.code {
-            KeyCode::Enter if alt => Input::Action(Action::QueueFollowUp),
-            KeyCode::Enter if shift => {
-                self.composer.newline();
-                Input::Edited
-            }
-            KeyCode::Enter => self.submit_or_command(),
-            KeyCode::Char('j') if ctrl => {
-                self.composer.newline();
-                Input::Edited
-            }
-            KeyCode::Esc => {
-                if self.escape() {
-                    Input::Consumed
-                } else {
-                    Input::Ignored
-                }
-            }
+            KeyCode::Enter if alt => return Some(Action::QueueFollowUp),
+            KeyCode::Enter if shift => self.composer.newline(),
+            KeyCode::Enter => return self.submit_or_command(),
+            KeyCode::Char('j') if ctrl => self.composer.newline(),
+            KeyCode::Esc => self.escape(),
             KeyCode::Char('c') if ctrl => {
                 if !self.composer.is_empty() {
                     self.composer.clear();
                     self.quit_armed = false;
-                    return Input::Edited;
-                }
-                if self.quit_armed {
-                    Input::Action(Action::Quit)
+                } else if self.quit_armed {
+                    return Some(Action::Quit);
                 } else {
                     self.quit_armed = true;
-                    self.notice(
-                        crate::transcript::block::NoticeLevel::Info,
-                        "Press Ctrl+C again to quit",
-                    );
-                    Input::Edited
+                    self.notice(NoticeLevel::Info, "Press Ctrl+C again to quit");
                 }
             }
             KeyCode::Char('d') if ctrl => {
                 if self.composer.is_empty() {
-                    Input::Action(Action::Quit)
-                } else {
-                    self.composer.delete();
-                    Input::Edited
+                    return Some(Action::Quit);
                 }
+                self.composer.delete();
             }
-            KeyCode::Char('g') if ctrl => Input::Action(Action::EditDraft),
-            KeyCode::Char('o') if ctrl => {
-                self.tools_expanded = !self.tools_expanded;
-                Input::Consumed
-            }
-            KeyCode::Char('t') if ctrl => {
-                self.show_reasoning = !self.show_reasoning;
-                Input::Consumed
-            }
-            KeyCode::Char('r') if ctrl => {
-                self.open_panel(super::Panel::Sessions);
-                Input::Consumed
-            }
-            KeyCode::Char('l') if ctrl => {
-                self.open_panel(super::Panel::Models);
-                Input::Consumed
-            }
-            KeyCode::Char('f') if ctrl => {
-                self.open_panel(super::Panel::Find);
-                Input::Consumed
-            }
-            KeyCode::Char('a') if ctrl => {
-                self.composer.move_home();
-                Input::Edited
-            }
-            KeyCode::Char('e') if ctrl => {
-                self.composer.move_end();
-                Input::Edited
-            }
-            KeyCode::Char('u') if ctrl => {
-                self.composer.delete_to_line_start();
-                Input::Edited
-            }
-            KeyCode::Char('k') if ctrl => {
-                self.composer.delete_to_line_end();
-                Input::Edited
-            }
-            KeyCode::Char('w') if ctrl => {
-                self.composer.delete_word_left();
-                Input::Edited
-            }
+            KeyCode::Char('g') if ctrl => return Some(Action::EditDraft),
+            KeyCode::Char('o') if ctrl => self.tools_expanded = !self.tools_expanded,
+            KeyCode::Char('t') if ctrl => self.show_reasoning = !self.show_reasoning,
+            KeyCode::Char('r') if ctrl => self.open_panel(Panel::Sessions),
+            KeyCode::Char('l') if ctrl => self.open_panel(Panel::Models),
+            KeyCode::Char('f') if ctrl => self.open_panel(Panel::Find),
+            KeyCode::Char('a') if ctrl => self.composer.move_home(),
+            KeyCode::Char('e') if ctrl => self.composer.move_end(),
+            KeyCode::Char('u') if ctrl => self.composer.delete_to_line_start(),
+            KeyCode::Char('k') if ctrl => self.composer.delete_to_line_end(),
+            KeyCode::Char('w') if ctrl => self.composer.delete_word_left(),
             KeyCode::Char('z') if ctrl => {
                 self.composer.undo();
-                Input::Edited
             }
             KeyCode::Char('y') if ctrl => {
                 self.composer.redo();
-                Input::Edited
             }
-            KeyCode::BackTab => Input::Action(Action::SetReasoning(self.next_reasoning())),
+            KeyCode::BackTab => return self.next_reasoning().map(Action::SetReasoning),
             KeyCode::Char('@') => {
                 self.composer.type_char('@');
-                self.open_panel(super::Panel::Files);
-                Input::Edited
+                self.open_panel(Panel::Files);
             }
-            KeyCode::Char(character) if ctrl => {
-                let _ = character;
-                Input::Ignored
-            }
+            KeyCode::Char(_) if ctrl => {}
             KeyCode::Char(character) => {
                 self.composer.type_char(character);
-                if commands::opens_palette(self.composer.text(), true) {
-                    self.open_panel(super::Panel::Palette);
+                if commands::opens_palette(self.composer.text()) {
+                    self.open_panel(Panel::Palette);
                 }
-                Input::Edited
             }
-            KeyCode::Backspace => {
-                self.composer.backspace();
-                Input::Edited
-            }
-            KeyCode::Delete => {
-                self.composer.delete();
-                Input::Edited
-            }
-            KeyCode::Left if alt => {
-                self.composer.move_word_left();
-                Input::Edited
-            }
-            KeyCode::Right if alt => {
-                self.composer.move_word_right();
-                Input::Edited
-            }
-            KeyCode::Left => {
-                self.composer.move_left();
-                Input::Edited
-            }
-            KeyCode::Right => {
-                self.composer.move_right();
-                Input::Edited
-            }
+            KeyCode::Backspace => self.composer.backspace(),
+            KeyCode::Delete => self.composer.delete(),
+            KeyCode::Left if alt => self.composer.move_word_left(),
+            KeyCode::Right if alt => self.composer.move_word_right(),
+            KeyCode::Left => self.composer.move_left(),
+            KeyCode::Right => self.composer.move_right(),
             // Arrows move inside a multi-line draft and only browse history at
             // its first and last line.
-            KeyCode::Up if self.composer.move_up() => Input::Edited,
-            KeyCode::Up => self.browse_history(true),
-            KeyCode::Down if self.composer.move_down() => Input::Edited,
-            KeyCode::Down => self.browse_history(false),
-            KeyCode::Home if ctrl => self.scroll_to_start(),
-            KeyCode::End if ctrl => self.scroll_to_end(),
-            KeyCode::Home => {
-                self.composer.move_home();
-                Input::Edited
+            KeyCode::Up if alt => return Some(Action::RecallQueued),
+            KeyCode::Up if ctrl => self.jump_to_user_message(false),
+            KeyCode::Down if ctrl => self.jump_to_user_message(true),
+            KeyCode::Up => {
+                if !self.composer.move_up() {
+                    self.composer.history_prev();
+                }
             }
-            KeyCode::End => {
-                self.composer.move_end();
-                Input::Edited
+            KeyCode::Down => {
+                if !self.composer.move_down() {
+                    self.composer.history_next();
+                }
             }
-            KeyCode::PageUp => self.scroll_pages(-1),
-            KeyCode::PageDown => self.scroll_pages(1),
-            KeyCode::F(1) => {
-                self.open_panel(super::Panel::Help);
-                Input::Consumed
+            KeyCode::Home if ctrl => {
+                self.scroll = Scroll::Anchor {
+                    block: 0,
+                    offset: 0,
+                };
+                // The top of the loaded window is also where the next page begins.
+                self.load_older();
             }
-            _ => Input::Ignored,
+            KeyCode::End if ctrl => self.scroll = Scroll::Follow,
+            KeyCode::Home => self.composer.move_home(),
+            KeyCode::End => self.composer.move_end(),
+            // Two rows of the previous page stay in view.
+            KeyCode::PageUp => self.scroll_by(-self.page_rows()),
+            KeyCode::PageDown => self.scroll_by(self.page_rows()),
+            KeyCode::F(1) => self.open_panel(Panel::Help),
+            _ => {}
         }
+        None
     }
 
     /// A terminal paste. The composer decides whether the payload becomes a
-    /// single token, and the palette follows immediately (`/` or `@` pasted
-    /// first opens the matching picker).
+    /// single token, and a leading `/` opens the palette at once.
     pub fn on_paste(&mut self, text: &str) {
         if self.has_interaction() {
             return;
         }
         self.composer.insert(text);
-        if commands::opens_palette(self.composer.text(), true)
-            && matches!(self.overlay, Overlay::None)
-        {
-            self.open_panel(super::Panel::Palette);
+        if commands::opens_palette(self.composer.text()) && self.overlay.is_none() {
+            self.open_panel(Panel::Palette);
         }
     }
 
-    fn submit_or_command(&mut self) -> Input {
-        if let Some((name, argument)) = commands::parse(self.composer.text()) {
-            let argument = argument.to_owned();
-            match commands::execute(name, &argument) {
-                Some(Executed::Action(action)) => {
-                    self.composer.clear();
-                    return Input::Action(action);
+    fn submit_or_command(&mut self) -> Option<Action> {
+        let Some((name, argument)) = commands::parse(self.composer.text()) else {
+            return Some(Action::Submit);
+        };
+        match commands::execute(name, argument) {
+            Some(Executed::Action(action)) => {
+                self.composer.clear();
+                Some(action)
+            }
+            Some(Executed::Panel(panel)) => {
+                self.composer.clear();
+                self.open_panel(panel);
+                None
+            }
+            Some(Executed::Noop) => {
+                self.notice(NoticeLevel::Error, "Missing argument");
+                None
+            }
+            None => {
+                if !name.is_empty() {
+                    let message = format!("Unknown command /{name}");
+                    self.notice(NoticeLevel::Error, message);
                 }
-                Some(Executed::Panel(panel)) => {
-                    self.composer.clear();
-                    self.open_panel(panel);
-                    return Input::Consumed;
-                }
-                Some(Executed::Noop) => {
-                    self.notice(
-                        crate::transcript::block::NoticeLevel::Error,
-                        "Missing argument",
-                    );
-                    return Input::Consumed;
-                }
-                None => {
-                    if name.is_empty() {
-                        return Input::Consumed;
-                    }
-                    self.notice(
-                        crate::transcript::block::NoticeLevel::Error,
-                        format!("Unknown command /{name}"),
-                    );
-                    return Input::Consumed;
-                }
+                None
             }
         }
-        Input::Action(Action::Submit)
     }
 
-    /// Prompt history browsing at the first or last line of the draft.
-    fn browse_history(&mut self, up: bool) -> Input {
-        let moved = if up {
-            self.composer.history_prev()
+    fn page_rows(&self) -> isize {
+        self.viewport_rows().saturating_sub(2).max(1) as isize
+    }
+
+    /// Ctrl+↑/↓: puts the previous or next user message at the top. Past the
+    /// last one the view follows the tail again.
+    fn jump_to_user_message(&mut self, forward: bool) {
+        let blocks = self.transcript_blocks();
+        let layout = &self.layout;
+        let (top, offset) = match self.scroll {
+            Scroll::Anchor { block, offset } => (block, offset),
+            Scroll::Follow if forward => return,
+            Scroll::Follow => {
+                let max_top = layout.total_rows().saturating_sub(layout.viewport.height);
+                layout.anchor(max_top)
+            }
+        };
+        let is_user = |block: &Block| matches!(block, Block::User { .. });
+        let target = if forward {
+            blocks
+                .iter()
+                .enumerate()
+                .skip(top + 1)
+                .find(|(_, block)| is_user(block))
+                .map(|(index, _)| index)
         } else {
-            self.composer.history_next()
+            let end = if offset > 0 { top + 1 } else { top };
+            blocks[..end.min(blocks.len())].iter().rposition(is_user)
         };
-        if moved { Input::Edited } else { Input::Ignored }
-    }
-
-    fn scroll_pages(&mut self, direction: isize) -> Input {
-        self.scroll_by(
-            direction * self.viewport_rows() as isize,
-            self.viewport_rows(),
-        );
-        Input::Consumed
-    }
-
-    fn scroll_to_start(&mut self) -> Input {
-        self.scroll = super::Scroll::Anchor {
-            block: 0,
-            offset: 0,
+        self.scroll = match target {
+            Some(block) => Scroll::Anchor { block, offset: 0 },
+            None if forward => Scroll::Follow,
+            None => self.scroll,
         };
-        // The top of the loaded window is also where the next page begins, so
-        // the same request that a scroll to the edge makes belongs here.
-        self.on_action(super::Action::LoadOlder);
-        Input::Consumed
-    }
-
-    fn scroll_to_end(&mut self) -> Input {
-        self.scroll = super::Scroll::Follow;
-        Input::Consumed
     }
 
     /// Mouse: wheel scrolling, click-to-open, and drag selection that copies on
     /// release.
-    pub fn on_mouse(&mut self, mouse: MouseEvent) -> Input {
+    pub fn on_mouse(&mut self, mouse: MouseEvent) {
         match mouse.kind {
-            MouseEventKind::ScrollUp => {
-                if matches!(self.overlay, Overlay::Diff { .. }) {
-                    self.scroll_diff(-3);
-                } else if matches!(self.overlay, Overlay::Tool(_)) {
-                    self.scroll_tool(-3);
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                let delta = if mouse.kind == MouseEventKind::ScrollUp {
+                    -3
                 } else {
-                    self.scroll_by(-3, self.viewport_rows());
-                }
-                Input::Consumed
-            }
-            MouseEventKind::ScrollDown => {
-                if matches!(self.overlay, Overlay::Diff { .. }) {
-                    self.scroll_diff(3);
-                } else if matches!(self.overlay, Overlay::Tool(_)) {
-                    self.scroll_tool(3);
+                    3
+                };
+                if matches!(self.overlay, Overlay::Diff(_) | Overlay::Tool(_)) {
+                    self.scroll_view(delta);
                 } else {
-                    self.scroll_by(3, self.viewport_rows());
+                    self.scroll_by(delta);
                 }
-                Input::Consumed
             }
             MouseEventKind::Down(MouseButton::Left) => {
                 self.selection_start = Some((mouse.column, mouse.row));
                 self.selection_end = None;
-                Input::Consumed
             }
             MouseEventKind::Drag(MouseButton::Left) => {
                 if self.selection_start.is_some() {
                     self.selection_end = Some((mouse.column, mouse.row));
                 }
-                Input::Consumed
             }
             MouseEventKind::Up(MouseButton::Left) => {
                 let cell = (mouse.column, mouse.row);
@@ -800,15 +555,13 @@ impl App {
                     self.selection_end = Some(cell);
                     self.copy_selection();
                 }
-                Input::Consumed
             }
-            _ => Input::Ignored,
+            _ => {}
         }
     }
 
-    /// A click, not a drag, on the transcript: a tool card's header row folds
-    /// or unfolds that card, an expanded card's hint row opens the tool view,
-    /// and a turn-end line opens the turn's diff.
+    /// A click: a card header folds the card, its hint opens the tool view, and
+    /// a turn-end line opens the turn's diff.
     fn click_transcript(&mut self, (column, row): (u16, u16)) {
         if !self.overlay.is_none() {
             return;
@@ -821,97 +574,61 @@ impl App {
             return;
         };
         match session.transcript.blocks().get(index) {
-            Some(crate::transcript::Block::Tool(call)) => {
+            Some(Block::Tool(call)) => {
                 let key = call.key.clone();
-                // The hint is always a card's last row, and the drawn row is
-                // what the reader clicked on.
-                let hint = crate::ui::blocks::FULL_OUTPUT_HINT;
+                // The hint is a card's last row; the drawn row is what was clicked.
                 let on_hint = self
                     .rendered
                     .row(row)
-                    .is_some_and(|text| text.trim_end().ends_with(hint));
+                    .is_some_and(|text| text.trim_end().ends_with(blocks::FULL_OUTPUT_HINT));
                 if line == 0 {
                     if let Some(call) = session.transcript.find_tool_mut(&key) {
                         call.toggle_expanded(all_expanded);
                     }
                 } else if on_hint {
-                    self.open_panel(super::Panel::Tool(key));
+                    self.open_panel(Panel::Tool(key));
                 }
             }
-            Some(crate::transcript::Block::TurnEnd { .. }) => {
-                self.open_panel(super::Panel::Diff(super::DiffScope::Turn));
-            }
+            Some(Block::TurnEnd { .. }) => self.open_panel(Panel::Diff(super::DiffScope::Turn)),
             _ => {}
         }
     }
 
     /// Copies the drag that just ended, if it covered more than one cell.
     fn copy_selection(&mut self) {
-        let (Some(from), Some(to)) = (self.selection_start, self.selection_end) else {
-            self.selection_start = None;
-            self.selection_end = None;
+        let (from, to) = (self.selection_start.take(), self.selection_end.take());
+        let (Some(from), Some(to)) = (from, to) else {
             return;
         };
-        self.selection_start = None;
-        self.selection_end = None;
-        let drag = crate::ui::selection::Drag { from, to };
+        let drag = selection::Drag { from, to };
         if drag.is_click() {
             return;
         }
-        let Some(text) = self.selected_text(drag) else {
-            return;
-        };
-        if !text.trim().is_empty() {
+        if let Some(text) = self
+            .selected_text(drag)
+            .filter(|text| !text.trim().is_empty())
+        {
             self.copy(text);
         }
     }
 
-    fn scroll_diff(&mut self, delta: isize) {
-        let rows = self.viewport_rows();
-        self.diff.scroll_by(delta * 3, rows);
-        if let Overlay::Diff { scroll, .. } = &mut self.overlay {
-            *scroll = self.diff.scroll.min(u16::MAX as usize) as u16;
-        }
-    }
-
-    fn scroll_tool(&mut self, delta: isize) {
-        let rows = self.viewport_rows();
-        self.tool_view.scroll_by(delta * 3, rows);
-    }
-
     /// The reasoning levels this session's model supports, in Agent order.
-    pub fn reasoning_levels(&self) -> Vec<crate::protocol::Reasoning> {
-        let levels = self
-            .session
+    pub fn reasoning_levels(&self) -> Vec<Reasoning> {
+        self.session
             .as_ref()
             .and_then(|session| session.model(&self.models))
             .map(|model| model.supported_reasoning.clone())
-            .unwrap_or_default();
-        if levels.is_empty() {
-            vec![
-                crate::protocol::Reasoning::Auto,
-                crate::protocol::Reasoning::Low,
-                crate::protocol::Reasoning::Medium,
-                crate::protocol::Reasoning::High,
-            ]
-        } else {
-            levels
-        }
+            .unwrap_or_default()
     }
 
     /// Shift+Tab: the next supported reasoning level.
-    fn next_reasoning(&self) -> crate::protocol::Reasoning {
+    fn next_reasoning(&self) -> Option<Reasoning> {
+        let current = self.session.as_ref()?.info.reasoning;
         let levels = self.reasoning_levels();
-        let current = self
-            .session
-            .as_ref()
-            .map_or(crate::protocol::Reasoning::default(), |session| {
-                session.info.reasoning
-            });
-        let index = levels
+        let next = levels
             .iter()
             .position(|level| *level == current)
-            .unwrap_or(0);
-        levels[(index + 1) % levels.len()]
+            .map_or(0, |at| (at + 1) % levels.len());
+        levels.get(next).copied()
     }
 }

@@ -154,7 +154,7 @@ fn assistant(
         } else {
             let rows = thinking.lines().count().max(1);
             let summary = Line::styled(
-                format!("Thought · {rows} {}", plural(rows, "line")),
+                format!("Thought · {}", plural(rows as u64, "line")),
                 styles.dim().add_modifier(ratatui::style::Modifier::ITALIC),
             );
             lines.push(rails::reasoning_rail(summary, styles));
@@ -219,8 +219,8 @@ fn tool(call: &ToolCall, styles: Styles, width: usize, expanded: bool) -> Vec<Li
         let mut hint = "… ".to_owned();
         if body.hidden > 0 {
             let which = if body.tail { "earlier" } else { "more" };
-            let lines = plural(body.hidden, "line");
-            hint.push_str(&format!("{} {which} {lines} · ", body.hidden));
+            let noun = format!("{which} line");
+            hint.push_str(&format!("{} · ", plural(body.hidden as u64, &noun)));
         }
         hint.push_str(if expanded {
             FULL_OUTPUT_HINT
@@ -346,10 +346,7 @@ fn tool_header(
 ) -> (Vec<Span<'static>>, bool) {
     let mut meta: Vec<Vec<Span<'static>>> = Vec::new();
     if let Some(duration) = call.duration {
-        meta.push(vec![Span::styled(
-            crate::app::format_duration(duration),
-            styles.dim(),
-        )]);
+        meta.push(vec![Span::styled(format_duration(duration), styles.dim())]);
     }
     if let Some(code) = call.exit_code {
         let style = if code == 0 {
@@ -430,12 +427,59 @@ fn card_row(spans: Vec<Span<'static>>, rail: Style, styles: Styles, band: Color)
     }
 }
 
-fn plural(count: usize, word: &str) -> String {
-    if count == 1 {
-        word.to_owned()
-    } else {
-        format!("{word}s")
+/// `1 request`, `2 requests`.
+pub fn plural(count: u64, noun: &str) -> String {
+    match count {
+        1 => format!("1 {noun}"),
+        _ => format!("{count} {noun}s"),
     }
+}
+
+/// A short duration: `0.4s`, `12s`, `3m07s`.
+pub fn format_duration(duration: std::time::Duration) -> String {
+    let seconds = duration.as_secs_f64();
+    if seconds < 10.0 {
+        format!("{seconds:.1}s")
+    } else if seconds < 60.0 {
+        format!("{}s", seconds as u64)
+    } else {
+        format!("{}m{:02}s", seconds as u64 / 60, seconds as u64 % 60)
+    }
+}
+
+/// `completed in 3m07s · 12 requests · 11 tools · 3 files changed (+40 −7)`;
+/// a turn that did not complete leads with its reason instead.
+pub fn turn_end_line(
+    outcome: &crate::protocol::LoopOutcome,
+    duration: Option<std::time::Duration>,
+    requests: u32,
+    tool_rounds: u64,
+    changes: Option<&crate::transcript::ChangeSummary>,
+) -> String {
+    let completed = outcome.is_completed();
+    let mut parts: Vec<String> = Vec::new();
+    match (completed, duration) {
+        (true, Some(duration)) => parts.push(format!("completed in {}", format_duration(duration))),
+        (true, None) => parts.push("completed".into()),
+        (false, duration) => {
+            parts.push(outcome.label());
+            parts.extend(duration.map(format_duration));
+        }
+    }
+    if completed && requests > 0 {
+        parts.push(plural(u64::from(requests), "request"));
+    }
+    if tool_rounds > 0 {
+        parts.push(plural(tool_rounds, "tool"));
+    }
+    if let Some(changes) = changes.filter(|changes| !changes.is_empty()) {
+        let files = format!("{} changed", plural(changes.files as u64, "file"));
+        parts.push(match changes.lines {
+            Some((added, removed)) => format!("{files} (+{added} −{removed})"),
+            None => files,
+        });
+    }
+    parts.join(" · ")
 }
 
 fn turn_end(
@@ -447,7 +491,7 @@ fn turn_end(
     styles: Styles,
     width: usize,
 ) -> Line<'static> {
-    let text = crate::app::turn_end_line(outcome, duration, requests, tool_rounds, changes);
+    let text = turn_end_line(outcome, duration, requests, tool_rounds, changes);
     let labeled = format!("── {text} ──");
     let style = match outcome {
         crate::protocol::LoopOutcome::Completed => styles.dim(),
@@ -943,5 +987,38 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn turn_end_lines_read_as_sentences() {
+        let failed: crate::protocol::LoopOutcome = serde_json::from_value(serde_json::json!({
+            "type": "failed", "kind": "model", "model_error": {"kind": "provider_unavailable",
+            "delivery": "none", "retryable": false}
+        }))
+        .unwrap();
+        assert_eq!(
+            turn_end_line(&failed, Some(Duration::from_millis(20)), 1, 0, None),
+            "failed · model error: provider unavailable · 0.0s"
+        );
+        let changes = crate::transcript::ChangeSummary {
+            files: 1,
+            lines: Some((2, 1)),
+        };
+        let completed = crate::protocol::LoopOutcome::Completed;
+        assert_eq!(
+            turn_end_line(
+                &completed,
+                Some(Duration::from_secs(5)),
+                1,
+                1,
+                Some(&changes)
+            ),
+            "completed in 5.0s · 1 request · 1 tool · 1 file changed (+2 −1)"
+        );
+        assert_eq!(
+            turn_end_line(&completed, None, 8, 7, None),
+            "completed · 8 requests · 7 tools"
+        );
+        assert_eq!(format_duration(Duration::from_secs(187)), "3m07s");
     }
 }

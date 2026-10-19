@@ -4,6 +4,7 @@
 
 use std::sync::Arc;
 
+use ratatui::layout::Rect;
 use ratatui::text::Line;
 
 use super::Block;
@@ -28,8 +29,16 @@ pub struct Viewport {
     /// First layout row on screen.
     pub top: usize,
     pub height: usize,
+    pub width: u16,
     /// Screen cell of layout row 0, column 0.
     pub origin: (u16, u16),
+}
+
+impl Viewport {
+    /// The screen area the transcript was drawn in.
+    pub fn area(&self) -> Rect {
+        Rect::new(self.origin.0, self.origin.1, self.width, self.height as u16)
+    }
 }
 
 /// Ordered blocks plus their render cache and prefix heights.
@@ -416,6 +425,7 @@ mod tests {
         layout.viewport = Viewport {
             top: 1,
             height: 4,
+            width: 40,
             origin: (0, 10),
         };
         assert_eq!(layout.hit(5, 10), Some((0, 1)));

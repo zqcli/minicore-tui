@@ -8,23 +8,34 @@
 //! drawn.
 
 use crate::app::commands;
-use crate::app::{App, Overlay, Panel};
+use crate::app::overlay;
+use crate::app::{App, Overlay};
+use crate::protocol::SessionInfo;
 use crate::theme::Palette;
 
-use super::files;
 use super::panel::{Row, Sheet};
 use super::sheets;
 use super::views;
 
-/// The sheet for the current overlay, or `None` when no sheet is open.
+/// The sheet for the current overlay, or `None` when no sheet is open. A
+/// pending interaction is a sheet too: it owns the keyboard until answered.
 pub fn sheet(app: &App, palette: &Palette) -> Option<Sheet> {
     Some(match &app.overlay {
-        Overlay::None => return None,
+        Overlay::None => return interaction_sheet(app, palette),
         Overlay::Palette { filter, selected } => palette_sheet(filter, *selected),
-        Overlay::Sessions { filter, selected } => sessions_sheet(app, filter, *selected),
+        Overlay::Sessions {
+            filter,
+            selected,
+            rows,
+            armed,
+        } => sessions_sheet(app, rows, filter, *selected, armed.is_some()),
         Overlay::Models { selected } => models_sheet(app, *selected),
         Overlay::Reasoning { selected } => reasoning_sheet(app, *selected),
-        Overlay::Files { filter, selected } => files_sheet(filter, *selected),
+        Overlay::Files {
+            filter,
+            selected,
+            paths,
+        } => files_sheet(paths, filter, *selected),
         Overlay::Find {
             query,
             matches,
@@ -33,9 +44,10 @@ pub fn sheet(app: &App, palette: &Palette) -> Option<Sheet> {
             sheets::find_title(query),
             sheets::find_hint(matches.len(), *current),
         ),
-        Overlay::Interaction => interaction_sheet(app, palette),
         // Views own the transcript area instead of a sheet.
-        Overlay::Context | Overlay::Help | Overlay::Diff { .. } | Overlay::Tool(_) => return None,
+        Overlay::Context | Overlay::Help { .. } | Overlay::Diff(_) | Overlay::Tool(_) => {
+            return None;
+        }
     })
 }
 
@@ -49,7 +61,13 @@ fn palette_sheet(filter: &str, selected: usize) -> Sheet {
         .selected(Some(selected))
 }
 
-fn sessions_sheet(app: &App, filter: &str, selected: usize) -> Sheet {
+fn sessions_sheet(
+    app: &App,
+    rows: &[SessionInfo],
+    filter: &str,
+    selected: usize,
+    armed: bool,
+) -> Sheet {
     let resident = app
         .session
         .as_ref()
@@ -58,15 +76,15 @@ fn sessions_sheet(app: &App, filter: &str, selected: usize) -> Sheet {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|elapsed| elapsed.as_secs())
         .unwrap_or(0);
-    let rows = app
-        .filtered_sessions(filter)
-        .iter()
+    let rows = sheets::filtered_sessions(rows, filter, app.session.as_ref())
+        .into_iter()
         .map(|info| {
+            let label = sheets::session_label(info, app.session.as_ref());
             let current = resident == Some(info.session_id.as_str());
-            sheets::session_row(info, app.session_label(info), current, now)
+            sheets::session_row(info, label, current, now)
         })
         .collect();
-    let hint = if app.delete_pending.is_some() {
+    let hint = if armed {
         "ctrl+d again deletes · esc cancels"
     } else {
         "enter open · type filter · ctrl+d delete · esc close"
@@ -118,10 +136,10 @@ fn reasoning_sheet(app: &App, selected: usize) -> Sheet {
         .selected(Some(selected))
 }
 
-fn files_sheet(filter: &str, selected: usize) -> Sheet {
-    let rows = files::filtered(filter)
+fn files_sheet(paths: &[String], filter: &str, selected: usize) -> Sheet {
+    let rows = overlay::matching_paths(paths, filter)
         .into_iter()
-        .map(|path| Row::new(path, String::new()))
+        .map(|path| Row::new(format!("@{path}"), String::new()))
         .collect();
     Sheet::new(
         "Files",
@@ -132,17 +150,9 @@ fn files_sheet(filter: &str, selected: usize) -> Sheet {
     .selected(Some(selected))
 }
 
-pub fn approval(app: &App, palette: &Palette) -> Sheet {
-    interaction_sheet(app, palette)
-}
-
-fn interaction_sheet(app: &App, palette: &Palette) -> Sheet {
-    let Some(session) = app.session.as_ref() else {
-        return Sheet::new("Approval", "esc closes");
-    };
-    let Some(interaction) = session.interaction.as_ref() else {
-        return Sheet::new("Approval", "esc closes");
-    };
+fn interaction_sheet(app: &App, palette: &Palette) -> Option<Sheet> {
+    let session = app.session.as_ref()?;
+    let interaction = session.interaction.as_ref()?;
     let options = interaction.options();
     // The card is read at draw time: its detail and input can arrive after
     // the prompt does.
@@ -154,13 +164,13 @@ fn interaction_sheet(app: &App, palette: &Palette) -> Sheet {
         detail: call.map_or("", |call| call.detail.as_str()),
         input: call.and_then(|call| call.expanded_input.as_deref()),
     };
-    sheets::interaction_sheet(
+    Some(sheets::interaction_sheet(
         &interaction.prompt,
         &subject,
         &options,
-        app.interaction_choice,
+        interaction.selected,
         palette,
-    )
+    ))
 }
 
 /// Draws whichever full-screen view owns the transcript area. Returns false
@@ -168,51 +178,27 @@ fn interaction_sheet(app: &App, palette: &Palette) -> Sheet {
 pub fn draw_view(frame: &mut ratatui::Frame, area: ratatui::layout::Rect, app: &App) -> bool {
     let palette = app.palette;
     match &app.overlay {
-        Overlay::Diff { .. } => views::render_diff(frame, area, &palette, &app.diff),
-        Overlay::Tool(_) => views::render_tool(frame, area, &palette, &app.tool_view),
-        Overlay::Context => views::render_context(frame, area, &palette, &app.context_view),
-        Overlay::Help => {
-            let commands = crate::app::features::command_rows();
-            let help = views::help_view(&commands, &palette);
-            views::render_help(frame, area, &palette, &help, app.help_scroll);
+        Overlay::Diff(diff) => views::render_diff(frame, area, &palette, diff),
+        Overlay::Tool(tool) => {
+            views::render_tool(frame, area, &palette, tool, app.session.as_ref());
+        }
+        Overlay::Context => {
+            let session = app.session.as_ref();
+            let lines = views::context_lines(session, &palette);
+            views::render_context(frame, area, &palette, &lines);
+        }
+        Overlay::Help { scroll } => {
+            let help = views::help_view(commands::COMMANDS, &palette);
+            views::render_help(frame, area, &palette, &help, *scroll);
         }
         _ => return false,
     }
     true
 }
 
-/// The sheet a panel would open, for key handlers that need to know whether a
-/// panel is a sheet or a view.
-pub fn is_sheet(panel: &Panel) -> bool {
-    !matches!(
-        panel,
-        Panel::Context | Panel::Help | Panel::Diff(_) | Panel::Tool(_)
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn sheets_are_only_the_overlays_that_do_not_replace_the_transcript() {
-        assert!(is_sheet(&Panel::Palette));
-        assert!(is_sheet(&Panel::Sessions));
-        assert!(is_sheet(&Panel::Models));
-        assert!(is_sheet(&Panel::Reasoning));
-        assert!(is_sheet(&Panel::Files));
-        assert!(is_sheet(&Panel::Find));
-        assert!(is_sheet(&Panel::Interaction));
-        assert!(!is_sheet(&Panel::Context));
-        assert!(!is_sheet(&Panel::Help));
-        assert!(!is_sheet(&Panel::Diff(crate::app::DiffScope::Turn)));
-        assert!(!is_sheet(&Panel::Tool(crate::protocol::ToolRef {
-            session_id: String::new(),
-            loop_id: String::new(),
-            request_index: 0,
-            tool_call_id: String::new(),
-        })));
-    }
 
     #[test]
     fn the_palette_lists_command_names_and_descriptions() {

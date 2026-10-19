@@ -1,0 +1,331 @@
+//! Applying the results of async operations and the Agent's events.
+
+use serde_json::{Value, json};
+
+use super::overlay::matching_paths;
+use super::tasks::{self, History, Window};
+use super::{App, LiveTurn, Overlay, Scroll, Session, SessionOp};
+use crate::protocol::{
+    self, AgentEvent, CompactStatus, CompactionResult, RpcError, SessionInfo, SessionState,
+    TurnRef, TurnWaitResult,
+};
+use crate::transcript::{Block, ChangeSummary, NoticeLevel};
+
+impl App {
+    pub(super) fn on_op(&mut self, op: SessionOp) {
+        match op {
+            SessionOp::Tail(result) => self.on_tail(result),
+            SessionOp::Page(result) => self.on_page(result),
+            SessionOp::TurnItems(result) => {
+                if let Some(items) = self.ok(result) {
+                    self.session_mut().reconcile_turn(&items);
+                }
+            }
+            SessionOp::State(result) => self.on_state(result),
+            SessionOp::Presentation(result) => {
+                if let Some(presentation) = self.ok(result) {
+                    self.session_mut().presentation = Some(presentation);
+                }
+            }
+            SessionOp::Context(result) => {
+                if let Some(context) = self.ok(result) {
+                    self.session_mut().apply_context(context);
+                }
+            }
+            SessionOp::Sent(text, result) => self.on_sent(text, result),
+            SessionOp::Waited(result) => self.on_waited(result),
+            SessionOp::Steered(result) => self.on_steered(result),
+            SessionOp::Done(result) => {
+                self.ok(result);
+            }
+            SessionOp::Compacted(result) => self.on_compacted(result),
+            SessionOp::Info(result) => {
+                if let Some(info) = self.ok(result) {
+                    self.session_mut().info = info.clone();
+                    self.merge_catalog_info(info);
+                }
+            }
+            SessionOp::Changes(loop_id, result) => self.on_changes(&loop_id, result),
+            SessionOp::ToolRead(key, result) => {
+                if let Some(read) = self.ok(result)
+                    && let Some(card) = self.session_mut().transcript.find_tool_mut(&key)
+                {
+                    card.apply_read(&read);
+                }
+            }
+            SessionOp::ToolOutput(key, stream, result) => {
+                // Pages for a call the view no longer shows are dropped.
+                let Overlay::Tool(tool) = &mut self.overlay else {
+                    return;
+                };
+                if tool.key != key {
+                    return;
+                }
+                match result {
+                    Ok(text) => tool.set_stream(&stream, text),
+                    // The other streams still show; the view says what failed.
+                    Err(error) => {
+                        tool.set_stream(&stream, Default::default());
+                        tool.status = error.message;
+                    }
+                }
+            }
+            SessionOp::Files(result) => {
+                if let Some(found) = self.ok(result)
+                    && let Overlay::Files {
+                        filter,
+                        selected,
+                        paths,
+                    } = &mut self.overlay
+                {
+                    *paths = found;
+                    let last = matching_paths(paths, filter).len().saturating_sub(1);
+                    *selected = (*selected).min(last);
+                }
+            }
+            SessionOp::ChangeFiles(scope, result) => self.on_change_files(scope, result),
+            SessionOp::DiffFile(query, result) => self.on_diff_file(query, result),
+        }
+    }
+
+    /// Makes the opened or created session resident and loads its tail.
+    pub(super) fn adopt(&mut self, result: Result<SessionInfo, RpcError>, created: bool) {
+        self.loading_session = false;
+        let Some(info) = self.ok(result) else {
+            return;
+        };
+        self.merge_catalog_info(info.clone());
+        let epoch = self.session.as_ref().map_or(0, |old| old.epoch) + 1;
+        self.session = Some(Session::new(info, epoch));
+        self.scroll = Scroll::Follow;
+        self.waiting_for_compaction = false;
+        self.read_history(Window::Tail);
+        self.refresh_presentation();
+        self.refresh_context();
+        // A new session already carries its settings; an opened one takes them
+        // through `session.update`, so a flag is never silently dropped.
+        let launch = std::mem::take(&mut self.launch);
+        if !created && (launch.model.is_some() || launch.reasoning.is_some()) {
+            self.update_session(launch.fields(false));
+        }
+    }
+
+    fn on_tail(&mut self, result: Result<History, RpcError>) {
+        if let Some(page) = self.ok(result) {
+            self.session_mut().install_tail(page);
+            self.scroll = Scroll::Follow;
+        }
+    }
+
+    fn on_page(&mut self, result: Result<History, RpcError>) {
+        let page = match result {
+            Ok(page) => page,
+            Err(error) => {
+                self.session_mut().loading_older = false;
+                // The read already restarted once on a fresh pin.
+                if error.is_stale_pin() {
+                    self.notice(
+                        NoticeLevel::Info,
+                        "Could not load older history yet; try again in a moment",
+                    );
+                } else {
+                    self.error(error);
+                }
+                return;
+            }
+        };
+        let grown = self.session_mut().prepend_page(page);
+        if let Scroll::Anchor { block, offset } = self.scroll {
+            let block = block.saturating_add_signed(grown);
+            self.scroll = Scroll::Anchor { block, offset };
+        }
+    }
+
+    fn on_state(&mut self, result: Result<SessionState, RpcError>) {
+        let Some(state) = self.ok(result) else {
+            return;
+        };
+        let idle = state.accepts_turn();
+        self.session_mut().compaction = state.compaction;
+        if idle {
+            self.waiting_for_compaction = false;
+            self.flush_queue();
+        } else if self.waiting_for_compaction {
+            // Post-turn compaction still owns the session: keep asking until
+            // it settles, or the queue never flushes.
+            self.retry_when_idle();
+        }
+        // A loop this process did not start has no `turn.wait` of its own.
+        if let Some(active) = state.active_loop {
+            let session_id = self.session_mut().info.session_id.clone();
+            self.start_turn(TurnRef::new(session_id, active.loop_id));
+        }
+    }
+
+    /// Makes `turn` the live turn and waits for it. The only place a
+    /// `turn.wait` is registered, and only while no turn is live.
+    pub(super) fn start_turn(&mut self, turn: TurnRef) {
+        let session = self.session_mut();
+        if session.live.is_some() {
+            return;
+        }
+        let start = session
+            .next_turn_start
+            .take()
+            .unwrap_or(session.transcript.len());
+        session.live = Some(LiveTurn::new(turn.clone(), start));
+        self.scroll = Scroll::Follow;
+        self.spawn(tasks::wait_turn(self.client.clone(), turn));
+    }
+
+    fn on_sent(&mut self, text: String, result: Result<TurnRef, RpcError>) {
+        match result {
+            Ok(turn) => {
+                self.start_turn(turn);
+                if let Some(title) = self.session.as_ref().and_then(Session::auto_title) {
+                    self.rename(&title);
+                }
+            }
+            // Post-turn compaction owns the session: the turn was refused, not
+            // sent, so the text waits as a follow-up until the Agent is idle.
+            Err(error) if error.is_busy() => {
+                self.waiting_for_compaction = true;
+                let session = self.session_mut();
+                session.unsend_prompt(&text);
+                session.push_follow_up(text);
+                self.retry_when_idle();
+            }
+            // The text never reached the Agent; it returns to the draft.
+            Err(error) => {
+                self.session_mut().unsend_prompt(&text);
+                self.restore_draft(&text);
+                self.error(error);
+            }
+        }
+    }
+
+    fn retry_when_idle(&mut self) {
+        let client = self.client.clone();
+        let params = json!({ "session_id": self.session_mut().info.session_id });
+        self.spawn(async move {
+            tokio::time::sleep(super::BUSY_RETRY).await;
+            SessionOp::State(client.call(protocol::METHOD_SESSION_STATE, &params).await)
+        });
+    }
+
+    fn on_waited(&mut self, result: Result<TurnWaitResult, RpcError>) {
+        let Some(wait) = self.ok(result) else {
+            return;
+        };
+        let Some(reconcile) = self.session_mut().end_turn(&wait) else {
+            return;
+        };
+        let TurnWaitResult { turn, .. } = wait;
+        let client = self.client.clone();
+        if reconcile {
+            let (client, turn) = (client.clone(), turn.clone());
+            self.spawn(async move { SessionOp::TurnItems(tasks::read_turn(client, turn).await) });
+        }
+        self.spawn(async move {
+            let changes = tasks::turn_changes(client, turn.session_id, turn.loop_id.clone()).await;
+            SessionOp::Changes(turn.loop_id, changes)
+        });
+        // An automatic compaction has no response of its own: `session.context`
+        // is where it is reported, and the footer's figure moved too.
+        self.refresh_presentation();
+        self.refresh_context();
+        self.scroll = Scroll::Follow;
+        self.flush_queue();
+    }
+
+    fn on_steered(&mut self, result: Result<Value, RpcError>) {
+        match result {
+            Ok(_) => {}
+            Err(error) if error.code == protocol::TURN_NOT_FOUND => {
+                self.session_mut().abandon_steers();
+                self.notice(NoticeLevel::Info, "Turn already ended; queued as next");
+            }
+            Err(error) if error.code == protocol::STEER_QUEUE_FULL => {
+                self.session_mut().demote_last_steer();
+                self.notice(
+                    NoticeLevel::Error,
+                    "Steer queue is full; queued for the next turn",
+                );
+            }
+            Err(error) => self.error(error),
+        }
+    }
+
+    fn on_compacted(&mut self, result: Result<CompactionResult, RpcError>) {
+        self.session_mut().compaction = None;
+        let Some(result) = self.ok(result) else {
+            return;
+        };
+        match result.status {
+            CompactStatus::Compacted => {
+                self.session_mut().push_compaction(&result, None);
+                self.refresh_presentation();
+            }
+            CompactStatus::Noop => self.notice(NoticeLevel::Info, "Nothing to compact yet"),
+            CompactStatus::Failed => self.notice(
+                NoticeLevel::Error,
+                format!(
+                    "Compaction failed: {}",
+                    result.failure_kind.as_deref().unwrap_or("no progress")
+                ),
+            ),
+            CompactStatus::UnknownWrite | CompactStatus::Unknown => self.notice(
+                NoticeLevel::Error,
+                "Compaction result is unverified; reopen the session to reconcile",
+            ),
+        }
+    }
+
+    fn on_changes(&mut self, loop_id: &str, result: Result<ChangeSummary, RpcError>) {
+        let Ok(summary) = result else {
+            return;
+        };
+        for block in self.session_mut().transcript.blocks_mut() {
+            if let Block::TurnEnd {
+                loop_id: id,
+                changes,
+                ..
+            } = block
+                && id == loop_id
+            {
+                *changes = Some(summary);
+            }
+        }
+    }
+
+    /// Applies an Agent event: to the resident session, or to the catalog for
+    /// another one.
+    pub(super) fn on_agent_event(&mut self, event: AgentEvent) {
+        let Some(meta) = event.meta() else {
+            return;
+        };
+        let resident = self
+            .session
+            .as_ref()
+            .is_some_and(|session| session.info.session_id == meta.session_id);
+        if resident {
+            if let Some(turn) = self.session_mut().apply_event(event) {
+                self.start_turn(turn);
+            }
+        } else if let AgentEvent::SessionOpened { session, .. } = event {
+            self.merge_catalog_info(*session);
+        }
+    }
+
+    /// Updates the known sessions with `info`, adding it when new.
+    pub(super) fn merge_catalog_info(&mut self, info: SessionInfo) {
+        match self
+            .sessions
+            .iter_mut()
+            .find(|known| known.session_id == info.session_id)
+        {
+            Some(known) => *known = info,
+            None => self.sessions.push(info),
+        }
+    }
+}

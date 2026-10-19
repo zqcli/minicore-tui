@@ -129,6 +129,7 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, styles: Styles) {
     layout.viewport = Viewport {
         top,
         height,
+        width: area.width,
         origin: (area.x, area.y),
     };
     let mut lines = layout.visible(top, height);
@@ -153,8 +154,6 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, styles: Styles) {
     // while a turn streams.
     app.rendered
         .set(area.y, lines.iter().map(Line::to_string).collect());
-    app.viewport = height;
-    app.transcript_area = Some(area);
     frame.render_widget(Paragraph::new(lines), area);
 }
 

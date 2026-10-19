@@ -612,21 +612,6 @@ pub struct TurnSendResult {
     pub turn: TurnRef,
 }
 
-#[derive(Clone, Debug, Deserialize)]
-pub struct SteerResult {
-    pub steer_index: Option<u64>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-pub struct CancelledResult {
-    pub cancelled: bool,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-pub struct OkResult {
-    pub ok: bool,
-}
-
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Usage {
     pub input_tokens: Option<u64>,

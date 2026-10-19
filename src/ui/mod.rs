@@ -4,7 +4,6 @@
 
 pub mod blocks;
 pub mod composer;
-pub mod files;
 pub mod markdown;
 pub mod panel;
 pub mod picker;
@@ -36,14 +35,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         return;
     }
     let styles = Styles::of(app.palette);
-    // An approval prompt is a sheet even though it does not open an overlay:
-    // it owns the keyboard until answered, so it must be visible.
-    let approval = app.overlay.is_none() && app.has_interaction();
-    let sheet = if approval {
-        Some(screens::approval(app, &app.palette))
-    } else {
-        screens::sheet(app, &app.palette)
-    };
+    let sheet = screens::sheet(app, &app.palette);
     let (rows, cursor) = status::band(app, styles, area.width);
     let sheet_rows = sheet.as_ref().map_or(0, panel::Sheet::height);
     // One blank row keeps the last transcript line off the stack below it,

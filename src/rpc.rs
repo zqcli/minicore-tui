@@ -134,15 +134,14 @@ impl Client {
         })
     }
 
-    /// Sends one request and awaits its response. Query methods take one of
-    /// the Agent's read-query slots; everything else is always admitted.
+    /// Sends one request and awaits its response. Read queries wait for one of
+    /// the client's query permits first.
     pub async fn call<P: serde::Serialize, R: DeserializeOwned>(
         &self,
         method: &'static str,
         params: &P,
-        query: bool,
     ) -> Result<R, RpcError> {
-        let _permit = if query {
+        let _permit = if is_query(method) {
             Some(self.queries.acquire().await.map_err(|_| closed())?)
         } else {
             None
@@ -182,11 +181,6 @@ impl Client {
         })
     }
 
-    /// Whether the child process is still answering. `None` is a live agent.
-    pub fn closed_reason(&self) -> Option<String> {
-        self.closed.lock().unwrap().clone()
-    }
-
     pub fn stderr_tail(&self) -> Vec<String> {
         self.stderr_tail.lock().unwrap().iter().cloned().collect()
     }
@@ -207,6 +201,15 @@ impl Client {
 
 fn closed() -> RpcError {
     RpcError::closed("rpc client is shutting down")
+}
+
+/// Methods that hold one of the Agent's read-query slots.
+fn is_query(method: &str) -> bool {
+    method == crate::protocol::METHOD_SESSION_READ
+        || method == crate::protocol::METHOD_TURN_RESULT
+        || ["tool.", "workspace.", "changes."]
+            .iter()
+            .any(|prefix| method.starts_with(prefix))
 }
 
 fn encode_request(request: OutgoingRequest) -> Result<Vec<u8>, RpcError> {
