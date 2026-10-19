@@ -2,109 +2,86 @@
 
 ## 0.4.0 — Rewrite
 
-A full rewrite of the frontend against `minicore-agent` 0.7.0 and
-`minicore-runtime` 0.7.0 over Protocol v1. Breaking changes to the CLI, the
-config file, keys and commands are intentional.
+A rewrite of the frontend against `minicore-agent` 0.7.0 (`4102719`) and
+`minicore-runtime` 0.7.0 (`b93aea3`) over Protocol v1. The CLI, config file,
+keys and commands changed incompatibly. Requires Rust 1.88 or newer.
 
-### Turn lifecycle
+### Turns
 
-- A turn now ends exactly when `turn.wait` resolves. Agent events are display
-  hints and can no longer leave a completed turn stuck as incomplete; the
-  post-compaction "completed but incomplete / Unsupported interaction" state
-  and the inability to clear it with `Esc` are gone.
-- A `session_busy` answer from `turn.send` (post-turn compaction still running)
-  queues the message as a follow-up and sends it when the session is idle. The
-  draft is never dropped.
-- After a turn with a gap or a non-completed outcome, the durable turn result is
-  reconciled into the transcript's block model, so what is shown matches the
-  store without a second render path.
-- Steering and follow-ups share one queue shown above the composer.
-  `Alt+Enter` queues a follow-up and `Alt+Up` takes one back.
-- Late deltas after a turn ends are ignored instead of extending the turn.
+- A turn ends exactly when `turn.wait` resolves; Agent events are only display
+  hints. If the wait is lost, the stored `turn.result` ends the turn. A turn can
+  no longer stay "incomplete" after a compaction.
+- After a gap in events or a turn that did not complete, the turn's durable
+  items replace what was streamed, so the transcript matches the store.
+- A message sent while the Agent still compacts after a turn is queued and sent
+  when the session is idle, instead of being lost.
+- `Enter` steers a running turn; `Alt+Enter` queues a follow-up; `Alt+↑` takes
+  the newest follow-up back. Steers the Agent did not apply become follow-ups.
+- Approval and choice prompts are answered inline (`y`, `n`, `Enter`).
+- The turn-end line shows outcome, duration, requests, tools and, when files
+  changed, `N files changed (+a −b)`. If a diff is binary, truncated or
+  unreadable, the line gives only the file count rather than a wrong total.
+- Untitled sessions are named from their first prompt.
 
 ### History and sessions
 
-- History is loaded in display view from a fresh probe on every operation.
-  Cached pins are gone, which removes the `invalid_state` failure when
-  reopening a session.
-- Older pages load as you scroll to the top; below the compaction boundary the
-  summary and an "earlier messages" row lead to the canonical view.
-- A stale pin is retried once with a new probe rather than reported as
-  malformed history.
-- Returning to a session reloads it from the Agent; only the active session is
-  resident.
+- The latest items load first; older pages load as you scroll to the top, and
+  the history behind a compaction summary is reachable from the
+  `earlier items` row. A session that opens on a summary reads back to the
+  latest answer.
+- Each history read takes its own snapshot pin, so reopening a session no longer
+  fails with `invalid_state`; a stale pin is retried once.
+- Only the open session is kept in memory; returning to another reloads it. A
+  turn keeps running in the Agent while you look at another session.
+- `/export` writes the canonical conversation as Markdown.
 
 ### Transcript and rendering
 
-- New per-block layout cache with prefix heights and a viewport-only render
-  path. Rendering cost no longer grows with history length, selection
-  hit-testing is limited to the visible window, and tool card bodies are
-  bounded.
-- Incremental Markdown rendering for streaming: the stable prefix is cached and
-  only the tail is re-rendered per delta. Streaming no longer re-parses the
-  whole message each frame.
-- Real word wrapping with CJK-aware break opportunities, preserved list
-  indentation, and hard breaks for overlong tokens. Prose no longer breaks
-  inside words.
-- Scrolling is anchored to content: `PageUp` and `Ctrl+Home` hold the view
-  while output streams, and a `↓ new output` pill marks appended content.
-- One blank line between blocks, one rail style per block kind, tool cards
-  folded by default with duration, exit code and change counts.
-- Reasoning folds to one line when a turn finishes and expands with `Ctrl+T`.
-- The turn-end change summary counts added and removed lines by paging each
-  changed file's `changes.diff`, once per finished turn. When a diff is
-  unavailable, binary, truncated or stale the counts are omitted rather than
-  shown as zero. A bash card shows its output tail while the turn is live; after
-  a reload it shows the line count instead and fetches the body on demand.
+- Blocks are rendered once and cached by revision, width and fold state, and
+  only visible rows are drawn, so cost no longer grows with history length.
+- Streaming Markdown re-renders only the unfinished tail of the message.
+- Word wrapping with CJK-aware breaks and preserved list indentation.
+- Scrolling is anchored to what you read: streaming output does not move the
+  view, and a `↓ new output` pill shows when you are above the bottom.
+- Tool cards are folded by default and bounded: duration, exit code, line
+  changes, the output tail of a live `bash` call, and a tool view with the full
+  stdout and stderr. After a reload a `bash` card shows only its header.
+- Reasoning folds to `Thought · N lines` when finished; `Ctrl+T` shows it.
+- Compaction shows as a status phase and a one-line marker with token counts.
+  Loaded content is never removed.
 
-### Compaction
+### Interface
 
-- Compaction is shown as a status-line phase and leaves a one-line marker with
-  before and after token counts. Loaded content is never removed from the
-  transcript, so the answer being read survives a post-turn compaction.
-- `/compact` runs manual compaction and reports its result the same way. The
-  Agent has no compaction-completed event, so the marker comes from the
-  `session.compact` result or a `session.context` read and is deduplicated by
-  operation id.
-
-### UI
-
-- One visual system: a single bottom-sheet style for every picker and prompt,
-  full-screen views for diff, tool output, context and help, and one footer.
-  English copy throughout, human labels instead of raw enum names.
+- One visual system: a bottom-sheet style for pickers, approval prompts and
+  find; full-screen views for diff, tool output, context and help; English copy;
+  dark and light palettes, and `NO_COLOR`.
 - Command palette with descriptions, `@` file picker, session picker with
-  delete, model and reasoning pickers, find-in-transcript, mouse selection with
-  copy, `/copy`, `/export`, `/theme`, and the external editor.
-- Approval and other interactions are answered inline and no longer reported as
-  unsupported.
-- The fatal screen shows the Agent stderr tail instead of byte counts.
-- The composer is a purpose-built editing model (grapheme-safe movement,
-  undo/redo, bracketed paste projection) and no longer depends on
-  `tui-textarea`.
+  delete, model and reasoning pickers, find in the transcript, drag-to-copy,
+  `/copy`, `/export`, `/theme`, `/tool`, `/diff [scope]` and `Ctrl+G` for an
+  external editor.
+- The footer's `ctx N%` is the context usage the Agent reported for its last
+  request; it is `ctx ?` until reported, never an estimate.
+- The fatal screen shows the reason and the Agent's stderr tail.
+- The composer has grapheme-safe editing, undo/redo, prompt history and paste
+  tokens; it no longer depends on `tui-textarea`.
 
-### Backend and protocol
+### CLI, configuration and protocol
 
-- Targets Agent 0.7.0: workspace file and search cursors are opaque values
-  passed back verbatim, `tool_process` chunks are decoded and bounded, and
-  `turn.result` is assembled through the shared chunk reader.
-- Handshake requires Protocol v1 and the capabilities actually used.
-- The Agent child is spawned before the alternate screen, and shutdown drains
-  the child with a bounded wait.
-
-### CLI and configuration
-
-- New CLI: `--agent`, `--config`, `--workspace`, `--session`, `--continue`,
-  `--profile`, `--model`, `--reasoning`, `--theme`, `-h`, `-V`.
-- The TUI config is `~/.config/minicore-tui/config.toml` (or
-  `$MINICORE_TUI_CONFIG`) with `agent`, `agent_config`, `theme` and `editor`.
-- Dependencies move to ratatui 0.30, crossterm 0.29 and pulldown-cmark 0.13;
-  the runtime dependencies `tui-textarea`, `icu_segmenter`, `time` and
-  `tempfile` are gone.
-- Rust 1.88 or newer is required (edition 2024).
-- The package version is 0.4.0.
+- Options: `--agent`, `--config`, `--workspace`, `--session`, `--continue`,
+  `--profile`, `--model`, `--reasoning`, `--theme`, `-h`, `-V`. `--config` is
+  required unless the TUI config sets `agent_config`.
+- TUI config at `$MINICORE_TUI_CONFIG`, else `$XDG_CONFIG_HOME` or `~/.config`
+  `/minicore-tui/config.toml`, with `agent`, `agent_config`, `theme` and
+  `editor` (a list: command and arguments).
+- The handshake requires Protocol v1 and ten capabilities (`session.read`,
+  `session.read.display`, `session.context`, `turn.result`, `tool.read`,
+  `tool.read.display`, `tool.output`, `workspace.files`, `changes.list`,
+  `changes.diff`). The Agent is spawned before the alternate screen and shut down
+  with a bounded wait.
+- Dependencies: ratatui 0.30, crossterm 0.29, pulldown-cmark 0.13. `tui-textarea`,
+  `icu_segmenter` and `time` are gone; `tempfile` is test-only.
 
 ### Removed
 
-- The v0.3 state machines, request-kind registry and generation counters, the
-  old test suites, snapshots, scripts, tools and historical specification
-  documents.
+- The v0.3 state machines, request-kind registry, generation counters, test
+  suites, scripts and historical specification documents.
