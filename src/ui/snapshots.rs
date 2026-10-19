@@ -150,12 +150,17 @@ fn render(app: &mut App, width: u16, height: u16) -> String {
 }
 
 /// The checked-in frame. Snapshots live in the source so the expected output is
-/// reviewed with the code that produces it; `cargo test` diffs against it.
+/// reviewed with the code that produces it; `cargo test` diffs against it, and
+/// `UPDATE_SNAPSHOTS=1 cargo test` rewrites it.
 const IDLE: &str = include_str!("../../tests/snapshots/idle.txt");
 const STREAMING: &str = include_str!("../../tests/snapshots/streaming.txt");
 
 fn snapshot(path: &str, expected: &str, rendered: String) {
-    let _ = path;
+    if std::env::var_os("UPDATE_SNAPSHOTS").is_some() {
+        let file = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path);
+        std::fs::write(file, rendered).expect("write snapshot");
+        return;
+    }
     assert_eq!(expected, rendered, "frame differs from {path}");
 }
 

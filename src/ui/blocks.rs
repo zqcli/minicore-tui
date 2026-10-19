@@ -160,6 +160,9 @@ fn assistant(
         }
     }
     if !text.trim().is_empty() {
+        if !lines.is_empty() {
+            lines.push(Line::default());
+        }
         for line in markdown::render(text, width.saturating_sub(INSET), &styles, styles.text()) {
             lines.push(rails::rail(line, styles));
         }

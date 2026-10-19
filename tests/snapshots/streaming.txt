@@ -1,4 +1,3 @@
-▏ Thought · 1 line
   It does not any more. The streaming renderer keeps the stable prefix
   and re-renders only the tail, so a delta costs one small parse.
 
@@ -12,6 +11,7 @@
 ▎ Now stream a longer answer.
 
 ▏ I should explain the anchor rule first, then show it.
+
   An anchored view keeps its block and row, so new output below never
   moves the text you are reading. Only scrolling to the end returns
   to following.
