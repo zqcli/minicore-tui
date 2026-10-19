@@ -445,8 +445,8 @@ impl App {
                 let id = info.session_id.clone();
                 Input::Action(Action::OpenSession(id))
             }
-            Overlay::Find { .. } => {
-                // Enter is "next match"; the bar stays open.
+            find @ Overlay::Find { .. } => {
+                self.overlay = find;
                 self.find_step(true);
                 Input::Consumed
             }
@@ -740,6 +740,7 @@ impl App {
         let layout = &self.layout.cache;
         let (top, offset) = match self.scroll {
             super::Scroll::Anchor { block, offset } => (block, offset),
+            super::Scroll::Follow if forward => return Input::Consumed,
             super::Scroll::Follow => {
                 let max_top = layout.total_rows().saturating_sub(layout.viewport.height);
                 layout.anchor(max_top)
