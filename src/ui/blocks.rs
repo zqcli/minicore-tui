@@ -440,10 +440,10 @@ fn turn_end(
 ) -> Line<'static> {
     let text = crate::app::turn_end_line(outcome, duration, requests, tool_rounds, changes);
     let labeled = format!("── {text} ──");
-    let style = if outcome.is_completed() {
-        styles.dim()
-    } else {
-        styles.warning()
+    let style = match outcome {
+        crate::protocol::LoopOutcome::Completed => styles.dim(),
+        crate::protocol::LoopOutcome::Failed { .. } => styles.error(),
+        _ => styles.warning(),
     };
     Line::styled(wrap::truncate(&labeled, width), style)
 }
