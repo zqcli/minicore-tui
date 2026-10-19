@@ -10,9 +10,8 @@ use super::{BUSY_RETRY, Msg, OpDone, OpKind};
 use crate::protocol::{
     self, CompactionResult, ModelListResult, OkResult, PingResult, ProfileListResult,
     ReadSessionResult, SessionContext, SessionInfo, SessionListResult, SessionPresentation,
-    SessionResult, SessionState, SessionUpdateResult, SteerResult, ToolRef, TurnRef,
-    TurnResultPage, TurnSendResult, TurnWaitResult, changes::ChangeList, tool::ToolOutputPage,
-    tool::ToolReadResult,
+    SessionResult, SessionState, SteerResult, ToolRef, TurnRef, TurnResultPage, TurnSendResult,
+    TurnWaitResult, changes::ChangeList, tool::ToolOutputPage, tool::ToolReadResult,
 };
 use crate::rpc::Client;
 use crate::transcript::ChangeSummary;
@@ -217,8 +216,8 @@ pub fn rename(client: Arc<Client>, tx: Tx, session_id: String, title: String) {
 
 pub fn update_session(client: Arc<Client>, tx: Tx, params: Value, session_id: String) {
     tokio::spawn(async move {
-        let result: Result<SessionUpdateResult, _> = client
-            .call::<Value, SessionUpdateResult>(protocol::METHOD_SESSION_UPDATE, &params, false)
+        let result: Result<SessionResult, _> = client
+            .call::<Value, SessionResult>(protocol::METHOD_SESSION_UPDATE, &params, false)
             .await;
         post(
             &tx,

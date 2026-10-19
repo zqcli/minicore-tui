@@ -9,9 +9,9 @@ use ratatui::text::{Line, Span};
 
 use crate::theme::Palette;
 
-use super::wrap::{sanitize, width, wrap};
+use super::wrap::{self, sanitize, width, wrap};
 
-/// A sheet never covers more than this many list rows; the rest scroll.
+/// A sheet never shows more than this many list rows; the rest scroll.
 pub const MAX_ROWS: usize = 12;
 /// One cell of padding on each side of every row.
 const PAD: u16 = 1;
@@ -32,9 +32,8 @@ pub struct Row {
     pub label: String,
     pub detail: String,
     pub tone: Tone,
-    /// A marker column before the label: `Some(true)` draws an accent `●` for
-    /// the current item (the loaded session, the active model), `Some(false)`
-    /// keeps the column blank so labels stay aligned.
+    /// `Some(true)` marks the current item with an accent `●`; `Some(false)`
+    /// keeps the marker column blank so labels stay aligned.
     pub mark: Option<bool>,
 }
 
@@ -70,7 +69,6 @@ pub struct Sheet {
     pub body: Vec<Line<'static>>,
     pub rows: Vec<Row>,
     pub selected: Option<usize>,
-    pub offset: usize,
     pub hint: String,
 }
 
@@ -82,7 +80,6 @@ impl Sheet {
             body: Vec::new(),
             rows: Vec::new(),
             selected: None,
-            offset: 0,
             hint: hint.into(),
         }
     }
@@ -94,11 +91,6 @@ impl Sheet {
 
     pub fn selected(mut self, selected: Option<usize>) -> Self {
         self.selected = selected;
-        self
-    }
-
-    pub fn offset(mut self, offset: usize) -> Self {
-        self.offset = offset;
         self
     }
 
@@ -121,13 +113,13 @@ impl Sheet {
         1 + self.body.len() as u16 + self.visible_rows() as u16 + 1
     }
 
-    /// The window of rows actually drawn, from the scroll offset.
+    /// The rows drawn: the first `MAX_ROWS`, scrolled just enough to keep the
+    /// selection on screen.
     fn window(&self) -> std::ops::Range<usize> {
-        let visible = self.visible_rows();
         let start = self
-            .offset
-            .min(self.rows.len().saturating_sub(visible.min(self.rows.len())));
-        start..(start + visible).min(self.rows.len())
+            .selected
+            .map_or(0, |selected| (selected + 1).saturating_sub(MAX_ROWS));
+        start..(start + MAX_ROWS).min(self.rows.len())
     }
 }
 
@@ -146,7 +138,7 @@ pub fn render(frame: &mut Frame, area: Rect, palette: &Palette, sheet: &Sheet) {
         if y >= bottom {
             return;
         }
-        draw_line(frame, area, y, palette, line.clone());
+        draw_line(frame, area, y, line.clone());
         y += 1;
     }
 
@@ -173,7 +165,6 @@ pub fn render(frame: &mut Frame, area: Rect, palette: &Palette, sheet: &Sheet) {
             frame,
             area,
             y,
-            palette,
             Line::from(Span::styled(
                 clean(&sheet.hint),
                 Style::default().fg(palette.faint),
@@ -196,7 +187,7 @@ fn render_title(frame: &mut Frame, area: Rect, palette: &Palette, sheet: &Sheet)
             Style::default().fg(palette.dim),
         ));
     }
-    draw_line(frame, area, area.y, palette, Line::from(spans));
+    draw_line(frame, area, area.y, Line::from(spans));
 }
 
 fn render_row(frame: &mut Frame, area: Rect, palette: &Palette, row: &Row, highlighted: bool) {
@@ -244,54 +235,21 @@ fn render_row(frame: &mut Frame, area: Rect, palette: &Palette, row: &Row, highl
         Span::styled(" ".repeat(gap), Style::default()),
         Span::styled(detail, detail_style),
     ]);
-    draw_line(frame, area, area.y, palette, line);
+    draw_line(frame, area, area.y, line);
 }
 
 /// Writes one line at `y`, clipped to `area`, over any band already painted.
-fn draw_line(frame: &mut Frame, area: Rect, y: u16, _palette: &Palette, line: Line<'_>) {
+fn draw_line(frame: &mut Frame, area: Rect, y: u16, line: Line<'_>) {
     frame.buffer_mut().set_line(area.x, y, &line, area.width);
 }
 
-/// Terminal-safe text, borrowing from either `sanitize` signature.
 fn clean(text: &str) -> String {
-    sanitize(text).to_string()
+    sanitize(text).into_owned()
 }
 
-/// Shortens `text` to `cells`, ending with `…` when it was cut.
+/// Sanitizes `text` and shortens it to `cells`, ending with `…` when cut.
 pub fn truncate(text: &str, cells: usize) -> String {
-    let text = clean(text);
-    if width(&text) <= cells {
-        return text;
-    }
-    if cells == 0 {
-        return String::new();
-    }
-    let mut out = String::new();
-    let mut used = 0;
-    for grapheme in unicode_segmentation::UnicodeSegmentation::graphemes(&*text, true) {
-        let cells_of = width(grapheme);
-        if used + cells_of > cells.saturating_sub(1) {
-            break;
-        }
-        out.push_str(grapheme);
-        used += cells_of;
-    }
-    out.push('…');
-    out
-}
-
-/// The row index under a pointer at `(column, row)` inside the sheet's `area`.
-pub fn row_at(area: Rect, sheet: &Sheet, column: u16, row: u16) -> Option<usize> {
-    if column < area.x || column >= area.right() || row < area.y || row >= area.bottom() {
-        return None;
-    }
-    let body_rows = sheet.body.len() as u16;
-    let list_top = area.y + 1 + body_rows;
-    if row < list_top {
-        return None;
-    }
-    let index = sheet.window().start + (row - list_top) as usize;
-    (index < sheet.window().end).then_some(index)
+    wrap::truncate(&sanitize(text), cells)
 }
 
 /// Wraps one message into sheet body lines, so a long approval prompt still
@@ -401,43 +359,23 @@ mod tests {
     }
 
     #[test]
-    fn the_list_scrolls_to_the_offset_and_stops_at_the_row_cap() {
-        let sheet = Sheet::new("Sessions", "hint").rows(rows(20)).offset(6);
+    fn the_list_stops_at_the_row_cap_and_scrolls_with_the_selection() {
+        let sheet = Sheet::new("Sessions", "hint").rows(rows(20));
         assert_eq!(sheet.height(), 1 + MAX_ROWS as u16 + 1);
+        let top = capture(&sheet.selected(Some(MAX_ROWS - 1)), 30, 14);
+        assert!(top[1].starts_with(" row 00"), "{:?}", top[1]);
+        assert!(top[MAX_ROWS].starts_with(" row 11"), "{:?}", top[MAX_ROWS]);
+
+        let sheet = Sheet::new("Sessions", "hint")
+            .rows(rows(20))
+            .selected(Some(15));
         let text = capture(&sheet, 30, sheet.height());
-        assert!(text[1].starts_with(" row 06"), "{:?}", text[1]);
-        assert!(text[1].ends_with("06"), "{:?}", text[1]);
+        assert!(text[1].starts_with(" row 04"), "{:?}", text[1]);
         assert!(
-            text[MAX_ROWS].starts_with(" row 17"),
-            "{:?}",
+            text[MAX_ROWS].starts_with(" row 15"),
+            "the selection is the last visible row: {:?}",
             text[MAX_ROWS]
         );
-    }
-
-    #[test]
-    fn an_offset_past_the_end_is_clamped_so_the_last_row_stays_visible() {
-        let sheet = Sheet::new("Sessions", "hint").rows(rows(20)).offset(99);
-        let text = capture(&sheet, 30, sheet.height());
-        assert!(
-            text[MAX_ROWS].starts_with(" row 19"),
-            "{:?}",
-            text[MAX_ROWS]
-        );
-    }
-
-    #[test]
-    fn row_hit_testing_skips_the_title_body_and_hint() {
-        let sheet = Sheet::new("Approval", "y allow")
-            .body(vec![Line::from("Write a.rs?")])
-            .rows(rows(2));
-        let area = Rect::new(0, 10, 40, sheet.height());
-        assert_eq!(row_at(area, &sheet, 3, 10), None, "title row");
-        assert_eq!(row_at(area, &sheet, 3, 11), None, "body row");
-        assert_eq!(row_at(area, &sheet, 3, 12), Some(0));
-        assert_eq!(row_at(area, &sheet, 3, 13), Some(1));
-        assert_eq!(row_at(area, &sheet, 3, 14), None, "hint row");
-        assert_eq!(row_at(area, &sheet, 3, 99), None, "outside the area");
-        assert_eq!(row_at(area, &sheet, 99, 12), None, "outside the columns");
     }
 
     #[test]

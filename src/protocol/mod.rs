@@ -1,8 +1,6 @@
-//! Wire DTOs for minicore-agent 0.7.0 (Protocol v1) over stdio JSON-RPC.
-//!
-//! Responses ignore unknown fields so a patch release can add read-only data.
-//! Enums that the Agent documents as non-exhaustive carry an `Unknown` arm so a
-//! future value degrades instead of failing a frame.
+//! Wire DTOs for minicore-agent 0.7.0 (Protocol v1). Unknown fields are
+//! ignored, and enums the Agent documents as non-exhaustive decode future values
+//! to `Unknown` instead of failing the frame.
 
 pub mod changes;
 pub mod event;
@@ -14,7 +12,7 @@ use std::fmt;
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::Value;
 
 pub use changes::{ChangeKind, ChangeList, ChangeRecord, ChangeScope};
 pub use event::AgentEvent;
@@ -24,17 +22,16 @@ pub use read::{
     RuntimeUserItem, SnapshotPin, TurnResultPage,
 };
 pub use tool::{
-    ToolCallRecord, ToolDisplay, ToolExecution, ToolExecutionState, ToolInvocation, ToolReadResult,
-    ToolRef, ToolSubject, ToolSummary,
+    ToolDisplay, ToolExecution, ToolExecutionState, ToolInvocation, ToolReadResult, ToolRef,
+    ToolSubject, ToolSummary,
 };
-pub use workspace::{FileEntry, FileKind, FilesPage, SearchMatch, SearchPage, WorkspaceStatus};
+pub use workspace::{FileEntry, FileKind, FilesPage};
 
 pub const JSONRPC_VERSION: &str = "2.0";
 pub const PROTOCOL_VERSION: u32 = 1;
 
 pub const METHOD_PING: &str = "agent.ping";
 pub const METHOD_RELOAD: &str = "agent.reload";
-pub const METHOD_SHUTDOWN: &str = "agent.shutdown";
 pub const METHOD_MODELS: &str = "model.list";
 pub const METHOD_PROFILES: &str = "profile.list";
 pub const METHOD_SESSION_LIST: &str = "session.list";
@@ -49,7 +46,6 @@ pub const METHOD_SESSION_READ: &str = "session.read";
 pub const METHOD_SESSION_PRESENTATION: &str = "session.presentation";
 pub const METHOD_SESSION_CONTEXT: &str = "session.context";
 pub const METHOD_SESSION_COMPACT: &str = "session.compact";
-pub const METHOD_SESSION_COMPACT_CANCEL: &str = "session.compact.cancel";
 pub const METHOD_TURN_SEND: &str = "turn.send";
 pub const METHOD_TURN_STEER: &str = "turn.steer";
 pub const METHOD_TURN_CANCEL: &str = "turn.cancel";
@@ -57,45 +53,24 @@ pub const METHOD_TURN_WAIT: &str = "turn.wait";
 pub const METHOD_TURN_RESULT: &str = "turn.result";
 pub const METHOD_TOOL_READ: &str = "tool.read";
 pub const METHOD_TOOL_OUTPUT: &str = "tool.output";
-pub const METHOD_WORKSPACE_READ: &str = "workspace.read";
 pub const METHOD_WORKSPACE_FILES: &str = "workspace.files";
-pub const METHOD_WORKSPACE_SEARCH: &str = "workspace.search";
-pub const METHOD_WORKSPACE_STATUS: &str = "workspace.status";
 pub const METHOD_CHANGES_LIST: &str = "changes.list";
 pub const METHOD_CHANGES_DIFF: &str = "changes.diff";
 pub const METHOD_INTERACTION_ANSWER: &str = "interaction.answer";
 
-pub const PARSE_ERROR: i64 = -32_700;
 pub const INVALID_REQUEST: i64 = -32_600;
-pub const METHOD_NOT_FOUND: i64 = -32_601;
 pub const INVALID_PARAMS: i64 = -32_602;
 pub const INTERNAL_ERROR: i64 = -32_603;
-pub const SESSION_NOT_FOUND: i64 = -32_001;
 pub const SESSION_NOT_LOADED: i64 = -32_002;
 pub const SESSION_BUSY: i64 = -32_003;
-pub const SESSION_BLOCKED: i64 = -32_004;
 pub const INVALID_STATE: i64 = -32_005;
-pub const INTERACTION_NOT_FOUND: i64 = -32_006;
 pub const TURN_NOT_FOUND: i64 = -32_007;
-pub const PROFILE_NOT_FOUND: i64 = -32_008;
-pub const MODEL_NOT_FOUND: i64 = -32_009;
-pub const WORKSPACE_ERROR: i64 = -32_010;
-pub const STORE_ERROR: i64 = -32_011;
-pub const PROVIDER_ERROR: i64 = -32_012;
-pub const RUNTIME_ERROR: i64 = -32_013;
-pub const INVALID_SESSION_SETTINGS: i64 = -32_014;
-pub const HISTORY_TOO_LARGE: i64 = -32_015;
 pub const STEER_QUEUE_FULL: i64 = -32_016;
-pub const RELOAD_REQUIRES_RESTART: i64 = -32_017;
-pub const RELOAD_UNAVAILABLE: i64 = -32_018;
 pub const RESOURCE_EXHAUSTED: i64 = -32_019;
 pub const QUERY_LIMIT: i64 = -32_020;
-pub const TOOL_NOT_FOUND: i64 = -32_021;
-pub const CONTEXT_UNCOMPRESSIBLE: i64 = -32_022;
-pub const CONFIG_ERROR: i64 = -32_023;
 
 /// Capabilities this client requires before it sends anything beyond the
-/// handshake. Matches what v0.4 actually uses.
+/// handshake: exactly the ones it uses.
 pub const REQUIRED_CAPABILITIES: &[&str] = &[
     "session.read",
     "session.read.display",
@@ -105,8 +80,6 @@ pub const REQUIRED_CAPABILITIES: &[&str] = &[
     "tool.read.display",
     "tool.output",
     "workspace.files",
-    "workspace.search",
-    "workspace.status",
     "changes.list",
     "changes.diff",
 ];
@@ -286,9 +259,9 @@ pub fn parse_frame(line: &[u8]) -> Result<IncomingFrame, FrameError> {
             let params = envelope.params.ok_or_else(|| FrameError {
                 detail: "agent.event without params".into(),
             })?;
-            let event = AgentEvent::decode(params).map_err(|error| FrameError {
-                detail: format!("malformed agent.event: {error}"),
-            })?;
+            // Events are hints the turn reconciles anyway, so an unreadable one
+            // must not stop the stream.
+            let event = serde_json::from_value(params).unwrap_or(AgentEvent::Unknown);
             Ok(IncomingFrame::Event(event))
         }
         (None, Some(method)) => Ok(IncomingFrame::UnknownNotification(method.to_owned())),
@@ -363,7 +336,6 @@ fn parse_wire_error(value: Value) -> Result<RpcError, FrameError> {
 pub struct PingResult {
     pub version: String,
     pub protocol_version: u32,
-    #[serde(default)]
     pub capabilities: Vec<String>,
 }
 
@@ -453,13 +425,6 @@ pub struct ModelListResult {
 #[derive(Clone, Debug, Deserialize)]
 pub struct ModelInfo {
     pub id: String,
-    #[serde(default)]
-    pub model_ref: String,
-    #[serde(default)]
-    pub context_window: u64,
-    #[serde(default)]
-    pub supports_tools: bool,
-    #[serde(default)]
     pub supported_reasoning: Vec<Reasoning>,
 }
 
@@ -472,12 +437,7 @@ pub struct ProfileListResult {
 pub struct ProfileInfo {
     pub id: String,
     pub model: String,
-    #[serde(default)]
     pub reasoning: Reasoning,
-    #[serde(default)]
-    pub tools: Vec<String>,
-    #[serde(default)]
-    pub approval: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -488,34 +448,18 @@ pub struct SessionListResult {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct SessionInfo {
     pub session_id: String,
-    #[serde(default)]
     pub title: Option<String>,
-    #[serde(default)]
     pub profile: String,
-    #[serde(default)]
     pub workspace: String,
-    #[serde(default)]
     pub model: String,
-    #[serde(default)]
     pub reasoning: Reasoning,
-    #[serde(default)]
     pub loaded: bool,
-    #[serde(default)]
-    pub created_at: String,
-    #[serde(default)]
     pub updated_at: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct SessionResult {
     pub session: SessionInfo,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-pub struct SessionUpdateResult {
-    pub session: SessionInfo,
-    #[serde(default)]
-    pub active_revision: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
@@ -534,11 +478,7 @@ pub enum SessionStatus {
 pub struct SessionState {
     pub session_id: String,
     pub status: SessionStatus,
-    #[serde(default)]
     pub active_loop: Option<LoopState>,
-    #[serde(default)]
-    pub block_reason: Option<String>,
-    #[serde(default)]
     pub compaction: Option<CompactionProgress>,
 }
 
@@ -552,24 +492,12 @@ impl SessionState {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct LoopState {
     pub loop_id: String,
-    #[serde(default)]
-    pub status: Option<String>,
-    #[serde(default)]
-    pub request_index: u32,
-    #[serde(default)]
-    pub config_revision: u64,
-    #[serde(default)]
-    pub model: Option<String>,
-    #[serde(default)]
-    pub pending_interaction: Option<PendingInteraction>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct PendingInteraction {
     pub interaction_id: String,
-    #[serde(default)]
     pub tool_call_id: String,
-    #[serde(default)]
     pub tool_name: String,
     pub kind: Value,
 }
@@ -578,9 +506,7 @@ pub struct PendingInteraction {
 pub struct CompactionProgress {
     pub operation_id: String,
     pub phase: CompactionPhase,
-    #[serde(default)]
     pub covered_item_count: usize,
-    #[serde(default)]
     pub retained_item_count: usize,
 }
 
@@ -610,124 +536,50 @@ impl CompactionPhase {
 #[derive(Clone, Debug, Deserialize)]
 pub struct SessionPresentation {
     pub session_id: String,
-    #[serde(default)]
-    pub model_label: Option<String>,
-    #[serde(default)]
     pub git_branch: Option<String>,
-    #[serde(default)]
     pub context: Option<ContextUsage>,
-    #[serde(default)]
-    pub last_loop: Option<LastLoop>,
-    #[serde(default)]
-    pub steer_progress: Option<SteerProgressView>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct ContextUsage {
-    #[serde(default)]
     pub tokens: Option<u64>,
-    #[serde(default)]
     pub window: Option<u64>,
-    #[serde(default)]
     pub percent: Option<f64>,
-    #[serde(default)]
     pub kind: ContextKind,
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum ContextKind {
     Reported,
-    #[default]
     Estimated,
     #[serde(other)]
     Unknown,
 }
 
 #[derive(Clone, Debug, Deserialize)]
-pub struct LastLoop {
-    pub loop_id: String,
-    #[serde(default)]
-    pub started_at: Option<String>,
-    #[serde(default)]
-    pub finished_at: Option<String>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-pub struct SteerProgressView {
-    pub loop_id: String,
-    pub request_index: u32,
-    pub applied_count: u64,
-}
-
-#[derive(Clone, Debug, Deserialize)]
 pub struct SessionContext {
     pub session_id: String,
-    #[serde(default)]
     pub current_operation: Option<CompactionProgress>,
-    #[serde(default)]
     pub coverage: Option<ContextCoverage>,
-    #[serde(default)]
     pub last_result: Option<CompactionResult>,
-    #[serde(default)]
     pub budget: Option<ContextBudget>,
-    #[serde(default)]
-    pub automatic: Option<AutomaticContext>,
-    #[serde(default)]
     pub last_prepare_failure: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct ContextCoverage {
-    #[serde(default)]
     pub covered_loop_count: usize,
-    #[serde(default)]
     pub covered_item_count: usize,
-    #[serde(default)]
     pub retained_item_count: usize,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct ContextBudget {
-    #[serde(default)]
-    pub estimated_history_items: Option<u64>,
-    #[serde(default)]
-    pub estimated_history_bytes: Option<u64>,
-    #[serde(default)]
     pub estimated_history_tokens: Option<u64>,
-    #[serde(default)]
     pub estimated_request_context_tokens: Option<u64>,
-    #[serde(default)]
     pub input_budget_tokens: Option<u64>,
-    #[serde(default)]
     pub trigger_tokens: Option<u64>,
-    #[serde(default)]
-    pub target_tokens: Option<u64>,
-    #[serde(default)]
-    pub within_runtime_limits: Option<bool>,
-}
-
-#[derive(Clone, Debug, Default, Deserialize)]
-pub struct AutomaticContext {
-    #[serde(default)]
-    pub current: Option<AutomaticObservation>,
-    #[serde(default)]
-    pub last: Option<AutomaticObservation>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-pub struct AutomaticObservation {
-    #[serde(default)]
-    pub operation_id: Option<String>,
-    #[serde(default)]
-    pub outcome: Option<String>,
-    #[serde(default)]
-    pub before_tokens: Option<u64>,
-    #[serde(default)]
-    pub after_tokens: Option<u64>,
-    #[serde(default)]
-    pub trigger_tokens: Option<u64>,
-    #[serde(default)]
     pub target_tokens: Option<u64>,
 }
 
@@ -744,37 +596,24 @@ pub enum CompactStatus {
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct CompactionResult {
-    #[serde(default)]
     pub origin: Option<String>,
     pub operation_id: String,
     pub status: CompactStatus,
-    #[serde(default)]
     pub before_tokens: Option<u64>,
-    #[serde(default)]
     pub after_tokens: Option<u64>,
-    #[serde(default)]
     pub covered_loop_count: Option<usize>,
-    #[serde(default)]
     pub covered_item_count: Option<usize>,
-    #[serde(default)]
     pub retained_item_count: Option<usize>,
-    #[serde(default)]
     pub failure_kind: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct TurnSendResult {
     pub turn: TurnRef,
-    #[serde(default)]
-    pub accepted_at: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct SteerResult {
-    pub ok: bool,
-    #[serde(default)]
-    pub accepted_at: Option<String>,
-    #[serde(default)]
     pub steer_index: Option<u64>,
 }
 
@@ -790,17 +629,11 @@ pub struct OkResult {
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Usage {
-    #[serde(default)]
     pub input_tokens: Option<u64>,
-    #[serde(default)]
     pub output_tokens: Option<u64>,
-    #[serde(default)]
     pub reasoning_tokens: Option<u64>,
-    #[serde(default)]
     pub cache_read_tokens: Option<u64>,
-    #[serde(default)]
     pub cache_write_tokens: Option<u64>,
-    #[serde(default)]
     pub provider_total_tokens: Option<u64>,
 }
 
@@ -840,13 +673,10 @@ impl UsageTotals {
 pub enum LoopOutcome {
     Completed,
     Cancelled {
-        #[serde(default)]
         reason: CancelReason,
     },
     Failed {
-        #[serde(default)]
         kind: String,
-        #[serde(default)]
         model_error: Option<ModelError>,
     },
     #[serde(other)]
@@ -894,37 +724,20 @@ impl LoopOutcome {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum CancelReason {
     User,
     OwnerDropped,
     Shutdown,
     Deadline,
-    #[default]
     #[serde(other)]
     Unknown,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct ModelError {
-    #[serde(default)]
     pub kind: String,
-    #[serde(default)]
-    pub delivery: String,
-    #[serde(default)]
-    pub retryable: bool,
-    #[serde(default)]
-    pub retry_after_millis: Option<u64>,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum TurnPersistence {
-    Persisted,
-    Failed,
-    #[serde(other)]
-    Unknown,
 }
 
 /// The authoritative `turn.wait` result.
@@ -932,35 +745,15 @@ pub enum TurnPersistence {
 pub struct TurnWaitResult {
     pub turn: TurnRef,
     pub outcome: LoopOutcome,
-    #[serde(default)]
     pub usage: Option<Usage>,
-    #[serde(default)]
     pub requests: Option<u32>,
-    #[serde(default)]
     pub tool_rounds: Option<u64>,
-    #[serde(default)]
-    pub final_config_revision: Option<u64>,
-    #[serde(default)]
-    pub persistence: Option<TurnPersistence>,
-}
-
-/// Page of chunks plus the paging controls shared by `session.read` and
-/// `turn.result`. Cursors stay opaque: the Agent owns their shape.
-#[derive(Clone, Debug, Deserialize)]
-pub struct Page {
-    #[serde(default)]
-    pub next_cursor: Option<Value>,
-    #[serde(default)]
-    pub total: usize,
-}
-
-pub fn empty_params() -> Value {
-    json!({})
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn reasoning_roundtrips_every_agent_level() {

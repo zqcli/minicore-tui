@@ -179,8 +179,8 @@ mod tests {
     fn info() -> SessionInfo {
         serde_json::from_value(json!({
             "session_id": "ses_1acdef0123456789abcdef", "title": "Fix the parser",
-            "model": "gpt-6-luna",
-            "updated_at": "2026-01-02T03:04:05.006Z"
+            "profile": "coding", "workspace": "", "model": "gpt-6-luna", "reasoning": "auto",
+            "loaded": false, "updated_at": "2026-01-02T03:04:05.006Z"
         }))
         .unwrap()
     }

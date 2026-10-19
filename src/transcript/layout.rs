@@ -1,13 +1,6 @@
-//! Per-block line cache, prefix heights, viewport and scroll anchoring.
-//!
-//! A frame renders only the visible window: the first visible block comes from
-//! a binary search over prefix heights, and each block's lines come from its
-//! cache. A block re-renders only when its own revision, the width or the fold
-//! flags change, so a streaming delta re-renders exactly one block.
-//!
-//! `S` is renderer state the UI keeps per layout (the streaming markdown
-//! parsers). The cache never inspects it; it is dropped and reset whenever the
-//! width or the fold flags invalidate the whole cache.
+//! Per-block line cache, prefix heights, viewport and scroll anchoring. A block
+//! re-renders only when its revision, the width or the fold flags change, and a
+//! frame reads only the visible rows.
 
 use std::sync::Arc;
 
@@ -49,7 +42,7 @@ pub struct Layout<S = ()> {
     fold: Option<Fold>,
     /// Set when the block vector no longer lines up with the cache.
     invalid: bool,
-    /// Renderer state owned by the caller.
+    /// Renderer state the cache hands to the render callback, never inspects.
     pub state: S,
     /// The last drawn window, for selection and scrolling.
     pub viewport: Viewport,
@@ -104,9 +97,8 @@ impl<S> Layout<S> {
                 continue;
             }
             let lines = render_block(&mut self.state, index, block);
-            // One blank row separates blocks. It belongs to the block below so
-            // the last block does not leave a trailing gap, and a block that
-            // renders nothing still occupies its row.
+            // The separator row belongs to the block below, so the last block
+            // leaves no trailing gap; an empty block still occupies a row.
             let mut lines: Vec<Line<'static>> = if index == 0 {
                 lines
             } else {
@@ -155,29 +147,25 @@ impl<S> Layout<S> {
         self.prefix.last().copied().unwrap_or(0)
     }
 
-    pub fn len(&self) -> usize {
+    fn len(&self) -> usize {
         self.cached.len()
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.cached.is_empty()
-    }
-
-    pub fn lines(&self, block: usize) -> &[Line<'static>] {
+    fn lines(&self, block: usize) -> &[Line<'static>] {
         self.cached
             .get(block)
             .map_or(&[], |cached| cached.lines.as_ref())
     }
 
     /// Height of a block in rows.
-    pub fn height(&self, block: usize) -> usize {
+    fn height(&self, block: usize) -> usize {
         self.cached
             .get(block)
             .map_or(0, |cached| cached.lines.len().max(1))
     }
 
     /// First screen row of `block`.
-    pub fn row_of(&self, block: usize) -> usize {
+    fn row_of(&self, block: usize) -> usize {
         self.prefix
             .get(block)
             .copied()
@@ -185,7 +173,7 @@ impl<S> Layout<S> {
     }
 
     /// The block containing `row`, and the row's offset inside it.
-    pub fn block_at(&self, row: usize) -> (usize, usize) {
+    fn block_at(&self, row: usize) -> (usize, usize) {
         if self.cached.is_empty() {
             return (0, 0);
         }
@@ -212,37 +200,26 @@ impl<S> Layout<S> {
     }
 
     /// Maps a screen row to the block it belongs to and the line inside it.
-    pub fn line_at(&self, row: usize) -> Option<(usize, usize)> {
+    fn line_at(&self, row: usize) -> Option<(usize, usize)> {
         if self.cached.is_empty() || row >= self.total_rows() {
             return None;
         }
         Some(self.block_at(row))
     }
 
-    /// One row of a block, if it is cached.
-    pub fn line(&self, block: usize, offset: usize) -> Option<&Line<'static>> {
-        self.lines(block).get(offset)
-    }
-
     /// The layout row under an absolute screen cell.
-    pub fn row_at(&self, column: u16, row: u16) -> Option<usize> {
-        if row < self.viewport.origin.1 {
-            return None;
-        }
-        if column < self.viewport.origin.0 {
-            return None;
-        }
-        let offset = (row - self.viewport.origin.1) as usize;
-        if offset >= self.viewport.height {
+    fn row_at(&self, column: u16, row: u16) -> Option<usize> {
+        let (left, top) = self.viewport.origin;
+        let offset = row.checked_sub(top)? as usize;
+        if column < left || offset >= self.viewport.height {
             return None;
         }
         let row = self.viewport.top + offset;
         (row < self.total_rows()).then_some(row)
     }
 
-    /// The block under an absolute screen cell and the index of the clicked
-    /// row among the block's own lines. `None` off the drawn window and on the
-    /// blank row that separates a block from the one above it.
+    /// The block under a screen cell and the clicked line within it; `None` off
+    /// the window and on a block's separator row.
     pub fn hit(&self, column: u16, row: u16) -> Option<(usize, usize)> {
         let (block, offset) = self.line_at(self.row_at(column, row)?)?;
         let line = if block == 0 {
@@ -253,89 +230,17 @@ impl<S> Layout<S> {
         Some((block, line))
     }
 
-    /// Cell column of an absolute screen column inside a layout row.
-    pub fn cell_at(&self, column: u16) -> usize {
-        column.saturating_sub(self.viewport.origin.0) as usize
-    }
-
     /// Rows of the visible window, top row first.
     pub fn visible(&self, top: usize, height: usize) -> Vec<Line<'static>> {
         let mut lines = Vec::with_capacity(height);
         let mut row = top;
         while lines.len() < height && row < self.total_rows() {
             let (block, offset) = self.block_at(row);
-            lines.push(
-                self.line(block, offset)
-                    .cloned()
-                    .unwrap_or_else(|| Line::raw("")),
-            );
+            lines.push(self.lines(block)[offset].clone());
             row += 1;
         }
         lines
     }
-
-    /// Plain text of a screen row, for selection copy.
-    pub fn row_text(&self, row: usize) -> Option<&Line<'static>> {
-        let (block, offset) = self.line_at(row)?;
-        self.line(block, offset)
-    }
-
-    /// The transcript text between two absolute cells. The two cells are
-    /// ordered by row and then column, so dragging in either direction copies
-    /// the same cells. Cells outside the drawn window are clamped into it, so a
-    /// drag that leaves the screen still copies a contiguous range. Rows are
-    /// joined with newlines, the way a clipboard paste reads.
-    pub fn selection_text(&self, from: (u16, u16), to: (u16, u16)) -> String {
-        let (first, last) = if from.0 <= to.0 {
-            (from, to)
-        } else {
-            (to, from)
-        };
-        let Some(first_row) = self.row_at(0, first.0) else {
-            return String::new();
-        };
-        let last_row = self.row_at(0, last.0).unwrap_or(first_row);
-        let mut out = String::new();
-        for row in first_row..=last_row {
-            let Some(line) = self.row_text(row) else {
-                continue;
-            };
-            let row = row as u16;
-            let text = line.to_string();
-            let start = if row == first_row as u16 {
-                self.cell_at(first.1)
-            } else {
-                0
-            };
-            let end = if row == last_row as u16 {
-                self.cell_at(last.1).max(1)
-            } else {
-                usize::MAX
-            };
-            if !out.is_empty() {
-                out.push('\n');
-            }
-            out.push_str(&slice_cells(&text, start, end));
-        }
-        out
-    }
-}
-
-/// Cuts cells `[start, end)` out of a row of text.
-fn slice_cells(text: &str, start: usize, end: usize) -> String {
-    use unicode_width::UnicodeWidthChar;
-    let mut out = String::new();
-    let mut column = 0;
-    for character in text.chars() {
-        if column >= end {
-            break;
-        }
-        if column >= start {
-            out.push(character);
-        }
-        column += UnicodeWidthChar::width(character).unwrap_or(0);
-    }
-    out.trim_end().to_owned()
 }
 
 #[cfg(test)]
@@ -501,41 +406,6 @@ mod tests {
         let window: Vec<String> = layout.visible(1, 2).iter().map(Line::to_string).collect();
         assert_eq!(window, ["", "row 0"], "the separator row starts block 1");
         assert_eq!(layout.visible(5, 4).len(), 3, "clipped at the last row");
-    }
-
-    #[test]
-    fn selection_copy_joins_rows_and_respects_cell_bounds() {
-        let mut layout = Layout::<()>::default();
-        let blocks = [user("alpha"), user("beta")];
-        let revisions = [1, 2];
-        layout.prepare(&blocks, &revisions, 40, fold(), |_, index, _| {
-            if index == 0 {
-                vec![Line::raw("hello world"), Line::raw("second")]
-            } else {
-                vec![Line::raw("third")]
-            }
-        });
-        layout.viewport = Viewport {
-            top: 0,
-            height: 4,
-            origin: (0, 0),
-        };
-        assert_eq!(layout.selection_text((0, 6), (0, 11)), "world");
-        assert_eq!(
-            layout.selection_text((0, 6), (3, 5)),
-            "world\nsecond\n\nthird",
-            "the last row stops at the release column"
-        );
-        assert_eq!(
-            layout.selection_text((1, 0), (0, 5)),
-            " world\ns",
-            "the drag copies from the earlier cell to the later one"
-        );
-        assert_eq!(
-            layout.selection_text((0, 0), (0, 5)),
-            "hello",
-            "a single-row selection stops at the release column"
-        );
     }
 
     #[test]

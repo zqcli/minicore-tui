@@ -335,9 +335,8 @@ fn is_noise(line: &str, expanded: bool) -> bool {
             .any(|prefix| line.starts_with(prefix))
 }
 
-/// The header row: status glyph, tool name and detail on the left, the meta
-/// (duration, exit code, line counts, truncation) right-aligned. Returns the
-/// spans and whether the left side had to be cut.
+/// Header spans (glyph, name and detail left, meta right-aligned) and whether
+/// the left side had to be cut.
 fn tool_header(
     call: &ToolCall,
     glyph: &str,
@@ -470,8 +469,8 @@ fn compaction(
     let text = match (before, after) {
         (Some(before), Some(after)) => format!(
             "─ Context compacted · {} → {} tokens ─",
-            crate::ui::tokens(before),
-            crate::ui::tokens(after)
+            crate::ui::format_tokens(before),
+            crate::ui::format_tokens(after)
         ),
         // An automatic compaction usually reports no token figures; the item
         // counts say what it did instead of leaving a bare marker.

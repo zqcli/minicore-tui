@@ -768,7 +768,8 @@ async fn the_diff_view_lists_one_row_per_path_and_merges_its_records() {
     );
     fake.script(
         "changes.diff",
-        json!({"change_ref": "r1", "path": "app.py", "hunks": [], "complete": true}),
+        json!({"change_ref": "r1", "path": "app.py", "hunks": [], "complete": true,
+               "binary": false, "stale": false, "truncated": false}),
     );
     open(&mut app, &mut rx, &fake, &tx).await;
 
@@ -819,18 +820,18 @@ async fn a_late_diff_answer_cannot_paint_or_miscount_another_file() {
         vec![
             (
                 json!({"path": "a.py", "hunks": [
-                    {"old_start": 1, "old_lines": 1, "new_start": 1, "new_lines": 2,
+                    {"old_start": 1, "old_count": 1, "new_start": 1, "new_count": 2,
                      "lines": [{"kind": "added", "text": "a1", "line_complete": true},
                                {"kind": "added", "text": "a2", "line_complete": true},
                                {"kind": "removed", "text": "old", "line_complete": true}]}
-                ], "complete": true}),
+                ], "complete": true, "binary": false, "stale": false, "truncated": false}),
                 std::time::Duration::from_millis(400),
             ),
             (
                 json!({"path": "b.py", "hunks": [
-                    {"old_start": 1, "old_lines": 1, "new_start": 1, "new_lines": 1,
+                    {"old_start": 1, "old_count": 1, "new_start": 1, "new_count": 1,
                      "lines": [{"kind": "added", "text": "b1", "line_complete": true}]}
-                ], "complete": true}),
+                ], "complete": true, "binary": false, "stale": false, "truncated": false}),
                 std::time::Duration::ZERO,
             ),
         ],
@@ -891,16 +892,16 @@ async fn each_diff_row_is_measured_once_without_visiting_it() {
         "changes.diff",
         vec![
             json!({"path": "a.py", "hunks": [
-                {"old_start": 1, "old_lines": 1, "new_start": 1, "new_lines": 1,
+                {"old_start": 1, "old_count": 1, "new_start": 1, "new_count": 1,
                  "lines": [{"kind": "added", "text": "x", "line_complete": true},
                            {"kind": "removed", "text": "y", "line_complete": true}]}
-            ], "complete": true}),
+            ], "complete": true, "binary": false, "stale": false, "truncated": false}),
             json!({"path": "b.py", "hunks": [
-                {"old_start": 0, "old_lines": 0, "new_start": 1, "new_lines": 3,
+                {"old_start": 0, "old_count": 0, "new_start": 1, "new_count": 3,
                  "lines": [{"kind": "added", "text": "1", "line_complete": true},
                            {"kind": "added", "text": "2", "line_complete": true},
                            {"kind": "added", "text": "3", "line_complete": true}]}
-            ], "complete": true}),
+            ], "complete": true, "binary": false, "stale": false, "truncated": false}),
         ],
     );
     open(&mut app, &mut rx, &fake, &tx).await;
@@ -1011,7 +1012,7 @@ async fn scrolling_leaves_follow_mode_and_returns_to_it() {
             expanded_tools: false,
             show_reasoning: false,
         },
-        |_, _| vec![ratatui::text::Line::raw("row"); 10],
+        |_, _, _| vec![ratatui::text::Line::raw("row"); 10],
     );
     app.viewport = 5;
     assert_eq!(
@@ -1133,6 +1134,7 @@ fn diff_with(added: usize, removed: usize) -> Value {
     json!({
         "change_ref": "tool:abc", "path": "app.py", "kind": "modified",
         "availability": "available", "complete": true, "truncated": false,
+        "binary": false, "stale": false,
         "hunks": [{"old_start": 1, "old_count": removed, "new_start": 1,
                    "new_count": added, "lines": lines}],
         "next_cursor": null,
@@ -1257,9 +1259,12 @@ async fn three_tool_calls_on_one_file_report_one_file_and_summed_lines() {
         "changes.list",
         json!({
             "records": [
-                {"change_ref": "tool:w", "path": "app.py", "details_available": true},
-                {"change_ref": "tool:e", "path": "app.py", "details_available": true},
-                {"change_ref": "tool:p", "path": "app.py", "details_available": true},
+                {"change_ref": "tool:w", "path": "app.py", "kind": "modified",
+                 "details_available": true},
+                {"change_ref": "tool:e", "path": "app.py", "kind": "modified",
+                 "details_available": true},
+                {"change_ref": "tool:p", "path": "app.py", "kind": "modified",
+                 "details_available": true},
             ],
             "total": 3,
         }),
@@ -1366,10 +1371,12 @@ async fn launch_flags_apply_to_an_opened_session_through_session_update() {
     };
     fake.script("session.open", json!({"session": session_info("s1")}));
     fake.script("session.read", display_read(0, 0));
+    let mut updated = session_info("s1");
+    updated["model"] = json!("deep");
+    updated["reasoning"] = json!("max");
     fake.script(
         "session.update",
-        json!({"session": {"session_id": "s1", "model": "deep", "reasoning": "max"},
-               "active_revision": null}),
+        json!({"session": updated, "active_revision": null}),
     );
     crate::app::tasks::bootstrap(fake.client.clone(), tx.clone()).await;
     pump(&mut app, &mut rx, |app| app.ready).await;
@@ -2438,8 +2445,6 @@ async fn older_history_loaded_during_a_turn_survives_the_turns_reconcile() {
             usage: None,
             requests: None,
             tool_rounds: None,
-            final_config_revision: None,
-            persistence: None,
         }))),
     })));
     fake.script(
@@ -2562,8 +2567,6 @@ async fn a_canonical_page_loaded_during_a_turn_survives_the_turns_reconcile() {
             usage: None,
             requests: None,
             tool_rounds: None,
-            final_config_revision: None,
-            persistence: None,
         }))),
     })));
     fake.script(
@@ -2776,17 +2779,17 @@ async fn selecting_an_unmeasured_row_clears_the_pane_before_the_answer() {
         vec![
             (
                 json!({"path": "a.py", "hunks": [
-                    {"old_start": 1, "old_lines": 1, "new_start": 1, "new_lines": 1,
+                    {"old_start": 1, "old_count": 1, "new_start": 1, "new_count": 1,
                      "lines": [{"kind": "added", "text": "a1", "line_complete": true}]}
-                ], "complete": true}),
+                ], "complete": true, "binary": false, "stale": false, "truncated": false}),
                 std::time::Duration::ZERO,
             ),
             // b.py's read is held long enough for the test to look at the pane.
             (
                 json!({"path": "b.py", "hunks": [
-                    {"old_start": 1, "old_lines": 1, "new_start": 1, "new_lines": 1,
+                    {"old_start": 1, "old_count": 1, "new_start": 1, "new_count": 1,
                      "lines": [{"kind": "added", "text": "b1", "line_complete": true}]}
-                ], "complete": true}),
+                ], "complete": true, "binary": false, "stale": false, "truncated": false}),
                 std::time::Duration::from_millis(600),
             ),
         ],
@@ -2854,19 +2857,24 @@ async fn a_new_record_on_the_same_path_invalidates_the_measured_count() {
         vec![
             (
                 json!({"path": "a.py", "hunks": [
-                    {"old_start": 1, "old_lines": 1, "new_start": 1, "new_lines": 1,
+                    {"old_start": 1, "old_count": 1, "new_start": 1, "new_count": 1,
                      "lines": [{"kind": "added", "text": "first", "line_complete": true}]}
-                ], "complete": true}),
+                ], "complete": true, "binary": false, "stale": false, "truncated": false}),
                 std::time::Duration::ZERO,
             ),
             (
                 json!({"path": "a.py", "hunks": [
-                    {"old_start": 1, "old_lines": 1, "new_start": 1, "new_lines": 1,
+                    {"old_start": 1, "old_count": 1, "new_start": 1, "new_count": 1,
                      "lines": [{"kind": "added", "text": "second", "line_complete": true},
                                {"kind": "removed", "text": "gone", "line_complete": true}],
                      "line_complete": true}
-                ], "complete": true}),
+                ], "complete": true, "binary": false, "stale": false, "truncated": false}),
                 std::time::Duration::from_millis(500),
+            ),
+            (
+                json!({"path": "a.py", "hunks": [], "complete": true,
+                       "binary": false, "stale": false, "truncated": false}),
+                std::time::Duration::ZERO,
             ),
         ],
     );
@@ -2948,8 +2956,6 @@ async fn a_page_landing_before_the_reconcile_still_survives_it() {
             usage: None,
             requests: None,
             tool_rounds: None,
-            final_config_revision: None,
-            persistence: None,
         }))),
     })));
     let queued = app.session.as_ref().unwrap().reconcile_from.clone();
@@ -3481,7 +3487,8 @@ async fn slash_tool_opens_a_card_and_brackets_step_between_cards() {
     fake.script(
         "tool.output",
         json!({"stream": "stdout", "encoding": "base64", "base_offset": 0,
-               "next_offset": 6, "observed_end": 6, "eof": true, "data": "aGVsbG8K"}),
+               "next_offset": 6, "observed_end": 6, "eof": true, "truncated": false,
+               "availability": "available", "data": "aGVsbG8K"}),
     );
     open(&mut app, &mut rx, &fake, &tx).await;
     {
@@ -3564,6 +3571,7 @@ async fn a_file_changed_twice_shows_each_record_under_its_own_separator() {
         "changes.diff",
         vec![
             json!({"path": "app.py", "complete": true,
+                   "binary": false, "stale": false, "truncated": false,
                    "tool_ref": {"session_id": "s1", "loop_id": "l1", "request_index": 0,
                                 "tool_call_id": "c1"},
                    "hunks": [{"old_start": 0, "old_count": 1, "new_start": 0, "new_count": 1,
@@ -3571,6 +3579,7 @@ async fn a_file_changed_twice_shows_each_record_under_its_own_separator() {
                                 {"kind": "removed", "old_index": 0, "text": "old\n", "line_complete": true},
                                 {"kind": "added", "new_index": 0, "text": "new\n", "line_complete": true}]}]}),
             json!({"path": "app.py", "complete": true,
+                   "binary": false, "stale": false, "truncated": false,
                    "hunks": [{"old_start": 1, "old_count": 0, "new_start": 1, "new_count": 1,
                               "lines": [
                                 {"kind": "added", "new_index": 1, "text": "more\n", "line_complete": true}]}]}),

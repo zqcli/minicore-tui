@@ -1,17 +1,6 @@
-//! Markdown to styled lines.
-//!
-//! A small adapter over `pulldown-cmark`: it keeps the inline styling the
-//! transcript needs (headings, emphasis, code, lists, quotes, tables, links)
-//! and renders straight into pre-wrapped [`Line`]s, so the layout cache stores
-//! exactly the rows that get drawn.
-//!
-//! [`StreamRenderer`] is the streaming path. An assistant message grows one
-//! token at a time, and re-parsing the whole message on every delta would be
-//! quadratic. The renderer cuts the text at its last *stable* boundary, caches
-//! the lines of everything before it, and re-renders only the tail. A stable
-//! boundary is a place where the following text cannot change how the previous
-//! block renders, so the incremental result is identical to rendering the whole
-//! text in one pass.
+//! Markdown to pre-wrapped styled lines, over `pulldown-cmark`. A growing message
+//! renders through [`StreamRenderer`], which caches everything before the last
+//! boundary later text cannot change, so a delta re-parses only the tail.
 
 use std::sync::Arc;
 
@@ -56,18 +45,6 @@ pub fn render(text: &str, width: usize, styles: &Styles, base: Style) -> Vec<Lin
         out.pop();
     }
     out
-}
-
-/// Renders markdown and returns the visible text of each produced line.
-pub fn render_with_text(
-    text: &str,
-    width: usize,
-    styles: &Styles,
-    base: Style,
-) -> (Vec<Line<'static>>, Vec<String>) {
-    let lines = render(text, width, styles, base);
-    let text = lines.iter().map(Line::to_string).collect();
-    (lines, text)
 }
 
 #[derive(Clone, Debug)]
@@ -602,23 +579,6 @@ impl StreamRenderer {
         self.scan.cached
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.text.is_empty()
-    }
-
-    pub fn width(&self) -> usize {
-        self.width
-    }
-
-    pub fn set_width(&mut self, width: usize) {
-        if width != self.width {
-            self.width = width;
-            self.prefix = Arc::from(Vec::new());
-            self.current = None;
-            self.scan.cached = 0;
-        }
-    }
-
     /// Renders the current text, re-rendering only what changed.
     pub fn lines(&mut self, styles: &Styles) -> Arc<[Line<'static>]> {
         if let Some(current) = &self.current {
@@ -665,13 +625,8 @@ impl StreamRenderer {
     }
 }
 
-/// Finds the last byte offset that ends a complete block that later text
-/// cannot change.
-///
-/// The scan is incremental: each line is consumed once, and a candidate cut at
-/// a blank line is only committed when the next non-blank line proves it does
-/// not continue the block before it (lists, quotes and tables can span blank
-/// lines). Anything else stays in the re-rendered tail.
+/// Finds, one line at a time, the last offset later text cannot re-render; a cut
+/// at a blank line waits for the next line to prove a list, quote or table ended.
 #[derive(Default)]
 struct Scan {
     /// Bytes consumed so far; always a line boundary.
@@ -713,9 +668,8 @@ impl Scan {
     fn line(&mut self, line: &str, start: usize, end: usize) {
         let content = line.trim_end();
         let trimmed = content.trim_start();
-        // Fences and their closers share one indentation rule (up to three
-        // spaces, as CommonMark allows), so a fence nested in a list closes on
-        // a nested line and the cut advances instead of stalling.
+        // Fences and closers share CommonMark's three-space indent rule, so a
+        // fence nested in a list closes and the cut advances instead of stalling.
         let indent = content.len() - trimmed.len();
         if let Some((marker, len)) = self.fence {
             let closed = indent <= 3
@@ -1196,26 +1150,6 @@ mod tests {
             Arc::ptr_eq(&second, &third),
             "an idle frame allocates nothing"
         );
-    }
-
-    #[test]
-    fn width_changes_reset_the_cached_prefix() {
-        let styles = styles();
-        let mut renderer = StreamRenderer::new(40, Style::default());
-        renderer.push("first paragraph\n\nsecond paragraph\n");
-        assert_eq!(renderer.lines(&styles).len(), 3);
-        renderer.set_width(10);
-        let narrow = renderer.lines(&styles);
-        assert_eq!(
-            narrow.len(),
-            5,
-            "{:?}",
-            narrow.iter().map(Line::to_string).collect::<Vec<_>>()
-        );
-        assert_eq!(narrow[0].to_string(), "first");
-        assert_eq!(narrow[1].to_string(), "paragraph");
-        assert_eq!(narrow[2].to_string(), "");
-        assert_eq!(narrow[3].to_string(), "second");
     }
 
     #[test]
