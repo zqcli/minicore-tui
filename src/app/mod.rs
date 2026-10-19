@@ -562,8 +562,6 @@ pub struct App {
     /// Mouse selection: the cell the drag started at and where it is now.
     pub selection_start: Option<(u16, u16)>,
     pub selection_end: Option<(u16, u16)>,
-    /// The last assistant answer, so `/copy` works after a reopen.
-    pub last_answer: Option<String>,
     /// The composed diff view, rebuilt when the overlay opens or its data
     /// changes.
     pub diff: crate::ui::views::DiffView,
@@ -638,7 +636,6 @@ impl App {
             palette: crate::theme::Palette::dark(),
             selection_start: None,
             selection_end: None,
-            last_answer: None,
             diff: crate::ui::views::DiffView::new("Diff"),
             context_view: crate::ui::views::ContextView::default(),
             tool_view: crate::ui::views::ToolView::default(),
@@ -1127,8 +1124,7 @@ impl App {
             .session
             .as_ref()
             .and_then(|session| session.transcript.last_answer())
-            .map(str::to_owned)
-            .or_else(|| self.last_answer.clone());
+            .map(str::to_owned);
         let Some(text) = text else {
             self.notice(NoticeLevel::Error, "No answer to copy yet");
             return;
@@ -2038,13 +2034,6 @@ impl App {
             session.reconcile_from = Some((loop_id.clone(), start));
             let turn = wait.turn.clone();
             tasks::load_turn_result(self.client.clone(), self.tx.clone(), turn, epoch);
-        }
-        if let Some(answer) = self
-            .session
-            .as_ref()
-            .and_then(|session| session.transcript.last_answer())
-        {
-            self.last_answer = Some(answer.to_owned());
         }
         if let Some(session) = self.session.as_ref() {
             tasks::load_changes(
