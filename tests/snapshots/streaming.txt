@@ -1,4 +1,3 @@
-
 thought for 1 lines · Ctrl+T to show
   It does not any more. The streaming renderer keeps the stable prefix
   and re-renders only the tail, so a delta costs one small parse.
@@ -16,5 +15,6 @@ thought for 1 lines · Ctrl+T to show
   An anchored view keeps its block and row, so new output below never
   moves the text you are reading. Only scrolling to the end returns
   to following.
+
 ▎ Ask anything · / commands · @ files
-minicore-tui@- · gpt-6-luna · max · ● ready
+minicore-tui · Cache the parser · gpt-6-luna · max · ● ready     ctx ?

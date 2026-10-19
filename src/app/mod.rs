@@ -724,9 +724,9 @@ impl App {
         self.notices.retain(|notice| {
             notice.level == NoticeLevel::Error || notice.at.elapsed() < NOTICE_TTL
         });
-        // How often this runs is the main loop's business; a busy turn needs a
-        // clock tick, an idle app does not.
-        self.notices.len() != before || self.is_busy() || self.compacting()
+        // How often this runs is the main loop's business; anything the status
+        // line shows needs a clock tick for its time and spinner.
+        self.notices.len() != before || self.status_label().is_some()
     }
 
     /// Whether a periodic tick is needed at all.

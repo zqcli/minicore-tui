@@ -253,10 +253,104 @@ fn the_footer_reports_the_state_and_context() {
     app.composer.set_text("hello");
     let rendered = render(&mut app, 80, 12);
     let footer = rendered.lines().last().unwrap_or_default();
-    assert!(footer.contains("minicore-tui@-"), "{footer}");
+    assert!(footer.starts_with("minicore-tui · "), "{footer}");
+    assert!(
+        !footer.contains('@'),
+        "an unknown branch is left out: {footer}"
+    );
     assert!(footer.contains("gpt-6-luna"), "{footer}");
     assert!(footer.contains("max"), "{footer}");
     assert!(footer.contains("● ready"), "{footer}");
+    assert!(footer.ends_with("ctx ?"), "{footer}");
+}
+
+#[test]
+fn the_footer_names_the_branch_and_right_aligns_the_totals() {
+    let mut app = app();
+    let session = app.session.as_mut().expect("session");
+    session.presentation = Some(
+        serde_json::from_value(serde_json::json!({
+            "session_id": "ses_0123456789abcdef", "git_branch": "main",
+            "context": {"tokens": 16400, "window": 40000, "percent": 41.0, "kind": "reported"}
+        }))
+        .unwrap(),
+    );
+    session.usage = crate::protocol::UsageTotals {
+        input: 50_500,
+        output: 1_800,
+        cached: 33_800,
+    };
+    let rendered = render(&mut app, 100, 12);
+    let footer = rendered.lines().last().unwrap_or_default();
+    assert!(footer.starts_with("minicore-tui@main · "), "{footer}");
+    assert!(footer.contains("Cache the parser"), "{footer}");
+    assert!(
+        footer.ends_with("↑50.5k ↓1.8k R33.8k · ctx 41%"),
+        "{footer}"
+    );
+    assert_eq!(crate::ui::wrap::width(footer), 100, "flush right: {footer}");
+    // On a narrow terminal the title gives way first.
+    let narrow = render(&mut app, 70, 12);
+    let footer = narrow.lines().last().unwrap_or_default();
+    assert!(!footer.contains("Cache the parser"), "{footer}");
+    assert!(footer.ends_with("ctx 41%"), "{footer}");
+}
+
+/// The last transcript row never touches the stack below it, and the
+/// composer's tint spans the whole row like `reference.png`.
+#[test]
+fn a_blank_row_separates_the_transcript_and_the_composer_band_is_full_width() {
+    let mut app = app();
+    for index in 0..40 {
+        app.session
+            .as_mut()
+            .expect("session")
+            .transcript
+            .push(Block::User {
+                text: format!("prompt {index}"),
+                kind: UserKind::Prompt,
+            });
+    }
+    let backend = TestBackend::new(50, 14);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+    terminal
+        .draw(|frame| crate::ui::draw(frame, &mut app))
+        .expect("draw");
+    let buffer = terminal.backend().buffer().clone();
+    let row = |y: u16| -> String {
+        (0..50)
+            .map(|x| buffer[(x, y)].symbol())
+            .collect::<String>()
+            .trim_end()
+            .to_owned()
+    };
+    let composer = (0..14)
+        .find(|y| row(*y).starts_with("▎ Ask anything"))
+        .expect("composer row");
+    assert_eq!(row(composer - 1), "", "the gap row above the stack");
+    assert!(
+        row(composer - 2).contains("prompt 39"),
+        "{}",
+        row(composer - 2)
+    );
+    assert_eq!(
+        buffer[(49u16, composer)].bg,
+        app.palette.composer_bg,
+        "the band reaches the last column"
+    );
+}
+
+#[test]
+fn the_status_spinner_moves_with_time() {
+    use std::time::Duration;
+    let frames: std::collections::HashSet<&str> = (0..10)
+        .map(|step| crate::ui::status::spinner(Duration::from_millis(step * 100)))
+        .collect();
+    assert_eq!(frames.len(), 10, "every tick shows the next frame");
+    assert_eq!(
+        crate::ui::status::spinner(Duration::from_millis(1_000)),
+        crate::ui::status::spinner(Duration::ZERO)
+    );
 }
 
 #[test]
