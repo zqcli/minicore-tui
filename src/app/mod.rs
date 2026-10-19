@@ -549,7 +549,6 @@ pub struct App {
     pub quit_armed: bool,
     pub ready: bool,
     pub fatal: Option<Fatal>,
-    pub last_error: Option<String>,
     pub waiting_for_compaction: bool,
     pub started: Instant,
     pub interaction_choice: usize,
@@ -630,7 +629,6 @@ impl App {
             quit_armed: false,
             ready: false,
             fatal: None,
-            last_error: None,
             waiting_for_compaction: false,
             started: Instant::now(),
             interaction_choice: 0,
@@ -712,30 +710,26 @@ impl App {
         }
     }
 
-    /// Expires transient notices; returns whether the frame changed.
+    /// Expires info notices; errors stay until the next key press.
     pub fn tick(&mut self) -> bool {
         let before = self.notices.len();
         self.notices.retain(|notice| {
             notice.level == NoticeLevel::Error || notice.at.elapsed() < NOTICE_TTL
         });
-        // How often this runs is the main loop's business; anything the status
-        // line shows needs a clock tick for its time and spinner.
         self.notices.len() != before || self.status_label().is_some()
     }
 
-    /// Whether a periodic tick is needed at all.
+    /// Whether something on screen moves with the clock.
     pub fn wants_tick(&self) -> bool {
-        self.is_busy()
-            || self.compacting()
-            || !self.notices.is_empty()
-            || self.waiting_for_compaction
+        self.status_label().is_some()
+            || self
+                .notices
+                .iter()
+                .any(|notice| notice.level == NoticeLevel::Info)
     }
 
     pub fn notice(&mut self, level: NoticeLevel, text: impl Into<String>) {
         let text = text.into();
-        if level == NoticeLevel::Error {
-            self.last_error = Some(text.clone());
-        }
         self.notices.push_back(Notice {
             level,
             text,

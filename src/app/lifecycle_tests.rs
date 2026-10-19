@@ -27,8 +27,8 @@ async fn pump(
         }
     }
     panic!(
-        "the app never reached the expected state (error: {:?}, busy: {}, session: {}, ready: {})",
-        app.last_error,
+        "the app never reached the expected state (notices: {:?}, busy: {}, session: {}, ready: {})",
+        app.notices,
         app.is_busy(),
         app.session.is_some(),
         app.ready
@@ -77,7 +77,7 @@ async fn step_until(
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    panic!("the app never settled (error: {:?})", app.last_error);
+    panic!("the app never settled (notices: {:?})", app.notices);
 }
 
 /// Pumps for a fixed window, for work that retries on a timer.
@@ -498,7 +498,7 @@ async fn a_stale_pin_reloads_the_tail_instead_of_failing() {
         fake.calls("session.read").len() > before,
         "the failed page is followed by a fresh probe"
     );
-    assert!(app.last_error.is_none() || app.session.is_some());
+    assert!(app.session.is_some());
 }
 
 #[tokio::test]
@@ -1101,7 +1101,7 @@ async fn an_op_for_another_session_is_ignored() {
             "should not surface",
         ))),
     })));
-    assert!(app.last_error.is_none());
+    assert!(app.notices.is_empty());
 }
 
 /// A turn-scope change list with one record and a countable diff.
@@ -1742,7 +1742,10 @@ async fn a_send_refused_for_another_reason_returns_the_text_to_the_composer() {
             .iter()
             .any(|block| matches!(block, Block::User { .. }))
     );
-    assert_eq!(app.last_error.as_deref(), Some("history too large"));
+    assert_eq!(
+        app.notices.back().map(|notice| notice.text.as_str()),
+        Some("history too large")
+    );
 }
 
 #[tokio::test]
@@ -1942,7 +1945,7 @@ async fn a_stale_pin_during_the_tail_load_restarts_with_a_fresh_probe() {
 
     open(&mut app, &mut rx, &fake, &tx).await;
 
-    assert_eq!(app.last_error, None, "a stale pin is never surfaced");
+    assert!(app.notices.is_empty(), "a stale pin is never surfaced");
     let reads = fake.calls("session.read");
     assert_eq!(reads.len(), 4, "probe, refused page, fresh probe, page");
     assert!(

@@ -20,6 +20,7 @@ pub enum Input {
 impl App {
     /// Routes a key event to the focused surface.
     pub fn on_key(&mut self, key: KeyEvent) -> Input {
+        self.notices.clear();
         if self.fatal.is_some() {
             return match key.code {
                 KeyCode::Char('q') | KeyCode::Esc => Input::Action(Action::Quit),
