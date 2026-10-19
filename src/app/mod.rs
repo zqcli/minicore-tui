@@ -1118,9 +1118,6 @@ impl App {
         }
     }
 
-    /// Puts the oldest queued follow-up back in the composer. A draft already
-    /// in the composer is never overwritten: the queue item stays where it is
-    /// until there is room for it.
     /// Asks for a fresh context ledger: the view must never show a stale one.
     pub fn refresh_context(&mut self) {
         let Some(session) = self.session.as_ref() else {
@@ -1133,6 +1130,9 @@ impl App {
         );
     }
 
+    /// Puts the oldest queued follow-up back in the composer. A draft already
+    /// in the composer is never overwritten: the queue item stays where it is
+    /// until there is room for it.
     fn recall_queued(&mut self) {
         if !self.composer.is_empty() {
             self.notice(

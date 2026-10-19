@@ -38,14 +38,6 @@ pub struct DiffFile {
 
 /// The change records of the row at `path`, for a caller that does not keep
 /// them (a preview row built from tool cards has none).
-pub fn row_refs(view: &DiffView, path: &str) -> Vec<String> {
-    view.files
-        .iter()
-        .find(|file| file.path == path)
-        .map(|file| file.change_refs.clone())
-        .unwrap_or_default()
-}
-
 impl DiffFile {
     /// The row's line column: the measured total, or a marker while unknown.
     fn count(&self) -> String {
