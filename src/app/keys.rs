@@ -710,11 +710,57 @@ impl App {
                 Input::Consumed
             }
             MouseEventKind::Up(MouseButton::Left) => {
-                self.selection_end = Some((mouse.column, mouse.row));
-                self.copy_selection();
+                let cell = (mouse.column, mouse.row);
+                if self.selection_start == Some(cell) {
+                    self.selection_start = None;
+                    self.selection_end = None;
+                    self.click_transcript(cell);
+                } else {
+                    self.selection_end = Some(cell);
+                    self.copy_selection();
+                }
                 Input::Consumed
             }
             _ => Input::Ignored,
+        }
+    }
+
+    /// A click, not a drag, on the transcript: a tool card's header row folds
+    /// or unfolds that card, an expanded card's hint row opens the tool view,
+    /// and a turn-end line opens the turn's diff.
+    fn click_transcript(&mut self, (column, row): (u16, u16)) {
+        if !self.overlay.is_none() {
+            return;
+        }
+        let Some((index, line)) = self.layout.cache.hit(column, row) else {
+            return;
+        };
+        let all_expanded = self.tools_expanded;
+        let Some(session) = self.session.as_mut() else {
+            return;
+        };
+        match session.transcript.blocks().get(index) {
+            Some(crate::transcript::Block::Tool(call)) => {
+                let key = call.key.clone();
+                // The hint is always a card's last row, and the drawn row is
+                // what the reader clicked on.
+                let hint = crate::ui::blocks::FULL_OUTPUT_HINT;
+                let on_hint = self
+                    .rendered
+                    .row(row)
+                    .is_some_and(|text| text.trim_end().ends_with(hint));
+                if line == 0 {
+                    if let Some(call) = session.transcript.find_tool_mut(&key) {
+                        call.toggle_expanded(all_expanded);
+                    }
+                } else if on_hint {
+                    self.open_panel(super::Panel::Tool(key));
+                }
+            }
+            Some(crate::transcript::Block::TurnEnd { .. }) => {
+                self.open_panel(super::Panel::Diff(super::DiffScope::Turn));
+            }
+            _ => {}
         }
     }
 
