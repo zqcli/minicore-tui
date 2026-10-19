@@ -218,4 +218,45 @@ async fn ctrl_d_twice_deletes_the_row_the_filtered_picker_shows() {
     assert_eq!(deleted.len(), 1);
     assert_eq!(deleted[0]["session_id"], "s_beta");
     assert_eq!(h.notices(), ["Session deleted"]);
+    let screen = h.screen(80, 20);
+    assert_eq!(
+        screen.matches("beta").count(),
+        1,
+        "only the typed filter is left:\n{screen}"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_sessions_picker_lists_this_workspace_first_then_newest() {
+    let mut h = Harness::new();
+    let titled = |id: &str, title: &str, workspace: &str, updated: &str| {
+        let mut info = session_info(id);
+        info["title"] = json!(title);
+        info["workspace"] = json!(workspace);
+        info["updated_at"] = json!(updated);
+        info
+    };
+    let here = std::env::temp_dir().to_string_lossy().into_owned();
+    h.fake.script(
+        "session.list",
+        json!({"sessions": [
+            session_info("s1"),
+            titled("s_new_elsewhere", "elsewhere new", "/other", "2025-01-02T00:00:00Z"),
+            titled("s_old_here", "here old", &here, "2025-01-01T00:00:00Z"),
+            titled("s_new_here", "here new", &here, "2025-01-03T00:00:00Z"),
+        ]}),
+    );
+    h.open().await;
+
+    h.ctrl(KeyCode::Char('r'));
+    let screen = h.screen(80, 20);
+    let order: Vec<usize> = ["here new", "here old", "elsewhere new"]
+        .iter()
+        .map(|title| {
+            screen
+                .find(title)
+                .unwrap_or_else(|| panic!("{title}:\n{screen}"))
+        })
+        .collect();
+    assert!(order.is_sorted(), "{screen}");
 }

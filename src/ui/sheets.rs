@@ -11,6 +11,7 @@ use crate::protocol::SessionInfo;
 use crate::theme::Palette;
 
 use super::panel::{Row, Sheet, Tone, body_lines};
+use super::picker::fuzzy_match;
 
 /// What an interaction is about: the tool, its one-line detail (a path, a
 /// command) and the start of its input (the content or script it would run).
@@ -23,9 +24,8 @@ pub struct Subject<'a> {
 /// Input lines an approval shows before it says how many more there are.
 const INPUT_PREVIEW: usize = 6;
 
-/// The sheet for a pending interaction: the question, what would run, then an
-/// approval with two rows or a choice list. A text answer is not offered
-/// because the Agent's tool-input interactions are choices.
+/// The sheet for a pending interaction: the question, what would run, then
+/// the approval's two rows or the choice list.
 pub fn interaction_sheet(
     prompt: &str,
     subject: &Subject<'_>,
@@ -127,6 +127,18 @@ fn short_session_id(session_id: &str) -> &str {
         .nth(6)
         .map_or(body.len(), |(index, _)| index);
     &session_id[..session_id.len() - body.len() + cut]
+}
+
+/// The picker rows whose label fuzzy-matches `filter`, in order.
+pub fn filtered_sessions<'a>(
+    rows: &'a [SessionInfo],
+    filter: &str,
+    resident: Option<&Session>,
+) -> Vec<&'a SessionInfo> {
+    let filter = filter.trim();
+    rows.iter()
+        .filter(|info| filter.is_empty() || fuzzy_match(&session_label(info, resident), filter))
+        .collect()
 }
 
 /// One sessions-picker row: `label` (the title, or the first prompt), marked

@@ -422,7 +422,7 @@ fn typing_keeps_the_draft_visible_and_marked_with_the_rail() {
 fn an_open_overlay_is_not_drawn_over_the_composer() {
     let mut app = app();
     app.composer.set_text("draft");
-    app.overlay = Overlay::Help;
+    app.overlay = Overlay::Help { scroll: 0 };
     let rendered = render(&mut app, 40, 10);
     assert!(
         rendered.contains("▎ draft"),
@@ -524,13 +524,7 @@ fn clicking_a_turn_end_line_opens_the_turn_diff() {
     let screen = render(app, 70, 20);
     click(app, 5, row_of(&screen, "── completed"));
     assert!(
-        matches!(
-            app.overlay,
-            Overlay::Diff {
-                scope: crate::app::DiffScope::Turn,
-                ..
-            }
-        ),
+        matches!(&app.overlay, Overlay::Diff(diff) if diff.scope == crate::app::DiffScope::Turn),
         "{:?}",
         app.overlay
     );

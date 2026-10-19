@@ -2,6 +2,7 @@
 
 use serde_json::{Value, json};
 
+use super::overlay::matching_paths;
 use super::tasks::{self, History, Window};
 use super::{App, LiveTurn, Overlay, Scroll, Session, SessionOp};
 use crate::protocol::{
@@ -46,37 +47,40 @@ impl App {
             }
             SessionOp::Changes(loop_id, result) => self.on_changes(&loop_id, result),
             SessionOp::ToolRead(key, result) => {
-                if let Some(read) = self.ok(result) {
-                    if let Some(card) = self.session_mut().transcript.find_tool_mut(&key) {
-                        card.apply_read(&read);
-                    }
-                    if self.tool_view.key.as_ref() == Some(&key) {
-                        self.refresh_tool_header();
-                    }
+                if let Some(read) = self.ok(result)
+                    && let Some(card) = self.session_mut().transcript.find_tool_mut(&key)
+                {
+                    card.apply_read(&read);
                 }
             }
             SessionOp::ToolOutput(key, stream, result) => {
                 // Pages for a call the view no longer shows are dropped.
-                if self.tool_view.key.as_ref() != Some(&key) {
+                let Overlay::Tool(tool) = &mut self.overlay else {
+                    return;
+                };
+                if tool.key != key {
                     return;
                 }
                 match result {
-                    Ok(text) => self.tool_view.set_stream(&stream, text, &self.palette),
+                    Ok(text) => tool.set_stream(&stream, text),
                     // The other streams still show; the view says what failed.
                     Err(error) => {
-                        self.tool_view
-                            .set_stream(&stream, Default::default(), &self.palette);
-                        self.tool_view.status = error.message;
+                        tool.set_stream(&stream, Default::default());
+                        tool.status = error.message;
                     }
                 }
             }
             SessionOp::Files(result) => {
-                if let Some(paths) = self.ok(result) {
-                    crate::ui::files::set_candidates(paths);
-                    if let Overlay::Files { filter, selected } = &mut self.overlay {
-                        let last = crate::ui::files::filter_count(filter).saturating_sub(1);
-                        *selected = (*selected).min(last);
-                    }
+                if let Some(found) = self.ok(result)
+                    && let Overlay::Files {
+                        filter,
+                        selected,
+                        paths,
+                    } = &mut self.overlay
+                {
+                    *paths = found;
+                    let last = matching_paths(paths, filter).len().saturating_sub(1);
+                    *selected = (*selected).min(last);
                 }
             }
             SessionOp::ChangeFiles(scope, result) => self.on_change_files(scope, result),

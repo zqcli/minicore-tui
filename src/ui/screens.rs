@@ -8,10 +8,11 @@
 //! drawn.
 
 use crate::app::commands;
+use crate::app::overlay;
 use crate::app::{App, Overlay};
+use crate::protocol::SessionInfo;
 use crate::theme::Palette;
 
-use super::files;
 use super::panel::{Row, Sheet};
 use super::sheets;
 use super::views;
@@ -22,10 +23,19 @@ pub fn sheet(app: &App, palette: &Palette) -> Option<Sheet> {
     Some(match &app.overlay {
         Overlay::None => return interaction_sheet(app, palette),
         Overlay::Palette { filter, selected } => palette_sheet(filter, *selected),
-        Overlay::Sessions { filter, selected } => sessions_sheet(app, filter, *selected),
+        Overlay::Sessions {
+            filter,
+            selected,
+            rows,
+            armed,
+        } => sessions_sheet(app, rows, filter, *selected, armed.is_some()),
         Overlay::Models { selected } => models_sheet(app, *selected),
         Overlay::Reasoning { selected } => reasoning_sheet(app, *selected),
-        Overlay::Files { filter, selected } => files_sheet(filter, *selected),
+        Overlay::Files {
+            filter,
+            selected,
+            paths,
+        } => files_sheet(paths, filter, *selected),
         Overlay::Find {
             query,
             matches,
@@ -35,7 +45,9 @@ pub fn sheet(app: &App, palette: &Palette) -> Option<Sheet> {
             sheets::find_hint(matches.len(), *current),
         ),
         // Views own the transcript area instead of a sheet.
-        Overlay::Context | Overlay::Help | Overlay::Diff { .. } | Overlay::Tool(_) => return None,
+        Overlay::Context | Overlay::Help { .. } | Overlay::Diff(_) | Overlay::Tool(_) => {
+            return None;
+        }
     })
 }
 
@@ -49,7 +61,13 @@ fn palette_sheet(filter: &str, selected: usize) -> Sheet {
         .selected(Some(selected))
 }
 
-fn sessions_sheet(app: &App, filter: &str, selected: usize) -> Sheet {
+fn sessions_sheet(
+    app: &App,
+    rows: &[SessionInfo],
+    filter: &str,
+    selected: usize,
+    armed: bool,
+) -> Sheet {
     let resident = app
         .session
         .as_ref()
@@ -58,20 +76,15 @@ fn sessions_sheet(app: &App, filter: &str, selected: usize) -> Sheet {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|elapsed| elapsed.as_secs())
         .unwrap_or(0);
-    let rows = app
-        .filtered_sessions(filter)
-        .iter()
+    let rows = sheets::filtered_sessions(rows, filter, app.session.as_ref())
+        .into_iter()
         .map(|info| {
+            let label = sheets::session_label(info, app.session.as_ref());
             let current = resident == Some(info.session_id.as_str());
-            sheets::session_row(
-                info,
-                sheets::session_label(info, app.session.as_ref()),
-                current,
-                now,
-            )
+            sheets::session_row(info, label, current, now)
         })
         .collect();
-    let hint = if app.delete_pending.is_some() {
+    let hint = if armed {
         "ctrl+d again deletes · esc cancels"
     } else {
         "enter open · type filter · ctrl+d delete · esc close"
@@ -123,10 +136,10 @@ fn reasoning_sheet(app: &App, selected: usize) -> Sheet {
         .selected(Some(selected))
 }
 
-fn files_sheet(filter: &str, selected: usize) -> Sheet {
-    let rows = files::filtered(filter)
+fn files_sheet(paths: &[String], filter: &str, selected: usize) -> Sheet {
+    let rows = overlay::matching_paths(paths, filter)
         .into_iter()
-        .map(|path| Row::new(path, String::new()))
+        .map(|path| Row::new(format!("@{path}"), String::new()))
         .collect();
     Sheet::new(
         "Files",
@@ -165,16 +178,18 @@ fn interaction_sheet(app: &App, palette: &Palette) -> Option<Sheet> {
 pub fn draw_view(frame: &mut ratatui::Frame, area: ratatui::layout::Rect, app: &App) -> bool {
     let palette = app.palette;
     match &app.overlay {
-        Overlay::Diff { .. } => views::render_diff(frame, area, &palette, &app.diff),
-        Overlay::Tool(_) => views::render_tool(frame, area, &palette, &app.tool_view),
+        Overlay::Diff(diff) => views::render_diff(frame, area, &palette, diff),
+        Overlay::Tool(tool) => {
+            views::render_tool(frame, area, &palette, tool, app.session.as_ref());
+        }
         Overlay::Context => {
             let session = app.session.as_ref();
             let lines = views::context_lines(session, &palette);
             views::render_context(frame, area, &palette, &lines);
         }
-        Overlay::Help => {
+        Overlay::Help { scroll } => {
             let help = views::help_view(commands::COMMANDS, &palette);
-            views::render_help(frame, area, &palette, &help, app.help_scroll);
+            views::render_help(frame, area, &palette, &help, *scroll);
         }
         _ => return false,
     }

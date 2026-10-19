@@ -652,9 +652,8 @@ impl Session {
         }
     }
 
-    /// Puts an older page in front of the transcript, in place of the marker,
-    /// and returns how many blocks the front grew by (negative when the marker
-    /// went and nothing came).
+    /// Puts an older page in front of the transcript in place of the marker;
+    /// returns how much the front grew, negative when the marker went alone.
     pub fn prepend_page(&mut self, page: History) -> isize {
         self.loading_older = false;
         let mut scratch = Transcript::default();

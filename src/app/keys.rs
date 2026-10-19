@@ -3,11 +3,12 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
+use super::overlay::matching_paths;
 use super::{Action, Answer, App, Overlay, Panel, Scroll, find};
 use crate::app::commands::{self, Executed};
 use crate::protocol::Reasoning;
 use crate::transcript::{Block, NoticeLevel};
-use crate::ui::{blocks, files, selection, sheets};
+use crate::ui::{blocks, selection, sheets};
 
 impl App {
     /// Routes a key event to the focused surface; the action it asks for, if any.
@@ -52,17 +53,14 @@ impl App {
     fn on_overlay_key(&mut self, key: KeyEvent) -> Option<Action> {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let tool = matches!(self.overlay, Overlay::Tool(_));
-        let scrolling = tool || matches!(self.overlay, Overlay::Diff { .. });
+        let scrolling = tool || matches!(self.overlay, Overlay::Diff(_));
         let page = self.viewport_rows().saturating_sub(2) as isize;
         match key.code {
-            KeyCode::Esc => {
-                self.delete_pending = None;
-                match std::mem::replace(&mut self.overlay, Overlay::None) {
-                    Overlay::Palette { .. } => self.discard_command_draft(),
-                    Overlay::Files { .. } => self.discard_mention(),
-                    _ => {}
-                }
-            }
+            KeyCode::Esc => match std::mem::replace(&mut self.overlay, Overlay::None) {
+                Overlay::Palette { .. } => self.discard_command_draft(),
+                Overlay::Files { .. } => self.discard_mention(),
+                _ => {}
+            },
             KeyCode::Char('[') | KeyCode::Left if tool => self.step_tool(-1),
             KeyCode::Char(']') | KeyCode::Right if tool => self.step_tool(1),
             KeyCode::PageUp if scrolling => self.scroll_view(-page),
@@ -75,9 +73,7 @@ impl App {
             KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => self.find_step(false),
             KeyCode::Enter => return self.on_overlay_accept(),
             KeyCode::Up => self.overlay_move(-1),
-            KeyCode::Tab if matches!(self.overlay, Overlay::Diff { .. }) => {
-                self.diff_cycle_scope();
-            }
+            KeyCode::Tab if matches!(self.overlay, Overlay::Diff(_)) => self.diff_cycle_scope(),
             KeyCode::Tab | KeyCode::Down => self.overlay_move(1),
             KeyCode::PageUp => self.overlay_move(-10),
             KeyCode::PageDown => self.overlay_move(10),
@@ -107,28 +103,34 @@ impl App {
     /// Ctrl+D in the sessions picker: the first press arms the delete, the
     /// second deletes the selected session.
     fn delete_confirm(&mut self) {
-        let Overlay::Sessions { selected, filter } = &self.overlay else {
+        let Overlay::Sessions {
+            rows,
+            filter,
+            selected,
+            armed,
+        } = &mut self.overlay
+        else {
             return;
         };
-        let Some(info) = self.filtered_sessions(filter).into_iter().nth(*selected) else {
+        let resident = self.session.as_ref();
+        let Some(info) = sheets::filtered_sessions(rows, filter, resident)
+            .get(*selected)
+            .copied()
+        else {
             return;
         };
         let id = info.session_id.clone();
-        let resident = self
-            .session
-            .as_ref()
-            .is_some_and(|session| session.info.session_id == id);
-        if resident {
+        if resident.is_some_and(|session| session.info.session_id == id) {
             self.notice(
                 NoticeLevel::Error,
                 "Open another session before deleting this one",
             );
-        } else if self.delete_pending.as_deref() == Some(id.as_str()) {
-            self.delete_pending = None;
+        } else if armed.as_deref() == Some(id.as_str()) {
+            *armed = None;
             self.on_action(Action::DeleteSession(id));
         } else {
-            let label = sheets::session_label(&info, self.session.as_ref());
-            self.delete_pending = Some(id);
+            let label = sheets::session_label(info, resident);
+            *armed = Some(id);
             self.notice(
                 NoticeLevel::Info,
                 format!("Press Ctrl+D again to delete \"{label}\" permanently"),
@@ -156,11 +158,13 @@ impl App {
     pub fn overlay_move(&mut self, delta: isize) {
         let len = match &self.overlay {
             Overlay::Palette { filter, .. } => commands::filter(filter).len(),
-            Overlay::Sessions { filter, .. } => self.filtered_sessions(filter).len(),
+            Overlay::Sessions { rows, filter, .. } => {
+                sheets::filtered_sessions(rows, filter, self.session.as_ref()).len()
+            }
             Overlay::Models { .. } => self.models.len(),
             Overlay::Reasoning { .. } => self.reasoning_levels().len(),
-            Overlay::Files { filter, .. } => files::filter_count(filter),
-            Overlay::Diff { .. } => self.diff.files.len(),
+            Overlay::Files { paths, filter, .. } => matching_paths(paths, filter).len(),
+            Overlay::Diff(diff) => diff.files.len(),
             _ => 0,
         };
         let step = |selected: usize| {
@@ -172,16 +176,14 @@ impl App {
             | Overlay::Models { selected }
             | Overlay::Reasoning { selected }
             | Overlay::Files { selected, .. } => *selected = step(*selected),
-            Overlay::Diff { file, scroll, .. } => {
-                let next = step(*file);
-                if next != *file {
-                    *file = next;
-                    *scroll = 0;
-                    self.diff.select(next);
+            Overlay::Diff(diff) => {
+                let next = step(diff.selected);
+                if next != diff.selected {
+                    diff.select(next);
                     self.load_selected_diff();
                 }
             }
-            Overlay::Help => self.help_scroll = self.help_scroll.saturating_add_signed(delta * 3),
+            Overlay::Help { scroll } => *scroll = scroll.saturating_add_signed(delta * 3),
             Overlay::Tool(_) => self.scroll_view(delta),
             Overlay::Find { .. } => self.find_step(delta > 0),
             Overlay::Context | Overlay::None => {}
@@ -193,11 +195,8 @@ impl App {
         // The view's title and hint rows are not content.
         let rows = self.viewport_rows().saturating_sub(2);
         match &mut self.overlay {
-            Overlay::Diff { scroll, .. } => {
-                self.diff.scroll_by(delta, rows);
-                *scroll = self.diff.scroll.min(u16::MAX as usize) as u16;
-            }
-            Overlay::Tool(_) => self.tool_view.scroll_by(delta, rows),
+            Overlay::Diff(diff) => diff.scroll_by(delta, rows),
+            Overlay::Tool(tool) => tool.scroll_by(delta, rows),
             _ => {}
         }
     }
@@ -239,8 +238,12 @@ impl App {
             .map_or(&[][..], |session| session.transcript.blocks());
         match &mut self.overlay {
             Overlay::Palette { filter, selected }
-            | Overlay::Sessions { filter, selected }
-            | Overlay::Files { filter, selected } => {
+            | Overlay::Sessions {
+                filter, selected, ..
+            }
+            | Overlay::Files {
+                filter, selected, ..
+            } => {
                 edit(filter);
                 *selected = 0;
             }
@@ -274,9 +277,8 @@ impl App {
         match std::mem::replace(&mut self.overlay, Overlay::None) {
             Overlay::Palette { selected, filter } => {
                 let command = commands::filter(&filter).get(selected).copied();
-                // The composer holds the whole command line, so an argument
-                // typed after the name belongs to the command accepted, even
-                // when that row is another fuzzy match than the typed name.
+                // The argument typed after the name goes to the command accepted,
+                // which can be another fuzzy match than the typed name.
                 let arg = commands::parse(self.composer.text())
                     .map_or("", |(_, arg)| arg)
                     .to_owned();
@@ -290,8 +292,12 @@ impl App {
                     _ => None,
                 }
             }
-            Overlay::Sessions { selected, filter } => self
-                .filtered_sessions(&filter)
+            Overlay::Sessions {
+                selected,
+                filter,
+                rows,
+                ..
+            } => sheets::filtered_sessions(&rows, &filter, self.session.as_ref())
                 .get(selected)
                 .map(|info| Action::OpenSession(info.session_id.clone())),
             find @ Overlay::Find { .. } => {
@@ -307,21 +313,32 @@ impl App {
                 .reasoning_levels()
                 .get(selected)
                 .map(|level| Action::SetReasoning(*level)),
-            Overlay::Files { filter, selected } => {
-                let paths = files::filtered(&filter);
+            Overlay::Files {
+                filter,
+                selected,
+                paths,
+            } => {
                 // No match keeps the picker open rather than inserting nothing.
-                let Some(path) = paths.get(selected) else {
-                    self.overlay = Overlay::Files { filter, selected };
+                let Some(path) = matching_paths(&paths, &filter)
+                    .get(selected)
+                    .copied()
+                    .cloned()
+                else {
+                    self.overlay = Overlay::Files {
+                        filter,
+                        selected,
+                        paths,
+                    };
                     return None;
                 };
-                // The row is `@path`; it replaces the `@` token it was opened from.
+                // The path replaces the `@` token the picker was opened from.
                 self.discard_mention();
-                self.composer.insert(path);
+                self.composer.insert(&format!("@{path}"));
                 None
             }
             Overlay::Context
-            | Overlay::Help
-            | Overlay::Diff { .. }
+            | Overlay::Help { .. }
+            | Overlay::Diff(_)
             | Overlay::Tool(_)
             | Overlay::None => None,
         }
@@ -513,7 +530,7 @@ impl App {
                 } else {
                     3
                 };
-                if matches!(self.overlay, Overlay::Diff { .. } | Overlay::Tool(_)) {
+                if matches!(self.overlay, Overlay::Diff(_) | Overlay::Tool(_)) {
                     self.scroll_view(delta);
                 } else {
                     self.scroll_by(delta);
@@ -543,9 +560,8 @@ impl App {
         }
     }
 
-    /// A click, not a drag, on the transcript: a tool card's header row folds
-    /// or unfolds that card, an expanded card's hint row opens the tool view,
-    /// and a turn-end line opens the turn's diff.
+    /// A click: a card header folds the card, its hint opens the tool view, and
+    /// a turn-end line opens the turn's diff.
     fn click_transcript(&mut self, (column, row): (u16, u16)) {
         if !self.overlay.is_none() {
             return;

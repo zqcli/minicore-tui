@@ -15,6 +15,7 @@ pub mod session;
 pub mod tasks;
 #[cfg(test)]
 mod tests;
+pub mod tool;
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -33,7 +34,7 @@ use crate::protocol::{
 use crate::rpc::Client;
 use crate::theme::ThemeKind;
 use crate::transcript::{Block, ChangeSummary, NoticeLevel};
-use crate::ui::views;
+use crate::ui::{sheets, views};
 
 pub use actions::{Action, Answer};
 pub use diff::{DiffQuery, DiffScope};
@@ -161,20 +162,6 @@ pub struct App {
     /// Mouse selection: the cell the drag started at and where it is now.
     pub selection_start: Option<(u16, u16)>,
     pub selection_end: Option<(u16, u16)>,
-    /// The diff view, rebuilt when the overlay opens or its data changes.
-    pub diff: views::DiffView,
-    /// The tool-output view, rebuilt from the selected card.
-    pub tool_view: views::ToolView,
-    pub help_scroll: usize,
-    /// Sessions picker rows, in display order, refreshed when it opens.
-    pub session_rows: Vec<SessionInfo>,
-    /// Confirm a delete with a second Ctrl+D before it runs.
-    pub delete_pending: Option<String>,
-    /// Change records of each diff row still to be measured, so a row is read
-    /// once.
-    pub diff_pending: Vec<(DiffQuery, Vec<String>)>,
-    /// The one diff read in flight.
-    pub diff_in_flight: Option<DiffQuery>,
     /// Where the transcript was drawn last frame, for mouse selection.
     pub transcript_area: Option<ratatui::layout::Rect>,
     /// The rows the last frame drew, so selection copies what is on screen.
@@ -226,13 +213,6 @@ impl App {
             palette: crate::theme::Palette::dark(),
             selection_start: None,
             selection_end: None,
-            diff: views::DiffView::new("Diff"),
-            tool_view: views::ToolView::default(),
-            help_scroll: 0,
-            session_rows: Vec::new(),
-            delete_pending: None,
-            diff_pending: Vec::new(),
-            diff_in_flight: None,
             transcript_area: None,
             rendered: crate::ui::selection::Screen::default(),
             layout: crate::ui::View::default(),
@@ -268,6 +248,17 @@ impl App {
             Msg::Deleted(id, result) => {
                 if self.ok(result).is_some() {
                     self.sessions.retain(|session| session.session_id != id);
+                    if let Overlay::Sessions {
+                        rows,
+                        filter,
+                        selected,
+                        ..
+                    } = &mut self.overlay
+                    {
+                        rows.retain(|session| session.session_id != id);
+                        let shown = sheets::filtered_sessions(rows, filter, self.session.as_ref());
+                        *selected = (*selected).min(shown.len().saturating_sub(1));
+                    }
                     self.notice(NoticeLevel::Info, "Session deleted");
                 }
             }
@@ -427,8 +418,8 @@ impl App {
     /// `c` in a view: copies what the view shows.
     pub fn copy_view(&mut self) {
         let text = match &self.overlay {
-            Overlay::Diff { .. } => views::diff_text(&self.diff),
-            Overlay::Tool(_) => self.tool_view.text(),
+            Overlay::Diff(diff) => views::diff_text(diff),
+            Overlay::Tool(tool) => views::tool_text(tool, self.session.as_ref()),
             _ => views::context_text(self.session.as_ref(), &self.palette),
         };
         if text.trim().is_empty() {

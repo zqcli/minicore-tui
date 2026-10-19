@@ -639,6 +639,14 @@ impl Transcript {
         self.blocks
     }
 
+    /// Every tool card, in order.
+    pub fn tool_calls(&self) -> impl Iterator<Item = &ToolCall> {
+        self.blocks.iter().filter_map(|block| match block {
+            Block::Tool(call) => Some(call.as_ref()),
+            _ => None,
+        })
+    }
+
     pub fn find_tool_by_call_id(&self, tool_call_id: &str) -> Option<&ToolCall> {
         self.blocks.iter().find_map(|block| match block {
             Block::Tool(call) if call.key.tool_call_id == tool_call_id => Some(call.as_ref()),

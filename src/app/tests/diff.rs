@@ -214,3 +214,34 @@ async fn the_turn_diff_lists_the_newest_turn_and_tab_widens_the_scope() {
         ]
     );
 }
+
+#[tokio::test(start_paused = true)]
+async fn switching_the_theme_recolors_an_open_diff() {
+    let mut h = diff_view(vec![record("r1", "a.py", "modified")]).await;
+    h.fake.script("changes.diff", diff("a.py", &[('+', "new")]));
+    open_session_diff(&mut h);
+    h.settle().await;
+    let dark = crate::theme::Palette::dark();
+    assert_eq!(h.fg_of("+new"), dark.added);
+
+    let light = crate::theme::Palette::light();
+    h.app.palette = light;
+    assert_eq!(h.fg_of("+new"), light.added);
+    assert_ne!(dark.added, light.added);
+}
+
+#[tokio::test(start_paused = true)]
+async fn switching_the_theme_keeps_the_context_view() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.fake.script(
+        "session.context",
+        json!({"session_id": "s1", "coverage":
+            {"covered_loop_count": 6, "covered_item_count": 12, "retained_item_count": 3}}),
+    );
+    h.type_text("/context");
+    h.press(KeyCode::Enter);
+    h.settle().await;
+    h.app.palette = crate::theme::Palette::light();
+    let screen = h.screen(100, 20);
+    assert!(screen.contains("Summary covers 6 turns"), "{screen}");
+}

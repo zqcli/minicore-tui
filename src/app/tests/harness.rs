@@ -253,6 +253,22 @@ impl Harness {
         self.app.layout.cache.viewport.height
     }
 
+    /// The foreground of the first cell of `needle` on a 100x30 frame.
+    pub fn fg_of(&mut self, needle: &str) -> ratatui::style::Color {
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
+        terminal
+            .draw(|frame| crate::ui::draw(frame, &mut self.app))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        (0..30)
+            .find_map(|y| {
+                let row: String = (0..100).map(|x| buffer[(x, y)].symbol()).collect();
+                row.find(needle).map(|x| buffer[(x as u16, y)].fg)
+            })
+            .unwrap_or_else(|| panic!("{needle:?} is not on screen"))
+    }
+
     /// One frame of the whole screen as text.
     pub fn screen(&mut self, width: u16, height: u16) -> String {
         let mut terminal =

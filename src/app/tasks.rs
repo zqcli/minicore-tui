@@ -330,9 +330,8 @@ pub async fn read_diffs(
     Ok(pages)
 }
 
-/// One change record's diff, paged to the end into one page. The Agent admits
-/// few concurrent reads and other clients share them, so a capacity refusal
-/// is retried briefly.
+/// One change record's diff, paged to the end; a capacity refusal is retried
+/// briefly.
 async fn read_diff(
     client: &Client,
     session_id: &str,
