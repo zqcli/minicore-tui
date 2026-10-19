@@ -31,30 +31,18 @@ pub fn text(session: Option<&Session>, styles: Styles) -> String {
         .join("\n")
 }
 
-/// How full the context is, in percent: as the Agent reported it after the
-/// last request, else estimated against the input budget.
+/// How full the context is, in percent, as the Agent reported it for the last
+/// request. A compaction invalidates the report; history estimates exclude the
+/// summary, so they would understate it.
 pub fn percent(session: &Session) -> Option<f64> {
-    let reported = session
-        .presentation
-        .as_ref()
-        .and_then(|presentation| presentation.context.as_ref())
-        .filter(|usage| usage.tokens.is_some());
-    if let Some(usage) = reported {
-        return usage
-            .percent
-            .or_else(|| match (usage.tokens, usage.window) {
-                (Some(tokens), Some(window)) if window > 0 => {
-                    Some(tokens as f64 / window as f64 * 100.0)
-                }
-                _ => None,
-            });
-    }
-    let budget = session.context.as_ref()?.budget.as_ref()?;
-    let tokens = budget
-        .estimated_request_context_tokens
-        .or(budget.estimated_history_tokens)?;
-    let limit = budget.input_budget_tokens.filter(|limit| *limit > 0)?;
-    Some(tokens as f64 / limit as f64 * 100.0)
+    let usage = session.presentation.as_ref()?.context.as_ref()?;
+    let tokens = usage.tokens?;
+    usage.percent.or_else(|| {
+        usage
+            .window
+            .filter(|window| *window > 0)
+            .map(|window| tokens as f64 / window as f64 * 100.0)
+    })
 }
 
 /// Labels estimates as estimates and never prints an unknown number as zero.
