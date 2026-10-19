@@ -214,8 +214,23 @@ impl App {
     }
 
     fn on_waited(&mut self, result: Result<TurnWaitResult, RpcError>) {
-        let Some(wait) = self.ok(result) else {
-            return;
+        let wait = match result {
+            Ok(wait) => wait,
+            Err(error) => {
+                self.error(error);
+                // Neither the wait nor the stored result answered: end the turn
+                // as unknown rather than leave it running forever.
+                let Some(live) = self.session.as_ref().and_then(|s| s.live.as_ref()) else {
+                    return;
+                };
+                TurnWaitResult {
+                    turn: live.turn.clone(),
+                    outcome: crate::protocol::LoopOutcome::Unknown,
+                    usage: None,
+                    requests: None,
+                    tool_rounds: None,
+                }
+            }
         };
         let Some(reconcile) = self.session_mut().end_turn(&wait) else {
             return;

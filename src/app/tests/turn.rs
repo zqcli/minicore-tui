@@ -361,3 +361,33 @@ async fn the_turn_end_line_counts_changed_files_and_lines() {
         assert!(screen.contains(expected), "{expected}:\n{screen}");
     }
 }
+
+#[tokio::test(start_paused = true)]
+async fn a_lost_wait_ends_the_turn_from_its_stored_result() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.fake.script("turn.send", json!({"turn": turn("l1")}));
+    h.fake
+        .script_error("turn.wait", -32007, "turn not found", "turn_not_found");
+    h.fake.script(
+        "turn.result",
+        json!({"items": [], "next_cursor": null, "outcome": completed(), "requests": 3}),
+    );
+    h.submit("go");
+    h.settle().await;
+    assert!(!h.is_busy());
+    assert_eq!(turn_ends(&h), ["l1"]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_turn_whose_end_cannot_be_read_still_ends() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.fake.script("turn.send", json!({"turn": turn("l1")}));
+    h.fake
+        .script_error("turn.wait", -32007, "turn not found", "turn_not_found");
+    h.fake
+        .script_error("turn.result", -32007, "turn not found", "turn_not_found");
+    h.submit("go");
+    h.settle().await;
+    assert!(!h.is_busy());
+    assert_eq!(turn_ends(&h), ["l1"]);
+}

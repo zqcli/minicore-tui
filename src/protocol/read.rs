@@ -333,6 +333,11 @@ pub fn decode_item(raw: &str) -> Result<RawHistoryItem, String> {
 pub struct TurnResultPage {
     pub items: Vec<ReadChunk>,
     pub next_cursor: Option<Value>,
+    /// Absent while the turn is still running.
+    pub outcome: Option<super::LoopOutcome>,
+    pub usage: Option<super::Usage>,
+    pub requests: Option<u32>,
+    pub tool_rounds: Option<u64>,
 }
 
 #[cfg(test)]

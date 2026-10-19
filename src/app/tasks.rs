@@ -146,9 +146,31 @@ pub async fn wait_turn(client: Arc<Client>, turn: TurnRef) -> SessionOp {
             Err(error) if error.is_capacity() || error.is_busy() => {
                 tokio::time::sleep(BUSY_RETRY).await;
             }
-            result => return SessionOp::Waited(result),
+            Ok(wait) => return SessionOp::Waited(Ok(wait)),
+            // The waiter is gone but the turn may have ended: its stored result
+            // ends it, so a lost wait never leaves the turn running.
+            Err(error) => match stored_outcome(&client, &turn).await {
+                Ok(Some(wait)) => return SessionOp::Waited(Ok(wait)),
+                Ok(None) => tokio::time::sleep(BUSY_RETRY).await,
+                Err(_) => return SessionOp::Waited(Err(error)),
+            },
         }
     }
+}
+
+async fn stored_outcome(
+    client: &Client,
+    turn: &TurnRef,
+) -> Result<Option<TurnWaitResult>, RpcError> {
+    let params = json!({"session_id": turn.session_id, "loop_id": turn.loop_id, "limit": 1});
+    let page: TurnResultPage = client.call(protocol::METHOD_TURN_RESULT, &params).await?;
+    Ok(page.outcome.map(|outcome| TurnWaitResult {
+        turn: turn.clone(),
+        outcome,
+        usage: page.usage,
+        requests: page.requests,
+        tool_rounds: page.tool_rounds,
+    }))
 }
 
 /// Reads one history window. A stale pin means the history moved while it was
