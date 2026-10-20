@@ -378,7 +378,8 @@ fn expanded_title(call: &ToolCall) -> String {
 /// and exit code in its footer instead.
 fn meta(call: &ToolCall, styles: Styles, facts: bool) -> Vec<Span<'static>> {
     let mut items: Vec<Vec<Span<'static>>> = Vec::new();
-    if facts && let Some(duration) = call.duration {
+    // "0.0s" says nothing, so instant tools show no time.
+    if facts && let Some(duration) = call.duration.filter(|d| d.as_millis() >= 50) {
         items.push(vec![Span::styled(format_duration(duration), styles.meta())]);
     }
     match call.state {

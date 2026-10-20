@@ -68,7 +68,7 @@ async fn a_turn_streams_tool_facts_and_ends_on_its_wait() {
     assert!(screen.contains("1 tool"), "{screen}");
     assert!(!screen.contains("2 tools"), "{screen}");
     assert!(screen.contains("▎ $ cargo test"), "{screen}");
-    assert!(screen.contains("0.0s · exit 1"), "{screen}");
+    assert!(screen.contains("exit 1"), "{screen}");
     assert!(screen.contains("esc to interrupt"), "{screen}");
 
     h.fake.release("turn.wait");
