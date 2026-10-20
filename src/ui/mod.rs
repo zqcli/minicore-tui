@@ -8,9 +8,7 @@ pub mod markdown;
 pub mod panel;
 #[cfg(test)]
 mod perf_tests;
-pub mod picker;
 pub mod rails;
-pub mod selection;
 pub mod sheets;
 #[cfg(test)]
 pub mod snapshots;
@@ -18,13 +16,13 @@ pub mod status;
 pub mod theme;
 pub mod transcript;
 pub mod views;
-pub mod wrap;
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::text::Line;
 
 use crate::app::{App, Overlay};
+use crate::wrap;
 
 use self::theme::Styles;
 

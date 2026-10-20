@@ -14,6 +14,9 @@ mod mouse;
 mod notify;
 mod ops;
 pub mod overlay;
+pub mod picker;
+pub mod scrollbar;
+pub mod selection;
 pub mod session;
 pub mod tasks;
 pub mod templates;
@@ -42,7 +45,7 @@ use crate::transcript::layout::Layout;
 use crate::transcript::{Block, ChangeSummary};
 use crate::ui::theme::{Palette, Styles};
 use crate::ui::transcript::RenderState;
-use crate::ui::{sheets, views};
+use crate::ui::views;
 
 pub use actions::{Action, Answer};
 pub use diff::{DiffQuery, DiffScope};
@@ -195,7 +198,7 @@ pub struct App {
     pub overlay: Overlay,
     pub styles: Styles,
     /// The highlighted cells, copied when the button comes up.
-    pub selection: Option<crate::ui::selection::Drag>,
+    pub selection: Option<selection::Drag>,
     pub press: Option<Press>,
     /// The scrollbar thumb is held this many rows below its top.
     pub scrollbar_grab: Option<usize>,
@@ -203,7 +206,7 @@ pub struct App {
     pub scrolled_at: Option<tokio::time::Instant>,
     pub flash: Option<(String, tokio::time::Instant)>,
     /// The rows the last frame drew, so selection copies what is on screen.
-    pub rendered: crate::ui::selection::Screen,
+    pub rendered: selection::Screen,
     /// The transcript's line cache and viewport, owned by the renderer.
     pub layout: Layout<RenderState>,
     /// A draft waiting for the main loop to run the external editor on it.
@@ -262,7 +265,7 @@ impl App {
             scrollbar_grab: None,
             scrolled_at: None,
             flash: None,
-            rendered: crate::ui::selection::Screen::default(),
+            rendered: selection::Screen::default(),
             layout: Layout::default(),
             edit_request: None,
             loading_session: false,
@@ -309,7 +312,7 @@ impl App {
                     } = &mut self.overlay
                     {
                         rows.retain(|session| session.session_id != id);
-                        let shown = sheets::filtered_sessions(rows, filter, self.session.as_ref());
+                        let shown = overlay::filtered_sessions(rows, filter, self.session.as_ref());
                         *selected = (*selected).min(shown.len().saturating_sub(1));
                     }
                     self.notice(NoticeLevel::Info, "Session deleted");
@@ -482,16 +485,16 @@ impl App {
     }
 
     /// The drag as text, from the rows the last frame drew.
-    pub fn selected_text(&self, drag: crate::ui::selection::Drag) -> Option<String> {
-        let text = crate::ui::selection::text(&self.rendered, self.layout.viewport.area(), drag);
+    pub fn selected_text(&self, drag: selection::Drag) -> Option<String> {
+        let text = selection::text(&self.rendered, self.layout.viewport.area(), drag);
         (!text.is_empty()).then_some(text)
     }
 
     /// `c` in a view: copies what the view shows.
     pub fn copy_view(&mut self) {
         let text = match &self.overlay {
-            Overlay::Diff(diff) => views::diff::text(diff),
-            Overlay::Tool(tool) => views::tool::text(tool, self.session.as_ref()),
+            Overlay::Diff(diff) => diff::text(diff),
+            Overlay::Tool(tool) => tool::text(tool, self.session.as_ref()),
             _ => views::context::text(self.session.as_ref(), self.styles),
         };
         if text.trim().is_empty() {

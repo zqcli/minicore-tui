@@ -5,7 +5,7 @@
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
-use super::wrap;
+use crate::wrap;
 
 pub const RAIL: &str = "▎";
 

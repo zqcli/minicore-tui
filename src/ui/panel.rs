@@ -8,9 +8,9 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
-use super::picker;
 use super::theme::Styles;
-use super::wrap::{self, sanitize, width, wrap};
+use crate::app::picker;
+use crate::wrap::{self, sanitize, width, wrap};
 
 /// A sheet never shows more than this many list rows; the rest scroll.
 pub const MAX_ROWS: usize = 10;

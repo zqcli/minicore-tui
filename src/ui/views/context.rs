@@ -10,7 +10,7 @@ use crate::protocol::{CompactStatus, SessionContext, SessionPresentation};
 use super::{chrome, styled};
 use crate::ui::format_tokens;
 use crate::ui::theme::Styles;
-use crate::ui::wrap::wrap;
+use crate::wrap::wrap;
 
 /// The summary lines of the context view.
 pub fn lines(session: Option<&Session>, styles: Styles) -> Vec<Line<'static>> {

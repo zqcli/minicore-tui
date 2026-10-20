@@ -4,15 +4,17 @@
 
 use ratatui::text::{Line, Span};
 
-use crate::app::overlay::{self, matching_models};
-use crate::app::session::{InteractionKind, auto_title};
-use crate::app::{App, Overlay, Session};
+use crate::app::overlay::{
+    self, filtered_sessions, matching_models, session_label, short_session_id,
+};
+use crate::app::picker;
+use crate::app::session::InteractionKind;
+use crate::app::{App, Overlay};
 use crate::protocol::{ModelInfo, Reasoning, SessionInfo};
 
 use super::panel::{Kind, Row, Sheet, Tone, body_lines, truncate};
-use super::picker::{self, fuzzy_match};
 use super::theme::Styles;
-use super::wrap::width;
+use crate::wrap::width;
 
 /// Rows of the completion list that show at once.
 const COMPLETION_ROWS: usize = 5;
@@ -421,44 +423,6 @@ fn find_sheet(query: &str, total: usize, current: usize) -> Sheet {
         _ => format!("{} of {total}", current + 1),
     };
     Sheet::new(title, "enter next · shift+enter previous · esc close").status(status)
-}
-
-/// A session's name in the picker: its title, else (for the resident session)
-/// its first prompt, else its short id.
-pub fn session_label(info: &SessionInfo, resident: Option<&Session>) -> String {
-    let title = info
-        .title
-        .as_deref()
-        .filter(|title| !title.trim().is_empty());
-    title
-        .map(str::to_owned)
-        .or_else(|| {
-            let resident = resident.filter(|session| session.info.session_id == info.session_id)?;
-            auto_title(resident.first_prompt()?)
-        })
-        .unwrap_or_else(|| short_session_id(&info.session_id).to_owned())
-}
-
-/// `ses_8ca3c4cf...` → `ses_8ca3c4`, enough to tell sessions apart in a row.
-fn short_session_id(session_id: &str) -> &str {
-    let body = session_id.strip_prefix("ses_").unwrap_or(session_id);
-    let cut = body
-        .char_indices()
-        .nth(6)
-        .map_or(body.len(), |(index, _)| index);
-    &session_id[..session_id.len() - body.len() + cut]
-}
-
-/// The picker rows whose label fuzzy-matches `filter`, in order.
-pub fn filtered_sessions<'a>(
-    rows: &'a [SessionInfo],
-    filter: &str,
-    resident: Option<&Session>,
-) -> Vec<&'a SessionInfo> {
-    let filter = filter.trim();
-    rows.iter()
-        .filter(|info| filter.is_empty() || fuzzy_match(&session_label(info, resident), filter))
-        .collect()
 }
 
 /// What sets one sessions-picker row apart from the others.

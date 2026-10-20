@@ -6,8 +6,8 @@ use std::ops::Range;
 use ratatui::text::{Line, Span};
 
 use super::theme::Styles;
-use super::wrap;
 use crate::app::composer::Composer;
+use crate::wrap;
 
 /// The editor body is never shorter than this many rows.
 pub const MIN_ROWS: usize = 4;

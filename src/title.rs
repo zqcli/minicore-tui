@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use crate::ui::wrap;
+use crate::wrap;
 
 /// A turn must have run this long before its end or an approval rings the bell.
 const LONG_TURN: Duration = Duration::from_secs(10);

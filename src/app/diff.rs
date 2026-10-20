@@ -3,10 +3,10 @@
 use serde_json::json;
 
 use super::{App, Overlay, Panel, SessionOp, session::Session, tasks};
-use crate::protocol::changes::DiffPage;
+use crate::protocol::changes::{DiffLine, DiffPage, LineKind};
 use crate::protocol::{self, ChangeKind, ChangeList, ChangeRecord, ChangeScope, RpcError};
 use crate::transcript::{Block, Transcript};
-use crate::ui::views::{self, diff::DiffRow};
+use crate::wrap::sanitize;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DiffScope {
@@ -38,6 +38,161 @@ impl DiffScope {
 pub struct DiffQuery {
     pub scope: DiffScope,
     pub path: String,
+}
+
+/// One row of a file's diff, before it is styled.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DiffRow {
+    Blank,
+    /// Dim text: the separator between records, or why there is no diff.
+    Note(String),
+    /// `@@ -a,b +c,d @@`
+    Hunk(String),
+    /// A diff line: the dim `old new` line-number gutter, then the text.
+    Line {
+        kind: LineKind,
+        gutter: String,
+        text: String,
+    },
+}
+
+impl DiffRow {
+    /// The row as `c` copies it: without the line-number gutter.
+    fn body(&self) -> String {
+        match self {
+            Self::Blank => String::new(),
+            Self::Note(text) | Self::Hunk(text) => text.clone(),
+            Self::Line { kind, text, .. } => format!("{}{text}", sign(*kind)),
+        }
+    }
+}
+
+pub fn sign(kind: LineKind) -> &'static str {
+    match kind {
+        LineKind::Added => "+",
+        LineKind::Removed => "-",
+        LineKind::Context | LineKind::Unknown => " ",
+    }
+}
+
+/// The text of the diff view: the file's path, then its rows.
+pub fn text(diff: &DiffState) -> String {
+    let mut out = String::new();
+    if let Some(file) = diff.current() {
+        out.push_str(&file.path);
+        out.push('\n');
+    }
+    for row in &diff.rows {
+        out.push_str(&row.body());
+        out.push('\n');
+    }
+    out
+}
+
+/// Rows for every change record of one file, told apart by a separator naming the tool.
+pub fn rows(pages: &[DiffPage], tools: &[Option<String>]) -> Vec<DiffRow> {
+    if pages.len() <= 1 {
+        return match pages.first() {
+            Some(page) => hunk_rows(page),
+            None => vec![DiffRow::Note("No differences.".into())],
+        };
+    }
+    let mut rows = Vec::new();
+    for (index, page) in pages.iter().enumerate() {
+        let position = format!("change {} of {}", index + 1, pages.len());
+        let label = match tools.get(index).and_then(Option::as_deref) {
+            Some(tool) => format!("── {tool} · {position} ──"),
+            None => format!("── {position} ──"),
+        };
+        if index > 0 {
+            rows.push(DiffRow::Blank);
+        }
+        rows.push(DiffRow::Note(label));
+        rows.extend(hunk_rows(page));
+    }
+    rows
+}
+
+/// Turns one `changes.diff` page into rows.
+pub(crate) fn hunk_rows(page: &DiffPage) -> Vec<DiffRow> {
+    if page.binary {
+        return vec![DiffRow::Note("Binary file: the diff is not shown.".into())];
+    }
+    if page.hunks.is_empty() {
+        let note = match page.availability.as_deref() {
+            Some("unavailable") => "The original content is unavailable for this change.",
+            Some("partial") => "Only part of this diff is available.",
+            _ => "No differences.",
+        };
+        return vec![DiffRow::Note(note.into())];
+    }
+    let digits = page
+        .hunks
+        .iter()
+        .flat_map(|hunk| {
+            [
+                hunk.old_start + hunk.old_count,
+                hunk.new_start + hunk.new_count,
+            ]
+        })
+        .max()
+        .unwrap_or(0)
+        .to_string()
+        .len();
+    let mut rows = Vec::new();
+    for hunk in &page.hunks {
+        rows.push(DiffRow::Hunk(format!(
+            "@@ -{},{} +{},{} @@",
+            unified_start(hunk.old_start, hunk.old_count),
+            hunk.old_count,
+            unified_start(hunk.new_start, hunk.new_count),
+            hunk.new_count
+        )));
+        // A long line arrives as several fragments; only the last one is
+        // `line_complete`. They are joined back into one row.
+        let mut pending: Option<(&DiffLine, String)> = None;
+        for line in &hunk.lines {
+            let (first, text) = match pending.take() {
+                Some((first, mut text)) => {
+                    text.push_str(&line.text);
+                    (first, text)
+                }
+                None => (line, line.text.clone()),
+            };
+            if line.line_complete {
+                rows.push(diff_row(first, &text, digits));
+            } else {
+                pending = Some((first, text));
+            }
+        }
+        if let Some((first, text)) = pending {
+            rows.push(diff_row(first, &text, digits));
+        }
+    }
+    if !page.complete {
+        rows.push(DiffRow::Note("… the diff continues".into()));
+    }
+    rows
+}
+
+/// A hunk start as unified diff prints it: the first line's 1-based number, or
+/// the line before an empty range.
+fn unified_start(start: u64, count: u64) -> u64 {
+    if count > 0 { start + 1 } else { start }
+}
+
+fn diff_row(line: &DiffLine, text: &str, digits: usize) -> DiffRow {
+    let number = |index: Option<u64>| index.map_or(String::new(), |index| (index + 1).to_string());
+    // Diff text carries the original line terminator; the row already ends.
+    DiffRow::Line {
+        kind: line.kind,
+        gutter: format!(
+            "{:>digits$} {:>digits$} ",
+            number(line.old_index),
+            number(line.new_index)
+        ),
+        text: sanitize(text.trim_end_matches(['\n', '\r'])).into_owned(),
+    }
 }
 
 /// One selectable file in a diff.
@@ -307,7 +462,7 @@ impl App {
                             Some(call.name.clone())
                         })
                         .collect();
-                    diff.rows = views::diff::rows(&pages, &tools);
+                    diff.rows = rows(&pages, &tools);
                     diff.scroll = 0;
                     // Records with equal before and after content have no hunks.
                     let unchanged = pages

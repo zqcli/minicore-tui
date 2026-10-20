@@ -3,10 +3,29 @@
 use serde_json::json;
 
 use super::tasks::StreamText;
-use super::{App, NoticeLevel, Overlay, Panel, Scroll, SessionOp, tasks};
+use super::{App, NoticeLevel, Overlay, Panel, Scroll, Session, SessionOp, tasks};
 use crate::protocol::{self, RpcError, ToolReadResult, ToolRef};
-use crate::transcript::Block;
-use crate::ui::views::{self, tool::ToolRow};
+use crate::transcript::{Block, ToolCall};
+use crate::wrap::sanitize;
+
+/// One row of the tool view's output, before it is styled.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ToolRow {
+    Text(String),
+    /// The heading of a stream: `── stderr ──`.
+    Section(String),
+    Note(&'static str),
+}
+
+impl ToolRow {
+    pub fn text(&self) -> String {
+        match self {
+            Self::Text(text) => text.clone(),
+            Self::Section(name) => format!("── {name} ──"),
+            Self::Note(note) => (*note).to_owned(),
+        }
+    }
+}
 
 /// The open tool view. Its header and input are read from the card when drawn;
 /// the output starts as the card's tail until the full streams arrive.
@@ -37,7 +56,7 @@ impl ToolView {
         };
         slot.1 = Some(text);
         if self.streams.iter().all(|(_, text)| text.is_some()) {
-            self.rows = views::tool::stream_rows(&self.streams);
+            self.rows = stream_rows(&self.streams);
             self.status.clear();
             self.scroll = self.scroll.min(self.rows.len().saturating_sub(1));
         }
@@ -64,7 +83,7 @@ impl App {
             });
         }
         Some(ToolView {
-            rows: views::tool::text_rows(&call.output.join("\n")),
+            rows: text_rows(&call.output.join("\n")),
             streams: streams
                 .iter()
                 .map(|stream| ((*stream).to_owned(), None))
@@ -157,6 +176,72 @@ impl App {
     }
 }
 
+/// The lines of plain text as rows, made safe for the terminal.
+pub fn text_rows(text: &str) -> Vec<ToolRow> {
+    text.lines()
+        .map(|line| ToolRow::Text(sanitize(line).into_owned()))
+        .collect()
+}
+
+/// The rows of the answered streams, each under a heading when there are several.
+pub fn stream_rows(streams: &[(String, Option<StreamText>)]) -> Vec<ToolRow> {
+    let sections = streams.len() > 1;
+    let mut rows = Vec::new();
+    for (name, text) in streams {
+        let Some(text) = text else { continue };
+        let body = text_rows(&text.text);
+        let noted = text.dropped_head || text.expired || text.cut;
+        if body.is_empty() && !noted {
+            continue;
+        }
+        if sections {
+            if !rows.is_empty() {
+                rows.push(ToolRow::Text(String::new()));
+            }
+            rows.push(ToolRow::Section(name.clone()));
+        }
+        if text.dropped_head {
+            rows.push(ToolRow::Note("… earlier output is no longer retained"));
+        }
+        if text.expired && body.is_empty() {
+            rows.push(ToolRow::Note("… this output has expired from the agent"));
+        }
+        rows.extend(body);
+        if text.cut {
+            rows.push(ToolRow::Note("… cut at 1 MiB"));
+        }
+    }
+    rows
+}
+
+/// The call's input: a bash command always, since the detail is a summary
+/// that can name another one; any other input only when it adds to the detail.
+pub fn tool_input(call: &ToolCall) -> &str {
+    let input = call.expanded_input.as_deref().unwrap_or_default();
+    if call.name == "bash" || input.trim() != call.detail.trim() {
+        input
+    } else {
+        ""
+    }
+}
+
+/// The text of the tool view, input then output, for `c`.
+pub fn text(tool: &ToolView, session: Option<&Session>) -> String {
+    let input = session
+        .and_then(|session| session.transcript.find_tool(&tool.key))
+        .map_or("", tool_input);
+    let mut out = String::new();
+    for line in input
+        .lines()
+        .map(str::to_owned)
+        .chain(tool.rows.iter().map(ToolRow::text))
+    {
+        out.push_str(&line);
+        out.push('\n');
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -187,7 +272,7 @@ mod tests {
     }
 
     fn shown(state: &ToolView) -> String {
-        views::tool::text(state, None)
+        text(state, None)
     }
 
     #[test]
@@ -210,7 +295,7 @@ mod tests {
             1,
         );
         session.transcript.push(Block::Tool(Box::new(call)));
-        let shown = views::tool::text(&state(&[]), Some(&session));
+        let shown = text(&state(&[]), Some(&session));
         assert_eq!(shown, "git diff -- README.md\ntail\n");
         // Equal to the detail apart from the prompt is still the command.
         let Some(Block::Tool(call)) = session.transcript.block_mut(0) else {
@@ -218,7 +303,7 @@ mod tests {
         };
         call.detail = "git diff -- README.md".into();
         assert_eq!(
-            views::tool::text(&state(&[]), Some(&session)),
+            text(&state(&[]), Some(&session)),
             "git diff -- README.md\ntail\n"
         );
     }

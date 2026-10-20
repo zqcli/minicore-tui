@@ -180,7 +180,7 @@ pub fn filter<'a>(input: &str, templates: &'a [Template]) -> Vec<Command<'a>> {
         .iter()
         .copied()
         .chain(templates.iter().map(Template::command))
-        .filter(|command| crate::ui::picker::fuzzy_match(command.name, input))
+        .filter(|command| crate::app::picker::fuzzy_match(command.name, input))
         .collect();
     matches.sort_by_key(|command| (command.name != input, !command.name.starts_with(input)));
     matches

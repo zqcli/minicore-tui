@@ -9,11 +9,11 @@ use super::markdown;
 use super::rails::{fill, indent, rail_row, surface_row};
 use super::status::spinner;
 use super::theme::Styles;
-use super::wrap;
 use crate::protocol::read::UserKind;
 use crate::transcript::layout::Fold;
 use crate::transcript::{Block, ToolCall};
 use crate::transcript::{TRUNCATED_MARKER, ToolState};
+use crate::wrap;
 
 /// Columns before block text: the rail and one pad cell.
 pub const INSET: usize = 2;
@@ -1339,7 +1339,7 @@ mod tests {
             for width in 3..12 {
                 for line in render(&block, styles(), width, fold()) {
                     assert!(
-                        crate::ui::wrap::width(&line.to_string()) <= width as usize,
+                        crate::wrap::width(&line.to_string()) <= width as usize,
                         "{:?} at width {width}: {line:?}",
                         block.loop_id()
                     );

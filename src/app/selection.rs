@@ -7,7 +7,7 @@ use std::ops::Range;
 use ratatui::layout::Rect;
 use unicode_segmentation::UnicodeSegmentation;
 
-use super::wrap::width;
+use crate::wrap::width;
 
 /// Two terminal cells, in drawing order; both ends are selected.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

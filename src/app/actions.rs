@@ -306,7 +306,7 @@ impl App {
             .position(|model| model.id == session.info.model);
         let delta = if forward { 1 } else { -1 };
         let next = at.map_or(0, |at| {
-            crate::ui::picker::step(at, delta, self.models.len())
+            crate::app::picker::step(at, delta, self.models.len())
         });
         self.update_session(json!({ "model": self.models[next].id }));
     }

@@ -303,7 +303,7 @@ fn the_footer_names_the_branch_and_right_aligns_the_totals() {
         footer.ends_with("↑50.5k ↓1.8k R33.8k · ctx 41.00%"),
         "{footer}"
     );
-    assert_eq!(crate::ui::wrap::width(footer), 100, "flush right: {footer}");
+    assert_eq!(crate::wrap::width(footer), 100, "flush right: {footer}");
     // On a narrow terminal the directory is cut first, then dropped; the
     // model and level stay.
     for (columns, identity) in [(60_u16, " ▸ mini…"), (50, " gpt")] {
@@ -312,11 +312,7 @@ fn the_footer_names_the_branch_and_right_aligns_the_totals() {
         assert!(footer.starts_with(identity), "{footer}");
         assert!(footer.contains("gpt 6 luna · max"), "{footer}");
         assert!(footer.ends_with("ctx 41.00%"), "{footer}");
-        assert_eq!(
-            crate::ui::wrap::width(footer),
-            usize::from(columns),
-            "{footer}"
-        );
+        assert_eq!(crate::wrap::width(footer), usize::from(columns), "{footer}");
     }
 }
 
@@ -420,7 +416,7 @@ fn a_narrow_terminal_keeps_every_row_within_the_width() {
     let rendered = render(&mut app, 30, 24);
     for line in rendered.lines() {
         assert!(
-            crate::ui::wrap::width(line) <= 30,
+            crate::wrap::width(line) <= 30,
             "a row exceeds the terminal width: {line:?}"
         );
     }
@@ -742,7 +738,7 @@ fn the_scrollbar_shows_after_a_scroll_and_its_track_jumps() {
     left(app, Down, 69, area.y);
     let view = app.layout.viewport;
     let (_, len) =
-        crate::ui::transcript::thumb(view.height, app.layout.total_rows(), view.top).unwrap();
+        crate::app::scrollbar::thumb(view.height, app.layout.total_rows(), view.top).unwrap();
     assert_eq!(
         app.scrollbar_grab,
         Some(len / 2),

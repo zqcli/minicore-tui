@@ -5,10 +5,11 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde_json::json;
 
 use super::diff::DiffState;
+use super::session::auto_title;
 use super::tool::ToolView;
-use super::{App, DiffScope, Msg, NoticeLevel, SessionOp, commands, find, tasks};
+use super::{App, DiffScope, Msg, NoticeLevel, Session, SessionOp, commands, find, tasks};
+use crate::app::picker::fuzzy_match;
 use crate::protocol::{self, FilesPage, ModelInfo, RpcError, SessionInfo, ToolRef};
-use crate::ui::picker::fuzzy_match;
 use crate::ui::sheets;
 
 #[derive(Debug)]
@@ -104,6 +105,44 @@ pub fn matching_models<'a>(models: &'a [ModelInfo], filter: &str) -> Vec<&'a Mod
     models
         .iter()
         .filter(|model| fuzzy_match(&model.id, filter.trim()))
+        .collect()
+}
+
+/// A session's name in the picker: its title, else (for the resident session)
+/// its first prompt, else its short id.
+pub fn session_label(info: &SessionInfo, resident: Option<&Session>) -> String {
+    let title = info
+        .title
+        .as_deref()
+        .filter(|title| !title.trim().is_empty());
+    title
+        .map(str::to_owned)
+        .or_else(|| {
+            let resident = resident.filter(|session| session.info.session_id == info.session_id)?;
+            auto_title(resident.first_prompt()?)
+        })
+        .unwrap_or_else(|| short_session_id(&info.session_id).to_owned())
+}
+
+/// `ses_8ca3c4cf...` → `ses_8ca3c4`, enough to tell sessions apart in a row.
+pub fn short_session_id(session_id: &str) -> &str {
+    let body = session_id.strip_prefix("ses_").unwrap_or(session_id);
+    let cut = body
+        .char_indices()
+        .nth(6)
+        .map_or(body.len(), |(index, _)| index);
+    &session_id[..session_id.len() - body.len() + cut]
+}
+
+/// The picker rows whose label fuzzy-matches `filter`, in order.
+pub fn filtered_sessions<'a>(
+    rows: &'a [SessionInfo],
+    filter: &str,
+    resident: Option<&Session>,
+) -> Vec<&'a SessionInfo> {
+    let filter = filter.trim();
+    rows.iter()
+        .filter(|info| filter.is_empty() || fuzzy_match(&session_label(info, resident), filter))
         .collect()
 }
 
@@ -276,7 +315,7 @@ impl App {
         else {
             return;
         };
-        let shown = sheets::filtered_sessions(rows, filter, self.session.as_ref());
+        let shown = filtered_sessions(rows, filter, self.session.as_ref());
         if let Some(info) = shown.get(*selected) {
             *renaming = Some(info.title.clone().unwrap_or_default());
         }
@@ -297,7 +336,7 @@ impl App {
         match key.code {
             KeyCode::Enter => {
                 let title = std::mem::take(title);
-                let shown = sheets::filtered_sessions(rows, filter, self.session.as_ref());
+                let shown = filtered_sessions(rows, filter, self.session.as_ref());
                 let id = shown.get(*selected).map(|info| info.session_id.clone());
                 if let Overlay::Sessions { renaming, .. } = &mut self.overlay {
                     *renaming = None;

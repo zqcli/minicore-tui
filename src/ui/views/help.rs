@@ -8,7 +8,7 @@ use crate::app::commands::Command;
 
 use super::{chrome, styled};
 use crate::ui::theme::Styles;
-use crate::ui::wrap::wrap;
+use crate::wrap::wrap;
 
 struct KeyRow {
     keys: &'static str,
@@ -211,7 +211,7 @@ mod tests {
     use super::*;
     use crate::app::commands::COMMANDS;
     use crate::ui::theme::Palette;
-    use crate::ui::wrap::width as cells;
+    use crate::wrap::width as cells;
 
     fn styles() -> Styles {
         Styles::of(Palette::dark())

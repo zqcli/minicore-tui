@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::prompt_history::{self, Record};
-use crate::ui::wrap;
+use crate::wrap;
 
 /// Pastes of more lines or characters than these become a chip.
 const TOKEN_LINES: usize = 10;

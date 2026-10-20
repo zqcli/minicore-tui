@@ -4,8 +4,9 @@
 use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
 use super::{App, DOUBLE_CLICK, Overlay, Panel, Press, Scroll};
+use super::{scrollbar, selection};
 use crate::transcript::Block;
-use crate::ui::{blocks, selection, transcript};
+use crate::ui::blocks;
 
 impl App {
     /// Mouse: wheel scrolling, the scrollbar, click-to-open, and drag, word or
@@ -113,7 +114,7 @@ impl App {
         };
         let cells = match clicks {
             2 => word.clone(),
-            3 => Some(0..crate::ui::wrap::width(text.trim_end()) as u16),
+            3 => Some(0..crate::wrap::width(text.trim_end()) as u16),
             _ => None,
         };
         self.selection = cells
@@ -153,7 +154,7 @@ impl App {
         let area = viewport.area();
         let on_bar = column + 1 == area.right() && row >= area.y && row < area.bottom();
         on_bar
-            .then(|| transcript::thumb(viewport.height, self.layout.total_rows(), viewport.top))
+            .then(|| scrollbar::thumb(viewport.height, self.layout.total_rows(), viewport.top))
             .flatten()
     }
 
@@ -161,11 +162,11 @@ impl App {
     fn drag_scrollbar(&mut self, row: u16, grab: usize) {
         let viewport = self.layout.viewport;
         let total = self.layout.total_rows();
-        let Some((_, len)) = transcript::thumb(viewport.height, total, viewport.top) else {
+        let Some((_, len)) = scrollbar::thumb(viewport.height, total, viewport.top) else {
             return;
         };
         let first = row as isize - viewport.origin.1 as isize - grab as isize;
-        self.scroll_to(transcript::thumb_top(viewport.height, total, len, first));
+        self.scroll_to(scrollbar::thumb_top(viewport.height, total, len, first));
     }
 
     /// Whether `cell` is on the jump label, which shows while the view is
@@ -177,7 +178,7 @@ impl App {
             && row + 1 == area.bottom()
             && column
                 .checked_sub(area.x)
-                .is_some_and(|column| transcript::jump_label(area.width).contains(&column))
+                .is_some_and(|column| scrollbar::jump_label(area.width).contains(&column))
     }
 
     /// A click: the jump label follows the tail again, a card or a thinking row

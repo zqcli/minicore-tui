@@ -6,7 +6,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use super::theme::Styles;
-use super::wrap;
+use crate::wrap;
 
 mod stream;
 
