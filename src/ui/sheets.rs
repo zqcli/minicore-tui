@@ -43,6 +43,12 @@ pub fn sheet(app: &App, styles: Styles) -> Option<Sheet> {
     })
 }
 
+/// Rows of the inline completion list (commands, `@` files) shown inside the
+/// composer band, as content only: the band adds the gutter, rail and tint.
+pub fn completion(_app: &App, _styles: Styles, _width: u16) -> Option<Vec<Line<'static>>> {
+    None
+}
+
 fn palette_sheet(filter: &str, selected: usize) -> Sheet {
     let rows = commands::filter(filter)
         .into_iter()
