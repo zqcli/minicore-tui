@@ -18,8 +18,8 @@ use super::markdown::StreamRenderer;
 use super::theme::Styles;
 use super::{blocks, selection, views};
 use crate::app::{App, Scroll};
-use crate::transcript::Block;
 use crate::transcript::layout::{Fold, Viewport};
+use crate::transcript::{Block, RequestKey};
 
 /// Composited on the last row while the view is detached from the tail.
 pub const JUMP_LABEL: &str = " ↓ Jump to latest message · End ";
@@ -34,11 +34,11 @@ const HEADER_HINTS: &[(&str, &str)] = &[
     ("ctrl+r", "sessions"),
 ];
 
-/// Streaming markdown renderers of live assistant blocks, by transcript
-/// position. Each caches its stable prefix, so a delta re-parses only the tail.
+/// Streaming markdown renderers of live assistant blocks, by request. Each
+/// caches its stable prefix, so a delta re-parses only the tail.
 #[derive(Default)]
 pub struct RenderState {
-    streams: HashMap<usize, Stream>,
+    streams: HashMap<RequestKey, Stream>,
     /// What the streams were rendered for; any change restarts them.
     key: Option<(u16, Fold, Styles)>,
     /// Rows of the welcome header cached in front of block 0.
@@ -56,29 +56,31 @@ impl RenderState {
             self.key = Some(key);
             self.streams.clear();
         }
-        self.streams
-            .retain(|index, _| blocks.get(*index).is_some_and(Block::is_streaming));
+        // Live blocks sit at the end, so a match is found after a few steps.
+        self.streams.retain(|key, _| {
+            blocks.iter().rev().any(|block| {
+                matches!(block, Block::Assistant { key: live, streaming: true, .. } if live == key)
+            })
+        });
     }
 
     fn render(
         &mut self,
-        index: usize,
         block: &Block,
         (width, fold, styles): (u16, Fold, Styles),
     ) -> Vec<Line<'static>> {
         let Block::Assistant {
+            key,
             reasoning,
             text,
             streaming: true,
             expanded,
-            ..
         } = block
         else {
-            self.streams.remove(&index);
             return blocks::render(block, styles, width, fold);
         };
         let inner = blocks::text_width(width as usize);
-        let stream = self.streams.entry(index).or_insert_with(|| Stream {
+        let stream = self.streams.entry(key.clone()).or_insert_with(|| Stream {
             text: StreamRenderer::new(inner, styles.text()),
             reasoning: StreamRenderer::new(inner, blocks::thinking_style(styles)),
         });
@@ -145,8 +147,8 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, styles: Styles) {
         // The header rides in front of block 0, so it scrolls and anchors with
         // the transcript without being a block.
         |state, index, block| match index {
-            0 => [header.clone(), state.render(index, block, key)].concat(),
-            _ => state.render(index, block, key),
+            0 => [header.clone(), state.render(block, key)].concat(),
+            _ => state.render(block, key),
         },
     );
     let total = layout.total_rows();
@@ -364,6 +366,39 @@ mod tests {
             .iter()
             .map(|span| span.content.as_ref())
             .collect()
+    }
+
+    #[test]
+    fn a_stream_follows_its_request_when_the_blocks_around_it_move() {
+        use crate::ui::theme::Palette;
+        let live = |request_index, text: &str| Block::Assistant {
+            key: RequestKey {
+                loop_id: "l".into(),
+                request_index,
+            },
+            reasoning: String::new(),
+            text: text.into(),
+            streaming: true,
+            expanded: None,
+        };
+        let fold = Fold {
+            expanded: false,
+            show_reasoning: true,
+        };
+        let key = (60, fold, Styles::of(Palette::dark()));
+        let first = live(0, "one\n\ntwo is long enough to leave a prefix\n\nthree");
+        let second = live(1, "beta");
+        let mut state = RenderState::default();
+        state.prepare(key, &[first.clone(), second.clone()]);
+        state.render(&first, key);
+        state.render(&second, key);
+        state.prepare(key, std::slice::from_ref(&second));
+        let rows =
+            |lines: Vec<Line<'static>>| lines.iter().map(Line::to_string).collect::<Vec<_>>();
+        assert_eq!(
+            rows(state.render(&second, key)),
+            rows(blocks::render(&second, key.2, 60, fold))
+        );
     }
 
     #[test]

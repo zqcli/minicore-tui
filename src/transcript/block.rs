@@ -1,6 +1,7 @@
 //! The transcript data model: ordered blocks, tool calls, and the operations
 //! that apply Agent events and history items to them.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::protocol::event::{CommandResult, ProcessChunk, ProcessStream};
@@ -536,12 +537,18 @@ fn split_bash_result(content: &str) -> Option<(Option<i64>, &str, &str)> {
     Some((code.trim().parse().ok(), stdout, stderr))
 }
 
+/// Revisions come from one counter, so no two blocks of any session share one and
+/// the layout cache can follow a block that moved.
+fn next_revision() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
 /// Ordered blocks, each with a revision that changes on every mutation and keys the layout cache.
 #[derive(Clone, Debug, Default)]
 pub struct Transcript {
     blocks: Vec<Block>,
     revisions: Vec<u64>,
-    next_revision: u64,
 }
 
 impl Transcript {
@@ -554,9 +561,8 @@ impl Transcript {
     }
 
     fn bump(&mut self, index: usize) {
-        self.next_revision += 1;
         if let Some(revision) = self.revisions.get_mut(index) {
-            *revision = self.next_revision;
+            *revision = next_revision();
         }
     }
 
@@ -569,17 +575,15 @@ impl Transcript {
     }
 
     pub fn push(&mut self, block: Block) -> usize {
-        self.next_revision += 1;
         self.blocks.push(block);
-        self.revisions.push(self.next_revision);
+        self.revisions.push(next_revision());
         self.blocks.len() - 1
     }
 
     pub fn insert(&mut self, index: usize, block: Block) {
         let index = index.min(self.blocks.len());
-        self.next_revision += 1;
         self.blocks.insert(index, block);
-        self.revisions.insert(index, self.next_revision);
+        self.revisions.insert(index, next_revision());
     }
 
     pub fn clear(&mut self) {
@@ -658,7 +662,6 @@ impl Transcript {
         ) {
             Some(index) => index,
             None => {
-                self.next_revision += 1;
                 self.blocks.push(Block::Assistant {
                     key: key.clone(),
                     reasoning: String::new(),
@@ -666,7 +669,7 @@ impl Transcript {
                     streaming: true,
                     expanded: None,
                 });
-                self.revisions.push(self.next_revision);
+                self.revisions.push(next_revision());
                 self.blocks.len() - 1
             }
         };
@@ -1203,6 +1206,21 @@ mod tests {
             kind: UserKind::Prompt,
         });
         assert_eq!(transcript.last_answer(), None);
+    }
+
+    #[test]
+    fn two_transcripts_never_share_a_revision() {
+        let user = || Block::User {
+            text: "a".into(),
+            kind: UserKind::Prompt,
+        };
+        let mut first = Transcript::default();
+        let mut second = Transcript::default();
+        first.push(user());
+        second.push(user());
+        assert_ne!(first.revisions(), second.revisions());
+        first.block_mut(0);
+        assert_ne!(first.revisions(), second.revisions());
     }
 }
 

@@ -543,3 +543,20 @@ async fn slash_tool_opens_a_card_and_brackets_step_between_cards() {
         "the card at the top of the view"
     );
 }
+
+#[tokio::test(start_paused = true)]
+async fn pointer_motion_asks_for_a_redraw_only_over_the_scrollbar() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    conversation(&mut h, 12);
+    h.screen(60, 24);
+    let moved = |h: &mut Harness, column| {
+        h.app.on_mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            column,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        })
+    };
+    assert!(!moved(&mut h, 20), "motion over text changes nothing");
+    assert!(moved(&mut h, 59), "motion over the scrollbar shows it");
+}

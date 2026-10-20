@@ -598,8 +598,9 @@ impl App {
     }
 
     /// Mouse: wheel scrolling, the scrollbar, click-to-open, and drag, word or
-    /// line selection that copies on release.
-    pub fn on_mouse(&mut self, mouse: MouseEvent) {
+    /// line selection that copies on release. Returns whether the screen may
+    /// have changed; plain pointer motion elsewhere does not.
+    pub fn on_mouse(&mut self, mouse: MouseEvent) -> bool {
         let cell = (mouse.column, mouse.row);
         // A full-screen view hides the transcript the press would land on.
         let view = matches!(
@@ -624,12 +625,15 @@ impl App {
                     Overlay::Diff(_) | Overlay::Tool(_) => self.scroll_view(delta),
                     _ => self.overlay_move(delta.signum()),
                 }
+                true
             }
-            _ if view => {}
+            _ if view => false,
             MouseEventKind::Moved => {
-                if self.scrollbar_thumb(cell).is_some() {
+                let on_thumb = self.scrollbar_thumb(cell).is_some();
+                if on_thumb {
                     self.scrolled_at = Some(tokio::time::Instant::now());
                 }
+                on_thumb
             }
             MouseEventKind::Down(MouseButton::Left) => {
                 if let Some((start, len)) = self.scrollbar_thumb(cell) {
@@ -644,6 +648,7 @@ impl App {
                 } else {
                     self.press_at(cell);
                 }
+                true
             }
             MouseEventKind::Drag(MouseButton::Left) => {
                 if let Some(grab) = self.scrollbar_grab {
@@ -651,11 +656,12 @@ impl App {
                 } else {
                     self.extend_selection(cell);
                 }
+                true
             }
             MouseEventKind::Up(MouseButton::Left) => {
                 if self.scrollbar_grab.take().is_some() {
                     self.scrolled_at = Some(tokio::time::Instant::now());
-                    return;
+                    return true;
                 }
                 self.extend_selection(cell);
                 if let Some(drag) = self.selection {
@@ -667,8 +673,9 @@ impl App {
                 {
                     self.click_transcript(cell);
                 }
+                true
             }
-            _ => {}
+            _ => false,
         }
     }
 

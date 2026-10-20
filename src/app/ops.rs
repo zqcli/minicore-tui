@@ -105,6 +105,7 @@ impl App {
         self.merge_catalog_info(info.clone());
         let epoch = self.session.as_ref().map_or(0, |old| old.epoch) + 1;
         self.session = Some(Session::new(info, epoch));
+        self.layout.clear();
         self.scroll = Scroll::Follow;
         self.waiting_for_compaction = false;
         self.read_history(Window::Tail);

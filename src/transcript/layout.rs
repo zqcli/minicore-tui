@@ -1,15 +1,17 @@
 //! Per-block line cache, prefix heights, viewport and scroll anchoring. A block
-//! re-renders only when its revision, the width or the fold flags change, and a
-//! frame reads only the visible rows.
+//! re-renders only when its revision, the width or a fold flag it depends on
+//! changes, and a frame reads only the visible rows.
 
+use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use ratatui::layout::Rect;
 use ratatui::text::Line;
 
 use super::Block;
 
-/// The render inputs that invalidate the whole cache.
+/// The render inputs that only some blocks depend on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Fold {
     /// Ctrl+O: tool cards, thinking and compaction summaries open.
@@ -18,10 +20,66 @@ pub struct Fold {
     pub show_reasoning: bool,
 }
 
+/// Which fold flags a block's rows were built from.
+#[derive(Clone, Copy, Debug)]
+struct Uses {
+    expanded: bool,
+    show_reasoning: bool,
+}
+
+impl Uses {
+    fn of(block: &Block) -> Self {
+        match block {
+            Block::Assistant {
+                reasoning,
+                expanded,
+                ..
+            } => {
+                let thinking = !reasoning.trim().is_empty();
+                Self {
+                    expanded: thinking && expanded.is_none(),
+                    show_reasoning: thinking,
+                }
+            }
+            Block::Tool(call) => Self {
+                expanded: call.expanded.is_none(),
+                show_reasoning: false,
+            },
+            Block::Compaction { .. } => Self {
+                expanded: true,
+                show_reasoning: false,
+            },
+            _ => Self {
+                expanded: false,
+                show_reasoning: false,
+            },
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 struct Cached {
     revision: u64,
+    /// The fold the rows were built under, and the part of it they read.
+    fold: Fold,
+    uses: Uses,
     lines: Arc<[Line<'static>]>,
+}
+
+impl Cached {
+    fn is_current(&self, revision: u64, fold: Fold) -> bool {
+        self.revision == revision
+            && !(self.uses.expanded && self.fold.expanded != fold.expanded)
+            && !(self.uses.show_reasoning && self.fold.show_reasoning != fold.show_reasoning)
+    }
+}
+
+/// Work done by `prepare`, for the exit report under `MINICORE_TUI_PERF_STATS`.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Stats {
+    pub blocks_rendered: u64,
+    pub rows_rendered: u64,
+    pub prepare_max: Duration,
 }
 
 /// Where the transcript was last drawn: absolute screen rows map to layout
@@ -50,13 +108,11 @@ pub struct Layout<S = ()> {
     /// is the total height. Empty until the first successful prepare.
     prefix: Vec<usize>,
     width: u16,
-    fold: Option<Fold>,
-    /// Set when the block vector no longer lines up with the cache.
-    invalid: bool,
     /// Renderer state the cache hands to the render callback, never inspects.
     pub state: S,
     /// The last drawn window, for selection and scrolling.
     pub viewport: Viewport,
+    pub stats: Stats,
 }
 
 impl<S: Default> Default for Layout<S> {
@@ -65,23 +121,24 @@ impl<S: Default> Default for Layout<S> {
             cached: Vec::new(),
             prefix: Vec::new(),
             width: 0,
-            fold: None,
-            invalid: true,
             state: S::default(),
             viewport: Viewport::default(),
+            stats: Stats::default(),
         }
     }
 }
 
 impl<S> Layout<S> {
-    /// Drops every cached block, for changes the cache key cannot see (theme).
+    /// Drops every cached block, for changes the cache key cannot see (theme, a
+    /// different session).
     pub fn clear(&mut self) {
         self.cached.clear();
-        self.invalid = true;
+        self.prefix.clear();
     }
 
     /// Brings the cache up to date. `render_block` runs only for blocks that
-    /// changed or are new.
+    /// are new or changed. A block is found again by its revision wherever it
+    /// moved to, except across the first position, which carries no separator.
     pub fn prepare<F>(
         &mut self,
         blocks: &[Block],
@@ -92,25 +149,31 @@ impl<S> Layout<S> {
     ) where
         F: FnMut(&mut S, usize, &Block) -> Vec<Line<'static>>,
     {
-        if self.width != width || self.fold != Some(fold) {
+        let started = Instant::now();
+        if self.width != width {
             self.width = width;
-            self.fold = Some(fold);
-            self.cached.clear();
-            self.invalid = true;
+            self.clear();
         }
-        if self.cached.len() > blocks.len() {
-            // Blocks were removed or spliced; positions after the change are no
-            // longer comparable.
-            self.cached.truncate(blocks.len());
-            self.invalid = true;
-        }
-        let mut first_changed = usize::MAX;
-        for (index, block) in blocks.iter().enumerate() {
-            let unchanged = self
-                .cached
-                .get(index)
-                .is_some_and(|cached| !self.invalid && cached.revision == revisions[index]);
-            if unchanged {
+        let kept = self
+            .cached
+            .iter()
+            .zip(revisions)
+            .take_while(|(cached, revision)| cached.is_current(**revision, fold))
+            .count();
+        let moved = self.cached.split_off(kept);
+        let by_revision: HashMap<u64, &Cached> = moved
+            .iter()
+            .enumerate()
+            .filter(|(offset, _)| kept + offset > 0)
+            .map(|(_, cached)| (cached.revision, cached))
+            .collect();
+        for (index, block) in blocks.iter().enumerate().skip(kept) {
+            let revision = revisions[index];
+            let reused = by_revision
+                .get(&revision)
+                .filter(|cached| index > 0 && cached.is_current(revision, fold));
+            if let Some(cached) = reused {
+                self.cached.push((*cached).clone());
                 continue;
             }
             let lines = render_block(&mut self.state, index, block);
@@ -127,22 +190,19 @@ impl<S> Layout<S> {
             if lines.is_empty() {
                 lines.push(Line::raw(""));
             }
-            let entry = Cached {
-                revision: revisions[index],
+            self.stats.blocks_rendered += 1;
+            self.stats.rows_rendered += lines.len() as u64;
+            self.cached.push(Cached {
+                revision,
+                fold,
+                uses: Uses::of(block),
                 lines: lines.into(),
-            };
-            match self.cached.get_mut(index) {
-                Some(cached) => *cached = entry,
-                None => self.cached.push(entry),
-            }
-            first_changed = first_changed.min(index);
+            });
         }
-        if self.invalid || self.prefix.len() != self.cached.len() + 1 || first_changed == 0 {
-            self.rebuild_prefix(0);
-            self.invalid = false;
-        } else if first_changed != usize::MAX {
-            self.rebuild_prefix(first_changed);
+        if kept < blocks.len() || self.prefix.len() != blocks.len() + 1 {
+            self.rebuild_prefix(kept);
         }
+        self.stats.prepare_max = self.stats.prepare_max.max(started.elapsed());
     }
 
     fn rebuild_prefix(&mut self, from: usize) {
@@ -326,32 +386,132 @@ mod tests {
         assert_eq!(layout.row_of(1), 2);
     }
 
+    fn card(expanded: Option<bool>) -> Block {
+        let mut call = crate::transcript::ToolCall::new(
+            crate::protocol::ToolRef {
+                session_id: "s".into(),
+                loop_id: "l".into(),
+                request_index: 0,
+                tool_call_id: "c".into(),
+            },
+            "bash",
+        );
+        call.expanded = expanded;
+        Block::Tool(Box::new(call))
+    }
+
+    fn answer(reasoning: &str) -> Block {
+        Block::Assistant {
+            key: crate::transcript::RequestKey {
+                loop_id: "l".into(),
+                request_index: 0,
+            },
+            reasoning: reasoning.into(),
+            text: "reply".into(),
+            streaming: false,
+            expanded: None,
+        }
+    }
+
+    fn rendered_by<S: Default>(
+        layout: &mut Layout<S>,
+        blocks: &[Block],
+        revisions: &[u64],
+        fold: Fold,
+    ) -> Vec<usize> {
+        let mut rendered = vec![];
+        layout.prepare(blocks, revisions, 40, fold, |_, index, _| {
+            rendered.push(index);
+            lines(2)
+        });
+        rendered
+    }
+
     #[test]
-    fn width_and_fold_changes_invalidate_the_cache() {
+    fn a_width_change_renders_every_block_again() {
         let mut layout = Layout::<()>::default();
-        let blocks = [user("a")];
-        let revisions = [1];
-        layout.prepare(&blocks, &revisions, 40, fold(), |_, _, _| lines(1));
+        let blocks = [user("a"), user("b")];
+        layout.prepare(&blocks, &[1, 2], 40, fold(), |_, _, _| lines(1));
         let mut count = 0;
-        layout.prepare(&blocks, &revisions, 50, fold(), |_, _, _| {
+        layout.prepare(&blocks, &[1, 2], 50, fold(), |_, _, _| {
             count += 1;
             lines(1)
         });
-        assert_eq!(count, 1);
-        layout.prepare(
-            &blocks,
-            &revisions,
-            50,
-            Fold {
-                expanded: true,
-                show_reasoning: true,
-            },
-            |_, _, _| {
-                count += 1;
-                lines(1)
-            },
-        );
         assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn a_fold_flag_renders_only_the_blocks_that_read_it() {
+        let mut layout = Layout::<()>::default();
+        let blocks = [
+            user("a"),
+            card(None),
+            card(Some(true)),
+            answer("thinking"),
+            answer(""),
+        ];
+        let revisions = [1, 2, 3, 4, 5];
+        rendered_by(&mut layout, &blocks, &revisions, fold());
+        let expanded = Fold {
+            expanded: true,
+            ..fold()
+        };
+        assert_eq!(
+            rendered_by(&mut layout, &blocks, &revisions, expanded),
+            [1, 3],
+            "Ctrl+O reaches cards and thinking that follow it, not a pinned card"
+        );
+        let reasoning = Fold {
+            show_reasoning: true,
+            ..expanded
+        };
+        assert_eq!(
+            rendered_by(&mut layout, &blocks, &revisions, reasoning),
+            [3],
+            "Ctrl+T reaches only thinking"
+        );
+    }
+
+    #[test]
+    fn a_prepended_page_keeps_the_rows_of_the_blocks_it_moved() {
+        let mut layout = Layout::<()>::default();
+        let blocks = [user("a"), user("b"), user("c")];
+        rendered_by(&mut layout, &blocks, &[1, 2, 3], fold());
+        let blocks = [user("x"), user("y"), user("a"), user("b"), user("c")];
+        assert_eq!(
+            rendered_by(&mut layout, &blocks, &[7, 8, 1, 2, 3], fold()),
+            [0, 1, 2],
+            "the old first block gains a separator, the others are reused"
+        );
+        assert_eq!(layout.total_rows(), 5 * 2 + 4);
+        assert_eq!(layout.row_of(3), 8);
+    }
+
+    #[test]
+    fn dropping_the_front_renders_the_new_first_block_without_a_separator() {
+        let mut layout = Layout::<()>::default();
+        let blocks = [user("a"), user("b"), user("c")];
+        rendered_by(&mut layout, &blocks, &[1, 2, 3], fold());
+        let blocks = [user("b"), user("c")];
+        assert_eq!(rendered_by(&mut layout, &blocks, &[2, 3], fold()), [0]);
+        assert_eq!(layout.total_rows(), 2 * 2 + 1);
+        assert_eq!(layout.visible(0, 1)[0].to_string(), "row 0");
+    }
+
+    #[test]
+    fn a_removed_block_in_the_middle_shifts_the_ones_after_it() {
+        let mut layout = Layout::<()>::default();
+        let blocks = [user("a"), user("b"), user("c"), user("d")];
+        rendered_by(&mut layout, &blocks, &[1, 2, 3, 4], fold());
+        let blocks = [user("a"), user("c"), user("d")];
+        assert!(rendered_by(&mut layout, &blocks, &[1, 3, 4], fold()).is_empty());
+        assert_eq!(layout.total_rows(), 3 * 2 + 2);
+        layout.prepare(&blocks[..1], &[1], 40, fold(), |_, _, _| lines(9));
+        assert_eq!(
+            layout.total_rows(),
+            2,
+            "a shorter transcript drops the tail"
+        );
     }
 
     #[test]

@@ -616,13 +616,15 @@ impl StreamRenderer {
         }
     }
 
-    /// Points the renderer at the block's authoritative text. The text only
-    /// ever grows, so the cached prefix stays valid.
+    /// Points the renderer at the block's authoritative text. While the text
+    /// only grows the cached prefix stays valid; any other text starts over.
     pub fn reset(&mut self, text: &str) {
-        if self.text != text {
-            self.text.clear();
-            self.text.push_str(text);
-            self.current = None;
+        match text.strip_prefix(self.text.as_str()) {
+            Some(delta) => self.push(delta),
+            None => {
+                *self = Self::new(self.width, self.base);
+                self.text.push_str(text);
+            }
         }
     }
 

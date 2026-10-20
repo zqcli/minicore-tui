@@ -2,7 +2,7 @@
 //! the terminal loop.
 
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crossterm::event::{Event as TermEvent, EventStream};
 use futures_util::StreamExt;
@@ -20,6 +20,90 @@ use minicore_tui::ui::theme::{Palette, Styles};
 const FRAME: Duration = Duration::from_millis(16);
 /// Clock while something animates: one spinner frame.
 const TICK: Duration = minicore_tui::ui::status::SPINNER_FRAME;
+
+/// What made a frame necessary; the order indexes `Frames::draws`.
+#[derive(Clone, Copy)]
+enum Cause {
+    Tick,
+    Event,
+    Key,
+    Mouse,
+    Resize,
+}
+
+const CAUSES: [&str; 5] = ["tick", "event", "key", "mouse", "resize"];
+
+/// The frames wanted since the last draw, and, under `MINICORE_TUI_PERF_STATS`,
+/// how many draws each cause led to and how long they took.
+struct Frames {
+    pending: u8,
+    draws: [u64; CAUSES.len()],
+    elapsed: Vec<Duration>,
+    report: bool,
+}
+
+impl Frames {
+    fn new() -> Self {
+        Self {
+            pending: 1 << Cause::Event as u8,
+            draws: [0; CAUSES.len()],
+            elapsed: Vec::new(),
+            report: std::env::var_os("MINICORE_TUI_PERF_STATS").is_some(),
+        }
+    }
+
+    fn mark(&mut self, cause: Cause) {
+        self.pending |= 1 << cause as u8;
+    }
+
+    fn wanted(&self) -> bool {
+        self.pending != 0
+    }
+
+    fn drawn(&mut self, elapsed: Duration) {
+        for (cause, count) in self.draws.iter_mut().enumerate() {
+            *count += u64::from(self.pending >> cause & 1);
+        }
+        self.pending = 0;
+        if self.report {
+            self.elapsed.push(elapsed);
+        }
+    }
+
+    fn print(&mut self, app: &App) {
+        if !self.report {
+            return;
+        }
+        let causes: Vec<String> = CAUSES
+            .iter()
+            .zip(self.draws)
+            .map(|(name, count)| format!("{name}={count}"))
+            .collect();
+        self.elapsed.sort();
+        let at = |p: f64| {
+            let last = self.elapsed.len().saturating_sub(1);
+            self.elapsed
+                .get((last as f64 * p) as usize)
+                .map_or(0, Duration::as_micros)
+        };
+        let layout = &app.layout.stats;
+        let rss = std::fs::read_to_string("/proc/self/statm")
+            .ok()
+            .and_then(|statm| statm.split(' ').nth(1)?.parse::<u64>().ok())
+            .map_or(0, |pages| pages * 4);
+        eprintln!(
+            "draws {{{}}} total={} draw_us p50={} p95={} max={} blocks_rendered={} rows_rendered={} prepare_us_max={} rss_kb={rss}",
+            causes.join(","),
+            self.elapsed.len(),
+            at(0.5),
+            at(0.95),
+            at(1.0),
+            layout.blocks_rendered,
+            layout.rows_rendered,
+            layout.prepare_max.as_micros(),
+        );
+    }
+}
 
 fn main() -> std::io::Result<()> {
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -98,7 +182,7 @@ async fn run() -> i32 {
         tokio::spawn(async move { minicore_tui::app::tasks::bootstrap(client, tx).await })
     };
     let mut events = EventStream::new();
-    let mut dirty = true;
+    let mut frames = Frames::new();
     let mut next_frame = tokio::time::Instant::now();
     let mut next_tick = tokio::time::Instant::now() + TICK;
     let mut startup = Some(args.session.clone());
@@ -113,19 +197,19 @@ async fn run() -> i32 {
             incoming = incoming_rx.recv(), if agent_open => match incoming {
                 Some(Incoming::Event(event)) => {
                     app.on_msg(Msg::Agent(event));
-                    dirty = true;
+                    frames.mark(Cause::Event);
                 }
                 Some(Incoming::Closed { status }) => {
                     app.on_msg(Msg::AgentClosed(status.unwrap_or_else(|| "agent closed".into())));
                     agent_open = false;
-                    dirty = true;
+                    frames.mark(Cause::Event);
                 }
                 None => agent_open = false,
             },
             message = msg_rx.recv() => {
                 if let Some(message) = message {
                     app.on_msg(message);
-                    dirty = true;
+                    frames.mark(Cause::Event);
                 }
             }
             maybe_event = events.next() => {
@@ -135,18 +219,19 @@ async fn run() -> i32 {
                             if let Some(action) = app.on_key(key) {
                                 app.on_action(action);
                             }
-                            dirty = true;
+                            frames.mark(Cause::Key);
                         }
                     }
                     Some(Ok(TermEvent::Mouse(mouse))) => {
-                        app.on_mouse(mouse);
-                        dirty = true;
+                        if app.on_mouse(mouse) {
+                            frames.mark(Cause::Mouse);
+                        }
                     }
                     Some(Ok(TermEvent::Paste(text))) => {
                         app.on_paste(&text);
-                        dirty = true;
+                        frames.mark(Cause::Key);
                     }
-                    Some(Ok(TermEvent::Resize(_, _))) => dirty = true,
+                    Some(Ok(TermEvent::Resize(_, _))) => frames.mark(Cause::Resize),
                     // The terminal is gone; polling it again would spin.
                     None => app.quit = true,
                     _ => {}
@@ -155,12 +240,12 @@ async fn run() -> i32 {
             _ = tokio::time::sleep_until(next_tick), if tick_due => {
                 app.tick();
                 next_tick = tokio::time::Instant::now() + TICK;
-                dirty = true;
+                frames.mark(Cause::Tick);
             }
             // Frame pacing exists to wait out the rest of a frame, never to
             // block an idle loop: with nothing to draw this branch must not be
             // armed, or an already-expired deadline would spin the loop.
-            _ = tokio::time::sleep_until(next_frame), if dirty => {}
+            _ = tokio::time::sleep_until(next_frame), if frames.wanted() => {}
         }
 
         // Ctrl+G delegates the draft to an external editor. The terminal is the
@@ -181,7 +266,7 @@ async fn run() -> i32 {
                 }
             };
             app.on_msg(Msg::DraftEdited(edited));
-            dirty = true;
+            frames.mark(Cause::Event);
         }
 
         // Startup opens or creates a session once; after a failure Enter or
@@ -198,10 +283,11 @@ async fn run() -> i32 {
                 None => minicore_tui::app::Action::NewSession,
             };
             app.on_action(action);
-            dirty = true;
+            frames.mark(Cause::Event);
         }
 
-        if dirty && guard.is_active() && tokio::time::Instant::now() >= next_frame {
+        if frames.wanted() && guard.is_active() && tokio::time::Instant::now() >= next_frame {
+            let started = Instant::now();
             if let Err(error) = guard
                 .terminal()
                 .draw(|frame| minicore_tui::ui::draw(frame, &mut app))
@@ -209,7 +295,7 @@ async fn run() -> i32 {
                 eprintln!("draw failed: {error}");
                 break;
             }
-            dirty = false;
+            frames.drawn(started.elapsed());
             next_frame = tokio::time::Instant::now() + FRAME;
         }
         if app.quit {
@@ -219,6 +305,7 @@ async fn run() -> i32 {
 
     let _ = client.shutdown().await;
     let _ = guard.restore();
+    frames.print(&app);
     boot.abort();
     0
 }
