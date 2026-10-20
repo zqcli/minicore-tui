@@ -316,6 +316,7 @@ impl App {
             notice.level == NoticeLevel::Error || notice.at.elapsed() < NOTICE_TTL
         });
         self.flash = self.flash.take().filter(|(_, at)| at.elapsed() < FLASH_TTL);
+        self.refresh_running_cards();
     }
 
     /// Whether something on screen moves with the clock.

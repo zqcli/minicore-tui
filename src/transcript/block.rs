@@ -312,8 +312,18 @@ impl ToolCall {
         self.expanded = (expanded != all_expanded).then_some(expanded);
     }
 
-    /// The header detail; the paths of a patch replace the Agent's `tool apply_patch` placeholder.
+    /// The header detail: the command that ran for `bash`, since the Agent's
+    /// summary can name another one; the paths of a patch replace its
+    /// `tool apply_patch` placeholder.
     pub fn header_detail(&self) -> String {
+        if self.name == "bash"
+            && let Some(command) = self
+                .expanded_input
+                .as_deref()
+                .and_then(|input| input.lines().find(|line| !line.trim().is_empty()))
+        {
+            return format!("$ {}", command.trim());
+        }
         if !self.detail.is_empty() && !self.detail.starts_with("tool ") {
             return self.detail.clone();
         }

@@ -1,5 +1,5 @@
- ▎ ... (16 more lines, ctrl+o to expand)
-
+ ▎ $ cargo test --lib
+ ▎ ... (16 more lines, click or ctrl+o to expand)
 
    completed in 12s · 2 requests · 1 tool · 2 files changed (+40 −7)
 

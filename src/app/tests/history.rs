@@ -498,7 +498,7 @@ async fn canonical_cards_take_their_detail_and_facts_from_tool_read() {
     assert_eq!(card.exit_code, Some(2));
     assert_eq!(card.duration, Some(std::time::Duration::from_millis(1500)));
     let screen = h.screen(100, 40);
-    assert!(screen.contains("▎ ls -la"), "{screen}");
+    assert!(screen.contains("▎ $ ls -la"), "{screen}");
     assert!(screen.contains("1.5s · exit 2"), "{screen}");
 }
 

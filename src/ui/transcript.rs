@@ -87,11 +87,11 @@ impl RenderState {
         let thinking = stream.reasoning.lines(&styles);
         let reply = stream.text.lines(&styles);
         blocks::assistant_rows(
-            reasoning,
             &thinking,
             &reply,
             expanded.unwrap_or(fold.expanded),
             fold.show_reasoning,
+            true,
             styles,
             width as usize,
         )

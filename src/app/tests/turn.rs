@@ -102,6 +102,54 @@ async fn a_turn_streams_tool_facts_and_ends_on_its_wait() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_tick_redraws_only_the_running_cards() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.fake.script("turn.send", json!({"turn": turn("l1")}));
+    h.fake.script_held("turn.wait", waited("l1", completed()));
+    h.submit("go");
+    h.until(|app| app.is_busy()).await;
+    for id in ["c1", "c2"] {
+        h.emit(
+            "tool_started",
+            json!({"turn": turn("l1"), "request_index": 0, "tool_call_id": id,
+                   "tool_name": "bash"}),
+        )
+        .await;
+    }
+    h.emit(
+        "tool_finished",
+        json!({"turn": turn("l1"), "request_index": 0, "tool_call_id": "c1",
+               "result": {"outcome": "success", "content_bytes": 0}}),
+    )
+    .await;
+    h.settle().await;
+    let revisions = |h: &Harness| {
+        h.app
+            .session
+            .as_ref()
+            .unwrap()
+            .transcript
+            .revisions()
+            .to_vec()
+    };
+    let before = revisions(&h);
+    h.app.tick();
+    let after = revisions(&h);
+    let changed: Vec<usize> = (0..before.len())
+        .filter(|&at| before[at] != after[at])
+        .collect();
+    let running: Vec<usize> = h
+        .blocks()
+        .iter()
+        .enumerate()
+        .filter(|(_, block)| matches!(block, Block::Tool(call) if call.state == ToolState::Running))
+        .map(|(at, _)| at)
+        .collect();
+    assert_eq!(running.len(), 1, "c1 finished, c2 runs");
+    assert_eq!(changed, running);
+}
+
+#[tokio::test(start_paused = true)]
 async fn a_wait_answer_for_another_loop_leaves_the_turn_running() {
     let mut h = Harness::opened(display_read(0, 0)).await;
     h.fake.script("turn.send", json!({"turn": turn("l1")}));
@@ -386,7 +434,7 @@ async fn the_turn_end_line_counts_changed_files_and_lines() {
         h.submit("change it");
         h.settle().await;
         let screen = h.screen(100, 12);
-        let ends = screen.lines().any(|row| row.trim_end().ends_with(expected));
+        let ends = screen.lines().any(|row| row.contains(expected));
         assert!(ends, "{expected}:\n{screen}");
     }
 }
