@@ -164,6 +164,17 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, styles: Styles) {
         &mut render,
     );
     let height = area.height as usize;
+    // The dock grows and shrinks under an anchored view; its bottom row stays
+    // put, so the tail the user is reading is never covered.
+    let drawn = layout.viewport.height;
+    if let Scroll::Anchor { block, offset } = app.scroll
+        && drawn > 0
+        && drawn != height
+    {
+        let bottom = (layout.anchor_row(block, offset) + drawn).min(layout.total_rows());
+        let (block, offset) = layout.anchor(bottom.saturating_sub(height));
+        app.scroll = Scroll::Anchor { block, offset };
+    }
     let scroll = app.scroll;
     let resolve = |layout: &Layout<RenderState>| {
         let total = layout.total_rows();

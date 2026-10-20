@@ -4,7 +4,7 @@ use crossterm::event::{KeyCode, KeyModifiers};
 use serde_json::{Value, json};
 
 use super::harness::*;
-use crate::app::{Action, Scroll, SessionOp};
+use crate::app::{Action, NoticeLevel, Scroll, SessionOp};
 use crate::protocol::read::UserKind;
 use crate::transcript::{Block, ChangeSummary, ToolState};
 
@@ -241,6 +241,78 @@ async fn a_steer_leaves_the_queue_only_when_the_agent_applies_it() {
         block,
         Block::User { text, kind: UserKind::Steering } if text == "also the tests"
     )));
+}
+
+/// A long history and a turn whose `bash` card is still running, drawn once.
+async fn running_card() -> Harness {
+    let history = (0..15)
+        .flat_map(|n| {
+            [
+                user(2 * n, "l0", &format!("question {n}")),
+                assistant(2 * n + 1, "l0", &format!("answer {n}")),
+            ]
+        })
+        .collect();
+    let mut h = Harness::opened(page(30, 0, history)).await;
+    h.fake.script("turn.send", json!({"turn": turn("l1")}));
+    h.fake.script_held("turn.wait", waited("l1", completed()));
+    h.fake
+        .script("turn.steer", json!({"ok": true, "steer_index": 0}));
+    h.submit("go");
+    h.until(|app| app.is_busy()).await;
+    h.emit("turn_started", json!({"turn": turn("l1")})).await;
+    h.emit(
+        "tool_started",
+        json!({"turn": turn("l1"), "request_index": 0, "tool_call_id": "c1", "tool_name": "bash"}),
+    )
+    .await;
+    h.emit(
+        "tool_presentation",
+        json!({"turn": turn("l1"), "request_index": 0, "tool_call_id": "c1",
+               "tool_name": "bash", "display": {"detail": "$ sleep 40", "truncated": false}}),
+    )
+    .await;
+    h.settle().await;
+    h
+}
+
+#[tokio::test(start_paused = true)]
+async fn rows_added_to_the_dock_never_cover_the_running_card() {
+    for pinned in [false, true] {
+        for shown in ["Steering: more", "Follow-up: later", "boom", "Allow bash?"] {
+            let mut h = running_card().await;
+            assert!(h.screen(80, 20).contains("▎ $ sleep 40"));
+            if pinned {
+                let layout = &h.app.layout;
+                let (block, offset) = layout.anchor(layout.viewport.top);
+                h.app.scroll = Scroll::Anchor { block, offset };
+            }
+            match shown {
+                "Steering: more" => h.submit("more"),
+                "Follow-up: later" => {
+                    h.app.composer.set_text("later");
+                    h.key(KeyCode::Enter, KeyModifiers::ALT);
+                }
+                "boom" => h.app.notice(NoticeLevel::Error, "boom"),
+                _ => {
+                    h.emit(
+                        "interaction_requested",
+                        json!({"turn": turn("l1"), "interaction": {
+                            "interaction_id": "i1", "tool_call_id": "c1", "tool_name": "bash",
+                            "kind": {"type": "approval", "data": {"prompt": "Allow bash?"}}}}),
+                    )
+                    .await;
+                    h.until(|app| app.has_interaction()).await;
+                }
+            }
+            let screen = h.screen(80, 20);
+            assert!(screen.contains(shown), "{shown}:\n{screen}");
+            assert!(
+                screen.contains("▎ $ sleep 40"),
+                "pinned {pinned}, {shown}:\n{screen}"
+            );
+        }
+    }
 }
 
 #[tokio::test(start_paused = true)]
