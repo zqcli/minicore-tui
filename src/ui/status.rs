@@ -43,8 +43,13 @@ pub fn dock(app: &App, styles: Styles, width: u16, height: u16) -> Dock {
     }
     above.push(Line::default());
 
-    let (mut editor, cursor) =
-        composer::render(&app.composer, styles, width, composer::max_rows(height));
+    let (mut editor, cursor) = composer::render(
+        &app.composer,
+        styles,
+        width,
+        composer::max_rows(height),
+        !app.overlay.is_view(),
+    );
     if let Some(rows) = sheets::completion(app, styles, width.saturating_sub(1)) {
         editor.extend(rows.into_iter().map(|line| {
             let spans = line

@@ -21,6 +21,8 @@ pub fn max_rows(height: u16) -> usize {
 }
 
 const PLACEHOLDER: &str = "Ask anything · / commands · @ files";
+/// Shown instead while a full-screen view owns the keys.
+const VIEW_PLACEHOLDER: &str = "view open · esc to return";
 
 /// The draft as drawn: sanitized text with chips in place of payloads, the
 /// chips' byte ranges in it and the cursor's byte offset in it.
@@ -52,12 +54,14 @@ fn shown(composer: &Composer) -> (String, Vec<Range<usize>>, usize) {
 
 /// The editor body for a band `width` cells wide: the rail at column 0 and the
 /// draft from column 1, padded or scrolled to between [`MIN_ROWS`] and
-/// `max_rows` rows. Returns the rows and the cursor as (row, column).
+/// `max_rows` rows, dimmed with its own placeholder when `active` is false.
+/// Returns the rows and the cursor as (row, column).
 pub fn render(
     composer: &Composer,
     styles: Styles,
     width: u16,
     max_rows: usize,
+    active: bool,
 ) -> (Vec<Line<'static>>, (u16, u16)) {
     let width = usize::from(width).max(3);
     // One cell stays free after the text, so a cursor at the end of a full row
@@ -101,7 +105,12 @@ pub fn render(
         offset = end + 1;
     }
     if composer.is_empty() {
-        let hint = wrap::truncate(PLACEHOLDER, limit);
+        let placeholder = if active {
+            PLACEHOLDER
+        } else {
+            VIEW_PLACEHOLDER
+        };
+        let hint = wrap::truncate(placeholder, limit);
         body = vec![vec![Span::styled(hint, styles.faint())]];
     }
 
@@ -130,6 +139,11 @@ pub fn render(
             .map(|spans| row(spans, width, styles)),
     );
     lines.resize_with(target, || row(Vec::new(), width, styles));
+    if !active {
+        for span in lines.iter_mut().flat_map(|line| &mut line.spans) {
+            span.style = span.style.patch(styles.faint());
+        }
+    }
     let cursor = (blank + cursor.0 - top, 1 + cursor.1);
     (lines, (cursor.0 as u16, cursor.1 as u16))
 }
@@ -208,7 +222,7 @@ mod tests {
     }
 
     fn drawn(c: &Composer, width: u16) -> (Vec<String>, (u16, u16)) {
-        let (lines, caret) = render(c, styles(), width, 12);
+        let (lines, caret) = render(c, styles(), width, 12, true);
         let rows = lines
             .iter()
             .map(|line| line.to_string().trim_end().to_owned())
@@ -260,7 +274,7 @@ mod tests {
         let (rows, cursor) = drawn(&c, 60);
         assert_eq!(rows[1], "▎see [paste #1 +12 lines]", "{rows:?}");
         assert_eq!(cursor, (1, 1 + "see [paste #1 +12 lines]".len() as u16));
-        let (lines, _) = render(&c, styles(), 60, 12);
+        let (lines, _) = render(&c, styles(), 60, 12, true);
         let chip = lines[1]
             .spans
             .iter()
@@ -284,7 +298,7 @@ mod tests {
         assert_eq!(rows.len(), MIN_ROWS);
         assert_eq!(rows[1], format!("▎{PLACEHOLDER}"));
         assert_eq!(cursor, (1, 1), "the cursor sits on the second row");
-        let (lines, _) = render(&Composer::new(), styles(), 50, 12);
+        let (lines, _) = render(&Composer::new(), styles(), 50, 12, true);
         assert!(lines.iter().all(|line| line.width() == 50), "full rows");
     }
 

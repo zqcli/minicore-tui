@@ -63,6 +63,14 @@ impl Overlay {
     pub fn is_none(&self) -> bool {
         matches!(self, Self::None)
     }
+
+    /// A full-screen view, which hides the transcript and the keys of the composer.
+    pub fn is_view(&self) -> bool {
+        matches!(
+            self,
+            Self::Diff(_) | Self::Tool(_) | Self::Context | Self::Help { .. }
+        )
+    }
 }
 
 /// A picker or view a command or key opens.

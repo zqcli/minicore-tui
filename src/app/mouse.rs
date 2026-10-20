@@ -15,10 +15,7 @@ impl App {
     pub fn on_mouse(&mut self, mouse: MouseEvent) -> bool {
         let cell = (mouse.column, mouse.row);
         // A full-screen view hides the transcript the press would land on.
-        let view = matches!(
-            self.overlay,
-            Overlay::Diff(_) | Overlay::Tool(_) | Overlay::Context | Overlay::Help { .. }
-        );
+        let view = self.overlay.is_view();
         match mouse.kind {
             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
                 let step = if mouse.modifiers.contains(KeyModifiers::ALT) {

@@ -453,6 +453,24 @@ fn an_open_overlay_is_not_drawn_over_the_composer() {
 }
 
 #[test]
+fn a_view_dims_the_composer_and_keys_typed_in_it_do_not_edit_the_draft() {
+    let mut app = app();
+    app.overlay = Overlay::Help { scroll: 0 };
+    let rendered = render(&mut app, 60, 12);
+    assert!(rendered.contains("view open · esc to return"), "{rendered}");
+    assert!(!rendered.contains("Ask anything"), "{rendered}");
+    app.on_key(crossterm::event::KeyEvent::from(
+        crossterm::event::KeyCode::Char('x'),
+    ));
+    assert!(app.composer.is_empty(), "the view owns the keys");
+
+    app.overlay = Overlay::None;
+    let rendered = render(&mut app, 60, 12);
+    assert!(rendered.contains("Ask anything"), "{rendered}");
+    assert!(!rendered.contains("view open"), "{rendered}");
+}
+
+#[test]
 fn a_queued_steer_is_shown_above_the_composer() {
     let mut app = app();
     app.session
