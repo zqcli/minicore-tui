@@ -461,6 +461,37 @@ fn a_queued_steer_is_shown_above_the_composer() {
 }
 
 #[test]
+fn steering_is_listed_before_follow_ups_with_the_recall_hint() {
+    let mut app = app();
+    let queue = &mut app.session.as_mut().expect("session").queue;
+    for (text, kind) in [
+        ("later", crate::app::QueuedKind::Follow),
+        ("now", crate::app::QueuedKind::Steer),
+    ] {
+        queue.push(crate::app::Queued {
+            text: text.into(),
+            kind,
+        });
+    }
+    let rendered = render(&mut app, 60, 12);
+    let rows: Vec<&str> = rendered
+        .lines()
+        .filter(|line| {
+            line.contains("Steering") || line.contains("Follow-up") || line.contains('↳')
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            "  Steering: now",
+            "  Follow-up: later",
+            "  ↳ alt+up to edit the last follow-up"
+        ],
+        "{rendered}"
+    );
+}
+
+#[test]
 fn a_running_turn_shows_the_status_line_with_elapsed_time() {
     let mut app = app();
     let session = app.session.as_mut().expect("session");

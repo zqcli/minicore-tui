@@ -16,7 +16,7 @@ the kitty keyboard protocol; `Ctrl+J` always inserts a newline.
 | `Alt+Enter` | Queue the draft as a follow-up while a turn runs; send it when idle. |
 | `Shift+Enter`, `Ctrl+J` | Newline. |
 | `Esc` | Interrupt the running turn; when idle, clear the draft. Closes an open picker or view first. |
-| `Ctrl+C` | Clear a non-empty draft; on an empty draft press twice to quit. |
+| `Ctrl+C` | Clear the draft; a second press within 500 ms quits. |
 | `Ctrl+D` | Quit when the draft is empty; otherwise delete the character after the cursor. |
 | `↑` / `↓` | Move between lines of a multi-line draft; on the first or last line, browse prompt history (100 kept). |
 | `Alt+↑` | Take the newest queued follow-up back into an empty draft. |

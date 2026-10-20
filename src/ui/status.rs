@@ -90,9 +90,11 @@ fn padded(text: &str, width: u16, style: Style) -> Line<'static> {
 }
 
 fn queued_rows(session: &Session, styles: Styles, width: u16) -> Vec<Line<'static>> {
-    let mut rows: Vec<Line<'static>> = session
-        .queue
-        .iter()
+    // Steering messages are applied first, so they are listed first.
+    let mut queue: Vec<_> = session.queue.iter().collect();
+    queue.sort_by_key(|queued| queued.kind == QueuedKind::Follow);
+    let mut rows: Vec<Line<'static>> = queue
+        .into_iter()
         .take(QUEUE_ROWS)
         .map(|queued| {
             let text = format!("{}: {}", queued.label(), queued.text);
@@ -302,14 +304,16 @@ fn totals(session: &Session, styles: Styles) -> Vec<Span<'static>> {
             styles.reasoning_rail(),
         ),
     ];
-    // Before the first presentation answer nothing is known, not even that
-    // the window is unknown.
-    if session.presentation.is_some() {
-        let (text, style) = match super::views::context::percent(session) {
-            Some(percent) if percent >= 70.0 => (format!("ctx {percent:.2}%"), styles.amber()),
-            Some(percent) => (format!("ctx {percent:.2}%"), styles.reasoning_rail()),
-            None => ("ctx ?".to_owned(), styles.reasoning_rail()),
-        };
+    // An unknown window is only worth a mark once the session has used some.
+    let context = match super::views::context::percent(session) {
+        Some(percent) if percent >= 70.0 => Some((format!("ctx {percent:.2}%"), styles.amber())),
+        Some(percent) => Some((format!("ctx {percent:.2}%"), styles.reasoning_rail())),
+        None if session.presentation.is_some() && usage.input > 0 => {
+            Some(("ctx ?".to_owned(), styles.reasoning_rail()))
+        }
+        None => None,
+    };
+    if let Some((text, style)) = context {
         spans.push(Span::styled(" · ", styles.meta()));
         spans.push(Span::styled(text, style));
     }
