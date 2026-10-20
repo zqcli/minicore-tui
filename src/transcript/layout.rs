@@ -57,13 +57,57 @@ impl Uses {
     }
 }
 
+/// One block's rows in shared chunks, so a streaming answer's committed rows
+/// are handed to the cache every frame without being copied.
+#[derive(Clone, Debug, Default)]
+pub struct Rows {
+    chunks: Vec<Arc<[Line<'static>]>>,
+    len: usize,
+}
+
+impl From<Vec<Line<'static>>> for Rows {
+    fn from(lines: Vec<Line<'static>>) -> Self {
+        let mut rows = Self::default();
+        rows.push(lines.into());
+        rows
+    }
+}
+
+impl Rows {
+    pub fn push(&mut self, chunk: Arc<[Line<'static>]>) {
+        if !chunk.is_empty() {
+            self.len += chunk.len();
+            self.chunks.push(chunk);
+        }
+    }
+
+    pub fn prepend(&mut self, lines: Vec<Line<'static>>) {
+        self.len += lines.len();
+        self.chunks.insert(0, lines.into());
+    }
+
+    fn len(&self) -> usize {
+        self.len
+    }
+
+    /// The rows from `offset` on.
+    pub fn iter_from(&self, offset: usize) -> impl Iterator<Item = &Line<'static>> {
+        let mut skip = offset;
+        self.chunks.iter().flat_map(move |chunk| {
+            let from = skip.min(chunk.len());
+            skip -= from;
+            chunk[from..].iter()
+        })
+    }
+}
+
 #[derive(Clone, Debug)]
 struct Cached {
     revision: u64,
     /// The fold the rows were built under, and the part of it they read.
     fold: Fold,
     uses: Uses,
-    lines: Arc<[Line<'static>]>,
+    rows: Rows,
 }
 
 impl Cached {
@@ -108,6 +152,8 @@ pub struct Layout<S = ()> {
     /// is the total height. Empty until the first successful prepare.
     prefix: Vec<usize>,
     width: u16,
+    /// The blank row that opens every block but the first.
+    separator: Arc<[Line<'static>]>,
     /// Renderer state the cache hands to the render callback, never inspects.
     pub state: S,
     /// The last drawn window, for selection and scrolling.
@@ -121,6 +167,7 @@ impl<S: Default> Default for Layout<S> {
             cached: Vec::new(),
             prefix: Vec::new(),
             width: 0,
+            separator: Arc::from([Line::raw("")]),
             state: S::default(),
             viewport: Viewport::default(),
             stats: Stats::default(),
@@ -139,7 +186,7 @@ impl<S> Layout<S> {
     /// Brings the cache up to date. `render_block` runs only for blocks that
     /// are new or changed. A block is found again by its revision wherever it
     /// moved to, except across the first position, which carries no separator.
-    pub fn prepare<F>(
+    pub fn prepare<F, R>(
         &mut self,
         blocks: &[Block],
         revisions: &[u64],
@@ -147,7 +194,8 @@ impl<S> Layout<S> {
         fold: Fold,
         mut render_block: F,
     ) where
-        F: FnMut(&mut S, usize, &Block) -> Vec<Line<'static>>,
+        F: FnMut(&mut S, usize, &Block) -> R,
+        R: Into<Rows>,
     {
         let started = Instant::now();
         if self.width != width {
@@ -176,27 +224,23 @@ impl<S> Layout<S> {
                 self.cached.push((*cached).clone());
                 continue;
             }
-            let lines = render_block(&mut self.state, index, block);
+            let mut rows: Rows = render_block(&mut self.state, index, block).into();
             // The separator row belongs to the block below, so the last block
             // leaves no trailing gap; an empty block still occupies a row.
-            let mut lines: Vec<Line<'static>> = if index == 0 {
-                lines
-            } else {
-                let mut spaced = Vec::with_capacity(lines.len() + 1);
-                spaced.push(Line::raw(""));
-                spaced.extend(lines);
-                spaced
-            };
-            if lines.is_empty() {
-                lines.push(Line::raw(""));
+            if index > 0 {
+                rows.len += 1;
+                rows.chunks.insert(0, self.separator.clone());
+            }
+            if rows.len == 0 {
+                rows.push(Arc::from([Line::raw("")]));
             }
             self.stats.blocks_rendered += 1;
-            self.stats.rows_rendered += lines.len() as u64;
+            self.stats.rows_rendered += rows.len as u64;
             self.cached.push(Cached {
                 revision,
                 fold,
                 uses: Uses::of(block),
-                lines: lines.into(),
+                rows,
             });
         }
         if kept < blocks.len() || self.prefix.len() != blocks.len() + 1 {
@@ -214,7 +258,7 @@ impl<S> Layout<S> {
         }
         let mut row = *self.prefix.last().unwrap_or(&0);
         for cached in &self.cached[from..] {
-            row += cached.lines.len().max(1);
+            row += cached.rows.len().max(1);
             self.prefix.push(row);
         }
     }
@@ -228,17 +272,11 @@ impl<S> Layout<S> {
         self.cached.len()
     }
 
-    fn lines(&self, block: usize) -> &[Line<'static>] {
-        self.cached
-            .get(block)
-            .map_or(&[], |cached| cached.lines.as_ref())
-    }
-
     /// Height of a block in rows.
     fn height(&self, block: usize) -> usize {
         self.cached
             .get(block)
-            .map_or(0, |cached| cached.lines.len().max(1))
+            .map_or(0, |cached| cached.rows.len().max(1))
     }
 
     /// First screen row of `block`.
@@ -308,13 +346,16 @@ impl<S> Layout<S> {
     }
 
     /// Rows of the visible window, top row first.
-    pub fn visible(&self, top: usize, height: usize) -> Vec<Line<'static>> {
+    pub fn visible(&self, top: usize, height: usize) -> Vec<&Line<'static>> {
+        let (first, offset) = self.block_at(top);
         let mut lines = Vec::with_capacity(height);
-        let mut row = top;
-        while lines.len() < height && row < self.total_rows() {
-            let (block, offset) = self.block_at(row);
-            lines.push(self.lines(block)[offset].clone());
-            row += 1;
+        for (index, cached) in self.cached.iter().enumerate().skip(first) {
+            let skip = if index == first { offset } else { 0 };
+            let room = height - lines.len();
+            lines.extend(cached.rows.iter_from(skip).take(room));
+            if lines.len() == height {
+                break;
+            }
         }
         lines
     }
@@ -580,7 +621,11 @@ mod tests {
         layout.prepare(&blocks, &revisions, 40, fold(), |_, index, _| {
             lines(index + 1)
         });
-        let window: Vec<String> = layout.visible(1, 2).iter().map(Line::to_string).collect();
+        let window: Vec<String> = layout
+            .visible(1, 2)
+            .into_iter()
+            .map(Line::to_string)
+            .collect();
         assert_eq!(window, ["", "row 0"], "the separator row starts block 1");
         assert_eq!(layout.visible(5, 4).len(), 3, "clipped at the last row");
     }

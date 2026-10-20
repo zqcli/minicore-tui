@@ -177,6 +177,33 @@ pub fn assistant_rows(
     styles: Styles,
     width: usize,
 ) -> Vec<Line<'static>> {
+    let mut lines = thinking_rows(
+        reasoning,
+        thinking.iter(),
+        expanded,
+        show_reasoning,
+        styles,
+        width,
+    );
+    if !reply.is_empty() {
+        if !lines.is_empty() {
+            lines.push(Line::default());
+        }
+        lines.extend(reply.iter().map(|line| indent(line.clone(), INSET)));
+    }
+    lines
+}
+
+/// The thinking half of an assistant message: `thinking` is the reasoning
+/// rendered, of which a folded block reads only the first rows.
+pub fn thinking_rows<'a>(
+    reasoning: &str,
+    thinking: impl Iterator<Item = &'a Line<'static>>,
+    expanded: bool,
+    show_reasoning: bool,
+    styles: Styles,
+    width: usize,
+) -> Vec<Line<'static>> {
     let rail = styles.reasoning_rail();
     let mut lines = Vec::new();
     let raw = reasoning.trim();
@@ -189,16 +216,8 @@ pub fn assistant_rows(
     } else if !raw.is_empty() {
         let total = raw.split('\n').count();
         let folded = !expanded && total > THINKING_ROWS;
-        let shown = if folded {
-            &thinking[..THINKING_ROWS.min(thinking.len())]
-        } else {
-            thinking
-        };
-        lines.extend(
-            shown
-                .iter()
-                .map(|line| rail_row(rail, padded(line.spans.clone()), width)),
-        );
+        let shown = thinking.take(if folded { THINKING_ROWS } else { usize::MAX });
+        lines.extend(shown.map(|line| rail_row(rail, padded(line.spans.clone()), width)));
         if folded {
             lines.push(rail_row(
                 rail,
@@ -206,12 +225,6 @@ pub fn assistant_rows(
                 width,
             ));
         }
-    }
-    if !reply.is_empty() {
-        if !lines.is_empty() {
-            lines.push(Line::default());
-        }
-        lines.extend(reply.iter().map(|line| indent(line.clone(), INSET)));
     }
     lines
 }

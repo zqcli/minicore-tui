@@ -3,6 +3,7 @@
 //! highlight, jump label, scrollbar and copy flash. A frame touches only the
 //! visible rows.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::ops::Range;
 use std::path::Path;
@@ -18,7 +19,7 @@ use super::markdown::StreamRenderer;
 use super::theme::Styles;
 use super::{blocks, selection, views};
 use crate::app::{App, Scroll};
-use crate::transcript::layout::{Fold, Viewport};
+use crate::transcript::layout::{Fold, Rows, Viewport};
 use crate::transcript::{Block, RequestKey};
 
 /// Composited on the last row while the view is detached from the tail.
@@ -64,11 +65,7 @@ impl RenderState {
         });
     }
 
-    fn render(
-        &mut self,
-        block: &Block,
-        (width, fold, styles): (u16, Fold, Styles),
-    ) -> Vec<Line<'static>> {
+    fn render(&mut self, block: &Block, (width, fold, styles): (u16, Fold, Styles)) -> Rows {
         let Block::Assistant {
             key,
             reasoning,
@@ -77,26 +74,36 @@ impl RenderState {
             expanded,
         } = block
         else {
-            return blocks::render(block, styles, width, fold);
+            return blocks::render(block, styles, width, fold).into();
         };
         let inner = blocks::text_width(width as usize);
         let stream = self.streams.entry(key.clone()).or_insert_with(|| Stream {
-            text: StreamRenderer::new(inner, styles.text()),
+            text: StreamRenderer::new(inner, styles.text()).inset(blocks::INSET),
             reasoning: StreamRenderer::new(inner, blocks::thinking_style(styles)),
         });
         stream.text.reset(text);
         stream.reasoning.reset(&blocks::reasoning_source(reasoning));
-        let thinking = stream.reasoning.lines(&styles);
-        let reply = stream.text.lines(&styles);
-        blocks::assistant_rows(
+        let mut head = blocks::thinking_rows(
             reasoning,
-            &thinking,
-            &reply,
+            stream
+                .reasoning
+                .rows(&styles)
+                .iter()
+                .flat_map(|chunk| chunk.iter()),
             expanded.unwrap_or(fold.expanded),
             fold.show_reasoning,
             styles,
             width as usize,
-        )
+        );
+        let reply = stream.text.rows(&styles);
+        if !head.is_empty() && !reply.is_empty() {
+            head.push(Line::default());
+        }
+        let mut rows = Rows::from(head);
+        for chunk in reply {
+            rows.push(chunk.clone());
+        }
+        rows
     }
 }
 
@@ -113,7 +120,7 @@ pub fn inner(area: Rect) -> Rect {
 /// Draws the transcript into `area` and records the drawn rows for copy.
 pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, styles: Styles) {
     let area = inner(area);
-    let header = header(styles, area.width, &app.workspace);
+    let welcome = || header(styles, area.width, &app.workspace);
     let Some(session) = app.session.as_ref() else {
         let status = if !app.ready {
             "Connecting to minicore-agent…"
@@ -122,7 +129,7 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, styles: Styles) {
         } else {
             "No session yet · enter starts one"
         };
-        let mut lines = header;
+        let mut lines = welcome();
         lines.push(Line::styled(format!(" {status}"), styles.dim()));
         frame.render_widget(Paragraph::new(lines), area);
         draw_flash(frame, area, app, styles);
@@ -138,7 +145,6 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, styles: Styles) {
     let layout = &mut app.layout;
     let blocks = session.transcript.blocks();
     layout.state.prepare(key, blocks);
-    layout.state.header_rows = header.len();
     layout.prepare(
         blocks,
         session.transcript.revisions(),
@@ -146,9 +152,14 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, styles: Styles) {
         fold,
         // The header rides in front of block 0, so it scrolls and anchors with
         // the transcript without being a block.
-        |state, index, block| match index {
-            0 => [header.clone(), state.render(block, key)].concat(),
-            _ => state.render(block, key),
+        |state, index, block| {
+            let mut rows = state.render(block, key);
+            if index == 0 {
+                let header = welcome();
+                state.header_rows = header.len();
+                rows.prepend(header);
+            }
+            rows
         },
     );
     let total = layout.total_rows();
@@ -170,22 +181,36 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, styles: Styles) {
         width: area.width,
         origin: (area.x, area.y),
     };
-    let mut lines = match blocks.is_empty() {
-        true => header,
-        false => layout.visible(top, height),
+    let mut rows: Vec<Cow<Line>> = if blocks.is_empty() {
+        let header = welcome();
+        layout.state.header_rows = header.len();
+        header.into_iter().map(Cow::Owned).collect()
+    } else {
+        layout
+            .visible(top, height)
+            .into_iter()
+            .map(Cow::Borrowed)
+            .collect()
     };
     if let Some(drag) = app.selection {
-        for (index, line) in lines.iter_mut().enumerate() {
+        for (index, row) in rows.iter_mut().enumerate() {
             if let Some(span) = selection::row_span(area.y + index as u16, drag, area) {
-                *line = highlight(line, span.start, span.end);
+                *row = Cow::Owned(highlight(row, span.start, span.end));
             }
         }
     }
     // Copy reads exactly these rows, so a drag copies what is on screen even
     // while a turn streams.
     app.rendered
-        .set(area.y, lines.iter().map(Line::to_string).collect());
-    frame.render_widget(Paragraph::new(lines), area);
+        .set(area.y, rows.iter().map(|row| row.to_string()).collect());
+    for (y, row) in (area.y..area.bottom()).zip(&rows) {
+        let area = Rect {
+            y,
+            height: 1,
+            ..area
+        };
+        frame.render_widget(row.as_ref(), area);
+    }
     let buffer = frame.buffer_mut();
     if top + height < total && area.height > 0 {
         let cells = jump_label(area.width);
@@ -393,12 +418,13 @@ mod tests {
         state.render(&first, key);
         state.render(&second, key);
         state.prepare(key, std::slice::from_ref(&second));
-        let rows =
-            |lines: Vec<Line<'static>>| lines.iter().map(Line::to_string).collect::<Vec<_>>();
-        assert_eq!(
-            rows(state.render(&second, key)),
-            rows(blocks::render(&second, key.2, 60, fold))
-        );
+        let rendered = state.render(&second, key);
+        let rows: Vec<String> = rendered.iter_from(0).map(Line::to_string).collect();
+        let want: Vec<String> = blocks::render(&second, key.2, 60, fold)
+            .iter()
+            .map(Line::to_string)
+            .collect();
+        assert_eq!(rows, want);
     }
 
     #[test]
