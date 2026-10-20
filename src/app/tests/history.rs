@@ -658,3 +658,22 @@ async fn totals_are_left_out_when_the_window_does_not_reach_the_summary() {
     let h = Harness::opened(partial).await;
     assert_eq!(h.app.session.as_ref().unwrap().usage.input, 0);
 }
+
+#[tokio::test(start_paused = true)]
+async fn an_opened_session_shows_the_times_the_agent_stored_and_none_for_old_prompts() {
+    let h = &mut Harness::opened(page(
+        4,
+        0,
+        vec![
+            user(0, "l0", "old prompt"),
+            assistant(1, "l0", "old answer"),
+            user_at(2, "l1", "new prompt", "2026-10-20T21:38:00Z"),
+            assistant(3, "l1", "new answer"),
+        ],
+    ))
+    .await;
+    assert_eq!(h.sent_at("old prompt"), None);
+    let screen = h.screen(60, 20);
+    assert_eq!(screen.matches("· 10/20/2026").count(), 1, "{screen}");
+    assert!(screen.contains("21:38 · 10/20/2026"), "{screen}");
+}

@@ -1,5 +1,15 @@
 //! The UTC timestamps the Agent writes.
 
+use std::time::{SystemTime, UNIX_EPOCH};
+
+/// Milliseconds since the Unix epoch now.
+pub fn now_millis() -> u64 {
+    let since_epoch = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    since_epoch.as_millis() as u64
+}
+
 /// Milliseconds since the Unix epoch for a `YYYY-MM-DDTHH:MM:SS(.fff)Z` stamp.
 pub fn unix_millis(stamp: &str) -> Option<u64> {
     let bytes = stamp.as_bytes();

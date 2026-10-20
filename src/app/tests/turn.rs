@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 use super::harness::*;
 use crate::app::{Action, NoticeLevel, Scroll, SessionOp};
 use crate::protocol::read::UserKind;
+use crate::protocol::stamp::{now_millis, unix_millis};
 use crate::transcript::{Block, ChangeSummary, ToolState};
 
 fn turn_ends(h: &Harness) -> Vec<String> {
@@ -178,7 +179,10 @@ async fn dropped_events_make_the_durable_items_replace_only_that_turn() {
         ],
     ))
     .await;
-    h.fake.script("turn.send", json!({"turn": turn("l1")}));
+    h.fake.script(
+        "turn.send",
+        json!({"turn": turn("l1"), "accepted_at": "2026-10-20T21:38:00Z"}),
+    );
     h.fake.script_held("turn.wait", waited("l1", completed()));
     h.fake.script(
         "turn.result",
@@ -213,7 +217,68 @@ async fn dropped_events_make_the_durable_items_replace_only_that_turn() {
         ]
     );
     assert_eq!(turn_ends(&h), ["l1"]);
+    assert_eq!(h.sent_at("the prompt"), unix_millis("2026-10-20T21:38:00Z"));
     assert!(matches!(h.blocks().last(), Some(Block::TurnEnd { .. })));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_sent_prompt_takes_the_agents_acceptance_time_over_the_clock() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.fake.script(
+        "turn.send",
+        json!({"turn": turn("l1"), "accepted_at": "2026-10-20T21:38:00Z"}),
+    );
+    h.fake.script_held("turn.wait", waited("l1", completed()));
+    h.submit("with a time");
+    assert!(
+        h.sent_at("with a time").is_some(),
+        "the clock stamps it at once"
+    );
+    h.until(|app| app.is_busy()).await;
+    h.settle().await;
+    assert_eq!(
+        h.sent_at("with a time"),
+        unix_millis("2026-10-20T21:38:00Z")
+    );
+    assert!(h.screen(60, 12).contains("21:38 · 10/20/2026"));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_prompt_without_an_acceptance_time_keeps_the_send_clock() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.fake.script("turn.send", json!({"turn": turn("l1")}));
+    h.fake.script_held("turn.wait", waited("l1", completed()));
+    let before = now_millis();
+    h.submit("no ack time");
+    h.until(|app| app.is_busy()).await;
+    let at = h.sent_at("no ack time").expect("stamped at send");
+    assert!((before..=now_millis()).contains(&at));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_steering_message_shows_the_time_the_agent_accepted_it() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.fake.script("turn.send", json!({"turn": turn("l1")}));
+    h.fake.script(
+        "turn.steer",
+        json!({"ok": true, "accepted_at": "2026-10-20T21:39:30Z"}),
+    );
+    h.fake.script_held("turn.wait", waited("l1", completed()));
+    h.submit("start");
+    h.until(|app| app.is_busy()).await;
+    h.submit("also the tests");
+    h.settle().await;
+    h.emit(
+        "steer_progress",
+        json!({"turn": turn("l1"), "applied_count": 1}),
+    )
+    .await;
+    h.settle().await;
+    assert_eq!(
+        h.sent_at("also the tests"),
+        unix_millis("2026-10-20T21:39:30Z")
+    );
+    assert!(h.screen(60, 14).contains("21:39 · 10/20/2026 · ↳ steering"));
 }
 
 #[tokio::test(start_paused = true)]
@@ -239,7 +304,7 @@ async fn a_steer_leaves_the_queue_only_when_the_agent_applies_it() {
     assert!(h.queue().is_empty());
     assert!(h.blocks().iter().any(|block| matches!(
         block,
-        Block::User { text, kind: UserKind::Steering } if text == "also the tests"
+        Block::User { text, kind: UserKind::Steering, .. } if text == "also the tests"
     )));
 }
 

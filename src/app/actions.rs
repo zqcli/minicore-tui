@@ -8,9 +8,8 @@ use super::{
     commands, tasks, templates,
 };
 use crate::config::ThemeKind;
-use crate::protocol::{
-    self, CompactionPhase, CompactionProgress, Reasoning, SessionResult, TurnSendResult,
-};
+use crate::protocol::stamp::now_millis;
+use crate::protocol::{self, CompactionPhase, CompactionProgress, Reasoning, SessionResult};
 use crate::transcript::Block;
 use crate::ui::theme::{Palette, Styles};
 
@@ -178,13 +177,12 @@ impl App {
         session.transcript.push(Block::User {
             text: text.clone(),
             kind: protocol::read::UserKind::Prompt,
+            at: Some(now_millis()),
         });
         self.call(
             protocol::METHOD_TURN_SEND,
             json!({ "text": text }),
-            move |result: Result<TurnSendResult, _>| {
-                SessionOp::Sent(text, result.map(|sent| sent.turn))
-            },
+            move |result| SessionOp::Sent(text, result),
         );
     }
 
@@ -200,9 +198,12 @@ impl App {
         session.queue.push(Queued {
             text: text.clone(),
             kind: QueuedKind::Steer,
+            at: Some(now_millis()),
         });
         let fields = json!({ "loop_id": loop_id, "text": text });
-        self.call(protocol::METHOD_TURN_STEER, fields, SessionOp::Steered);
+        self.call(protocol::METHOD_TURN_STEER, fields, move |result| {
+            SessionOp::Steered(text, result)
+        });
     }
 
     /// Esc on a running turn asks the Agent to cancel it; `turn.wait` ends it.

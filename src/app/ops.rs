@@ -1,12 +1,13 @@
 //! Applying the results of async operations and the Agent's events.
 
-use serde_json::{Value, json};
+use serde_json::json;
 
 use super::tasks::{self, History, Window};
 use super::{App, LiveTurn, NoticeLevel, Overlay, Scroll, Session, SessionOp, find};
+use crate::protocol::stamp::unix_millis;
 use crate::protocol::{
     self, AgentEvent, CompactStatus, CompactionResult, RpcError, SessionInfo, SessionState,
-    TurnRef, TurnWaitResult,
+    SteerResult, TurnRef, TurnSendResult, TurnWaitResult,
 };
 use crate::transcript::{Block, ChangeSummary};
 
@@ -41,7 +42,7 @@ impl App {
             }
             SessionOp::Sent(text, result) => self.on_sent(text, result),
             SessionOp::Waited(result) => self.on_waited(result),
-            SessionOp::Steered(result) => self.on_steered(result),
+            SessionOp::Steered(text, result) => self.on_steered(text, result),
             SessionOp::Done(result) => {
                 self.ok(result);
             }
@@ -259,10 +260,13 @@ impl App {
         self.spawn(tasks::wait_turn(self.client.clone(), turn));
     }
 
-    fn on_sent(&mut self, text: String, result: Result<TurnRef, RpcError>) {
+    fn on_sent(&mut self, text: String, result: Result<TurnSendResult, RpcError>) {
         match result {
-            Ok(turn) => {
-                self.start_turn(turn);
+            Ok(sent) => {
+                if let Some(at) = sent.accepted_at.as_deref().and_then(unix_millis) {
+                    self.session_mut().stamp_prompt(&text, at);
+                }
+                self.start_turn(sent.turn);
                 if let Some(title) = self.session.as_ref().and_then(Session::auto_title) {
                     self.rename(&title);
                 }
@@ -336,9 +340,13 @@ impl App {
         self.flush_queue();
     }
 
-    fn on_steered(&mut self, result: Result<Value, RpcError>) {
+    fn on_steered(&mut self, text: String, result: Result<SteerResult, RpcError>) {
         match result {
-            Ok(_) => {}
+            Ok(steer) => {
+                if let Some(at) = steer.accepted_at.as_deref().and_then(unix_millis) {
+                    self.session_mut().stamp_steer(&text, at);
+                }
+            }
             Err(error) if error.code == protocol::TURN_NOT_FOUND => {
                 self.session_mut().abandon_steers();
                 self.notice(NoticeLevel::Info, "Turn already ended; queued as next");

@@ -16,6 +16,7 @@ fn conversation(h: &mut Harness, count: usize) {
         transcript.push(Block::User {
             text: format!("prompt {index}"),
             kind: UserKind::Prompt,
+            at: None,
         });
         transcript.push(Block::Assistant {
             key: RequestKey {
@@ -520,6 +521,7 @@ async fn slash_tool_opens_a_card_and_brackets_step_between_cards() {
     transcript.push(Block::User {
         text: "go".into(),
         kind: UserKind::Prompt,
+        at: None,
     });
     transcript.push(card("c1", "bash"));
     transcript.push(card("c2", "read"));

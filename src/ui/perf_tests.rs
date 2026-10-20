@@ -88,6 +88,7 @@ fn user(index: usize) -> Block {
     Block::User {
         text: format!("Prompt {index}: please look at the parser and explain why it is slow."),
         kind: UserKind::Prompt,
+        at: None,
     }
 }
 

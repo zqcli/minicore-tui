@@ -12,7 +12,7 @@ use crate::app::{Action, App, Msg, SessionOp};
 use crate::testing::FakeAgent;
 use crate::transcript::Block;
 
-pub use crate::testing::{chunk, display_read, session_info, turn};
+pub use crate::testing::{chunk, chunk_envelope, display_read, session_info, turn};
 
 /// The channel counts as settled after this much quiet; longer than any retry
 /// or scripted delay.
@@ -184,6 +184,16 @@ impl Harness {
         self.app.transcript_blocks()
     }
 
+    /// The time of the user block with `text`.
+    pub fn sent_at(&self, text: &str) -> Option<u64> {
+        self.blocks().iter().find_map(|block| match block {
+            Block::User {
+                text: found, at, ..
+            } if found == text => *at,
+            _ => None,
+        })
+    }
+
     /// User and assistant texts, in transcript order.
     pub fn texts(&self) -> Vec<String> {
         self.blocks()
@@ -300,6 +310,15 @@ pub fn user(index: usize, loop_id: &str, text: &str) -> Value {
         index,
         json!({"type": "user", "data": {"loop_id": loop_id, "kind": "prompt",
                                         "input": {"text": text}}}),
+    )
+}
+
+pub fn user_at(index: usize, loop_id: &str, text: &str, timestamp: &str) -> Value {
+    chunk_envelope(
+        index,
+        json!({"item": {"type": "user", "data": {"loop_id": loop_id, "kind": "prompt",
+                                                 "input": {"text": text}}},
+               "timestamp": timestamp}),
     )
 }
 

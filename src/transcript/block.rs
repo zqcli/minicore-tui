@@ -12,6 +12,8 @@ pub enum Block {
     User {
         text: String,
         kind: UserKind,
+        /// When the Agent accepted it, in Unix milliseconds; old history has none.
+        at: Option<u64>,
     },
     Assistant {
         key: RequestKey,

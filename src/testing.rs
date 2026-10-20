@@ -400,7 +400,12 @@ pub fn turn(loop_id: &str) -> Value {
 /// One history chunk as the Agent frames it: the item JSON lives in `data`, and
 /// a small item is a single complete chunk.
 pub fn chunk(index: usize, item: Value) -> Value {
-    let data = json!({"item": item}).to_string();
+    chunk_envelope(index, json!({"item": item}))
+}
+
+/// A history chunk whose item JSON is the whole `envelope`, e.g. with a timestamp.
+pub fn chunk_envelope(index: usize, envelope: Value) -> Value {
+    let data = envelope.to_string();
     json!({
         "index": index,
         "offset": 0,

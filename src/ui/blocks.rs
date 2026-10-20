@@ -2,6 +2,10 @@
 //! cache calls these once per change and stores the returned lines, so a block
 //! never re-renders per frame. Column 0 of the width a block gets is its rail.
 
+use std::sync::LazyLock;
+
+use jiff::Timestamp;
+use jiff::tz::TimeZone;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
@@ -46,7 +50,7 @@ pub fn render(block: &Block, styles: Styles, width: u16, fold: Fold) -> Vec<Line
     }
     let width = width as usize;
     match block {
-        Block::User { text, kind } => user(text, *kind, styles, width),
+        Block::User { text, kind, at } => user(text, *kind, *at, styles, width),
         Block::Assistant {
             reasoning,
             text,
@@ -137,7 +141,13 @@ pub fn plain_text(block: &Block) -> String {
 pub const MIN_WIDTH: usize = 8;
 
 /// A user card: the composer surface with a pad row above and below.
-fn user(text: &str, kind: UserKind, styles: Styles, width: usize) -> Vec<Line<'static>> {
+fn user(
+    text: &str,
+    kind: UserKind,
+    at: Option<u64>,
+    styles: Styles,
+    width: usize,
+) -> Vec<Line<'static>> {
     let row = |spans: Vec<Span<'static>>| {
         surface_row(styles.user_rail(), styles.composer(), spans, width)
     };
@@ -145,11 +155,36 @@ fn user(text: &str, kind: UserKind, styles: Styles, width: usize) -> Vec<Line<'s
     for line in markdown::render(text, text_width(width), &styles, styles.text()) {
         lines.push(row(padded(line.spans)));
     }
+    let mut meta = Vec::new();
+    meta.extend(at.and_then(|at| stamp_label(at, local_zone())));
     if kind == UserKind::Steering {
-        lines.push(row(padded(vec![Span::styled("↳ steering", styles.meta())])));
+        meta.push("↳ steering".to_owned());
+    }
+    if !meta.is_empty() {
+        lines.push(row(padded(vec![Span::styled(
+            meta.join(" · "),
+            styles.meta(),
+        )])));
     }
     lines.push(row(Vec::new()));
     lines
+}
+
+/// `HH:MM · MM/DD/YYYY` for a Unix-millisecond instant in `zone`.
+fn stamp_label(millis: u64, zone: &TimeZone) -> Option<String> {
+    let local = Timestamp::from_millisecond(i64::try_from(millis).ok()?)
+        .ok()?
+        .to_zoned(zone.clone());
+    Some(local.strftime("%H:%M · %m/%d/%Y").to_string())
+}
+
+fn local_zone() -> &'static TimeZone {
+    // Tests render in UTC so snapshots do not depend on the machine.
+    static ZONE: LazyLock<TimeZone> = LazyLock::new(|| match cfg!(test) {
+        true => TimeZone::UTC,
+        false => TimeZone::system(),
+    });
+    &ZONE
 }
 
 /// `spans` behind the one-cell inner pad.
@@ -773,6 +808,7 @@ mod tests {
         let block = Block::User {
             text: "hello world".into(),
             kind: UserKind::Prompt,
+            at: None,
         };
         let lines = render(&block, styles(), 40, fold());
         assert_eq!(text(&lines), ["▎", "▎ hello world", "▎"]);
@@ -788,9 +824,47 @@ mod tests {
         let block = Block::User {
             text: "focus on tests".into(),
             kind: UserKind::Steering,
+            at: None,
         };
         let body = text(&render(&block, styles(), 40, fold()));
         assert_eq!(body[2], "▎ ↳ steering");
+    }
+
+    fn sent(stamp: &str) -> Option<u64> {
+        crate::protocol::stamp::unix_millis(stamp)
+    }
+
+    #[test]
+    fn the_stamp_reads_in_the_given_zone_and_the_date_follows_it() {
+        let at = sent("2026-10-20T21:38:05.250Z").unwrap();
+        let zone = |hours| TimeZone::fixed(jiff::tz::Offset::constant(hours));
+        assert_eq!(stamp_label(at, &zone(0)).unwrap(), "21:38 · 10/20/2026");
+        assert_eq!(stamp_label(at, &zone(-5)).unwrap(), "16:38 · 10/20/2026");
+        assert_eq!(stamp_label(at, &zone(8)).unwrap(), "05:38 · 10/21/2026");
+        let early = sent("2026-01-02T03:04:00Z").unwrap();
+        assert_eq!(stamp_label(early, &zone(0)).unwrap(), "03:04 · 01/02/2026");
+    }
+
+    #[test]
+    fn a_stamped_card_shows_the_time_below_the_text_and_beside_the_steering_label() {
+        let card = |kind, at| Block::User {
+            text: "hello".into(),
+            kind,
+            at,
+        };
+        let at = sent("2026-10-20T21:38:00Z");
+        let prompt = render(&card(UserKind::Prompt, at), styles(), 40, fold());
+        assert_eq!(text(&prompt), ["▎", "▎ hello", "▎ 21:38 · 10/20/2026", "▎"]);
+        let meta = &prompt[2];
+        assert_eq!(wrap::width(&meta.to_string()), 40);
+        assert_eq!(meta.spans[2].style.fg, Some(Palette::dark().meta));
+        assert_eq!(meta.spans[2].style.bg, Some(Palette::dark().composer_bg));
+
+        let steer = render(&card(UserKind::Steering, at), styles(), 40, fold());
+        assert_eq!(
+            steer[2].to_string().trim_end(),
+            "▎ 21:38 · 10/20/2026 · ↳ steering"
+        );
     }
 
     #[test]
@@ -1352,6 +1426,7 @@ mod tests {
             Block::User {
                 text: "a very long word without any break opportunity at all".into(),
                 kind: UserKind::Prompt,
+                at: None,
             },
             assistant(
                 "```rust\nfn main() { println!(\"wide code\"); }\n```",
