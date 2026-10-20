@@ -47,6 +47,7 @@ pub const METHOD_SESSION_READ: &str = "session.read";
 pub const METHOD_SESSION_PRESENTATION: &str = "session.presentation";
 pub const METHOD_SESSION_CONTEXT: &str = "session.context";
 pub const METHOD_SESSION_COMPACT: &str = "session.compact";
+pub const METHOD_SESSION_COMPACT_CANCEL: &str = "session.compact.cancel";
 pub const METHOD_TURN_SEND: &str = "turn.send";
 pub const METHOD_TURN_STEER: &str = "turn.steer";
 pub const METHOD_TURN_CANCEL: &str = "turn.cancel";
@@ -569,7 +570,23 @@ pub struct SessionContext {
     pub coverage: Option<ContextCoverage>,
     pub last_result: Option<CompactionResult>,
     pub budget: Option<ContextBudget>,
+    pub automatic: Option<AutomaticView>,
     pub last_prepare_failure: Option<String>,
+}
+
+/// The latest automatic compactions between requests, which have no event.
+#[derive(Clone, Debug, Deserialize)]
+pub struct AutomaticView {
+    pub current: Option<AutomaticObservation>,
+    pub last: Option<AutomaticObservation>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct AutomaticObservation {
+    pub operation_id: String,
+    pub before_tokens: Option<u64>,
+    pub after_tokens: Option<u64>,
+    pub outcome: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]

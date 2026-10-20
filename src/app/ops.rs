@@ -3,7 +3,7 @@
 use serde_json::{Value, json};
 
 use super::tasks::{self, History, Window};
-use super::{App, LiveTurn, Overlay, Scroll, Session, SessionOp};
+use super::{App, LiveTurn, Overlay, Scroll, Session, SessionOp, find};
 use crate::protocol::{
     self, AgentEvent, CompactStatus, CompactionResult, RpcError, SessionInfo, SessionState,
     TurnRef, TurnWaitResult,
@@ -18,9 +18,11 @@ impl App {
         match op {
             SessionOp::Tail(result) => self.on_tail(result),
             SessionOp::Page(result) => self.on_page(result),
-            SessionOp::TurnItems(result) => {
-                if let Some(items) = self.ok(result) {
-                    self.session_mut().reconcile_turn(&items);
+            SessionOp::TurnItems(loop_id, result) => {
+                if let Some(items) = self.ok(result)
+                    && let Some((at, grown)) = self.session_mut().reconcile_turn(&loop_id, &items)
+                {
+                    self.blocks_moved(at, grown);
                 }
             }
             SessionOp::State(result) => self.on_state(result),
@@ -164,10 +166,7 @@ impl App {
             }
         };
         let (grown, cards) = self.session_mut().prepend_page(page);
-        if let Scroll::Anchor { block, offset } = self.scroll {
-            let block = block.saturating_add_signed(grown);
-            self.scroll = Scroll::Anchor { block, offset };
-        }
+        self.blocks_moved(0, grown);
         for key in cards {
             let hydrated = key.clone();
             self.read_tool(&key, move |read| {
@@ -177,12 +176,49 @@ impl App {
         self.backfill();
     }
 
+    /// Keeps the anchored view and the find matches on their blocks after
+    /// `delta` blocks were added or removed in front of block `at`.
+    fn blocks_moved(&mut self, at: usize, delta: isize) {
+        let moved = |block: usize| match block >= at {
+            true => block.saturating_add_signed(delta),
+            false => block,
+        };
+        if let Scroll::Anchor { block, offset } = self.scroll {
+            self.scroll = Scroll::Anchor {
+                block: moved(block),
+                offset,
+            };
+        }
+        if let Overlay::Find {
+            query,
+            matches,
+            current,
+        } = &mut self.overlay
+        {
+            let shown = matches.get(*current).map(|found| moved(found.block));
+            *matches = find::find_matches(
+                self.session
+                    .as_ref()
+                    .map_or(&[][..], |session| session.transcript.blocks()),
+                query,
+            );
+            *current = shown
+                .and_then(|block| matches.iter().position(|found| found.block == block))
+                .unwrap_or(0);
+        }
+    }
+
     fn on_state(&mut self, result: Result<SessionState, RpcError>) {
         let Some(state) = self.ok(result) else {
             return;
         };
         let idle = state.accepts_turn();
-        self.session_mut().compaction = state.compaction;
+        let session = self.session_mut();
+        let was_compacting = session.compaction.is_some();
+        session.compaction = state.compaction;
+        if was_compacting && session.compaction.is_none() {
+            self.refresh_context();
+        }
         if idle {
             self.waiting_for_compaction = false;
             self.flush_queue();
@@ -209,8 +245,9 @@ impl App {
             .next_turn_start
             .take()
             .unwrap_or(session.transcript.len());
-        session.live = Some(LiveTurn::new(turn.clone(), start));
-        self.scroll = Scroll::Follow;
+        let mut live = LiveTurn::new(turn.clone(), start);
+        live.usage_base = session.usage.clone();
+        session.live = Some(live);
         self.spawn(tasks::wait_turn(self.client.clone(), turn));
     }
 
@@ -275,7 +312,9 @@ impl App {
         let client = self.client.clone();
         if reconcile {
             let (client, turn) = (client.clone(), turn.clone());
-            self.spawn(async move { SessionOp::TurnItems(tasks::read_turn(client, turn).await) });
+            self.spawn(async move {
+                SessionOp::TurnItems(turn.loop_id.clone(), tasks::read_turn(client, turn).await)
+            });
         }
         self.spawn(async move {
             let changes = tasks::turn_changes(client, turn.session_id, turn.loop_id.clone()).await;
@@ -286,7 +325,6 @@ impl App {
         // may also have switched branches.
         self.refresh_branch();
         self.refresh_context();
-        self.scroll = Scroll::Follow;
         self.flush_queue();
     }
 
@@ -319,6 +357,9 @@ impl App {
                 self.refresh_presentation();
             }
             CompactStatus::Noop => self.notice(NoticeLevel::Info, "Nothing to compact yet"),
+            CompactStatus::Failed if result.failure_kind.as_deref() == Some("cancelled") => {
+                self.notice(NoticeLevel::Info, "Compaction cancelled");
+            }
             CompactStatus::Failed => self.notice(
                 NoticeLevel::Error,
                 format!(
@@ -371,6 +412,10 @@ impl App {
             // compaction, not only at the turn's end.
             if compaction_ended || (usage && self.session_mut().presentation_due()) {
                 self.refresh_presentation();
+            }
+            // The context report holds the finished compaction's marker.
+            if compaction_ended {
+                self.refresh_context();
             }
         } else if let AgentEvent::SessionOpened { session, .. } = event {
             self.merge_catalog_info(*session);

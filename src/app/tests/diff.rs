@@ -248,3 +248,53 @@ async fn switching_the_theme_keeps_the_context_view() {
     let screen = h.screen(100, 20);
     assert!(screen.contains("Summary covers 6 turns"), "{screen}");
 }
+
+#[tokio::test(start_paused = true)]
+async fn the_turn_diff_of_a_running_turn_reads_that_turn() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.fake.script("turn.send", json!({"turn": turn("l2")}));
+    h.fake.script_held("turn.wait", waited("l2", completed()));
+    h.app
+        .session
+        .as_mut()
+        .unwrap()
+        .transcript
+        .push(Block::TurnEnd {
+            loop_id: "l1".into(),
+            outcome: crate::protocol::LoopOutcome::Completed,
+            duration: None,
+            requests: 1,
+            tools: 0,
+            usage: Default::default(),
+            changes: None,
+        });
+    h.submit("work");
+    h.until(|app| app.is_busy()).await;
+
+    h.fake.script("changes.list", json!({"records": []}));
+    h.type_text("/diff");
+    h.press(KeyCode::Enter);
+    h.settle().await;
+    assert_eq!(
+        h.calls("changes.list")[0]["scope"],
+        json!({"turn": {"loop_id": "l2"}})
+    );
+    let screen = h.screen(100, 12);
+    assert!(
+        screen.contains("This turn has no recorded changes yet; tab shows the session."),
+        "{screen}"
+    );
+
+    h.press(KeyCode::Esc);
+    h.fake.script(
+        "changes.list",
+        json!({"records": [record("r1", "app.py", "modified")]}),
+    );
+    h.fake
+        .script("changes.diff", diff("app.py", &[('+', "new")]));
+    h.type_text("/diff");
+    h.press(KeyCode::Enter);
+    h.settle().await;
+    let screen = h.screen(100, 12);
+    assert!(screen.starts_with(" ← Diff · turn · app.py"), "{screen}");
+}

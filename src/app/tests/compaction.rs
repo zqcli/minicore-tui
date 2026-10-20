@@ -202,3 +202,128 @@ async fn the_end_of_a_compaction_refreshes_the_footer_context_inside_the_window(
     assert_eq!(h.calls("session.presentation").len(), before + 1);
     assert_eq!(footer_percent(&h), Some(7.0));
 }
+
+fn automatic_context(current: serde_json::Value, last: serde_json::Value) -> serde_json::Value {
+    json!({"session_id": "s1", "automatic": {"current": current, "last": last}})
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_compaction_between_requests_shows_its_phase_and_leaves_a_marker() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.fake.script("turn.send", json!({"turn": turn("l1")}));
+    h.fake.script_held("turn.wait", waited("l1", completed()));
+    h.submit("go");
+    h.until(|app| app.is_busy()).await;
+    h.settle().await;
+
+    let running = json!({"operation_id": "auto-boundary-l1-1", "loop_id": "l1",
+                         "before_tokens": 32100, "outcome": "summarizing"});
+    h.fake
+        .script("session.context", automatic_context(running, json!(null)));
+    tokio::time::advance(Duration::from_secs(3)).await;
+    h.app.tick();
+    h.until(|app| app.compacting()).await;
+    let screen = h.screen(100, 14);
+    assert!(
+        screen.contains("Compacting context · summarizing (esc to interrupt)"),
+        "{screen}"
+    );
+    assert!(h.compactions().is_empty());
+
+    let done = json!({"operation_id": "auto-boundary-l1-1", "loop_id": "l1",
+                      "before_tokens": 32100, "after_tokens": 4100, "outcome": "compacted"});
+    h.fake
+        .script("session.context", automatic_context(json!(null), done));
+    tokio::time::advance(Duration::from_secs(3)).await;
+    h.app.tick();
+    h.until(|app| !app.compacting()).await;
+    assert_eq!(h.compactions(), ["auto-boundary-l1-1"]);
+    assert!(
+        h.screen(100, 14)
+            .contains("Compacted from 32.1k to 4.1k tokens")
+    );
+
+    tokio::time::advance(Duration::from_secs(3)).await;
+    h.app.tick();
+    h.run_for(Duration::from_secs(1)).await;
+    assert_eq!(h.compactions().len(), 1, "one marker per operation");
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_earlier_automatic_compaction_is_not_added_when_the_session_opens() {
+    let done = json!({"operation_id": "auto-boundary-l0-1", "before_tokens": 32100,
+                      "after_tokens": 4100, "outcome": "compacted"});
+    let mut h = Harness::new();
+    h.fake
+        .script("session.context", automatic_context(json!(null), done));
+    h.open().await;
+    h.settle().await;
+    assert!(h.compactions().is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_end_of_a_post_turn_compaction_adds_its_marker_and_the_status_names_the_phase() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    let state = |compaction: serde_json::Value| json!({"state": {"session_id": "s1", "status": "idle", "compaction": compaction}});
+    let working = json!({"operation_id": "auto-l1", "phase": "merging",
+                         "covered_item_count": 8, "retained_item_count": 2});
+    h.emit("session_state", state(working)).await;
+    h.until(|app| app.compacting()).await;
+    let screen = h.screen(100, 14);
+    assert!(
+        screen.contains("Compacting context · merging (esc to cancel)"),
+        "{screen}"
+    );
+
+    h.fake.script("session.context", automatic());
+    h.emit("session_state", state(serde_json::Value::Null))
+        .await;
+    h.until(|app| !app.compacting()).await;
+    h.settle().await;
+    assert_eq!(h.compactions(), ["auto-lup_1"]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn esc_cancels_the_compaction_that_owns_the_session() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.fake
+        .script("session.compact.cancel", json!({"cancelled": true}));
+    h.emit(
+        "session_state",
+        json!({"state": {"session_id": "s1", "status": "idle",
+                         "compaction": {"operation_id": "auto-l1", "phase": "summarizing",
+                                        "covered_item_count": 8, "retained_item_count": 2}}}),
+    )
+    .await;
+    h.until(|app| app.compacting()).await;
+    h.app.composer.set_text("a draft");
+    h.press(crossterm::event::KeyCode::Esc);
+    h.settle().await;
+    assert_eq!(
+        h.calls("session.compact.cancel"),
+        [json!({"session_id": "s1", "operation_id": "auto-l1"})]
+    );
+    assert_eq!(h.app.composer.text(), "a draft", "esc did one thing");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_cancelled_manual_compaction_says_so() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.fake.script_held(
+        "session.compact",
+        json!({"origin": "manual", "operation_id": "tui-1", "status": "failed",
+               "failure_kind": "cancelled"}),
+    );
+    h.fake
+        .script("session.compact.cancel", json!({"cancelled": true}));
+    h.action(Action::Compact);
+    h.press(crossterm::event::KeyCode::Esc);
+    h.run_for(Duration::from_millis(100)).await;
+    assert_eq!(
+        h.calls("session.compact.cancel")[0]["operation_id"],
+        "tui-1"
+    );
+    h.fake.release("session.compact");
+    h.settle().await;
+    assert_eq!(h.notices(), ["Compaction cancelled"]);
+}

@@ -15,7 +15,7 @@ the kitty keyboard protocol; `Ctrl+J` always inserts a newline.
 | `Enter` | Send when the session is idle; steer the running turn when it is busy. A draft whose first word names a command (`/model`, `/rename x`) runs it; any other draft, `/usr/bin/env is broken` included, is a prompt. |
 | `Alt+Enter` | Queue the draft as a follow-up while a turn runs; send it when idle. |
 | `Shift+Enter`, `Ctrl+J` | Newline. |
-| `Esc` | Interrupt the running turn; when idle, clear the draft. Closes an open picker or view first. |
+| `Esc` | Interrupt the running turn; cancel a running compaction; else clear the draft. Closes an open picker or view first. |
 | `Ctrl+C` | Clear the draft; a second press within 500 ms quits. |
 | `Ctrl+D` | Quit when the draft is empty; otherwise delete the character after the cursor. |
 | `↑` / `↓` | Move between lines of a multi-line draft; on the first or last line, browse prompt history (100 kept). |

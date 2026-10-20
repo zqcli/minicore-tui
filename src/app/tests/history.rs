@@ -534,3 +534,115 @@ async fn every_card_of_a_page_is_read_once_and_a_missing_call_stays_bare() {
     assert!(h.notices().is_empty(), "{:?}", h.notices());
     assert!(cards(&h).iter().all(|card| card.detail.is_empty()));
 }
+
+#[tokio::test(start_paused = true)]
+async fn find_matches_follow_their_blocks_when_a_page_is_put_in_front() {
+    let mut h = Harness::opened(answered(80, 0)).await;
+    h.ctrl(KeyCode::Char('f'));
+    h.type_text("latest");
+    let matched = |h: &Harness| match &h.app.overlay {
+        crate::app::Overlay::Find { matches, .. } => {
+            matches.iter().map(|found| found.block).collect::<Vec<_>>()
+        }
+        other => panic!("find is not open: {other:?}"),
+    };
+    assert_eq!(matched(&h), [1], "after the earlier-history marker");
+
+    h.fake.script(
+        "session.read",
+        page(
+            80,
+            0,
+            vec![user(18, "l0", "first"), assistant(19, "l0", "second")],
+        ),
+    );
+    h.app.scroll_by(-1);
+    h.action(Action::LoadOlder);
+    h.settle().await;
+    assert_eq!(h.texts(), ["first", "second", "latest"]);
+    assert_eq!(matched(&h), [2]);
+    h.press(KeyCode::Enter);
+    assert_eq!(
+        h.app.scroll,
+        Scroll::Anchor {
+            block: 2,
+            offset: 0
+        }
+    );
+}
+
+fn with_records(mut read: Value, records: Value) -> Value {
+    read["records"] = records;
+    read
+}
+
+fn turn_end_lines(h: &mut Harness) -> Vec<String> {
+    h.screen(100, 20)
+        .lines()
+        .map(|row| row.trim().to_owned())
+        .filter(|row| row.starts_with("completed") || row.starts_with("interrupted"))
+        .collect()
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_reopened_session_gets_its_turn_end_lines_and_totals_from_the_read() {
+    let items = vec![
+        user(0, "l1", "q1"),
+        assistant_tool(1, "l1", "c1", "bash"),
+        assistant(2, "l1", "a1"),
+        user(3, "l2", "q2"),
+        assistant(4, "l2", "a2"),
+    ];
+    let records = json!([
+        {"loop_id": "l1", "outcome": completed(), "requests": 2,
+         "usage": {"input_tokens": 100, "output_tokens": 10, "cache_read_tokens": 40}},
+        {"loop_id": "l2", "outcome": cancelled(), "requests": 1,
+         "usage": {"input_tokens": 50, "output_tokens": 5}},
+    ]);
+    let mut h = Harness::opened(with_records(page(5, 0, items), records)).await;
+    assert_eq!(
+        shape(&h),
+        [
+            "user",
+            "assistant",
+            "tool",
+            "assistant",
+            "other",
+            "user",
+            "assistant",
+            "other"
+        ]
+    );
+    assert_eq!(
+        turn_end_lines(&mut h),
+        ["completed · 2 requests · 1 tool", "interrupted"]
+    );
+    let usage = &h.app.session.as_ref().unwrap().usage;
+    assert_eq!((usage.input, usage.output, usage.cached), (150, 15, 40));
+}
+
+#[tokio::test(start_paused = true)]
+async fn totals_are_left_out_when_the_window_does_not_reach_the_summary() {
+    let records = json!([{"loop_id": "l1", "outcome": completed(), "requests": 1,
+                          "usage": {"input_tokens": 100}}]);
+    let mut read = with_records(
+        page(80, 0, vec![user(70, "l1", "q"), assistant(71, "l1", "a")]),
+        records,
+    );
+    read["projection"]["first_item"] = json!(0);
+    let h = Harness::opened(read).await;
+    assert_eq!(h.marker(), Some(20));
+    assert_eq!(h.app.session.as_ref().unwrap().usage.input, 0);
+
+    let mut summarised = with_records(page(5, 3, vec![summary(3), user(4, "l1", "q")]), json!([]));
+    summarised["projection"]["covered_usage"] =
+        json!({"usage": {"input_tokens": 900, "output_tokens": 90}, "partial": false});
+    let h = Harness::opened(summarised).await;
+    assert_eq!(h.app.session.as_ref().unwrap().usage.input, 900);
+
+    let mut partial = page(5, 3, vec![summary(3), user(4, "l1", "q")]);
+    partial["projection"]["covered_usage"] =
+        json!({"usage": {"input_tokens": 900}, "partial": true});
+    let h = Harness::opened(partial).await;
+    assert_eq!(h.app.session.as_ref().unwrap().usage.input, 0);
+}

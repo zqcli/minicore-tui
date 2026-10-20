@@ -134,7 +134,7 @@ impl App {
             (DiffScope::Workspace, _) => ChangeScope::Workspace,
         };
         if diff.files.is_empty() {
-            diff.status = "No file changes are recorded for this scope.".into();
+            diff.status = empty_status(scope, session.is_busy()).into();
         }
         let fields = json!({"scope": wire.value(), "limit": 200, "max_bytes": 262_144});
         self.call(
@@ -197,7 +197,8 @@ impl App {
         }
         diff.set_files(files);
         if diff.files.is_empty() {
-            diff.status = "No file changes are recorded for this scope.".into();
+            let running = self.session.as_ref().is_some_and(Session::is_busy);
+            diff.status = empty_status(scope, running).into();
             return;
         }
         diff.status.clear();
@@ -333,8 +334,18 @@ impl App {
     }
 }
 
-/// The loop of the newest finished turn, for the turn scope.
+fn empty_status(scope: DiffScope, running: bool) -> &'static str {
+    match (scope, running) {
+        (DiffScope::Turn, true) => "This turn has no recorded changes yet; tab shows the session.",
+        _ => "No file changes are recorded for this scope.",
+    }
+}
+
+/// The running turn's loop, else the newest finished turn's, for the turn scope.
 fn latest_loop(session: &Session) -> Option<String> {
+    if let Some(live) = session.live.as_ref() {
+        return Some(live.turn.loop_id.clone());
+    }
     session
         .transcript
         .blocks()

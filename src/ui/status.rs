@@ -124,9 +124,12 @@ fn working_line(app: &App, styles: Styles, width: u16) -> Option<Line<'static>> 
         .as_ref()
         .and_then(|session| session.live.as_ref());
     let interrupting = live.is_some_and(|live| live.interrupting);
-    let text = if app.compacting() {
-        // The Agent offers no way to cancel a compaction.
-        "Compacting context…"
+    let compaction = app
+        .session
+        .as_ref()
+        .and_then(|session| session.compaction_label());
+    let text = if let Some(label) = &compaction {
+        label.as_str()
     } else if app.has_interaction() {
         // Esc answers the prompt with a denial; it does not cancel the turn.
         "Waiting for approval (esc to deny)"
@@ -167,7 +170,7 @@ fn working_line(app: &App, styles: Styles, width: u16) -> Option<Line<'static>> 
         Span::raw(" "),
         Span::styled(spinner(app.started.elapsed()), styles.accent()),
         Span::raw(" "),
-        Span::styled(text, styles.dim()),
+        Span::styled(text.to_owned(), styles.dim()),
     ];
     for extra in extras {
         spans.push(Span::styled(" · ", styles.meta()));
