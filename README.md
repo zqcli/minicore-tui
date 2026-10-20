@@ -9,7 +9,7 @@ rewrite of the v0.3 frontend; see [CHANGELOG.md](CHANGELOG.md).
 ## Requirements
 
 - Rust 1.88 or newer (edition 2024, `rust-version` in `Cargo.toml`) to build;
-- a `minicore-agent` 0.7.0 executable and an Agent TOML configuration;
+- a `minicore-agent` 0.7.0 executable (the TUI writes the Agent configuration itself);
 - a terminal with an alternate screen, raw mode and bracketed paste. Mouse
   reporting is used for the wheel, clicks and selection. `Shift+Enter` and
   `Alt+Enter` need a terminal with the kitty keyboard protocol; `Ctrl+J` always
@@ -26,20 +26,30 @@ that lacks one: `session.read`, `session.read.display`, `session.context`,
 
 ```bash
 cargo build --locked --release
-target/release/minicore-tui --config ./agent.toml --workspace ./project
+export MINICORE_HOME=~/minicore                  # the TUI directory
+target/release/minicore-tui --workspace ./project   # first run writes starter files
 ```
 
-The Agent is spawned as `<agent> --config <agent.toml> --stdio` before the
-screen switches, so a missing binary or a rejected configuration is an ordinary
-terminal error. The TUI then opens or creates a session and waits for your first
-message; no model is called until you send one. A draft typed meanwhile is kept.
+Everything lives in one *TUI directory*: `--home`, else `$MINICORE_HOME`, else
+the directory of the executable (its parent when that is named `bin`, so a
+bundle with `bin/minicore-tui` and `bin/minicore-agent` needs nothing set).
+Providers and models are in `models.toml`, profiles and preferences in
+`config.toml`, the system prompt in `prompt/SYSTEM_PROMPT.md`, and every session
+in `session/`. On the first run the TUI writes commented starters, says what to
+fill in and exits; after that it validates both files, writes the Agent config
+to `session/agent.toml` and spawns `<agent> --config session/agent.toml --stdio`
+before the screen switches, so a bad configuration is an ordinary terminal error
+naming the file, line and key. The TUI then opens or creates a session and waits
+for your first message; no model is called until you send one. A draft typed
+meanwhile is kept. Full reference: [docs/configuration.md](docs/configuration.md).
 
 ### Options
 
 | Option | Meaning |
 |---|---|
-| `--agent <BIN>` | Agent executable. Default: `minicore-agent` from `PATH`. |
-| `--config <PATH>` | Agent TOML configuration. Required, unless `agent_config` is set in the TUI config. |
+| `--home <DIR>` | The TUI directory. Default: `$MINICORE_HOME`, else the executable's directory (its parent when named `bin`). |
+| `--agent <BIN>` | Agent executable. Default: `[agent] binary` in `config.toml`, else `<home>/bin/minicore-agent`, else `minicore-agent` from `PATH`. |
+| `--agent-config <FILE>` | Use this Agent config as is; no composition, no `models.toml`. For tests and advanced use. Replaces `--config`. |
 | `--workspace <DIR>` | Workspace of a new session. Default: the current directory. |
 | `--session <ID>` | Open this session. |
 | `--continue` | Open the most recent session of the workspace, or create one. Cannot be combined with `--session`. |
@@ -51,25 +61,47 @@ message; no model is called until you send one. A draft typed meanwhile is kept.
 
 Bad arguments print the usage and exit with status 2.
 
-### TUI config
+### Configuration
 
-Local preferences only; never Agent credentials or provider catalogs. The file
-is `$MINICORE_TUI_CONFIG`, else `$XDG_CONFIG_HOME/minicore-tui/config.toml`,
-else `~/.config/minicore-tui/config.toml`:
+`config.toml` (profiles, `[ui]`, `[agent]`, `[loop]`, `[compaction]`) and
+`models.toml` (providers and models, never keys: only `api_key_env`) replace the
+0.4 `~/.config/minicore-tui/config.toml`, which is no longer read.
 
 ```toml
-agent = "/usr/local/bin/minicore-agent"   # same as --agent
-agent_config = "/path/to/agent.toml"      # same as --config
-theme = "dark"                            # "dark" or "light"
-editor = ["nvim"]                         # command and arguments for Ctrl+G
-bell = true                               # ring when a turn over 10 s ends or asks approval
+# config.toml
+default_profile = "coding"
+
+[profiles.coding]
+model = "gpt-6-luna"               # a model id from models.toml
+reasoning = "max"
+approval = "auto"                  # ask | auto | read_only
+
+[ui]
+theme = "dark"                     # /theme writes this key back
+editor = ["nvim"]                  # Ctrl+G; default $VISUAL, then $EDITOR
+bell = true                        # ring when a turn over 10 s ends or asks approval
 ```
 
-Command-line options win. A missing file gives the defaults; a file with a
-syntax error or an unknown key is ignored as a whole. `/theme` saves the palette
-by rewriting the file, which drops comments. `Ctrl+G` uses `editor`, then
-`$VISUAL`, then `$EDITOR`. With `NO_COLOR` set the UI uses no colors.
-The prompt history is saved as `history.jsonl` in the same directory.
+```toml
+# models.toml
+[providers.luna]
+api = "open_ai_responses"
+base_url = "https://ai.789210.xyz/v1"
+api_key_env = "LUNA_API_KEY"       # the NAME of the variable
+
+[models.gpt-6-luna]
+provider = "luna"
+context_window = 64000
+max_output_tokens = 20000
+reasoning = ["auto", "low", "medium", "high", "max"]
+```
+
+Command-line options win. A malformed file, an unknown key or a dangling
+reference stops the start with `file:line: key: reason`; nothing is ignored
+silently. `/theme` edits only the `theme` key and keeps comments. `/reload`
+composes the Agent config again, so editing `SYSTEM_PROMPT.md` or a profile and
+running `/reload` applies it. With `NO_COLOR` set the UI uses no colors. Prompt
+history is `history.jsonl` in the TUI directory.
 
 ## Screen
 
@@ -150,7 +182,7 @@ The complete map is [docs/keybindings.md](docs/keybindings.md). The essentials:
 - `/new [profile]`, `/sessions` (`/resume`), `/session`, `/rename`, `/model [id]`,
   `/reasoning`, `/compact`, `/diff`, `/tool`, `/context`, `/copy`, `/export`,
   `/theme`, `/reload`, `/help`, `/quit`, and a command per prompt template in
-  `~/.config/minicore-tui/prompts/*.md`; `Ctrl+P` cycles models.
+  `<home>/prompt/commands/*.md`; `Ctrl+P` cycles models.
 
 ## Troubleshooting
 

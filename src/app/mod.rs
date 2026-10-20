@@ -214,6 +214,12 @@ pub struct App {
     /// waiting rather than start one.
     pub loading_session: bool,
     pub templates: Vec<templates::Template>,
+    /// The TUI directory; `None` in tests, which touch no files.
+    pub home: Option<crate::config::Home>,
+    /// The Agent config is composed from `home`, so `/reload` composes it again.
+    pub composed: bool,
+    /// `[ui] editor` from config.toml.
+    pub editor: Vec<String>,
     /// The `/word` draft an Enter already warned about; a second Enter sends it.
     pub armed_unknown: Option<String>,
     pub notifier: crate::title::Notifier,
@@ -268,6 +274,9 @@ impl App {
             edit_request: None,
             loading_session: false,
             templates: Vec::new(),
+            home: None,
+            composed: false,
+            editor: Vec::new(),
             armed_unknown: None,
             notifier: crate::title::Notifier::default(),
         }
@@ -293,8 +302,7 @@ impl App {
                 self.models = models;
                 self.profiles = profiles;
                 self.sessions = sessions;
-                self.templates = templates::load();
-                self.notifier.bell = crate::config::Config::load().bell;
+                self.templates = templates::load(self.home.as_ref());
                 self.ready = true;
             }
             Msg::Opened(result) => self.adopt(result, false),

@@ -18,10 +18,10 @@ the kitty keyboard protocol; `Ctrl+J` always inserts a newline.
 | `Esc` | Interrupt the running turn; cancel a running compaction; else clear the draft. Closes an open picker or view first. |
 | `Ctrl+C` | Clear the draft; a second press within 500 ms quits. |
 | `Ctrl+D` | Quit when the draft is empty; otherwise delete the character after the cursor. |
-| `↑` / `↓` | Move between lines of a multi-line draft; on the first or last line, browse prompt history. The last 100 prompts, paste chips included, are kept in `history.jsonl` next to the TUI config and survive a restart; a prompt over 32 KiB stays in memory only. |
+| `↑` / `↓` | Move between lines of a multi-line draft; on the first or last line, browse prompt history. The last 100 prompts, paste chips included, are kept in `history.jsonl` in the TUI directory and survive a restart; a prompt over 32 KiB stays in memory only. |
 | `Alt+↑` | Take the queued follow-ups back into an empty draft, separated by blank lines. |
 | `Ctrl+X` | Copy the last assistant answer, as `/copy` does. |
-| `Ctrl+G` | Edit the draft in the `editor` from the TUI config, else `$VISUAL`, else `$EDITOR`. |
+| `Ctrl+G` | Edit the draft in `[ui] editor` from `config.toml`, else `$VISUAL`, else `$EDITOR`. |
 | `/` at the start of the draft | Open the command palette. `Enter` runs the highlighted command; with no match it sends the line as a prompt. |
 | `@` at the start of a word | Open the workspace file picker. In the middle of a word (`me@example.com`) it is plain text. |
 | `Home` / `End`, `Ctrl+A` / `Ctrl+E` | Start or end of the current line (`Home` with an empty draft and `End` also scroll, see below). |
@@ -133,14 +133,13 @@ the name.
 | `/copy` | Copy the last assistant answer as Markdown. |
 | `/export [path]` | Write the conversation as Markdown; the default is `./minicore-<session>-<date>.md`. |
 | `/theme [dark\|light]` | Switch the palette and save it; without an argument, toggle. |
-| `/reload` | Ask the Agent to reload its configuration. |
+| `/reload` | Compose the Agent config again from `config.toml`, `models.toml` and the prompt, reload the Agent and the templates. |
 | `/help` | Open the help view. |
 | `/quit` | Quit. |
 
 ## Prompt templates
 
-Each `*.md` file in `prompts/` next to the TUI config (`~/.config/minicore-tui/prompts/`,
-or beside `$MINICORE_TUI_CONFIG`) is a command named after the file; they are
+Each `*.md` file in `prompt/commands/` of the TUI directory is a command named after the file; they are
 read at start and by `/reload`. A template shadows no built-in command. An
 optional `---` front matter gives `description:` and `argument-hint:`; without a
 description the first line is used. `/name args` expands `$1`, `$2`, …, `$@` (or
@@ -151,6 +150,6 @@ text, as pi does.
 
 The window title is `workspace · session title · idle|working|approval`, written
 only when it changes. The terminal bell rings when a turn that ran more than
-10 s ends, or asks for approval; `bell = false` in the TUI config turns it off.
+10 s ends, or asks for approval; `bell = false` under `[ui]` in `config.toml` turns it off.
 Quitting restores the title and prints `Resume: minicore-tui --session <id>` for
 a session with history.

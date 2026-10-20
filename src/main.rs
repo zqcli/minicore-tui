@@ -10,7 +10,7 @@ use tokio::sync::mpsc;
 
 use minicore_tui::app::{App, Msg};
 use minicore_tui::cli::{Args, USAGE};
-use minicore_tui::config::{Config, ThemeKind};
+use minicore_tui::config::{self, Home, Prepared, Request};
 use minicore_tui::protocol::SessionInfo;
 use minicore_tui::rpc::{Client, Incoming};
 use minicore_tui::terminal;
@@ -129,19 +129,32 @@ async fn run() -> i32 {
         println!("minicore-tui {}", env!("CARGO_PKG_VERSION"));
         return 0;
     }
-    let config = Config::load();
-    let args = args.with_config(config.clone());
-    let theme = args.theme.unwrap_or(ThemeKind::Dark);
-    let Some(agent_config) = args.agent_config.clone() else {
-        eprintln!(
-            "an agent config is required: pass --config or set `agent_config` in the TUI config"
-        );
-        return 2;
+    let home = match Home::resolve(args.home.as_deref()) {
+        Ok(home) => home,
+        Err(error) => {
+            eprintln!("{error}");
+            return 2;
+        }
     };
-    let agent = args
-        .agent
-        .clone()
-        .unwrap_or_else(minicore_tui::rpc::default_agent_bin);
+    let request = Request {
+        agent: args.agent.as_deref(),
+        agent_config: args.agent_config.as_deref(),
+        profile: args.profile.as_deref(),
+        model: args.model.as_deref(),
+    };
+    let has_env = |name: &str| std::env::var_os(name).is_some_and(|value| !value.is_empty());
+    let launch = match config::prepare(&home, &request, &has_env) {
+        Ok(Prepared::Launch(launch)) => launch,
+        Ok(Prepared::FirstRun(message)) => {
+            print!("{message}");
+            return 1;
+        }
+        Err(error) => {
+            eprintln!("minicore-tui: {error}");
+            return 2;
+        }
+    };
+    let theme = args.theme.unwrap_or(launch.ui.theme);
     let workspace = args
         .workspace
         .clone()
@@ -150,7 +163,7 @@ async fn run() -> i32 {
 
     let (msg_tx, mut msg_rx) = mpsc::unbounded_channel::<Msg>();
     let (incoming_tx, mut incoming_rx) = mpsc::channel::<Incoming>(256);
-    let client = match Client::spawn(&agent, &agent_config, incoming_tx) {
+    let client = match Client::spawn(&launch.agent_binary, &launch.agent_config, incoming_tx) {
         Ok(client) => client,
         Err(error) => {
             eprintln!("{error}");
@@ -174,9 +187,11 @@ async fn run() -> i32 {
         reasoning: args.reasoning,
     };
     app.theme = theme;
-    if let Some(file) = minicore_tui::config::history_path() {
-        app.composer = minicore_tui::app::composer::Composer::with_history_file(file);
-    }
+    app.notifier.bell = launch.ui.bell;
+    app.editor = launch.ui.editor;
+    app.composed = launch.composed;
+    app.composer = minicore_tui::app::composer::Composer::with_history_file(home.history_file());
+    app.home = Some(home);
     app.styles = Styles::of(Palette::for_kind(theme));
 
     let boot = {
