@@ -3,6 +3,12 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
+
+# The Agent and Runtime revisions the E2E job tests and the packages ship.
+env:
+  AGENT_REV: 004dbf2832f50083199ec2c703f5df364ff2acf5
+  RUNTIME_REV: c0181d1983280c8cdd14a3196b1ea199b7e6206d
 
 jobs:
   quality:
@@ -51,21 +57,19 @@ jobs:
     name: fixed Agent/Runtime and loopback E2E
     runs-on: ubuntu-latest
     env:
-      AGENT_REV: 4102719b401075d0cdbc3c790d0f561d0b22a8f6
-      RUNTIME_REV: b93aea38fea32b4ee416e4bbf5e66254157e1463
       MINICORE_E2E_MOCK_API_KEY: ci-loopback-only
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
         with:
           repository: zqcli/minicore-agent
-          ref: 4102719b401075d0cdbc3c790d0f561d0b22a8f6
+          ref: ${{ env.AGENT_REV }}
           path: .ci-fixed/minicore-agent
           fetch-depth: 1
       - uses: actions/checkout@v4
         with:
           repository: zqcli/minicore-runtime
-          ref: b93aea38fea32b4ee416e4bbf5e66254157e1463
+          ref: ${{ env.RUNTIME_REV }}
           path: .ci-fixed/minicore-runtime
           fetch-depth: 1
       - uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -96,3 +100,66 @@ jobs:
         env:
           MINICORE_AGENT_BIN: ${{ runner.temp }}/minicore-agent-target/debug/minicore-agent
         run: cargo test --locked --offline --all-targets
+
+  package:
+    name: package (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: macos-latest
+            target: x86_64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: zqcli/minicore-agent
+          ref: ${{ env.AGENT_REV }}
+          path: .ci-fixed/minicore-agent
+          fetch-depth: 1
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          target: ${{ matrix.target }}
+          rustflags: ""
+      - name: Build the TUI and the pinned Agent
+        shell: bash
+        run: |
+          cargo build --locked --release --target ${{ matrix.target }}
+          cargo build --locked --release --target ${{ matrix.target }} --manifest-path .ci-fixed/minicore-agent/Cargo.toml --target-dir target/agent
+      - name: Stage
+        id: stage
+        shell: bash
+        env:
+          EXE: ${{ runner.os == 'Windows' && '.exe' || '' }}
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
+          name="minicore-tui-$version-${{ matrix.target }}"
+          # The package is a TUI directory: bin/ beside the files a first run writes.
+          mkdir -p "$name/bin" "$name/docs"
+          cp "target/${{ matrix.target }}/release/minicore-tui$EXE" "$name/bin/"
+          cp "target/agent/${{ matrix.target }}/release/minicore-agent$EXE" "$name/bin/"
+          cp README.md CHANGELOG.md "$name/"
+          cp docs/configuration.md "$name/docs/"
+          printf 'minicore-tui %s %s\nminicore-agent %s\nminicore-runtime %s\n' \
+            "$version" "$GITHUB_SHA" "$AGENT_REV" "$RUNTIME_REV" > "$name/BUILD.txt"
+          # A tarball keeps the executable bits, which artifact zips drop.
+          if [ -z "$EXE" ]; then
+            tar -czf "$name.tar.gz" "$name"
+            echo "path=$name.tar.gz" >> "$GITHUB_OUTPUT"
+          else
+            echo "path=$name" >> "$GITHUB_OUTPUT"
+          fi
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.stage.outputs.name }}
+          path: ${{ steps.stage.outputs.path }}
+          if-no-files-found: error
