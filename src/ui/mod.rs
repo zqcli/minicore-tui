@@ -6,6 +6,8 @@ pub mod blocks;
 pub mod composer;
 pub mod markdown;
 pub mod panel;
+#[cfg(test)]
+mod perf_tests;
 pub mod picker;
 pub mod rails;
 pub mod selection;
