@@ -16,7 +16,7 @@ keys and commands changed incompatibly. Requires Rust 1.88 or newer.
 - A message sent while the Agent still compacts after a turn is queued and sent
   when the session is idle, instead of being lost.
 - `Enter` steers a running turn; `Alt+Enter` queues a follow-up; `Alt+↑` takes
-  the newest follow-up back. Steers the Agent did not apply become follow-ups.
+  the queued follow-ups back. Steers the Agent did not apply become follow-ups.
 - Approval and choice prompts are answered inline (`y`, `n`, `Enter`).
 - The turn-end line shows outcome, duration, requests, tools and, when files
   changed, `N files changed (+a −b)`. If a diff is binary, truncated or
@@ -42,12 +42,12 @@ keys and commands changed incompatibly. Requires Rust 1.88 or newer.
 - Streaming Markdown re-renders only the unfinished tail of the message.
 - Word wrapping with CJK-aware breaks and preserved list indentation.
 - Scrolling is anchored to what you read: streaming output does not move the
-  view, and a `↓ new output` pill shows when you are above the bottom.
+  view, and a `Jump to latest message` label shows when you are above the bottom.
 - Tool cards are folded by default and bounded: duration, exit code, line
   changes, the output tail of a live `bash` call, and a tool view with the full
   stdout and stderr. After a reload a card shows its line count and a
   `click for full output` row.
-- Reasoning folds to `Thought · N lines` when finished; `Ctrl+T` shows it.
+- Reasoning folds to its first three rows when finished; `Ctrl+T` collapses it to one row.
 - Compaction shows as a status phase and a one-line marker with token counts.
   Loaded content is never removed.
 

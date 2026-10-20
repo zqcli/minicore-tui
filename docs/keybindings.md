@@ -24,7 +24,7 @@ the kitty keyboard protocol; `Ctrl+J` always inserts a newline.
 | `Ctrl+G` | Edit the draft in the `editor` from the TUI config, else `$VISUAL`, else `$EDITOR`. |
 | `/` at the start of the draft | Open the command palette. `Enter` runs the highlighted command; with no match it sends the line as a prompt. |
 | `@` at the start of a word | Open the workspace file picker. In the middle of a word (`me@example.com`) it is plain text. |
-| `Home` / `End`, `Ctrl+A` / `Ctrl+E` | Start or end of the current line. |
+| `Home` / `End`, `Ctrl+A` / `Ctrl+E` | Start or end of the current line (`Home` with an empty draft and `End` also scroll, see below). |
 | `←` / `→` | Move by character. |
 | `Ctrl+←` / `Ctrl+→`, `Alt+←` / `Alt+→` | Move by word. |
 | `Backspace` / `Delete` | Delete before or after the cursor. |
@@ -41,8 +41,9 @@ one unit. `Esc` while busy only interrupts; it does not clear the draft.
 
 | Key | Action |
 |---|---|
-| `PageUp` / `PageDown` | Scroll one viewport minus two rows. |
-| `Ctrl+Home` / `Ctrl+End` | Jump to the top of the loaded history (and load older items), or back to the tail. |
+| `PageUp` / `PageDown` | Scroll one viewport minus four rows. |
+| `Ctrl+Home`, or `Home` with an empty draft | Jump to the top of the loaded history and load older items. |
+| `End` | Move to the end of the line and follow the tail again. |
 | `Ctrl+↑` / `Ctrl+↓` | Put the previous or next user message at the top; past the last one, follow the tail. |
 | `Ctrl+R` | Sessions picker. |
 | `Ctrl+L` | Model picker. |
@@ -56,13 +57,13 @@ one unit. `Esc` while busy only interrupts; it does not clear the draft.
 
 Any upward scroll anchors the view to the content you are reading; new output
 does not move it, and a ` ↓ Jump to latest message · End ` label shows while you
-are above the bottom. `Ctrl+End` or scrolling to the bottom resumes following the tail.
+are above the bottom. `End` or scrolling to the bottom resumes following the tail.
 
 ## Mouse
 
 | Gesture | Action |
 |---|---|
-| Wheel | Scroll three rows. With a view open it scrolls that view (help, diff, tool output; the context view does not scroll); over a picker it moves the selection. It never scrolls the transcript behind them. |
+| Wheel | Scroll one row per notch, five with `Alt`. With a view open it scrolls that view (help three rows per notch, diff, tool output; the context view does not scroll); over a picker it moves the selection. It never scrolls the transcript behind them. |
 | Click a tool card's header row | Toggle that card. |
 | Click a card's `click for full output` row | Open the tool view. Expanded cards end in this row; so does a card reloaded from history, whose row reads `… N lines · click for full output`. |
 | Click a turn-end line | Open the diff view for that turn. |
@@ -103,6 +104,7 @@ While an interaction is pending, only these keys act; the rest are ignored.
 ## Views
 
 `Esc` returns from a view to the transcript with its scroll position intact.
+A view owns the keys: the composer below it is dimmed and reads `view open · esc to return`, and the keys the view does not bind do nothing.
 
 | View | Keys |
 |---|---|

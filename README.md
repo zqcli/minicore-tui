@@ -102,7 +102,7 @@ without a report. The TUI never estimates it.
 
 - **Conversation.** User messages and Markdown answers stream with an incremental
   renderer. User messages are tinted cards; thinking has a purple rail and
-  folds to its first three rows plus `... (N more lines, ctrl+o to expand)`;
+  folds to its first three rows plus `... (N more lines, ctrl+o to expand)` (the newest three while it streams);
   `Ctrl+T` collapses it to one `Thinking...` row.
 - **Tool cards** start folded to three rows on a state-coloured band (running,
   done, failed): tool name, target (`$ cmd`, `path:range`, `pattern in path`)
@@ -123,7 +123,8 @@ without a report. The TUI never estimates it.
   A reloaded `bash` card shows its line count and a `click for full output` row;
   `/tool` opens the same view.
 - **Views** replace the transcript and keep the footer: diff (turn, session or
-  workspace scope), tool output, context budget and help. `Esc` returns.
+  workspace scope), tool output, context budget and help. `Esc` returns; the
+  composer is dimmed meanwhile, because the view owns the keys.
 - **Completion and selectors.** `/` and `@` open a list inside the editor that
   filters as you type (`Tab` inserts, `Enter` runs, `Esc` closes and keeps the
   text). Sessions with delete (`Ctrl+R`), model (`Ctrl+L`), reasoning
@@ -144,7 +145,7 @@ The complete map is [docs/keybindings.md](docs/keybindings.md). The essentials:
   `Esc` interrupt (idle: clear the draft), `Ctrl+C` clear / quit, `Ctrl+D` quit;
 - `Ctrl+R` sessions, `Ctrl+L` model, `Shift+Tab` reasoning, `Ctrl+O` tool cards,
   `Ctrl+T` reasoning text, `Ctrl+F` find, `F1` help;
-- `PageUp` / `PageDown`, `Ctrl+Home` / `Ctrl+End`, `Ctrl+↑` / `Ctrl+↓` and the
+- `PageUp` / `PageDown`, `Ctrl+Home` / `End`, `Ctrl+↑` / `Ctrl+↓` and the
   wheel navigate; `/` opens the command palette and `@` the file picker;
 - `/new [profile]`, `/sessions` (`/resume`), `/session`, `/rename`, `/model [id]`,
   `/reasoning`, `/compact`, `/diff`, `/tool`, `/context`, `/copy`, `/export`,
