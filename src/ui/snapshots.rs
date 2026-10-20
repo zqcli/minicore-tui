@@ -513,7 +513,7 @@ fn steering_is_listed_before_follow_ups_with_the_recall_hint() {
         [
             "  Steering: now",
             "  Follow-up: later",
-            "  ↳ alt+up to edit the last follow-up"
+            "  ↳ alt+up to edit the queued follow-ups"
         ],
         "{rendered}"
     );

@@ -112,7 +112,7 @@ without a report. The TUI never estimates it.
 - **Turn end** is one dim line: outcome, duration, requests, tools and, when files
   changed, `N files changed (+a −b)`. A failed or cancelled turn shows its reason.
 - **Steering and queue.** `Enter` while a turn runs steers it; `Alt+Enter` queues
-  a follow-up sent after the turn; `Alt+↑` takes the newest follow-up back.
+  a follow-up sent after the turn; `Alt+↑` takes the queued follow-ups back.
   `Esc` interrupts. A message sent while the Agent still compacts after a turn
   waits in the queue and is sent when the session is idle.
 - **Compaction** shows as a status phase and leaves a `[compaction]` box with

@@ -116,7 +116,7 @@ fn queued_rows(session: &Session, styles: Styles, width: u16) -> Vec<Line<'stati
         .iter()
         .any(|queued| queued.kind == QueuedKind::Follow)
     {
-        let hint = "↳ alt+up to edit the last follow-up";
+        let hint = "↳ alt+up to edit the queued follow-ups";
         rows.push(padded(hint, width, styles.faint()));
     }
     rows

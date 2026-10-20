@@ -505,14 +505,14 @@ impl App {
         );
     }
 
-    /// Alt+↑: the newest queued follow-up goes back to an empty composer.
+    /// Alt+↑: the queued follow-ups go back to an empty composer.
     fn recall_queued(&mut self) {
         if !self.composer.is_empty() {
             self.notice(
                 NoticeLevel::Info,
                 "Clear the draft before recalling a queued message",
             );
-        } else if let Some(text) = self.session.as_mut().and_then(|s| s.recall_follow_up()) {
+        } else if let Some(text) = self.session.as_mut().and_then(Session::recall_follow_ups) {
             self.composer.set_text(&text);
         }
     }

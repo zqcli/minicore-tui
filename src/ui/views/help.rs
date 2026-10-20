@@ -46,7 +46,7 @@ const KEYS: &[KeyRow] = &[
     },
     KeyRow {
         keys: "alt+↑",
-        action: "pull the last queued message back",
+        action: "pull the queued follow-ups back",
     },
     KeyRow {
         keys: "ctrl+x",

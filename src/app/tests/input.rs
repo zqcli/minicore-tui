@@ -124,8 +124,8 @@ async fn follow_ups_queue_behind_a_running_turn_and_alt_up_recalls_the_newest() 
 
     h.ctrl(KeyCode::Char('c'));
     h.key(KeyCode::Up, KeyModifiers::ALT);
-    assert_eq!(h.app.composer.text(), "two");
-    assert_eq!(h.queue(), ["one"]);
+    assert_eq!(h.app.composer.text(), "one\n\ntwo");
+    assert!(h.queue().is_empty());
 }
 
 #[tokio::test(start_paused = true)]

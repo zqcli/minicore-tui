@@ -619,13 +619,14 @@ impl Session {
         Some(self.queue.remove(index).text)
     }
 
-    /// The newest follow-up, taken back out of the queue.
-    pub fn recall_follow_up(&mut self) -> Option<String> {
-        let index = self
-            .queue
-            .iter()
-            .rposition(|queued| queued.kind == QueuedKind::Follow)?;
-        Some(self.queue.remove(index).text)
+    /// Every follow-up taken back out of the queue, oldest first, as blank-line separated paragraphs.
+    pub fn recall_follow_ups(&mut self) -> Option<String> {
+        let (follows, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut self.queue)
+            .into_iter()
+            .partition(|queued| queued.kind == QueuedKind::Follow);
+        self.queue = rest;
+        let texts: Vec<_> = follows.into_iter().map(|queued| queued.text).collect();
+        (!texts.is_empty()).then(|| texts.join("\n\n"))
     }
 
     /// The Agent discards steers it has not applied; they wait as follow-ups.
