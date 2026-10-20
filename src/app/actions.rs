@@ -380,7 +380,7 @@ impl App {
     pub(super) fn refresh_branch(&mut self) {
         self.call(
             protocol::METHOD_WORKSPACE_STATUS,
-            json!({"max_bytes": 1024}),
+            json!({}),
             SessionOp::WorkspaceStatus,
         );
     }

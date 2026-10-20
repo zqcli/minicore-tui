@@ -271,7 +271,10 @@ fn the_footer_reports_the_state_and_context() {
         !footer.contains("ctx"),
         "no context before it is known: {footer}"
     );
-    assert!(footer.ends_with("↑0 ↓0 R0"), "{footer}");
+    assert!(
+        !footer.contains('↑'),
+        "no token totals before any usage: {footer}"
+    );
 }
 
 #[test]

@@ -290,20 +290,23 @@ fn footer(app: &App, styles: Styles, width: u16) -> Line<'static> {
     Line::from(spans)
 }
 
-/// `↑in ↓out Rcache · ctx N%`; the context share turns amber from 70 %.
+/// `↑in ↓out Rcache · ctx N%`, each part once known; the context share turns amber from 70 %.
 fn totals(session: &Session, styles: Styles) -> Vec<Span<'static>> {
     let usage = &session.usage;
     let tokens = crate::ui::format_tokens;
-    let mut spans = vec![
-        Span::styled(
+    let mut spans = Vec::new();
+    // Totals count from when the session was opened, so zeros on a reopened
+    // session would misstate it.
+    if usage.input + usage.output + usage.cached > 0 {
+        spans.push(Span::styled(
             format!("↑{} ↓{}", tokens(usage.input), tokens(usage.output)),
             styles.user_rail(),
-        ),
-        Span::styled(
+        ));
+        spans.push(Span::styled(
             format!(" R{}", tokens(usage.cached)),
             styles.reasoning_rail(),
-        ),
-    ];
+        ));
+    }
     // An unknown window is only worth a mark once the session has used some.
     let context = match super::views::context::percent(session) {
         Some(percent) if percent >= 70.0 => Some((format!("ctx {percent:.2}%"), styles.amber())),
@@ -314,7 +317,9 @@ fn totals(session: &Session, styles: Styles) -> Vec<Span<'static>> {
         None => None,
     };
     if let Some((text, style)) = context {
-        spans.push(Span::styled(" · ", styles.meta()));
+        if !spans.is_empty() {
+            spans.push(Span::styled(" · ", styles.meta()));
+        }
         spans.push(Span::styled(text, style));
     }
     spans
