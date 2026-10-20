@@ -76,7 +76,7 @@ pub struct Ready {
 pub enum SessionOp {
     Tail(Result<tasks::History, RpcError>),
     Page(Result<tasks::History, RpcError>),
-    TurnItems(Result<Vec<RawHistoryItem>, RpcError>),
+    TurnItems(String, Result<Vec<RawHistoryItem>, RpcError>),
     State(Result<SessionState, RpcError>),
     Presentation(Result<SessionPresentation, RpcError>),
     /// A `workspace.status` answer, wanted only for the branch it caches in the presentation.
@@ -316,6 +316,7 @@ impl App {
             notice.level == NoticeLevel::Error || notice.at.elapsed() < NOTICE_TTL
         });
         self.flash = self.flash.take().filter(|(_, at)| at.elapsed() < FLASH_TTL);
+        self.watch_context();
     }
 
     /// Whether something on screen moves with the clock.

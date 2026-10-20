@@ -138,14 +138,19 @@ hints.
    and turns unapplied steers into follow-ups. If the outcome is not `completed`
    or the turn had a gap, its durable items are read with `turn.result` (paged,
    chunk-assembled) and **reconciled**: they replace the blocks the turn streamed,
-   keep what only live events knew (duration, exit code, expansion) and leave the
-   turn-end block last. In every case `changes.list` for the turn fills the change
+   up to its turn-end line and no further, so a follow-up already sent stays
+   after it. Cards keep the detail, input and output the live events knew,
+   thinking and text the items lack stay, and so do blocks no item covers (the
+   request an interrupt cut short, compaction markers). In every case `changes.list` for the turn fills the change
    summary, `session.presentation` and `session.context` are refreshed, and the
    next follow-up is sent.
 4. **`turn_finished`** only changes the phase text. A wait answer for another
    loop leaves the live turn running.
 5. **Interrupt.** `Esc` sends `turn.cancel` once; the status line shows
-   `Interrupting` until `turn.wait` resolves.
+   `Interrupting` until `turn.wait` resolves. Only the user's own send, `End`
+   and the jump label follow the tail; a turn starting or ending leaves an
+   anchored view alone. Per-request `request_usage` events add to the footer
+   totals as they come; the wait's usage then replaces them.
 
 The `(+a −b)` counts of the turn-end line are not in `changes.list`; they come
 from paging `changes.diff` for each of the first 100 records. A record without
@@ -190,11 +195,19 @@ history.
 ## Compaction
 
 `session_state.compaction` and `session.context.current_operation` drive the
-`Compacting context` status and the `● compacting` footer state. The Agent has
-no completed event, so the one-line marker comes from the `session.compact`
-result of a compaction the TUI started, or from `last_result` in a
-`session.context` read (on open, after each turn, when the Context view opens).
-Both carry an operation id and `push_compaction` skips one it already shows.
+`Compacting context · <phase>` status and the `● compacting` footer state. The
+Agent has no completed event, so the one-line marker comes from the
+`session.compact` result of a compaction the TUI started, or from `last_result`
+in a `session.context` read (on open, after each turn, when a compaction ends,
+when the Context view opens). A compaction between two requests of a turn
+reaches neither: it is only in `session.context.automatic.current` and `.last`,
+so the context is read every 2 s while a turn runs, and a `last` that differs
+from the one the first read of the session reported becomes a marker. All carry
+an operation id and `push_compaction` skips one it already shows. `Esc` outside
+a turn sends `session.compact.cancel` for the operation shown; inside a turn it
+interrupts the turn, which ends the compaction too.
+The footer's `ctx` is the reported tokens over `budget.input_budget_tokens`
+(over the model window when the Agent reports no budget).
 Loaded blocks are never removed. A summary replayed from history is a block of
 the tail, shown under its marker with `Ctrl+T`.
 

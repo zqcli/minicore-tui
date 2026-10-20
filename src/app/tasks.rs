@@ -9,12 +9,12 @@ use tokio::sync::mpsc;
 
 use super::{App, BUSY_RETRY, Msg, SessionOp};
 use crate::protocol::changes::{ChangeList, DiffPage};
-use crate::protocol::read::RawHistoryItem;
+use crate::protocol::read::{RawHistoryItem, TurnRecord};
 use crate::protocol::tool::ToolOutputPage;
 use crate::protocol::{
     self, ChunkAssembler, ChunkOutcome, ModelListResult, PingResult, ProfileListResult, ReadCursor,
     ReadSessionResult, RpcError, SessionInfo, SessionListResult, SessionResult, SnapshotPin,
-    ToolRef, TurnRef, TurnResultPage, TurnWaitResult,
+    ToolRef, TurnRef, TurnResultPage, TurnWaitResult, Usage,
 };
 use crate::rpc::Client;
 use crate::transcript::{ChangeSummary, NoticeLevel};
@@ -32,6 +32,10 @@ pub struct History {
     pub floor: usize,
     pub has_more: bool,
     pub canonical: bool,
+    /// How the turns with items in the window ended.
+    pub records: Vec<TurnRecord>,
+    /// The usage behind the summary, when the Agent counted all of it.
+    pub covered_usage: Option<Usage>,
 }
 
 /// Which part of the history to read.
@@ -197,13 +201,18 @@ pub async fn read_history(
             ),
             Window::CanonicalBefore(end) => (end.saturating_sub(protocol::PAGE_LIMIT), end),
         };
-        let items = read_window(&client, &session_id, view, &pin, start, end).await?;
+        let (items, records) = read_window(&client, &session_id, view, &pin, start, end).await?;
         Ok(History {
             items,
             from: start,
             floor: pin.first_item,
             has_more: start > pin.first_item,
             canonical,
+            records,
+            covered_usage: pin
+                .covered_usage
+                .filter(|covered| !covered.partial)
+                .map(|covered| covered.usage),
         })
     };
     match read().await {
@@ -224,7 +233,8 @@ async fn probe(client: &Client, session_id: &str, view: &str) -> Result<Snapshot
     Ok(page.pin())
 }
 
-/// Reads `[start, end)` against `pin` and decodes every complete item.
+/// Reads `[start, end)` against `pin` and decodes every complete item, with
+/// the record of each turn that has one.
 async fn read_window(
     client: &Client,
     session_id: &str,
@@ -232,9 +242,10 @@ async fn read_window(
     pin: &SnapshotPin,
     start: usize,
     end: usize,
-) -> Result<Vec<RawHistoryItem>, RpcError> {
+) -> Result<(Vec<RawHistoryItem>, Vec<TurnRecord>), RpcError> {
     let mut assembler = ChunkAssembler::new();
     let mut items = Vec::new();
+    let mut records: Vec<TurnRecord> = Vec::new();
     let mut cursor = Some(ReadCursor {
         item: start,
         offset: 0,
@@ -253,6 +264,11 @@ async fn read_window(
             params["projection_revision"] = json!(projection);
         }
         let page: ReadSessionResult = client.call(protocol::METHOD_SESSION_READ, &params).await?;
+        for record in page.records {
+            if !records.iter().any(|known| known.loop_id == record.loop_id) {
+                records.push(record);
+            }
+        }
         for chunk in page.items {
             let index = chunk.index;
             if let Ok(ChunkOutcome::Item(item)) = assembler.push(chunk)
@@ -264,7 +280,7 @@ async fn read_window(
         }
         cursor = page.next_cursor.as_ref().and_then(ReadCursor::from_value);
     }
-    Ok(items)
+    Ok((items, records))
 }
 
 /// One turn's durable items, read after a gap or an unfinished outcome.
@@ -448,7 +464,9 @@ pub async fn export(client: Arc<Client>, session_id: String, path: Option<String
     let written = async {
         let items = async || {
             let pin = probe(&client, &session_id, "canonical").await?;
-            read_window(&client, &session_id, "canonical", &pin, 0, pin.total).await
+            let (items, _) =
+                read_window(&client, &session_id, "canonical", &pin, 0, pin.total).await?;
+            Ok::<_, RpcError>(items)
         };
         let items = match items().await {
             Err(error) if error.is_stale_pin() => items().await,

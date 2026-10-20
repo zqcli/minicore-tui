@@ -1,13 +1,14 @@
 //! The transcript data model: ordered blocks, tool calls, and the operations
 //! that apply Agent events and history items to them.
 
+use std::ops::Range;
 use std::time::{Duration, Instant};
 
 use crate::protocol::event::{CommandResult, ProcessChunk, ProcessStream};
 use crate::protocol::{
     LoopOutcome, ToolDisplay, ToolExecution, ToolExecutionState, ToolInvocation, ToolReadResult,
     ToolRef, ToolSummary, Usage, read::RawHistoryItem, read::RuntimeAssistantPart,
-    read::RuntimeItem, read::UserKind,
+    read::RuntimeItem, read::TurnRecord, read::UserKind,
 };
 
 /// One rendered unit of the conversation.
@@ -291,6 +292,22 @@ impl ToolCall {
 
     /// Carries over what only live events knew when history replaces this card.
     pub fn keep_live_facts(&mut self, live: &ToolCall) {
+        if self.detail.is_empty() {
+            self.detail.clone_from(&live.detail);
+        }
+        if self.expanded_input.is_none() {
+            self.expanded_input.clone_from(&live.expanded_input);
+            self.input_lines = self.input_lines.or(live.input_lines);
+        }
+        if self.detail.is_empty()
+            && self.name == "bash"
+            && let Some(script) = self
+                .expanded_input
+                .as_deref()
+                .and_then(|input| input.lines().next())
+        {
+            self.detail = format!("$ {script}");
+        }
         self.duration = self.duration.or(live.duration);
         self.exit_code = self.exit_code.or(live.exit_code);
         self.expanded = self.expanded.or(live.expanded);
@@ -587,16 +604,24 @@ impl Transcript {
         self.revisions.clear();
     }
 
-    pub fn truncate(&mut self, len: usize) {
-        self.blocks.truncate(len);
-        self.revisions.truncate(len);
-    }
-
     pub fn remove(&mut self, index: usize) {
         if index < self.blocks.len() {
             self.blocks.remove(index);
             self.revisions.remove(index);
         }
+    }
+
+    /// Replaces `range` with `blocks`.
+    pub fn splice(&mut self, range: Range<usize>, blocks: Vec<Block>) {
+        let revisions: Vec<u64> = blocks
+            .iter()
+            .map(|_| {
+                self.next_revision += 1;
+                self.next_revision
+            })
+            .collect();
+        self.blocks.splice(range.clone(), blocks);
+        self.revisions.splice(range, revisions);
     }
 
     pub fn remove_front(&mut self, count: usize) {
@@ -681,6 +706,119 @@ impl Transcript {
             _ => None,
         })
     }
+}
+
+/// The blocks of a turn's durable items with what only the live turn showed
+/// put back: card facts, thinking and text the items lack, and the blocks no
+/// item covers, such as the request an interrupt cut short.
+pub fn merge_live(mut durable: Vec<Block>, live: &[Block]) -> Vec<Block> {
+    for block in &mut durable {
+        match block {
+            Block::Tool(call) => {
+                if let Some(known) = live.iter().find_map(|live| match live {
+                    Block::Tool(known) if known.key == call.key => Some(known),
+                    _ => None,
+                }) {
+                    call.keep_live_facts(known);
+                }
+            }
+            Block::Assistant {
+                key,
+                reasoning,
+                text,
+                expanded,
+                ..
+            } => {
+                if let Some((known_reasoning, known_text, known_expanded)) =
+                    live.iter().find_map(|live| match live {
+                        Block::Assistant {
+                            key: known,
+                            reasoning,
+                            text,
+                            expanded,
+                            ..
+                        } if known == key => Some((reasoning, text, expanded)),
+                        _ => None,
+                    })
+                {
+                    if reasoning.is_empty() {
+                        reasoning.clone_from(known_reasoning);
+                    }
+                    if text.is_empty() {
+                        text.clone_from(known_text);
+                    }
+                    *expanded = expanded.or(*known_expanded);
+                }
+            }
+            _ => {}
+        }
+    }
+    let uncovered: Vec<Block> =
+        live.iter()
+            .filter(|block| match block {
+                Block::Tool(call) => !durable
+                    .iter()
+                    .any(|kept| matches!(kept, Block::Tool(kept) if kept.key == call.key)),
+                Block::Assistant {
+                    key,
+                    reasoning,
+                    text,
+                    ..
+                } => !(reasoning.is_empty() && text.is_empty())
+                    && !durable.iter().any(
+                        |kept| matches!(kept, Block::Assistant { key: kept, .. } if kept == key),
+                    ),
+                Block::User { text, .. } => !durable
+                    .iter()
+                    .any(|kept| matches!(kept, Block::User { text: kept, .. } if kept == text)),
+                Block::Compaction { .. } => true,
+                _ => false,
+            })
+            .cloned()
+            .collect();
+    durable.extend(uncovered);
+    durable
+}
+
+/// Appends history items, closing each turn that has a record with its
+/// turn-end line; the duration and changes are not stored.
+pub fn append_history(
+    transcript: &mut Transcript,
+    items: &[RawHistoryItem],
+    records: &[TurnRecord],
+    session_id: &str,
+) {
+    let close = |transcript: &mut Transcript, loop_id: Option<&str>| {
+        let Some(record) = loop_id.and_then(|id| records.iter().find(|r| r.loop_id == id)) else {
+            return;
+        };
+        let tools = transcript
+            .tool_calls()
+            .filter(|call| call.key.loop_id == record.loop_id)
+            .count() as u64;
+        transcript.push(Block::TurnEnd {
+            loop_id: record.loop_id.clone(),
+            outcome: record.outcome.clone(),
+            duration: None,
+            requests: record.requests,
+            tools,
+            usage: record.usage.clone(),
+            changes: None,
+        });
+    };
+    let mut open: Option<&str> = None;
+    for item in items {
+        match &item.item {
+            RuntimeItem::User(user) if user.kind != UserKind::Steering => {
+                close(transcript, open.take());
+            }
+            RuntimeItem::Summary(_) => close(transcript, open.take()),
+            RuntimeItem::Assistant(assistant) => open = Some(&assistant.loop_id),
+            _ => {}
+        }
+        append_history_item(transcript, item, session_id);
+    }
+    close(transcript, open);
 }
 
 /// Converts one decoded history item into blocks appended to the transcript.

@@ -31,18 +31,31 @@ pub fn text(session: Option<&Session>, styles: Styles) -> String {
         .join("\n")
 }
 
-/// How full the context is, in percent, as the Agent reported it for the last
-/// request. A compaction invalidates the report; history estimates exclude the
-/// summary, so they would understate it.
+/// The input budget the Agent reports, which automatic compaction works against.
+fn input_budget(context: Option<&SessionContext>) -> Option<u64> {
+    context?
+        .budget
+        .as_ref()?
+        .input_budget_tokens
+        .filter(|budget| *budget > 0)
+}
+
+/// How full the context is, in percent of the input budget (of the model
+/// window when the Agent reports no budget), as reported for the last request.
+/// A compaction invalidates the report; history estimates exclude the summary,
+/// so they would understate it.
 pub fn percent(session: &Session) -> Option<f64> {
     let usage = session.presentation.as_ref()?.context.as_ref()?;
     let tokens = usage.tokens?;
-    usage.percent.or_else(|| {
-        usage
-            .window
-            .filter(|window| *window > 0)
-            .map(|window| tokens as f64 / window as f64 * 100.0)
-    })
+    match input_budget(session.context.as_ref()) {
+        Some(budget) => Some(tokens as f64 / budget as f64 * 100.0),
+        None => usage.percent.or_else(|| {
+            usage
+                .window
+                .filter(|window| *window > 0)
+                .map(|window| tokens as f64 / window as f64 * 100.0)
+        }),
+    }
 }
 
 /// Labels estimates as estimates and never prints an unknown number as zero.
@@ -54,18 +67,36 @@ fn summary_lines(
     let mut lines = Vec::new();
     let usage = presentation.and_then(|view| view.context.as_ref());
 
-    let reported = usage.and_then(|usage| match (usage.tokens, usage.window) {
-        (Some(tokens), Some(window)) if window > 0 => {
-            let percent = usage
-                .percent
-                .unwrap_or(tokens as f64 / window as f64 * 100.0);
-            Some(format!(
-                "Context: {} of {} tokens ({percent:.0}%) — reported by the last request",
-                format_tokens(tokens),
-                format_tokens(window)
-            ))
-        }
-        _ => None,
+    let reported = usage.and_then(|usage| {
+        let tokens = usage.tokens?;
+        let window = usage.window.filter(|window| *window > 0);
+        let line = match (input_budget(context), window) {
+            (Some(budget), window) => {
+                let percent = tokens as f64 / budget as f64 * 100.0;
+                let window = window
+                    .filter(|window| *window != budget)
+                    .map_or(String::new(), |window| {
+                        format!(" · model window {}", format_tokens(window))
+                    });
+                format!(
+                    "Context: {} of {} input budget ({percent:.0}%){window} — reported by the last request",
+                    format_tokens(tokens),
+                    format_tokens(budget)
+                )
+            }
+            (None, Some(window)) => {
+                let percent = usage
+                    .percent
+                    .unwrap_or(tokens as f64 / window as f64 * 100.0);
+                format!(
+                    "Context: {} of {} tokens ({percent:.0}%) — reported by the last request",
+                    format_tokens(tokens),
+                    format_tokens(window)
+                )
+            }
+            (None, None) => return None,
+        };
+        Some(line)
     });
     let budget = context.and_then(|context| context.budget.as_ref());
     let estimated = budget.and_then(|budget| {
@@ -92,7 +123,10 @@ fn summary_lines(
     if let Some(budget) = budget {
         if let (Some(trigger), Some(limit)) = (budget.trigger_tokens, budget.input_budget_tokens) {
             let percent = if limit > 0 {
-                format!(" ({:.0}%)", trigger as f64 / limit as f64 * 100.0)
+                format!(
+                    " ({:.0}% of the input budget)",
+                    trigger as f64 / limit as f64 * 100.0
+                )
             } else {
                 String::new()
             };
@@ -142,10 +176,13 @@ fn summary_lines(
                 }
                 _ => compact_status(last.status).to_owned(),
             };
-            lines.push(styled(
-                &format!("Last compaction{origin}: {detail}"),
-                styles.dim(),
-            ));
+            // An automatic check that found nothing to do is not a compaction;
+            // the summary line below says what the last real one covered.
+            let label = match (last.status, last.origin.as_deref()) {
+                (CompactStatus::Noop, Some("automatic")) => "Last automatic check".to_owned(),
+                _ => format!("Last compaction{origin}"),
+            };
+            lines.push(styled(&format!("{label}: {detail}"), styles.dim()));
         }
         if let Some(coverage) = &context.coverage {
             lines.push(styled(
@@ -279,11 +316,14 @@ mod tests {
                     .collect()
             })
             .collect();
-        assert!(text[0].contains("31.2k of 40k tokens (78%)"), "{text:?}");
+        assert!(
+            text[0].contains("31.2k of 40k input budget (78%)"),
+            "{text:?}"
+        );
         assert!(text[0].contains("reported"), "{text:?}");
         assert!(
             text.iter()
-                .any(|line| line.contains("Auto-compacts at 32k tokens (80%)")),
+                .any(|line| line.contains("Auto-compacts at 32k tokens (80% of the input budget)")),
             "{text:?}"
         );
         assert!(
@@ -470,5 +510,61 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(text.contains("Last compaction: failed"), "{text}");
+    }
+
+    fn lines_of(lines: Vec<Line<'static>>) -> Vec<String> {
+        lines.iter().map(Line::to_string).collect()
+    }
+
+    #[test]
+    fn the_footer_percent_is_of_the_input_budget_the_agent_reports() {
+        let mut session = Session::new(
+            serde_json::from_value(crate::testing::session_info("s")).unwrap(),
+            1,
+        );
+        session.presentation = Some(
+            serde_json::from_value(json!({
+                "session_id": "s",
+                "context": {"tokens": 18000, "window": 64000, "percent": 28.1, "kind": "reported"}
+            }))
+            .unwrap(),
+        );
+        assert_eq!(percent(&session), Some(28.1), "no budget yet: the window");
+        session.context = Some(
+            serde_json::from_value(json!({
+                "session_id": "s",
+                "budget": {"input_budget_tokens": 40000, "trigger_tokens": 32000}
+            }))
+            .unwrap(),
+        );
+        assert_eq!(percent(&session), Some(45.0));
+        let text = lines_of(lines(Some(&session), Styles::of(Palette::dark())));
+        assert!(
+            text[0].starts_with("Context: 18k of 40k input budget (45%) · model window 64k"),
+            "{text:?}"
+        );
+    }
+
+    #[test]
+    fn an_automatic_check_that_found_nothing_is_not_called_a_compaction() {
+        let context: SessionContext = serde_json::from_value(json!({
+            "session_id": "ses_1",
+            "coverage": {"covered_loop_count": 5, "covered_item_count": 64, "retained_item_count": 0},
+            "last_result": {"operation_id": "auto-2", "origin": "automatic", "status": "noop"}
+        }))
+        .unwrap();
+        let text = lines_of(summary_lines(
+            Some(&context),
+            None,
+            Styles::of(Palette::dark()),
+        ));
+        assert!(
+            text.contains(&"Last automatic check: nothing to compact".to_owned()),
+            "{text:?}"
+        );
+        assert!(
+            text.contains(&"Summary covers 5 turns · 64 items · 0 kept".to_owned()),
+            "{text:?}"
+        );
     }
 }

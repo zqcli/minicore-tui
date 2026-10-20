@@ -11,6 +11,9 @@ use crate::protocol::{
 use crate::transcript::{Block, NoticeLevel};
 use crate::ui::theme::{Palette, Styles};
 
+/// How often the context report is asked for while a turn runs.
+const CONTEXT_EVERY: std::time::Duration = std::time::Duration::from_secs(2);
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Action {
     /// Enter: send when idle, steer when a turn runs.
@@ -118,6 +121,7 @@ impl App {
         if self.is_busy() {
             self.steer(text);
         } else {
+            self.scroll = Scroll::Follow;
             self.send(text);
         }
     }
@@ -130,7 +134,10 @@ impl App {
         }
         match self.session.as_mut().filter(|session| session.is_busy()) {
             Some(session) => session.push_follow_up(text),
-            None => self.send(text),
+            None => {
+                self.scroll = Scroll::Follow;
+                self.send(text);
+            }
         }
     }
 
@@ -147,7 +154,6 @@ impl App {
             text: text.clone(),
             kind: protocol::read::UserKind::Prompt,
         });
-        self.scroll = Scroll::Follow;
         self.call(
             protocol::METHOD_TURN_SEND,
             json!({ "text": text }),
@@ -189,13 +195,40 @@ impl App {
         self.call(protocol::METHOD_TURN_CANCEL, fields, SessionOp::Done);
     }
 
-    /// Esc: interrupt a running turn, else clear the draft.
+    /// Esc: interrupt a running turn, else cancel a compaction, else clear the draft.
     pub fn escape(&mut self) {
         if self.is_busy() {
             self.interrupt();
+        } else if let Some(progress) = self
+            .session
+            .as_ref()
+            .and_then(|session| session.compaction.as_ref())
+        {
+            let fields = json!({ "operation_id": progress.operation_id });
+            self.call(
+                protocol::METHOD_SESSION_COMPACT_CANCEL,
+                fields,
+                SessionOp::Done,
+            );
         } else {
             self.composer.clear();
         }
+    }
+
+    /// Asks for the context report now and then while a turn runs, because a
+    /// compaction between two requests has no event.
+    pub fn watch_context(&mut self) {
+        let Some(session) = self.session.as_mut().filter(|session| session.is_busy()) else {
+            return;
+        };
+        if session
+            .context_asked
+            .is_some_and(|asked| asked.elapsed() < CONTEXT_EVERY)
+        {
+            return;
+        }
+        session.context_asked = Some(tokio::time::Instant::now());
+        self.refresh_context();
     }
 
     pub(super) fn create_session(&mut self) {

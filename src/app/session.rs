@@ -3,12 +3,14 @@
 use std::time::{Duration, Instant};
 
 use crate::protocol::event::{PreviewState, ToolOutcome};
+use crate::protocol::read::TurnRecord;
 use crate::protocol::read::{RawHistoryItem, UserKind};
 use crate::protocol::{
-    AgentEvent, CompactStatus, CompactionProgress, CompactionResult, ModelInfo, SessionContext,
-    SessionInfo, SessionPresentation, ToolRef, TurnRef, TurnWaitResult, UsageTotals,
+    AgentEvent, CompactStatus, CompactionPhase, CompactionProgress, CompactionResult, ModelInfo,
+    SessionContext, SessionInfo, SessionPresentation, ToolRef, TurnRef, TurnWaitResult, Usage,
+    UsageTotals,
 };
-use crate::transcript::block::append_history_item;
+use crate::transcript::block::{append_history, append_history_item, merge_live};
 use crate::transcript::{Block, RequestKey, ToolCall, ToolState, Transcript};
 
 use super::tasks::History;
@@ -29,6 +31,10 @@ pub struct Session {
     pub presentation_asked: Option<tokio::time::Instant>,
     pub presentation_in_flight: bool,
     pub context: Option<SessionContext>,
+    /// When `session.context` was last asked for while a turn ran.
+    pub context_asked: Option<tokio::time::Instant>,
+    /// The latest automatic compaction `session.context` reported.
+    auto_seen: Option<String>,
     pub compaction: Option<CompactionProgress>,
     /// Coverage of the current summary from `session.context`; a summary
     /// replayed from history carries none of its own.
@@ -43,8 +49,9 @@ pub struct Session {
     /// Pages still to load behind the summary until the latest answer shows.
     pub backfill: u8,
     pub applied_steers: u64,
-    /// The finished turn whose durable items will replace its streamed region.
-    pub reconcile_from: Option<(String, usize)>,
+    /// The finished turns whose durable items will replace their streamed
+    /// regions, with where each region starts.
+    pub reconcile_from: Vec<(String, usize)>,
     /// Where the next turn's region starts, captured before its prompt block.
     pub next_turn_start: Option<usize>,
 }
@@ -62,6 +69,8 @@ pub struct LiveTurn {
     pub running_tool: Option<(String, String)>,
     /// Esc asked for cancellation and `turn.wait` has not answered yet.
     pub interrupting: bool,
+    /// The session totals before this turn's requests were added to them.
+    pub usage_base: UsageTotals,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -92,6 +101,7 @@ impl LiveTurn {
             gap: false,
             running_tool: None,
             interrupting: false,
+            usage_base: UsageTotals::default(),
         }
     }
 }
@@ -189,6 +199,8 @@ impl Session {
             presentation_asked: None,
             presentation_in_flight: false,
             context: None,
+            context_asked: None,
+            auto_seen: None,
             compaction: None,
             summary_coverage: None,
             interaction: None,
@@ -197,13 +209,27 @@ impl Session {
             loading_older: false,
             backfill: 0,
             applied_steers: 0,
-            reconcile_from: None,
+            reconcile_from: Vec::new(),
             next_turn_start: None,
         }
     }
 
     pub fn is_busy(&self) -> bool {
         self.live.is_some()
+    }
+
+    /// The status line while a compaction runs. Inside a turn Esc ends the
+    /// whole turn, which is the only way to stop that compaction.
+    pub fn compaction_label(&self) -> Option<String> {
+        let progress = self.compaction.as_ref()?;
+        let key = match self.is_busy() {
+            true => "interrupt",
+            false => "cancel",
+        };
+        Some(format!(
+            "Compacting context · {} (esc to {key})",
+            progress.phase.label()
+        ))
     }
 
     /// Whether the footer's figures may be asked for again mid-turn: no answer
@@ -268,6 +294,9 @@ impl Session {
             // session, so the progress is taken as it comes.
             AgentEvent::SessionState { state, .. } => self.compaction = state.compaction,
             AgentEvent::TurnStarted { turn, .. } => return Some(turn),
+            AgentEvent::RequestUsage { turn, usage, .. } if self.is_live(&turn) => {
+                self.usage.add(&usage);
+            }
             AgentEvent::RequestStarted {
                 request_index,
                 model,
@@ -500,7 +529,12 @@ impl Session {
             }
         }
         let usage = wait.usage.clone().unwrap_or_default();
-        self.usage.add(&usage);
+        // The wait's total replaces the requests streamed so far, which an
+        // event gap may have left short.
+        if wait.usage.is_some() {
+            self.usage = live.usage_base;
+            self.usage.add(&usage);
+        }
         let tools = self.tools_since(live.start);
         self.transcript.push(Block::TurnEnd {
             loop_id: wait.turn.loop_id.clone(),
@@ -513,52 +547,38 @@ impl Session {
         });
         let reconcile = live.gap || !wait.outcome.is_completed();
         if reconcile {
-            self.reconcile_from = Some((wait.turn.loop_id.clone(), live.start));
+            self.reconcile_from
+                .push((wait.turn.loop_id.clone(), live.start));
         }
         Some(reconcile)
     }
 
-    /// Replaces the region a finished turn streamed into with its durable
-    /// items, keeping what only live events knew and the turn-end line last.
-    pub fn reconcile_turn(&mut self, items: &[RawHistoryItem]) {
-        let Some((loop_id, start)) = self.reconcile_from.take() else {
-            return;
-        };
-        let turn_end = self
-            .transcript
-            .blocks()
+    /// Replaces the region a finished turn streamed into, up to its turn-end
+    /// line, with its durable items and what only live events knew. Blocks
+    /// after the line, such as a follow-up already sent, stay as they are.
+    /// Returns where the region ended and how much it grew.
+    pub fn reconcile_turn(
+        &mut self,
+        loop_id: &str,
+        items: &[RawHistoryItem],
+    ) -> Option<(usize, isize)> {
+        let at = self
+            .reconcile_from
             .iter()
-            .position(|block| matches!(block, Block::TurnEnd { loop_id: id, .. } if *id == loop_id))
-            .map(|index| {
-                let block = self.transcript.blocks()[index].clone();
-                self.transcript.remove(index);
-                block
-            });
-        let live: Vec<ToolCall> = self.transcript.blocks()[start.min(self.transcript.len())..]
-            .iter()
-            .filter_map(|block| match block {
-                Block::Tool(call) => Some(call.as_ref().clone()),
-                _ => None,
-            })
-            .collect();
-        self.transcript.truncate(start);
+            .position(|(id, _)| id == loop_id)?;
+        let (_, start) = self.reconcile_from.remove(at);
+        let end = self.transcript.blocks().iter().rposition(
+            |block| matches!(block, Block::TurnEnd { loop_id: id, .. } if id == loop_id),
+        )?;
+        let mut durable = Transcript::default();
         for item in items {
-            append_history_item(&mut self.transcript, item, &self.info.session_id);
+            append_history_item(&mut durable, item, &self.info.session_id);
         }
-        for index in start..self.transcript.len() {
-            let known = match &self.transcript.blocks()[index] {
-                Block::Tool(call) => live.iter().find(|live| live.key == call.key),
-                _ => None,
-            };
-            if let Some(known) = known.cloned()
-                && let Some(Block::Tool(call)) = self.transcript.block_mut(index)
-            {
-                call.keep_live_facts(&known);
-            }
-        }
-        if let Some(turn_end) = turn_end {
-            self.transcript.push(turn_end);
-        }
+        let blocks = merge_live(durable.into_blocks(), &self.transcript.blocks()[start..end]);
+        let grown = blocks.len() as isize - (end - start) as isize;
+        self.transcript.splice(start..end, blocks);
+        self.rebase(end, grown);
+        Some((end, grown))
     }
 
     /// A refused send: the optimistic prompt block goes again.
@@ -660,8 +680,26 @@ impl Session {
         self.transcript.clear();
         self.first_item = page.floor;
         self.loaded_from = page.from;
-        for item in &page.items {
-            append_history_item(&mut self.transcript, item, &self.info.session_id);
+        append_history(
+            &mut self.transcript,
+            &page.items,
+            &page.records,
+            &self.info.session_id,
+        );
+        // With the whole display window loaded, its turns and the summary's
+        // cover are every turn there is; anything less would be a wrong total.
+        let covered = match page.floor {
+            0 => Some(Usage::default()),
+            _ => page.covered_usage,
+        };
+        if page.from <= page.floor
+            && self.usage == UsageTotals::default()
+            && let Some(mut total) = covered
+        {
+            for record in &page.records {
+                total.add(&record.usage);
+            }
+            self.usage.add(&total);
         }
         if let Some(coverage) = self.summary_coverage {
             self.cover_replayed_compaction(coverage);
@@ -681,9 +719,18 @@ impl Session {
     pub fn prepend_page(&mut self, page: History) -> (isize, Vec<ToolRef>) {
         self.loading_older = false;
         let mut scratch = Transcript::default();
-        for item in &page.items {
-            append_history_item(&mut scratch, item, &self.info.session_id);
-        }
+        // A turn cut by the page's end already has its line from the later window.
+        let records: Vec<TurnRecord> = page
+            .records
+            .iter()
+            .filter(|record| {
+                !self.transcript.blocks().iter().any(
+                    |block| matches!(block, Block::TurnEnd { loop_id, .. } if *loop_id == record.loop_id),
+                )
+            })
+            .cloned()
+            .collect();
+        append_history(&mut scratch, &page.items, &records, &self.info.session_id);
         let bare_cards = match page.canonical {
             true => scratch.tool_calls().map(|call| call.key.clone()).collect(),
             false => Vec::new(),
@@ -716,21 +763,26 @@ impl Session {
                 .insert(0, Block::EarlierHistory { hidden_items });
         }
         let grown = added as isize - replaced as isize + isize::from(marker);
-        self.rebase(grown);
+        self.rebase(0, grown);
         (grown, bare_cards)
     }
 
-    /// Moves every boundary stated as a transcript index by `delta` blocks
-    /// put in front of it; a page can land at any point around a turn.
-    fn rebase(&mut self, delta: isize) {
-        let shift = |index: &mut usize| *index = index.saturating_add_signed(delta);
+    /// Moves every boundary at or after `at` by `delta` blocks inserted or
+    /// removed before it; a page or a reconcile can land at any point around
+    /// a turn.
+    fn rebase(&mut self, at: usize, delta: isize) {
+        let shift = |index: &mut usize| {
+            if *index >= at {
+                *index = index.saturating_add_signed(delta);
+            }
+        };
         if let Some(live) = self.live.as_mut() {
             shift(&mut live.start);
         }
         if let Some(start) = self.next_turn_start.as_mut() {
             shift(start);
         }
-        if let Some((_, start)) = self.reconcile_from.as_mut() {
+        for (_, start) in &mut self.reconcile_from {
             shift(start);
         }
     }
@@ -738,7 +790,38 @@ impl Session {
     /// Takes a `session.context` report: compaction progress, the last result
     /// as a marker, and the coverage of the current summary.
     pub fn apply_context(&mut self, context: SessionContext) {
-        self.compaction = context.current_operation.clone();
+        let automatic = context.automatic.as_ref();
+        // A compaction between two requests has no event or operation of its own.
+        self.compaction = context.current_operation.clone().or_else(|| {
+            let running = automatic?.current.as_ref()?;
+            Some(CompactionProgress {
+                operation_id: running.operation_id.clone(),
+                phase: CompactionPhase::Summarizing,
+                covered_item_count: 0,
+                retained_item_count: 0,
+            })
+        });
+        // The first report only sets the baseline: an earlier compaction is
+        // already in the history that was read.
+        if let Some(last) = automatic.and_then(|view| view.last.as_ref())
+            && self.auto_seen.replace(last.operation_id.clone()).as_ref()
+                != Some(&last.operation_id)
+            && last.outcome == "compacted"
+            && self.context.is_some()
+        {
+            let result = CompactionResult {
+                origin: Some("automatic".into()),
+                operation_id: last.operation_id.clone(),
+                status: CompactStatus::Compacted,
+                before_tokens: last.before_tokens,
+                after_tokens: last.after_tokens,
+                covered_loop_count: None,
+                covered_item_count: None,
+                retained_item_count: None,
+                failure_kind: None,
+            };
+            self.push_compaction(&result, None);
+        }
         let coverage = context
             .coverage
             .as_ref()

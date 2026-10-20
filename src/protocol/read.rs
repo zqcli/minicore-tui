@@ -3,7 +3,7 @@
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::ToolSummary;
+use super::{LoopOutcome, ToolSummary, Usage};
 
 /// One canonical item body, complete and contiguous.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -30,6 +30,20 @@ pub struct ReadSessionResult {
     pub history_revision: String,
     pub captured_end: u64,
     pub projection: Option<DisplayProjection>,
+    /// Summaries of the turns that have an item in this page.
+    #[serde(default)]
+    pub records: Vec<TurnRecord>,
+}
+
+/// How a stored turn ended.
+#[derive(Clone, Debug, Deserialize)]
+pub struct TurnRecord {
+    pub loop_id: String,
+    pub outcome: LoopOutcome,
+    #[serde(default)]
+    pub usage: Usage,
+    #[serde(default)]
+    pub requests: u32,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -37,6 +51,14 @@ pub struct DisplayProjection {
     pub revision: String,
     pub first_item: usize,
     pub covered_item_count: usize,
+    /// The usage of the turns behind the summary.
+    pub covered_usage: Option<CoveredUsage>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct CoveredUsage {
+    pub usage: Usage,
+    pub partial: bool,
 }
 
 impl ReadSessionResult {
@@ -53,6 +75,10 @@ impl ReadSessionResult {
                 .projection
                 .as_ref()
                 .map_or(0, |projection| projection.first_item),
+            covered_usage: self
+                .projection
+                .as_ref()
+                .and_then(|projection| projection.covered_usage.clone()),
         }
     }
 }
@@ -66,6 +92,7 @@ pub struct SnapshotPin {
     pub projection_revision: Option<String>,
     pub total: usize,
     pub first_item: usize,
+    pub covered_usage: Option<CoveredUsage>,
 }
 
 /// A read position: an item index and a byte offset inside that item.

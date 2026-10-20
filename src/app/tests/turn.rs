@@ -4,7 +4,7 @@ use crossterm::event::{KeyCode, KeyModifiers};
 use serde_json::{Value, json};
 
 use super::harness::*;
-use crate::app::{Action, SessionOp};
+use crate::app::{Action, Scroll, SessionOp};
 use crate::protocol::read::UserKind;
 use crate::transcript::{Block, ChangeSummary, ToolState};
 
@@ -450,4 +450,210 @@ async fn a_turn_whose_end_cannot_be_read_still_ends() {
     h.settle().await;
     assert!(!h.is_busy());
     assert_eq!(turn_ends(&h), ["l1"]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_follow_up_sent_before_the_cancelled_turn_reconciles_stays_after_it() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.fake.script_sequence(
+        "turn.send",
+        ["l1", "l2"]
+            .iter()
+            .map(|id| json!({"turn": turn(id)}))
+            .collect(),
+    );
+    h.fake.script_sequence_later(
+        "turn.wait",
+        vec![
+            (waited("l1", cancelled()), Duration::from_secs(1)),
+            (waited("l2", completed()), Duration::from_secs(60)),
+        ],
+    );
+    h.fake.script_held(
+        "turn.result",
+        turn_result(
+            "l1",
+            vec![
+                user(0, "l1", "start"),
+                assistant_tool(1, "l1", "c1", "bash"),
+                assistant(2, "l1", "partial answer"),
+            ],
+        ),
+    );
+    h.submit("start");
+    h.until(|app| app.is_busy()).await;
+    h.app.composer.set_text("next");
+    h.key(KeyCode::Enter, KeyModifiers::ALT);
+    // The turn ends and the follow-up is sent while the stored items are still on their way.
+    h.until(|app| app.transcript_blocks().len() >= 3).await;
+    h.run_for(Duration::from_secs(3)).await;
+    assert_eq!(h.sends(), ["start", "next"]);
+
+    h.fake.release("turn.result");
+    h.run_for(Duration::from_secs(2)).await;
+    assert_eq!(h.texts(), ["start", "partial answer", "next"]);
+    let shape: Vec<&str> = h
+        .blocks()
+        .iter()
+        .map(|block| match block {
+            Block::User { .. } => "user",
+            Block::Assistant { .. } => "assistant",
+            Block::Tool(_) => "tool",
+            Block::TurnEnd { .. } => "end",
+            _ => "other",
+        })
+        .collect();
+    assert_eq!(
+        shape,
+        ["user", "assistant", "tool", "assistant", "end", "user"]
+    );
+    let live = h.app.session.as_ref().unwrap().live.as_ref().unwrap();
+    assert_eq!(live.start, 5, "the running turn still starts at its prompt");
+
+    h.run_for(Duration::from_secs(120)).await;
+    assert_eq!(turn_ends(&h), ["l1", "l2"]);
+    assert!(matches!(h.blocks().last(), Some(Block::TurnEnd { .. })));
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_interrupted_turn_keeps_its_card_details_and_unfinished_thinking() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.fake.script("turn.send", json!({"turn": turn("l1")}));
+    h.fake.script_held("turn.wait", waited("l1", cancelled()));
+    h.fake.script(
+        "turn.result",
+        turn_result(
+            "l1",
+            vec![
+                user(0, "l1", "go"),
+                assistant_tool(1, "l1", "c1", "bash"),
+                assistant_tool(2, "l1", "c2", "bash"),
+            ],
+        ),
+    );
+    h.submit("go");
+    h.until(|app| app.is_busy()).await;
+    for (id, display) in [
+        (
+            "c1",
+            json!({"detail": "$ sleep 90", "expanded_input": "sleep 90"}),
+        ),
+        (
+            "c2",
+            json!({"detail": "", "expanded_input": "echo hi\nsecond line"}),
+        ),
+    ] {
+        h.emit(
+            "tool_presentation",
+            json!({"turn": turn("l1"), "request_index": 0, "tool_call_id": id,
+                   "tool_name": "bash", "display": display}),
+        )
+        .await;
+    }
+    h.emit(
+        "output_delta",
+        json!({"turn": turn("l1"), "request_index": 1, "channel": "reasoning",
+               "delta": "Implementing strict import validation"}),
+    )
+    .await;
+    h.settle().await;
+    h.fake.release("turn.wait");
+    h.settle().await;
+
+    let cards: Vec<(String, Option<String>)> = h
+        .app
+        .session
+        .as_ref()
+        .unwrap()
+        .transcript
+        .tool_calls()
+        .map(|call| (call.detail.clone(), call.expanded_input.clone()))
+        .collect();
+    assert_eq!(
+        cards,
+        [
+            ("$ sleep 90".into(), Some("sleep 90".into())),
+            ("$ echo hi".into(), Some("echo hi\nsecond line".into())),
+        ]
+    );
+    let thinking = h.blocks().iter().any(|block| {
+        matches!(block, Block::Assistant { reasoning, streaming: false, .. }
+            if reasoning == "Implementing strict import validation")
+    });
+    assert!(thinking, "{:?}", h.blocks());
+    assert!(matches!(h.blocks().last(), Some(Block::TurnEnd { .. })));
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_turn_start_and_end_leave_an_anchored_view_where_it_is() {
+    let anchor = Scroll::Anchor {
+        block: 2,
+        offset: 1,
+    };
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.fake.script_sequence(
+        "turn.send",
+        ["l1", "l2"]
+            .iter()
+            .map(|id| json!({"turn": turn(id)}))
+            .collect(),
+    );
+    h.fake.script_sequence_later(
+        "turn.wait",
+        vec![
+            (waited("l1", completed()), Duration::from_secs(1)),
+            (waited("l2", completed()), Duration::from_secs(1)),
+        ],
+    );
+    h.submit("one");
+    assert_eq!(h.app.scroll, Scroll::Follow, "sending follows");
+    h.until(|app| app.is_busy()).await;
+    h.app.composer.set_text("two");
+    h.key(KeyCode::Enter, KeyModifiers::ALT);
+    h.app.scroll = anchor;
+    // The turn ends and the queued follow-up starts the next one by itself.
+    h.until(|app| app.transcript_blocks().len() >= 3).await;
+    h.run_for(Duration::from_secs(3)).await;
+    assert_eq!(h.sends(), ["one", "two"]);
+    h.settle().await;
+    assert_eq!(h.app.scroll, anchor);
+    assert!(!h.is_busy());
+
+    h.fake.script("turn.wait", waited("l9", completed()));
+    h.state(json!({"session_id": "s1", "status": "running",
+                   "active_loop": {"loop_id": "l9"}}));
+    assert_eq!(
+        h.app.scroll, anchor,
+        "adopting a running turn does not follow"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_footer_totals_move_with_each_request_and_the_wait_settles_them() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.fake.script("turn.send", json!({"turn": turn("l1")}));
+    h.fake.script_held(
+        "turn.wait",
+        json!({"turn": turn("l1"), "outcome": completed(),
+               "usage": {"input_tokens": 300, "output_tokens": 30}, "requests": 3}),
+    );
+    h.submit("go");
+    h.until(|app| app.is_busy()).await;
+    let usage = |h: &Harness| h.app.session.as_ref().unwrap().usage.clone();
+
+    for _ in 0..2 {
+        h.emit(
+            "request_usage",
+            json!({"turn": turn("l1"), "usage": {"input_tokens": 100, "output_tokens": 10}}),
+        )
+        .await;
+    }
+    h.until(|app| app.session.as_ref().unwrap().usage.input == 200)
+        .await;
+    assert_eq!(usage(&h).output, 20);
+
+    // The third request's event was dropped; the wait has the whole turn.
+    h.fake.release("turn.wait");
+    h.until(|app| !app.is_busy()).await;
+    assert_eq!((usage(&h).input, usage(&h).output), (300, 30));
 }
