@@ -218,8 +218,8 @@ fn read_optional(home: &Home) -> Result<Option<Settings>, ConfigError> {
     Source::read(home.config_file())?.parse().map(Some)
 }
 
-/// `--agent`, else `[agent] binary`, else `bin/minicore-agent` when it exists,
-/// else `minicore-agent` from `PATH`.
+/// `--agent`, else `[agent] binary`, else `bin/minicore-agent` (`.exe` on
+/// Windows) when it exists, else `minicore-agent` from `PATH`.
 fn agent_binary(home: &Home, flag: Option<&Path>, configured: Option<PathBuf>) -> PathBuf {
     if let Some(flag) = flag {
         return flag.to_owned();
@@ -227,7 +227,10 @@ fn agent_binary(home: &Home, flag: Option<&Path>, configured: Option<PathBuf>) -
     if let Some(configured) = configured {
         return home.join(&configured);
     }
-    let bundled = home.dir().join("bin").join("minicore-agent");
+    let bundled = home
+        .dir()
+        .join("bin")
+        .join(format!("minicore-agent{}", std::env::consts::EXE_SUFFIX));
     if bundled.exists() {
         bundled
     } else {

@@ -378,12 +378,13 @@ fn the_agent_binary_is_the_flag_then_the_setting_then_the_bundled_one() {
     let dir = tempfile::tempdir().unwrap();
     let home = Home(dir.path().to_path_buf());
     assert_eq!(agent_binary(&home, None, None), Path::new("minicore-agent"));
+    let bundled = dir
+        .path()
+        .join("bin")
+        .join(format!("minicore-agent{}", std::env::consts::EXE_SUFFIX));
     std::fs::create_dir(dir.path().join("bin")).unwrap();
-    std::fs::write(dir.path().join("bin/minicore-agent"), "").unwrap();
-    assert_eq!(
-        agent_binary(&home, None, None),
-        dir.path().join("bin/minicore-agent")
-    );
+    std::fs::write(&bundled, "").unwrap();
+    assert_eq!(agent_binary(&home, None, None), bundled);
     assert_eq!(
         agent_binary(&home, None, Some("other/agent".into())),
         dir.path().join("other/agent")
