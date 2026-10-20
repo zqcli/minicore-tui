@@ -92,25 +92,30 @@ mod tests {
             .0
     }
 
+    /// `path` made absolute the way `pick` does, so Windows gains its drive.
+    fn absolute(path: &str) -> PathBuf {
+        std::path::absolute(path).unwrap()
+    }
+
     #[test]
     fn the_flag_beats_the_environment_which_beats_the_executable() {
         let exe = "/opt/mct/bin/minicore-tui";
-        assert_eq!(pick(Some("/a"), Some("/b"), exe), Path::new("/a"));
-        assert_eq!(pick(None, Some("/b"), exe), Path::new("/b"));
-        assert_eq!(pick(None, None, exe), Path::new("/opt/mct"));
+        assert_eq!(pick(Some("/a"), Some("/b"), exe), absolute("/a"));
+        assert_eq!(pick(None, Some("/b"), exe), absolute("/b"));
+        assert_eq!(pick(None, None, exe), absolute("/opt/mct"));
     }
 
     #[test]
     fn only_a_bin_directory_is_replaced_by_its_parent() {
         assert_eq!(
             pick(None, None, "/opt/mct/minicore-tui"),
-            Path::new("/opt/mct")
+            absolute("/opt/mct")
         );
         assert_eq!(
             pick(None, None, "/opt/bin/mct/minicore-tui"),
-            Path::new("/opt/bin/mct")
+            absolute("/opt/bin/mct")
         );
-        assert_eq!(pick(None, None, "/bin/minicore-tui"), Path::new("/"));
+        assert_eq!(pick(None, None, "/bin/minicore-tui"), absolute("/"));
     }
 
     #[test]
