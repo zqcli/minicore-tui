@@ -111,6 +111,7 @@ fn conversation(app: &mut App) {
         reasoning: "The layout cache only keyed on the block revision...".into(),
         text: "It does not any more. The **streaming renderer** keeps the stable prefix and\nre-renders only the tail, so a delta costs one small parse.".into(),
         streaming: false,
+        expanded: None,
     });
     transcript.push(Block::Tool(Box::new(tool())));
     transcript.push(Block::TurnEnd {
@@ -184,6 +185,7 @@ fn the_screen_shows_earlier_content_while_streaming() {
         reasoning: "I should explain the anchor rule first, then show it.".into(),
         text: "An anchored view keeps its block and row, so\nnew output below never moves the text you\nare reading. Only scrolling to the end returns\nto following.".into(),
         streaming: true,
+        expanded: None,
     });
     snapshot(
         "tests/snapshots/streaming.txt",
@@ -214,6 +216,7 @@ fn an_anchored_view_does_not_move_when_content_grows() {
             .collect::<Vec<_>>()
             .join("\n\n"),
         streaming: true,
+        expanded: None,
     });
     let after = render(&mut app, 70, 20);
     let kept: Vec<&str> = before.lines().take(10).collect();
@@ -329,10 +332,11 @@ fn a_blank_row_separates_the_transcript_and_the_composer_band_is_full_width() {
         .find(|y| row(*y).starts_with("▎ Ask anything"))
         .expect("composer row");
     assert_eq!(row(composer - 1), "", "the gap row above the stack");
+    assert_eq!(row(composer - 2), "▎", "the card's bottom pad row");
     assert!(
-        row(composer - 2).contains("prompt 39"),
+        row(composer - 3).contains("prompt 39"),
         "{}",
-        row(composer - 2)
+        row(composer - 3)
     );
     assert_eq!(
         buffer[(49u16, composer)].bg,
@@ -493,7 +497,7 @@ fn clicking_a_card_header_toggles_that_card_and_its_hint_opens_the_tool_view() {
     let app = &mut fixture.app;
     conversation(app);
     let folded = render(app, 70, 20);
-    let header = row_of(&folded, "▎ ✓ bash");
+    let header = row_of(&folded, "▎ bash");
     click(app, 10, header);
     let expanded = render(app, 70, 20);
     assert!(
@@ -502,7 +506,7 @@ fn clicking_a_card_header_toggles_that_card_and_its_hint_opens_the_tool_view() {
     );
     assert!(!app.tools_expanded, "only that card changed");
 
-    click(app, 10, row_of(&expanded, "▎   … 14 earlier lines"));
+    click(app, 10, row_of(&expanded, "▎ … 14 earlier lines"));
     assert!(matches!(app.overlay, Overlay::Tool(_)), "{:?}", app.overlay);
 
     app.overlay = Overlay::None;
@@ -519,7 +523,7 @@ fn clicking_a_turn_end_line_opens_the_turn_diff() {
     let app = &mut fixture.app;
     conversation(app);
     let screen = render(app, 70, 20);
-    click(app, 5, row_of(&screen, "── completed"));
+    click(app, 5, row_of(&screen, "  completed"));
     assert!(
         matches!(&app.overlay, Overlay::Diff(diff) if diff.scope == crate::app::DiffScope::Turn),
         "{:?}",
@@ -536,7 +540,7 @@ fn a_drag_over_a_card_header_selects_instead_of_toggling() {
     let app = &mut fixture.app;
     conversation(app);
     let screen = render(app, 70, 20);
-    let header = row_of(&screen, "▎ ✓ bash");
+    let header = row_of(&screen, "▎ bash");
     for (kind, column) in [
         (MouseEventKind::Down(MouseButton::Left), 2),
         (MouseEventKind::Drag(MouseButton::Left), 8),

@@ -67,7 +67,8 @@ async fn a_turn_streams_tool_facts_and_ends_on_its_wait() {
     let screen = h.screen(80, 20);
     assert!(screen.contains("1 tool"), "{screen}");
     assert!(!screen.contains("2 tools"), "{screen}");
-    assert!(screen.contains("bash  $ cargo test"), "{screen}");
+    assert!(screen.contains("▎ $ cargo test"), "{screen}");
+    assert!(screen.contains("0.0s · exit 1"), "{screen}");
     assert!(screen.contains("esc to interrupt"), "{screen}");
 
     h.fake.release("turn.wait");
@@ -356,12 +357,12 @@ async fn the_turn_end_line_counts_changed_files_and_lines() {
         (
             vec![record("tool:a", true)],
             diff_with(40, 7),
-            "1 file changed (+40 −7) ──",
+            "1 file changed (+40 −7)",
         ),
         (
             vec![record("tool:a", false)],
             diff_with(1, 1),
-            "1 file changed ──",
+            "1 file changed",
         ),
         (
             vec![
@@ -370,7 +371,7 @@ async fn the_turn_end_line_counts_changed_files_and_lines() {
                 record("tool:p", true),
             ],
             diff_with(2, 1),
-            "1 file changed (+6 −3) ──",
+            "1 file changed (+6 −3)",
         ),
     ];
     for (records, diff, expected) in cases {
@@ -385,7 +386,8 @@ async fn the_turn_end_line_counts_changed_files_and_lines() {
         h.submit("change it");
         h.settle().await;
         let screen = h.screen(100, 12);
-        assert!(screen.contains(expected), "{expected}:\n{screen}");
+        let ends = screen.lines().any(|row| row.trim_end().ends_with(expected));
+        assert!(ends, "{expected}:\n{screen}");
     }
 }
 

@@ -1,12 +1,12 @@
 //! Block rendering: one function per block kind, in the rail style. The layout
 //! cache calls these once per change and stores the returned lines, so a block
-//! never re-renders per frame.
+//! never re-renders per frame. Column 0 of the width a block gets is its rail.
 
-use ratatui::style::Style;
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use super::markdown;
-use super::rails;
+use super::rails::{fill, indent, rail_row, surface_row};
 use super::theme::Styles;
 use super::wrap;
 use crate::protocol::read::UserKind;
@@ -14,11 +14,28 @@ use crate::transcript::block::{NoticeLevel, TRUNCATED_MARKER, ToolState};
 use crate::transcript::layout::Fold;
 use crate::transcript::{Block, ToolCall};
 
-/// Columns the assistant's inset costs, including the rail.
+/// Columns before block text: the rail and one pad cell.
 pub const INSET: usize = 2;
 
 /// The end of a card's hint row that opens the tool view when clicked.
 pub const FULL_OUTPUT_HINT: &str = "click for full output";
+
+/// Thinking rows a long block shows before its expand hint.
+const THINKING_ROWS: usize = 3;
+
+/// Body rows of an expanded card; the tool view has the rest.
+const EXPANDED_ROWS: usize = 200;
+
+/// The column text wraps at in a block `width` wide, keeping one pad cell on
+/// the right.
+pub fn text_width(width: usize) -> usize {
+    width.saturating_sub(INSET + 1)
+}
+
+/// Thinking text: dim italic, so it reads as an aside to the reply.
+pub fn thinking_style(styles: Styles) -> Style {
+    styles.dim().add_modifier(Modifier::ITALIC)
+}
 
 /// Renders one block at `width`. Always returns at least one line so a block
 /// occupies a row even when it has no content of its own.
@@ -35,10 +52,27 @@ pub fn render(block: &Block, styles: Styles, width: u16, fold: Fold) -> Vec<Line
         Block::Assistant {
             reasoning,
             text,
-            streaming,
+            expanded,
             ..
-        } => assistant(reasoning, text, *streaming, styles, width, fold),
-        Block::Tool(call) => tool(call, styles, width, call.is_expanded(fold.expanded_tools)),
+        } => {
+            let thinking = markdown::render(
+                &reasoning_source(reasoning),
+                text_width(width),
+                &styles,
+                thinking_style(styles),
+            );
+            let reply = markdown::render(text, text_width(width), &styles, styles.text());
+            assistant_rows(
+                reasoning,
+                &thinking,
+                &reply,
+                expanded.unwrap_or(fold.expanded),
+                fold.show_reasoning,
+                styles,
+                width,
+            )
+        }
+        Block::Tool(call) => tool(call, styles, width, call.is_expanded(fold.expanded)),
         Block::TurnEnd {
             outcome,
             duration,
@@ -46,15 +80,18 @@ pub fn render(block: &Block, styles: Styles, width: u16, fold: Fold) -> Vec<Line
             tools,
             changes,
             ..
-        } => vec![turn_end(
-            outcome,
-            *duration,
-            *requests,
-            *tools,
-            changes.as_ref(),
-            styles,
-            width,
-        )],
+        } => {
+            let text = turn_end_line(outcome, *duration, *requests, *tools, changes.as_ref());
+            let style = match outcome {
+                crate::protocol::LoopOutcome::Completed => styles.meta(),
+                crate::protocol::LoopOutcome::Failed { .. } => styles.failure(),
+                _ => styles.warning(),
+            };
+            vec![indent(
+                Line::styled(wrap::truncate(&text, width - INSET), style),
+                INSET,
+            )]
+        }
         Block::Compaction {
             operation_id: _,
             before,
@@ -68,21 +105,24 @@ pub fn render(block: &Block, styles: Styles, width: u16, fold: Fold) -> Vec<Line
             summary.as_deref(),
             styles,
             width,
-            fold,
+            fold.expanded,
         ),
         Block::Notice { level, text } => {
-            let style = match level {
-                NoticeLevel::Error => styles.failure(),
-                NoticeLevel::Info => styles.dim(),
+            let (rail, style) = match level {
+                NoticeLevel::Error => (styles.failure(), styles.failure()),
+                NoticeLevel::Info => (styles.status_rail(), styles.faint()),
             };
-            wrap::wrap(text, width)
+            wrap::wrap(text, width - 1)
                 .into_iter()
-                .map(|line| Line::styled(line, style))
+                .map(|line| rail_row(rail, vec![Span::styled(line, style)], width))
                 .collect()
         }
-        Block::EarlierHistory { hidden_items } => vec![Line::styled(
-            format!("↑ {hidden_items} earlier items · home to load"),
-            styles.faint(),
+        Block::EarlierHistory { hidden_items } => vec![indent(
+            Line::styled(
+                format!("↑ {hidden_items} earlier items · home to load"),
+                styles.faint(),
+            ),
+            INSET,
         )],
     }
 }
@@ -102,70 +142,76 @@ pub fn plain_text(block: &Block) -> String {
 /// frame is a degenerate terminal; the block then draws as clipped plain text.
 pub const MIN_WIDTH: usize = 8;
 
+/// A user card: the composer surface with a pad row above and below.
 fn user(text: &str, kind: UserKind, styles: Styles, width: usize) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
+    let row = |spans: Vec<Span<'static>>| {
+        surface_row(styles.user_rail(), styles.composer(), spans, width)
+    };
+    let mut lines = vec![row(Vec::new())];
+    for line in markdown::render(text, text_width(width), &styles, styles.text()) {
+        lines.push(row(padded(line.spans)));
+    }
     if kind == UserKind::Steering {
-        lines.push(Line::styled("↳ steering", styles.dim()));
+        lines.push(row(padded(vec![Span::styled("↳ steering", styles.meta())])));
     }
-    let body = markdown::render(text, width.saturating_sub(INSET), &styles, styles.text());
-    let mut body: Vec<Line<'static>> = body
-        .into_iter()
-        .map(|line| rails::user_rail(line, styles))
-        .collect();
-    if body.is_empty() {
-        body.push(rails::user_rail(Line::raw(""), styles));
-    }
-    lines.extend(body);
+    lines.push(row(Vec::new()));
     lines
 }
 
-fn assistant(
+/// `spans` behind the one-cell inner pad.
+fn padded(spans: Vec<Span<'static>>) -> Vec<Span<'static>> {
+    let mut row = vec![Span::raw(" ")];
+    row.extend(spans);
+    row
+}
+
+/// An assistant message from its rendered thinking and reply rows: thinking on
+/// the purple rail, folded to its first rows unless `expanded`, then the reply
+/// at the same text column without a rail.
+pub fn assistant_rows(
     reasoning: &str,
-    text: &str,
-    streaming: bool,
+    thinking: &[Line<'static>],
+    reply: &[Line<'static>],
+    expanded: bool,
+    show_reasoning: bool,
     styles: Styles,
     width: usize,
-    fold: Fold,
 ) -> Vec<Line<'static>> {
+    let rail = styles.reasoning_rail();
     let mut lines = Vec::new();
-    let source = reasoning_source(reasoning);
-    let thinking = source.trim_end();
-    if !thinking.is_empty() {
-        if fold.show_reasoning {
-            for line in
-                markdown::render(thinking, width.saturating_sub(INSET), &styles, styles.dim())
-            {
-                lines.push(rails::reasoning_rail(line, styles));
-            }
-        } else if streaming {
-            // While a message streams, the live reasoning tail is the useful
-            // part; the folded summary replaces it once the message ends.
-            let tail: Vec<&str> = thinking.lines().rev().take(3).collect();
-            let tail: Vec<&str> = tail.into_iter().rev().collect();
-            for line in markdown::render(
-                &tail.join("\n"),
-                width.saturating_sub(INSET),
-                &styles,
-                styles.dim(),
-            ) {
-                lines.push(rails::reasoning_rail(line, styles));
-            }
+    let raw = reasoning.trim();
+    if !raw.is_empty() && !show_reasoning {
+        lines.push(rail_row(
+            rail,
+            padded(vec![Span::styled("Thinking...", thinking_style(styles))]),
+            width,
+        ));
+    } else if !raw.is_empty() {
+        let total = raw.split('\n').count();
+        let folded = !expanded && total > THINKING_ROWS;
+        let shown = if folded {
+            &thinking[..THINKING_ROWS.min(thinking.len())]
         } else {
-            let rows = thinking.lines().count().max(1);
-            let summary = Line::styled(
-                format!("Thought · {}", plural(rows as u64, "line")),
-                styles.dim().add_modifier(ratatui::style::Modifier::ITALIC),
-            );
-            lines.push(rails::reasoning_rail(summary, styles));
+            thinking
+        };
+        lines.extend(
+            shown
+                .iter()
+                .map(|line| rail_row(rail, padded(line.spans.clone()), width)),
+        );
+        if folded {
+            lines.push(rail_row(
+                rail,
+                expand_hint(total - THINKING_ROWS, styles),
+                width,
+            ));
         }
     }
-    if !text.trim().is_empty() {
+    if !reply.is_empty() {
         if !lines.is_empty() {
             lines.push(Line::default());
         }
-        for line in markdown::render(text, width.saturating_sub(INSET), &styles, styles.text()) {
-            lines.push(rails::rail(line, styles));
-        }
+        lines.extend(reply.iter().map(|line| indent(line.clone(), INSET)));
     }
     lines
 }
@@ -173,46 +219,95 @@ fn assistant(
 /// Reasoning arrives as one short heading or sentence per line; markdown would
 /// fold those lines into one paragraph, so every newline is a hard break.
 pub fn reasoning_source(reasoning: &str) -> String {
-    reasoning.replace('\n', "  \n")
+    reasoning.trim().replace('\n', "  \n")
+}
+
+/// `... (N more lines, ctrl+o to expand)`.
+fn expand_hint(hidden: usize, styles: Styles) -> Vec<Span<'static>> {
+    vec![
+        Span::styled(
+            format!("... ({},", plural(hidden as u64, "more line")),
+            styles.meta(),
+        ),
+        Span::raw(" "),
+        Span::styled("ctrl+o", styles.faint()),
+        Span::styled(" to expand", styles.meta()),
+        Span::styled(")", styles.text()),
+    ]
 }
 
 fn tool(call: &ToolCall, styles: Styles, width: usize, expanded: bool) -> Vec<Line<'static>> {
-    let (glyph, state_style, band) = match call.state {
-        ToolState::Pending => ("·", styles.dim(), styles.card()),
-        ToolState::Running => ("⠋", styles.accent(), styles.card()),
-        ToolState::Succeeded => ("✓", styles.success(), styles.card_success()),
-        ToolState::Failed => ("✗", styles.failure(), styles.card_failure()),
-        ToolState::Denied | ToolState::Cancelled => ("⊘", styles.warning(), styles.card_failure()),
-    };
-    let inner = width.saturating_sub(INSET);
-    let (header, clipped) = tool_header(call, glyph, state_style, styles, inner);
-    let row = |spans: Vec<Span<'static>>| card_row(spans, state_style, band);
-    let mut lines = vec![row(header)];
-    let body_row = |line: &str, style: Style| {
-        let text = wrap::truncate(&wrap::sanitize(line), inner.saturating_sub(2));
-        row(vec![Span::styled(format!("  {text}"), style)])
-    };
-    if expanded
-        && call.name == "bash"
-        && let Some(command) = call.expanded_input.as_deref()
-        && (clipped || command.trim_end().contains('\n'))
-    {
-        for line in command.lines().take(EXPANDED_ROWS) {
-            lines.push(body_row(line, styles.dim()));
+    let (rail, surface) = match call.state {
+        ToolState::Pending | ToolState::Running => (styles.card_rail(), styles.card()),
+        ToolState::Succeeded => (styles.card_success_rail(), styles.card_success()),
+        ToolState::Failed | ToolState::Denied | ToolState::Cancelled => {
+            (styles.card_failure_rail(), styles.card_failure())
         }
+    };
+    let row = |spans: Vec<Span<'static>>| surface_row(rail, surface, spans, width);
+    let inner = text_width(width);
+    let body = card_body(call);
+    if !expanded {
+        let name = Span::styled(wrap::truncate(&call.name, inner), styles.tool_title());
+        let mut lines = vec![row(title_spans(
+            vec![name],
+            meta(call, styles, true),
+            inner,
+        ))];
+        let detail = one_line(&call.header_detail());
+        if !detail.is_empty() {
+            lines.push(row(padded(vec![Span::styled(
+                detail,
+                styles.tool_output(),
+            )])));
+        }
+        let hidden = body.lines.len() + body.hidden;
+        if hidden > 0 {
+            lines.push(row(padded(expand_hint(hidden, styles))));
+        }
+        // A folded card keeps a blank row below it, so two folded cards sit two
+        // rows apart while an expanded one hugs whatever follows.
+        lines.push(Line::default());
+        return lines;
     }
-    let body = card_body(call, expanded);
-    for line in &body.lines {
-        let style = if !body.patch {
-            styles.faint()
-        } else if is_patch_header(line) {
-            styles.dim()
+
+    let bash = call.name == "bash";
+    let mut lines = vec![row(Vec::new())];
+    let title_style = styles.tool_title().add_modifier(Modifier::BOLD);
+    let mut right = meta(call, styles, !bash);
+    let title = expanded_title(call);
+    let title_rows = title
+        .lines()
+        .take(EXPANDED_ROWS)
+        .flat_map(|line| wrap::wrap_line(&wrap::sanitize(line), inner));
+    for (index, line) in title_rows.enumerate() {
+        let left = vec![Span::styled(line, title_style)];
+        lines.push(row(if index == 0 {
+            title_spans(left, std::mem::take(&mut right), inner)
         } else {
-            styles.patch(line)
-        };
-        lines.push(body_row(line, style));
+            padded(left)
+        }));
     }
-    if body.hidden > 0 || (expanded && call.truncated) {
+
+    let failed = call.state == ToolState::Failed && !bash;
+    let mut body_rows: Vec<Line<'static>> = body
+        .lines
+        .iter()
+        .map(|line| {
+            let style = if body.patch && is_patch_header(line) {
+                styles.dim()
+            } else if body.patch {
+                styles.patch(line)
+            } else if failed {
+                styles.failure()
+            } else {
+                styles.tool_output()
+            };
+            let text = wrap::truncate(&wrap::sanitize(line), inner);
+            row(padded(vec![Span::styled(text, style)]))
+        })
+        .collect();
+    if body.hidden > 0 || call.truncated {
         // A card from display history knows its size but holds no lines.
         let unloaded = body.lines.is_empty() && body.hidden > 0;
         let mut hint = "… ".to_owned();
@@ -224,25 +319,126 @@ fn tool(call: &ToolCall, styles: Styles, width: usize, expanded: bool) -> Vec<Li
             };
             hint.push_str(&format!("{} · ", plural(body.hidden as u64, noun)));
         }
-        hint.push_str(if expanded || unloaded {
-            FULL_OUTPUT_HINT
+        hint.push_str(FULL_OUTPUT_HINT);
+        let hint = row(padded(vec![Span::styled(
+            wrap::truncate(&hint, inner),
+            styles.meta(),
+        )]));
+        if body.tail {
+            body_rows.insert(0, hint);
         } else {
-            "ctrl+o to expand"
-        });
-        lines.push(body_row(&hint, styles.faint()));
+            body_rows.push(hint);
+        }
     }
+    if !body_rows.is_empty() {
+        lines.push(row(Vec::new()));
+        lines.extend(body_rows);
+    }
+    if bash {
+        let mut footer: Vec<Span<'static>> = Vec::new();
+        if let Some(duration) = call.duration {
+            footer.push(Span::styled(
+                format!("Took {}", format_duration(duration)),
+                styles.meta(),
+            ));
+        }
+        if let Some(code) = call.exit_code.filter(|code| *code != 0) {
+            if !footer.is_empty() {
+                footer.push(Span::styled(" · ", styles.meta()));
+            }
+            footer.push(Span::styled(format!("exit {code}"), styles.failure()));
+        }
+        if !footer.is_empty() {
+            lines.push(row(Vec::new()));
+            lines.push(row(padded(footer)));
+        }
+    }
+    lines.push(row(Vec::new()));
     lines
 }
 
-/// Body rows of a folded card, by kind, and of an expanded one; the tool view
-/// has the rest.
-const FOLDED_PATCH_ROWS: usize = 8;
-const FOLDED_WRITE_ROWS: usize = 6;
-const FOLDED_OUTPUT_ROWS: usize = 4;
-const FOLDED_SHORT_ROWS: usize = 3;
-const EXPANDED_ROWS: usize = 200;
+/// The bold first rows of an expanded card: the whole command for `bash`,
+/// else the tool name and its subject.
+fn expanded_title(call: &ToolCall) -> String {
+    let detail = call.header_detail();
+    if call.name == "bash"
+        && let Some(command) = call.expanded_input.as_deref()
+    {
+        return format!("$ {}", command.trim());
+    }
+    match (call.name == "bash", detail.is_empty()) {
+        (_, true) => call.name.clone(),
+        (true, false) => detail,
+        (false, false) => format!("{} {detail}", call.name),
+    }
+}
 
-/// What a card shows under its header.
+/// What a card adds right of its title: duration, an unusual end, a failing
+/// exit code and the size of a change. An expanded `bash` card puts duration
+/// and exit code in its footer instead.
+fn meta(call: &ToolCall, styles: Styles, facts: bool) -> Vec<Span<'static>> {
+    let mut items: Vec<Vec<Span<'static>>> = Vec::new();
+    if facts && let Some(duration) = call.duration {
+        items.push(vec![Span::styled(format_duration(duration), styles.meta())]);
+    }
+    match call.state {
+        ToolState::Denied => items.push(vec![Span::styled("denied", styles.meta())]),
+        ToolState::Cancelled => items.push(vec![Span::styled("cancelled", styles.meta())]),
+        ToolState::Failed if call.exit_code.is_none() => {
+            items.push(vec![Span::styled("failed", styles.failure())]);
+        }
+        _ => {}
+    }
+    if facts && let Some(code) = call.exit_code.filter(|code| *code != 0) {
+        items.push(vec![Span::styled(format!("exit {code}"), styles.failure())]);
+    }
+    if let Some((added, removed)) = call.line_changes()
+        && added + removed > 0
+    {
+        items.push(vec![
+            Span::styled(format!("+{added}"), styles.added()),
+            Span::raw(" "),
+            Span::styled(format!("−{removed}"), styles.removed()),
+        ]);
+    }
+    let mut spans = Vec::new();
+    for (index, item) in items.into_iter().enumerate() {
+        if index > 0 {
+            spans.push(Span::styled(" · ", styles.meta()));
+        }
+        spans.extend(item);
+    }
+    spans
+}
+
+/// A title row: `left` after the pad cell and `right` flush with the text
+/// edge, which is left out when both do not fit.
+fn title_spans(
+    left: Vec<Span<'static>>,
+    right: Vec<Span<'static>>,
+    inner: usize,
+) -> Vec<Span<'static>> {
+    let cells = |spans: &[Span<'static>]| -> usize {
+        spans.iter().map(|span| wrap::width(&span.content)).sum()
+    };
+    let (left_width, right_width) = (cells(&left), cells(&right));
+    let mut spans = padded(left);
+    if right_width > 0 && left_width + right_width < inner {
+        spans.push(Span::raw(" ".repeat(inner - left_width - right_width)));
+        spans.extend(right);
+    }
+    spans
+}
+
+/// One row of `text`: control characters gone and whitespace runs collapsed.
+fn one_line(text: &str) -> String {
+    wrap::sanitize(text)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// What an expanded card shows under its title.
 struct Body<'a> {
     lines: Vec<&'a str>,
     /// Lines left out: before the shown ones for a tail, after them for a head.
@@ -253,12 +449,11 @@ struct Body<'a> {
 
 /// `bash` shows its output tail; `edit`, `apply_patch` and `write` the head of
 /// their input; `read`, failed and other tools the head of their result.
-fn card_body(call: &ToolCall, expanded: bool) -> Body<'_> {
-    let rows = |folded: usize| if expanded { EXPANDED_ROWS } else { folded };
+fn card_body(call: &ToolCall) -> Body<'_> {
     let failed = call.state == ToolState::Failed;
     if call.name == "bash" {
         let output = call.output_content();
-        let shown = rows(FOLDED_OUTPUT_ROWS).min(output.len());
+        let shown = EXPANDED_ROWS.min(output.len());
         let hidden = if output.is_empty() {
             call.output_lines.unwrap_or(0)
         } else {
@@ -276,20 +471,11 @@ fn card_body(call: &ToolCall, expanded: bool) -> Body<'_> {
         && !(failed && !call.output.is_empty())
     {
         let write = call.name == "write";
-        let all: Vec<&str> = input.lines().collect();
-        // Folded patches skip their file and hunk headers: the header already
-        // names the files, so the rows go to the change itself.
-        let source: Vec<&str> = all
-            .iter()
-            .copied()
-            .filter(|line| write || !is_noise(line, expanded))
+        let source: Vec<&str> = input
+            .lines()
+            .filter(|line| write || !is_noise(line))
             .collect();
-        let folded = if write {
-            FOLDED_WRITE_ROWS
-        } else {
-            FOLDED_PATCH_ROWS
-        };
-        let shown = rows(folded).min(source.len());
+        let shown = EXPANDED_ROWS.min(source.len());
         return Body {
             hidden: source.len() - shown + call.hidden_input_lines(),
             lines: source[..shown].to_vec(),
@@ -298,12 +484,7 @@ fn card_body(call: &ToolCall, expanded: bool) -> Body<'_> {
         };
     }
     let output = call.output_content();
-    let folded = if failed || call.name == "read" {
-        FOLDED_SHORT_ROWS
-    } else {
-        FOLDED_OUTPUT_ROWS
-    };
-    let shown = rows(folded).min(output.len());
+    let shown = EXPANDED_ROWS.min(output.len());
     // The Agent's count includes the cut marker the card leaves out.
     let markers = call
         .output
@@ -329,109 +510,9 @@ fn is_patch_header(line: &str) -> bool {
         .any(|prefix| line.starts_with(prefix))
 }
 
-/// Patch lines a card leaves out. The envelope and a bare `@@` say nothing;
-/// headers with ranges and paths only earn a row when the card is expanded.
-fn is_noise(line: &str, expanded: bool) -> bool {
-    let line = line.trim_end();
-    if line == "*** Begin Patch" || line == "*** End Patch" || line == "@@" {
-        return true;
-    }
-    !expanded
-        && ["--- ", "+++ ", "diff --git", "index ", "@@"]
-            .iter()
-            .any(|prefix| line.starts_with(prefix))
-}
-
-/// Header spans (glyph, name and detail left, meta right-aligned) and whether
-/// the left side had to be cut.
-fn tool_header(
-    call: &ToolCall,
-    glyph: &str,
-    state_style: Style,
-    styles: Styles,
-    width: usize,
-) -> (Vec<Span<'static>>, bool) {
-    let mut meta: Vec<Vec<Span<'static>>> = Vec::new();
-    if let Some(duration) = call.duration {
-        meta.push(vec![Span::styled(format_duration(duration), styles.dim())]);
-    }
-    if let Some(code) = call.exit_code {
-        let style = if code == 0 {
-            styles.dim()
-        } else {
-            styles.failure()
-        };
-        meta.push(vec![Span::styled(format!("exit {code}"), style)]);
-    }
-    if let Some((added, removed)) = call.line_changes()
-        && added + removed > 0
-    {
-        meta.push(vec![
-            Span::styled(format!("+{added}"), styles.added()),
-            Span::raw(" "),
-            Span::styled(format!("−{removed}"), styles.removed()),
-        ]);
-    }
-    if call.truncated {
-        meta.push(vec![Span::styled("truncated", styles.dim())]);
-    }
-    let mut right: Vec<Span<'static>> = Vec::new();
-    for (index, item) in meta.into_iter().enumerate() {
-        if index > 0 {
-            right.push(Span::styled(" · ", styles.dim()));
-        }
-        right.extend(item);
-    }
-    let right_width: usize = right.iter().map(|span| wrap::width(&span.content)).sum();
-    if right_width + 2 >= width {
-        right.clear();
-    }
-    let room = if right.is_empty() {
-        width
-    } else {
-        width - right_width - 1
-    };
-    let title = format!("{glyph} {}", call.name);
-    let detail = call.header_detail();
-    let detail = wrap::sanitize(&detail);
-    let full = if detail.is_empty() {
-        title.clone()
-    } else {
-        format!("{title}  {detail}")
-    };
-    let left = wrap::truncate(&full, room);
-    let clipped = left != full;
-    let split = if left.starts_with(&title) {
-        title.len()
-    } else {
-        left.len()
-    };
-    let mut spans = vec![
-        Span::styled(left[..split].to_owned(), state_style),
-        Span::styled(left[split..].to_owned(), styles.text()),
-    ];
-    let padding = width.saturating_sub(wrap::width(&left) + right_width);
-    if !right.is_empty() {
-        spans.push(Span::raw(" ".repeat(padding)));
-        spans.extend(right);
-    }
-    (spans, clipped)
-}
-
-/// One card row: the rail in the state's color, then the spans, all on the
-/// card's background band.
-fn card_row(spans: Vec<Span<'static>>, rail: Style, band: Style) -> Line<'static> {
-    let paint = |style: Style| style.patch(band);
-    let mut row = vec![Span::styled("▎ ", paint(rail))];
-    row.extend(spans.into_iter().map(|span| {
-        let style = paint(span.style);
-        span.style(style)
-    }));
-    Line {
-        style: paint(Style::default()),
-        spans: row,
-        alignment: None,
-    }
+/// Patch lines that say nothing: the envelope and a bare `@@`.
+fn is_noise(line: &str) -> bool {
+    matches!(line.trim_end(), "*** Begin Patch" | "*** End Patch" | "@@")
 }
 
 /// `1 request`, `2 requests`.
@@ -489,25 +570,7 @@ pub fn turn_end_line(
     parts.join(" · ")
 }
 
-fn turn_end(
-    outcome: &crate::protocol::LoopOutcome,
-    duration: Option<std::time::Duration>,
-    requests: u32,
-    tools: u64,
-    changes: Option<&crate::transcript::ChangeSummary>,
-    styles: Styles,
-    width: usize,
-) -> Line<'static> {
-    let text = turn_end_line(outcome, duration, requests, tools, changes);
-    let labeled = format!("── {text} ──");
-    let style = match outcome {
-        crate::protocol::LoopOutcome::Completed => styles.dim(),
-        crate::protocol::LoopOutcome::Failed { .. } => styles.failure(),
-        _ => styles.warning(),
-    };
-    Line::styled(wrap::truncate(&labeled, width), style)
-}
-
+/// A compaction marker: a labelled box whose summary opens with Ctrl+O.
 fn compaction(
     before: Option<u64>,
     after: Option<u64>,
@@ -515,11 +578,11 @@ fn compaction(
     summary: Option<&str>,
     styles: Styles,
     width: usize,
-    fold: Fold,
+    expanded: bool,
 ) -> Vec<Line<'static>> {
     let text = match (before, after) {
         (Some(before), Some(after)) => format!(
-            "─ Context compacted · {} → {} tokens ─",
+            "Compacted from {} to {} tokens",
             crate::ui::format_tokens(before),
             crate::ui::format_tokens(after)
         ),
@@ -530,19 +593,39 @@ fn compaction(
                 let items = covered.map(|n| format!("{n} items"));
                 let kept = kept.map(|n| format!("{n} kept"));
                 let parts: Vec<String> = items.into_iter().chain(kept).collect();
-                format!("─ Context compacted · {} ─", parts.join(" · "))
+                format!("Compacted {}", parts.join(" · "))
             }
-            None => "─ Context compacted ─".to_owned(),
+            None => "Context compacted".to_owned(),
         },
     };
-    let mut lines = vec![Line::styled(wrap::truncate(&text, width), styles.dim())];
-    if fold.show_reasoning
-        && let Some(summary) = summary
-    {
-        for line in markdown::render(summary, width.saturating_sub(INSET), &styles, styles.dim()) {
-            lines.push(rails::rail(line, styles));
+    let surface = styles.custom_message();
+    let row = |spans: Vec<Span<'static>>| Line::from(fill(surface, spans, width));
+    let text = wrap::truncate(&text, width - INSET);
+    let mut lines = vec![
+        row(Vec::new()),
+        row(padded(vec![Span::styled(
+            "[compaction]",
+            styles.reasoning_rail().add_modifier(Modifier::BOLD),
+        )])),
+        row(Vec::new()),
+    ];
+    match summary.filter(|summary| !summary.trim().is_empty()) {
+        Some(summary) if expanded => {
+            lines.push(row(padded(vec![Span::styled(text, styles.bold())])));
+            lines.push(row(Vec::new()));
+            for line in markdown::render(summary, text_width(width), &styles, styles.text()) {
+                lines.push(row(padded(line.spans)));
+            }
         }
+        Some(_) => lines.push(row(padded(vec![
+            Span::styled(text, styles.text()),
+            Span::styled(" (", styles.meta()),
+            Span::styled("ctrl+o", styles.faint()),
+            Span::styled(" to expand)", styles.meta()),
+        ]))),
+        None => lines.push(row(padded(vec![Span::styled(text, styles.text())]))),
     }
+    lines.push(row(Vec::new()));
     lines
 }
 
@@ -561,13 +644,23 @@ mod tests {
 
     fn fold() -> Fold {
         Fold {
-            expanded_tools: false,
-            show_reasoning: false,
+            expanded: false,
+            show_reasoning: true,
+        }
+    }
+
+    fn expanded() -> Fold {
+        Fold {
+            expanded: true,
+            show_reasoning: true,
         }
     }
 
     fn text(lines: &[Line<'static>]) -> Vec<String> {
-        lines.iter().map(Line::to_string).collect()
+        lines
+            .iter()
+            .map(|line| line.to_string().trim_end().to_owned())
+            .collect()
     }
 
     fn assistant(text: &str, reasoning: &str, streaming: bool) -> Block {
@@ -579,17 +672,23 @@ mod tests {
             reasoning: reasoning.into(),
             text: text.into(),
             streaming,
+            expanded: None,
         }
     }
 
     #[test]
-    fn a_user_block_is_marked_by_its_rail() {
+    fn a_user_card_is_a_padded_surface_behind_the_rail() {
         let block = Block::User {
             text: "hello world".into(),
             kind: UserKind::Prompt,
         };
-        let body = text(&render(&block, styles(), 40, fold()));
-        assert!(body[0].starts_with("▎ hello world"), "{body:?}");
+        let lines = render(&block, styles(), 40, fold());
+        assert_eq!(text(&lines), ["▎", "▎ hello world", "▎"]);
+        for line in &lines {
+            assert_eq!(wrap::width(&line.to_string()), 40, "full width: {line:?}");
+            assert_eq!(line.spans[0].style.bg, None, "the rail cell has no surface");
+            assert_eq!(line.spans[1].style.bg, Some(Palette::dark().composer_bg));
+        }
     }
 
     #[test]
@@ -599,15 +698,19 @@ mod tests {
             kind: UserKind::Steering,
         };
         let body = text(&render(&block, styles(), 40, fold()));
-        assert!(body[0].contains("steering"));
+        assert_eq!(body[2], "▎ ↳ steering");
     }
 
     #[test]
-    fn assistant_prose_is_markdown_not_raw_text() {
-        let block = assistant("## Title\n\nsome **bold** prose", "", false);
+    fn assistant_prose_is_markdown_at_the_thinking_column() {
+        let block = assistant("## Title\n\nsome **bold** prose", "plan", false);
         let body = text(&render(&block, styles(), 60, fold()));
-        assert!(body.iter().any(|line| line.contains("Title")));
-        assert!(body.iter().any(|line| line.contains("bold")));
+        assert_eq!(body[0], "▎ plan");
+        assert_eq!(body[1], "");
+        assert_eq!(
+            body[2], "  Title",
+            "the reply has no rail but the same column"
+        );
         assert!(
             !body.iter().any(|line| line.contains("**")),
             "markdown markers are not shown: {body:?}"
@@ -615,50 +718,64 @@ mod tests {
     }
 
     #[test]
-    fn finished_reasoning_collapses_and_ctrl_t_shows_it() {
-        let block = assistant("the answer", "one\ntwo\nthree", false);
-        let folded = text(&render(&block, styles(), 60, fold()));
-        assert_eq!(folded[0], "▏ Thought · 3 lines", "{folded:?}");
-        assert!(folded.iter().any(|line| line.contains("the answer")));
+    fn long_thinking_shows_its_first_rows_and_how_many_follow() {
+        let reasoning = "one\ntwo\nthree\nfour\nfive";
+        for streaming in [false, true] {
+            let block = assistant("the answer", reasoning, streaming);
+            let folded = text(&render(&block, styles(), 60, fold()));
+            assert_eq!(
+                folded[..4],
+                [
+                    "▎ one",
+                    "▎ two",
+                    "▎ three",
+                    "▎... (2 more lines, ctrl+o to expand)"
+                ],
+                "{folded:?}"
+            );
+        }
+        let block = assistant("the answer", reasoning, false);
+        let open = text(&render(&block, styles(), 60, expanded()));
+        assert_eq!(open[4], "▎ five", "{open:?}");
+        assert!(open.iter().all(|line| !line.contains("ctrl+o")));
+    }
 
-        let shown = text(&render(
-            &block,
-            styles(),
-            60,
-            Fold {
-                expanded_tools: false,
-                show_reasoning: true,
-            },
-        ));
-        assert!(shown.iter().any(|line| line.contains("three")));
+    #[test]
+    fn thinking_is_dim_italic_with_bold_headings() {
+        let block = assistant("", "**Reading the tests**\nthen run them", false);
+        let lines = render(&block, styles(), 60, fold());
+        assert_eq!(text(&lines), ["▎ Reading the tests", "▎ then run them"]);
+        let heading = &lines[0].spans[2].style;
         assert!(
-            shown[0].starts_with('▏'),
-            "reasoning rows carry the reasoning rail: {shown:?}"
+            heading
+                .add_modifier
+                .contains(Modifier::BOLD | Modifier::ITALIC)
+        );
+        assert_eq!(lines[1].spans[2].style, thinking_style(styles()));
+        assert_eq!(
+            lines[0].spans[0].style.fg,
+            Some(Palette::dark().thinking_rail)
         );
     }
 
     #[test]
-    fn reasoning_lines_are_not_folded_into_one_paragraph() {
-        let block = assistant("", "**Reading the tests**\n**Running the suite**", false);
-        let shown = text(&render(
-            &block,
-            styles(),
-            60,
-            Fold {
-                expanded_tools: false,
-                show_reasoning: true,
-            },
-        ));
-        assert_eq!(shown.len(), 2, "{shown:?}");
-        assert!(shown[1].contains("Running the suite"));
+    fn one_thinking_block_can_open_while_the_rest_stay_folded() {
+        let mut block = assistant("", "a\nb\nc\nd", false);
+        if let Block::Assistant { expanded, .. } = &mut block {
+            *expanded = Some(true);
+        }
+        assert_eq!(render(&block, styles(), 60, fold()).len(), 4);
     }
 
     #[test]
-    fn streaming_reasoning_shows_only_the_tail() {
-        let block = assistant("", "one\ntwo\nthree\nfour\nfive", true);
-        let lines = text(&render(&block, styles(), 60, fold()));
-        assert!(!lines.iter().any(|line| line.contains("one")));
-        assert!(lines.iter().any(|line| line.contains("five")));
+    fn hidden_thinking_is_one_row() {
+        let block = assistant("answer", "a\nb\nc\nd", false);
+        let hidden = Fold {
+            expanded: true,
+            show_reasoning: false,
+        };
+        let body = text(&render(&block, styles(), 60, hidden));
+        assert_eq!(body, ["▎ Thinking...", "", "  answer"]);
     }
 
     fn call() -> ToolCall {
@@ -680,84 +797,105 @@ mod tests {
         call
     }
 
-    fn expanded() -> Fold {
-        Fold {
-            expanded_tools: true,
-            show_reasoning: false,
-        }
+    fn card(call: ToolCall, fold: Fold) -> Vec<String> {
+        text(&render(&Block::Tool(Box::new(call)), styles(), 60, fold))
     }
 
     #[test]
-    fn a_tool_card_reports_status_duration_and_exit_code() {
-        let block = Block::Tool(Box::new(call()));
-        let body = text(&render(&block, styles(), 60, fold()));
-        assert!(body[0].contains("✓ bash"));
-        assert!(body[0].contains("0.4s"));
-        assert!(body[0].contains("exit 0"));
+    fn a_folded_card_is_title_detail_and_hint_then_a_blank_row() {
         assert_eq!(
-            body.last().unwrap(),
-            "▎   … 12 earlier lines · ctrl+o to expand"
-        );
-    }
-
-    #[test]
-    fn a_bash_card_shows_the_output_tail_not_the_command() {
-        let mut card = call();
-        card.detail = "$ make test".into();
-        card.expanded_input = Some("make test".into());
-        card.output = (1..=6).map(|index| format!("out {index}")).collect();
-        card.output_dropped = 0;
-        let body = text(&render(&Block::Tool(Box::new(card)), styles(), 60, fold()));
-        assert_eq!(
-            body[1..],
+            card(call(), fold()),
             [
-                "▎   out 3",
-                "▎   out 4",
-                "▎   out 5",
-                "▎   out 6",
-                "▎   … 2 earlier lines · ctrl+o to expand",
+                format!("▎ bash{}0.4s", " ".repeat(49)),
+                "▎ $ python3 -m unittest".into(),
+                "▎ ... (14 more lines, ctrl+o to expand)".into(),
+                String::new(),
             ]
         );
     }
 
     #[test]
-    fn an_expanded_bash_card_shows_a_long_command_above_its_output() {
-        let mut card = call();
-        card.expanded_input = Some("cd app\npython3 -m unittest".into());
-        let body = text(&render(
-            &Block::Tool(Box::new(card)),
-            styles(),
-            60,
-            expanded(),
-        ));
-        assert_eq!(body[1], "▎   cd app");
-        assert_eq!(body[2], "▎   python3 -m unittest");
-        assert_eq!(body[3], "▎   Ran 30 tests");
-        assert!(body.last().unwrap().ends_with(FULL_OUTPUT_HINT), "{body:?}");
-
-        // A one-line command that fits the header is not repeated.
-        let mut short = call();
-        short.expanded_input = Some("python3 -m unittest".into());
-        let body = text(&render(
-            &Block::Tool(Box::new(short)),
-            styles(),
-            60,
-            expanded(),
-        ));
-        assert_eq!(body[1], "▎   Ran 30 tests");
+    fn folded_card_rows_are_one_line_and_cut_at_the_edge() {
+        let mut long = call();
+        long.detail = format!("$ cd app &&\n  {}", "x".repeat(80));
+        let body = card(long, fold());
+        assert_eq!(body[1], format!("▎ $ cd app && {}", "x".repeat(46)));
     }
 
     #[test]
-    fn a_non_zero_exit_code_is_red() {
-        let mut card = call();
-        card.exit_code = Some(1);
-        let lines = render(&Block::Tool(Box::new(card)), styles(), 60, fold());
+    fn a_card_is_colored_by_its_state() {
+        let palette = Palette::dark();
+        for (state, rail, surface) in [
+            (ToolState::Running, palette.card_rail, palette.card_bg),
+            (
+                ToolState::Succeeded,
+                palette.card_success_rail,
+                palette.card_success_bg,
+            ),
+            (
+                ToolState::Failed,
+                palette.card_failure_rail,
+                palette.card_failure_bg,
+            ),
+        ] {
+            let mut card = call();
+            card.state = state;
+            let lines = render(&Block::Tool(Box::new(card)), styles(), 60, fold());
+            assert_eq!(lines[0].spans[0].style.fg, Some(rail));
+            assert_eq!(lines[0].spans[1].style.bg, Some(surface));
+        }
+    }
+
+    #[test]
+    fn only_a_failing_exit_code_is_shown_and_it_is_red() {
+        let mut failing = call();
+        failing.exit_code = Some(1);
+        let lines = render(&Block::Tool(Box::new(failing)), styles(), 60, fold());
         let exit = lines[0]
             .spans
             .iter()
             .find(|span| span.content == "exit 1")
-            .expect("the exit code is in the header");
+            .expect("the exit code is in the title row");
         assert_eq!(exit.style.fg, Some(Palette::dark().failure));
+        assert!(!card(call(), fold())[0].contains("exit"));
+    }
+
+    #[test]
+    fn an_expanded_bash_card_shows_the_command_output_and_time() {
+        let mut long = call();
+        long.exit_code = Some(2);
+        long.expanded_input = Some("cd app\npython3 -m unittest".into());
+        assert_eq!(
+            card(long, expanded()),
+            [
+                "▎",
+                "▎ $ cd app",
+                "▎ python3 -m unittest",
+                "▎",
+                "▎ … 12 earlier lines · click for full output",
+                "▎ Ran 30 tests",
+                "▎ OK",
+                "▎",
+                "▎ Took 0.4s · exit 2",
+                "▎",
+            ]
+        );
+    }
+
+    #[test]
+    fn expanded_titles_are_bold_and_name_the_subject() {
+        let mut read = call();
+        read.name = "read".into();
+        read.detail = "src/app.py:1-40".into();
+        read.exit_code = None;
+        let lines = render(&Block::Tool(Box::new(read)), styles(), 60, expanded());
+        assert!(lines[1].to_string().starts_with("▎ read src/app.py:1-40"));
+        assert!(
+            lines[1].spans[2]
+                .style
+                .add_modifier
+                .contains(Modifier::BOLD)
+        );
     }
 
     fn patch_card() -> ToolCall {
@@ -775,70 +913,54 @@ mod tests {
     }
 
     #[test]
-    fn a_folded_patch_skips_its_headers_and_counts_what_is_left() {
-        let body = text(&render(
-            &Block::Tool(Box::new(patch_card())),
-            styles(),
-            60,
-            fold(),
-        ));
-        assert!(body[0].starts_with("▎ ✓ apply_patch  app.py"), "{body:?}");
-        assert!(body[0].ends_with("0.4s · +1 −0"), "{body:?}");
-        assert_eq!(
-            body[1..],
-            [
-                "▎    def greet(name):",
-                "▎   +    \"\"\"Greet.\"\"\"",
-                "▎        return name",
-            ],
-            "nothing is hidden, so there is no hint"
-        );
+    fn a_patch_card_counts_its_change_and_expands_to_a_colored_diff() {
+        let folded = card(patch_card(), fold());
+        assert_eq!(folded[1], "▎ app.py");
+        assert!(folded[0].ends_with("0.4s · +1 −0"), "{folded:?}");
+        assert_eq!(folded[2], "▎ ... (8 more lines, ctrl+o to expand)");
 
-        let expanded = text(&render(
+        let lines = render(
             &Block::Tool(Box::new(patch_card())),
             styles(),
             60,
             expanded(),
-        ));
-        assert!(
-            expanded.contains(&"▎   @@ -1,2 +1,3 @@".to_owned()),
-            "{expanded:?}"
         );
-    }
-
-    #[test]
-    fn a_long_patch_says_how_many_lines_follow() {
-        let mut card = patch_card();
-        let lines: Vec<String> = (0..12).map(|index| format!("+line {index}")).collect();
-        card.expanded_input = Some(format!("@@\n{}", lines.join("\n")));
-        let body = text(&render(&Block::Tool(Box::new(card)), styles(), 60, fold()));
-        assert_eq!(body.len(), 1 + 8 + 1, "{body:?}");
-        assert_eq!(body[1], "▎   +line 0", "a bare @@ takes no row");
-        assert_eq!(body[9], "▎   … 4 more lines · ctrl+o to expand");
-    }
-
-    #[test]
-    fn a_truncated_read_shows_its_first_lines_without_the_cut_marker() {
-        let mut card = call();
-        card.name = "read".into();
-        card.detail = "large.txt:1-2000".into();
-        card.duration = None;
-        card.exit_code = None;
-        card.output_dropped = 0;
-        card.truncated = true;
-        card.output_lines = Some(2001);
-        card.output = Vec::new();
-        // The 2,000 line result as previewed: cut inside line 5, then marked.
-        card.apply_result("1: alpha\n2: beta\n3: gamma\n4: delta\n1\n[truncated]");
-        let body = text(&render(&Block::Tool(Box::new(card)), styles(), 70, fold()));
-        assert!(body[0].ends_with("truncated"), "{body:?}");
+        let body = text(&lines);
         assert_eq!(
-            body[1..],
+            body[1],
+            format!("▎ apply_patch app.py{}0.4s · +1 −0", " ".repeat(27))
+        );
+        assert_eq!(body[7], "▎ @@ -1,2 +1,3 @@");
+        assert_eq!(body[9], "▎ +    \"\"\"Greet.\"\"\"");
+        assert_eq!(lines[9].spans[2].style.fg, Some(Palette::dark().added));
+    }
+
+    #[test]
+    fn a_truncated_read_counts_every_line_it_leaves_out() {
+        let mut read = call();
+        read.name = "read".into();
+        read.detail = "large.txt:1-2000".into();
+        read.duration = None;
+        read.exit_code = None;
+        read.output_dropped = 0;
+        read.output_lines = Some(2001);
+        read.output = Vec::new();
+        // The 2,000 line result as previewed: cut inside line 5, then marked.
+        read.apply_result("1: alpha\n2: beta\n3: gamma\n4: delta\n1\n[truncated]");
+        assert_eq!(
+            card(read.clone(), fold())[2],
+            "▎ ... (2000 more lines, ctrl+o to expand)"
+        );
+        let open = card(read, expanded());
+        assert_eq!(
+            open[3..9],
             [
-                "▎   1: alpha",
-                "▎   2: beta",
-                "▎   3: gamma",
-                "▎   … 1997 more lines · ctrl+o to expand",
+                "▎ 1: alpha",
+                "▎ 2: beta",
+                "▎ 3: gamma",
+                "▎ 4: delta",
+                "▎ 1",
+                "▎ … 1995 more lines · click for full output",
             ]
         );
     }
@@ -850,60 +972,48 @@ mod tests {
             card.name = name.into();
             card.output = Vec::new();
             card.output_lines = Some(42);
-            let body = text(&render(&Block::Tool(Box::new(card)), styles(), 60, fold()));
-            assert_eq!(body.len(), 2, "{body:?}");
-            assert_eq!(body[1], "▎   … 42 lines · click for full output");
+            let folded = self::card(card.clone(), fold());
+            assert_eq!(folded[2], "▎ ... (42 more lines, ctrl+o to expand)");
+            let open = self::card(card, expanded());
+            assert!(
+                open.contains(&format!("▎ … 42 lines · {FULL_OUTPUT_HINT}")),
+                "{open:?}"
+            );
         }
     }
 
     #[test]
     fn one_card_can_be_expanded_while_the_others_stay_folded() {
-        let mut card = call();
-        card.expanded = Some(true);
-        let body = text(&render(&Block::Tool(Box::new(card)), styles(), 60, fold()));
-        assert!(body.last().unwrap().ends_with(FULL_OUTPUT_HINT), "{body:?}");
-    }
-
-    #[test]
-    fn a_folded_card_is_small_and_an_expanded_one_is_bounded() {
-        let mut card = call();
-        card.output = (0..400).map(|index| format!("line {index}")).collect();
-        let block = Block::Tool(Box::new(card));
-        let folded = render(&block, styles(), 60, fold());
-        let expanded = render(
-            &block,
-            styles(),
-            60,
-            Fold {
-                expanded_tools: true,
-                show_reasoning: false,
-            },
+        let mut one = call();
+        one.expanded = Some(true);
+        let body = card(one, fold());
+        assert_eq!(
+            body.last().unwrap(),
+            "▎",
+            "an expanded card ends on its pad row"
         );
-        assert!(folded.len() <= 8, "folded cards stay small");
-        assert!(expanded.len() > folded.len());
-        assert!(expanded.len() <= 202, "expanded cards cap at 200 rows");
     }
 
     #[test]
-    fn a_failed_card_uses_the_error_band() {
-        let mut card = call();
-        card.state = ToolState::Failed;
-        card.output = vec!["Traceback (most recent call last)".into()];
-        let lines = render(&Block::Tool(Box::new(card)), styles(), 60, fold());
-        assert_eq!(lines[0].style.bg, Some(Palette::dark().card_failure_bg));
+    fn an_expanded_card_is_bounded() {
+        let mut long = call();
+        long.output = (0..400).map(|index| format!("line {index}")).collect();
+        let open = card(long, expanded());
+        assert!(open.len() <= 210, "{}", open.len());
+        assert!(open.contains(&"▎ line 399".to_owned()));
     }
 
     #[test]
     fn tool_output_is_sanitized_before_it_reaches_the_terminal() {
-        let mut card = call();
-        card.output = vec!["\u{1b}[31mred\u{1b}[0m".into()];
-        let body = text(&render(&Block::Tool(Box::new(card)), styles(), 60, fold()));
+        let mut dirty = call();
+        dirty.output = vec!["\u{1b}[31mred\u{1b}[0m".into()];
+        let body = card(dirty, expanded());
         assert!(body.iter().any(|line| line.contains("red")));
         assert!(!body.iter().any(|line| line.contains('\u{1b}')));
     }
 
     #[test]
-    fn a_turn_end_line_names_the_outcome_and_the_change_size() {
+    fn a_turn_end_line_is_quiet_and_names_the_change_size() {
         let block = Block::TurnEnd {
             loop_id: "l".into(),
             outcome: LoopOutcome::Completed,
@@ -916,25 +1026,46 @@ mod tests {
                 lines: Some((40, 7)),
             }),
         };
-        let body = text(&render(&block, styles(), 100, fold()));
-        let line = &body[0];
-        assert!(line.contains("completed"), "{line}");
-        assert!(line.contains("3m07s"), "{line}");
-        assert!(line.contains("12 requests"), "{line}");
-        assert!(line.contains("3 files changed (+40 −7)"), "{line}");
+        let lines = render(&block, styles(), 100, fold());
+        assert_eq!(
+            lines[0].to_string(),
+            "  completed in 3m07s · 12 requests · 11 tools · 3 files changed (+40 −7)"
+        );
+        assert_eq!(lines[0].style.fg, Some(Palette::dark().meta));
     }
 
-    #[test]
-    fn a_compaction_marker_shows_what_it_saved() {
-        let block = Block::Compaction {
+    fn compaction_block(summary: Option<&str>) -> Block {
+        Block::Compaction {
             operation_id: "tui-1".into(),
             before: Some(32_200),
             after: Some(2_700),
             coverage: None,
-            summary: None,
-        };
-        let body = text(&render(&block, styles(), 80, fold()));
-        assert!(body[0].contains("32.2k → 2.7k"), "{body:?}");
+            summary: summary.map(Into::into),
+        }
+    }
+
+    #[test]
+    fn a_compaction_marker_shows_what_it_saved_and_opens_its_summary() {
+        let folded = text(&render(
+            &compaction_block(Some("kept the plan")),
+            styles(),
+            80,
+            fold(),
+        ));
+        assert_eq!(folded[1], " [compaction]");
+        assert_eq!(
+            folded[3],
+            " Compacted from 32.2k to 2.7k tokens (ctrl+o to expand)"
+        );
+        let open = text(&render(
+            &compaction_block(Some("kept the plan")),
+            styles(),
+            80,
+            expanded(),
+        ));
+        assert_eq!(open[5], " kept the plan", "{open:?}");
+        let bare = text(&render(&compaction_block(None), styles(), 80, fold()));
+        assert_eq!(bare[3], " Compacted from 32.2k to 2.7k tokens");
     }
 
     /// An automatic compaction reports no token figures, so the marker says what
@@ -949,14 +1080,8 @@ mod tests {
             summary: None,
         };
         let body = text(&render(&block, styles(), 80, fold()));
-        assert!(body[0].contains("177 items"), "{body:?}");
-        assert!(body[0].contains("0 kept"), "{body:?}");
-    }
+        assert_eq!(body[3], " Compacted 177 items · 0 kept");
 
-    /// An automatic result commonly reports what it covered but not what it
-    /// kept; the count that exists must still be shown.
-    #[test]
-    fn a_compaction_with_only_a_covered_count_still_reports_it() {
         let block = Block::Compaction {
             operation_id: "auto-lup_2".into(),
             before: None,
@@ -965,18 +1090,18 @@ mod tests {
             summary: None,
         };
         let body = text(&render(&block, styles(), 80, fold()));
-        assert!(body[0].contains("332 items"), "{body:?}");
-        assert!(!body[0].contains("kept"), "{body:?}");
+        assert_eq!(body[3], " Compacted 332 items");
     }
 
     #[test]
-    fn errors_are_red_and_archived_history_is_dim() {
+    fn notices_are_status_lines_and_errors_are_red() {
         let error = Block::Notice {
             level: NoticeLevel::Error,
             text: "turn failed".into(),
         };
         let lines = render(&error, styles(), 40, fold());
-        assert_eq!(lines[0].style.fg, Some(Palette::dark().failure));
+        assert_eq!(lines[0].to_string(), "▎turn failed");
+        assert_eq!(lines[0].spans[1].style.fg, Some(Palette::dark().failure));
 
         let history = Block::EarlierHistory { hidden_items: 40 };
         let body = text(&render(&history, styles(), 40, fold()));
@@ -985,6 +1110,8 @@ mod tests {
 
     #[test]
     fn narrow_widths_never_overflow() {
+        let mut open = call();
+        open.expanded = Some(true);
         for block in [
             Block::User {
                 text: "a very long word without any break opportunity at all".into(),
@@ -992,10 +1119,12 @@ mod tests {
             },
             assistant(
                 "```rust\nfn main() { println!(\"wide code\"); }\n```",
-                "",
+                "one\ntwo\nthree\nfour",
                 false,
             ),
             Block::Tool(Box::new(call())),
+            Block::Tool(Box::new(open)),
+            compaction_block(Some("summary")),
         ] {
             for width in 3..12 {
                 for line in render(&block, styles(), width, fold()) {

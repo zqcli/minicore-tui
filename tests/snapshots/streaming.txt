@@ -1,16 +1,16 @@
-  It does not any more. The streaming renderer keeps the stable prefix
-  and re-renders only the tail, so a delta costs one small parse.
 
-▎ ✓ bash  $ cargo test --lib                             4.2s · exit 0
-▎   running 131 tests
-▎   test result: ok
-▎   … 14 earlier lines · ctrl+o to expand
+▎ bash                                                           4.2s
+▎ $ cargo test --lib
+▎ ... (16 more lines, ctrl+o to expand)
 
-── completed in 12s · 2 requests · 1 tool · 2 files changed (+40 −7) …
 
+  completed in 12s · 2 requests · 1 tool · 2 files changed (+40 −7)
+
+▎
 ▎ Now stream a longer answer.
+▎
 
-▏ I should explain the anchor rule first, then show it.
+▎ I should explain the anchor rule first, then show it.
 
   An anchored view keeps its block and row, so new output below never
   moves the text you are reading. Only scrolling to the end returns

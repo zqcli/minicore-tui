@@ -12,7 +12,9 @@ use super::Block;
 /// The render inputs that invalidate the whole cache.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Fold {
-    pub expanded_tools: bool,
+    /// Ctrl+O: tool cards, thinking and compaction summaries open.
+    pub expanded: bool,
+    /// Off under Ctrl+T, which leaves one `Thinking...` row per block.
     pub show_reasoning: bool,
 }
 
@@ -272,7 +274,7 @@ mod tests {
 
     fn fold() -> Fold {
         Fold {
-            expanded_tools: false,
+            expanded: false,
             show_reasoning: false,
         }
     }
@@ -341,7 +343,7 @@ mod tests {
             &revisions,
             50,
             Fold {
-                expanded_tools: true,
+                expanded: true,
                 show_reasoning: true,
             },
             |_, _, _| {

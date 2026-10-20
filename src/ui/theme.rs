@@ -48,6 +48,8 @@ pub struct Palette {
     pub card_rail: Color,
     pub card_success_rail: Color,
     pub card_failure_rail: Color,
+    /// The compaction marker's box.
+    pub custom_bg: Color,
 }
 
 impl Palette {
@@ -86,6 +88,7 @@ impl Palette {
             card_rail: Color::Rgb(137, 180, 250),
             card_success_rail: Color::Rgb(123, 159, 136),
             card_failure_rail: Color::Rgb(188, 120, 136),
+            custom_bg: Color::Rgb(0x2d, 0x28, 0x38),
         }
     }
 
@@ -124,6 +127,7 @@ impl Palette {
             card_rail: Color::Rgb(0x1e, 0x66, 0xf5),
             card_success_rail: Color::Rgb(0x40, 0xa0, 0x2b),
             card_failure_rail: Color::Rgb(0xd2, 0x0f, 0x39),
+            custom_bg: Color::Rgb(0xed, 0xe7, 0xf6),
         }
     }
 
@@ -311,6 +315,10 @@ impl Styles {
 
     pub fn card_failure_rail(&self) -> Style {
         fg(self.palette.card_failure_rail)
+    }
+
+    pub fn custom_message(&self) -> Style {
+        bg(self.palette.custom_bg)
     }
 
     /// Mouse selection; reverse video when the palette has no colors.
