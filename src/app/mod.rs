@@ -6,6 +6,7 @@
 
 pub mod actions;
 pub mod commands;
+pub mod composer;
 pub mod diff;
 pub mod find;
 pub mod keys;
@@ -163,7 +164,7 @@ pub struct App {
     pub profiles: Vec<ProfileInfo>,
     /// Settings requested on the command line, used once by the first session.
     pub launch: LaunchSettings,
-    pub composer: crate::ui::composer::Composer,
+    pub composer: composer::Composer,
     pub notices: VecDeque<Notice>,
     pub scroll: Scroll,
     pub tools_expanded: bool,
@@ -224,7 +225,7 @@ impl App {
             models: Vec::new(),
             profiles: Vec::new(),
             launch: LaunchSettings::default(),
-            composer: crate::ui::composer::Composer::new(),
+            composer: composer::Composer::new(),
             notices: VecDeque::new(),
             scroll: Scroll::Follow,
             tools_expanded: false,

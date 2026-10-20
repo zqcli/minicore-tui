@@ -54,6 +54,11 @@ fn config_path() -> Option<PathBuf> {
     Some(base.join("minicore-tui").join("config.toml"))
 }
 
+/// The prompt history file, next to the config file.
+pub fn history_path() -> Option<PathBuf> {
+    Some(config_path()?.with_file_name("history.jsonl"))
+}
+
 impl Config {
     /// Loads the config file; a missing or malformed one gives the defaults.
     pub fn load() -> Self {

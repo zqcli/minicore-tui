@@ -174,6 +174,9 @@ async fn run() -> i32 {
         reasoning: args.reasoning,
     };
     app.theme = theme;
+    if let Some(file) = minicore_tui::config::history_path() {
+        app.composer = minicore_tui::app::composer::Composer::with_history_file(file);
+    }
     app.styles = Styles::of(Palette::for_kind(theme));
 
     let boot = {

@@ -68,6 +68,7 @@ Command-line options win. A missing file gives the defaults; a file with a
 syntax error or an unknown key is ignored as a whole. `/theme` saves the palette
 by rewriting the file, which drops comments. `Ctrl+G` uses `editor`, then
 `$VISUAL`, then `$EDITOR`. With `NO_COLOR` set the UI uses no colors.
+The prompt history is saved as `history.jsonl` in the same directory.
 
 ## Screen
 

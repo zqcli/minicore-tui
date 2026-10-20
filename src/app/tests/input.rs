@@ -240,6 +240,29 @@ async fn ctrl_and_alt_move_and_delete_by_word() {
     assert_eq!(h.app.composer.text(), "one");
 }
 
+#[tokio::test(start_paused = true)]
+async fn alt_d_and_alt_delete_delete_the_next_word_and_ctrl_x_copies_the_answer() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.app.composer.set_text("one two three");
+    h.press(KeyCode::Home);
+    h.key(KeyCode::Char('d'), KeyModifiers::ALT);
+    assert_eq!(
+        h.app.composer.text(),
+        " two three",
+        "typed nothing, deleted a word"
+    );
+    h.key(KeyCode::Delete, KeyModifiers::ALT);
+    assert_eq!(h.app.composer.text(), " three");
+
+    h.ctrl(KeyCode::Char('x'));
+    assert_eq!(h.notices(), ["No answer to copy yet"]);
+    assert_eq!(
+        h.app.composer.text(),
+        " three",
+        "Ctrl+X leaves the draft alone"
+    );
+}
+
 fn wheel(h: &mut Harness, kind: MouseEventKind) {
     h.app.on_mouse(MouseEvent {
         kind,

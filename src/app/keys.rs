@@ -32,9 +32,9 @@ impl App {
 
     /// A composer key, then the completion list brought in step with the draft.
     fn on_composer_input(&mut self, key: KeyEvent) -> Option<Action> {
-        let before = self.composer.text().to_owned();
+        let before = self.composer.version();
         let action = self.on_composer_key(key);
-        let edited = self.composer.text() != before;
+        let edited = self.composer.version() != before;
         let typed = edited
             && matches!(
                 key.code,
@@ -440,6 +440,7 @@ impl App {
                 self.composer.delete();
             }
             KeyCode::Char('g') if ctrl => return Some(Action::EditDraft),
+            KeyCode::Char('x') if ctrl => return Some(Action::CopyLastAnswer),
             KeyCode::Char('o') if ctrl => {
                 self.tools_expanded = !self.tools_expanded;
                 let state = if self.tools_expanded {
@@ -479,10 +480,12 @@ impl App {
                 self.composer.type_char('@');
                 self.open_panel(Panel::Files);
             }
+            KeyCode::Char('d') if alt => self.composer.delete_word_right(),
             KeyCode::Char(_) if ctrl => {}
             KeyCode::Char(character) => self.composer.type_char(character),
             KeyCode::Backspace if ctrl || alt => self.composer.delete_word_left(),
             KeyCode::Backspace => self.composer.backspace(),
+            KeyCode::Delete if alt => self.composer.delete_word_right(),
             KeyCode::Delete => self.composer.delete(),
             KeyCode::Left if ctrl || alt => self.composer.move_word_left(),
             KeyCode::Right if ctrl || alt => self.composer.move_word_right(),
