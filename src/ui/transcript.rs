@@ -19,7 +19,7 @@ use super::markdown::StreamRenderer;
 use super::theme::Styles;
 use super::{blocks, selection, views};
 use crate::app::{App, Scroll};
-use crate::transcript::layout::{Fold, Rows, Viewport};
+use crate::transcript::layout::{Fold, Layout, Rows, Viewport};
 use crate::transcript::{Block, RequestKey};
 
 /// Composited on the last row while the view is detached from the tail.
@@ -145,32 +145,41 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, styles: Styles) {
     let layout = &mut app.layout;
     let blocks = session.transcript.blocks();
     layout.state.prepare(key, blocks);
+    // The header rides in front of block 0, so it scrolls and anchors with the
+    // transcript without being a block.
+    let mut render = |state: &mut RenderState, index: usize, block: &Block| {
+        let mut rows = state.render(block, key);
+        if index == 0 {
+            let header = welcome();
+            state.header_rows = header.len();
+            rows.prepend(header);
+        }
+        rows
+    };
     layout.prepare(
         blocks,
         session.transcript.revisions(),
         width,
         fold,
-        // The header rides in front of block 0, so it scrolls and anchors with
-        // the transcript without being a block.
-        |state, index, block| {
-            let mut rows = state.render(block, key);
-            if index == 0 {
-                let header = welcome();
-                state.header_rows = header.len();
-                rows.prepend(header);
-            }
-            rows
-        },
+        &mut render,
     );
-    let total = layout.total_rows();
     let height = area.height as usize;
-    let top = match app.scroll {
-        Scroll::Follow => total.saturating_sub(height),
-        // An anchor is resolved against the current layout, so content growing
-        // below it does not move the view.
-        Scroll::Anchor { block, offset } => layout.anchor_row(block, offset),
+    let scroll = app.scroll;
+    let resolve = |layout: &Layout<RenderState>| {
+        let total = layout.total_rows();
+        match scroll {
+            Scroll::Follow => total.saturating_sub(height),
+            // An anchor is resolved against the current layout, so content
+            // growing below it does not move the view.
+            Scroll::Anchor { block, offset } => layout.anchor_row(block, offset),
+        }
+        .min(total.saturating_sub(1))
+    };
+    let mut top = resolve(layout);
+    while layout.settle(blocks, top, height, &mut render) {
+        top = resolve(layout);
     }
-    .min(total.saturating_sub(1));
+    let total = layout.total_rows();
     // A selection marks screen cells, so it means nothing once the rows move.
     if top != layout.viewport.top {
         app.selection = None;

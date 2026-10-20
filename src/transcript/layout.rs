@@ -1,6 +1,7 @@
 //! Per-block line cache, prefix heights, viewport and scroll anchoring. A block
-//! re-renders only when its revision, the width or a fold flag it depends on
-//! changes, and a frame reads only the visible rows.
+//! re-renders when its revision changes; a new width or fold flag only marks the
+//! affected blocks stale, and those render as they come near the window, so a
+//! frame costs the window, not the history.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -12,7 +13,7 @@ use ratatui::text::Line;
 use super::Block;
 
 /// The render inputs that only some blocks depend on.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Fold {
     /// Ctrl+O: tool cards, thinking and compaction summaries open.
     pub expanded: bool,
@@ -104,15 +105,18 @@ impl Rows {
 #[derive(Clone, Debug)]
 struct Cached {
     revision: u64,
-    /// The fold the rows were built under, and the part of it they read.
+    /// The width and fold the rows were built under, and the part of the fold they read.
+    width: u16,
     fold: Fold,
     uses: Uses,
     rows: Rows,
 }
 
 impl Cached {
-    fn is_current(&self, revision: u64, fold: Fold) -> bool {
-        self.revision == revision
+    /// Whether the rows still fit `width` and `fold`; a stale block keeps its
+    /// old height as the estimate until it renders again.
+    fn fits(&self, width: u16, fold: Fold) -> bool {
+        self.width == width
             && !(self.uses.expanded && self.fold.expanded != fold.expanded)
             && !(self.uses.show_reasoning && self.fold.show_reasoning != fold.show_reasoning)
     }
@@ -152,6 +156,7 @@ pub struct Layout<S = ()> {
     /// is the total height. Empty until the first successful prepare.
     prefix: Vec<usize>,
     width: u16,
+    fold: Fold,
     /// The blank row that opens every block but the first.
     separator: Arc<[Line<'static>]>,
     /// Renderer state the cache hands to the render callback, never inspects.
@@ -167,6 +172,7 @@ impl<S: Default> Default for Layout<S> {
             cached: Vec::new(),
             prefix: Vec::new(),
             width: 0,
+            fold: Fold::default(),
             separator: Arc::from([Line::raw("")]),
             state: S::default(),
             viewport: Viewport::default(),
@@ -183,30 +189,29 @@ impl<S> Layout<S> {
         self.prefix.clear();
     }
 
-    /// Brings the cache up to date. `render_block` runs only for blocks that
-    /// are new or changed. A block is found again by its revision wherever it
-    /// moved to, except across the first position, which carries no separator.
+    /// Brings the cache up to date. `render_block` runs for blocks that are new
+    /// or changed. A block is found again by its revision wherever it moved to,
+    /// except across the first position, which carries no separator. Blocks a
+    /// new width or fold makes stale wait for [`Layout::settle`].
     pub fn prepare<F, R>(
         &mut self,
         blocks: &[Block],
         revisions: &[u64],
         width: u16,
         fold: Fold,
-        mut render_block: F,
+        render_block: &mut F,
     ) where
         F: FnMut(&mut S, usize, &Block) -> R,
         R: Into<Rows>,
     {
         let started = Instant::now();
-        if self.width != width {
-            self.width = width;
-            self.clear();
-        }
+        self.width = width;
+        self.fold = fold;
         let kept = self
             .cached
             .iter()
             .zip(revisions)
-            .take_while(|(cached, revision)| cached.is_current(**revision, fold))
+            .take_while(|(cached, revision)| cached.revision == **revision)
             .count();
         let moved = self.cached.split_off(kept);
         let by_revision: HashMap<u64, &Cached> = moved
@@ -217,36 +222,81 @@ impl<S> Layout<S> {
             .collect();
         for (index, block) in blocks.iter().enumerate().skip(kept) {
             let revision = revisions[index];
-            let reused = by_revision
-                .get(&revision)
-                .filter(|cached| index > 0 && cached.is_current(revision, fold));
-            if let Some(cached) = reused {
-                self.cached.push((*cached).clone());
-                continue;
-            }
-            let mut rows: Rows = render_block(&mut self.state, index, block).into();
-            // The separator row belongs to the block below, so the last block
-            // leaves no trailing gap; an empty block still occupies a row.
-            if index > 0 {
-                rows.len += 1;
-                rows.chunks.insert(0, self.separator.clone());
-            }
-            if rows.len == 0 {
-                rows.push(Arc::from([Line::raw("")]));
-            }
-            self.stats.blocks_rendered += 1;
-            self.stats.rows_rendered += rows.len as u64;
-            self.cached.push(Cached {
-                revision,
-                fold,
-                uses: Uses::of(block),
-                rows,
-            });
+            let entry = match by_revision.get(&revision) {
+                Some(cached) if index > 0 => (*cached).clone(),
+                _ => self.render_entry(index, block, revision, render_block),
+            };
+            self.cached.push(entry);
         }
         if kept < blocks.len() || self.prefix.len() != blocks.len() + 1 {
             self.rebuild_prefix(kept);
         }
         self.stats.prepare_max = self.stats.prepare_max.max(started.elapsed());
+    }
+
+    /// Renders the stale blocks within a window of rows around `top` and
+    /// reports whether any moved, in which case the caller resolves its scroll
+    /// again and calls once more. A margin of one window each way keeps a page
+    /// of scrolling exact.
+    pub fn settle<F, R>(
+        &mut self,
+        blocks: &[Block],
+        top: usize,
+        height: usize,
+        render_block: &mut F,
+    ) -> bool
+    where
+        F: FnMut(&mut S, usize, &Block) -> R,
+        R: Into<Rows>,
+    {
+        let started = Instant::now();
+        let to = top + 2 * height;
+        let mut rendered = false;
+        let mut index = self.block_at(top.saturating_sub(height)).0;
+        while index < self.cached.len() && self.prefix[index] < to {
+            if !self.cached[index].fits(self.width, self.fold) {
+                let revision = self.cached[index].revision;
+                self.cached[index] =
+                    self.render_entry(index, &blocks[index], revision, render_block);
+                self.rebuild_prefix(index);
+                rendered = true;
+            }
+            index += 1;
+        }
+        self.stats.prepare_max = self.stats.prepare_max.max(started.elapsed());
+        rendered
+    }
+
+    fn render_entry<F, R>(
+        &mut self,
+        index: usize,
+        block: &Block,
+        revision: u64,
+        render_block: &mut F,
+    ) -> Cached
+    where
+        F: FnMut(&mut S, usize, &Block) -> R,
+        R: Into<Rows>,
+    {
+        let mut rows: Rows = render_block(&mut self.state, index, block).into();
+        // The separator row belongs to the block below, so the last block
+        // leaves no trailing gap; an empty block still occupies a row.
+        if index > 0 {
+            rows.len += 1;
+            rows.chunks.insert(0, self.separator.clone());
+        }
+        if rows.len == 0 {
+            rows.push(Arc::from([Line::raw("")]));
+        }
+        self.stats.blocks_rendered += 1;
+        self.stats.rows_rendered += rows.len as u64;
+        Cached {
+            revision,
+            width: self.width,
+            fold: self.fold,
+            uses: Uses::of(block),
+            rows,
+        }
     }
 
     fn rebuild_prefix(&mut self, from: usize) {
@@ -392,13 +442,13 @@ mod tests {
         let blocks = [user("a"), user("b"), user("c")];
         let revisions = [1, 2, 3];
         let mut rendered: Vec<usize> = vec![];
-        layout.prepare(&blocks, &revisions, 40, fold(), |_, index, _| {
+        layout.prepare(&blocks, &revisions, 40, fold(), &mut |_, index, _| {
             rendered.push(index);
             lines(2)
         });
         assert_eq!(rendered, vec![0, 1, 2]);
         rendered.clear();
-        layout.prepare(&blocks, &revisions, 40, fold(), |_, index, _| {
+        layout.prepare(&blocks, &revisions, 40, fold(), &mut |_, index, _| {
             rendered.push(index);
             lines(2)
         });
@@ -415,10 +465,10 @@ mod tests {
         let mut layout = Layout::<()>::default();
         let blocks = [user("a"), user("b")];
         let revisions = [1, 2];
-        layout.prepare(&blocks, &revisions, 40, fold(), |_, _, _| lines(2));
+        layout.prepare(&blocks, &revisions, 40, fold(), &mut |_, _, _| lines(2));
         let revisions = [1, 9];
         let mut rendered: Vec<usize> = vec![];
-        layout.prepare(&blocks, &revisions, 40, fold(), |_, index, _| {
+        layout.prepare(&blocks, &revisions, 40, fold(), &mut |_, index, _| {
             rendered.push(index);
             lines(3)
         });
@@ -454,6 +504,8 @@ mod tests {
         }
     }
 
+    /// Prepares and settles a window over the whole transcript, returning the
+    /// blocks that rendered.
     fn rendered_by<S: Default>(
         layout: &mut Layout<S>,
         blocks: &[Block],
@@ -461,10 +513,13 @@ mod tests {
         fold: Fold,
     ) -> Vec<usize> {
         let mut rendered = vec![];
-        layout.prepare(blocks, revisions, 40, fold, |_, index, _| {
+        let mut render = |_: &mut S, index: usize, _: &Block| {
             rendered.push(index);
             lines(2)
-        });
+        };
+        layout.prepare(blocks, revisions, 40, fold, &mut render);
+        while layout.settle(blocks, 0, 1000, &mut render) {}
+        rendered.sort();
         rendered
     }
 
@@ -472,13 +527,42 @@ mod tests {
     fn a_width_change_renders_every_block_again() {
         let mut layout = Layout::<()>::default();
         let blocks = [user("a"), user("b")];
-        layout.prepare(&blocks, &[1, 2], 40, fold(), |_, _, _| lines(1));
+        layout.prepare(&blocks, &[1, 2], 40, fold(), &mut |_, _, _| lines(1));
         let mut count = 0;
-        layout.prepare(&blocks, &[1, 2], 50, fold(), |_, _, _| {
+        let mut render = |_: &mut (), _: usize, _: &Block| {
             count += 1;
             lines(1)
-        });
+        };
+        layout.prepare(&blocks, &[1, 2], 50, fold(), &mut render);
+        while layout.settle(&blocks, 0, 10, &mut render) {}
         assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn stale_blocks_keep_their_height_until_they_come_near_the_window() {
+        let mut layout = Layout::<()>::default();
+        let blocks: Vec<Block> = (0..30).map(|_| card(None)).collect();
+        let revisions: Vec<u64> = (1..=30).collect();
+        layout.prepare(&blocks, &revisions, 40, fold(), &mut |_, _, _| lines(1));
+        assert_eq!(layout.total_rows(), 30 + 29);
+        let expanded = Fold {
+            expanded: true,
+            ..fold()
+        };
+        let mut rendered = vec![];
+        let mut render = |_: &mut (), index: usize, _: &Block| {
+            rendered.push(index);
+            lines(5)
+        };
+        layout.prepare(&blocks, &revisions, 40, expanded, &mut render);
+        assert_eq!(layout.total_rows(), 30 + 29, "nothing rendered yet");
+        // Following the tail: each pass resolves the top again, as a frame does.
+        while layout.settle(&blocks, layout.total_rows() - 10, 10, &mut render) {}
+        assert!(
+            rendered.len() < 30 && rendered.contains(&29),
+            "only blocks near the bottom window rendered: {rendered:?}"
+        );
+        assert_eq!(layout.row_of(29) + 6, layout.total_rows());
     }
 
     #[test]
@@ -547,7 +631,7 @@ mod tests {
         let blocks = [user("a"), user("c"), user("d")];
         assert!(rendered_by(&mut layout, &blocks, &[1, 3, 4], fold()).is_empty());
         assert_eq!(layout.total_rows(), 3 * 2 + 2);
-        layout.prepare(&blocks[..1], &[1], 40, fold(), |_, _, _| lines(9));
+        layout.prepare(&blocks[..1], &[1], 40, fold(), &mut |_, _, _| lines(9));
         assert_eq!(
             layout.total_rows(),
             2,
@@ -560,11 +644,11 @@ mod tests {
         let mut layout = Layout::<()>::default();
         let mut blocks = vec![user("a")];
         let mut revisions = vec![1];
-        layout.prepare(&blocks, &revisions, 40, fold(), |_, _, _| lines(2));
+        layout.prepare(&blocks, &revisions, 40, fold(), &mut |_, _, _| lines(2));
         blocks.push(user("b"));
         revisions.push(2);
         let mut rendered: Vec<usize> = vec![];
-        layout.prepare(&blocks, &revisions, 40, fold(), |_, index, _| {
+        layout.prepare(&blocks, &revisions, 40, fold(), &mut |_, index, _| {
             rendered.push(index);
             lines(4)
         });
@@ -578,7 +662,7 @@ mod tests {
         let mut layout = Layout::<()>::default();
         let blocks = [user("a"), user("b"), user("c")];
         let revisions = [1, 2, 3];
-        layout.prepare(&blocks, &revisions, 40, fold(), |_, _, _| lines(3));
+        layout.prepare(&blocks, &revisions, 40, fold(), &mut |_, _, _| lines(3));
         assert_eq!(layout.block_at(0), (0, 0));
         assert_eq!(layout.block_at(2), (0, 2));
         assert_eq!(
@@ -600,12 +684,12 @@ mod tests {
         let mut layout = Layout::<()>::default();
         let blocks = [user("a"), user("b")];
         let revisions = [1, 2];
-        layout.prepare(&blocks, &revisions, 40, fold(), |_, index, _| {
+        layout.prepare(&blocks, &revisions, 40, fold(), &mut |_, index, _| {
             lines(if index == 1 { 10 } else { 1 })
         });
         assert_eq!(layout.anchor_row(1, 8), 9);
         let revisions = [1, 3];
-        layout.prepare(&blocks, &revisions, 40, fold(), |_, _, _| lines(1));
+        layout.prepare(&blocks, &revisions, 40, fold(), &mut |_, _, _| lines(1));
         assert_eq!(
             layout.anchor_row(1, 8),
             2,
@@ -618,7 +702,7 @@ mod tests {
         let mut layout = Layout::<()>::default();
         let blocks = [user("a"), user("b"), user("c")];
         let revisions = [1, 2, 3];
-        layout.prepare(&blocks, &revisions, 40, fold(), |_, index, _| {
+        layout.prepare(&blocks, &revisions, 40, fold(), &mut |_, index, _| {
             lines(index + 1)
         });
         let window: Vec<String> = layout
@@ -634,7 +718,7 @@ mod tests {
     fn a_click_maps_to_the_block_row_it_landed_on() {
         let mut layout = Layout::<()>::default();
         let blocks = [user("a"), user("b")];
-        layout.prepare(&blocks, &[1, 2], 40, fold(), |_, _, _| lines(2));
+        layout.prepare(&blocks, &[1, 2], 40, fold(), &mut |_, _, _| lines(2));
         layout.viewport = Viewport {
             top: 1,
             height: 4,
@@ -654,20 +738,22 @@ mod tests {
         let mut layout = Layout::<usize>::default();
         let blocks = [user("a")];
         let revisions = [1];
-        layout.prepare(&blocks, &revisions, 40, fold(), |state, _, _| {
+        layout.prepare(&blocks, &revisions, 40, fold(), &mut |state, _, _| {
             *state += 1;
             lines(1)
         });
         assert_eq!(layout.state, 1);
-        layout.prepare(&blocks, &revisions, 40, fold(), |state, _, _| {
+        layout.prepare(&blocks, &revisions, 40, fold(), &mut |state, _, _| {
             *state += 1;
             lines(1)
         });
         assert_eq!(layout.state, 1, "an unchanged block is not re-rendered");
-        layout.prepare(&blocks, &revisions, 44, fold(), |state, _, _| {
+        let mut render = |state: &mut usize, _: usize, _: &Block| {
             *state += 1;
             lines(1)
-        });
+        };
+        layout.prepare(&blocks, &revisions, 44, fold(), &mut render);
+        layout.settle(&blocks, 0, 10, &mut render);
         assert_eq!(layout.state, 2);
     }
 }

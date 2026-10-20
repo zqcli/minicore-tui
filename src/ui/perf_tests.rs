@@ -8,7 +8,7 @@ use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use tokio::sync::mpsc;
 
-use crate::app::{App, Msg, Session};
+use crate::app::{App, Msg, Scroll, Session};
 use crate::protocol::read::UserKind;
 use crate::protocol::{LoopOutcome, Reasoning, SessionInfo, ToolRef};
 use crate::transcript::block::{ToolState, Transcript};
@@ -236,6 +236,27 @@ fn perf() {
         bench.app.tools_expanded = expanded;
         println!("ctrl+o -> expanded={expanded}: {:?}", bench.draw());
     }
+    bench.app.tools_expanded = true;
+    bench.draw();
+    bench.app.scroll = Scroll::Anchor {
+        block: BLOCKS / 2,
+        offset: 0,
+    };
+    println!("jump into stale cards after ctrl+o: {:?}", bench.draw());
+    let pages: Vec<Duration> = (0..10)
+        .map(|_| {
+            bench.app.scroll_by(-(HEIGHT as isize));
+            bench.draw()
+        })
+        .collect();
+    println!(
+        "page up over stale cards: mean {:.0}us max {:.0}us",
+        mean_micros(&pages),
+        micros(*pages.iter().max().unwrap()),
+    );
+    bench.app.scroll = Scroll::Follow;
+    bench.app.tools_expanded = false;
+    bench.draw();
 
     bench.app.show_reasoning = !bench.app.show_reasoning;
     println!("ctrl+t: {:?}", bench.draw());
