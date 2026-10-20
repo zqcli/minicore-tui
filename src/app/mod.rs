@@ -79,6 +79,8 @@ pub enum SessionOp {
     TurnItems(Result<Vec<RawHistoryItem>, RpcError>),
     State(Result<SessionState, RpcError>),
     Presentation(Result<SessionPresentation, RpcError>),
+    /// A `workspace.status` answer, wanted only for the branch it caches in the presentation.
+    WorkspaceStatus(Result<Value, RpcError>),
     Context(Result<SessionContext, RpcError>),
     /// The send answer, with the text so a refusal can hand it back.
     Sent(String, Result<TurnRef, RpcError>),

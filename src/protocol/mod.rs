@@ -55,6 +55,7 @@ pub const METHOD_TURN_RESULT: &str = "turn.result";
 pub const METHOD_TOOL_READ: &str = "tool.read";
 pub const METHOD_TOOL_OUTPUT: &str = "tool.output";
 pub const METHOD_WORKSPACE_FILES: &str = "workspace.files";
+pub const METHOD_WORKSPACE_STATUS: &str = "workspace.status";
 pub const METHOD_CHANGES_LIST: &str = "changes.list";
 pub const METHOD_CHANGES_DIFF: &str = "changes.diff";
 pub const METHOD_INTERACTION_ANSWER: &str = "interaction.answer";

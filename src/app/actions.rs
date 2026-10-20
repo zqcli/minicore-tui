@@ -375,6 +375,16 @@ impl App {
         );
     }
 
+    /// The Agent reports a branch only after a `workspace.status`, so one runs
+    /// before the presentation is read again.
+    pub(super) fn refresh_branch(&mut self) {
+        self.call(
+            protocol::METHOD_WORKSPACE_STATUS,
+            json!({"max_bytes": 1024}),
+            SessionOp::WorkspaceStatus,
+        );
+    }
+
     /// Alt+↑: the newest queued follow-up goes back to an empty composer.
     fn recall_queued(&mut self) {
         if !self.composer.is_empty() {

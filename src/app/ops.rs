@@ -30,6 +30,8 @@ impl App {
                     self.session_mut().presentation = Some(presentation);
                 }
             }
+            // A failed status still leaves the footer's other figures to read.
+            SessionOp::WorkspaceStatus(_) => self.refresh_presentation(),
             SessionOp::Context(result) => {
                 if let Some(context) = self.ok(result) {
                     self.session_mut().apply_context(context);
@@ -106,7 +108,7 @@ impl App {
         self.scroll = Scroll::Follow;
         self.waiting_for_compaction = false;
         self.read_history(Window::Tail);
-        self.refresh_presentation();
+        self.refresh_branch();
         self.refresh_context();
         // A new session already carries its settings; an opened one takes them
         // through `session.update`, so a flag is never silently dropped.
@@ -279,8 +281,9 @@ impl App {
             SessionOp::Changes(turn.loop_id, changes)
         });
         // An automatic compaction has no response of its own: `session.context`
-        // is where it is reported, and the footer's figure moved too.
-        self.refresh_presentation();
+        // is where it is reported, and the footer's figure moved too. The turn
+        // may also have switched branches.
+        self.refresh_branch();
         self.refresh_context();
         self.scroll = Scroll::Follow;
         self.flush_queue();
