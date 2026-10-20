@@ -1,6 +1,6 @@
-//! Turning a mouse drag into transcript text. The renderer stores the rows it
-//! actually drew, so copying works on what the user sees rather than on a
-//! second layout pass — and it stays exact while a turn streams.
+//! Turning a mouse drag into transcript text, read from the rows the last frame
+//! showed, so copying works on what the user sees and stays exact while a turn
+//! streams.
 
 use std::ops::Range;
 
@@ -28,34 +28,13 @@ impl Drag {
     }
 }
 
-/// The plain text of every row the transcript drew, indexed by screen row;
-/// column 0 of a row is the transcript's left edge, not the screen's.
-#[derive(Clone, Debug, Default)]
-pub struct Screen {
-    /// First screen row of `rows`.
-    pub top: u16,
-    pub rows: Vec<String>,
-}
-
-impl Screen {
-    pub fn set(&mut self, top: u16, rows: Vec<String>) {
-        self.top = top;
-        self.rows = rows;
-    }
-
-    pub fn row(&self, row: u16) -> Option<&str> {
-        let index = row.checked_sub(self.top)? as usize;
-        self.rows.get(index).map(String::as_str)
-    }
-}
-
 /// The visible text of `drag` inside `area`, joined with newlines.
-pub fn text(screen: &Screen, area: Rect, drag: Drag) -> String {
+pub fn text(row_text: impl Fn(u16) -> Option<String>, area: Rect, drag: Drag) -> String {
     let (from, to) = drag.ordered();
     let lines: Vec<String> = (from.1..=to.1)
         .filter_map(|row| {
             let span = row_span(row, drag, area)?;
-            Some(slice_cells(screen.row(row)?, span.start, span.end))
+            Some(slice_cells(&row_text(row)?, span.start, span.end))
         })
         .collect();
     lines.join("\n").trim_end().to_owned()
@@ -143,11 +122,10 @@ pub fn word_at(text: &str, column: u16) -> Option<Range<u16>> {
 mod tests {
     use super::*;
 
-    fn screen(rows: &[&str]) -> Screen {
-        Screen {
-            top: 0,
-            rows: rows.iter().map(|row| (*row).to_owned()).collect(),
-        }
+    /// The text lookup of a screen whose first row is `top`.
+    fn screen(rows: &[&str], top: u16) -> impl Fn(u16) -> Option<String> {
+        let rows: Vec<String> = rows.iter().map(|row| (*row).to_owned()).collect();
+        move |row| rows.get(row.checked_sub(top)? as usize).cloned()
     }
 
     fn area() -> Rect {
@@ -156,7 +134,7 @@ mod tests {
 
     #[test]
     fn a_drag_across_one_line_copies_that_slice() {
-        let screen = screen(&["hello world"]);
+        let screen = screen(&["hello world"], 0);
         let drag = Drag {
             from: (2, 0),
             to: (7, 0),
@@ -166,7 +144,7 @@ mod tests {
 
     #[test]
     fn a_drag_across_rows_joins_them_with_newlines() {
-        let screen = screen(&["first", "second"]);
+        let screen = screen(&["first", "second"], 0);
         let drag = Drag {
             from: (1, 0),
             to: (3, 1),
@@ -176,7 +154,7 @@ mod tests {
 
     #[test]
     fn a_backwards_drag_copies_in_reading_order() {
-        let screen = screen(&["first", "second"]);
+        let screen = screen(&["first", "second"], 0);
         let forwards = Drag {
             from: (1, 0),
             to: (3, 1),
@@ -193,7 +171,7 @@ mod tests {
 
     #[test]
     fn rows_without_content_contribute_nothing() {
-        let screen = screen(&["one"]);
+        let screen = screen(&["one"], 0);
         let drag = Drag {
             from: (0, 5),
             to: (2, 7),
@@ -203,7 +181,7 @@ mod tests {
 
     #[test]
     fn a_drag_past_the_last_block_stops_there() {
-        let screen = screen(&["only"]);
+        let screen = screen(&["only"], 0);
         let drag = Drag {
             from: (0, 0),
             to: (39, 9),
@@ -213,8 +191,7 @@ mod tests {
 
     #[test]
     fn a_recorded_frame_copies_the_rows_the_terminal_shows() {
-        let mut screen = Screen::default();
-        screen.set(3, vec!["first row".into(), "second".into()]);
+        let screen = screen(&["first row", "second"], 3);
         let area = Rect::new(0, 3, 20, 2);
         let drag = Drag {
             from: (0, 3),
@@ -225,7 +202,7 @@ mod tests {
 
     #[test]
     fn wide_characters_are_sliced_by_cells_not_bytes() {
-        let screen = screen(&["中文ab"]);
+        let screen = screen(&["中文ab"], 0);
         let drag = Drag {
             from: (2, 0),
             to: (3, 0),
@@ -235,10 +212,7 @@ mod tests {
 
     #[test]
     fn the_gutter_is_neither_copied_nor_counted() {
-        let screen = Screen {
-            top: 0,
-            rows: vec!["hello world".into()],
-        };
+        let screen = screen(&["hello world"], 0);
         let area = Rect::new(1, 0, 40, 10);
         let drag = Drag {
             from: (0, 0),

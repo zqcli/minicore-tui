@@ -395,6 +395,13 @@ impl<S> Layout<S> {
         Some((block, line))
     }
 
+    /// The text of the row the last frame drew at screen row `row`.
+    pub fn row_text(&self, row: u16) -> Option<String> {
+        let offset = row.checked_sub(self.viewport.origin.1)? as usize;
+        let lines = self.visible(self.viewport.top, offset + 1);
+        Some(lines.get(offset)?.to_string())
+    }
+
     /// Rows of the visible window, top row first.
     pub fn visible(&self, top: usize, height: usize) -> Vec<&Line<'static>> {
         let (first, offset) = self.block_at(top);

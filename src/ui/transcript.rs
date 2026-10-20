@@ -216,10 +216,6 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, styles: Styles) {
             }
         }
     }
-    // Copy reads exactly these rows, so a drag copies what is on screen even
-    // while a turn streams.
-    app.rendered
-        .set(area.y, rows.iter().map(|row| row.to_string()).collect());
     for (y, row) in (area.y..area.bottom()).zip(&rows) {
         let area = Rect {
             y,

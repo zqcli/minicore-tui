@@ -205,8 +205,6 @@ pub struct App {
     /// The last scroll by the user, which shows the scrollbar for a moment.
     pub scrolled_at: Option<tokio::time::Instant>,
     pub flash: Option<(String, tokio::time::Instant)>,
-    /// The rows the last frame drew, so selection copies what is on screen.
-    pub rendered: selection::Screen,
     /// The transcript's line cache and viewport, owned by the renderer.
     pub layout: Layout<RenderState>,
     /// A draft waiting for the main loop to run the external editor on it.
@@ -265,7 +263,6 @@ impl App {
             scrollbar_grab: None,
             scrolled_at: None,
             flash: None,
-            rendered: selection::Screen::default(),
             layout: Layout::default(),
             edit_request: None,
             loading_session: false,
@@ -486,7 +483,11 @@ impl App {
 
     /// The drag as text, from the rows the last frame drew.
     pub fn selected_text(&self, drag: selection::Drag) -> Option<String> {
-        let text = selection::text(&self.rendered, self.layout.viewport.area(), drag);
+        let text = selection::text(
+            |row| self.layout.row_text(row),
+            self.layout.viewport.area(),
+            drag,
+        );
         (!text.is_empty()).then_some(text)
     }
 

@@ -95,11 +95,11 @@ impl App {
     /// which selects the word or the whole row.
     fn press_at(&mut self, cell: (u16, u16)) {
         let area = self.layout.viewport.area();
-        let text = self.rendered.row(cell.1).unwrap_or_default();
+        let text = self.layout.row_text(cell.1).unwrap_or_default();
         let word = cell
             .0
             .checked_sub(area.x)
-            .and_then(|column| selection::word_at(text, column));
+            .and_then(|column| selection::word_at(&text, column));
         let now = tokio::time::Instant::now();
         let clicks = match &self.press {
             Some(last)
@@ -200,7 +200,12 @@ impl App {
             return;
         }
         let all_expanded = self.tools_expanded;
-        let text = self.rendered.row(row).unwrap_or_default().trim().to_owned();
+        let text = self
+            .layout
+            .row_text(row)
+            .unwrap_or_default()
+            .trim()
+            .to_owned();
         // The clicked block stays where it is instead of following the tail.
         let pinned = match self.scroll {
             Scroll::Follow => {
