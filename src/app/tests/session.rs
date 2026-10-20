@@ -70,7 +70,7 @@ async fn a_failed_create_waits_for_enter_to_try_again() {
     h.settle().await;
     assert_eq!(h.calls("session.create").len(), 1);
     assert_eq!(h.notices(), ["profile not found"]);
-    assert!(h.screen(60, 12).contains("Press Enter to start one"));
+    assert!(h.screen(60, 24).contains("enter starts one"));
 
     h.app.composer.set_text("a draft");
     h.press(KeyCode::Enter);

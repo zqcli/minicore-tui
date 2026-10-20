@@ -216,7 +216,7 @@ fn split(area: Rect) -> (Option<Rect>, Rect) {
 }
 
 pub fn render(frame: &mut Frame, area: Rect, styles: Styles, diff: &DiffState) {
-    let mut title = format!("← Diff · {}", diff.scope.label());
+    let mut title = format!("Diff · {}", diff.scope.label());
     if let Some(file) = diff.current() {
         title.push_str(" · ");
         title.push_str(&file.path);
@@ -226,7 +226,13 @@ pub fn render(frame: &mut Frame, area: Rect, styles: Styles, diff: &DiffState) {
         area,
         styles,
         &title,
-        "tab scope · ↑↓ file · PgUp/PgDn scroll · c copy · esc back",
+        &[
+            ("tab", "scope"),
+            ("↑↓", "file"),
+            ("pgup/pgdn", "scroll"),
+            ("c", "copy"),
+            ("esc", "back"),
+        ],
     );
     let (list, hunks) = split(area);
     if let Some(list) = list {

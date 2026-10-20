@@ -207,7 +207,13 @@ fn compact_status(status: crate::protocol::CompactStatus) -> &'static str {
 }
 
 pub fn render(frame: &mut Frame, area: Rect, styles: Styles, lines: &[Line<'static>]) {
-    chrome(frame, area, styles, "← Context", "r refresh · esc back");
+    chrome(
+        frame,
+        area,
+        styles,
+        "Context",
+        &[("r", "refresh"), ("esc", "back")],
+    );
     let bottom = area.bottom().saturating_sub(1);
     let mut y = area.y + 1;
     for line in lines {

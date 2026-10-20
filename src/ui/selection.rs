@@ -5,10 +5,11 @@
 use std::ops::Range;
 
 use ratatui::layout::Rect;
+use unicode_segmentation::UnicodeSegmentation;
 
 use super::wrap::width;
 
-/// Two terminal cells, in drawing order.
+/// Two terminal cells, in drawing order; both ends are selected.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Drag {
     pub from: (u16, u16),
@@ -25,15 +26,10 @@ impl Drag {
             (to, from)
         }
     }
-
-    /// True when the pointer never left the cell it started on: a click, not a
-    /// selection.
-    pub fn is_click(self) -> bool {
-        self.from == self.to
-    }
 }
 
-/// The plain text of every row the transcript drew, indexed by screen row.
+/// The plain text of every row the transcript drew, indexed by screen row;
+/// column 0 of a row is the transcript's left edge, not the screen's.
 #[derive(Clone, Debug, Default)]
 pub struct Screen {
     /// First screen row of `rows`.
@@ -55,26 +51,13 @@ impl Screen {
 
 /// The visible text of `drag` inside `area`, joined with newlines.
 pub fn text(screen: &Screen, area: Rect, drag: Drag) -> String {
-    if drag.is_click() || area.width == 0 || area.height == 0 {
-        return String::new();
-    }
     let (from, to) = drag.ordered();
-    let mut lines: Vec<String> = Vec::new();
-    for row in from.1..=to.1 {
-        if row < area.y || row >= area.bottom() {
-            continue;
-        }
-        let Some(text) = screen.row(row) else {
-            continue;
-        };
-        let column_from = if row == from.1 {
-            from.0.max(area.x)
-        } else {
-            area.x
-        };
-        let column_to = if row == to.1 { to.0 } else { area.right() };
-        lines.push(slice_cells(text, column_from, column_to));
-    }
+    let lines: Vec<String> = (from.1..=to.1)
+        .filter_map(|row| {
+            let span = row_span(row, drag, area)?;
+            Some(slice_cells(screen.row(row)?, span.start, span.end))
+        })
+        .collect();
     lines.join("\n").trim_end().to_owned()
 }
 
@@ -83,7 +66,7 @@ pub fn text(screen: &Screen, area: Rect, drag: Drag) -> String {
 fn slice_cells(text: &str, from: u16, to: u16) -> String {
     let mut out = String::new();
     let mut column = 0u16;
-    for grapheme in unicode_segmentation::UnicodeSegmentation::graphemes(text, true) {
+    for grapheme in text.graphemes(true) {
         let cells = width(grapheme) as u16;
         let end = column + cells.max(1);
         if end > from && column < to {
@@ -97,7 +80,7 @@ fn slice_cells(text: &str, from: u16, to: u16) -> String {
     out.trim_end().to_owned()
 }
 
-/// The cell range a drag covers on one row, for the selection highlight.
+/// The cells a drag covers on one screen row, counted from `area`'s left edge.
 pub fn row_span(row: u16, drag: Drag, area: Rect) -> Option<Range<u16>> {
     let (from, to) = drag.ordered();
     if row < from.1 || row > to.1 || row < area.y || row >= area.bottom() {
@@ -108,8 +91,52 @@ pub fn row_span(row: u16, drag: Drag, area: Rect) -> Option<Range<u16>> {
     } else {
         area.x
     };
-    let end = if row == to.1 { to.0 + 1 } else { area.right() };
-    (end > start).then_some(start..end)
+    let end = if row == to.1 {
+        (to.0 + 1).min(area.right())
+    } else {
+        area.right()
+    };
+    (end > start).then(|| start - area.x..end - area.x)
+}
+
+/// The cells of the word under `column`, as a double-click selects it: paths
+/// and kebab-case names stay whole. `None` past the end of the row.
+pub fn word_at(text: &str, column: u16) -> Option<Range<u16>> {
+    struct Segment {
+        cells: Range<u16>,
+        word: bool,
+        joiner: bool,
+    }
+    let mut start = 0u16;
+    let segments: Vec<Segment> = text
+        .split_word_bounds()
+        .map(|segment| {
+            let end = start + width(segment) as u16;
+            let joiner = matches!(segment, "/" | "-");
+            let word = joiner || segment.chars().any(char::is_alphanumeric);
+            let cells = start..end;
+            start = end;
+            Segment {
+                cells,
+                word,
+                joiner,
+            }
+        })
+        .collect();
+    let clicked = segments
+        .iter()
+        .position(|segment| segment.cells.contains(&column))?;
+    let joins =
+        |left: &Segment, right: &Segment| left.word && right.word && (left.joiner || right.joiner);
+    let mut first = clicked;
+    while first > 0 && joins(&segments[first - 1], &segments[first]) {
+        first -= 1;
+    }
+    let mut last = clicked;
+    while last + 1 < segments.len() && joins(&segments[last], &segments[last + 1]) {
+        last += 1;
+    }
+    Some(segments[first].cells.start..segments[last].cells.end)
 }
 
 #[cfg(test)]
@@ -134,7 +161,7 @@ mod tests {
             from: (2, 0),
             to: (7, 0),
         };
-        assert_eq!(text(&screen, area(), drag), "llo w");
+        assert_eq!(text(&screen, area(), drag), "llo wo", "both ends included");
     }
 
     #[test]
@@ -144,7 +171,7 @@ mod tests {
             from: (1, 0),
             to: (3, 1),
         };
-        assert_eq!(text(&screen, area(), drag), "irst\nsec");
+        assert_eq!(text(&screen, area(), drag), "irst\nseco");
     }
 
     #[test]
@@ -162,15 +189,6 @@ mod tests {
             text(&screen, area(), forwards),
             text(&screen, area(), backwards)
         );
-    }
-
-    #[test]
-    fn a_click_selects_nothing() {
-        let drag = Drag {
-            from: (2, 0),
-            to: (2, 0),
-        };
-        assert!(drag.is_click(), "a click must not copy a character");
     }
 
     #[test]
@@ -210,9 +228,24 @@ mod tests {
         let screen = screen(&["中文ab"]);
         let drag = Drag {
             from: (2, 0),
-            to: (4, 0),
+            to: (3, 0),
         };
         assert_eq!(text(&screen, area(), drag), "文");
+    }
+
+    #[test]
+    fn the_gutter_is_neither_copied_nor_counted() {
+        let screen = Screen {
+            top: 0,
+            rows: vec!["hello world".into()],
+        };
+        let area = Rect::new(1, 0, 40, 10);
+        let drag = Drag {
+            from: (0, 0),
+            to: (5, 0),
+        };
+        assert_eq!(text(&screen, area, drag), "hello");
+        assert_eq!(row_span(0, drag, area), Some(0..5));
     }
 
     #[test]
@@ -226,6 +259,20 @@ mod tests {
         assert_eq!(row_span(2, drag, area()), Some(0..40));
         assert_eq!(row_span(3, drag, area()), Some(0..10));
         assert_eq!(row_span(4, drag, area()), None, "below the drag");
+    }
+
+    #[test]
+    fn a_double_click_word_keeps_paths_and_kebab_names_whole() {
+        let row = "run src/ui/mod.rs --low-stock now.";
+        let pick = |column: u16| {
+            word_at(row, column).map(|cells| &row[cells.start as usize..cells.end as usize])
+        };
+        assert_eq!(pick(0), Some("run"));
+        assert_eq!(pick(8), Some("src/ui/mod.rs"));
+        assert_eq!(pick(20), Some("--low-stock"));
+        assert_eq!(pick(30), Some("now"));
+        assert_eq!(pick(3), Some(" "), "a space is its own run");
+        assert_eq!(pick(80), None);
     }
 
     #[test]

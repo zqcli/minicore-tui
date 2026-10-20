@@ -392,7 +392,7 @@ async fn a_session_that_opens_on_its_summary_loads_the_latest_answer_behind_it()
     assert_eq!(shape(&h), ["earlier", "user", "assistant", "compaction"]);
     assert_eq!(h.marker(), Some(198));
     assert_eq!(h.app.scroll, Scroll::Follow);
-    let screen = h.screen(100, 12);
+    let screen = h.screen(100, 30);
     let (answer, marker) = (screen.find("the final answer"), screen.find("[compaction]"));
     assert!(answer.is_some() && answer < marker, "{screen}");
 }

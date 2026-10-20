@@ -1,5 +1,6 @@
 //! Full-screen views: diff, tool output, context and help. Each replaces the
-//! transcript area and keeps the footer; the app owns scrolling and selection.
+//! transcript area right of its gutter and keeps the footer; the app owns
+//! scrolling and selection.
 
 pub mod context;
 pub mod diff;
@@ -21,15 +22,38 @@ fn styled(text: &str, style: Style) -> Line<'static> {
     Line::from(Span::styled(text.to_owned(), style))
 }
 
-/// Shared view chrome: the title row and the dim hint row.
-fn chrome(frame: &mut Frame, area: Rect, styles: Styles, title: &str, hint: &str) {
+/// Key hints as the welcome header draws them: the key faint, what it does
+/// dim, `·` between pairs.
+pub fn key_hints(hints: &[(&str, &str)], styles: Styles) -> Vec<Span<'static>> {
+    let mut spans = Vec::with_capacity(hints.len() * 3);
+    for (index, (key, action)) in hints.iter().enumerate() {
+        if index > 0 {
+            spans.push(Span::styled(" · ", styles.dim()));
+        }
+        spans.push(Span::styled((*key).to_owned(), styles.faint()));
+        spans.push(Span::styled(format!(" {action}"), styles.dim()));
+    }
+    spans
+}
+
+/// Shared view chrome: the title row, its name bold and its context in the
+/// meta colour, and the key-hint row at the bottom.
+fn chrome(frame: &mut Frame, area: Rect, styles: Styles, title: &str, hints: &[(&str, &str)]) {
+    let (name, context) = title.split_once(" · ").unwrap_or((title, ""));
+    let mut spans = vec![
+        Span::styled("← ", styles.meta()),
+        Span::styled(name.to_owned(), styles.bold()),
+    ];
+    if !context.is_empty() {
+        spans.push(Span::styled(format!(" · {context}"), styles.meta()));
+    }
     let buffer = frame.buffer_mut();
-    buffer.set_line(area.x, area.y, &styled(title, styles.title()), area.width);
+    buffer.set_line(area.x, area.y, &Line::from(spans), area.width);
     if area.height > 1 {
         buffer.set_line(
             area.x,
             area.bottom() - 1,
-            &styled(hint, styles.dim()),
+            &Line::from(key_hints(hints, styles)),
             area.width,
         );
     }
@@ -37,6 +61,7 @@ fn chrome(frame: &mut Frame, area: Rect, styles: Styles, title: &str, hint: &str
 
 /// Draws whichever view owns the transcript area; false when none is open.
 pub fn draw(frame: &mut Frame, area: Rect, app: &App, styles: Styles) -> bool {
+    let area = super::transcript::inner(area);
     match &app.overlay {
         Overlay::Diff(diff) => diff::render(frame, area, styles, diff),
         Overlay::Tool(tool) => tool::render(frame, area, styles, tool, app.session.as_ref()),
@@ -50,6 +75,7 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App, styles: Styles) -> bool {
         }
         _ => return false,
     }
+    super::transcript::draw_flash(frame, area, app, styles);
     true
 }
 
