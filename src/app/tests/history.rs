@@ -622,6 +622,18 @@ async fn a_reopened_session_gets_its_turn_end_lines_and_totals_from_the_read() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_turn_cut_by_the_window_leaves_its_tool_count_out() {
+    // The window starts after the turn's prompt and first cards.
+    let items = vec![
+        assistant_tool(7, "l1", "c9", "bash"),
+        assistant(8, "l1", "a1"),
+    ];
+    let records = json!([{"loop_id": "l1", "outcome": completed(), "requests": 9}]);
+    let mut h = Harness::opened(with_records(page(9, 7, items), records)).await;
+    assert_eq!(turn_end_lines(&mut h), ["completed · 9 requests"]);
+}
+
+#[tokio::test(start_paused = true)]
 async fn totals_are_left_out_when_the_window_does_not_reach_the_summary() {
     let records = json!([{"loop_id": "l1", "outcome": completed(), "requests": 1,
                           "usage": {"input_tokens": 100}}]);

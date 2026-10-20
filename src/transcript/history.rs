@@ -79,21 +79,25 @@ pub fn merge_live(mut durable: Vec<Block>, live: &[Block]) -> Vec<Block> {
 }
 
 /// Appends history items, closing each turn that has a record with its
-/// turn-end line; the duration and changes are not stored.
+/// turn-end line; the duration and changes are not stored, and the tool count
+/// is left out for a turn whose start is not among `items`.
 pub fn append_history(
     transcript: &mut Transcript,
     items: &[RawHistoryItem],
     records: &[TurnRecord],
     session_id: &str,
 ) {
-    let close = |transcript: &mut Transcript, loop_id: Option<&str>| {
+    let close = |transcript: &mut Transcript, loop_id: Option<&str>, whole: bool| {
         let Some(record) = loop_id.and_then(|id| records.iter().find(|r| r.loop_id == id)) else {
             return;
         };
-        let tools = transcript
-            .tool_calls()
-            .filter(|call| call.key.loop_id == record.loop_id)
-            .count() as u64;
+        let tools = match whole {
+            true => transcript
+                .tool_calls()
+                .filter(|call| call.key.loop_id == record.loop_id)
+                .count() as u64,
+            false => 0,
+        };
         transcript.push(Block::TurnEnd {
             loop_id: record.loop_id.clone(),
             outcome: record.outcome.clone(),
@@ -105,18 +109,24 @@ pub fn append_history(
         });
     };
     let mut open: Option<&str> = None;
+    // Whether the open turn's prompt is among `items`, so its cards are all here.
+    let mut whole = false;
     for item in items {
         match &item.item {
             RuntimeItem::User(user) if user.kind != UserKind::Steering => {
-                close(transcript, open.take());
+                close(transcript, open.take(), whole);
+                whole = true;
             }
-            RuntimeItem::Summary(_) => close(transcript, open.take()),
+            RuntimeItem::Summary(_) => {
+                close(transcript, open.take(), whole);
+                whole = false;
+            }
             RuntimeItem::Assistant(assistant) => open = Some(&assistant.loop_id),
             _ => {}
         }
         append_history_item(transcript, item, session_id);
     }
-    close(transcript, open);
+    close(transcript, open, whole);
 }
 
 /// Converts one decoded history item into blocks appended to the transcript.
