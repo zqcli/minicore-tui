@@ -1,4 +1,4 @@
-//! Prompt templates: `prompts/*.md` in the TUI config directory, each a
+//! Prompt templates: `prompt/commands/*.md` in the TUI directory, each a
 //! `/name` that expands to the file's text before it is sent.
 
 use std::path::Path;
@@ -52,10 +52,9 @@ impl Template {
     }
 }
 
-/// The templates in the config directory, by name; unreadable files are skipped.
-pub fn load() -> Vec<Template> {
-    crate::config::config_dir()
-        .map(|dir| load_from(&dir.join("prompts")))
+/// The templates in the TUI directory, by name; unreadable files are skipped.
+pub fn load(home: Option<&crate::config::Home>) -> Vec<Template> {
+    home.map(|home| load_from(&home.commands_dir()))
         .unwrap_or_default()
 }
 

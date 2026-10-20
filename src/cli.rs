@@ -12,8 +12,13 @@ minicore-tui — a pi-style coding agent TUI for minicore-agent
 Usage: minicore-tui [OPTIONS]
 
 Options:
-  --agent <BIN>          minicore-agent executable [default: minicore-agent]
-  --config <PATH>        agent config file (required unless the TUI config sets it)
+  --home <DIR>           TUI directory: config.toml, models.toml, prompt/, session/
+                         [default: $MINICORE_HOME, else the executable's directory,
+                         or its parent when that is named bin]
+  --agent <BIN>          minicore-agent executable [default: [agent] binary in
+                         config.toml, else <home>/bin/minicore-agent, else PATH]
+  --agent-config <FILE>  use this Agent config as is; skips config.toml, models.toml
+                         and the first-run files (for tests and advanced use)
   --workspace <DIR>      workspace for a new session [default: cwd]
   --session <ID>         open this session
   --continue             open the most recent session in this workspace
@@ -27,6 +32,7 @@ Options:
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Args {
+    pub home: Option<PathBuf>,
     pub agent: Option<PathBuf>,
     pub agent_config: Option<PathBuf>,
     pub workspace: Option<PathBuf>,
@@ -52,6 +58,10 @@ pub enum ArgsError {
     Theme(String),
     #[error("--session and --continue cannot be combined")]
     Conflict,
+    #[error(
+        "--config was replaced: --home names the TUI directory, --agent-config a raw Agent file"
+    )]
+    ConfigRenamed,
     #[error("unexpected argument {0}")]
     Unexpected(String),
 }
@@ -71,8 +81,12 @@ impl Args {
                     .ok_or_else(|| ArgsError::MissingValue(name.to_owned()))
             };
             match argument.as_str() {
+                "--home" => args.home = Some(PathBuf::from(value("--home")?)),
                 "--agent" => args.agent = Some(PathBuf::from(value("--agent")?)),
-                "--config" => args.agent_config = Some(PathBuf::from(value("--config")?)),
+                "--agent-config" => {
+                    args.agent_config = Some(PathBuf::from(value("--agent-config")?));
+                }
+                "--config" => return Err(ArgsError::ConfigRenamed),
                 "--workspace" => args.workspace = Some(PathBuf::from(value("--workspace")?)),
                 "--session" => args.session = Some(value("--session")?),
                 "--continue" => args.continue_recent = true,
@@ -100,20 +114,6 @@ impl Args {
         }
         Ok(args)
     }
-
-    /// Fills the gaps the CLI left with config-file values.
-    pub fn with_config(mut self, config: crate::config::Config) -> Self {
-        if self.agent.is_none() {
-            self.agent = config.agent;
-        }
-        if self.agent_config.is_none() {
-            self.agent_config = config.agent_config;
-        }
-        if self.theme.is_none() {
-            self.theme = Some(config.theme);
-        }
-        self
-    }
 }
 
 #[cfg(test)]
@@ -123,9 +123,11 @@ mod tests {
     #[test]
     fn parses_every_documented_option() {
         let args = Args::parse([
+            "--home",
+            "/h",
             "--agent",
             "/bin/agent",
-            "--config",
+            "--agent-config",
             "/etc/agent.toml",
             "--workspace",
             "/w",
@@ -144,6 +146,11 @@ mod tests {
         assert_eq!(
             args.agent.as_deref(),
             Some(std::path::Path::new("/bin/agent"))
+        );
+        assert_eq!(args.home.as_deref(), Some(std::path::Path::new("/h")));
+        assert_eq!(
+            args.agent_config.as_deref(),
+            Some(std::path::Path::new("/etc/agent.toml"))
         );
         assert_eq!(args.session.as_deref(), Some("ses_1"));
         assert_eq!(args.reasoning, Some(Reasoning::XHigh));
@@ -171,23 +178,20 @@ mod tests {
     }
 
     #[test]
-    fn config_fills_only_the_gaps_the_cli_left() {
-        let args = Args::parse(["--agent", "/cli/agent"]).unwrap();
-        let config = crate::config::Config {
-            agent: Some(PathBuf::from("/config/agent")),
-            agent_config: Some(PathBuf::from("/config/agent.toml")),
-            theme: ThemeKind::Light,
-            ..crate::config::Config::default()
-        };
-        let merged = args.with_config(config);
+    fn the_old_config_flag_says_what_replaced_it() {
         assert_eq!(
-            merged.agent.as_deref(),
-            Some(std::path::Path::new("/cli/agent"))
+            Args::parse(["--config", "/a.toml"]).unwrap_err(),
+            ArgsError::ConfigRenamed
         );
-        assert_eq!(
-            merged.agent_config.as_deref(),
-            Some(std::path::Path::new("/config/agent.toml"))
-        );
-        assert_eq!(merged.theme, Some(ThemeKind::Light));
+    }
+
+    #[test]
+    fn the_new_path_options_need_a_value() {
+        for flag in ["--home", "--agent-config"] {
+            assert_eq!(
+                Args::parse([flag]).unwrap_err(),
+                ArgsError::MissingValue(flag.to_owned())
+            );
+        }
     }
 }

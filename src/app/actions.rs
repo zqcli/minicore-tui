@@ -114,7 +114,14 @@ impl App {
                 ThemeKind::Light => ThemeKind::Dark,
             }),
             Action::ReloadAgent => {
-                self.templates = templates::load();
+                self.templates = templates::load(self.home.as_ref());
+                if let Some(home) = self.home.as_ref().filter(|_| self.composed)
+                    && let Err(error) =
+                        crate::config::load(home).and_then(|loaded| loaded.write(home))
+                {
+                    self.notice(NoticeLevel::Error, error.to_string());
+                    return;
+                }
                 let client = self.client.clone();
                 self.spawn_msg(async move {
                     match client
@@ -349,9 +356,9 @@ impl App {
     /// Switches the palette and persists the choice, so `/theme` survives a
     /// restart. A failed write is a notice, not a reason to keep the old theme.
     fn apply_theme(&mut self, kind: ThemeKind) {
-        let mut config = crate::config::Config::load();
-        config.theme = kind;
-        if let Err(error) = config.save() {
+        if let Some(home) = &self.home
+            && let Err(error) = crate::config::save_theme(&home.config_file(), kind)
+        {
             self.notice(NoticeLevel::Error, error);
         }
         self.theme = kind;
@@ -361,8 +368,9 @@ impl App {
 
     /// The editor command: config first, then `$VISUAL`/`$EDITOR`.
     pub fn editor_command(&self) -> Result<Vec<String>, String> {
-        crate::config::Config::load().editor().ok_or_else(|| {
-            "No editor configured: set `editor` in the TUI config or $VISUAL/$EDITOR".to_owned()
+        crate::config::editor_command(&self.editor).ok_or_else(|| {
+            "No editor configured: set `editor` under [ui] in config.toml or $VISUAL/$EDITOR"
+                .to_owned()
         })
     }
 

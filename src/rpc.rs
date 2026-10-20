@@ -5,7 +5,7 @@
 //! to a `oneshot`; events and child loss are posted to the app channel.
 
 use std::collections::{HashMap, VecDeque};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -390,11 +390,6 @@ fn fail(
     let _ = incoming.try_send(Incoming::Closed {
         status: Some(reason.to_owned()),
     });
-}
-
-/// Default agent binary name resolved through `PATH`.
-pub fn default_agent_bin() -> PathBuf {
-    PathBuf::from("minicore-agent")
 }
 
 #[cfg(test)]
