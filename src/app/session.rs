@@ -111,8 +111,8 @@ pub enum QueuedKind {
 impl Queued {
     pub fn label(&self) -> &'static str {
         match self.kind {
-            QueuedKind::Steer => "steer",
-            QueuedKind::Follow => "next",
+            QueuedKind::Steer => "Steering",
+            QueuedKind::Follow => "Follow-up",
         }
     }
 }

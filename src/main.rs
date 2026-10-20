@@ -18,8 +18,8 @@ use minicore_tui::ui::theme::{Palette, Styles};
 
 /// Frame cap: coalesce bursts instead of drawing on every event.
 const FRAME: Duration = Duration::from_millis(16);
-/// Clock while something animates.
-const TICK: Duration = Duration::from_millis(100);
+/// Clock while something animates: one spinner frame.
+const TICK: Duration = minicore_tui::ui::status::SPINNER_FRAME;
 
 fn main() -> std::io::Result<()> {
     let runtime = tokio::runtime::Builder::new_current_thread()

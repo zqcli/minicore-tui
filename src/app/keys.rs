@@ -10,6 +10,9 @@ use crate::protocol::Reasoning;
 use crate::transcript::{Block, NoticeLevel};
 use crate::ui::{blocks, selection, sheets};
 
+/// A second Ctrl+C within this long of the first quits.
+const QUIT_WINDOW: std::time::Duration = std::time::Duration::from_millis(500);
+
 impl App {
     /// Routes a key event to the focused surface; the action it asks for, if any.
     pub fn on_key(&mut self, key: KeyEvent) -> Option<Action> {
@@ -367,7 +370,7 @@ impl App {
         let alt = key.modifiers.contains(KeyModifiers::ALT);
         let shift = key.modifiers.contains(KeyModifiers::SHIFT);
         if !matches!(key.code, KeyCode::Char('c') if ctrl) {
-            self.quit_armed = false;
+            self.quit_armed = None;
         }
         match key.code {
             KeyCode::Enter if alt => return Some(Action::QueueFollowUp),
@@ -376,14 +379,15 @@ impl App {
             KeyCode::Char('j') if ctrl => self.composer.newline(),
             KeyCode::Esc => self.escape(),
             KeyCode::Char('c') if ctrl => {
-                if !self.composer.is_empty() {
-                    self.composer.clear();
-                    self.quit_armed = false;
-                } else if self.quit_armed {
+                let now = tokio::time::Instant::now();
+                if self.quit_armed.is_some_and(|at| now - at <= QUIT_WINDOW) {
                     return Some(Action::Quit);
-                } else {
-                    self.quit_armed = true;
+                }
+                self.quit_armed = Some(now);
+                if self.composer.is_empty() {
                     self.notice(NoticeLevel::Info, "Press Ctrl+C again to quit");
+                } else {
+                    self.composer.clear();
                 }
             }
             KeyCode::Char('d') if ctrl => {

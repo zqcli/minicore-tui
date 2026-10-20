@@ -153,8 +153,8 @@ pub struct App {
     pub tools_expanded: bool,
     pub show_reasoning: bool,
     pub quit: bool,
-    /// Ctrl+C armed the quit; a second press on an empty composer leaves.
-    pub quit_armed: bool,
+    /// When Ctrl+C last cleared the draft; a second press soon after quits.
+    pub quit_armed: Option<tokio::time::Instant>,
     pub ready: bool,
     pub fatal: Option<Fatal>,
     pub waiting_for_compaction: bool,
@@ -205,7 +205,7 @@ impl App {
             tools_expanded: false,
             show_reasoning: false,
             quit: false,
-            quit_armed: false,
+            quit_armed: None,
             ready: false,
             fatal: None,
             waiting_for_compaction: false,

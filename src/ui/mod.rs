@@ -1,6 +1,6 @@
 //! Rendering from `&App`: the transcript or a full-screen view, an optional
-//! bottom sheet, then the status band. Only the transcript's layout cache and
-//! the rows recorded for copy are written.
+//! the dock below it, where a bottom sheet takes the editor's place. Only the
+//! transcript's layout cache and the rows recorded for copy are written.
 
 pub mod blocks;
 pub mod composer;
@@ -22,7 +22,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::text::Line;
 
-use crate::app::App;
+use crate::app::{App, Overlay};
 
 use self::theme::Styles;
 
@@ -35,53 +35,72 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
     let styles = app.styles;
     let sheet = sheets::sheet(app, styles);
-    let (rows, cursor) = status::band(app, styles, area.width);
-    let sheet_rows = sheet.as_ref().map_or(0, panel::Sheet::height);
-    // One blank row keeps the last transcript line off the stack below it,
-    // when the terminal has the room.
-    let gap = u16::from(area.height > 8);
-    let bottom = (rows.len() as u16 + sheet_rows)
-        .min(area.height.saturating_sub(1 + gap))
-        .max(1);
-    let [main, _, bottom] = Layout::vertical([
+    let dock = status::dock(app, styles, area.width.saturating_sub(1), area.height);
+    // The transcript keeps a row and the footer its own; the rows above the
+    // slot give way first.
+    let room = area.height.saturating_sub(2);
+    let slot = sheet
+        .as_ref()
+        .map_or(dock.editor.len() as u16, panel::Sheet::height)
+        .min(room);
+    let above = (dock.above.len() as u16).min(room - slot);
+    let [main, above_area, slot_area, footer_area] = Layout::vertical([
         Constraint::Min(1),
-        Constraint::Length(gap),
-        Constraint::Length(bottom),
+        Constraint::Length(above),
+        Constraint::Length(slot),
+        Constraint::Length(1),
     ])
     .areas(area);
     if !views::draw(frame, main, app, styles) {
         transcript::draw(frame, main, app, styles);
     }
-    let band = if let Some(sheet) = sheet {
-        let [sheet_area, band] =
-            Layout::vertical([Constraint::Length(sheet.height()), Constraint::Min(1)])
-                .areas(bottom);
-        panel::render(frame, sheet_area, styles, &sheet);
-        band
-    } else {
-        bottom
-    };
-    // Row by row: a `Line` widget paints its style across the whole row, so
-    // the composer's tint is a full-width band, not just the typed cells.
-    for (index, line) in rows.iter().enumerate() {
-        let y = band.y + index as u16;
-        if y >= band.bottom() {
-            break;
-        }
+    let skip = dock.above.len() - usize::from(above);
+    draw_rows(frame, gutter(above_area), &dock.above[skip..]);
+    draw_rows(
+        frame,
+        gutter(footer_area),
+        std::slice::from_ref(&dock.footer),
+    );
+    let slot_area = gutter(slot_area);
+    if let Some(sheet) = sheet {
+        panel::render(frame, slot_area, styles, &sheet);
+        return;
+    }
+    draw_rows(frame, slot_area, &dock.editor);
+    // The composer has the keys while no view or picker does; a completion
+    // list is typed into through it.
+    if matches!(
+        app.overlay,
+        Overlay::None | Overlay::Palette { .. } | Overlay::Files { .. }
+    ) && slot_area.height > 0
+    {
+        frame.set_cursor_position((
+            slot_area.x + dock.cursor.1,
+            slot_area.y + dock.cursor.0.min(slot_area.height - 1),
+        ));
+    }
+}
+
+/// `area` without the left gutter column, which the dock never paints.
+fn gutter(area: Rect) -> Rect {
+    let inset = area.width.min(1);
+    Rect {
+        x: area.x + inset,
+        width: area.width - inset,
+        ..area
+    }
+}
+
+fn draw_rows(frame: &mut Frame, area: Rect, rows: &[Line<'static>]) {
+    for (y, line) in (area.y..area.bottom()).zip(rows) {
         frame.render_widget(
             line,
             Rect {
                 y,
                 height: 1,
-                ..band
+                ..area
             },
         );
-    }
-    if app.overlay.is_none() && !app.has_interaction() {
-        frame.set_cursor_position((
-            band.x + cursor.1,
-            band.y + cursor.0.min(band.height.saturating_sub(1)),
-        ));
     }
 }
 

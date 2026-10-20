@@ -1,7 +1,8 @@
 //! The composer: a grapheme-safe draft with undo, prompt history and paste
 //! tokens. The buffer holds the real text; the user sees each large paste as one
-//! atomic `[pasted N lines]` token, and [`Projection`] maps between the two.
+//! atomic `[paste #N +L lines]` chip, and [`Projection`] maps between the two.
 
+use std::cell::Cell;
 use std::collections::VecDeque;
 use std::ops::Range;
 
@@ -11,13 +12,12 @@ use unicode_segmentation::UnicodeSegmentation;
 use super::theme::Styles;
 use super::wrap;
 
-/// Rows a draft needs at `width`, capped at [`COMPOSER_ROWS`].
-pub const COMPOSER_ROWS: usize = 10;
+/// The editor body is never shorter than this many rows.
+pub const MIN_ROWS: usize = 4;
 
-/// Multi-line pastes longer than this many lines become a token, as do single
-/// lines above [`TOKEN_BYTES`].
-const TOKEN_LINES: usize = 3;
-const TOKEN_BYTES: usize = 400;
+/// Pastes of more lines or characters than these become a chip.
+const TOKEN_LINES: usize = 10;
+const TOKEN_CHARS: usize = 1000;
 /// Undo steps kept before the oldest is dropped.
 const UNDO_STEPS: usize = 200;
 /// Submitted prompts kept for recall.
@@ -29,14 +29,16 @@ pub struct Paste {
     /// Byte range of the payload in the buffer.
     pub range: Range<usize>,
     pub lines: usize,
+    pub chars: usize,
 }
 
 impl Paste {
-    pub fn label(&self) -> String {
-        if self.lines <= 1 {
-            format!("[pasted {} chars]", self.range.len())
+    /// The chip text; `number` counts the pastes in the draft from 1.
+    pub fn label(&self, number: usize) -> String {
+        if self.lines > TOKEN_LINES {
+            format!("[paste #{number} +{} lines]", self.lines)
         } else {
-            format!("[pasted {} lines]", self.lines)
+            format!("[paste #{number} {} chars]", self.chars)
         }
     }
 }
@@ -56,9 +58,9 @@ impl<'a> Projection<'a> {
     pub fn text(&self) -> String {
         let mut out = String::with_capacity(self.text.len());
         let mut at = 0;
-        for paste in self.pastes {
+        for (index, paste) in self.pastes.iter().enumerate() {
             out.push_str(&self.text[at..paste.range.start]);
-            out.push_str(&paste.label());
+            out.push_str(&paste.label(index + 1));
             at = paste.range.end;
         }
         out.push_str(&self.text[at..]);
@@ -70,11 +72,11 @@ impl<'a> Projection<'a> {
     pub fn display(&self, raw: usize) -> usize {
         let mut shown = 0;
         let mut at = 0;
-        for paste in self.pastes {
+        for (index, paste) in self.pastes.iter().enumerate() {
             if raw <= paste.range.start {
                 return shown + raw - at;
             }
-            shown += paste.range.start - at + paste.label().len();
+            shown += paste.range.start - at + paste.label(index + 1).len();
             at = paste.range.end;
         }
         shown + raw.saturating_sub(at)
@@ -85,13 +87,13 @@ impl<'a> Projection<'a> {
     pub fn raw(&self, display: usize) -> usize {
         let mut shown = 0;
         let mut at = 0;
-        for paste in self.pastes {
+        for (index, paste) in self.pastes.iter().enumerate() {
             let head = paste.range.start - at;
             if display <= shown + head {
                 return at + display.saturating_sub(shown);
             }
             shown += head;
-            let token = paste.label().len();
+            let token = paste.label(index + 1).len();
             // Inside the token snaps to its payload; the cell right after it is
             // after the token, so typing there never lands inside the payload.
             if display < shown + token {
@@ -140,6 +142,9 @@ pub struct Composer {
     /// Position in `history` while recalling; `None` means the live draft.
     recall: Option<usize>,
     draft: String,
+    /// First body row the last frame showed of a draft taller than the editor;
+    /// kept so the window only scrolls when the cursor leaves it.
+    view_top: Cell<usize>,
 }
 
 impl Composer {
@@ -335,10 +340,12 @@ impl Composer {
         self.cursor = start + text.len();
         self.shift(start, text.len());
         let lines = text.lines().count().max(1);
-        if lines > TOKEN_LINES || text.len() > TOKEN_BYTES {
+        let chars = text.chars().count();
+        if lines > TOKEN_LINES || chars > TOKEN_CHARS {
             self.pastes.push(Paste {
                 range: start..self.cursor,
                 lines,
+                chars,
             });
             self.pastes.sort_by_key(|paste| paste.range.start);
         }
@@ -679,87 +686,173 @@ impl Composer {
     }
 }
 
-/// The composer rows (a two-cell rail plus the draft wrapped to `width - 2`) and
-/// the cursor relative to the first row.
+/// The editor body is never taller than this many rows; completions come on top.
+const MAX_ROWS: usize = 12;
+
+/// Rows the editor body may take on a terminal `height` rows tall.
+pub fn max_rows(height: u16) -> usize {
+    (usize::from(height) * 32 / 100).clamp(MIN_ROWS, MAX_ROWS)
+}
+
+const PLACEHOLDER: &str = "Ask anything · / commands · @ files";
+
+impl Composer {
+    /// The draft as drawn: sanitized text with chips in place of payloads, the
+    /// chips' byte ranges in it and the cursor's byte offset in it.
+    fn shown(&self) -> (String, Vec<Range<usize>>, usize) {
+        let mut shown = String::with_capacity(self.text.len());
+        let mut chips = Vec::new();
+        let mut caret = None;
+        let mut at = 0;
+        let ends = self.pastes.iter().map(|paste| paste.range.start);
+        for (index, end) in ends.chain([self.text.len()]).enumerate() {
+            if caret.is_none() && (at..=end).contains(&self.cursor) {
+                // Sanitizing the prefix keeps an escape sequence whole; a cursor
+                // inside one lands on the cell before it.
+                caret = Some(shown.len() + wrap::sanitize(&self.text[at..self.cursor]).len());
+            }
+            shown.push_str(&wrap::sanitize(&self.text[at..end]));
+            let Some(paste) = self.pastes.get(index) else {
+                break;
+            };
+            let start = shown.len();
+            shown.push_str(&paste.label(index + 1));
+            chips.push(start..shown.len());
+            at = paste.range.end;
+        }
+        let caret = caret.unwrap_or(shown.len());
+        (shown, chips, caret)
+    }
+}
+
+/// The editor body for a band `width` cells wide: the rail at column 0 and the
+/// draft from column 1, padded or scrolled to between [`MIN_ROWS`] and
+/// `max_rows` rows. Returns the rows and the cursor as (row, column).
 pub fn render(
-    text: &str,
-    cursor: Option<usize>,
+    composer: &Composer,
     styles: Styles,
     width: u16,
+    max_rows: usize,
 ) -> (Vec<Line<'static>>, (u16, u16)) {
-    let total = width.max(3) as usize;
-    let content = total - 2;
-    let empty = text.is_empty();
-    let body = if empty { styles.faint() } else { styles.text() };
-    // The draft is drawn sanitized so escapes cannot drive the terminal; the
-    // caret is mapped into that copy to stay on the character it edits.
-    let (shown, caret) = if empty {
-        ("Ask anything · / commands · @ files".to_owned(), 0)
-    } else {
-        let caret = cursor.unwrap_or(text.len()).min(text.len());
-        sanitize_to_caret(text, caret)
-    };
-
-    let mut rows: Vec<Line<'static>> = Vec::new();
-    let mut caret_row = 0usize;
-    let mut caret_column = 2usize;
-    let mut offset = 0usize;
-    for line in shown.split('\n') {
-        let pieces = wrap::wrap(line, content);
-        if (offset..=offset + line.len()).contains(&caret) {
-            let prefix = &line[..caret.saturating_sub(offset).min(line.len())];
-            let prefix_rows = wrap::wrap(prefix, content);
-            // Wrapped rows drop their trailing blanks, but the caret still sits
-            // after them, so add back the width the row lost.
-            let tail = prefix.len() - prefix.trim_end().len();
-            let width = wrap::width(prefix_rows.last().map_or("", String::as_str))
-                + wrap::width(&prefix[prefix.len() - tail..]);
-            caret_row = rows.len() + prefix_rows.len() - 1 + width / content;
-            caret_column = 2 + width % content;
+    let width = usize::from(width).max(3);
+    // One cell stays free after the text, so a cursor at the end of a full row
+    // does not wrap.
+    let limit = width - 2;
+    let (shown, chips, caret) = composer.shown();
+    // A chip wraps as one word: its spaces are masked while finding breaks.
+    let mut shape = shown.clone().into_bytes();
+    for chip in &chips {
+        for byte in &mut shape[chip.clone()] {
+            if *byte == b' ' {
+                *byte = b'_';
+            }
         }
-        for piece in pieces {
-            rows.push(rail_row(&piece, body, styles));
-        }
-        offset += line.len() + 1;
     }
-    if rows.is_empty() {
-        rows.push(rail_row("", body, styles));
+    let shape = String::from_utf8(shape).expect("only ASCII spaces were replaced");
+
+    let mut body: Vec<Vec<Span<'static>>> = Vec::new();
+    let mut cursor = (0, 0);
+    let mut offset = 0;
+    for line in shape.split('\n') {
+        let ranges = wrap::breaks(line, limit);
+        let end = offset + line.len();
+        if (offset..=end).contains(&caret) {
+            let at = caret - offset;
+            let index = ranges
+                .iter()
+                .rposition(|range| range.start <= at)
+                .unwrap_or(0);
+            let from = offset + ranges[index].start.min(at);
+            cursor = (
+                body.len() + index,
+                wrap::width(&shown[from..caret]).min(limit),
+            );
+        }
+        for range in ranges {
+            let start = offset + range.start;
+            let text = shown[start..offset + range.end].trim_end();
+            body.push(styled(&shown, &chips, start..start + text.len(), styles));
+        }
+        offset = end + 1;
+    }
+    if composer.is_empty() {
+        let hint = wrap::truncate(PLACEHOLDER, limit);
+        body = vec![vec![Span::styled(hint, styles.faint())]];
     }
 
-    let start = if rows.len() > COMPOSER_ROWS {
-        caret_row
-            .saturating_sub(COMPOSER_ROWS / 2)
-            .min(rows.len() - COMPOSER_ROWS)
+    let rows = body.len();
+    let target = rows.clamp(MIN_ROWS, max_rows.max(MIN_ROWS));
+    let top = if rows > target {
+        let top = composer
+            .view_top
+            .get()
+            .min(rows - target)
+            .min(cursor.0)
+            .max((cursor.0 + 1).saturating_sub(target));
+        composer.view_top.set(top);
+        top
     } else {
         0
     };
-    let rows: Vec<Line<'static>> = rows.into_iter().skip(start).take(COMPOSER_ROWS).collect();
-    (
-        rows,
-        (
-            (caret_row - start) as u16,
-            caret_column.min(total - 1) as u16,
-        ),
-    )
+    // A short draft sits in the middle, a single line on the second row.
+    let blank = target.saturating_sub(rows) / 2;
+    let mut lines: Vec<Line<'static>> =
+        (0..blank).map(|_| row(Vec::new(), width, styles)).collect();
+    lines.extend(
+        body.into_iter()
+            .skip(top)
+            .take(target)
+            .map(|spans| row(spans, width, styles)),
+    );
+    lines.resize_with(target, || row(Vec::new(), width, styles));
+    let cursor = (blank + cursor.0 - top, 1 + cursor.1);
+    (lines, (cursor.0 as u16, cursor.1 as u16))
 }
 
-/// Sanitizes the draft and maps `caret` into it; sanitizing the prefix keeps an
-/// escape sequence whole, and a caret inside one maps to the cell before it.
-fn sanitize_to_caret(text: &str, caret: usize) -> (String, usize) {
-    let head = wrap::sanitize(&text[..caret]);
-    let shown = wrap::sanitize(text).into_owned();
-    (shown, head.len())
-}
-
-/// One composer row: accent rail, then the draft cell.
-fn rail_row(text: &str, style: ratatui::style::Style, styles: Styles) -> Line<'static> {
-    let mut spans = vec![Span::styled("▎ ", styles.accent())];
-    spans.push(Span::styled(text.to_owned(), style));
-    Line {
-        style: styles.composer(),
-        spans,
-        alignment: None,
+/// The spans of `shown[range]`, with the parts inside a chip styled as one.
+fn styled(
+    shown: &str,
+    chips: &[Range<usize>],
+    range: Range<usize>,
+    styles: Styles,
+) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    let mut at = range.start;
+    for chip in chips
+        .iter()
+        .filter(|chip| chip.start < range.end && chip.end > range.start)
+    {
+        let start = chip.start.max(range.start);
+        let end = chip.end.min(range.end);
+        if at < start {
+            spans.push(Span::styled(shown[at..start].to_owned(), styles.text()));
+        }
+        spans.push(Span::styled(
+            shown[start..end].to_owned(),
+            styles.paste_chip(),
+        ));
+        at = end;
     }
+    if at < range.end {
+        spans.push(Span::styled(shown[at..range.end].to_owned(), styles.text()));
+    }
+    spans
+}
+
+/// One editor row exactly `width` cells wide: the rail, then `spans` on the
+/// composer tint up to the last column.
+pub fn row(spans: Vec<Span<'static>>, width: usize, styles: Styles) -> Line<'static> {
+    let used: usize = spans.iter().map(|span| wrap::width(&span.content)).sum();
+    let mut out = vec![Span::styled("▎", styles.user_rail())];
+    out.extend(spans.into_iter().map(|span| {
+        let style = styles.composer().patch(span.style);
+        span.style(style)
+    }));
+    out.push(Span::styled(
+        " ".repeat(width.saturating_sub(1 + used)),
+        styles.composer(),
+    ));
+    Line::from(out)
 }
 
 fn prev_grapheme(text: &str, cursor: usize) -> usize {
@@ -983,7 +1076,7 @@ mod tests {
         let mut c = Composer::new();
         c.insert(&payload);
         assert_eq!(c.pastes().len(), 1);
-        assert_eq!(c.display(), "[pasted 40 lines]");
+        assert_eq!(c.display(), "[paste #1 +40 lines]");
         assert_eq!(c.text(), payload);
         assert_eq!(c.display_cursor(), c.display().len());
     }
@@ -1053,13 +1146,13 @@ mod tests {
         let mut c = Composer::new();
         c.insert(&big_paste(40));
         c.insert("tail");
-        assert_eq!(c.display(), "[pasted 40 lines]tail");
+        assert_eq!(c.display(), "[paste #1 +40 lines]tail");
         assert_eq!(c.display_cursor(), c.display().len());
         c.end_gesture();
         c.move_home();
         assert_eq!(c.display_cursor(), 0);
         c.move_right();
-        assert_eq!(c.display_cursor(), "[pasted 40 lines]".len());
+        assert_eq!(c.display_cursor(), "[paste #1 +40 lines]".len());
     }
 
     #[test]
@@ -1079,15 +1172,27 @@ mod tests {
         Styles::of(crate::ui::theme::Palette::dark())
     }
 
-    fn drawn(text: &str, cursor: Option<usize>, width: u16) -> (Vec<String>, (u16, u16)) {
-        let (lines, caret) = render(text, cursor, styles(), width);
-        (lines.iter().map(|line| line.to_string()).collect(), caret)
+    /// Typed key by key, so control characters skip the paste normalization.
+    fn typed(text: &str) -> Composer {
+        let mut c = Composer::new();
+        for ch in text.chars() {
+            c.type_char(ch);
+        }
+        c
+    }
+
+    fn drawn(c: &Composer, width: u16) -> (Vec<String>, (u16, u16)) {
+        let (lines, caret) = render(c, styles(), width, 12);
+        let rows = lines
+            .iter()
+            .map(|line| line.to_string().trim_end().to_owned())
+            .collect();
+        (rows, caret)
     }
 
     #[test]
     fn an_escape_sequence_is_shown_as_text_and_never_reaches_the_terminal() {
-        let text = "safe\u{1b}[31mred";
-        let (rows, _) = drawn(text, None, 40);
+        let (rows, _) = drawn(&typed("safe\u{1b}[31mred"), 40);
         let joined = rows.join("\n");
         assert!(
             !joined.contains('\u{1b}'),
@@ -1099,33 +1204,101 @@ mod tests {
 
     #[test]
     fn the_cursor_keeps_its_cell_after_sanitizing() {
-        // A tab shows as four cells, so the caret after it moves by four.
-        let (_, plain) = drawn("ab", Some(2), 40);
-        assert_eq!(plain, (0, 4), "rail (2) plus two cells");
+        let (_, plain) = drawn(&typed("ab"), 40);
+        assert_eq!(plain, (1, 3), "second row; the rail plus two cells");
 
-        let (_, tabbed) = drawn("ab\tc", Some(3), 40);
-        assert_eq!(
-            tabbed,
-            (0, 8),
-            "ab plus the tab's four cells, plus the two rail cells"
-        );
+        // A tab shows as four cells, so the caret after it moves by four.
+        let mut tabbed = typed("ab\tc");
+        tabbed.move_left();
+        let (_, caret) = drawn(&tabbed, 40);
+        assert_eq!(caret, (1, 7), "the rail, ab and the tab's four cells");
 
         // An escape sequence collapses to one picture glyph; the caret after it
         // counts the visible cell, not the eight source bytes.
-        let (rows, escaped) = drawn("a\u{1b}[31mb", Some(7), 40);
-        assert_eq!(
-            escaped,
-            (0, 4),
-            "the escape collapses to one cell, then the rail"
-        );
-        assert_eq!(rows.join(""), "▎ ab", "the escape is dropped, not painted");
+        let (rows, escaped) = drawn(&typed("a\u{1b}[31mb"), 40);
+        assert_eq!(escaped, (1, 3), "the escape takes no cell");
+        assert_eq!(rows[1], "▎ab", "the escape is dropped, not painted");
     }
 
     #[test]
     fn a_control_character_becomes_a_picture() {
-        let (rows, _) = drawn("a\u{7}b", None, 40);
+        let (rows, _) = drawn(&typed("a\u{7}b"), 40);
         let joined = rows.join("\n");
         assert!(joined.contains('\u{2407}'), "{joined:?}");
+    }
+
+    #[test]
+    fn the_cursor_lands_after_a_large_paste() {
+        let mut c = composer("see ");
+        c.insert(&big_paste(12));
+        let (rows, cursor) = drawn(&c, 60);
+        assert_eq!(rows[1], "▎see [paste #1 +12 lines]", "{rows:?}");
+        assert_eq!(cursor, (1, 1 + "see [paste #1 +12 lines]".len() as u16));
+        let (lines, _) = render(&c, styles(), 60, 12);
+        let chip = lines[1]
+            .spans
+            .iter()
+            .find(|span| span.content.starts_with("[paste"))
+            .expect("the chip is its own span");
+        assert_eq!(chip.style, styles().composer().patch(styles().paste_chip()));
+    }
+
+    #[test]
+    fn the_cursor_lands_at_the_end_of_a_multi_line_paste() {
+        let mut c = composer("head ");
+        c.insert("one\ntwo\nthree");
+        let (rows, cursor) = drawn(&c, 40);
+        assert_eq!(rows[..3], ["▎head one", "▎two", "▎three"]);
+        assert_eq!(cursor, (2, 6));
+    }
+
+    #[test]
+    fn the_editor_pads_short_drafts_and_starts_text_after_the_rail() {
+        let (rows, cursor) = drawn(&Composer::new(), 50);
+        assert_eq!(rows.len(), MIN_ROWS);
+        assert_eq!(rows[1], format!("▎{PLACEHOLDER}"));
+        assert_eq!(cursor, (1, 1), "the cursor sits on the second row");
+        let (lines, _) = render(&Composer::new(), styles(), 50, 12);
+        assert!(lines.iter().all(|line| line.width() == 50), "full rows");
+    }
+
+    #[test]
+    fn a_draft_wraps_by_word_and_the_cursor_follows_the_wrapped_word() {
+        // The cursor never sits on the row a word left when it wrapped.
+        let (rows, cursor) = drawn(&composer("hello wonderful"), 14);
+        assert_eq!(rows[1..3], ["▎hello", "▎wonderful"]);
+        assert_eq!(cursor, (2, 10));
+    }
+
+    #[test]
+    fn a_tall_draft_scrolls_to_keep_the_cursor_visible() {
+        let lines: Vec<String> = (0..20).map(|index| format!("line {index}")).collect();
+        let mut c = composer(&lines.join("\n"));
+        let (rows, cursor) = drawn(&c, 40);
+        assert_eq!(rows.len(), 12, "capped");
+        assert_eq!(rows[11], "▎line 19");
+        assert_eq!(cursor.0, 11, "typing at the end keeps the last row");
+        for _ in 0..5 {
+            c.move_up();
+        }
+        let (rows, cursor) = drawn(&c, 40);
+        assert_eq!(
+            rows[11], "▎line 19",
+            "moving inside the window does not scroll"
+        );
+        assert_eq!(cursor.0, 6);
+        for _ in 0..10 {
+            c.move_up();
+        }
+        let (rows, cursor) = drawn(&c, 40);
+        assert_eq!((rows[0].as_str(), cursor.0), ("▎line 4", 0));
+    }
+
+    #[test]
+    fn the_body_height_follows_the_terminal() {
+        assert_eq!(max_rows(10), MIN_ROWS);
+        assert_eq!(max_rows(30), 9);
+        assert_eq!(max_rows(100), 12);
     }
 
     #[test]
@@ -1134,7 +1307,7 @@ mod tests {
         let mut c = composer("head\n");
         c.insert(&payload);
         c.insert("tail");
-        assert_eq!(c.display(), "head\n[pasted 40 lines]tail");
+        assert_eq!(c.display(), "head\n[paste #1 +40 lines]tail");
         c.move_home();
         assert_eq!(c.cursor(), 5);
         assert!(!c.move_down(), "the token line is the last line");
@@ -1147,13 +1320,13 @@ mod tests {
     fn pasted() -> Composer {
         let mut c = Composer::new();
         c.insert("before ");
-        c.insert(&"x".repeat(TOKEN_BYTES + 1));
+        c.insert(&"x".repeat(TOKEN_CHARS + 1));
         c.insert("after");
         c
     }
 
     fn token_end(c: &Composer) -> usize {
-        let token = c.pastes()[0].label();
+        let token = c.pastes()[0].label(1);
         let shown = c.projection().text();
         shown.find(&token).expect("the paste shows as its token") + token.len()
     }

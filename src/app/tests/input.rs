@@ -123,18 +123,23 @@ async fn follow_ups_queue_behind_a_running_turn_and_alt_up_recalls_the_newest() 
 }
 
 #[tokio::test(start_paused = true)]
-async fn ctrl_c_clears_a_draft_then_needs_two_presses_on_an_empty_composer() {
+async fn ctrl_c_clears_a_draft_and_a_second_press_within_half_a_second_quits() {
     let mut h = Harness::opened(display_read(0, 0)).await;
     h.type_text("x");
     h.ctrl(KeyCode::Char('c'));
     assert_eq!(h.app.composer.text(), "");
     assert!(!h.app.quit);
-
     h.ctrl(KeyCode::Char('c'));
-    assert!(!h.app.quit, "the first empty press only arms the quit");
+    assert!(h.app.quit, "the second press is inside the window");
+
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.ctrl(KeyCode::Char('c'));
+    assert!(!h.app.quit, "the first press only arms the quit");
     assert_eq!(h.notices(), ["Press Ctrl+C again to quit"]);
+    tokio::time::advance(std::time::Duration::from_millis(600)).await;
+    h.ctrl(KeyCode::Char('c'));
+    assert!(!h.app.quit, "a late press arms again");
     h.type_text("x");
-    h.press(KeyCode::Backspace);
     h.ctrl(KeyCode::Char('c'));
     assert!(!h.app.quit, "typing disarmed the quit");
     h.ctrl(KeyCode::Char('c'));

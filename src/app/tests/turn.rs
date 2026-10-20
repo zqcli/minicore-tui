@@ -172,7 +172,7 @@ async fn a_steer_leaves_the_queue_only_when_the_agent_applies_it() {
 
     h.submit("also the tests");
     assert_eq!(h.queue(), ["also the tests"]);
-    assert!(h.screen(60, 12).contains("↳ steer · also the tests"));
+    assert!(h.screen(60, 12).contains("Steering: also the tests"));
 
     h.emit(
         "steer_progress",
@@ -212,7 +212,7 @@ async fn queued_follow_ups_are_sent_one_per_turn_oldest_first() {
         h.key(KeyCode::Enter, KeyModifiers::ALT);
     }
     assert_eq!(h.queue(), ["first", "second"]);
-    assert!(h.screen(60, 12).contains("⏵ next · first"));
+    assert!(h.screen(60, 12).contains("Follow-up: first"));
 
     h.settle().await;
     assert_eq!(h.sends(), ["start", "first", "second"]);

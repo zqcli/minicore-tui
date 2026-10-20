@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
+use ratatui::style::Color;
 use tokio::sync::mpsc;
 
 use crate::app::{App, Msg, Overlay, Scroll, Session};
@@ -229,7 +230,7 @@ fn an_anchored_view_does_not_move_when_content_grows() {
 }
 
 #[test]
-fn the_composer_grows_with_its_content_and_caps_at_ten_rows() {
+fn the_editor_grows_with_its_content_and_caps_at_twelve_rows() {
     let mut app = app();
     app.composer.set_text(
         &(0..20)
@@ -237,15 +238,16 @@ fn the_composer_grows_with_its_content_and_caps_at_ten_rows() {
             .collect::<Vec<_>>()
             .join("\n"),
     );
-    let rendered = render(&mut app, 60, 30);
-    let composer_rows = rendered
+    let rendered = render(&mut app, 60, 60);
+    let editor_rows = rendered
         .lines()
-        .filter(|line| line.starts_with('▎'))
+        .filter(|line| line.starts_with(" ▎"))
         .count();
     assert_eq!(
-        composer_rows, 10,
-        "the composer caps at ten rows:\n{rendered}"
+        editor_rows, 12,
+        "the editor caps at twelve rows:\n{rendered}"
     );
+    assert!(rendered.contains("line 19 of a long draft"), "{rendered}");
 }
 
 #[test]
@@ -254,15 +256,19 @@ fn the_footer_reports_the_state_and_context() {
     app.composer.set_text("hello");
     let rendered = render(&mut app, 80, 12);
     let footer = rendered.lines().last().unwrap_or_default();
-    assert!(footer.starts_with("minicore-tui · "), "{footer}");
+    assert!(
+        footer.starts_with(" ▸ minicore-tui · gpt 6 luna · max"),
+        "{footer}"
+    );
     assert!(
         !footer.contains('@'),
         "an unknown branch is left out: {footer}"
     );
-    assert!(footer.contains("gpt-6-luna"), "{footer}");
-    assert!(footer.contains("max"), "{footer}");
-    assert!(footer.contains("● ready"), "{footer}");
-    assert!(footer.ends_with("ctx ?"), "{footer}");
+    assert!(
+        !footer.contains("ctx"),
+        "no context before it is known: {footer}"
+    );
+    assert!(footer.ends_with("↑0 ↓0 R0"), "{footer}");
 }
 
 #[test]
@@ -283,18 +289,22 @@ fn the_footer_names_the_branch_and_right_aligns_the_totals() {
     };
     let rendered = render(&mut app, 100, 12);
     let footer = rendered.lines().last().unwrap_or_default();
-    assert!(footer.starts_with("minicore-tui@main · "), "{footer}");
-    assert!(footer.contains("Cache the parser"), "{footer}");
     assert!(
-        footer.ends_with("↑50.5k ↓1.8k R33.8k · ctx 41%"),
+        footer.starts_with(" ▸ minicore-tui@main · gpt 6 luna"),
+        "{footer}"
+    );
+    assert!(!footer.contains("Cache the parser"), "{footer}");
+    assert!(
+        footer.ends_with("↑50.5k ↓1.8k R33.8k · ctx 41.00%"),
         "{footer}"
     );
     assert_eq!(crate::ui::wrap::width(footer), 100, "flush right: {footer}");
-    // On a narrow terminal the title gives way first.
-    let narrow = render(&mut app, 70, 12);
+    // On a narrow terminal the directory and model are cut with an ellipsis.
+    let narrow = render(&mut app, 50, 12);
     let footer = narrow.lines().last().unwrap_or_default();
-    assert!(!footer.contains("Cache the parser"), "{footer}");
-    assert!(footer.ends_with("ctx 41%"), "{footer}");
+    assert!(footer.contains('…'), "{footer}");
+    assert!(footer.ends_with("ctx 41.00%"), "{footer}");
+    assert_eq!(crate::ui::wrap::width(footer), 50, "{footer}");
 }
 
 /// The last transcript row never touches the stack below it, and the
@@ -326,13 +336,18 @@ fn a_blank_row_separates_the_transcript_and_the_composer_band_is_full_width() {
             .to_owned()
     };
     let composer = (0..14)
-        .find(|y| row(*y).starts_with("▎ Ask anything"))
+        .find(|y| row(*y).starts_with(" ▎Ask anything"))
         .expect("composer row");
-    assert_eq!(row(composer - 1), "", "the gap row above the stack");
+    assert_eq!(row(composer - 2), "", "the gap row above the editor");
     assert!(
-        row(composer - 2).contains("prompt 39"),
+        row(composer - 3).contains("prompt 39"),
         "{}",
-        row(composer - 2)
+        row(composer - 3)
+    );
+    assert_eq!(
+        buffer[(0u16, composer)].bg,
+        Color::Reset,
+        "the gutter is never painted"
     );
     assert_eq!(
         buffer[(49u16, composer)].bg,
@@ -345,11 +360,11 @@ fn a_blank_row_separates_the_transcript_and_the_composer_band_is_full_width() {
 fn the_status_spinner_moves_with_time() {
     use std::time::Duration;
     let frames: std::collections::HashSet<&str> = (0..10)
-        .map(|step| crate::ui::status::spinner(Duration::from_millis(step * 100)))
+        .map(|step| crate::ui::status::spinner(Duration::from_millis(step * 80)))
         .collect();
     assert_eq!(frames.len(), 10, "every tick shows the next frame");
     assert_eq!(
-        crate::ui::status::spinner(Duration::from_millis(1_000)),
+        crate::ui::status::spinner(Duration::from_millis(800)),
         crate::ui::status::spinner(Duration::ZERO)
     );
 }
@@ -408,7 +423,7 @@ fn typing_keeps_the_draft_visible_and_marked_with_the_rail() {
         assert_eq!(app.on_key(key), None);
     }
     let rendered = render(&mut app, 40, 10);
-    assert!(rendered.contains("▎ hello"), "{rendered}");
+    assert!(rendered.contains(" ▎hello"), "{rendered}");
     assert!(
         !rendered.contains("Ask anything"),
         "the placeholder is gone once there is a draft:\n{rendered}"
@@ -422,7 +437,7 @@ fn an_open_overlay_is_not_drawn_over_the_composer() {
     app.overlay = Overlay::Help { scroll: 0 };
     let rendered = render(&mut app, 40, 10);
     assert!(
-        rendered.contains("▎ draft"),
+        rendered.contains(" ▎draft"),
         "the composer stays visible under a view:\n{rendered}"
     );
 }
@@ -440,7 +455,7 @@ fn a_queued_steer_is_shown_above_the_composer() {
         });
     let rendered = render(&mut app, 60, 12);
     assert!(
-        rendered.contains("↳ steer · focus on the parser first"),
+        rendered.contains("Steering: focus on the parser first"),
         "{rendered}"
     );
 }
@@ -457,9 +472,12 @@ fn a_running_turn_shows_the_status_line_with_elapsed_time() {
         0,
     ));
     let rendered = render(&mut app, 70, 12);
+    assert!(
+        rendered.contains("Working (esc to interrupt)"),
+        "{rendered}"
+    );
     assert!(rendered.contains("Thinking"), "{rendered}");
-    assert!(rendered.contains("esc to interrupt"), "{rendered}");
-    assert!(rendered.contains("● working"), "{rendered}");
+    assert!(rendered.contains("max · working"), "{rendered}");
 }
 
 /// A left press and release on one cell: a click, not a drag.
