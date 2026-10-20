@@ -227,13 +227,16 @@ the history length.
   `Anchor { block, offset }`. Any upward scroll turns the position into an
   anchor, resolved against the current layout each frame, so growth below it
   moves nothing; reaching the bottom returns to `Follow`. While anchored and not
-  at the bottom the last row is a `↓ new output` pill.
+  at the bottom the last row carries a centred ` ↓ Jump to latest message · End `
+  label, and a scrollbar overlays the right column for a second after a scroll.
 - **Text.** Agent and tool text passes `wrap::sanitize` (control characters and
   ANSI removed) before layout; wrapping never splits a grapheme.
 
-The bottom band is plain rows so the composer can grow: status line (busy only),
-up to three queue rows, the latest notice, the composer (1–10 rows), the footer.
-One sheet style serves pickers, the approval prompt and find; views replace the
+The transcript and the bottom band leave column 0 as a gutter. The band is plain
+rows so the editor can grow: queue rows, the Working line (busy only), the
+latest notice, the editor band (4–12 rows, plus the `/` or `@` completion rows
+from `sheets::completion`), the footer. A selector sheet (sessions, models,
+reasoning, approval, find) replaces the editor band; views replace the
 transcript area.
 
 ### Footer context figure
@@ -243,8 +246,9 @@ reported it for the last request, and `ctx ?` otherwise; the TUI never
 substitutes an estimate. `presentation` is read on open, after each turn and
 compaction, and on request-usage events at most every 2 s while a turn runs. The
 Context view also shows the budget's history estimate, labelled as one. The git
-branch comes from the same answer and is omitted until known; the TUI never
-calls `workspace.status`.
+branch comes from the same answer, which only caches it after a complete
+`workspace.status`, so one runs on open and after each turn; until then the
+branch is omitted.
 
 On Agent exit or a protocol failure the screen becomes a fatal message with the
 reason and the last 20 stderr lines; `q` or `Esc` quits.

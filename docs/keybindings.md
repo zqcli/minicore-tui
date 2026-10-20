@@ -45,15 +45,15 @@ one unit. `Esc` while busy only interrupts; it does not clear the draft.
 | `Ctrl+R` | Sessions picker. |
 | `Ctrl+L` | Model picker. |
 | `Shift+Tab` | Switch to the next reasoning level the model supports. |
-| `Ctrl+O` | Expand or collapse all tool cards. |
-| `Ctrl+T` | Show or hide reasoning and compaction summaries. |
+| `Ctrl+O` | Expand or collapse all tool cards, thinking and compaction summaries. |
+| `Ctrl+T` | Collapse thinking to one `Thinking...` row, or show it again. |
 | `Ctrl+F` | Find in the transcript. |
 | `F1` | Help view. |
 | `q` or `Esc` | Quit from the fatal screen. |
 
 Any upward scroll anchors the view to the content you are reading; new output
-does not move it, and a `↓ new output` pill shows while you are above the
-bottom. `Ctrl+End` or scrolling to the bottom resumes following the tail.
+does not move it, and a ` ↓ Jump to latest message · End ` label shows while you
+are above the bottom. `Ctrl+End` or scrolling to the bottom resumes following the tail.
 
 ## Mouse
 

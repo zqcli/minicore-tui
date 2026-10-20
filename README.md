@@ -72,56 +72,64 @@ by rewriting the file, which drops comments. `Ctrl+G` uses `editor`, then
 ## Screen
 
 ```text
- transcript (scrollable)
+ minicore-tui v0.4.0                                  (welcome header)
+ esc interrupt · ctrl+c clear · / commands · @ files · ctrl+o expand · ctrl+r sessions
+ transcript (scrollable, 1-column gutter, ▎ rails)
  …
- ⠋ Thinking · 1m12s · request 7 · 12 tools · esc to interrupt
- ↳ steer · focus on the parser first
-▎ composer (1–10 rows, grows with the draft)
- minicore-tui@main · gpt-6-luna · max · ● working      ↑50.5k ↓1.8k · ctx 41%
+ Follow-up: also update the README
+ ⠋ Working (esc to interrupt) · Thinking · 1m12s · request 7 · 12 tools
+
+ ▎ editor band (4–12 rows; the / and @ lists open inside it)
+ ▸ minicore-tui@main · gpt 6 luna · max · working · 1m · queued   ↑50.5k ↓1.8k R33.8k · ctx 41.00%
 ```
 
-The status line shows only while something is in flight: `Thinking`, `Writing`,
-`Waiting for model`, `Running <tool> <detail>`, `Waiting for approval`,
-`Compacting context`, `Interrupting` or `Waiting for compaction`, with the
-elapsed time and the interrupt key. The queue shows up to three rows above the
-composer. One notice line appears under the status line: info notices fade after
-5 seconds, errors stay until the next key press.
+The look follows pi-rail-ui. While something is in flight a Working line sits
+above the editor with the phase (`Thinking`, `Running <tool> <detail>`,
+`Waiting for approval`, `Compacting context`, …), elapsed time, request and
+tool counts. Queued messages show as `Steering:` / `Follow-up:` rows above it.
+The latest notice is a railed line in the band: info fades after 5 seconds,
+errors stay until the next key press.
 
-The footer shows the workspace directory and git branch, the session title, the
-model and reasoning level, a state dot, token totals and `ctx N%` — the context
-usage the Agent reported for its last request, `ctx ?` until it has reported
-one. The TUI never estimates it. The branch comes from `session.presentation`
-and is left out until known.
+The footer shows the workspace and git branch, the model and reasoning level,
+the state while not idle, the current or last turn's minutes, `queued`, token
+totals since the session was opened and `ctx N%` — the context usage the Agent
+reported for its last request (amber from 70 %), `ctx ?` once tokens were used
+without a report. The TUI never estimates it.
 
 ## Features
 
 - **Conversation.** User messages and Markdown answers stream with an incremental
-  renderer. Reasoning shows its last lines while streaming, then folds to
-  `Thought · N lines`; `Ctrl+T` shows it in full.
-- **Tool cards** start folded: state glyph, tool name, target, duration, exit
-  code and line changes. Live `bash` cards show the output tail, edits and
-  writes show the start of the change, reads and failures their first lines.
-  `Ctrl+O` expands all cards, a click toggles one, and an expanded card's
-  `click for full output` row opens the tool view with the complete output.
+  renderer. User messages are tinted cards; thinking has a purple rail and
+  folds to its first three rows plus `... (N more lines, ctrl+o to expand)`;
+  `Ctrl+T` collapses it to one `Thinking...` row.
+- **Tool cards** start folded to three rows on a state-coloured band (running,
+  done, failed): tool name, target (`$ cmd`, `path:range`, `pattern in path`)
+  and a hidden-line hint, with duration, exit code or line changes on the
+  right. `Ctrl+O` expands all cards and thinking, a click toggles one, and an
+  expanded card's `click for full output` row opens the tool view.
 - **Turn end** is one dim line: outcome, duration, requests, tools and, when files
   changed, `N files changed (+a −b)`. A failed or cancelled turn shows its reason.
 - **Steering and queue.** `Enter` while a turn runs steers it; `Alt+Enter` queues
   a follow-up sent after the turn; `Alt+↑` takes the newest follow-up back.
   `Esc` interrupts. A message sent while the Agent still compacts after a turn
   waits in the queue and is sent when the session is idle.
-- **Compaction** shows as a status phase and leaves a one-line marker with the
-  token counts; loaded content is never removed. `/compact` runs it manually.
+- **Compaction** shows as a status phase and leaves a `[compaction]` box with
+  the token counts and the summary behind `Ctrl+O`; loaded content is never
+  removed. `/compact` runs it manually.
 - **History.** Opening a session loads the latest items; scrolling to the top
   loads older pages, including the history behind a compaction summary.
   A reloaded `bash` card shows its line count and a `click for full output` row;
   `/tool` opens the same view.
 - **Views** replace the transcript and keep the footer: diff (turn, session or
   workspace scope), tool output, context budget and help. `Esc` returns.
-- **Pickers** in a bottom sheet: command palette (`/`), sessions with delete
-  (`Ctrl+R`), model (`Ctrl+L`), reasoning (`Shift+Tab` cycles), workspace files
-  (`@`) and find in the transcript (`Ctrl+F`). Approval prompts use the same sheet.
-- **Copy and export.** Dragging copies the selection (native clipboard, OSC 52
-  fallback). `/copy` copies the last answer, `/export [path]` writes the
+- **Completion and selectors.** `/` and `@` open a list inside the editor that
+  filters as you type (`Tab` inserts, `Enter` runs, `Esc` closes and keeps the
+  text). Sessions with delete (`Ctrl+R`), model (`Ctrl+L`), reasoning
+  (`Shift+Tab` cycles), find (`Ctrl+F`) and approval prompts replace the editor
+  with a bordered selector.
+- **Copy and export.** Dragging copies the selection on release (native
+  clipboard, OSC 52 fallback) and flashes `Copied!`; double-click selects a
+  word, triple-click a line. `/copy` copies the last answer, `/export [path]` writes the
   conversation as Markdown (default `./minicore-<session>-<date>.md`).
 - **Composer.** Grapheme-safe editing, undo and redo, prompt history, paste
   tokens for large pastes, external editor on `Ctrl+G`.

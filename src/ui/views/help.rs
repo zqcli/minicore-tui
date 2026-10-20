@@ -85,7 +85,7 @@ const KEYS: &[KeyRow] = &[
     },
     KeyRow {
         keys: "ctrl+t",
-        action: "show or hide reasoning",
+        action: "collapse or show thinking",
     },
     KeyRow {
         keys: "ctrl+f",
