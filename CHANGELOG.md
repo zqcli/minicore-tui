@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased — 0.5
+
+### Configuration (breaking)
+
+- One TUI directory (`--home`, `$MINICORE_HOME`, else the executable's directory,
+  or its parent named `bin`) holds everything: `config.toml` (profiles, `[ui]`,
+  `[agent]`, `[loop]`, `[compaction]`), `models.toml` (providers and models),
+  `prompt/SYSTEM_PROMPT.md`, `prompt/commands/*.md`, `session/` (all sessions)
+  and `history.jsonl`. See [docs/configuration.md](docs/configuration.md).
+- The TUI composes the Agent config from the two files into
+  `session/agent.toml` on every start. `--config` is replaced by `--agent-config`
+  (a raw file, no composition). `~/.config/minicore-tui/`, `$MINICORE_TUI_CONFIG`
+  and `prompts/` are no longer read; move templates to `prompt/commands/`.
+- A malformed file, unknown key, dangling reference, missing key variable or
+  empty system prompt stops the start with `file:line: key: reason` before the
+  screen changes, instead of silently falling back to defaults.
+- A first run writes commented starter files and exits. `/reload` composes the
+  Agent config again; `/theme` keeps the comments in `config.toml`.
+
 ## 0.4.0 — Rewrite
 
 A rewrite of the frontend against `minicore-agent` 0.7.0 (`4102719`) and

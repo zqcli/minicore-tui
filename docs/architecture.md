@@ -9,16 +9,19 @@ document and the code win.
 `minicore-tui` is the terminal frontend of `minicore-agent` (which links
 `minicore-runtime`). It talks to one Agent child over stdio NDJSON JSON-RPC
 (Protocol v1) and links neither backend crate. It never reads the Agent store or
-the workspace, runs a tool, calls a provider or keeps credentials; the TUI config
-holds local preferences only.
+the workspace, runs a tool, calls a provider or keeps credentials; its two
+settings files name environment variables, never keys.
 
 ## Modules
 
 ```text
 src/
-  main.rs       CLI, config, spawn the Agent, terminal guard, main loop, frame pacing
+  main.rs       CLI, startup (config::prepare), spawn the Agent, terminal guard, main loop, frame pacing
   cli.rs        flat argument parser and USAGE
-  config.rs     TUI config file (agent, agent_config, theme, editor, bell), ThemeKind
+  config/       the TUI directory and everything read from it (see below):
+                mod (Source, ConfigError, prepare, Loaded), home, settings
+                (config.toml), models (models.toml), compose (the Agent file),
+                scaffold (first-run starters)
   rpc.rs        Agent child process and JSON-RPC Client
   protocol/     serde DTOs and constants only: methods, error codes, required
                 capabilities, read sizes (mod); event; read (history items, chunk
@@ -78,10 +81,38 @@ selection when the rows move. What `app` still imports from `ui`:
 - `ui::views::context::text` and `ui::sheets::model_details`: the copy of the
   context view and the model note, which are formatting of what is shown.
 
+## Configuration
+
+All local state sits in one *TUI directory* (`--home`, `$MINICORE_HOME`, else the
+executable's directory or its parent named `bin`): `config.toml`, `models.toml`,
+`prompt/SYSTEM_PROMPT.md`, `prompt/commands/`, `session/` (the Agent's
+`data_dir`), `history.jsonl`. `config::prepare` runs before the terminal is
+touched:
+
+1. a fresh directory (neither settings file) gets commented starters and the
+   process exits with the paths and what to fill in;
+2. `models.toml` becomes `AgentModel`s (provider fields merged into each model),
+   then `config.toml` is checked against them: default profile, profile model,
+   reasoning against the model's list, tools, prompt files, compaction, loop. Each
+   error carries file, key and, from the `toml::Spanned` of the offending value,
+   the line;
+3. `--profile`/`--model` and the model's `api_key_env` are checked;
+4. `AgentFile` is serialized to `session/agent.toml` (mode 0600, atomic, with a
+   generated-file header; `system_prompt = { file }` holds the absolute prompt
+   path so the Agent reads it) and passed with `--config`.
+
+`--agent-config FILE` skips 1 to 4 and hands the file to the Agent unchanged.
+`App` keeps `home`, `composed` and the `[ui]` editor; `/reload` calls
+`config::load` and `write` again (an error is a notice and the Agent is not
+reloaded), `/theme` edits `[ui] theme` with `toml_edit` so comments survive. The
+Agent config is never parsed back: `AgentFile` only serializes.
+
 ## Main loop and message flow
 
-`main` spawns `minicore-agent --config <path> --stdio` **before** entering the
-alternate screen, so a missing binary stays an ordinary terminal error. It then
+`main` resolves the TUI directory, runs `config::prepare` (scaffold, validate,
+compose; see Configuration) and spawns `minicore-agent --config
+<home>/session/agent.toml --stdio` **before** entering the alternate screen, so a
+missing binary or a bad configuration stays an ordinary terminal error. It then
 starts `tasks::bootstrap` (ping, capability check, models, profiles, sessions)
 and loops on one `biased` `select!`: Agent events, `Msg` values from tasks,
 terminal input, an 80 ms tick (one spinner frame, armed only while something
@@ -309,9 +340,9 @@ with the placeholder `view open · esc to return`.
 
 The draft model is `app/composer.rs` (text, cursor, paste chips, undo, the
 prompt history); `ui/composer.rs` only draws it. Every submitted prompt is
-appended to `history.jsonl` next to the TUI config (the last 100, written
+appended to `<home>/history.jsonl` (the last 100, written
 atomically by `prompt_history.rs`; over 32 KiB stays in memory) and loaded at
-start. `app/templates.rs` reads `prompts/*.md` from the config directory at
+start. `app/templates.rs` reads `prompt/commands/*.md` from the TUI directory at
 start and on `/reload`; a template is a command that expands `$1`, `$@` and
 `${1:-default}` before the text is sent as a normal prompt. `title.rs` derives
 the terminal title (`workspace · session · idle|working|approval`) and the bell
