@@ -23,6 +23,7 @@ use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::widgets::Widget;
+use unicode_width::UnicodeWidthChar;
 
 use crate::app::{App, Overlay};
 use crate::wrap;
@@ -122,7 +123,8 @@ fn draw_rows(frame: &mut Frame, area: Rect, rows: &[Line<'static>]) {
 }
 
 /// `Line::render` for an unaligned line, minus ratatui's grapheme walk over
-/// printable ASCII, which is nearly every cell of a frame.
+/// printable ASCII and lone narrow characters (the rail), which is nearly every
+/// span of a frame.
 pub fn put_line(buf: &mut Buffer, area: Rect, line: &Line) {
     let area = area.intersection(buf.area);
     if area.is_empty() {
@@ -136,15 +138,18 @@ pub fn put_line(buf: &mut Buffer, area: Rect, line: &Line) {
     }
     let mut x = area.x;
     for span in &line.spans {
-        let text = span.content.as_bytes();
-        if text.iter().all(|byte| (0x20..0x7f).contains(byte)) {
-            let shown = text.len().min(usize::from(area.right() - x));
-            for (cell, byte) in (x..).zip(&text[..shown]) {
-                buf[(cell, area.y)]
-                    .set_char(char::from(*byte))
-                    .set_style(span.style);
+        if one_cell_per_char(&span.content) {
+            let room = usize::from(area.right() - x);
+            let start = buf.index_of(x, area.y);
+            let mut shown = 0;
+            for (cell, ch) in buf.content[start..]
+                .iter_mut()
+                .zip(span.content.chars().take(room))
+            {
+                cell.set_char(ch).set_style(span.style);
+                shown += 1;
             }
-            x += shown as u16;
+            x += shown;
         } else {
             let rest = Rect {
                 x,
@@ -157,6 +162,16 @@ pub fn put_line(buf: &mut Buffer, area: Rect, line: &Line) {
         if x == area.right() {
             break;
         }
+    }
+}
+
+/// Whether each char of `text` is a cell of its own: printable ASCII, or one
+/// narrow character. Longer non-ASCII text can hold clusters wider than their chars.
+fn one_cell_per_char(text: &str) -> bool {
+    let mut chars = text.chars();
+    match (chars.next(), chars.next()) {
+        (Some(only), None) => only.width() == Some(1),
+        _ => text.bytes().all(|byte| (0x20..0x7f).contains(&byte)),
     }
 }
 
@@ -226,6 +241,11 @@ mod tests {
                 Span::raw("clipped"),
             ]),
             Line::from(vec![Span::raw("a日"), Span::raw("bcdef")]),
+            Line::from(vec![
+                Span::raw("日"),
+                Span::raw("e\u{301}x"),
+                Span::raw("▎│"),
+            ]),
             Line::from(Span::styled(
                 "bold",
                 Style::default().add_modifier(Modifier::BOLD),
