@@ -415,7 +415,7 @@ async fn paging_keeps_four_rows_and_ctrl_arrows_jump_between_prompts() {
 
     h.ctrl(KeyCode::Home);
     assert!(
-        first_row(&mut h).ends_with("minicore-tui v0.4.0"),
+        first_row(&mut h).ends_with("minicore-tui v0.5.0"),
         "the header tops the transcript"
     );
     assert!(h.screen(60, 24).contains("prompt 0"));
@@ -423,7 +423,7 @@ async fn paging_keeps_four_rows_and_ctrl_arrows_jump_between_prompts() {
     assert_eq!(h.app.scroll, Scroll::Follow);
     h.press(KeyCode::Home);
     assert!(
-        first_row(&mut h).ends_with("minicore-tui v0.4.0"),
+        first_row(&mut h).ends_with("minicore-tui v0.5.0"),
         "home with no draft goes to the top"
     );
     h.press(KeyCode::End);

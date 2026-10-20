@@ -19,6 +19,16 @@
 - A first run writes commented starter files and exits. `/reload` composes the
   Agent config again; `/theme` keeps the comments in `config.toml`.
 
+### Transcript
+
+- A user message card shows when it was sent, `21:38 · 10/20/2026` in local
+  time, on the row under its text; steering cards add `↳ steering`. Live
+  messages take the Agent's `accepted_at`, history the stored timestamp; old
+  history without one shows no row.
+- Rows added to the dock (a steer, a queued follow-up, a notice, an approval)
+  no longer hide the bottom of an anchored view, such as a running tool card:
+  the view gives up rows at its top instead.
+
 ## 0.4.0 — Rewrite
 
 A rewrite of the frontend against `minicore-agent` 0.7.0 (`4102719`) and
