@@ -14,6 +14,7 @@ pub mod rpc;
 pub mod terminal;
 #[cfg(test)]
 pub mod testing;
+pub mod title;
 pub mod transcript;
 pub mod ui;
 

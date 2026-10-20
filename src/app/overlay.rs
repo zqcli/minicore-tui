@@ -1,13 +1,16 @@
 //! The one picker or view that owns input at a time. Its state lives in the
 //! variant, so closing it drops everything it held.
 
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde_json::json;
 
 use super::diff::DiffState;
 use super::tool::ToolState;
-use super::{App, DiffScope, SessionOp, commands, find};
-use crate::protocol::{self, FilesPage, ModelInfo, SessionInfo, ToolRef};
+use super::{App, DiffScope, Msg, SessionOp, commands, find, tasks};
+use crate::protocol::{self, FilesPage, ModelInfo, RpcError, SessionInfo, ToolRef};
+use crate::transcript::NoticeLevel;
 use crate::ui::picker::fuzzy_match;
+use crate::ui::sheets;
 
 #[derive(Debug)]
 pub enum Overlay {
@@ -23,6 +26,8 @@ pub enum Overlay {
         rows: Vec<SessionInfo>,
         /// The session a first Ctrl+D asked to delete.
         armed: Option<String>,
+        /// The new title being typed for the selected session.
+        renaming: Option<String>,
     },
     Models {
         filter: String,
@@ -37,6 +42,10 @@ pub enum Overlay {
         paths: Vec<String>,
     },
     Context,
+    /// `/session`; the item count arrives from `session.read`.
+    SessionInfo {
+        items: Option<usize>,
+    },
     Help {
         scroll: usize,
     },
@@ -64,6 +73,7 @@ pub enum Panel {
     Reasoning,
     Files,
     Context,
+    SessionInfo,
     Help,
     Diff(DiffScope),
     Find,
@@ -107,6 +117,7 @@ impl App {
                 selected: 0,
                 rows: self.session_rows(),
                 armed: None,
+                renaming: None,
             },
             Panel::Models => Overlay::Models {
                 filter: String::new(),
@@ -133,6 +144,10 @@ impl App {
                 self.refresh_context();
                 Overlay::Context
             }
+            Panel::SessionInfo => {
+                self.count_items();
+                Overlay::SessionInfo { items: None }
+            }
             Panel::Help => Overlay::Help { scroll: 0 },
             Panel::Diff(scope) => Overlay::Diff(self.open_diff(scope)),
             Panel::Find => Overlay::Find {
@@ -150,6 +165,183 @@ impl App {
         commands::is_command_line(text)
             .then(|| commands::parse(text).map(|(name, _)| name))
             .flatten()
+    }
+
+    /// The command and the partial argument while the draft is `/name arg`
+    /// for a command whose argument completes.
+    pub fn palette_arg(&self) -> Option<(&str, &str)> {
+        let text = self.composer.text();
+        if !commands::is_command_line(text) {
+            return None;
+        }
+        let (name, rest) = text.strip_prefix('/')?.split_once(char::is_whitespace)?;
+        matches!(name, "model" | "new" | "reasoning" | "theme" | "diff")
+            .then_some((name, rest.trim()))
+    }
+
+    /// The command list's rows as `(name, description)`: the commands for the
+    /// typed name, or the values the command accepts for its argument.
+    pub fn palette_rows(&self) -> Vec<(String, String)> {
+        if let Some((name, filter)) = self.palette_arg() {
+            return self.arg_rows(name, filter);
+        }
+        let Some(query) = self.palette_query() else {
+            return Vec::new();
+        };
+        commands::filter(query, &self.templates)
+            .into_iter()
+            .map(|command| {
+                let detail = if command.args.is_empty() {
+                    command.description.to_owned()
+                } else {
+                    format!("{} — {}", command.args, command.description)
+                };
+                (command.name.to_owned(), detail)
+            })
+            .collect()
+    }
+
+    fn arg_rows(&self, name: &str, filter: &str) -> Vec<(String, String)> {
+        let plain = |values: &[&str]| -> Vec<(String, String)> {
+            values
+                .iter()
+                .map(|value| ((*value).to_owned(), String::new()))
+                .collect()
+        };
+        let mut rows = match name {
+            "model" => self
+                .models
+                .iter()
+                .map(|model| (model.id.clone(), sheets::model_details(model)))
+                .collect(),
+            "new" => self
+                .profiles
+                .iter()
+                .map(|profile| {
+                    let approval = profile.approval.as_deref().unwrap_or_default();
+                    (profile.id.clone(), format!("{} {approval}", profile.model))
+                })
+                .collect(),
+            "reasoning" => self
+                .reasoning_levels()
+                .iter()
+                .map(|level| (level.label().to_owned(), String::new()))
+                .collect(),
+            "theme" => plain(&["dark", "light"]),
+            _ => plain(&["session", "workspace"]),
+        };
+        rows.retain(|(value, _)| fuzzy_match(value, filter));
+        rows.sort_by_key(|(value, _)| (value != filter, !value.starts_with(filter)));
+        rows
+    }
+
+    /// Asks how many history items the session holds.
+    fn count_items(&self) {
+        let fields =
+            json!({"limit": protocol::PROBE_LIMIT, "max_bytes": protocol::PROBE_MAX_BYTES});
+        self.call(
+            protocol::METHOD_SESSION_READ,
+            fields,
+            |result: Result<protocol::ReadSessionResult, _>| {
+                SessionOp::ItemCount(result.map(|page| page.total))
+            },
+        );
+    }
+
+    /// Copies the resident session's id.
+    pub(super) fn copy_session_id(&mut self) {
+        if let Some(session) = &self.session {
+            let id = session.info.session_id.clone();
+            self.copy(id);
+        }
+    }
+
+    /// Ctrl+N in the sessions picker: edits the selected session's title.
+    pub(super) fn start_rename(&mut self) {
+        let Overlay::Sessions {
+            rows,
+            filter,
+            selected,
+            renaming,
+            ..
+        } = &mut self.overlay
+        else {
+            return;
+        };
+        let shown = sheets::filtered_sessions(rows, filter, self.session.as_ref());
+        if let Some(info) = shown.get(*selected) {
+            *renaming = Some(info.title.clone().unwrap_or_default());
+        }
+    }
+
+    /// Keys while a title is being typed in the sessions picker.
+    pub(super) fn on_rename_key(&mut self, key: KeyEvent) {
+        let Overlay::Sessions {
+            rows,
+            filter,
+            selected,
+            renaming: Some(title),
+            ..
+        } = &mut self.overlay
+        else {
+            return;
+        };
+        match key.code {
+            KeyCode::Enter => {
+                let title = std::mem::take(title);
+                let shown = sheets::filtered_sessions(rows, filter, self.session.as_ref());
+                let id = shown.get(*selected).map(|info| info.session_id.clone());
+                if let Overlay::Sessions { renaming, .. } = &mut self.overlay {
+                    *renaming = None;
+                }
+                if let Some(id) = id {
+                    self.rename_session(id, title);
+                }
+            }
+            KeyCode::Backspace => {
+                title.pop();
+            }
+            KeyCode::Char(character) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                title.push(character);
+            }
+            KeyCode::Esc => {
+                if let Overlay::Sessions { renaming, .. } = &mut self.overlay {
+                    *renaming = None;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn rename_session(&self, session_id: String, title: String) {
+        let client = self.client.clone();
+        self.spawn_msg(async move {
+            let params = json!({ "session_id": session_id, "title": title.trim() });
+            Msg::Renamed(tasks::session(client, protocol::METHOD_SESSION_RENAME, params).await)
+        });
+    }
+
+    /// A renamed session replaces its entry in the picker, the catalog and the footer.
+    pub(super) fn on_renamed(&mut self, result: Result<SessionInfo, RpcError>) {
+        let Some(info) = self.ok(result) else {
+            return;
+        };
+        if let Overlay::Sessions { rows, .. } = &mut self.overlay
+            && let Some(row) = rows
+                .iter_mut()
+                .find(|row| row.session_id == info.session_id)
+        {
+            *row = info.clone();
+        }
+        if let Some(session) = self
+            .session
+            .as_mut()
+            .filter(|session| session.info.session_id == info.session_id)
+        {
+            session.info = info.clone();
+        }
+        self.merge_catalog_info(info);
+        self.notice(NoticeLevel::Info, "Session renamed");
     }
 
     /// The `@token` that ends at the cursor, without its `@`.

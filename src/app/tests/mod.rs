@@ -5,5 +5,6 @@ mod diff;
 mod harness;
 mod history;
 mod input;
+mod menus;
 mod session;
 mod turn;

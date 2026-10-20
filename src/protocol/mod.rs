@@ -444,6 +444,9 @@ pub struct ProfileInfo {
     pub id: String,
     pub model: String,
     pub reasoning: Reasoning,
+    /// `auto`, `ask` or `read_only`.
+    #[serde(default)]
+    pub approval: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]

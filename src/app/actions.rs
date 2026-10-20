@@ -3,7 +3,10 @@
 
 use serde_json::{Value, json};
 
-use super::{App, InteractionKind, Msg, Queued, QueuedKind, Scroll, Session, SessionOp, tasks};
+use super::{
+    App, InteractionKind, Msg, Queued, QueuedKind, Scroll, Session, SessionOp, commands, tasks,
+    templates,
+};
 use crate::config::ThemeKind;
 use crate::protocol::{
     self, CompactionPhase, CompactionProgress, Reasoning, SessionResult, TurnSendResult,
@@ -22,9 +25,17 @@ pub enum Action {
     QueueFollowUp,
     OpenSession(String),
     NewSession,
+    /// `/new <profile>`.
+    NewSessionWith(String),
     DeleteSession(String),
     Rename(String),
     SetModel(String),
+    /// `/model <text>`: the text names a model, which may take some resolving.
+    SwitchModel(String),
+    /// Ctrl+P, or Shift+Ctrl+P backwards.
+    CycleModel {
+        forward: bool,
+    },
     SetReasoning(Reasoning),
     SetTheme(ThemeKind),
     ToggleTheme,
@@ -44,6 +55,8 @@ pub enum Action {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Answer {
     Allow,
+    /// Allow now and answer this tool's later approvals without asking.
+    AllowTool,
     Deny,
     /// The row picked from the prompt's options; for an approval, row 0 allows.
     Choice(usize),
@@ -62,13 +75,24 @@ impl App {
                     Msg::Opened(tasks::session(client, protocol::METHOD_SESSION_OPEN, params).await)
                 });
             }
-            Action::NewSession => self.create_session(),
+            Action::NewSession => self.create_session(None),
+            Action::NewSessionWith(profile) if self.profiles.iter().any(|p| p.id == profile) => {
+                self.create_session(Some(profile));
+            }
+            Action::NewSessionWith(profile) => {
+                self.notice(NoticeLevel::Error, format!("Unknown profile {profile}"));
+            }
             Action::DeleteSession(id) => {
                 let client = self.client.clone();
                 self.spawn_msg(tasks::delete_session(client, id));
             }
             Action::Rename(title) => self.rename(&title),
             Action::SetModel(id) => self.update_session(json!({ "model": id })),
+            Action::SwitchModel(text) => match commands::resolve_model(&self.models, &text) {
+                Ok(model) => self.update_session(json!({ "model": model.id })),
+                Err(message) => self.notice(NoticeLevel::Error, message),
+            },
+            Action::CycleModel { forward } => self.cycle_model(forward),
             Action::SetReasoning(level) => self.update_session(json!({ "reasoning": level })),
             Action::Compact => self.compact(),
             Action::CopyLastAnswer => self.copy_last_answer(),
@@ -90,6 +114,7 @@ impl App {
                 ThemeKind::Light => ThemeKind::Dark,
             }),
             Action::ReloadAgent => {
+                self.templates = templates::load();
                 let client = self.client.clone();
                 self.spawn_msg(async move {
                     match client
@@ -110,7 +135,7 @@ impl App {
     fn submit(&mut self) {
         if self.session.is_none() {
             if !self.loading_session {
-                self.create_session();
+                self.create_session(None);
             }
             return;
         }
@@ -231,11 +256,14 @@ impl App {
         self.refresh_context();
     }
 
-    pub(super) fn create_session(&mut self) {
+    pub(super) fn create_session(&mut self, profile: Option<String>) {
         self.loading_session = true;
         // Without a profile the Agent picks its configured default; choosing
         // one here would override that.
         let mut params = self.launch.fields(true);
+        if let Some(profile) = profile {
+            params["profile"] = json!(profile);
+        }
         params["workspace"] = json!(self.workspace);
         let client = self.client.clone();
         self.spawn_msg(async move {
@@ -261,6 +289,26 @@ impl App {
             fields,
             |result: Result<SessionResult, _>| SessionOp::Info(result.map(|r| r.session)),
         );
+    }
+
+    /// Ctrl+P: the next model in the catalog, wrapping at the end.
+    fn cycle_model(&mut self, forward: bool) {
+        let Some(session) = self.session.as_ref() else {
+            return;
+        };
+        if self.models.len() < 2 {
+            self.notice(NoticeLevel::Info, "Only one model is available");
+            return;
+        }
+        let at = self
+            .models
+            .iter()
+            .position(|model| model.id == session.info.model);
+        let delta = if forward { 1 } else { -1 };
+        let next = at.map_or(0, |at| {
+            crate::ui::picker::step(at, delta, self.models.len())
+        });
+        self.update_session(json!({ "model": self.models[next].id }));
     }
 
     fn compact(&mut self) {
@@ -337,7 +385,13 @@ impl App {
             (Answer::Choice(index), InteractionKind::Choice(_)) => {
                 json!({"type": "choice", "index": index})
             }
-            (Answer::Allow | Answer::Choice(0), _) => decision("allow_once"),
+            (Answer::AllowTool | Answer::Choice(2), InteractionKind::Approval) => {
+                if let Some(session) = self.session.as_mut() {
+                    session.allowed_tools.insert(interaction.tool_name.clone());
+                }
+                decision("allow_once")
+            }
+            (Answer::Allow | Answer::AllowTool | Answer::Choice(0), _) => decision("allow_once"),
             (Answer::Deny | Answer::Choice(_), _) => decision("deny"),
         };
         let fields = json!({
@@ -346,6 +400,39 @@ impl App {
             "answer": wire,
         });
         self.call(protocol::METHOD_INTERACTION_ANSWER, fields, SessionOp::Done);
+    }
+
+    /// A new approval: answered at once for a tool allowed for the session,
+    /// else its card is read for the input it would run, which an `edit`
+    /// card only has once it has run.
+    pub(super) fn on_approval_requested(&mut self) {
+        let Some(session) = self.session.as_ref() else {
+            return;
+        };
+        let Some(interaction) = session.interaction.as_ref() else {
+            return;
+        };
+        let approval = matches!(interaction.kind, InteractionKind::Approval);
+        if approval && session.allowed_tools.contains(&interaction.tool_name) {
+            let tool = interaction.tool_name.clone();
+            self.answer(Answer::Allow);
+            self.notice(
+                NoticeLevel::Info,
+                format!("Allowed {tool} for this session"),
+            );
+            return;
+        }
+        let card = session
+            .transcript
+            .find_tool_by_call_id(&interaction.tool_call_id)
+            .filter(|call| call.expanded_input.is_none());
+        if let Some(call) = card {
+            let key = call.key.clone();
+            let hydrated = key.clone();
+            self.read_tool(&key, move |read| {
+                SessionOp::ToolHydrated(hydrated, read.ok())
+            });
+        }
     }
 
     pub(super) fn load_older(&mut self) {

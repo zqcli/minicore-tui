@@ -85,6 +85,10 @@ const KEYS: &[KeyRow] = &[
         action: "model",
     },
     KeyRow {
+        keys: "ctrl+p, shift+ctrl+p",
+        action: "next or previous model",
+    },
+    KeyRow {
         keys: "shift+tab",
         action: "cycle the reasoning level",
     },
@@ -157,7 +161,7 @@ fn entry(key: String, action: &str, styles: Styles, width: usize) -> Vec<Line<'s
 }
 
 /// The key table, then the commands, wrapped to `width`.
-pub fn lines(commands: &[Command], styles: Styles, width: usize) -> Vec<Line<'static>> {
+pub fn lines(commands: &[Command<'static>], styles: Styles, width: usize) -> Vec<Line<'static>> {
     let mut lines = vec![styled("Keys", styles.dim())];
     for row in KEYS {
         lines.extend(entry(row.keys.to_owned(), row.action, styles, width));
@@ -171,7 +175,13 @@ pub fn lines(commands: &[Command], styles: Styles, width: usize) -> Vec<Line<'st
     lines
 }
 
-pub fn render(frame: &mut Frame, area: Rect, styles: Styles, commands: &[Command], scroll: usize) {
+pub fn render(
+    frame: &mut Frame,
+    area: Rect,
+    styles: Styles,
+    commands: &[Command<'static>],
+    scroll: usize,
+) {
     let lines = lines(commands, styles, area.width as usize);
     let bottom = area.bottom().saturating_sub(1);
     let rows = bottom.saturating_sub(area.y + 1) as usize;

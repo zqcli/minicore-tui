@@ -177,7 +177,7 @@ mod tests {
             agent: Some(PathBuf::from("/config/agent")),
             agent_config: Some(PathBuf::from("/config/agent.toml")),
             theme: ThemeKind::Light,
-            editor: Vec::new(),
+            ..crate::config::Config::default()
         };
         let merged = args.with_config(config);
         assert_eq!(

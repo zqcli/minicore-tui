@@ -199,9 +199,10 @@ fn notice_line(notice: &Notice, styles: Styles, width: u16) -> Line<'static> {
     ])
 }
 
-/// `▸ dir@branch · model · reasoning · state · 3m · queued` and, right-aligned,
-/// `↑in ↓out Rcache · ctx N%`. Short of room, the directory and model give way
-/// first, then the elapsed time and queue mark; the reasoning level stays.
+/// `▸ dir@branch · model · reasoning · profile · state · 3m · queued` and,
+/// right-aligned, `↑in ↓out Rcache · ctx N%`. Short of room, the directory and
+/// branch give way first, then the elapsed time and queue mark, then the model;
+/// the reasoning level stays.
 fn footer(app: &App, styles: Styles, width: u16) -> Line<'static> {
     let width = usize::from(width);
     let session = app.session.as_ref();
@@ -211,42 +212,48 @@ fn footer(app: &App, styles: Styles, width: u16) -> Line<'static> {
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_else(|| app.workspace.display().to_string());
-    let mut prefix = vec![
-        Span::styled("▸ ", styles.text()),
-        Span::styled(wrap::truncate(&workspace, 20), styles.text()),
-    ];
-    if let Some(branch) = session
+    let branch = session
         .and_then(|session| session.presentation.as_ref())
         .and_then(|presentation| presentation.git_branch.as_deref())
-        .filter(|branch| !branch.trim().is_empty())
-    {
-        let branch = format!("@{}", wrap::truncate(branch, 16));
-        prefix.push(Span::styled(branch, styles.mint()));
-    }
-    if let Some(session) = session {
-        prefix.push(Span::styled(" · ", styles.meta()));
+        .filter(|branch| !branch.trim().is_empty());
+
+    let model = session.map_or_else(Vec::new, |session| {
         let model = wrap::truncate(&model_label(&session.info.model), 24);
-        prefix.push(Span::styled(model, styles.user_rail()));
-    }
+        vec![Span::styled(model, styles.user_rail())]
+    });
 
     let mut priority = Vec::new();
     if let Some(session) = session {
         priority.push(Span::styled(session.info.reasoning.label(), styles.amber()));
     }
-    let state = if app.compacting() {
-        Some("compacting")
+    let mut extras = Vec::new();
+    if let Some(profile) = session.and_then(|session| guarded_profile(app, session)) {
+        extras.push(Span::styled(profile.to_owned(), styles.reasoning_rail()));
+    }
+    if let Some(session) = session.filter(|session| !session.allowed_tools.is_empty()) {
+        let tools: Vec<&str> = session.allowed_tools.iter().map(String::as_str).collect();
+        extras.push(Span::styled(
+            format!("allow {}", tools.join(",")),
+            styles.amber(),
+        ));
+    }
+    let state = if app.has_interaction() {
+        Some(("approval", styles.amber()))
+    } else if app.compacting() {
+        Some(("compacting", styles.user_rail()))
     } else if app.is_busy() {
-        Some("working")
+        Some(("working", styles.user_rail()))
     } else if !app.ready || app.loading_session {
-        Some("connecting")
+        Some(("connecting", styles.user_rail()))
     } else {
         None
     };
-    if let Some(state) = state {
+    extras.extend(state.map(|(text, style)| Span::styled(text, style)));
+    for extra in extras {
         if !priority.is_empty() {
             priority.push(Span::styled(" · ", styles.meta()));
         }
-        priority.push(Span::styled(state, styles.user_rail()));
+        priority.push(extra);
     }
 
     let mut suffix = Vec::new();
@@ -270,8 +277,17 @@ fn footer(app: &App, styles: Styles, width: u16) -> Line<'static> {
     } else {
         width - right_width - 1
     };
-    let mut groups = [prefix, priority, suffix];
-    for index in [0, 2, 1] {
+    let mut groups = [Vec::new(), model, priority, suffix];
+    // The identity takes whatever the rest leaves.
+    let rest = spans_width(&join(&groups, styles));
+    let separator = if rest > 0 { 3 } else { 0 };
+    groups[0] = identity(
+        &workspace,
+        branch,
+        room.saturating_sub(rest + separator),
+        styles,
+    );
+    for index in [3, 1, 2] {
         let over = spans_width(&join(&groups, styles)).saturating_sub(room);
         if over == 0 {
             break;
@@ -291,6 +307,45 @@ fn footer(app: &App, styles: Styles, width: u16) -> Line<'static> {
         spans.extend(right);
     }
     Line::from(spans)
+}
+
+/// The session's profile when it asks before acting, which the footer would
+/// otherwise never reveal.
+fn guarded_profile<'a>(app: &App, session: &'a Session) -> Option<&'a str> {
+    let profile = app
+        .profiles
+        .iter()
+        .find(|profile| profile.id == session.info.profile)?;
+    let approval = profile.approval.as_deref()?;
+    (approval != "auto").then_some(session.info.profile.as_str())
+}
+
+/// `▸ dir@branch` in at most `room` cells: the directory is cut first (to 6
+/// cells at the least), then the branch goes, then the whole thing.
+fn identity(
+    workspace: &str,
+    branch: Option<&str>,
+    room: usize,
+    styles: Styles,
+) -> Vec<Span<'static>> {
+    let branch = branch.map(|branch| format!("@{}", wrap::truncate(branch, 16)));
+    let branch_width = branch.as_deref().map_or(0, wrap::width);
+    let workspace = wrap::truncate(workspace, 20);
+    let (name, branch) = if 2 + wrap::width(&workspace) + branch_width <= room {
+        (workspace, branch)
+    } else if room >= 2 + 6 + branch_width {
+        (wrap::truncate(&workspace, room - 2 - branch_width), branch)
+    } else if room >= 2 + 4 {
+        (wrap::truncate(&workspace, room - 2), None)
+    } else {
+        return Vec::new();
+    };
+    let mut spans = vec![
+        Span::styled("▸ ", styles.text()),
+        Span::styled(name, styles.text()),
+    ];
+    spans.extend(branch.map(|branch| Span::styled(branch, styles.mint())));
+    spans
 }
 
 /// `↑in ↓out Rcache · ctx N%`, each part once known; the context share turns amber from 70 %.

@@ -301,6 +301,7 @@ async fn run() -> i32 {
             frames.drawn(started.elapsed());
             next_frame = tokio::time::Instant::now() + FRAME;
         }
+        app.sync_terminal();
         if app.quit {
             break;
         }
@@ -309,6 +310,7 @@ async fn run() -> i32 {
     let _ = client.shutdown().await;
     let _ = guard.restore();
     frames.print(&app);
+    print!("{}", app.exit_output());
     boot.abort();
     0
 }

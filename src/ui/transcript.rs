@@ -18,7 +18,7 @@ use unicode_segmentation::UnicodeSegmentation;
 use super::markdown::StreamRenderer;
 use super::theme::Styles;
 use super::{blocks, selection, views};
-use crate::app::{App, Scroll};
+use crate::app::{App, Overlay, Scroll, find};
 use crate::transcript::layout::{Fold, Layout, Rows, Viewport};
 use crate::transcript::{Block, RequestKey};
 
@@ -207,6 +207,14 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, styles: Styles) {
         for (index, row) in rows.iter_mut().enumerate() {
             if let Some(span) = selection::row_span(area.y + index as u16, drag, area) {
                 *row = Cow::Owned(highlight(row, span.start, span.end));
+            }
+        }
+    }
+    if let Overlay::Find { query, .. } = &app.overlay {
+        let style = styles.amber().add_modifier(Modifier::REVERSED);
+        for row in &mut rows {
+            if let Some(marked) = find::mark(row, query, style) {
+                *row = Cow::Owned(marked);
             }
         }
     }

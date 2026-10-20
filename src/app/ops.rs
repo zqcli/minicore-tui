@@ -52,6 +52,13 @@ impl App {
                     self.merge_catalog_info(info);
                 }
             }
+            SessionOp::ItemCount(result) => {
+                if let Some(total) = self.ok(result)
+                    && let Overlay::SessionInfo { items } = &mut self.overlay
+                {
+                    *items = Some(total);
+                }
+            }
             SessionOp::Changes(loop_id, result) => self.on_changes(&loop_id, result),
             SessionOp::ToolRead(key, result) => {
                 if let Some(read) = self.ok(result)
@@ -201,6 +208,7 @@ impl App {
                     .as_ref()
                     .map_or(&[][..], |session| session.transcript.blocks()),
                 query,
+                self.show_reasoning,
             );
             *current = shown
                 .and_then(|block| matches.iter().position(|found| found.block == block))
@@ -403,10 +411,14 @@ impl App {
             let session = self.session_mut();
             let was_compacting = session.compaction.is_some();
             let usage = matches!(event, AgentEvent::RequestUsage { .. });
+            let requested = matches!(event, AgentEvent::InteractionRequested { .. });
             let started = session.apply_event(event);
             let compaction_ended = was_compacting && session.compaction.is_none();
             if let Some(turn) = started {
                 self.start_turn(turn);
+            }
+            if requested {
+                self.on_approval_requested();
             }
             // The footer's context figure moves with each request and each
             // compaction, not only at the turn's end.

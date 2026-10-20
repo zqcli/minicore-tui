@@ -667,7 +667,6 @@ pub fn turn_end_line(
     parts.join(" · ")
 }
 
-
 /// A compaction marker: a labelled box whose summary opens with Ctrl+O.
 fn compaction(
     before: Option<u64>,
