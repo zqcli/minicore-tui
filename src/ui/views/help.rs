@@ -8,6 +8,7 @@ use crate::app::commands::Command;
 
 use super::{chrome, styled};
 use crate::ui::theme::Styles;
+use crate::ui::wrap::wrap;
 
 struct KeyRow {
     keys: &'static str,
@@ -113,44 +114,72 @@ const KEYS: &[KeyRow] = &[
     },
 ];
 
-/// The key table, then the commands.
-pub fn lines(commands: &[Command], styles: Styles) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
-    lines.push(styled("Keys", styles.dim()));
+/// Width of the key column; a description wraps in what is left.
+const KEY_COLUMN: usize = 28;
+
+/// Below this the description goes under its key instead of beside it.
+const SIDE_BY_SIDE: usize = KEY_COLUMN + 24;
+
+/// One key or command and its description: side by side with a hanging indent
+/// when `width` allows, else the description wrapped under the key.
+fn entry(key: String, action: &str, styles: Styles, width: usize) -> Vec<Line<'static>> {
+    let key = Span::styled(format!("{key:<KEY_COLUMN$}"), styles.accent());
+    if width >= SIDE_BY_SIDE {
+        let mut rows = wrap(action, width - KEY_COLUMN).into_iter();
+        let first = rows.next().unwrap_or_default();
+        let mut lines = vec![Line::from(vec![key, Span::styled(first, styles.text())])];
+        lines.extend(rows.map(|row| {
+            Line::from(vec![
+                Span::raw(" ".repeat(KEY_COLUMN)),
+                Span::styled(row, styles.text()),
+            ])
+        }));
+        return lines;
+    }
+    let mut lines = vec![Line::from(Span::styled(
+        key.content.trim_end().to_owned(),
+        styles.accent(),
+    ))];
+    lines.extend(
+        wrap(action, width.saturating_sub(2).max(1))
+            .into_iter()
+            .map(|row| Line::from(Span::styled(format!("  {row}"), styles.text()))),
+    );
+    lines
+}
+
+/// The key table, then the commands, wrapped to `width`.
+pub fn lines(commands: &[Command], styles: Styles, width: usize) -> Vec<Line<'static>> {
+    let mut lines = vec![styled("Keys", styles.dim())];
     for row in KEYS {
-        lines.push(Line::from(vec![
-            Span::styled(format!("{:<28}", row.keys), styles.accent()),
-            Span::styled(row.action, styles.text()),
-        ]));
+        lines.extend(entry(row.keys.to_owned(), row.action, styles, width));
     }
     lines.push(Line::from(""));
     lines.push(styled("Commands", styles.dim()));
     for command in commands {
-        lines.push(Line::from(vec![
-            Span::styled(format!("/{:<27}", command.name), styles.accent()),
-            Span::styled(command.description, styles.text()),
-        ]));
+        let name = format!("/{}", command.name);
+        lines.extend(entry(name, command.description, styles, width));
     }
     lines
 }
 
-pub fn render(
-    frame: &mut Frame,
-    area: Rect,
-    styles: Styles,
-    lines: &[Line<'static>],
-    scroll: usize,
-) {
-    chrome(
-        frame,
-        area,
-        styles,
-        "Help",
-        &[("pgup/pgdn", "scroll"), ("esc", "back")],
-    );
+pub fn render(frame: &mut Frame, area: Rect, styles: Styles, commands: &[Command], scroll: usize) {
+    let lines = lines(commands, styles, area.width as usize);
     let bottom = area.bottom().saturating_sub(1);
     let rows = bottom.saturating_sub(area.y + 1) as usize;
-    let start = scroll.min(lines.len());
+    let start = scroll.min(lines.len().saturating_sub(rows));
+    let position = format!(
+        "scroll · lines {}–{} of {}",
+        start + 1,
+        (start + rows).min(lines.len()),
+        lines.len()
+    );
+    let hints = if lines.len() > rows {
+        vec![("pgup/pgdn", position.as_str()), ("esc", "back")]
+    } else {
+        vec![("esc", "back")]
+    };
+    chrome(frame, area, styles, "Help", &hints);
     for (row, line) in lines.iter().skip(start).take(rows).enumerate() {
         frame
             .buffer_mut()
@@ -164,36 +193,75 @@ mod tests {
     use super::*;
     use crate::app::commands::COMMANDS;
     use crate::ui::theme::Palette;
+    use crate::ui::wrap::width as cells;
+
+    fn styles() -> Styles {
+        Styles::of(Palette::dark())
+    }
+
+    fn text(lines: &[Line<'static>]) -> Vec<String> {
+        lines.iter().map(Line::to_string).collect()
+    }
 
     #[test]
     fn help_lists_every_key_row_and_command() {
-        let styles = Styles::of(Palette::dark());
-        let lines = lines(COMMANDS, styles);
-        let text: String = lines
-            .iter()
-            .map(|line| {
-                line.spans
-                    .iter()
-                    .map(|span| span.content.as_ref())
-                    .collect::<String>()
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
+        let text = text(&lines(COMMANDS, styles(), 80)).join("\n");
         assert!(text.contains("ctrl+f"), "{text}");
         assert!(text.contains("/compact"), "{text}");
         assert!(text.contains("Compact the session context now"), "{text}");
     }
 
     #[test]
-    fn help_scrolling_shows_a_later_window() {
-        let styles = Styles::of(Palette::dark());
-        let lines = lines(&[], styles);
-        let text = capture(
-            |frame| render(frame, frame.area(), styles, &lines, 5),
-            80,
-            10,
-        );
+    fn help_scrolling_shows_a_later_window_and_where_it_is() {
+        let total = lines(COMMANDS, styles(), 80).len();
+        let shot = |scroll| {
+            capture(
+                |frame| render(frame, frame.area(), styles(), COMMANDS, scroll),
+                80,
+                10,
+            )
+        };
+        let text = shot(5);
         assert!(text[0].starts_with("← Help"), "{:?}", text[0]);
         assert!(!text.join("\n").contains("send, or steer"), "{text:?}");
+        assert!(
+            text[9].contains(&format!("lines 6–13 of {total}")),
+            "{:?}",
+            text[9]
+        );
+        // Scrolling past the end stops at the last window.
+        let last = shot(999);
+        assert!(
+            last[9].contains(&format!("lines {}–{total} of {total}", total - 7)),
+            "{:?}",
+            last[9]
+        );
+    }
+
+    #[test]
+    fn narrow_help_wraps_without_losing_a_word() {
+        let words = |rows: &[String]| -> Vec<String> {
+            rows.iter()
+                .flat_map(|row| row.split_whitespace().map(str::to_owned))
+                .collect()
+        };
+        let mut expected = vec!["Keys".to_owned()];
+        for row in KEYS {
+            expected.extend(words(&[row.keys.to_owned(), row.action.to_owned()]));
+        }
+        expected.push("Commands".to_owned());
+        for command in COMMANDS {
+            expected.extend(words(&[
+                format!("/{}", command.name),
+                command.description.to_owned(),
+            ]));
+        }
+        for width in [30, 50, 60, 80] {
+            let rows = text(&lines(COMMANDS, styles(), width));
+            assert_eq!(words(&rows), expected, "width {width}");
+            for row in &rows {
+                assert!(cells(row) <= width, "{row:?} at width {width}");
+            }
+        }
     }
 }

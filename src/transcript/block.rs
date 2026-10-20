@@ -319,6 +319,12 @@ impl ToolCall {
         }
     }
 
+    /// A call that has started and not finished; one still waiting on approval
+    /// or input has not.
+    pub fn is_running(&self) -> bool {
+        !self.state.is_terminal() && self.started_at.is_some()
+    }
+
     /// Whether the card shows its expanded body under the global fold.
     pub fn is_expanded(&self, all_expanded: bool) -> bool {
         self.expanded.unwrap_or(all_expanded)
@@ -330,8 +336,18 @@ impl ToolCall {
         self.expanded = (expanded != all_expanded).then_some(expanded);
     }
 
-    /// The header detail; the paths of a patch replace the Agent's `tool apply_patch` placeholder.
+    /// The header detail: the command that ran for `bash`, since the Agent's
+    /// summary can name another one; the paths of a patch replace its
+    /// `tool apply_patch` placeholder.
     pub fn header_detail(&self) -> String {
+        if self.name == "bash"
+            && let Some(command) = self
+                .expanded_input
+                .as_deref()
+                .and_then(|input| input.lines().find(|line| !line.trim().is_empty()))
+        {
+            return format!("$ {}", command.trim());
+        }
         if !self.detail.is_empty() && !self.detail.starts_with("tool ") {
             return self.detail.clone();
         }

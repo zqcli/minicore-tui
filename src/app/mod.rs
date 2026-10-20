@@ -317,6 +317,7 @@ impl App {
         });
         self.flash = self.flash.take().filter(|(_, at)| at.elapsed() < FLASH_TTL);
         self.watch_context();
+        self.refresh_running_cards();
     }
 
     /// Whether something on screen moves with the clock.

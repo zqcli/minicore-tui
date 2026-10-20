@@ -96,12 +96,15 @@ pub fn stream_rows(streams: &[(String, Option<StreamText>)]) -> Vec<ToolRow> {
     rows
 }
 
-/// The call's input, empty when it only repeats the detail (a bash command).
+/// The call's input: a bash command always, since the detail is a summary
+/// that can name another one; any other input only when it adds to the detail.
 fn tool_input(call: &ToolCall) -> &str {
-    call.expanded_input
-        .as_deref()
-        .filter(|input| input.trim() != call.detail.trim())
-        .unwrap_or_default()
+    let input = call.expanded_input.as_deref().unwrap_or_default();
+    if call.name == "bash" || input.trim() != call.detail.trim() {
+        input
+    } else {
+        ""
+    }
 }
 
 /// The text of the tool view, input then output, for `c`.
@@ -155,9 +158,14 @@ pub fn render(
     );
     let mut y = area.y + 1;
     let bottom = area.bottom().saturating_sub(1);
-    if !call.detail.is_empty() {
-        let detail = styled(&sanitize(&call.detail), styles.dim());
-        frame.buffer_mut().set_line(area.x, y, &detail, area.width);
+    let heading = match (call.name == "bash", call.detail.is_empty()) {
+        (true, _) if !tool_input(call).is_empty() => "command",
+        (_, false) => call.detail.as_str(),
+        _ => "",
+    };
+    if !heading.is_empty() {
+        let heading = styled(&sanitize(heading), styles.dim());
+        frame.buffer_mut().set_line(area.x, y, &heading, area.width);
         y += 1;
     }
     for text in tool_input(call).lines() {

@@ -83,15 +83,17 @@ impl RenderState {
         });
         stream.text.reset(text);
         stream.reasoning.reset(&blocks::reasoning_source(reasoning));
+        let thinking: Vec<&Line<'static>> = stream
+            .reasoning
+            .rows(&styles)
+            .iter()
+            .flat_map(|chunk| chunk.iter())
+            .collect();
         let mut head = blocks::thinking_rows(
-            reasoning,
-            stream
-                .reasoning
-                .rows(&styles)
-                .iter()
-                .flat_map(|chunk| chunk.iter()),
+            &thinking,
             expanded.unwrap_or(fold.expanded),
             fold.show_reasoning,
+            text.trim().is_empty(),
             styles,
             width as usize,
         );

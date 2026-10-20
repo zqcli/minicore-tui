@@ -69,10 +69,7 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App, styles: Styles) -> bool {
             let lines = context::lines(app.session.as_ref(), styles);
             context::render(frame, area, styles, &lines);
         }
-        Overlay::Help { scroll } => {
-            let lines = help::lines(COMMANDS, styles);
-            help::render(frame, area, styles, &lines, *scroll);
-        }
+        Overlay::Help { scroll } => help::render(frame, area, styles, COMMANDS, *scroll),
         _ => return false,
     }
     super::transcript::draw_flash(frame, area, app, styles);
