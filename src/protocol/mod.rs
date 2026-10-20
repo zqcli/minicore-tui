@@ -426,6 +426,9 @@ pub struct ModelListResult {
 #[derive(Clone, Debug, Deserialize)]
 pub struct ModelInfo {
     pub id: String,
+    /// `provider/model`.
+    pub model_ref: Option<String>,
+    pub context_window: Option<u64>,
     pub supported_reasoning: Vec<Reasoning>,
 }
 

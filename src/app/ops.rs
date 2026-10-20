@@ -2,7 +2,6 @@
 
 use serde_json::{Value, json};
 
-use super::overlay::matching_paths;
 use super::tasks::{self, History, Window};
 use super::{App, LiveTurn, Overlay, Scroll, Session, SessionOp};
 use crate::protocol::{
@@ -84,15 +83,10 @@ impl App {
             }
             SessionOp::Files(result) => {
                 if let Some(found) = self.ok(result)
-                    && let Overlay::Files {
-                        filter,
-                        selected,
-                        paths,
-                    } = &mut self.overlay
+                    && let Overlay::Files { selected, paths } = &mut self.overlay
                 {
                     *paths = found;
-                    let last = matching_paths(paths, filter).len().saturating_sub(1);
-                    *selected = (*selected).min(last);
+                    *selected = 0;
                 }
             }
             SessionOp::ChangeFiles(scope, result) => self.on_change_files(scope, result),

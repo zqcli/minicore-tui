@@ -3,76 +3,94 @@
 use super::Action;
 use crate::protocol::Reasoning;
 
-/// One palette entry: the command name and a one-line description.
+/// One palette entry: the command name, its argument hint and a one-line description.
 pub struct Command {
     pub name: &'static str,
+    /// `<required>` or `[optional]`, empty when the command takes no argument.
+    pub args: &'static str,
     pub description: &'static str,
 }
 
 pub const COMMANDS: &[Command] = &[
     Command {
-        name: "new",
-        description: "Start a new session",
-    },
-    Command {
-        name: "sessions",
-        description: "Open or delete a session",
-    },
-    Command {
-        name: "resume",
-        description: "Open or delete a session",
-    },
-    Command {
-        name: "rename",
-        description: "Rename this session",
-    },
-    Command {
         name: "model",
-        description: "Switch the model",
+        args: "",
+        description: "Select the model (opens the selector)",
     },
     Command {
         name: "reasoning",
-        description: "Switch the reasoning level",
-    },
-    Command {
-        name: "compact",
-        description: "Compact the context now",
+        args: "[level]",
+        description: "Set the reasoning level, or pick one",
     },
     Command {
         name: "diff",
-        description: "Review the changes",
+        args: "[session|workspace]",
+        description: "Review file changes (the last turn by default)",
     },
     Command {
         name: "tool",
+        args: "",
         description: "Show the full output of a tool call",
     },
     Command {
         name: "context",
+        args: "",
         description: "Show context usage",
     },
     Command {
-        name: "copy",
-        description: "Copy the last answer",
-    },
-    Command {
         name: "export",
+        args: "[path]",
         description: "Export the conversation as Markdown",
     },
     Command {
-        name: "theme",
-        description: "Switch the color theme",
+        name: "copy",
+        args: "",
+        description: "Copy the last answer to the clipboard",
     },
     Command {
-        name: "reload",
-        description: "Reload the agent configuration",
+        name: "rename",
+        args: "<title>",
+        description: "Rename this session",
+    },
+    Command {
+        name: "theme",
+        args: "[dark|light]",
+        description: "Switch the colour theme",
     },
     Command {
         name: "help",
+        args: "",
         description: "Show keys and commands",
     },
     Command {
+        name: "new",
+        args: "",
+        description: "Start a new session",
+    },
+    Command {
+        name: "compact",
+        args: "",
+        description: "Compact the session context now",
+    },
+    Command {
+        name: "resume",
+        args: "",
+        description: "Resume a different session",
+    },
+    Command {
+        name: "sessions",
+        args: "",
+        description: "Open, filter or delete sessions",
+    },
+    Command {
+        name: "reload",
+        args: "",
+        description: "Reload the agent configuration",
+    },
+    Command {
         name: "quit",
-        description: "Exit minicore-tui",
+        args: "",
+        description: "Quit minicore-tui",
     },
 ];
 
@@ -134,17 +152,29 @@ pub fn execute(name: &str, arg: &str) -> Option<Executed> {
     })
 }
 
-/// Commands matching a palette filter, in table order.
+/// Commands matching a palette filter: an exact name, then name prefixes,
+/// then other fuzzy matches, each in table order.
 pub fn filter(input: &str) -> Vec<&'static Command> {
-    COMMANDS
+    let mut matches: Vec<&Command> = COMMANDS
         .iter()
         .filter(|command| crate::ui::picker::fuzzy_match(command.name, input))
-        .collect()
+        .collect();
+    matches.sort_by_key(|command| (command.name != input, !command.name.starts_with(input)));
+    matches
 }
 
-/// Whether the composer holds a command line that should open the palette.
-pub fn opens_palette(composer: &str) -> bool {
+/// Whether the composer holds a one-line `/command` draft.
+pub fn is_command_line(composer: &str) -> bool {
     composer.starts_with('/') && !composer.contains('\n')
+}
+
+/// The notice for a command run without the argument it needs.
+pub fn needs_argument(name: &str) -> String {
+    let args = COMMANDS
+        .iter()
+        .find(|command| command.name == name)
+        .map_or("an argument", |command| command.args);
+    format!("/{name} needs {args}")
 }
 
 #[cfg(test)]
@@ -164,6 +194,22 @@ mod tests {
         assert_eq!(names, ["reasoning"]);
         assert_eq!(filter("").len(), COMMANDS.len());
         assert!(filter("zzz").is_empty());
+        assert!(filter("usr/local/bin").is_empty(), "a path matches nothing");
+    }
+
+    #[test]
+    fn exact_and_prefix_matches_rank_first() {
+        let names = |input| -> Vec<&str> { filter(input).iter().map(|c| c.name).collect() };
+        assert_eq!(names("mo")[0], "model");
+        assert_eq!(names("res"), ["resume", "reasoning"]);
+        assert_eq!(names("re")[..3], ["reasoning", "rename", "resume"]);
+        assert_eq!(names("new")[0], "new");
+    }
+
+    #[test]
+    fn a_missing_argument_names_the_hint() {
+        assert_eq!(needs_argument("rename"), "/rename needs <title>");
+        assert_eq!(needs_argument("theme"), "/theme needs [dark|light]");
     }
 
     #[test]

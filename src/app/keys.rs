@@ -3,12 +3,12 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
-use super::overlay::matching_paths;
+use super::overlay::{matching_models, matching_paths};
 use super::{Action, Answer, App, Overlay, Panel, Scroll, find};
 use crate::app::commands::{self, Executed};
 use crate::protocol::Reasoning;
 use crate::transcript::{Block, NoticeLevel};
-use crate::ui::{blocks, selection, sheets};
+use crate::ui::{blocks, picker, selection, sheets};
 
 /// A second Ctrl+C within this long of the first quits.
 const QUIT_WINDOW: std::time::Duration = std::time::Duration::from_millis(500);
@@ -26,7 +26,147 @@ impl App {
         if self.has_interaction() {
             return self.on_interaction_key(key);
         }
-        self.on_composer_key(key)
+        self.on_composer_input(key)
+    }
+
+    /// A composer key, then the completion list brought in step with the draft.
+    fn on_composer_input(&mut self, key: KeyEvent) -> Option<Action> {
+        let before = self.composer.text().to_owned();
+        let action = self.on_composer_key(key);
+        let edited = self.composer.text() != before;
+        let typed = edited
+            && matches!(
+                key.code,
+                KeyCode::Char(_) | KeyCode::Backspace | KeyCode::Delete
+            );
+        self.sync_completion(edited, typed);
+        action
+    }
+
+    /// Keeps the inline completion list in step with the draft: an edit resets
+    /// the selection to the best match and a draft it no longer fits closes it.
+    /// Typing in the `/name` of a one-line draft opens the command list.
+    fn sync_completion(&mut self, edited: bool, typed: bool) {
+        let fits = match self.overlay {
+            Overlay::Palette { .. } => self.palette_query().is_some(),
+            Overlay::Files { .. } => self.mention_query().is_some(),
+            Overlay::None => {
+                if typed && self.palette_query().is_some() && self.word_start() == 0 {
+                    self.overlay = Overlay::Palette { selected: 0 };
+                }
+                return;
+            }
+            _ => return,
+        };
+        match &mut self.overlay {
+            _ if !fits => self.overlay = Overlay::None,
+            Overlay::Palette { selected } | Overlay::Files { selected, .. } if edited => {
+                *selected = 0;
+            }
+            _ => {}
+        }
+    }
+
+    /// Rows the completion list offers for the current draft.
+    fn completion_len(&self) -> usize {
+        match &self.overlay {
+            Overlay::Palette { .. } => self
+                .palette_query()
+                .map_or(0, |query| commands::filter(query).len()),
+            Overlay::Files { paths, .. } => self
+                .mention_query()
+                .map_or(0, |query| matching_paths(paths, query).len()),
+            _ => 0,
+        }
+    }
+
+    /// Keys while the completion list is open. It takes the arrows, Tab, Enter
+    /// and Esc while it has rows; every other key edits the draft that filters it.
+    fn on_completion_key(&mut self, key: KeyEvent) -> Option<Action> {
+        let rows = self.completion_len();
+        let plain = key.modifiers.is_empty();
+        match key.code {
+            // The draft stays: it may be a path rather than a command.
+            KeyCode::Esc => self.overlay = Overlay::None,
+            KeyCode::Up if plain && rows > 0 => self.overlay_move(-1),
+            KeyCode::Down if plain && rows > 0 => self.overlay_move(1),
+            KeyCode::Tab if plain && rows > 0 => self.apply_completion(),
+            KeyCode::Enter if plain && rows > 0 => return self.accept_completion(),
+            // An `@` with no match never sends the draft by accident.
+            KeyCode::Enter if plain && matches!(self.overlay, Overlay::Files { .. }) => {}
+            // No command matches: the line is a prompt.
+            KeyCode::Enter if plain => {
+                self.overlay = Overlay::None;
+                return self.on_composer_input(key);
+            }
+            _ => return self.on_composer_input(key),
+        }
+        None
+    }
+
+    /// The selected command or path, if the list has one.
+    fn selected_completion(&self) -> Option<String> {
+        match &self.overlay {
+            Overlay::Palette { selected } => commands::filter(self.palette_query()?)
+                .get(*selected)
+                .map(|command| command.name.to_owned()),
+            Overlay::Files { selected, paths } => matching_paths(paths, self.mention_query()?)
+                .get(*selected)
+                .map(|path| (*path).clone()),
+            _ => None,
+        }
+    }
+
+    /// Tab: puts the selected completion into the draft and closes the list.
+    /// A command keeps the argument typed after it; a path ends the `@` token.
+    fn apply_completion(&mut self) {
+        let Some(choice) = self.selected_completion() else {
+            return;
+        };
+        match std::mem::replace(&mut self.overlay, Overlay::None) {
+            Overlay::Palette { .. } => {
+                let text = self.composer.text();
+                let rest = &text[text.find(char::is_whitespace).unwrap_or(text.len())..];
+                let rest = if rest.trim().is_empty() { " " } else { rest };
+                self.composer.restore_text(&format!("/{choice}{rest}"));
+            }
+            _ => {
+                let start = self.word_start();
+                while self.composer.cursor() > start {
+                    self.composer.backspace();
+                }
+                self.composer.insert(&format!("@{choice} "));
+            }
+        }
+    }
+
+    /// Enter: a command runs with the argument typed after its name, which
+    /// may belong to another fuzzy match than the typed name; a path is inserted.
+    fn accept_completion(&mut self) -> Option<Action> {
+        if !matches!(self.overlay, Overlay::Palette { .. }) {
+            self.apply_completion();
+            return None;
+        }
+        let name = self.selected_completion()?;
+        let arg = commands::parse(self.composer.text()).map_or("", |(_, arg)| arg);
+        match commands::execute(&name, arg) {
+            Some(Executed::Action(action)) => {
+                self.overlay = Overlay::None;
+                self.composer.clear();
+                Some(action)
+            }
+            Some(Executed::Panel(panel)) => {
+                self.composer.clear();
+                self.open_panel(panel);
+                None
+            }
+            // The completed name stays in the draft for the argument it needs.
+            _ => {
+                self.apply_completion();
+                self.notice(NoticeLevel::Error, commands::needs_argument(&name));
+                None
+            }
+        }
     }
 
     /// Approval prompts own the keyboard until answered; other keys are
@@ -54,16 +194,18 @@ impl App {
     }
 
     fn on_overlay_key(&mut self, key: KeyEvent) -> Option<Action> {
+        if matches!(
+            self.overlay,
+            Overlay::Palette { .. } | Overlay::Files { .. }
+        ) {
+            return self.on_completion_key(key);
+        }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let tool = matches!(self.overlay, Overlay::Tool(_));
         let scrolling = tool || matches!(self.overlay, Overlay::Diff(_));
         let page = self.viewport_rows().saturating_sub(2) as isize;
         match key.code {
-            KeyCode::Esc => match std::mem::replace(&mut self.overlay, Overlay::None) {
-                Overlay::Palette { .. } => self.discard_command_draft(),
-                Overlay::Files { .. } => self.discard_mention(),
-                _ => {}
-            },
+            KeyCode::Esc => self.overlay = Overlay::None,
             KeyCode::Char('[') | KeyCode::Left if tool => self.step_tool(-1),
             KeyCode::Char(']') | KeyCode::Right if tool => self.step_tool(1),
             KeyCode::PageUp if scrolling => self.scroll_view(-page),
@@ -80,22 +222,10 @@ impl App {
             KeyCode::Tab | KeyCode::Down => self.overlay_move(1),
             KeyCode::PageUp => self.overlay_move(-10),
             KeyCode::PageDown => self.overlay_move(10),
-            KeyCode::Backspace if matches!(self.overlay, Overlay::Palette { .. }) => {
-                self.composer.backspace();
-                self.refresh_palette();
-            }
             KeyCode::Backspace => self.overlay_filter_push(None),
             KeyCode::Char('d') if ctrl => self.delete_confirm(),
             KeyCode::Char('r') if matches!(self.overlay, Overlay::Context) => {
                 self.refresh_context();
-            }
-            // The palette is driven by the composer line, so its arguments
-            // (`/rename <title>`, `/export <path>`) stay typable.
-            KeyCode::Char(character)
-                if !ctrl && matches!(self.overlay, Overlay::Palette { .. }) =>
-            {
-                self.composer.type_char(character);
-                self.refresh_palette();
             }
             KeyCode::Char(character) if !ctrl => self.overlay_filter_push(Some(character)),
             _ => {}
@@ -170,27 +300,24 @@ impl App {
     /// Moves the selected row of the active overlay by `delta`.
     pub fn overlay_move(&mut self, delta: isize) {
         let len = match &self.overlay {
-            Overlay::Palette { filter, .. } => commands::filter(filter).len(),
+            Overlay::Palette { .. } | Overlay::Files { .. } => self.completion_len(),
             Overlay::Sessions { rows, filter, .. } => {
                 sheets::filtered_sessions(rows, filter, self.session.as_ref()).len()
             }
-            Overlay::Models { .. } => self.models.len(),
+            Overlay::Models { filter, .. } => matching_models(&self.models, filter).len(),
             Overlay::Reasoning { .. } => self.reasoning_levels().len(),
-            Overlay::Files { paths, filter, .. } => matching_paths(paths, filter).len(),
             Overlay::Diff(diff) => diff.files.len(),
             _ => 0,
         };
-        let step = |selected: usize| {
-            (selected as isize + delta).clamp(0, len.saturating_sub(1) as isize) as usize
-        };
         match &mut self.overlay {
-            Overlay::Palette { selected, .. }
+            Overlay::Palette { selected }
             | Overlay::Sessions { selected, .. }
-            | Overlay::Models { selected }
+            | Overlay::Models { selected, .. }
             | Overlay::Reasoning { selected }
-            | Overlay::Files { selected, .. } => *selected = step(*selected),
+            | Overlay::Files { selected, .. } => *selected = picker::step(*selected, delta, len),
             Overlay::Diff(diff) => {
-                let next = step(diff.selected);
+                let next = (diff.selected as isize + delta).clamp(0, len.saturating_sub(1) as isize)
+                    as usize;
                 if next != diff.selected {
                     diff.select(next);
                     self.load_selected_diff();
@@ -214,33 +341,6 @@ impl App {
         }
     }
 
-    /// Esc on the palette: a draft that is only the command being typed goes
-    /// with it, so the next `/` does not start `//`.
-    fn discard_command_draft(&mut self) {
-        if commands::opens_palette(self.composer.text()) {
-            self.composer.clear();
-        }
-    }
-
-    /// Esc on the `@` picker: the `@query` token it was opened from goes, the
-    /// rest of the draft stays.
-    fn discard_mention(&mut self) {
-        let start = self.word_start();
-        if self.composer.text()[start..].starts_with('@') {
-            while self.composer.cursor() > start {
-                self.composer.backspace();
-            }
-        }
-    }
-
-    /// Where the whitespace-delimited word before the cursor begins.
-    fn word_start(&self) -> usize {
-        self.composer.text()[..self.composer.cursor()]
-            .char_indices()
-            .rfind(|(_, ch)| ch.is_whitespace())
-            .map_or(0, |(at, ch)| at + ch.len_utf8())
-    }
-
     /// Types `character` into the overlay's filter, or deletes the last one.
     fn overlay_filter_push(&mut self, character: Option<char>) {
         let edit = |text: &mut String| match character {
@@ -254,13 +354,10 @@ impl App {
             .as_ref()
             .map_or(&[][..], |session| session.transcript.blocks());
         match &mut self.overlay {
-            Overlay::Palette { filter, selected }
-            | Overlay::Sessions {
+            Overlay::Sessions {
                 filter, selected, ..
             }
-            | Overlay::Files {
-                filter, selected, ..
-            } => {
+            | Overlay::Models { filter, selected } => {
                 edit(filter);
                 *selected = 0;
             }
@@ -278,41 +375,8 @@ impl App {
         self.show_match();
     }
 
-    /// Re-filters the command palette from the composer line and keeps the
-    /// selection on the top row.
-    fn refresh_palette(&mut self) {
-        let Some((name, _)) = commands::parse(self.composer.text()) else {
-            self.overlay = Overlay::None;
-            return;
-        };
-        if let Overlay::Palette { filter, selected } = &mut self.overlay {
-            *filter = name.to_owned();
-            *selected = 0;
-        }
-    }
-
     fn on_overlay_accept(&mut self) -> Option<Action> {
         match std::mem::replace(&mut self.overlay, Overlay::None) {
-            Overlay::Palette { selected, filter } => {
-                // Without a match the line was never a command: it is a prompt.
-                let Some(command) = commands::filter(&filter).get(selected).copied() else {
-                    return Some(Action::Submit);
-                };
-                // The argument typed after the name goes to the command accepted,
-                // which can be another fuzzy match than the typed name.
-                let arg = commands::parse(self.composer.text())
-                    .map_or("", |(_, arg)| arg)
-                    .to_owned();
-                self.composer.clear();
-                match commands::execute(command.name, &arg) {
-                    Some(Executed::Action(action)) => Some(action),
-                    Some(Executed::Panel(panel)) => {
-                        self.open_panel(panel);
-                        None
-                    }
-                    _ => None,
-                }
-            }
             Overlay::Sessions {
                 selected,
                 filter,
@@ -326,38 +390,16 @@ impl App {
                 self.find_step(true);
                 None
             }
-            Overlay::Models { selected } => self
-                .models
+            Overlay::Models { filter, selected } => matching_models(&self.models, &filter)
                 .get(selected)
                 .map(|model| Action::SetModel(model.id.clone())),
             Overlay::Reasoning { selected } => self
                 .reasoning_levels()
                 .get(selected)
                 .map(|level| Action::SetReasoning(*level)),
-            Overlay::Files {
-                filter,
-                selected,
-                paths,
-            } => {
-                // No match keeps the picker open rather than inserting nothing.
-                let Some(path) = matching_paths(&paths, &filter)
-                    .get(selected)
-                    .copied()
-                    .cloned()
-                else {
-                    self.overlay = Overlay::Files {
-                        filter,
-                        selected,
-                        paths,
-                    };
-                    return None;
-                };
-                // The path replaces the `@` token the picker was opened from.
-                self.discard_mention();
-                self.composer.insert(&format!("@{path}"));
-                None
-            }
-            Overlay::Context
+            Overlay::Palette { .. }
+            | Overlay::Files { .. }
+            | Overlay::Context
             | Overlay::Help { .. }
             | Overlay::Diff(_)
             | Overlay::Tool(_)
@@ -421,12 +463,7 @@ impl App {
                 self.open_panel(Panel::Files);
             }
             KeyCode::Char(_) if ctrl => {}
-            KeyCode::Char(character) => {
-                self.composer.type_char(character);
-                if commands::opens_palette(self.composer.text()) {
-                    self.open_panel(Panel::Palette);
-                }
-            }
+            KeyCode::Char(character) => self.composer.type_char(character),
             KeyCode::Backspace if ctrl || alt => self.composer.delete_word_left(),
             KeyCode::Backspace => self.composer.backspace(),
             KeyCode::Delete => self.composer.delete(),
@@ -470,15 +507,13 @@ impl App {
     }
 
     /// A terminal paste. The composer decides whether the payload becomes a
-    /// single token, and a leading `/` opens the palette at once.
+    /// single token; a pasted `/name` opens the command list like typing does.
     pub fn on_paste(&mut self, text: &str) {
         if self.has_interaction() {
             return;
         }
         self.composer.insert(text);
-        if commands::opens_palette(self.composer.text()) && self.overlay.is_none() {
-            self.open_panel(Panel::Palette);
-        }
+        self.sync_completion(true, true);
     }
 
     /// A draft is a command only when its first word names one; anything else
@@ -497,7 +532,8 @@ impl App {
                 None
             }
             Some(Executed::Noop) => {
-                self.notice(NoticeLevel::Error, "Missing argument");
+                let name = commands::parse(self.composer.text()).map_or("", |(name, _)| name);
+                self.notice(NoticeLevel::Error, commands::needs_argument(name));
                 None
             }
             None => Some(Action::Submit),

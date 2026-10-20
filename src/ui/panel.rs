@@ -1,22 +1,23 @@
-//! The one bottom-sheet style shared by every panel: pickers, the approval
-//! prompt and the find bar. An accent title row, full-width selectable rows
-//! with a highlight band, and a dim hint row. No borders, no boxes.
+//! The one bottom-sheet style shared by every selector: pickers, the approval
+//! prompt and the find bar. A `─` border above and below, a bold title with a
+//! status on the right, a hint row of `key desc` pairs, an optional search
+//! line and the list. It takes the editor's place in the dock.
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::Style;
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
+use super::picker;
 use super::theme::Styles;
 use super::wrap::{self, sanitize, width, wrap};
 
 /// A sheet never shows more than this many list rows; the rest scroll.
-pub const MAX_ROWS: usize = 12;
-/// One cell of padding on each side of every row.
-const PAD: u16 = 1;
+pub const MAX_ROWS: usize = 10;
+/// Cells a row spends on the pointer and the current-item mark before its label.
+const POINTER: usize = 2;
 
-/// Emphasis of the right-hand detail text, so a failed row reads as a failure
-/// without a second color scheme.
+/// Emphasis of a row's label, so approving and denying read at a glance.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Tone {
     #[default]
@@ -26,13 +27,25 @@ pub enum Tone {
     Warning,
 }
 
+/// How a sheet lays out its rows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Kind {
+    /// `→` pointer, the detail right after the label.
+    #[default]
+    Arrow,
+    /// `→` pointer, details aligned in one column.
+    Column,
+    /// `›` pointer on a highlighted band, the detail at the right edge.
+    Session,
+}
+
 #[derive(Clone, Debug)]
 pub struct Row {
     pub label: String,
     pub detail: String,
     pub tone: Tone,
-    /// `Some(true)` marks the current item with an accent `●`; `Some(false)`
-    /// keeps the marker column blank so labels stay aligned.
+    /// `Some(true)` marks the current item with `✓`; `Some(false)` keeps the
+    /// mark column blank so labels stay aligned.
     pub mark: Option<bool>,
 }
 
@@ -60,25 +73,33 @@ impl Row {
 /// Everything a sheet draws; it owns its text, so a picker can rebuild it every frame.
 pub struct Sheet {
     pub title: String,
-    /// Filter text shown after the title, or a status such as `3 of 12`.
-    pub subtitle: Option<String>,
-    /// Non-selectable lines between the title and the list (prompt text,
-    /// an interaction question, a confirmation).
+    /// Scope or count shown at the right of the title row.
+    pub status: Option<String>,
+    /// `key desc` pairs separated by ` · `.
+    pub hint: String,
+    /// The typed filter, drawn after a `> ` prompt; `None` for a sheet without one.
+    pub search: Option<String>,
+    /// Non-selectable lines between the header and the list.
     pub body: Vec<Line<'static>>,
     pub rows: Vec<Row>,
     pub selected: Option<usize>,
-    pub hint: String,
+    pub kind: Kind,
+    /// Lines below the list: the empty state, the selected item's details.
+    pub notes: Vec<Line<'static>>,
 }
 
 impl Sheet {
     pub fn new(title: impl Into<String>, hint: impl Into<String>) -> Self {
         Self {
             title: title.into(),
-            subtitle: None,
+            status: None,
+            hint: hint.into(),
+            search: None,
             body: Vec::new(),
             rows: Vec::new(),
             selected: None,
-            hint: hint.into(),
+            kind: Kind::default(),
+            notes: Vec::new(),
         }
     }
 
@@ -92,8 +113,18 @@ impl Sheet {
         self
     }
 
-    pub fn subtitle(mut self, subtitle: Option<String>) -> Self {
-        self.subtitle = subtitle;
+    pub fn status(mut self, status: impl Into<String>) -> Self {
+        self.status = Some(status.into());
+        self
+    }
+
+    pub fn search(mut self, search: impl Into<String>) -> Self {
+        self.search = Some(search.into());
+        self
+    }
+
+    pub fn kind(mut self, kind: Kind) -> Self {
+        self.kind = kind;
         self
     }
 
@@ -102,127 +133,199 @@ impl Sheet {
         self
     }
 
+    pub fn notes(mut self, notes: Vec<Line<'static>>) -> Self {
+        self.notes = notes;
+        self
+    }
+
     fn visible_rows(&self) -> usize {
         self.rows.len().min(MAX_ROWS)
     }
 
-    /// Rows the sheet occupies, excluding any separator the caller adds.
-    pub fn height(&self) -> u16 {
-        1 + self.body.len() as u16 + self.visible_rows() as u16 + 1
+    /// Rows other than the list and its counter.
+    fn chrome(&self) -> usize {
+        let hint = usize::from(!self.hint.is_empty());
+        let search = if self.search.is_some() { 3 } else { 0 };
+        2 + 1 + hint + search + self.body.len() + self.notes.len()
     }
 
-    /// The rows drawn: the first `MAX_ROWS`, scrolled just enough to keep the
-    /// selection on screen.
-    fn window(&self) -> std::ops::Range<usize> {
-        let start = self
-            .selected
-            .map_or(0, |selected| (selected + 1).saturating_sub(MAX_ROWS));
-        start..(start + MAX_ROWS).min(self.rows.len())
+    /// Rows the sheet occupies at full size.
+    pub fn height(&self) -> u16 {
+        let counter = usize::from(self.rows.len() > self.visible_rows());
+        (self.chrome() + self.visible_rows() + counter) as u16
+    }
+
+    /// The sheet as `width` x `height` rows, the list shrunk to fit.
+    pub fn lines(&self, styles: Styles, width: u16, height: u16) -> Vec<Line<'static>> {
+        let cells = usize::from(width);
+        let height = usize::from(height);
+        let list = self
+            .visible_rows()
+            .min(height.saturating_sub(self.chrome()));
+        let border = || Line::styled("─".repeat(cells), styles.border());
+
+        let mut lines = vec![border(), self.title_line(styles, cells)];
+        if !self.hint.is_empty() {
+            lines.push(hint_line(&self.hint, styles, cells));
+        }
+        if let Some(search) = &self.search {
+            lines.push(Line::default());
+            lines.push(Line::from(vec![
+                Span::styled("> ", styles.accent()),
+                Span::styled(truncate(search, cells.saturating_sub(2)), styles.text()),
+            ]));
+            lines.push(Line::default());
+        }
+        lines.extend(self.body.iter().cloned());
+
+        let window = picker::window(self.selected.unwrap_or(0), self.rows.len(), list);
+        let column = self.label_column();
+        for index in window {
+            lines.push(self.row_line(styles, cells, column, index));
+        }
+        if self.rows.len() > list && height > self.chrome() + list {
+            let at = self.selected.map_or(1, |selected| selected + 1);
+            let counter = format!("  ({at}/{})", self.rows.len());
+            lines.push(Line::styled(counter, styles.dim()));
+        }
+        lines.extend(self.notes.iter().cloned());
+        lines.truncate(height.saturating_sub(1));
+        lines.push(border());
+        lines
+    }
+
+    fn title_line(&self, styles: Styles, cells: usize) -> Line<'static> {
+        let title = truncate(&self.title, cells);
+        let mut spans = vec![Span::styled(title.clone(), styles.bold())];
+        if let Some(status) = &self.status {
+            let room = cells.saturating_sub(width(&title) + 2);
+            let status = truncate(status, room);
+            let gap = cells.saturating_sub(width(&title) + width(&status));
+            spans.push(Span::raw(" ".repeat(gap)));
+            spans.push(Span::styled(status, styles.dim()));
+        }
+        Line::from(spans)
+    }
+
+    /// Where the details start in a [`Kind::Column`] sheet.
+    fn label_column(&self) -> usize {
+        let widest = self.rows.iter().map(|row| width(&row.label)).max();
+        widest.map_or(0, |widest| (widest + 2).min(32))
+    }
+
+    fn row_line(&self, styles: Styles, cells: usize, column: usize, index: usize) -> Line<'static> {
+        let row = &self.rows[index];
+        let selected = self.selected == Some(index);
+        let session = self.kind == Kind::Session;
+        let current = row.mark == Some(true);
+
+        let pointer = match (selected, session) {
+            (true, true) => "› ",
+            (true, false) => "→ ",
+            (false, _) => "  ",
+        };
+        let mark = match row.mark {
+            Some(true) if !session => "✓ ",
+            Some(_) if !session => "  ",
+            _ => "",
+        };
+        let label_style = match row.tone {
+            Tone::Plain if session => {
+                let base = if current {
+                    styles.accent()
+                } else {
+                    styles.text()
+                };
+                if selected {
+                    base.add_modifier(Modifier::BOLD)
+                } else {
+                    base
+                }
+            }
+            Tone::Plain if selected => styles.accent(),
+            Tone::Plain => styles.text(),
+            tone => {
+                let base = match tone {
+                    Tone::Success => styles.success(),
+                    Tone::Failure => styles.failure(),
+                    _ => styles.warning(),
+                };
+                if selected {
+                    base.add_modifier(Modifier::BOLD)
+                } else {
+                    base
+                }
+            }
+        };
+        let detail_style = if selected && self.kind == Kind::Column {
+            label_style
+        } else {
+            styles.dim()
+        };
+
+        let detail = sanitize(&row.detail).into_owned();
+        let room = cells.saturating_sub(POINTER + width(mark));
+        let (label, gap) = match self.kind {
+            Kind::Arrow => (truncate(&row.label, room), 1),
+            Kind::Column => {
+                let label = truncate(&row.label, room.min(column.max(POINTER) - POINTER));
+                let gap = column.saturating_sub(width(&label)).max(1);
+                (label, gap)
+            }
+            Kind::Session => {
+                let label = truncate(&row.label, room.saturating_sub(width(&detail) + 2));
+                let gap = room.saturating_sub(width(&label) + width(&detail)).max(1);
+                (label, gap)
+            }
+        };
+        let mut spans = vec![
+            Span::styled(pointer, styles.accent()),
+            Span::styled(mark, styles.accent()),
+            Span::styled(label, label_style),
+        ];
+        if !detail.is_empty() {
+            spans.push(Span::raw(" ".repeat(gap)));
+            spans.push(Span::styled(detail, detail_style));
+        }
+        let line = Line::from(spans);
+        if selected && session {
+            line.style(styles.highlight())
+        } else {
+            line
+        }
     }
 }
 
-/// Draws `sheet` into `area`, which must be at least [`Sheet::height`] rows.
+/// `key desc` pairs: the key is the first word of each ` · ` part.
+fn hint_line(hint: &str, styles: Styles, cells: usize) -> Line<'static> {
+    let hint = truncate(hint, cells);
+    let mut spans = Vec::new();
+    for (index, part) in hint.split(" · ").enumerate() {
+        if index > 0 {
+            spans.push(Span::styled(" · ", styles.dim()));
+        }
+        let (key, text) = part.split_once(' ').unwrap_or((part, ""));
+        spans.push(Span::styled(key.to_owned(), styles.faint()));
+        if !text.is_empty() {
+            spans.push(Span::styled(format!(" {text}"), styles.dim()));
+        }
+    }
+    Line::from(spans)
+}
+
+/// Draws `sheet` into `area`.
 pub fn render(frame: &mut Frame, area: Rect, styles: Styles, sheet: &Sheet) {
-    if area.height == 0 || area.width == 0 {
-        return;
-    }
-    let mut y = area.y;
-    let bottom = area.bottom();
-
-    render_title(frame, Rect { height: 1, ..area }, styles, sheet);
-    y += 1;
-
-    for line in &sheet.body {
-        if y >= bottom {
-            return;
-        }
-        draw_line(frame, area, y, line.clone());
-        y += 1;
-    }
-
-    let window = sheet.window();
-    let selected = sheet.selected;
-    for index in window {
-        if y >= bottom {
-            return;
-        }
-        let row = &sheet.rows[index];
-        let highlighted = selected == Some(index);
-        let row_area = Rect {
-            x: area.x,
-            y,
-            width: area.width,
-            height: 1,
-        };
-        render_row(frame, row_area, styles, row, highlighted);
-        y += 1;
-    }
-
-    if y < bottom {
-        draw_line(
-            frame,
-            area,
-            y,
-            Line::from(Span::styled(clean(&sheet.hint), styles.faint())),
+    let lines = sheet.lines(styles, area.width, area.height);
+    for (y, line) in (area.y..area.bottom()).zip(&lines) {
+        frame.render_widget(
+            line,
+            Rect {
+                y,
+                height: 1,
+                ..area
+            },
         );
     }
-}
-
-fn render_title(frame: &mut Frame, area: Rect, styles: Styles, sheet: &Sheet) {
-    let mut spans = vec![Span::styled(clean(&sheet.title), styles.title())];
-    if let Some(subtitle) = &sheet.subtitle {
-        spans.push(Span::raw("  "));
-        spans.push(Span::styled(clean(subtitle), styles.dim()));
-    }
-    draw_line(frame, area, area.y, Line::from(spans));
-}
-
-fn render_row(frame: &mut Frame, area: Rect, styles: Styles, row: &Row, highlighted: bool) {
-    let label_style = if highlighted {
-        frame.buffer_mut().set_style(area, styles.highlight());
-        styles.bold()
-    } else {
-        styles.text()
-    };
-
-    let detail = clean(&row.detail);
-    let marker = match row.mark {
-        Some(true) => Span::styled("● ", styles.accent()),
-        Some(false) => Span::raw("  "),
-        None => Span::raw(""),
-    };
-    let content =
-        (area.width.saturating_sub(2 * PAD) as usize).saturating_sub(width(&marker.content));
-    let detail_width = width(&detail);
-    let label = truncate(&row.label, content.saturating_sub(detail_width + 2));
-    let gap = content
-        .saturating_sub(width(&label))
-        .saturating_sub(detail_width)
-        .max(1);
-
-    let detail_style = match row.tone {
-        Tone::Plain => styles.faint(),
-        Tone::Success => styles.success(),
-        Tone::Failure => styles.failure(),
-        Tone::Warning => styles.warning(),
-    };
-    let line = Line::from(vec![
-        Span::raw(" ".repeat(PAD as usize)),
-        marker,
-        Span::styled(label, label_style),
-        Span::raw(" ".repeat(gap)),
-        Span::styled(detail, detail_style),
-    ]);
-    draw_line(frame, area, area.y, line);
-}
-
-/// Writes one line at `y`, clipped to `area`, over any band already painted.
-fn draw_line(frame: &mut Frame, area: Rect, y: u16, line: Line<'_>) {
-    frame.buffer_mut().set_line(area.x, y, &line, area.width);
-}
-
-fn clean(text: &str) -> String {
-    sanitize(text).into_owned()
 }
 
 /// Sanitizes `text` and shortens it to `cells`, ending with `…` when cut.
@@ -232,7 +335,7 @@ pub fn truncate(text: &str, cells: usize) -> String {
 
 /// Wraps one message into sheet body lines.
 pub fn body_lines(text: &str, cells: usize, style: Style) -> Vec<Line<'static>> {
-    wrap(&clean(text), cells)
+    wrap(&sanitize(text), cells)
         .into_iter()
         .map(|line| Line::from(Span::styled(line, style)))
         .collect()
@@ -246,26 +349,19 @@ mod tests {
     use super::*;
     use crate::ui::theme::Palette;
 
-    fn capture(sheet: &Sheet, width: u16, height: u16) -> Vec<String> {
+    fn text(line: &Line) -> String {
+        line.spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect()
+    }
+
+    fn capture(sheet: &Sheet, width: u16) -> Vec<String> {
         let styles = Styles::of(Palette::dark());
-        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        terminal
-            .draw(|frame| {
-                let area = frame.area();
-                render(frame, area, styles, sheet);
-            })
-            .unwrap();
-        let buffer = terminal.backend().buffer().clone();
-        let cells = buffer.content();
-        cells
-            .chunks(width as usize)
-            .map(|row| {
-                row.iter()
-                    .map(|cell| cell.symbol())
-                    .collect::<String>()
-                    .trim_end()
-                    .to_owned()
-            })
+        sheet
+            .lines(styles, width, sheet.height())
+            .iter()
+            .map(text)
             .collect()
     }
 
@@ -276,86 +372,167 @@ mod tests {
     }
 
     #[test]
-    fn height_counts_title_rows_and_hint() {
-        let sheet = Sheet::new("Title", "hint").rows(rows(3));
-        assert_eq!(sheet.height(), 5);
-        let sheet = sheet.body(vec![Line::from("question")]);
+    fn the_frame_is_a_border_title_hint_and_a_closing_border() {
+        let sheet = Sheet::new("Title", "enter open · esc close")
+            .status("3 sessions")
+            .rows(rows(2))
+            .selected(Some(0));
         assert_eq!(sheet.height(), 6);
+        let lines = capture(&sheet, 40);
+        assert_eq!(lines[0], "─".repeat(40));
+        assert_eq!(lines[1], format!("Title{}3 sessions", " ".repeat(25)));
+        assert_eq!(lines[2], "enter open · esc close");
+        assert_eq!(lines[3], "→ row 00 00");
+        assert_eq!(lines[4], "  row 01 01");
+        assert_eq!(lines[5], "─".repeat(40));
     }
 
     #[test]
-    fn the_title_is_accent_and_the_hint_is_dim() {
+    fn a_search_sheet_has_blank_rows_around_the_prompt() {
+        let sheet = Sheet::new("Model", "esc cancel")
+            .search("gpt")
+            .rows(rows(1));
+        let lines = capture(&sheet, 30);
+        assert_eq!(lines[3], "");
+        assert_eq!(lines[4], "> gpt");
+        assert_eq!(lines[5], "");
+    }
+
+    #[test]
+    fn the_window_scrolls_and_a_counter_appears() {
+        let sheet = Sheet::new("Models", "hint")
+            .rows(rows(25))
+            .selected(Some(12));
+        assert_eq!(sheet.height(), 3 + 1 + MAX_ROWS as u16 + 1);
+        let lines = capture(&sheet, 30);
+        assert!(lines[3].starts_with("  row 07"), "{:?}", lines[3]);
+        assert!(lines[8].starts_with("→ row 12"), "{:?}", lines[8]);
+        assert_eq!(lines[13], "  (13/25)");
+        assert_eq!(lines[14], "─".repeat(30));
+    }
+
+    #[test]
+    fn a_short_list_has_no_counter() {
+        let sheet = Sheet::new("Models", "hint")
+            .rows(rows(10))
+            .selected(Some(3));
+        assert!(!capture(&sheet, 30).iter().any(|line| line.contains('/')));
+    }
+
+    #[test]
+    fn a_cramped_area_shrinks_the_list_and_keeps_the_selection() {
+        let styles = Styles::of(Palette::dark());
+        let sheet = Sheet::new("Models", "hint")
+            .rows(rows(25))
+            .selected(Some(20));
+        let lines: Vec<String> = sheet.lines(styles, 30, 8).iter().map(text).collect();
+        assert_eq!(lines.len(), 8);
+        assert!(lines.iter().any(|line| line.starts_with("→ row 20")));
+        assert_eq!(lines[7], "─".repeat(30));
+    }
+
+    #[test]
+    fn a_session_row_is_a_band_with_the_detail_at_the_right_edge() {
         let palette = Palette::dark();
         let styles = Styles::of(palette);
-        let sheet = Sheet::new("Sessions", "enter open").rows(rows(1));
-        let text = capture(&sheet, 40, 3);
-        assert_eq!(text[0], "Sessions");
-        // The label is left aligned, the detail is right aligned.
-        assert!(text[1].starts_with(" row 00"), "{:?}", text[1]);
-        assert!(text[1].ends_with("00"), "{:?}", text[1]);
-        assert_eq!(text[2], "enter open");
-
-        let mut terminal = Terminal::new(TestBackend::new(40, 3)).unwrap();
-        terminal
-            .draw(|frame| render(frame, frame.area(), styles, &sheet))
-            .unwrap();
-        let buffer = terminal.backend().buffer();
-        let title = &buffer[(0u16, 0u16)];
-        assert_eq!(title.fg, palette.accent, "title color");
-        let hint = &buffer[(0u16, 2u16)];
-        assert_eq!(hint.fg, palette.faint, "hint color");
-    }
-
-    #[test]
-    fn a_narrow_sheet_shows_the_label_and_the_detail_without_overlap() {
-        let sheet = Sheet::new("Models", "hint").rows(vec![Row::new(
-            "a very long model identifier",
-            "max reasoning",
-        )]);
-        let text = capture(&sheet, 24, sheet.height());
-        assert_eq!(text[1], " a very…  max reasoning");
-    }
-
-    #[test]
-    fn the_selected_row_is_one_full_width_band() {
-        let palette = Palette::dark();
-        let styles = Styles::of(palette);
-        let sheet = Sheet::new("Commands", "enter run")
-            .rows(rows(3))
-            .selected(Some(1));
-        let mut terminal = Terminal::new(TestBackend::new(20, 5)).unwrap();
-        terminal
-            .draw(|frame| render(frame, frame.area(), styles, &sheet))
-            .unwrap();
-        let buffer = terminal.backend().buffer();
-        for column in 0..20 {
-            let cell = &buffer[(column, 2u16)];
-            assert_eq!(
-                cell.bg, palette.selection_bg,
-                "background band must span the row at column {column}"
-            );
-        }
-        assert_ne!(buffer[(0u16, 1u16)].bg, palette.selection_bg);
-    }
-
-    #[test]
-    fn the_list_stops_at_the_row_cap_and_scrolls_with_the_selection() {
-        let sheet = Sheet::new("Sessions", "hint").rows(rows(20));
-        assert_eq!(sheet.height(), 1 + MAX_ROWS as u16 + 1);
-        let top = capture(&sheet.selected(Some(MAX_ROWS - 1)), 30, 14);
-        assert!(top[1].starts_with(" row 00"), "{:?}", top[1]);
-        assert!(top[MAX_ROWS].starts_with(" row 11"), "{:?}", top[MAX_ROWS]);
-
-        let sheet = Sheet::new("Sessions", "hint")
-            .rows(rows(20))
-            .selected(Some(15));
-        let text = capture(&sheet, 30, sheet.height());
-        assert!(text[1].starts_with(" row 04"), "{:?}", text[1]);
-        assert!(
-            text[MAX_ROWS].starts_with(" row 15"),
-            "the selection is the last visible row: {:?}",
-            text[MAX_ROWS]
+        let sheet = Sheet::new("Resume", "")
+            .kind(Kind::Session)
+            .rows(vec![
+                Row::new("Fix the parser", "3 2h"),
+                Row::new("Other", "1 now"),
+            ])
+            .selected(Some(0));
+        let lines = sheet.lines(styles, 30, sheet.height());
+        assert_eq!(
+            text(&lines[2]),
+            format!("› Fix the parser{}3 2h", " ".repeat(10))
         );
+        assert_eq!(lines[2].style.bg, Some(palette.selection_bg));
+        assert_eq!(lines[3].style.bg, None);
+        assert_eq!(text(&lines[3]), format!("  Other{}1 now", " ".repeat(18)));
+    }
+
+    #[test]
+    fn the_current_item_gets_a_check_and_the_others_stay_aligned() {
+        let sheet = Sheet::new("Model", "").rows(vec![
+            Row::new("gpt-6", "[openai]").mark(true),
+            Row::new("glm-5", "[zai]").mark(false),
+        ]);
+        let lines = capture(&sheet, 40);
+        assert_eq!(lines[2], "  ✓ gpt-6 [openai]");
+        assert_eq!(lines[3], "    glm-5 [zai]");
+    }
+
+    #[test]
+    fn column_details_line_up() {
+        let sheet = Sheet::new("Reasoning", "")
+            .kind(Kind::Column)
+            .rows(vec![
+                Row::new("low", "Light"),
+                Row::new("medium", "Moderate"),
+            ])
+            .selected(Some(1));
+        let lines = capture(&sheet, 40);
+        assert_eq!(lines[2], "  low     Light");
+        assert_eq!(lines[3], "→ medium  Moderate");
+    }
+
+    #[test]
+    fn tones_colour_the_label() {
+        let palette = Palette::dark();
+        let styles = Styles::of(palette);
+        let sheet = Sheet::new("Approval", "").rows(vec![
+            Row::new("Allow once", "y").tone(Tone::Success),
+            Row::new("Deny", "n").tone(Tone::Failure),
+        ]);
+        let lines = sheet.lines(styles, 30, sheet.height());
+        assert_eq!(lines[2].spans[2].style.fg, Some(palette.success));
+        assert_eq!(lines[3].spans[2].style.fg, Some(palette.failure));
+    }
+
+    #[test]
+    fn the_hint_dims_keys_and_text_differently() {
+        let palette = Palette::dark();
+        let styles = Styles::of(palette);
+        let line = hint_line("enter open · esc close", styles, 40);
+        assert_eq!(text(&line), "enter open · esc close");
+        assert_eq!(line.spans[0].style.fg, Some(palette.faint));
+        assert_eq!(line.spans[1].style.fg, Some(palette.dim));
+    }
+
+    #[test]
+    fn the_border_uses_the_border_colour_across_the_width() {
+        let palette = Palette::dark();
+        let styles = Styles::of(palette);
+        let sheet = Sheet::new("T", "h");
+        let mut terminal = Terminal::new(TestBackend::new(20, sheet.height())).unwrap();
+        terminal
+            .draw(|frame| render(frame, frame.area(), styles, &sheet))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        for x in 0..20u16 {
+            assert_eq!(buffer[(x, 0u16)].fg, palette.border);
+            assert_eq!(buffer[(x, 3u16)].symbol(), "─");
+        }
+    }
+
+    #[test]
+    fn long_labels_are_cut_before_the_detail() {
+        let sheet = Sheet::new("Resume", "")
+            .kind(Kind::Session)
+            .rows(vec![Row::new("a very long session title indeed", "3 2h")]);
+        let lines = capture(&sheet, 24);
+        assert_eq!(lines[2], "  a very long ses…  3 2h");
+        assert_eq!(width(&lines[2]), 24);
+    }
+
+    #[test]
+    fn control_characters_never_reach_the_terminal() {
+        let sheet = Sheet::new("Ti\u{1b}]52;x\u{7}tle", "h\u{1b}[2Jint")
+            .rows(vec![Row::new("a\u{1b}[31mred", "b\u{7}")]);
+        let joined = capture(&sheet, 60).join("\n");
+        assert!(!joined.contains('\u{1b}'), "{joined:?}");
+        assert!(!joined.contains('\u{7}'), "{joined:?}");
     }
 
     #[test]
@@ -363,17 +540,7 @@ mod tests {
         assert_eq!(truncate("short", 10), "short");
         assert_eq!(truncate("abcdef", 4), "abc…");
         assert_eq!(truncate("abcdef", 0), "");
-        // Wide characters are never split in half.
         assert_eq!(truncate("中文中文", 5), "中文…");
-    }
-
-    #[test]
-    fn control_characters_never_reach_the_terminal() {
-        let sheet = Sheet::new("Ti\u{1b}]52;x\u{7}tle", "h\u{1b}[2Jint")
-            .rows(vec![Row::new("a\u{1b}[31mred", "b\u{7}")]);
-        let text = capture(&sheet, 60, sheet.height()).join("\n");
-        assert!(!text.contains('\u{1b}'), "{text:?}");
-        assert!(!text.contains('\u{7}'), "{text:?}");
     }
 
     #[test]
@@ -385,12 +552,7 @@ mod tests {
         );
         assert!(lines.len() > 1);
         for line in &lines {
-            let text: String = line
-                .spans
-                .iter()
-                .map(|span| span.content.as_ref())
-                .collect();
-            assert!(width(&text) <= 20, "{text:?}");
+            assert!(width(&text(line)) <= 20);
         }
     }
 }

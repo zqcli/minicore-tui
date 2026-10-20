@@ -258,11 +258,9 @@ async fn the_wheel_scrolls_the_open_overlay_never_the_hidden_transcript() {
 
     h.type_text("/");
     wheel(&mut h, MouseEventKind::ScrollDown);
-    assert!(matches!(
-        h.app.overlay,
-        Overlay::Palette { selected: 1, .. }
-    ));
+    assert!(matches!(h.app.overlay, Overlay::Palette { selected: 1 }));
     h.press(KeyCode::Esc);
+    h.app.composer.clear();
 
     h.type_text("/context");
     h.press(KeyCode::Enter);
@@ -287,25 +285,61 @@ async fn escape_closes_a_picker_and_takes_only_its_token() {
     h.type_text("/di");
     h.press(KeyCode::Esc);
     assert!(h.app.overlay.is_none());
-    assert_eq!(h.app.composer.text(), "", "the lone command goes with it");
-    h.type_text("/");
-    assert_eq!(h.app.composer.text(), "/", "a fresh command, not `//`");
+    assert_eq!(h.app.composer.text(), "/di", "the draft stays");
+
+    h.app.composer.clear();
+    h.type_text("/usr/local/bin/foo is a path");
     h.press(KeyCode::Esc);
+    assert_eq!(h.app.composer.text(), "/usr/local/bin/foo is a path");
 
     h.app.composer.set_text("fix the bug in ");
     h.type_text("@ap");
     h.press(KeyCode::Esc);
-    assert_eq!(h.app.composer.text(), "fix the bug in ");
+    assert!(h.app.overlay.is_none());
+    assert_eq!(h.app.composer.text(), "fix the bug in @ap");
 
+    h.app.composer.set_text("fix the bug in ");
     h.type_text("@zzz");
     h.settle().await;
     h.press(KeyCode::Enter);
     assert!(!h.app.overlay.is_none(), "no match keeps the picker open");
     h.press(KeyCode::Esc);
+    h.app.composer.set_text("fix the bug in ");
     h.type_text("@main");
     h.settle().await;
     h.press(KeyCode::Enter);
-    assert_eq!(h.app.composer.text(), "fix the bug in @src/main.rs");
+    assert_eq!(h.app.composer.text(), "fix the bug in @src/main.rs ");
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_command_list_filters_wraps_and_applies() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.type_text("/");
+    assert!(matches!(h.app.overlay, Overlay::Palette { selected: 0 }));
+    h.press(KeyCode::Up);
+    let last = crate::app::commands::COMMANDS.len() - 1;
+    assert!(matches!(h.app.overlay, Overlay::Palette { selected } if selected == last));
+    h.press(KeyCode::Down);
+    assert!(matches!(h.app.overlay, Overlay::Palette { selected: 0 }));
+
+    h.press(KeyCode::Backspace);
+    assert!(h.app.overlay.is_none(), "backspace past the slash closes");
+    assert_eq!(h.app.composer.text(), "");
+
+    h.type_text("/mo");
+    h.press(KeyCode::Tab);
+    assert!(h.app.overlay.is_none());
+    assert_eq!(
+        h.app.composer.text(),
+        "/model ",
+        "tab completes without running"
+    );
+
+    h.app.composer.clear();
+    h.type_text("/mo");
+    h.press(KeyCode::Enter);
+    assert!(matches!(h.app.overlay, Overlay::Models { .. }));
+    assert_eq!(h.app.composer.text(), "");
 }
 
 #[tokio::test(start_paused = true)]

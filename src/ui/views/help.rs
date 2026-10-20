@@ -167,7 +167,7 @@ mod tests {
             .join("\n");
         assert!(text.contains("ctrl+f"), "{text}");
         assert!(text.contains("/compact"), "{text}");
-        assert!(text.contains("Compact the context now"), "{text}");
+        assert!(text.contains("Compact the session context now"), "{text}");
     }
 
     #[test]

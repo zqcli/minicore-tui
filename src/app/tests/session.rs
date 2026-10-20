@@ -179,7 +179,7 @@ async fn the_sessions_picker_names_and_filters_by_title_or_first_prompt() {
 
     h.ctrl(KeyCode::Char('r'));
     let screen = h.screen(80, 20);
-    assert!(screen.contains("● fix the greeting"), "{screen}");
+    assert!(screen.contains("› fix the greeting"), "{screen}");
     assert!(screen.contains("ses_abcdef "), "{screen}");
     h.type_text("greet");
     let screen = h.screen(80, 20);
