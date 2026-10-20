@@ -12,8 +12,7 @@ use tokio::sync::mpsc;
 use crate::app::{App, Msg, Overlay, Scroll, Session};
 use crate::protocol::read::UserKind;
 use crate::protocol::{LoopOutcome, Reasoning, SessionInfo, ToolRef, TurnRef};
-use crate::transcript::block::{ToolState, Transcript};
-use crate::transcript::{Block, ChangeSummary, RequestKey, ToolCall};
+use crate::transcript::{Block, ChangeSummary, RequestKey, ToolCall, ToolState, Transcript};
 use crate::ui::theme::{Palette, Styles};
 
 /// A render fixture. The client needs a child process, so it runs `/bin/sleep`,

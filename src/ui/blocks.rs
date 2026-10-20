@@ -11,9 +11,9 @@ use super::status::spinner;
 use super::theme::Styles;
 use super::wrap;
 use crate::protocol::read::UserKind;
-use crate::transcript::block::{NoticeLevel, TRUNCATED_MARKER, ToolState};
 use crate::transcript::layout::Fold;
 use crate::transcript::{Block, ToolCall};
+use crate::transcript::{NoticeLevel, TRUNCATED_MARKER, ToolState};
 
 /// Columns before block text: the rail and one pad cell.
 pub const INSET: usize = 2;

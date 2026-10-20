@@ -11,8 +11,7 @@ use tokio::sync::mpsc;
 use crate::app::{App, Msg, Scroll, Session};
 use crate::protocol::read::UserKind;
 use crate::protocol::{LoopOutcome, Reasoning, SessionInfo, ToolRef};
-use crate::transcript::block::{ToolState, Transcript};
-use crate::transcript::{Block, RequestKey, ToolCall};
+use crate::transcript::{Block, RequestKey, ToolCall, ToolState, Transcript};
 use crate::ui::theme::{Palette, Styles};
 
 const BLOCKS: usize = 5000;

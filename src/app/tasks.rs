@@ -473,7 +473,7 @@ pub async fn export(client: Arc<Client>, session_id: String, path: Option<String
             result => result,
         }
         .map_err(|error| error.message)?;
-        std::fs::write(&path, crate::transcript::block::to_markdown(&items))
+        std::fs::write(&path, crate::transcript::to_markdown(&items))
             .map_err(|error| format!("{path}: {error}"))
     };
     match written.await {

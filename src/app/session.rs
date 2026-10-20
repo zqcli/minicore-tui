@@ -11,8 +11,8 @@ use crate::protocol::{
     SessionContext, SessionInfo, SessionPresentation, ToolRef, TurnRef, TurnWaitResult, Usage,
     UsageTotals,
 };
-use crate::transcript::block::{append_history, append_history_item, merge_live};
 use crate::transcript::{Block, RequestKey, ToolCall, ToolState, Transcript};
+use crate::transcript::{append_history, append_history_item, merge_live};
 
 use super::tasks::History;
 
