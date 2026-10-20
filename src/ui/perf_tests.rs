@@ -32,15 +32,14 @@ impl Bench {
             .expect("runtime");
         let (tx, _rx) = mpsc::unbounded_channel::<Msg>();
         let (incoming_tx, _incoming_rx) = mpsc::channel(4);
-        let client = runtime
-            .block_on(async {
-                crate::rpc::Client::spawn(
-                    std::path::Path::new("/bin/sleep"),
-                    std::path::Path::new("/dev/null"),
-                    incoming_tx,
-                )
-            })
-            .expect("client");
+        let client = runtime.block_on(async {
+            crate::rpc::Client::start(
+                tokio::io::sink(),
+                tokio::io::empty(),
+                tokio::io::empty(),
+                incoming_tx,
+            )
+        });
         let mut app = App::new(client, tx, PathBuf::from("/work/minicore-tui"));
         app.styles = Styles::of(Palette::dark());
         app.ready = true;

@@ -151,7 +151,9 @@ pub fn install_panic_hook() {
     }));
 }
 
-#[cfg(test)]
+// Without ANSI support crossterm drives the Windows console API instead of
+// writing escape sequences, so there are no bytes to compare.
+#[cfg(all(test, not(windows)))]
 mod tests {
     use super::*;
 

@@ -15,8 +15,8 @@ use crate::protocol::{LoopOutcome, Reasoning, SessionInfo, ToolRef, TurnRef};
 use crate::transcript::{Block, ChangeSummary, RequestKey, ToolCall, ToolState, Transcript};
 use crate::ui::theme::{Palette, Styles};
 
-/// A render fixture. The client needs a child process, so it runs `/bin/sleep`,
-/// which exits at once with an argument error no render observes.
+/// A render fixture. The client talks to an Agent that closes at once, which no
+/// render observes.
 struct Fixture {
     app: App,
     _runtime: tokio::runtime::Runtime,
@@ -43,15 +43,14 @@ fn app() -> Fixture {
         .expect("runtime");
     let (tx, _rx) = mpsc::unbounded_channel::<Msg>();
     let (incoming_tx, _incoming_rx) = mpsc::channel(4);
-    let client = runtime
-        .block_on(async {
-            crate::rpc::Client::spawn(
-                std::path::Path::new("/bin/sleep"),
-                std::path::Path::new("/dev/null"),
-                incoming_tx,
-            )
-        })
-        .expect("client");
+    let client = runtime.block_on(async {
+        crate::rpc::Client::start(
+            tokio::io::sink(),
+            tokio::io::empty(),
+            tokio::io::empty(),
+            incoming_tx,
+        )
+    });
     let mut app = App::new(client, tx, PathBuf::from("/work/minicore-tui"));
     app.styles = Styles::of(Palette::dark());
     app.ready = true;

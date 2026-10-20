@@ -51,21 +51,21 @@ jobs:
     name: fixed Agent/Runtime and loopback E2E
     runs-on: ubuntu-latest
     env:
-      AGENT_REV: 4102719
-      RUNTIME_REV: b93aea3
+      AGENT_REV: 4102719b401075d0cdbc3c790d0f561d0b22a8f6
+      RUNTIME_REV: b93aea38fea32b4ee416e4bbf5e66254157e1463
       MINICORE_E2E_MOCK_API_KEY: ci-loopback-only
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
         with:
           repository: zqcli/minicore-agent
-          ref: 4102719
+          ref: 4102719b401075d0cdbc3c790d0f561d0b22a8f6
           path: .ci-fixed/minicore-agent
           fetch-depth: 1
       - uses: actions/checkout@v4
         with:
           repository: zqcli/minicore-runtime
-          ref: b93aea3
+          ref: b93aea38fea32b4ee416e4bbf5e66254157e1463
           path: .ci-fixed/minicore-runtime
           fetch-depth: 1
       - uses: actions-rust-lang/setup-rust-toolchain@v1
