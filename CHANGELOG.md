@@ -29,6 +29,15 @@
   no longer hide the bottom of an anchored view, such as a running tool card:
   the view gives up rows at its top instead.
 
+### Performance
+
+- A running turn costs about half the CPU: the dock layout is plain `Rect`
+  arithmetic instead of a constraint solver, rows are painted without ratatui's
+  grapheme walk when they are ASCII or a lone narrow character, and terminal
+  input no longer spins on `sched_yield`.
+- A flash, the scrollbar or an info notice wakes the loop once, when it
+  expires, instead of ticking 12 times a second for as long as it shows.
+
 ## 0.4.0 — Rewrite
 
 A rewrite of the frontend against `minicore-agent` 0.7.0 (`4102719`) and

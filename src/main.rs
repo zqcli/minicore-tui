@@ -4,7 +4,8 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use crossterm::event::Event as TermEvent;
+use crossterm::event::{Event as TermEvent, EventStream};
+use futures_util::StreamExt;
 use tokio::sync::mpsc;
 
 use minicore_tui::app::{App, Msg};
@@ -198,12 +199,15 @@ async fn run() -> i32 {
         let tx = msg_tx.clone();
         tokio::spawn(async move { minicore_tui::app::tasks::bootstrap(client, tx).await })
     };
-    // Polling crossterm's `EventStream` fights its reader thread for the event
-    // lock and spins on `sched_yield` about 15 times per loop turn.
+    // The loop must not poll `EventStream` itself: every poll fights the stream's
+    // reader thread for the event lock and spins on `sched_yield` about 15 times.
     let (term_tx, mut term_rx) = mpsc::unbounded_channel::<TermEvent>();
-    std::thread::spawn(move || {
-        while let Ok(event) = crossterm::event::read() {
-            if term_tx.send(event).is_err() {
+    tokio::spawn(async move {
+        let mut events = EventStream::new();
+        while let Some(event) = events.next().await {
+            if let Ok(event) = event
+                && term_tx.send(event).is_err()
+            {
                 break;
             }
         }
@@ -262,7 +266,7 @@ async fn run() -> i32 {
                         frames.mark(Cause::Key);
                     }
                     Some(TermEvent::Resize(_, _)) => frames.mark(Cause::Resize),
-                    // The reader thread ended: the terminal is gone.
+                    // The stream ended: the terminal is gone.
                     None => app.quit = true,
                     _ => {}
                 }

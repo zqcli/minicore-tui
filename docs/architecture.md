@@ -115,8 +115,11 @@ compose; see Configuration) and spawns `minicore-agent --config
 missing binary or a bad configuration stays an ordinary terminal error. It then
 starts `tasks::bootstrap` (ping, capability check, models, profiles, sessions)
 and loops on one `biased` `select!`: Agent events, `Msg` values from tasks,
-terminal input, an 80 ms tick (one spinner frame, armed only while something
-animates) and the frame deadline (armed only while dirty). A frame is drawn at
+terminal input (a task forwards crossterm's `EventStream`; polling it from the
+loop costs about 15 `sched_yield` calls per turn), an 80 ms tick (one spinner
+frame, armed only while a turn or compaction animates; a flash, the scrollbar or
+an info notice sleeps until it expires instead) and the frame deadline (armed
+only while dirty). A frame is drawn at
 most every 16 ms, so a burst of deltas costs one draw; pointer motion off the
 scrollbar draws nothing. `MINICORE_TUI_PERF_STATS` prints the draws per cause
 and their times on exit. After bootstrap the loop opens a session once:
