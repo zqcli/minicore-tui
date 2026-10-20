@@ -37,6 +37,10 @@
   input no longer spins on `sched_yield`.
 - A flash, the scrollbar or an info notice wakes the loop once, when it
   expires, instead of ticking 12 times a second for as long as it shows.
+- Measured over an eight-turn, 70-minute coding session (gpt-6-luna, max
+  reasoning, 140x45, release build): the TUI holds 7.6–10 MB and uses 0.9 % of a
+  core while a turn runs (1.8 % before this release), 0 % idle. pi 0.87.1 with
+  pi-rail-ui on the same prompts used 200–280 MB and 6–12 %.
 
 ## 0.4.0 — Rewrite
 
