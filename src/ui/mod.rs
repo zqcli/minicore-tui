@@ -18,8 +18,11 @@ pub mod transcript;
 pub mod views;
 
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
+use ratatui::style::Style;
 use ratatui::text::Line;
+use ratatui::widgets::Widget;
 
 use crate::app::{App, Overlay};
 use crate::wrap;
@@ -44,13 +47,26 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         .map_or(dock.editor.len() as u16, panel::Sheet::height)
         .min(room);
     let above = (dock.above.len() as u16).min(room - slot);
-    let [main, above_area, slot_area, footer_area] = Layout::vertical([
-        Constraint::Min(1),
-        Constraint::Length(above),
-        Constraint::Length(slot),
-        Constraint::Length(1),
-    ])
-    .areas(area);
+    let footer = area.height.min(1);
+    let main = Rect {
+        height: area.height - above - slot - footer,
+        ..area
+    };
+    let above_area = Rect {
+        y: main.bottom(),
+        height: above,
+        ..area
+    };
+    let slot_area = Rect {
+        y: above_area.bottom(),
+        height: slot,
+        ..area
+    };
+    let footer_area = Rect {
+        y: slot_area.bottom(),
+        height: footer,
+        ..area
+    };
     if !views::draw(frame, main, app, styles) {
         transcript::draw(frame, main, app, styles);
     }
@@ -93,14 +109,54 @@ fn gutter(area: Rect) -> Rect {
 
 fn draw_rows(frame: &mut Frame, area: Rect, rows: &[Line<'static>]) {
     for (y, line) in (area.y..area.bottom()).zip(rows) {
-        frame.render_widget(
-            line,
+        put_line(
+            frame.buffer_mut(),
             Rect {
                 y,
                 height: 1,
                 ..area
             },
+            line,
         );
+    }
+}
+
+/// `Line::render` for an unaligned line, minus ratatui's grapheme walk over
+/// printable ASCII, which is nearly every cell of a frame.
+pub fn put_line(buf: &mut Buffer, area: Rect, line: &Line) {
+    let area = area.intersection(buf.area);
+    if area.is_empty() {
+        return;
+    }
+    if line.style != Style::default() {
+        if line.spans.iter().all(|span| span.content.is_empty()) {
+            return;
+        }
+        buf.set_style(area, line.style);
+    }
+    let mut x = area.x;
+    for span in &line.spans {
+        let text = span.content.as_bytes();
+        if text.iter().all(|byte| (0x20..0x7f).contains(byte)) {
+            let shown = text.len().min(usize::from(area.right() - x));
+            for (cell, byte) in (x..).zip(&text[..shown]) {
+                buf[(cell, area.y)]
+                    .set_char(char::from(*byte))
+                    .set_style(span.style);
+            }
+            x += shown as u16;
+        } else {
+            let rest = Rect {
+                x,
+                width: area.right() - x,
+                ..area
+            };
+            span.render(rest, buf);
+            x = (x + span.width() as u16).min(area.right());
+        }
+        if x == area.right() {
+            break;
+        }
     }
 }
 
@@ -143,7 +199,10 @@ fn draw_fatal(frame: &mut Frame, area: Rect, fatal: &crate::app::Fatal) {
 
 #[cfg(test)]
 mod tests {
-    use super::format_tokens;
+    use ratatui::style::{Color, Modifier};
+    use ratatui::text::Span;
+
+    use super::*;
 
     #[test]
     fn token_counts_drop_a_trailing_zero() {
@@ -151,5 +210,35 @@ mod tests {
         assert_eq!(format_tokens(12_300), "12.3k");
         assert_eq!(format_tokens(200_000), "200k");
         assert_eq!(format_tokens(1_800_000), "1.8M");
+    }
+
+    #[test]
+    fn put_line_paints_what_the_line_widget_paints() {
+        let red = Style::default().fg(Color::Red);
+        let lines = [
+            Line::from(vec![Span::styled("▎", red), Span::raw("plain text")]),
+            Line::from(vec![Span::raw("日本語 mixed"), Span::styled("tail", red)]),
+            Line::styled("whole row", Style::default().bg(Color::Blue)),
+            Line::styled("", Style::default().bg(Color::Blue)),
+            Line::from(vec![
+                Span::raw("ab"),
+                Span::raw("xyz "),
+                Span::raw("clipped"),
+            ]),
+            Line::from(vec![Span::raw("a日"), Span::raw("bcdef")]),
+            Line::from(Span::styled(
+                "bold",
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+        ];
+        for width in [4, 7, 20] {
+            for line in &lines {
+                let area = Rect::new(0, 0, width, 1);
+                let (mut fast, mut slow) = (Buffer::empty(area), Buffer::empty(area));
+                put_line(&mut fast, area, line);
+                line.render(area, &mut slow);
+                assert_eq!(fast, slow, "{line:?} at width {width}");
+            }
+        }
     }
 }

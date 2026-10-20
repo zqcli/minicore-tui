@@ -227,15 +227,15 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, styles: Styles) {
             }
         }
     }
+    let buffer = frame.buffer_mut();
     for (y, row) in (area.y..area.bottom()).zip(&rows) {
         let area = Rect {
             y,
             height: 1,
             ..area
         };
-        frame.render_widget(row.as_ref(), area);
+        super::put_line(buffer, area, row);
     }
-    let buffer = frame.buffer_mut();
     if top + height < total && area.height > 0 {
         let cells = jump_label(area.width);
         buffer.set_stringn(

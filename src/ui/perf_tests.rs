@@ -8,9 +8,13 @@ use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use tokio::sync::mpsc;
 
+use crate::app::session::{LiveTurn, Phase};
 use crate::app::{App, Msg, Scroll, Session};
 use crate::protocol::read::UserKind;
-use crate::protocol::{LoopOutcome, Reasoning, SessionInfo, ToolRef};
+use crate::protocol::{
+    ContextKind, ContextUsage, LoopOutcome, Reasoning, SessionInfo, SessionPresentation, ToolRef,
+    TurnRef, UsageTotals,
+};
 use crate::transcript::{Block, RequestKey, ToolCall, ToolState, Transcript};
 use crate::ui::theme::{Palette, Styles};
 
@@ -292,4 +296,101 @@ fn perf() {
         retained_output(bench.transcript())
     );
     println!("draw after settling every card: {:?}", bench.draw());
+}
+
+/// A turn in flight at the end of a 150-block history: a streaming answer, a
+/// running bash card, the Working line and a filled footer.
+fn busy_session() -> Bench {
+    let mut bench = Bench::new();
+    let transcript = bench.transcript();
+    for turn in 0..30 {
+        transcript.push(user(turn));
+        transcript.push(answer(turn));
+        transcript.push(tool(turn * 2));
+        transcript.push(tool(turn * 2 + 1));
+        transcript.push(turn_end(turn));
+    }
+    let start = transcript.len();
+    transcript.push(user(30));
+    let mut running = tool(60);
+    if let Block::Tool(call) = &mut running {
+        call.state = ToolState::Running;
+        call.started_at = Some(Instant::now());
+        call.duration = None;
+        call.exit_code = None;
+        call.output.truncate(12);
+    }
+    transcript.push(running);
+    let key = RequestKey {
+        loop_id: "loop_live".into(),
+        request_index: 1,
+    };
+    if let Block::Assistant {
+        text, reasoning, ..
+    } = transcript.assistant_mut(&key)
+    {
+        *reasoning = "Compare the two paths.\nThe cache key is the problem.".into();
+        text.push_str(&long_answer()[..3000]);
+    }
+    let mut live = LiveTurn::new(TurnRef::new("ses_perf", "loop_live"), start);
+    live.phase = Phase::Writing;
+    live.requests = 2;
+    live.running_tool = Some(("bash".into(), "cargo test --lib module_60".into()));
+    let session = bench.app.session.as_mut().expect("session");
+    session.live = Some(live);
+    session.usage = UsageTotals {
+        input: 1_234_567,
+        output: 45_678,
+        cached: 987_654,
+    };
+    session.presentation = Some(SessionPresentation {
+        session_id: "ses_perf".into(),
+        git_branch: Some("v05/perf".into()),
+        context: Some(ContextUsage {
+            tokens: Some(61_000),
+            window: Some(200_000),
+            percent: Some(30.5),
+            kind: ContextKind::Reported,
+        }),
+    });
+    // `watch_context` would ask the (absent) Agent; it was asked a moment ago.
+    session.context_asked = Some(tokio::time::Instant::now() + Duration::from_secs(3600));
+    bench.draw();
+    bench
+}
+
+fn report(name: &str, samples: &mut [Duration]) {
+    println!(
+        "{name}: mean {:.0}us p50 {:.0}us p95 {:.0}us",
+        mean_micros(samples),
+        micros(percentile(samples, 0.5)),
+        micros(percentile(samples, 0.95)),
+    );
+}
+
+#[test]
+#[ignore]
+fn busy_frame() {
+    let mut bench = busy_session();
+    let mut ticks: Vec<Duration> = (0..500)
+        .map(|_| {
+            bench.app.tick();
+            bench.draw()
+        })
+        .collect();
+    report("tick frame", &mut ticks);
+
+    let key = RequestKey {
+        loop_id: "loop_live".into(),
+        request_index: 1,
+    };
+    let mut events: Vec<Duration> = (0..500)
+        .map(|_| {
+            if let Block::Assistant { text, .. } = bench.transcript().assistant_mut(&key) {
+                text.push_str("and so on, ");
+            }
+            bench.draw()
+        })
+        .collect();
+    report("event frame", &mut events);
 }
