@@ -4,8 +4,7 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use crossterm::event::{Event as TermEvent, EventStream};
-use futures_util::StreamExt;
+use crossterm::event::Event as TermEvent;
 use tokio::sync::mpsc;
 
 use minicore_tui::app::{App, Msg};
@@ -199,7 +198,16 @@ async fn run() -> i32 {
         let tx = msg_tx.clone();
         tokio::spawn(async move { minicore_tui::app::tasks::bootstrap(client, tx).await })
     };
-    let mut events = EventStream::new();
+    // Polling crossterm's `EventStream` fights its reader thread for the event
+    // lock and spins on `sched_yield` about 15 times per loop turn.
+    let (term_tx, mut term_rx) = mpsc::unbounded_channel::<TermEvent>();
+    std::thread::spawn(move || {
+        while let Ok(event) = crossterm::event::read() {
+            if term_tx.send(event).is_err() {
+                break;
+            }
+        }
+    });
     let mut frames = Frames::new();
     let mut next_frame = tokio::time::Instant::now();
     let mut next_tick = tokio::time::Instant::now() + TICK;
@@ -230,9 +238,9 @@ async fn run() -> i32 {
                     frames.mark(Cause::Event);
                 }
             }
-            maybe_event = events.next() => {
+            maybe_event = term_rx.recv() => {
                 match maybe_event {
-                    Some(Ok(TermEvent::Key(key))) => {
+                    Some(TermEvent::Key(key)) => {
                         if key.is_press() {
                             if let Some(action) = app.on_key(key) {
                                 app.on_action(action);
@@ -240,17 +248,17 @@ async fn run() -> i32 {
                             frames.mark(Cause::Key);
                         }
                     }
-                    Some(Ok(TermEvent::Mouse(mouse))) => {
+                    Some(TermEvent::Mouse(mouse)) => {
                         if app.on_mouse(mouse) {
                             frames.mark(Cause::Mouse);
                         }
                     }
-                    Some(Ok(TermEvent::Paste(text))) => {
+                    Some(TermEvent::Paste(text)) => {
                         app.on_paste(&text);
                         frames.mark(Cause::Key);
                     }
-                    Some(Ok(TermEvent::Resize(_, _))) => frames.mark(Cause::Resize),
-                    // The terminal is gone; polling it again would spin.
+                    Some(TermEvent::Resize(_, _)) => frames.mark(Cause::Resize),
+                    // The reader thread ended: the terminal is gone.
                     None => app.quit = true,
                     _ => {}
                 }
