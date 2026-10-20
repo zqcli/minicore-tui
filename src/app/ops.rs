@@ -50,6 +50,13 @@ impl App {
                     self.merge_catalog_info(info);
                 }
             }
+            SessionOp::ItemCount(result) => {
+                if let Some(total) = self.ok(result)
+                    && let Overlay::SessionInfo { items } = &mut self.overlay
+                {
+                    *items = Some(total);
+                }
+            }
             SessionOp::Changes(loop_id, result) => self.on_changes(&loop_id, result),
             SessionOp::ToolRead(key, result) => {
                 if let Some(read) = self.ok(result)
@@ -366,6 +373,7 @@ impl App {
             if let Some(turn) = started {
                 self.start_turn(turn);
             }
+            self.auto_allow();
             // The footer's context figure moves with each request and each
             // compaction, not only at the turn's end.
             if compaction_ended || (usage && self.session_mut().presentation_due()) {

@@ -9,10 +9,12 @@ pub mod commands;
 pub mod diff;
 pub mod find;
 pub mod keys;
+mod notify;
 mod ops;
 pub mod overlay;
 pub mod session;
 pub mod tasks;
+pub mod templates;
 #[cfg(test)]
 mod tests;
 pub mod tool;
@@ -56,6 +58,8 @@ pub enum Msg {
     Opened(Result<SessionInfo, RpcError>),
     Created(Result<SessionInfo, RpcError>),
     Deleted(String, Result<(), RpcError>),
+    /// A `session.rename` from the sessions picker, which may name a closed session.
+    Renamed(Result<SessionInfo, RpcError>),
     /// A result for the session that was resident at epoch `.0`.
     Session(u64, Box<SessionOp>),
     Notice(NoticeLevel, String),
@@ -90,6 +94,8 @@ pub enum SessionOp {
     Done(Result<Value, RpcError>),
     Compacted(Result<CompactionResult, RpcError>),
     Info(Result<SessionInfo, RpcError>),
+    /// The number of history items, for `/session`.
+    ItemCount(Result<usize, RpcError>),
     Changes(String, Result<ChangeSummary, RpcError>),
     ToolRead(ToolRef, Result<ToolReadResult, RpcError>),
     /// The facts of a card loaded without its detail; `None` when the read failed.
@@ -197,6 +203,10 @@ pub struct App {
     /// An open or create request is in flight, so no session yet means
     /// waiting rather than start one.
     pub loading_session: bool,
+    pub templates: Vec<templates::Template>,
+    /// The `/word` draft an Enter already warned about; a second Enter sends it.
+    pub armed_unknown: Option<String>,
+    pub notifier: crate::title::Notifier,
 }
 
 #[derive(Clone, Debug)]
@@ -248,6 +258,9 @@ impl App {
             layout: Layout::default(),
             edit_request: None,
             loading_session: false,
+            templates: Vec::new(),
+            armed_unknown: None,
+            notifier: crate::title::Notifier::default(),
         }
     }
 
@@ -271,6 +284,8 @@ impl App {
                 self.models = models;
                 self.profiles = profiles;
                 self.sessions = sessions;
+                self.templates = templates::load();
+                self.notifier.bell = crate::config::Config::load().bell;
                 self.ready = true;
             }
             Msg::Opened(result) => self.adopt(result, false),
@@ -292,6 +307,7 @@ impl App {
                     self.notice(NoticeLevel::Info, "Session deleted");
                 }
             }
+            Msg::Renamed(result) => self.on_renamed(result),
             Msg::Session(epoch, op) => {
                 if self
                     .session

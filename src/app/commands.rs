@@ -1,21 +1,23 @@
 //! The slash-command table and its executor.
 
 use super::Action;
-use crate::protocol::Reasoning;
+use super::templates::Template;
+use crate::protocol::{ModelInfo, Reasoning};
 
 /// One palette entry: the command name, its argument hint and a one-line description.
-pub struct Command {
-    pub name: &'static str,
+#[derive(Clone, Copy)]
+pub struct Command<'a> {
+    pub name: &'a str,
     /// `<required>` or `[optional]`, empty when the command takes no argument.
-    pub args: &'static str,
-    pub description: &'static str,
+    pub args: &'a str,
+    pub description: &'a str,
 }
 
-pub const COMMANDS: &[Command] = &[
+pub const COMMANDS: &[Command<'static>] = &[
     Command {
         name: "model",
-        args: "",
-        description: "Select the model (opens the selector)",
+        args: "[id]",
+        description: "Switch the model, or pick one",
     },
     Command {
         name: "reasoning",
@@ -64,8 +66,13 @@ pub const COMMANDS: &[Command] = &[
     },
     Command {
         name: "new",
-        args: "",
+        args: "[profile]",
         description: "Start a new session",
+    },
+    Command {
+        name: "session",
+        args: "",
+        description: "Show this session's id, model and totals",
     },
     Command {
         name: "compact",
@@ -104,6 +111,17 @@ pub enum Executed {
     Noop,
 }
 
+impl super::App {
+    /// The text of template `name` run with `arg`, if there is such a template.
+    pub fn expand_template(&self, name: &str, arg: &str) -> Option<String> {
+        let template = self
+            .templates
+            .iter()
+            .find(|template| template.name == name)?;
+        Some(template.expand(arg))
+    }
+}
+
 /// Splits `/name arg`; `None` when the input is not a command line.
 pub fn parse(input: &str) -> Option<(&str, &str)> {
     let input = input.trim();
@@ -118,11 +136,14 @@ pub fn parse(input: &str) -> Option<(&str, &str)> {
 /// Resolves one command line to an action or a panel.
 pub fn execute(name: &str, arg: &str) -> Option<Executed> {
     Some(match name {
-        "new" => Executed::Action(Action::NewSession),
+        "new" if arg.is_empty() => Executed::Action(Action::NewSession),
+        "new" => Executed::Action(Action::NewSessionWith(arg.to_owned())),
+        "session" => Executed::Panel(super::Panel::SessionInfo),
         "sessions" | "resume" => Executed::Panel(super::Panel::Sessions),
         "rename" if !arg.is_empty() => Executed::Action(Action::Rename(arg.to_owned())),
         "rename" => Executed::Noop,
-        "model" => Executed::Panel(super::Panel::Models),
+        "model" if arg.is_empty() => Executed::Panel(super::Panel::Models),
+        "model" => Executed::Action(Action::SwitchModel(arg.to_owned())),
         "reasoning" => match Reasoning::parse(arg) {
             Some(level) => Executed::Action(Action::SetReasoning(level)),
             None => Executed::Panel(super::Panel::Reasoning),
@@ -152,15 +173,82 @@ pub fn execute(name: &str, arg: &str) -> Option<Executed> {
     })
 }
 
-/// Commands matching a palette filter: an exact name, then name prefixes,
-/// then other fuzzy matches, each in table order.
-pub fn filter(input: &str) -> Vec<&'static Command> {
-    let mut matches: Vec<&Command> = COMMANDS
+/// Commands and templates matching a palette filter: an exact name, then name
+/// prefixes, then other fuzzy matches, each in table order.
+pub fn filter<'a>(input: &str, templates: &'a [Template]) -> Vec<Command<'a>> {
+    let mut matches: Vec<Command<'a>> = COMMANDS
         .iter()
+        .copied()
+        .chain(templates.iter().map(Template::command))
         .filter(|command| crate::ui::picker::fuzzy_match(command.name, input))
         .collect();
     matches.sort_by_key(|command| (command.name != input, !command.name.starts_with(input)));
     matches
+}
+
+/// The `name` of a draft that is just `/name`: a typo for a command, unlike a
+/// path (`/usr/bin`) or a sentence (`/etc is where…`), which are prompts.
+pub fn bare_word(text: &str) -> Option<&str> {
+    let name = text.trim().strip_prefix('/')?;
+    let mut chars = name.chars();
+    let word = chars
+        .next()
+        .is_some_and(|first| first.is_ascii_alphabetic())
+        && chars.all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_'));
+    word.then_some(name)
+}
+
+/// The known name nearest to `name`, when it is only a typo away: one edit
+/// for a short word, two for a longer one.
+pub fn closest<'a>(name: &str, known: impl Iterator<Item = &'a str>) -> Option<&'a str> {
+    let allowed = if name.len() <= 4 { 1 } else { 2 };
+    known
+        .map(|candidate| (edit_distance(name, candidate), candidate))
+        .filter(|(distance, _)| *distance <= allowed)
+        .min_by_key(|(distance, _)| *distance)
+        .map(|(_, candidate)| candidate)
+}
+
+fn edit_distance(left: &str, right: &str) -> usize {
+    let right: Vec<char> = right.chars().collect();
+    let mut row: Vec<usize> = (0..=right.len()).collect();
+    for (i, a) in left.chars().enumerate() {
+        let mut diagonal = std::mem::replace(&mut row[0], i + 1);
+        for (j, b) in right.iter().enumerate() {
+            let above = row[j + 1];
+            row[j + 1] = (diagonal + usize::from(a != *b))
+                .min(above + 1)
+                .min(row[j] + 1);
+            diagonal = above;
+        }
+    }
+    row[right.len()]
+}
+
+/// The notice for a bare `/word` that names nothing.
+pub fn unknown_notice(name: &str, closest: Option<&str>) -> String {
+    match closest {
+        Some(near) => format!(
+            "Unknown command /{name} · did you mean /{near}? · enter again sends it as text"
+        ),
+        None => format!("Unknown command /{name} · enter again sends it as text"),
+    }
+}
+
+/// The model `arg` names: an exact id, else the one id it fuzzy-matches.
+pub fn resolve_model<'a>(models: &'a [ModelInfo], arg: &str) -> Result<&'a ModelInfo, String> {
+    if let Some(model) = models.iter().find(|model| model.id == arg) {
+        return Ok(model);
+    }
+    let found = super::overlay::matching_models(models, arg);
+    match found.as_slice() {
+        [] => Err(format!("Unknown model {arg}")),
+        [model] => Ok(model),
+        many => {
+            let ids: Vec<&str> = many.iter().map(|model| model.id.as_str()).collect();
+            Err(format!("{arg} matches {}: {}", many.len(), ids.join(", ")))
+        }
+    }
 }
 
 /// Whether the composer holds a one-line `/command` draft.
@@ -190,19 +278,26 @@ mod tests {
 
     #[test]
     fn the_filter_is_a_fuzzy_subsequence_match() {
-        let names: Vec<&str> = filter("rsn").iter().map(|command| command.name).collect();
+        let names: Vec<&str> = filter("rsn", &[])
+            .iter()
+            .map(|command| command.name)
+            .collect();
         assert_eq!(names, ["reasoning"]);
-        assert_eq!(filter("").len(), COMMANDS.len());
-        assert!(filter("zzz").is_empty());
-        assert!(filter("usr/local/bin").is_empty(), "a path matches nothing");
+        assert_eq!(filter("", &[]).len(), COMMANDS.len());
+        assert!(filter("zzz", &[]).is_empty());
+        assert!(
+            filter("usr/local/bin", &[]).is_empty(),
+            "a path matches nothing"
+        );
     }
 
     #[test]
     fn exact_and_prefix_matches_rank_first() {
-        let names = |input| -> Vec<&str> { filter(input).iter().map(|c| c.name).collect() };
+        let names = |input| -> Vec<&str> { filter(input, &[]).iter().map(|c| c.name).collect() };
         assert_eq!(names("mo")[0], "model");
         assert_eq!(names("res"), ["resume", "reasoning"]);
         assert_eq!(names("re")[..3], ["reasoning", "rename", "resume"]);
+        assert_eq!(names("sess"), ["session", "sessions"]);
         assert_eq!(names("new")[0], "new");
     }
 
@@ -273,5 +368,95 @@ mod tests {
             Some(Executed::Panel(crate::app::Panel::Sessions))
         ));
         assert!(execute("nonsense", "").is_none());
+    }
+
+    #[test]
+    fn only_a_bare_word_can_be_a_mistyped_command() {
+        assert_eq!(bare_word("/modle"), Some("modle"));
+        assert_eq!(bare_word("  /foo-bar_2 "), Some("foo-bar_2"));
+        for prompt in [
+            "/usr/bin",
+            "/usr/local/bin/foo is a path",
+            "/etc is where config lives",
+            "/",
+            "//foo",
+            "/9lives",
+            "/foo\nbar",
+            "plain text",
+        ] {
+            assert_eq!(bare_word(prompt), None, "{prompt:?} is a prompt");
+        }
+    }
+
+    #[test]
+    fn the_closest_command_is_offered_only_for_a_near_miss() {
+        let known = || COMMANDS.iter().map(|command| command.name);
+        assert_eq!(closest("modle", known()), Some("model"));
+        assert_eq!(closest("sesions", known()), Some("sessions"));
+        assert_eq!(closest("foo", known()), None);
+        assert_eq!(
+            unknown_notice("modle", Some("model")),
+            "Unknown command /modle · did you mean /model? · enter again sends it as text"
+        );
+        assert_eq!(
+            unknown_notice("foo", None),
+            "Unknown command /foo · enter again sends it as text"
+        );
+    }
+
+    #[test]
+    fn model_and_new_take_an_argument() {
+        assert!(matches!(
+            execute("model", ""),
+            Some(Executed::Panel(crate::app::Panel::Models))
+        ));
+        assert_eq!(
+            execute("model", "luna"),
+            Some(Executed::Action(Action::SwitchModel("luna".into())))
+        );
+        assert_eq!(
+            execute("new", "ask"),
+            Some(Executed::Action(Action::NewSessionWith("ask".into())))
+        );
+        assert_eq!(
+            execute("new", ""),
+            Some(Executed::Action(Action::NewSession))
+        );
+        assert!(matches!(
+            execute("session", ""),
+            Some(Executed::Panel(crate::app::Panel::SessionInfo))
+        ));
+    }
+
+    fn model(id: &str) -> ModelInfo {
+        serde_json::from_value(serde_json::json!({"id": id, "supported_reasoning": []})).unwrap()
+    }
+
+    #[test]
+    fn a_model_argument_resolves_exactly_then_by_a_unique_fuzzy_match() {
+        let models = [model("luna"), model("gpt-6-luna"), model("deep")];
+        assert_eq!(resolve_model(&models, "luna").unwrap().id, "luna");
+        assert_eq!(resolve_model(&models, "dp").unwrap().id, "deep");
+        assert_eq!(
+            resolve_model(&models, "lun").unwrap_err(),
+            "lun matches 2: luna, gpt-6-luna"
+        );
+        assert_eq!(
+            resolve_model(&models, "zzz").unwrap_err(),
+            "Unknown model zzz"
+        );
+    }
+
+    #[test]
+    fn templates_join_the_command_list_after_the_builtins_rank() {
+        let templates = [Template::parse("review".into(), "Review staged changes")];
+        let names = |input| -> Vec<&str> {
+            let found = filter(input, &templates);
+            found.iter().map(|command| command.name).collect()
+        };
+        assert_eq!(names("rev"), ["review"]);
+        assert_eq!(names("re").last(), Some(&"review"));
+        let found = filter("review", &templates);
+        assert_eq!(found[0].description, "Review staged changes");
     }
 }

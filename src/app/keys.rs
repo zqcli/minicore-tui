@@ -4,7 +4,9 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
 use super::overlay::{matching_models, matching_paths};
-use super::{Action, Answer, App, DOUBLE_CLICK, Overlay, Panel, Press, Scroll, find};
+use super::{
+    Action, Answer, App, DOUBLE_CLICK, InteractionKind, Overlay, Panel, Press, Scroll, find,
+};
 use crate::app::commands::{self, Executed};
 use crate::protocol::Reasoning;
 use crate::transcript::{Block, NoticeLevel};
@@ -33,6 +35,9 @@ impl App {
     /// A composer key, then the completion list brought in step with the draft.
     fn on_composer_input(&mut self, key: KeyEvent) -> Option<Action> {
         let before = self.composer.text().to_owned();
+        if key.code != KeyCode::Enter {
+            self.armed_unknown = None;
+        }
         let action = self.on_composer_key(key);
         let edited = self.composer.text() != before;
         let typed = edited
@@ -71,9 +76,7 @@ impl App {
     /// Rows the completion list offers for the current draft.
     fn completion_len(&self) -> usize {
         match &self.overlay {
-            Overlay::Palette { .. } => self
-                .palette_query()
-                .map_or(0, |query| commands::filter(query).len()),
+            Overlay::Palette { .. } => self.palette_rows().len(),
             Overlay::Files { paths, .. } => self
                 .mention_query()
                 .map_or(0, |query| matching_paths(paths, query).len()),
@@ -108,9 +111,10 @@ impl App {
     /// The selected command or path, if the list has one.
     fn selected_completion(&self) -> Option<String> {
         match &self.overlay {
-            Overlay::Palette { selected } => commands::filter(self.palette_query()?)
+            Overlay::Palette { selected } => self
+                .palette_rows()
                 .get(*selected)
-                .map(|command| command.name.to_owned()),
+                .map(|(name, _)| name.clone()),
             Overlay::Files { selected, paths } => matching_paths(paths, self.mention_query()?)
                 .get(*selected)
                 .map(|path| (*path).clone()),
@@ -119,7 +123,8 @@ impl App {
     }
 
     /// Tab: puts the selected completion into the draft and closes the list.
-    /// A command keeps the argument typed after it; a path ends the `@` token.
+    /// A command keeps the argument typed after it, an argument value replaces
+    /// the typed one; a path ends the `@` token.
     fn apply_completion(&mut self) {
         let Some(choice) = self.selected_completion() else {
             return;
@@ -127,6 +132,11 @@ impl App {
         match std::mem::replace(&mut self.overlay, Overlay::None) {
             Overlay::Palette { .. } => {
                 let text = self.composer.text();
+                if let Some((command, _)) = self.palette_arg() {
+                    let completed = format!("/{command} {choice}");
+                    self.composer.restore_text(&completed);
+                    return;
+                }
                 let rest = &text[text.find(char::is_whitespace).unwrap_or(text.len())..];
                 let rest = if rest.trim().is_empty() { " " } else { rest };
                 self.composer.restore_text(&format!("/{choice}{rest}"));
@@ -148,9 +158,16 @@ impl App {
             self.apply_completion();
             return None;
         }
-        let name = self.selected_completion()?;
-        let arg = commands::parse(self.composer.text()).map_or("", |(_, arg)| arg);
-        match commands::execute(&name, arg) {
+        let choice = self.selected_completion()?;
+        // In an argument list the command is already typed and the row is its argument.
+        let (name, arg) = match self.palette_arg() {
+            Some((command, _)) => (command.to_owned(), choice),
+            None => {
+                let typed = commands::parse(self.composer.text()).map_or("", |(_, arg)| arg);
+                (choice, typed.to_owned())
+            }
+        };
+        match commands::execute(&name, &arg) {
             Some(Executed::Action(action)) => {
                 self.overlay = Overlay::None;
                 self.composer.clear();
@@ -163,6 +180,11 @@ impl App {
             }
             // The completed name stays in the draft for the argument it needs.
             _ => {
+                if let Some(text) = self.expand_template(&name, &arg) {
+                    self.overlay = Overlay::None;
+                    self.composer.set_text(&text);
+                    return Some(Action::Submit);
+                }
                 self.apply_completion();
                 self.notice(NoticeLevel::Error, commands::needs_argument(&name));
                 None
@@ -177,6 +199,11 @@ impl App {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let answer = match key.code {
             KeyCode::Char('y') if !ctrl => Answer::Allow,
+            KeyCode::Char('a')
+                if !ctrl && matches!(interaction.kind, InteractionKind::Approval) =>
+            {
+                Answer::AllowTool
+            }
             KeyCode::Char('n') if !ctrl => Answer::Deny,
             KeyCode::Esc => Answer::Deny,
             KeyCode::Enter => Answer::Choice(interaction.selected),
@@ -200,6 +227,16 @@ impl App {
             Overlay::Palette { .. } | Overlay::Files { .. }
         ) {
             return self.on_completion_key(key);
+        }
+        if matches!(
+            self.overlay,
+            Overlay::Sessions {
+                renaming: Some(_),
+                ..
+            }
+        ) {
+            self.on_rename_key(key);
+            return None;
         }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let tool = matches!(self.overlay, Overlay::Tool(_));
@@ -225,6 +262,10 @@ impl App {
             KeyCode::PageDown => self.overlay_move(10),
             KeyCode::Backspace => self.overlay_filter_push(None),
             KeyCode::Char('d') if ctrl => self.delete_confirm(),
+            KeyCode::Char('n') if ctrl => self.start_rename(),
+            KeyCode::Char('c') if matches!(self.overlay, Overlay::SessionInfo { .. }) => {
+                self.copy_session_id();
+            }
             KeyCode::Char('r') if matches!(self.overlay, Overlay::Context) => {
                 self.refresh_context();
             }
@@ -242,6 +283,7 @@ impl App {
             filter,
             selected,
             armed,
+            ..
         } = &mut self.overlay
         else {
             return;
@@ -284,20 +326,6 @@ impl App {
         self.show_match();
     }
 
-    /// Puts the find bar's current match at the top of the view.
-    fn show_match(&mut self) {
-        if let Overlay::Find {
-            matches, current, ..
-        } = &self.overlay
-            && let Some(found) = matches.get(*current)
-        {
-            self.scroll = Scroll::Anchor {
-                block: found.block,
-                offset: 0,
-            };
-        }
-    }
-
     /// Moves the selected row of the active overlay by `delta`.
     pub fn overlay_move(&mut self, delta: isize) {
         let len = match &self.overlay {
@@ -327,7 +355,7 @@ impl App {
             Overlay::Help { scroll } => *scroll = scroll.saturating_add_signed(delta * 3),
             Overlay::Tool(_) => self.scroll_view(delta),
             Overlay::Find { .. } => self.find_step(delta > 0),
-            Overlay::Context | Overlay::None => {}
+            Overlay::Context | Overlay::SessionInfo { .. } | Overlay::None => {}
         }
     }
 
@@ -350,6 +378,7 @@ impl App {
                 text.pop();
             }
         };
+        let show_reasoning = self.show_reasoning;
         let blocks = self
             .session
             .as_ref()
@@ -368,7 +397,7 @@ impl App {
                 current,
             } => {
                 edit(query);
-                *matches = find::find_matches(blocks, query);
+                *matches = find::find_matches(blocks, query, show_reasoning);
                 *current = 0;
             }
             _ => {}
@@ -398,6 +427,10 @@ impl App {
                 .reasoning_levels()
                 .get(selected)
                 .map(|level| Action::SetReasoning(*level)),
+            Overlay::SessionInfo { .. } => {
+                self.copy_session_id();
+                None
+            }
             Overlay::Palette { .. }
             | Overlay::Files { .. }
             | Overlay::Context
@@ -460,6 +493,10 @@ impl App {
             }
             KeyCode::Char('r') if ctrl => self.open_panel(Panel::Sessions),
             KeyCode::Char('l') if ctrl => self.open_panel(Panel::Models),
+            KeyCode::Char('p' | 'P') if ctrl => {
+                let backward = shift || key.code == KeyCode::Char('P');
+                return Some(Action::CycleModel { forward: !backward });
+            }
             KeyCode::Char('f') if ctrl => self.open_panel(Panel::Find),
             KeyCode::Char('a') if ctrl => self.composer.move_home(),
             KeyCode::Char('e') if ctrl => self.composer.move_end(),
@@ -540,8 +577,9 @@ impl App {
     /// A draft is a command only when its first word names one; anything else
     /// starting with `/` (a path, say) is a prompt.
     fn submit_or_command(&mut self) -> Option<Action> {
-        let executed = commands::parse(self.composer.text())
-            .and_then(|(name, argument)| commands::execute(name, argument));
+        let text = self.composer.text().to_owned();
+        let executed =
+            commands::parse(&text).and_then(|(name, argument)| commands::execute(name, argument));
         match executed {
             Some(Executed::Action(action)) => {
                 self.composer.clear();
@@ -557,8 +595,32 @@ impl App {
                 self.notice(NoticeLevel::Error, commands::needs_argument(name));
                 None
             }
-            None => Some(Action::Submit),
+            None => self.submit_line(&text),
         }
+    }
+
+    /// A draft no built-in command claims: a template, a typo that Enter warns
+    /// about once, or a prompt. `//` escapes a leading slash.
+    fn submit_line(&mut self, text: &str) -> Option<Action> {
+        if let Some(escaped) = text.strip_prefix('/').filter(|rest| rest.starts_with('/')) {
+            self.composer.set_text(escaped);
+        } else if let Some(expanded) =
+            commands::parse(text).and_then(|(name, argument)| self.expand_template(name, argument))
+        {
+            self.composer.set_text(&expanded);
+        } else if let Some(name) = commands::bare_word(text)
+            && self.armed_unknown.as_deref() != Some(text.trim())
+        {
+            let known = commands::COMMANDS
+                .iter()
+                .map(|command| command.name)
+                .chain(self.templates.iter().map(|template| template.name.as_str()));
+            let notice = commands::unknown_notice(name, commands::closest(name, known));
+            self.armed_unknown = Some(text.trim().to_owned());
+            self.notice(NoticeLevel::Error, notice);
+            return None;
+        }
+        Some(Action::Submit)
     }
 
     fn page_rows(&self) -> isize {

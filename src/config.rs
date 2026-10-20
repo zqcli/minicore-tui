@@ -31,6 +31,8 @@ pub struct Config {
     pub theme: ThemeKind,
     /// Editor executable plus arguments; the draft path is appended.
     pub editor: Vec<String>,
+    /// Ring the terminal bell when a long turn ends or waits for approval.
+    pub bell: bool,
 }
 
 impl Default for Config {
@@ -40,8 +42,14 @@ impl Default for Config {
             agent_config: None,
             theme: ThemeKind::Dark,
             editor: Vec::new(),
+            bell: true,
         }
     }
+}
+
+/// The directory holding the config file, which also holds `prompts/`.
+pub fn config_dir() -> Option<PathBuf> {
+    config_path()?.parent().map(Path::to_path_buf)
 }
 
 fn config_path() -> Option<PathBuf> {

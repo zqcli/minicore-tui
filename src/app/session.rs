@@ -1,5 +1,6 @@
 //! The resident session: transcript, live turn, queue, usage and status.
 
+use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
 
 use crate::protocol::event::{PreviewState, ToolOutcome};
@@ -34,6 +35,8 @@ pub struct Session {
     /// replayed from history carries none of its own.
     pub summary_coverage: Option<(usize, usize)>,
     pub interaction: Option<PendingInteraction>,
+    /// Tools whose approvals the user allowed for the rest of this session.
+    pub allowed_tools: BTreeSet<String>,
     /// The display projection's first item; older items are behind the
     /// compaction summary.
     pub first_item: usize,
@@ -167,10 +170,15 @@ impl PendingInteraction {
         }
     }
 
-    /// The rows the prompt offers; for an approval, row 0 allows.
+    /// The rows the prompt offers; for an approval, row 0 allows once, row 1
+    /// denies and row 2 allows the tool for the session.
     pub fn options(&self) -> Vec<String> {
         match &self.kind {
-            InteractionKind::Approval => vec!["Allow once".into(), "Deny".into()],
+            InteractionKind::Approval => vec![
+                "Allow once".into(),
+                "Deny".into(),
+                format!("Allow {} this session", self.tool_name),
+            ],
             InteractionKind::Choice(choices) => choices.clone(),
         }
     }
@@ -192,6 +200,7 @@ impl Session {
             compaction: None,
             summary_coverage: None,
             interaction: None,
+            allowed_tools: BTreeSet::new(),
             first_item: 0,
             loaded_from: 0,
             loading_older: false,

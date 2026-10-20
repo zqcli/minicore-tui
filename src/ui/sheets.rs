@@ -4,7 +4,6 @@
 
 use ratatui::text::{Line, Span};
 
-use crate::app::commands;
 use crate::app::overlay::{self, matching_models};
 use crate::app::session::{InteractionKind, auto_title};
 use crate::app::{App, Overlay, Session};
@@ -27,7 +26,17 @@ pub fn sheet(app: &App, styles: Styles) -> Option<Sheet> {
             selected,
             rows,
             armed,
-        } => sessions_sheet(app, rows, filter, *selected, armed.as_deref(), styles),
+            renaming,
+        } => {
+            let state = SessionsState {
+                filter,
+                selected: *selected,
+                armed: armed.as_deref(),
+                renaming: renaming.as_deref(),
+            };
+            sessions_sheet(app, rows, &state, styles)
+        }
+        Overlay::SessionInfo { items } => session_info_sheet(app, *items, styles),
         Overlay::Models { filter, selected } => models_sheet(app, filter, *selected, styles),
         Overlay::Reasoning { selected } => reasoning_sheet(app, *selected),
         Overlay::Find {
@@ -49,20 +58,7 @@ pub fn sheet(app: &App, styles: Styles) -> Option<Sheet> {
 /// composer band, as content only: the band adds the gutter, rail and tint.
 pub fn completion(app: &App, styles: Styles, width: u16) -> Option<Vec<Line<'static>>> {
     let (items, selected) = match &app.overlay {
-        Overlay::Palette { selected } => {
-            let items = commands::filter(app.palette_query()?)
-                .into_iter()
-                .map(|command| {
-                    let detail = if command.args.is_empty() {
-                        command.description.to_owned()
-                    } else {
-                        format!("{} — {}", command.args, command.description)
-                    };
-                    (command.name.to_owned(), detail)
-                })
-                .collect::<Vec<_>>();
-            (items, *selected)
-        }
+        Overlay::Palette { selected } => (app.palette_rows(), *selected),
         Overlay::Files { selected, paths } => {
             let items = overlay::matching_paths(paths, app.mention_query()?)
                 .into_iter()
@@ -114,14 +110,23 @@ fn completion_lines(
     lines
 }
 
-fn sessions_sheet(
-    app: &App,
-    rows: &[SessionInfo],
-    filter: &str,
+/// The sessions picker's own state, as the sheet shows it.
+struct SessionsState<'a> {
+    filter: &'a str,
     selected: usize,
-    armed: Option<&str>,
-    styles: Styles,
-) -> Sheet {
+    /// The session a first Ctrl+D asked to delete.
+    armed: Option<&'a str>,
+    /// The title being typed, when a rename is under way.
+    renaming: Option<&'a str>,
+}
+
+fn sessions_sheet(app: &App, rows: &[SessionInfo], state: &SessionsState, styles: Styles) -> Sheet {
+    let SessionsState {
+        filter,
+        selected,
+        armed,
+        renaming,
+    } = *state;
     let resident = app
         .session
         .as_ref()
@@ -131,6 +136,20 @@ fn sessions_sheet(
         .map(|elapsed| elapsed.as_secs())
         .unwrap_or(0);
     let shown = filtered_sessions(rows, filter, app.session.as_ref());
+    if let Some(title) = renaming {
+        let target = shown
+            .get(selected)
+            .map(|info| session_label(info, app.session.as_ref()))
+            .unwrap_or_default();
+        return Sheet::new("Rename Session", "enter save · esc cancel")
+            .status(target)
+            .search(title);
+    }
+    let labels: Vec<String> = shown
+        .iter()
+        .map(|info| session_label(info, app.session.as_ref()))
+        .collect();
+    let workspace = app.workspace.to_string_lossy();
     let status = if shown.len() == rows.len() {
         count(rows.len(), "session")
     } else {
@@ -138,10 +157,15 @@ fn sessions_sheet(
     };
     let list = shown
         .iter()
-        .map(|info| {
-            let label = session_label(info, app.session.as_ref());
+        .zip(&labels)
+        .map(|(info, label)| {
             let current = resident == Some(info.session_id.as_str());
-            let row = session_row(info, label, current, now);
+            let context = RowContext {
+                current,
+                other_workspace: info.workspace != workspace,
+                duplicate: labels.iter().filter(|other| *other == label).count() > 1,
+            };
+            let row = session_row(info, label.clone(), &context, now);
             if armed == Some(info.session_id.as_str()) {
                 row.tone(Tone::Failure)
             } else {
@@ -152,7 +176,7 @@ fn sessions_sheet(
     let hint = if armed.is_some() {
         "ctrl+d delete again · esc cancel"
     } else {
-        "enter open · ctrl+d delete · esc close"
+        "enter open · ctrl+n rename · ctrl+d delete · esc close"
     };
     let notes = if list.is_empty() {
         vec![Line::styled("  No sessions found", styles.dim())]
@@ -213,7 +237,7 @@ fn provider(model: &ModelInfo) -> Option<&str> {
 }
 
 /// The full reference and the context window, as the model note shows them.
-fn model_details(model: &ModelInfo) -> String {
+pub fn model_details(model: &ModelInfo) -> String {
     let name = model.model_ref.as_deref().unwrap_or(&model.id);
     match model.context_window {
         Some(window) => format!("{name} · {} context", super::format_tokens(window)),
@@ -288,6 +312,8 @@ struct Subject<'a> {
 
 /// Input lines an approval shows before it says how many more there are.
 const INPUT_PREVIEW: usize = 6;
+/// The same for the diff of an `edit` or a patch.
+const DIFF_PREVIEW: usize = 12;
 
 /// The sheet for a pending interaction: the question, what would run, then
 /// the approval's two rows or the choice list.
@@ -310,14 +336,23 @@ fn approval_sheet(
         ]));
     }
     if let Some(input) = subject.input.filter(|input| !input.trim().is_empty()) {
-        let style = styles.dim();
-        let lines: Vec<&str> = input.lines().collect();
-        for line in lines.iter().take(INPUT_PREVIEW) {
+        let diff = matches!(subject.tool, "edit" | "apply_patch" | "patch");
+        let lines: Vec<&str> = input
+            .lines()
+            .filter(|line| !diff || !is_diff_header(line))
+            .collect();
+        let cap = if diff { DIFF_PREVIEW } else { INPUT_PREVIEW };
+        for line in lines.iter().take(cap) {
+            let style = if diff {
+                diff_style(line, styles)
+            } else {
+                styles.dim()
+            };
             body.push(Line::styled(format!("  {}", truncate(line, 100)), style));
         }
-        if lines.len() > INPUT_PREVIEW {
+        if lines.len() > cap {
             body.push(Line::styled(
-                format!("  … {} more lines", lines.len() - INPUT_PREVIEW),
+                format!("  … {} more lines", lines.len() - cap),
                 styles.faint(),
             ));
         }
@@ -331,12 +366,16 @@ fn approval_sheet(
             }
             match index {
                 0 => Row::new(option.clone(), "y").tone(Tone::Success),
-                _ => Row::new(option.clone(), "n").tone(Tone::Failure),
+                1 => Row::new(option.clone(), "n").tone(Tone::Failure),
+                _ => Row::new(option.clone(), "a").tone(Tone::Success),
             }
         })
         .collect();
     let (title, hint) = if approval {
-        ("Approval", "enter confirm · y allow · n deny · esc deny")
+        (
+            "Approval",
+            "enter confirm · y allow · a allow for session · n deny · esc deny",
+        )
     } else {
         ("Question", "enter choose · esc deny")
     };
@@ -345,6 +384,29 @@ fn approval_sheet(
         .body(body)
         .rows(rows)
         .selected(Some(selected))
+}
+
+/// The envelope lines of an `edit` diff or a patch, which say nothing the card does not.
+fn is_diff_header(line: &str) -> bool {
+    [
+        "--- before",
+        "+++ after",
+        "--- a/",
+        "+++ b/",
+        "@@",
+        "*** Begin Patch",
+        "*** End Patch",
+    ]
+    .iter()
+    .any(|prefix| line.starts_with(prefix))
+}
+
+fn diff_style(line: &str, styles: Styles) -> ratatui::style::Style {
+    match line.as_bytes().first() {
+        Some(b'+') => styles.success(),
+        Some(b'-') => styles.failure(),
+        _ => styles.dim(),
+    }
 }
 
 /// The find bar: the query in the title, the match position on the right.
@@ -399,16 +461,93 @@ pub fn filtered_sessions<'a>(
         .collect()
 }
 
-/// One sessions-picker row: `label` (the title, or the first prompt), marked
-/// when it is the resident session, with model and age on the right.
-fn session_row(info: &SessionInfo, label: String, resident: bool, now_seconds: u64) -> Row {
+/// What sets one sessions-picker row apart from the others.
+struct RowContext {
+    current: bool,
+    other_workspace: bool,
+    /// Another listed session has the same label.
+    duplicate: bool,
+}
+
+/// One sessions-picker row: `label` (the title, or the first prompt), with
+/// what tells the session apart on the right, then its age. The current
+/// session says so, one in another workspace names it, and a label shared
+/// with another session gets its short id.
+fn session_row(info: &SessionInfo, label: String, context: &RowContext, now_seconds: u64) -> Row {
+    let mut parts = Vec::new();
+    if context.current {
+        parts.push("current".to_owned());
+    }
+    if context.other_workspace
+        && let Some(name) = std::path::Path::new(&info.workspace).file_name()
+    {
+        parts.push(name.to_string_lossy().into_owned());
+    }
+    if context.duplicate {
+        parts.push(short_session_id(&info.session_id).to_owned());
+    }
     let age = age_label(&info.updated_at, now_seconds);
-    let detail = if age.is_empty() {
-        info.model.clone()
-    } else {
-        format!("{} {age}", info.model)
+    if !age.is_empty() {
+        parts.push(age);
+    }
+    Row::new(label, parts.join(" · ")).mark(context.current)
+}
+
+/// `/session`: the facts about the resident session; Enter or `c` copies its id.
+fn session_info_sheet(app: &App, items: Option<usize>, styles: Styles) -> Sheet {
+    let sheet = Sheet::new("Session", "enter copy id · c copy id · esc close");
+    let Some(session) = app.session.as_ref() else {
+        return sheet.body(vec![Line::styled("  No session is open", styles.dim())]);
     };
-    Row::new(label, detail).mark(resident)
+    let info = &session.info;
+    let usage = &session.usage;
+    let tokens = if usage.input + usage.output + usage.cached > 0 {
+        let format = super::format_tokens;
+        format!(
+            "↑{} ↓{} R{}",
+            format(usage.input),
+            format(usage.output),
+            format(usage.cached)
+        )
+    } else {
+        "none yet".to_owned()
+    };
+    let profile = app
+        .profiles
+        .iter()
+        .find(|profile| profile.id == info.profile)
+        .and_then(|profile| profile.approval.as_deref());
+    let facts = [
+        ("id", info.session_id.clone()),
+        ("title", session_label(info, Some(session))),
+        ("workspace", info.workspace.clone()),
+        (
+            "profile",
+            match profile {
+                Some(approval) => format!("{} ({approval} approval)", info.profile),
+                None => info.profile.clone(),
+            },
+        ),
+        (
+            "model",
+            format!("{} · {}", info.model, info.reasoning.label()),
+        ),
+        (
+            "items",
+            items.map_or_else(|| "…".to_owned(), |total| total.to_string()),
+        ),
+        ("tokens", tokens),
+    ];
+    let body = facts
+        .into_iter()
+        .map(|(name, value)| {
+            Line::from(vec![
+                Span::styled(format!("{name:<10}"), styles.dim()),
+                Span::styled(truncate(&value, 120), styles.text()),
+            ])
+        })
+        .collect();
+    sheet.body(body)
 }
 
 /// `now`, `5m`, `3h`, `2d`, `1w`, `4mo` or `2y`; empty when the timestamp is not RFC 3339.
@@ -544,7 +683,11 @@ mod tests {
             styles(),
         );
         assert_eq!(sheet.title, "Approval");
-        assert!(sheet.hint.contains("y allow · n deny"));
+        assert!(
+            sheet
+                .hint
+                .contains("y allow · a allow for session · n deny")
+        );
         assert_eq!(sheet.rows[0].label, "Allow once");
         assert_eq!(sheet.rows[0].detail, "y");
         assert_eq!(sheet.rows[0].tone, Tone::Success);
@@ -620,14 +763,36 @@ mod tests {
         assert_eq!(sheet.status.as_deref(), Some("3 of 5"));
     }
 
+    fn context(current: bool, other_workspace: bool, duplicate: bool) -> RowContext {
+        RowContext {
+            current,
+            other_workspace,
+            duplicate,
+        }
+    }
+
     #[test]
-    fn a_session_row_marks_the_resident_session_and_shows_model_and_age() {
-        let row = session_row(&info(), "Fix the parser".into(), true, now());
+    fn a_session_row_says_if_it_is_current_and_shows_its_age_not_the_model() {
+        let row = session_row(
+            &info(),
+            "Fix the parser".into(),
+            &context(true, false, false),
+            now(),
+        );
         assert_eq!(row.label, "Fix the parser");
         assert_eq!(row.mark, Some(true));
-        assert_eq!(row.detail, "gpt-6-luna 3h");
-        let row = session_row(&info(), "Fix the parser".into(), false, now());
+        assert_eq!(row.detail, "current · 3h");
+        let row = session_row(&info(), "x".into(), &context(false, false, false), now());
         assert_eq!(row.mark, Some(false));
+        assert_eq!(row.detail, "3h");
+    }
+
+    #[test]
+    fn rows_that_look_alike_get_a_short_id_and_other_workspaces_are_named() {
+        let mut other = info();
+        other.workspace = "/work/stockroom".into();
+        let row = session_row(&other, "Same".into(), &context(false, true, true), now());
+        assert_eq!(row.detail, "stockroom · ses_1acdef · 3h");
     }
 
     #[test]

@@ -305,12 +305,20 @@ fn the_footer_names_the_branch_and_right_aligns_the_totals() {
         "{footer}"
     );
     assert_eq!(crate::ui::wrap::width(footer), 100, "flush right: {footer}");
-    // On a narrow terminal the directory and model are cut with an ellipsis.
-    let narrow = render(&mut app, 50, 12);
-    let footer = narrow.lines().last().unwrap_or_default();
-    assert!(footer.contains('…'), "{footer}");
-    assert!(footer.ends_with("ctx 41.00%"), "{footer}");
-    assert_eq!(crate::ui::wrap::width(footer), 50, "{footer}");
+    // On a narrow terminal the directory is cut first, then dropped; the
+    // model and level stay.
+    for (columns, identity) in [(60_u16, " ▸ mini…"), (50, " gpt")] {
+        let narrow = render(&mut app, columns, 12);
+        let footer = narrow.lines().last().unwrap_or_default();
+        assert!(footer.starts_with(identity), "{footer}");
+        assert!(footer.contains("gpt 6 luna · max"), "{footer}");
+        assert!(footer.ends_with("ctx 41.00%"), "{footer}");
+        assert_eq!(
+            crate::ui::wrap::width(footer),
+            usize::from(columns),
+            "{footer}"
+        );
+    }
 }
 
 /// The last transcript row never touches the stack below it, and the

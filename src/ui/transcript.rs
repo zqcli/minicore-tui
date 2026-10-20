@@ -17,7 +17,7 @@ use unicode_segmentation::UnicodeSegmentation;
 use super::markdown::StreamRenderer;
 use super::theme::Styles;
 use super::{blocks, selection, views};
-use crate::app::{App, Scroll};
+use crate::app::{App, Overlay, Scroll, find};
 use crate::transcript::Block;
 use crate::transcript::layout::{Fold, Viewport};
 
@@ -177,6 +177,12 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, styles: Styles) {
             if let Some(span) = selection::row_span(area.y + index as u16, drag, area) {
                 *line = highlight(line, span.start, span.end);
             }
+        }
+    }
+    if let Overlay::Find { query, .. } = &app.overlay {
+        let style = styles.amber().add_modifier(Modifier::REVERSED);
+        for line in &mut lines {
+            *line = find::mark(line, query, style);
         }
     }
     // Copy reads exactly these rows, so a drag copies what is on screen even

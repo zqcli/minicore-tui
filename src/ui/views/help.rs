@@ -114,7 +114,7 @@ const KEYS: &[KeyRow] = &[
 ];
 
 /// The key table, then the commands.
-pub fn lines(commands: &[Command], styles: Styles) -> Vec<Line<'static>> {
+pub fn lines(commands: &[Command<'static>], styles: Styles) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     lines.push(styled("Keys", styles.dim()));
     for row in KEYS {
