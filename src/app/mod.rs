@@ -18,6 +18,7 @@ mod tests;
 pub mod tool;
 
 use std::collections::VecDeque;
+use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -60,6 +61,8 @@ pub enum Msg {
     Notice(NoticeLevel, String),
     /// The external editor returned a draft.
     DraftEdited(Option<String>),
+    /// A moment of feedback over the transcript, such as `Copied!`.
+    Flash(String),
 }
 
 /// The catalogs read at startup.
@@ -137,6 +140,17 @@ pub enum Scroll {
     Anchor { block: usize, offset: u16 },
 }
 
+/// The last left-button press, for drags and repeated clicks.
+#[derive(Clone, Debug)]
+pub struct Press {
+    pub cell: (u16, u16),
+    pub at: tokio::time::Instant,
+    /// 1, 2 or 3: a character drag, a word, a line.
+    pub clicks: u8,
+    /// The word under the press, which the next click must hit to count.
+    pub word: Option<Range<u16>>,
+}
+
 pub struct App {
     pub client: Arc<Client>,
     pub tx: Tx,
@@ -164,9 +178,14 @@ pub struct App {
     pub theme: ThemeKind,
     pub overlay: Overlay,
     pub styles: Styles,
-    /// Mouse selection: the cell the drag started at and where it is now.
-    pub selection_start: Option<(u16, u16)>,
-    pub selection_end: Option<(u16, u16)>,
+    /// The highlighted cells, copied when the button comes up.
+    pub selection: Option<crate::ui::selection::Drag>,
+    pub press: Option<Press>,
+    /// The scrollbar thumb is held this many rows below its top.
+    pub scrollbar_grab: Option<usize>,
+    /// The last scroll by the user, which shows the scrollbar for a moment.
+    pub scrolled_at: Option<tokio::time::Instant>,
+    pub flash: Option<(String, tokio::time::Instant)>,
     /// The rows the last frame drew, so selection copies what is on screen.
     pub rendered: crate::ui::selection::Screen,
     /// The transcript's line cache and viewport, owned by the renderer.
@@ -185,6 +204,10 @@ pub struct Fatal {
 }
 
 pub const NOTICE_TTL: Duration = Duration::from_secs(5);
+/// How long a flash and the scrollbar stay after the event that showed them.
+pub const FLASH_TTL: Duration = Duration::from_secs(1);
+/// Presses this close together on one word make a double or triple click.
+pub const DOUBLE_CLICK: Duration = Duration::from_millis(500);
 /// Delay before asking again whether post-turn compaction finished.
 pub const BUSY_RETRY: Duration = Duration::from_millis(700);
 
@@ -214,8 +237,11 @@ impl App {
             theme: ThemeKind::Dark,
             overlay: Overlay::None,
             styles: Styles::of(Palette::dark()),
-            selection_start: None,
-            selection_end: None,
+            selection: None,
+            press: None,
+            scrollbar_grab: None,
+            scrolled_at: None,
+            flash: None,
             rendered: crate::ui::selection::Screen::default(),
             layout: Layout::default(),
             edit_request: None,
@@ -278,23 +304,32 @@ impl App {
             Msg::DraftEdited(draft) => self
                 .composer
                 .restore_text(draft.as_deref().unwrap_or_default()),
+            Msg::Flash(text) => self.flash = Some((text, tokio::time::Instant::now())),
         }
     }
 
-    /// Expires info notices; errors stay until the next key press.
+    /// Expires info notices and the flash; errors stay until the next key press.
     pub fn tick(&mut self) {
         self.notices.retain(|notice| {
             notice.level == NoticeLevel::Error || notice.at.elapsed() < NOTICE_TTL
         });
+        self.flash = self.flash.take().filter(|(_, at)| at.elapsed() < FLASH_TTL);
     }
 
     /// Whether something on screen moves with the clock.
     pub fn wants_tick(&self) -> bool {
         self.status_label().is_some()
+            || self.flash.is_some()
+            || self.scrollbar_shown()
             || self
                 .notices
                 .iter()
                 .any(|notice| notice.level == NoticeLevel::Info)
+    }
+
+    /// The scrollbar shows while its thumb is held and briefly after a scroll.
+    pub fn scrollbar_shown(&self) -> bool {
+        self.scrollbar_grab.is_some() || self.scrolled_at.is_some_and(|at| at.elapsed() < FLASH_TTL)
     }
 
     pub fn notice(&mut self, level: NoticeLevel, text: impl Into<String>) {
@@ -396,16 +431,24 @@ impl App {
             Scroll::Follow => max_top,
             Scroll::Anchor { block, offset } => layout.anchor_row(block, offset).min(max_top),
         };
-        let next = (top as isize + delta).clamp(0, max_top as isize) as usize;
-        if next == max_top {
+        self.scroll_to(top.saturating_add_signed(delta));
+    }
+
+    /// Puts transcript row `top` at the top of the view; the bottom follows.
+    pub fn scroll_to(&mut self, top: usize) {
+        let layout = &self.layout;
+        let max_top = layout.total_rows().saturating_sub(layout.viewport.height);
+        self.scrolled_at = Some(tokio::time::Instant::now());
+        if top >= max_top {
             self.scroll = Scroll::Follow;
             return;
         }
-        let (block, offset) = layout.anchor(next);
+        let upwards = top <= layout.viewport.top;
+        let (block, offset) = layout.anchor(top);
         self.scroll = Scroll::Anchor { block, offset };
         // Reaching the first block asks for the next page; a request in flight
         // makes holding the key harmless.
-        if delta < 0 && block <= 1 {
+        if upwards && block <= 1 {
             self.load_older();
         }
     }

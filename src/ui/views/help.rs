@@ -92,12 +92,20 @@ const KEYS: &[KeyRow] = &[
         action: "find in the transcript",
     },
     KeyRow {
-        keys: "pgup/pgdn, ctrl+home/end",
-        action: "scroll the transcript",
+        keys: "pgup/pgdn, wheel",
+        action: "scroll the transcript (alt+wheel faster)",
+    },
+    KeyRow {
+        keys: "home/end, ctrl+home/end",
+        action: "top (home with an empty draft) · follow the end",
     },
     KeyRow {
         keys: "ctrl+↑ ↓",
         action: "jump between user messages",
+    },
+    KeyRow {
+        keys: "drag, double/triple-click",
+        action: "select text, a word, a line; copies on release",
     },
     KeyRow {
         keys: "f1",
@@ -133,7 +141,13 @@ pub fn render(
     lines: &[Line<'static>],
     scroll: usize,
 ) {
-    chrome(frame, area, styles, "← Help", "pgup/pgdn scroll · esc back");
+    chrome(
+        frame,
+        area,
+        styles,
+        "Help",
+        &[("pgup/pgdn", "scroll"), ("esc", "back")],
+    );
     let bottom = area.bottom().saturating_sub(1);
     let rows = bottom.saturating_sub(area.y + 1) as usize;
     let start = scroll.min(lines.len());

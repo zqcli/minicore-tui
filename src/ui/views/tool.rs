@@ -133,7 +133,7 @@ pub fn render(
     else {
         return;
     };
-    let mut title = format!("← {} · {}", call.name, state_label(call.state));
+    let mut title = format!("{} · {}", call.name, state_label(call.state));
     let calls = || session.transcript.tool_calls();
     if let Some(index) = calls().position(|other| other.key == tool.key) {
         title.push_str(&format!(" · tool {} of {}", index + 1, calls().count()));
@@ -146,7 +146,12 @@ pub fn render(
         area,
         styles,
         &title,
-        "[ ] previous/next tool · ↑↓ PgUp/PgDn scroll · c copy · esc back",
+        &[
+            ("[ ]", "previous/next tool"),
+            ("↑↓ pgup/pgdn", "scroll"),
+            ("c", "copy"),
+            ("esc", "back"),
+        ],
     );
     let mut y = area.y + 1;
     let bottom = area.bottom().saturating_sub(1);

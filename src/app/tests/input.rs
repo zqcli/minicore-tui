@@ -33,8 +33,13 @@ fn conversation(h: &mut Harness, count: usize) {
 /// blank row that separates it from the one above.
 fn first_row(h: &mut Harness) -> String {
     let screen = h.screen(60, 24);
-    let row = screen.lines().find(|row| !row.trim().is_empty());
-    row.unwrap_or_default().to_owned()
+    // The scrollbar fills the right edge for a moment after a scroll.
+    let bare = |row: &str| row.trim_end_matches(['│', '┃', ' ']).to_owned();
+    screen
+        .lines()
+        .map(bare)
+        .find(|row| !row.is_empty())
+        .unwrap_or_default()
 }
 
 #[tokio::test(start_paused = true)]
@@ -304,7 +309,7 @@ async fn escape_closes_a_picker_and_takes_only_its_token() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn paging_keeps_two_rows_and_ctrl_arrows_jump_between_prompts() {
+async fn paging_keeps_four_rows_and_ctrl_arrows_jump_between_prompts() {
     let mut h = Harness::opened(display_read(0, 0)).await;
     conversation(&mut h, 12);
     let before = h.screen(60, 24);
@@ -313,12 +318,13 @@ async fn paging_keeps_two_rows_and_ctrl_arrows_jump_between_prompts() {
 
     h.press(KeyCode::PageUp);
     let after = h.screen(60, 24);
-    let old: Vec<&str> = before.lines().take(rows).collect();
-    let new: Vec<&str> = after.lines().take(rows).collect();
+    let bare = |row: &str| row.trim_end_matches(['│', '┃', ' ']).to_owned();
+    let old: Vec<String> = before.lines().take(rows).map(bare).collect();
+    let new: Vec<String> = after.lines().take(rows).map(bare).collect();
     assert_eq!(
-        new[rows - 2],
+        new[rows - 4],
         old[0],
-        "two rows of the last page stay:\n{after}"
+        "four rows of the last page stay:\n{after}"
     );
     h.press(KeyCode::PageDown);
     assert_eq!(h.app.scroll, Scroll::Follow);
@@ -344,9 +350,20 @@ async fn paging_keeps_two_rows_and_ctrl_arrows_jump_between_prompts() {
     );
 
     h.ctrl(KeyCode::Home);
-    assert!(first_row(&mut h).ends_with("prompt 0"));
+    assert!(
+        first_row(&mut h).ends_with("minicore-tui v0.4.0"),
+        "the header tops the transcript"
+    );
+    assert!(h.screen(60, 24).contains("prompt 0"));
     h.ctrl(KeyCode::End);
     assert_eq!(h.app.scroll, Scroll::Follow);
+    h.press(KeyCode::Home);
+    assert!(
+        first_row(&mut h).ends_with("minicore-tui v0.4.0"),
+        "home with no draft goes to the top"
+    );
+    h.press(KeyCode::End);
+    assert_eq!(h.app.scroll, Scroll::Follow, "end follows the tail again");
 }
 
 #[tokio::test(start_paused = true)]
@@ -404,7 +421,7 @@ async fn r_in_the_context_view_reads_the_ledger_again() {
     h.press(KeyCode::Char('r'));
     h.settle().await;
     assert_eq!(h.calls("session.context").len(), before + 1);
-    assert!(h.screen(80, 20).starts_with("← Context"));
+    assert!(h.screen(80, 20).starts_with(" ← Context"));
 }
 
 fn card(id: &str, name: &str) -> Block {
@@ -446,7 +463,7 @@ async fn slash_tool_opens_a_card_and_brackets_step_between_cards() {
 
     h.type_text("/tool");
     h.press(KeyCode::Enter);
-    assert!(title(&mut h).starts_with("← read"), "the newest card");
+    assert!(title(&mut h).starts_with(" ← read"), "the newest card");
     assert!(title(&mut h).contains("tool 2 of 2"));
     h.settle().await;
     let screen = h.screen(80, 20);

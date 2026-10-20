@@ -407,16 +407,12 @@ impl App {
         }
     }
 
-    /// Copies `text` through the clipboard.
+    /// Copies `text` through the clipboard; success flashes, failure is a notice.
     pub fn copy(&mut self, text: String) {
         self.spawn_msg(async move {
             match crate::clipboard::copy(&text).await {
-                Ok(crate::clipboard::Copied::Native) => {
-                    Msg::Notice(NoticeLevel::Info, "Copied".into())
-                }
-                Ok(crate::clipboard::Copied::Osc52) => {
-                    Msg::Notice(NoticeLevel::Info, "Copied with OSC 52".into())
-                }
+                Ok(crate::clipboard::Copied::Native) => Msg::Flash("Copied!".into()),
+                Ok(crate::clipboard::Copied::Osc52) => Msg::Flash("Copied via OSC 52".into()),
                 Err(error) => Msg::Notice(NoticeLevel::Error, error),
             }
         });

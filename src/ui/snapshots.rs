@@ -223,8 +223,8 @@ fn an_anchored_view_does_not_move_when_content_grows() {
         "the anchored top must not be replaced:\n{before}\n---\n{after}"
     );
     assert!(
-        after.contains("↓ new output"),
-        "the pill marks content below an anchored view:\n{after}"
+        after.contains("↓ Jump to latest message · End"),
+        "the label marks content below an anchored view:\n{after}"
     );
 }
 
@@ -493,7 +493,7 @@ fn clicking_a_card_header_toggles_that_card_and_its_hint_opens_the_tool_view() {
     let app = &mut fixture.app;
     conversation(app);
     let folded = render(app, 70, 20);
-    let header = row_of(&folded, "▎ ✓ bash");
+    let header = row_of(&folded, " ▎ ✓ bash");
     click(app, 10, header);
     let expanded = render(app, 70, 20);
     assert!(
@@ -502,7 +502,7 @@ fn clicking_a_card_header_toggles_that_card_and_its_hint_opens_the_tool_view() {
     );
     assert!(!app.tools_expanded, "only that card changed");
 
-    click(app, 10, row_of(&expanded, "▎   … 14 earlier lines"));
+    click(app, 10, row_of(&expanded, " ▎   … 14 earlier lines"));
     assert!(matches!(app.overlay, Overlay::Tool(_)), "{:?}", app.overlay);
 
     app.overlay = Overlay::None;
@@ -519,7 +519,7 @@ fn clicking_a_turn_end_line_opens_the_turn_diff() {
     let app = &mut fixture.app;
     conversation(app);
     let screen = render(app, 70, 20);
-    click(app, 5, row_of(&screen, "── completed"));
+    click(app, 5, row_of(&screen, " ── completed"));
     assert!(
         matches!(&app.overlay, Overlay::Diff(diff) if diff.scope == crate::app::DiffScope::Turn),
         "{:?}",
@@ -536,7 +536,7 @@ fn a_drag_over_a_card_header_selects_instead_of_toggling() {
     let app = &mut fixture.app;
     conversation(app);
     let screen = render(app, 70, 20);
-    let header = row_of(&screen, "▎ ✓ bash");
+    let header = row_of(&screen, " ▎ ✓ bash");
     for (kind, column) in [
         (MouseEventKind::Down(MouseButton::Left), 2),
         (MouseEventKind::Drag(MouseButton::Left), 8),
@@ -551,6 +551,146 @@ fn a_drag_over_a_card_header_selects_instead_of_toggling() {
     }
     let after = render(app, 70, 20);
     assert!(after.contains("ctrl+o to expand"), "still folded:\n{after}");
+}
+
+#[test]
+fn the_gutter_column_stays_blank_and_ignores_clicks() {
+    let mut fixture = app();
+    let _runtime = fixture._runtime.enter();
+    let app = &mut fixture.app;
+    conversation(app);
+    let screen = render(app, 70, 20);
+    let area = app.layout.viewport.area();
+    assert_eq!(area.x, 1);
+    for line in screen.lines().take(area.height as usize) {
+        assert!(!line.starts_with(|c: char| c != ' '), "{line:?}\n{screen}");
+    }
+    app.scroll = Scroll::Anchor {
+        block: 0,
+        offset: 0,
+    };
+    let top = render(app, 70, 20);
+    assert!(top.contains(" minicore-tui v0.4.0"), "{top}");
+    assert!(
+        top.contains("esc interrupt · ctrl+c clear · / commands"),
+        "{top}"
+    );
+    app.scroll = Scroll::Follow;
+    let header = row_of(&screen, " ▎ ✓ bash");
+    click(app, 0, header);
+    assert!(
+        render(app, 70, 20).contains("ctrl+o to expand"),
+        "still folded"
+    );
+}
+
+fn left(
+    app: &mut App,
+    kind: fn(crossterm::event::MouseButton) -> crossterm::event::MouseEventKind,
+    column: u16,
+    row: u16,
+) {
+    app.on_mouse(crossterm::event::MouseEvent {
+        kind: kind(crossterm::event::MouseButton::Left),
+        column,
+        row,
+        modifiers: crossterm::event::KeyModifiers::NONE,
+    });
+}
+
+#[test]
+fn a_double_click_selects_a_word_and_a_triple_click_the_row() {
+    use crossterm::event::MouseEventKind::{Down, Up};
+    let mut fixture = app();
+    let _runtime = fixture._runtime.enter();
+    let app = &mut fixture.app;
+    conversation(app);
+    let screen = render(app, 70, 20);
+    let row = screen
+        .lines()
+        .position(|line| line.contains("re-renders only the tail"))
+        .expect("answer row") as u16;
+    let column = screen
+        .lines()
+        .nth(row as usize)
+        .unwrap()
+        .find("re-renders")
+        .unwrap() as u16
+        + 3;
+    let selected = |app: &App| app.selection.and_then(|drag| app.selected_text(drag));
+    for _ in 0..2 {
+        left(app, Down, column, row);
+        left(app, Up, column, row);
+    }
+    assert_eq!(selected(app).as_deref(), Some("re-renders"));
+    left(app, Down, column, row);
+    left(app, Up, column, row);
+    assert_eq!(
+        selected(app).as_deref(),
+        Some("  prefix and re-renders only the tail, so a delta costs one small"),
+        "the row without the gutter"
+    );
+    left(app, Down, column, row);
+    assert_eq!(app.selection, None, "a fourth press starts over");
+}
+
+#[test]
+fn a_detached_view_shows_the_jump_label_and_clicking_it_follows() {
+    let mut fixture = app();
+    let _runtime = fixture._runtime.enter();
+    let app = &mut fixture.app;
+    conversation(app);
+    conversation(app);
+    let screen = render(app, 70, 20);
+    assert!(!screen.contains("Jump to latest"), "following:\n{screen}");
+    app.scroll_by(-3);
+    let screen = render(app, 70, 20);
+    let area = app.layout.viewport.area();
+    let last = screen.lines().nth(area.bottom() as usize - 1).unwrap();
+    assert!(last.contains("↓ Jump to latest message · End"), "{screen}");
+    let column = last.find("Jump").unwrap() as u16;
+    click(app, column, area.bottom() - 1);
+    assert_eq!(app.scroll, Scroll::Follow);
+}
+
+#[test]
+fn the_scrollbar_shows_after_a_scroll_and_its_track_jumps() {
+    use crossterm::event::MouseEventKind::{Down, Drag, Up};
+    let mut fixture = app();
+    let _runtime = fixture._runtime.enter();
+    let app = &mut fixture.app;
+    for _ in 0..3 {
+        conversation(app);
+    }
+    let screen = render(app, 70, 20);
+    assert!(!screen.contains('┃'), "hidden until a scroll:\n{screen}");
+    app.scroll_by(-1);
+    let screen = render(app, 70, 20);
+    let area = app.layout.viewport.area();
+    let bar: String = screen
+        .lines()
+        .take(area.height as usize)
+        .map(|line| line.chars().nth(69).unwrap_or(' '))
+        .collect();
+    assert!(
+        bar.ends_with('┃') && bar.starts_with('│'),
+        "thumb at the bottom: {bar:?}"
+    );
+    left(app, Down, 69, area.y);
+    let view = app.layout.viewport;
+    let (_, len) =
+        crate::ui::transcript::thumb(view.height, app.layout.total_rows(), view.top).unwrap();
+    assert_eq!(
+        app.scrollbar_grab,
+        Some(len / 2),
+        "a track press grabs the thumb's centre"
+    );
+    render(app, 70, 20);
+    assert_eq!(app.layout.viewport.top, 0, "and jumps it to the top");
+    left(app, Drag, 69, area.bottom() - 1);
+    left(app, Up, 69, area.bottom() - 1);
+    assert_eq!(app.scroll, Scroll::Follow, "dragged to the end");
+    assert_eq!(app.selection, None, "the bar never selects");
 }
 /// The approval sheet says what would run, from the card, and the status line
 /// says what Esc does while it waits.

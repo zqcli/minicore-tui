@@ -47,6 +47,7 @@ fn open_session_diff(h: &mut Harness) {
 fn rows_naming(screen: &str, path: &str) -> Vec<String> {
     screen
         .lines()
+        .map(str::trim_start)
         .filter(|row| row.contains(path) && !row.starts_with('←'))
         .map(str::to_owned)
         .collect()
@@ -86,7 +87,7 @@ async fn the_diff_view_lists_one_row_per_path_and_counts_every_record() {
     open_session_diff(&mut h);
     h.settle().await;
     let screen = h.screen(100, 30);
-    assert!(screen.starts_with("← Diff · session · app.py"), "{screen}");
+    assert!(screen.starts_with(" ← Diff · session · app.py"), "{screen}");
     let app_rows = rows_naming(&screen, "app.py");
     assert_eq!(app_rows.len(), 1, "{screen}");
     assert!(app_rows[0].starts_with("M +2 −1 app.py"), "{screen}");
@@ -135,7 +136,7 @@ async fn a_late_answer_lands_on_its_own_row_and_never_paints_another_file() {
     h.press(KeyCode::Down);
     h.settle().await;
     let screen = h.screen(100, 30);
-    assert!(screen.starts_with("← Diff · session · b.py"), "{screen}");
+    assert!(screen.starts_with(" ← Diff · session · b.py"), "{screen}");
     assert!(
         rows_naming(&screen, "a.py")[0].starts_with("M +2 −1 a.py"),
         "{screen}"
@@ -164,7 +165,7 @@ async fn selecting_another_file_clears_the_pane_before_its_answer() {
 
     h.press(KeyCode::Down);
     let screen = h.screen(100, 30);
-    assert!(screen.starts_with("← Diff · session · b.py"), "{screen}");
+    assert!(screen.starts_with(" ← Diff · session · b.py"), "{screen}");
     assert!(!screen.contains("a1"), "{screen}");
     h.settle().await;
     assert!(h.screen(100, 30).contains("+b1"));
