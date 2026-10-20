@@ -76,6 +76,10 @@ const KEYS: &[KeyRow] = &[
         action: "model",
     },
     KeyRow {
+        keys: "ctrl+p, shift+ctrl+p",
+        action: "next or previous model",
+    },
+    KeyRow {
         keys: "shift+tab",
         action: "cycle the reasoning level",
     },

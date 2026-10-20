@@ -369,23 +369,36 @@ impl App {
         self.call(protocol::METHOD_INTERACTION_ANSWER, fields, SessionOp::Done);
     }
 
-    /// Answers an approval for a tool the user allowed for the session.
-    pub(super) fn auto_allow(&mut self) {
+    /// A new approval: answered at once for a tool allowed for the session,
+    /// else its card is read for the input it would run, which an `edit`
+    /// card only has once it has run.
+    pub(super) fn on_approval_requested(&mut self) {
         let Some(session) = self.session.as_ref() else {
             return;
         };
-        let tool = session
-            .interaction
-            .as_ref()
-            .filter(|interaction| matches!(interaction.kind, InteractionKind::Approval))
-            .map(|interaction| interaction.tool_name.clone())
-            .filter(|tool| session.allowed_tools.contains(tool));
-        if let Some(tool) = tool {
+        let Some(interaction) = session.interaction.as_ref() else {
+            return;
+        };
+        let approval = matches!(interaction.kind, InteractionKind::Approval);
+        if approval && session.allowed_tools.contains(&interaction.tool_name) {
+            let tool = interaction.tool_name.clone();
             self.answer(Answer::Allow);
             self.notice(
                 NoticeLevel::Info,
                 format!("Allowed {tool} for this session"),
             );
+            return;
+        }
+        let card = session
+            .transcript
+            .find_tool_by_call_id(&interaction.tool_call_id)
+            .filter(|call| call.expanded_input.is_none());
+        if let Some(call) = card {
+            let key = call.key.clone();
+            let hydrated = key.clone();
+            self.read_tool(&key, move |read| {
+                SessionOp::ToolHydrated(hydrated, read.ok())
+            });
         }
     }
 

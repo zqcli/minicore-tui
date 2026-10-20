@@ -12,7 +12,7 @@ the kitty keyboard protocol; `Ctrl+J` always inserts a newline.
 
 | Key | Action |
 |---|---|
-| `Enter` | Send when the session is idle; steer the running turn when it is busy. A draft whose first word names a command (`/model`, `/rename x`) runs it; any other draft, `/usr/bin/env is broken` included, is a prompt. |
+| `Enter` | Send when the session is idle; steer the running turn when it is busy. A draft whose first word names a command (`/model`, `/rename x`) or a prompt template runs it. A bare `/word` that names nothing (`/modle`) is not sent: a notice offers the nearest command, and a second `Enter` (or a leading `//`, which sends the rest) sends it as text. Any other draft, `/usr/bin/env is broken` and `/usr/bin` included, is a prompt. |
 | `Alt+Enter` | Queue the draft as a follow-up while a turn runs; send it when idle. |
 | `Shift+Enter`, `Ctrl+J` | Newline. |
 | `Esc` | Interrupt the running turn; when idle, clear the draft. Closes an open picker or view first. |
@@ -44,6 +44,7 @@ one unit. `Esc` while busy only interrupts; it does not clear the draft.
 | `Ctrl+↑` / `Ctrl+↓` | Put the previous or next user message at the top; past the last one, follow the tail. |
 | `Ctrl+R` | Sessions picker. |
 | `Ctrl+L` | Model picker. |
+| `Ctrl+P` / `Shift+Ctrl+P` | Switch to the next or previous model in the catalog (`Shift+Ctrl+P` needs the kitty keyboard protocol; other terminals send `Ctrl+P` for both). |
 | `Shift+Tab` | Switch to the next reasoning level the model supports. |
 | `Ctrl+O` | Expand or collapse all tool cards, thinking and compaction summaries. |
 | `Ctrl+T` | Collapse thinking to one `Thinking...` row, or show it again. |
@@ -78,12 +79,13 @@ counter.
 
 | Sheet | Keys |
 |---|---|
-| Command list | The text after `/` stays in the composer and filters the commands fuzzily, best match first. `Enter` runs the highlighted command with the argument typed after its name; `Tab` completes `/name ` without running. `Esc` closes the list and leaves the draft as it is; deleting the `/` closes it too. |
-| Sessions | Type to filter by title. `Enter` opens the session. `Ctrl+D` twice deletes the selected one; the open session cannot be deleted. Sessions of this workspace come first, newest first; the open one is marked. |
+| Command list | The text after `/` stays in the composer and filters the commands fuzzily, best match first. `Enter` runs the highlighted command with the argument typed after its name; `Tab` completes `/name ` without running. After `/model `, `/new `, `/reasoning `, `/theme ` or `/diff ` the list offers that command's arguments (model ids, profiles, levels) and `Enter` runs the command with the highlighted one. Prompt templates are listed with their description. `Esc` closes the list and leaves the draft as it is; deleting the `/` closes it too. |
+| Sessions | Type to filter by title. `Enter` opens the session. `Ctrl+N` renames the selected one (`Enter` saves, `Esc` cancels; an empty title clears it). `Ctrl+D` twice deletes the selected one; the open session cannot be deleted. Sessions of this workspace come first, newest first. Each row ends with its last activity; the open one says `current`, one from another workspace names it, and a title shared with another row adds the short id. |
+| Session (`/session`) | Id, title, workspace, profile, model, history items and token totals. `Enter` or `c` copies the id. |
 | Model | Type to filter by id. `Enter` switches to the highlighted model; the current one is marked `✓`. |
 | Reasoning | `Enter` applies the highlighted level; the current one is marked `✓`. |
 | Files (`@`) | The `@word` before the cursor filters workspace paths (up to 500 files). `Enter` or `Tab` replaces it with `@path `; with no match `Enter` does nothing. `Esc` closes the list and leaves the text. |
-| Find | Type to search (case-insensitive, one match per block: messages, notices, tool details, compaction summaries); the view shows match 1 as you type. `Enter`, `↓`, `Tab` go to the next match; `Shift+Enter`, `↑` to the previous. `Esc` closes and leaves the view where it is. |
+| Find | Type to search (case-insensitive; every occurrence counts: messages, notices, thinking, tool details and loaded tool output, compaction summaries); the view lands on the row of match 1 as you type, opens the folded thinking or tool output that holds it, and highlights the matches on screen. `Enter`, `↓`, `Tab` go to the next match; `Shift+Enter`, `↑` to the previous. `Esc` closes and leaves the view where it is. |
 
 ## Approval and choice prompts
 
@@ -92,8 +94,9 @@ While an interaction is pending, only these keys act; the rest are ignored.
 | Key | Action |
 |---|---|
 | `y` | Allow once (approval). |
+| `a` | Allow once and answer every later approval of the same tool for the rest of this session (the footer shows `allow <tool>`). |
 | `n`, `Esc` | Deny (approval). |
-| `↑` / `↓`, `Enter` | Select a row and submit it. For an approval the first row is `Allow once`, the second `Deny`. |
+| `↑` / `↓`, `Enter` | Select a row and submit it. For an approval the rows are `Allow once`, `Deny` and `Allow <tool> this session`. An `edit` or patch approval shows its diff. |
 
 ## Views
 
@@ -113,10 +116,11 @@ the name.
 
 | Command | Effect |
 |---|---|
-| `/new` | Create a session with the current defaults. |
+| `/new [profile]` | Create a session with the Agent's default profile, or the named one. |
 | `/sessions`, `/resume` | Open the sessions picker. |
 | `/rename <title>` | Rename the current session (an empty title is an error). |
-| `/model` | Open the model picker. |
+| `/model [id]` | Switch to the model (an exact id or a unique fuzzy match), or open the picker. |
+| `/session` | Show the open session's id, workspace, profile, model, item count and token totals. |
 | `/reasoning [level]` | Set the level directly, or open the picker when no valid level is given. |
 | `/compact` | Run manual compaction; refused while a turn runs. |
 | `/diff [session\|workspace]` | Open the diff view for the last turn, or the given scope. |
@@ -128,3 +132,21 @@ the name.
 | `/reload` | Ask the Agent to reload its configuration. |
 | `/help` | Open the help view. |
 | `/quit` | Quit. |
+
+## Prompt templates
+
+Each `*.md` file in `prompts/` next to the TUI config (`~/.config/minicore-tui/prompts/`,
+or beside `$MINICORE_TUI_CONFIG`) is a command named after the file; they are
+read at start and by `/reload`. A template shadows no built-in command. An
+optional `---` front matter gives `description:` and `argument-hint:`; without a
+description the first line is used. `/name args` expands `$1`, `$2`, …, `$@` (or
+`$ARGUMENTS`) and `${1:-default}` from the shell-quoted arguments and sends the
+text, as pi does.
+
+## Terminal title, bell and resume hint
+
+The window title is `workspace · session title · idle|working|approval`, written
+only when it changes. The terminal bell rings when a turn that ran more than
+10 s ends, or asks for approval; `bell = false` in the TUI config turns it off.
+Quitting restores the title and prints `Resume: minicore-tui --session <id>` for
+a session with history.

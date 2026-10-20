@@ -368,12 +368,15 @@ impl App {
             let session = self.session_mut();
             let was_compacting = session.compaction.is_some();
             let usage = matches!(event, AgentEvent::RequestUsage { .. });
+            let requested = matches!(event, AgentEvent::InteractionRequested { .. });
             let started = session.apply_event(event);
             let compaction_ended = was_compacting && session.compaction.is_none();
             if let Some(turn) = started {
                 self.start_turn(turn);
             }
-            self.auto_allow();
+            if requested {
+                self.on_approval_requested();
+            }
             // The footer's context figure moves with each request and each
             // compaction, not only at the turn's end.
             if compaction_ended || (usage && self.session_mut().presentation_due()) {

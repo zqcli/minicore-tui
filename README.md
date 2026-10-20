@@ -62,6 +62,7 @@ agent = "/usr/local/bin/minicore-agent"   # same as --agent
 agent_config = "/path/to/agent.toml"      # same as --config
 theme = "dark"                            # "dark" or "light"
 editor = ["nvim"]                         # command and arguments for Ctrl+G
+bell = true                               # ring when a turn over 10 s ends or asks approval
 ```
 
 Command-line options win. A missing file gives the defaults; a file with a
@@ -144,9 +145,10 @@ The complete map is [docs/keybindings.md](docs/keybindings.md). The essentials:
   `Ctrl+T` reasoning text, `Ctrl+F` find, `F1` help;
 - `PageUp` / `PageDown`, `Ctrl+Home` / `Ctrl+End`, `Ctrl+↑` / `Ctrl+↓` and the
   wheel navigate; `/` opens the command palette and `@` the file picker;
-- `/new`, `/sessions` (`/resume`), `/rename`, `/model`, `/reasoning`, `/compact`,
-  `/diff`, `/tool`, `/context`, `/copy`, `/export`, `/theme`, `/reload`, `/help`,
-  `/quit`.
+- `/new [profile]`, `/sessions` (`/resume`), `/session`, `/rename`, `/model [id]`,
+  `/reasoning`, `/compact`, `/diff`, `/tool`, `/context`, `/copy`, `/export`,
+  `/theme`, `/reload`, `/help`, `/quit`, and a command per prompt template in
+  `~/.config/minicore-tui/prompts/*.md`; `Ctrl+P` cycles models.
 
 ## Troubleshooting
 

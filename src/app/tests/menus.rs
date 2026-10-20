@@ -649,3 +649,41 @@ async fn the_title_follows_the_session_and_the_exit_prints_the_resume_command() 
         "\x1b[23;0tResume: minicore-tui --session s1\n"
     );
 }
+
+#[tokio::test(start_paused = true)]
+async fn an_edit_approval_reads_the_card_and_shows_the_diff_in_colour() {
+    let mut h = running_app().await;
+    h.fake.script(
+        "tool.read",
+        json!({"display": {
+            "detail": "notes.txt", "input_line_count": 5,
+            "expanded_input": "--- before\n+++ after\n@@\n-hello\n+goodbye\n context\n",
+        }}),
+    );
+    h.submit("work");
+    h.until(|app| app.is_busy()).await;
+    // The card exists, as the invocation event makes it, but has no input yet.
+    let mut call = ToolCall::new(
+        ToolRef {
+            session_id: "s1".into(),
+            loop_id: "l1".into(),
+            request_index: 0,
+            tool_call_id: "c-i1".into(),
+        },
+        "edit",
+    );
+    call.detail = "notes.txt".into();
+    push_blocks(&mut h, vec![Block::Tool(Box::new(call))]);
+    ask(&mut h, "i1", "edit").await;
+
+    assert_eq!(h.calls("tool.read").len(), 1);
+    let screen = h.screen(100, 30);
+    assert!(screen.contains("edit  notes.txt"), "{screen}");
+    assert!(
+        !screen.contains("--- before"),
+        "headers are left out:\n{screen}"
+    );
+    let palette = Palette::dark();
+    assert_eq!(h.fg_of("-hello"), palette.failure);
+    assert_eq!(h.fg_of("+goodbye"), palette.success);
+}
