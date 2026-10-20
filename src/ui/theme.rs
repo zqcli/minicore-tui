@@ -14,45 +14,78 @@ pub struct Palette {
     pub dim: Color,
     /// Faint text inside cards and markers.
     pub faint: Color,
+    /// Timestamps, card hints and footer separators.
+    pub meta: Color,
     pub accent: Color,
+    /// The editor, user and pending-card rail; also the footer's model and token counts.
     pub user_rail: Color,
+    /// The thinking rail; also the footer's cache and context figures.
     pub thinking_rail: Color,
+    pub notice_rail: Color,
+    pub status_rail: Color,
     pub composer_bg: Color,
+    pub paste_bg: Color,
     pub selection_bg: Color,
     pub selection_fg: Color,
+    pub border: Color,
     pub success: Color,
     pub failure: Color,
     pub warning: Color,
+    pub mint: Color,
+    pub amber: Color,
+    pub heading: Color,
+    pub inline_code: Color,
+    pub code_block: Color,
     pub added: Color,
     pub removed: Color,
     pub hunk: Color,
-    /// Tool card bands: a faint tint of the card's state over the page.
+    pub tool_title: Color,
+    pub tool_output: Color,
+    /// Tool card bands and rails per state: running, done, failed.
     pub card_bg: Color,
     pub card_success_bg: Color,
     pub card_failure_bg: Color,
+    pub card_rail: Color,
+    pub card_success_rail: Color,
+    pub card_failure_rail: Color,
 }
 
 impl Palette {
     pub fn dark() -> Self {
         Self {
-            text: Color::Rgb(0xdc, 0xdf, 0xe4),
-            dim: Color::Rgb(0x9a, 0x9f, 0xab),
-            faint: Color::Rgb(0x6b, 0x70, 0x7b),
-            accent: Color::Rgb(0x7a, 0xa2, 0xf7),
-            user_rail: Color::Rgb(0x4f, 0x8a, 0xe8),
-            thinking_rail: Color::Rgb(0xa7, 0x8b, 0xe8),
-            composer_bg: Color::Rgb(0x40, 0x42, 0x56),
-            selection_bg: Color::Rgb(0x3a, 0x45, 0x66),
-            selection_fg: Color::Rgb(0xf5, 0xf7, 0xfa),
-            success: Color::Rgb(0x7a, 0xc0, 0x8a),
-            failure: Color::Rgb(0xe0, 0x6c, 0x75),
-            warning: Color::Rgb(0xe0, 0xb1, 0x62),
-            added: Color::Rgb(0x7a, 0xc0, 0x8a),
-            removed: Color::Rgb(0xe0, 0x6c, 0x75),
-            hunk: Color::Rgb(0x8a, 0x90, 0xa0),
-            card_bg: Color::Rgb(0x26, 0x28, 0x30),
-            card_success_bg: Color::Rgb(0x1f, 0x2b, 0x25),
-            card_failure_bg: Color::Rgb(0x31, 0x20, 0x24),
+            text: Color::Rgb(0xd4, 0xd4, 0xd4),
+            dim: Color::Rgb(0x80, 0x80, 0x80),
+            faint: Color::Rgb(0x66, 0x66, 0x66),
+            meta: Color::Rgb(127, 132, 156),
+            accent: Color::Rgb(0x8a, 0xbe, 0xb7),
+            user_rail: Color::Rgb(137, 180, 250),
+            thinking_rail: Color::Rgb(203, 166, 247),
+            notice_rail: Color::Rgb(148, 226, 213),
+            status_rail: Color::Rgb(250, 179, 135),
+            composer_bg: Color::Rgb(49, 50, 68),
+            paste_bg: Color::Rgb(69, 71, 90),
+            selection_bg: Color::Rgb(0x3a, 0x3a, 0x4a),
+            selection_fg: Color::Rgb(245, 245, 250),
+            border: Color::Rgb(0x5f, 0x87, 0xff),
+            success: Color::Rgb(0xb5, 0xbd, 0x68),
+            failure: Color::Rgb(0xcc, 0x66, 0x66),
+            warning: Color::Rgb(249, 226, 175),
+            mint: Color::Rgb(166, 227, 161),
+            amber: Color::Rgb(249, 226, 175),
+            heading: Color::Rgb(0xf0, 0xc6, 0x74),
+            inline_code: Color::Rgb(0x8a, 0xbe, 0xb7),
+            code_block: Color::Rgb(0xb5, 0xbd, 0x68),
+            added: Color::Rgb(0xb5, 0xbd, 0x68),
+            removed: Color::Rgb(0xcc, 0x66, 0x66),
+            hunk: Color::Rgb(0x80, 0x80, 0x80),
+            tool_title: Color::Rgb(205, 214, 244),
+            tool_output: Color::Rgb(166, 173, 200),
+            card_bg: Color::Rgb(40, 43, 61),
+            card_success_bg: Color::Rgb(41, 49, 46),
+            card_failure_bg: Color::Rgb(52, 43, 47),
+            card_rail: Color::Rgb(137, 180, 250),
+            card_success_rail: Color::Rgb(123, 159, 136),
+            card_failure_rail: Color::Rgb(188, 120, 136),
         }
     }
 
@@ -61,21 +94,36 @@ impl Palette {
             text: Color::Rgb(0x2b, 0x2f, 0x38),
             dim: Color::Rgb(0x5c, 0x63, 0x70),
             faint: Color::Rgb(0x8a, 0x91, 0x9e),
-            accent: Color::Rgb(0x2f, 0x5d, 0xb8),
-            user_rail: Color::Rgb(0x2f, 0x5d, 0xb8),
-            thinking_rail: Color::Rgb(0x6f, 0x4f, 0xb8),
-            composer_bg: Color::Rgb(0xe4, 0xe6, 0xee),
+            meta: Color::Rgb(0x6c, 0x6f, 0x85),
+            accent: Color::Rgb(0x17, 0x92, 0x99),
+            user_rail: Color::Rgb(0x1e, 0x66, 0xf5),
+            thinking_rail: Color::Rgb(0x88, 0x39, 0xef),
+            notice_rail: Color::Rgb(0x17, 0x92, 0x99),
+            status_rail: Color::Rgb(0xfe, 0x64, 0x0b),
+            composer_bg: Color::Rgb(0xe6, 0xe9, 0xef),
+            paste_bg: Color::Rgb(0xcc, 0xd0, 0xda),
             selection_bg: Color::Rgb(0xd0, 0xda, 0xf0),
-            selection_fg: Color::Rgb(0xf5, 0xf7, 0xfa),
-            success: Color::Rgb(0x1f, 0x7a, 0x3a),
-            failure: Color::Rgb(0xb8, 0x2a, 0x35),
-            warning: Color::Rgb(0x9a, 0x6a, 0x00),
-            added: Color::Rgb(0x1f, 0x7a, 0x3a),
-            removed: Color::Rgb(0xb8, 0x2a, 0x35),
+            selection_fg: Color::Rgb(0x2b, 0x2f, 0x38),
+            border: Color::Rgb(0x1e, 0x66, 0xf5),
+            success: Color::Rgb(0x40, 0xa0, 0x2b),
+            failure: Color::Rgb(0xd2, 0x0f, 0x39),
+            warning: Color::Rgb(0xdf, 0x8e, 0x1d),
+            mint: Color::Rgb(0x40, 0xa0, 0x2b),
+            amber: Color::Rgb(0xdf, 0x8e, 0x1d),
+            heading: Color::Rgb(0xdf, 0x8e, 0x1d),
+            inline_code: Color::Rgb(0x17, 0x92, 0x99),
+            code_block: Color::Rgb(0x40, 0xa0, 0x2b),
+            added: Color::Rgb(0x40, 0xa0, 0x2b),
+            removed: Color::Rgb(0xd2, 0x0f, 0x39),
             hunk: Color::Rgb(0x6b, 0x72, 0x80),
-            card_bg: Color::Rgb(0xee, 0xf0, 0xf4),
-            card_success_bg: Color::Rgb(0xe5, 0xf2, 0xe8),
-            card_failure_bg: Color::Rgb(0xf8, 0xe6, 0xe8),
+            tool_title: Color::Rgb(0x4c, 0x4f, 0x69),
+            tool_output: Color::Rgb(0x5c, 0x5f, 0x77),
+            card_bg: Color::Rgb(0xe8, 0xec, 0xf8),
+            card_success_bg: Color::Rgb(0xe6, 0xf2, 0xe6),
+            card_failure_bg: Color::Rgb(0xf8, 0xe6, 0xea),
+            card_rail: Color::Rgb(0x1e, 0x66, 0xf5),
+            card_success_rail: Color::Rgb(0x40, 0xa0, 0x2b),
+            card_failure_rail: Color::Rgb(0xd2, 0x0f, 0x39),
         }
     }
 
@@ -184,8 +232,56 @@ impl Styles {
         fg(self.palette.thinking_rail)
     }
 
+    /// Inline code: colored, no band.
     pub fn code(&self) -> Style {
-        bg(self.palette.faint).patch(self.text())
+        fg(self.palette.inline_code)
+    }
+
+    pub fn code_block(&self) -> Style {
+        fg(self.palette.code_block)
+    }
+
+    pub fn heading(&self) -> Style {
+        fg(self.palette.heading).add_modifier(Modifier::BOLD)
+    }
+
+    pub fn meta(&self) -> Style {
+        fg(self.palette.meta)
+    }
+
+    pub fn mint(&self) -> Style {
+        fg(self.palette.mint)
+    }
+
+    pub fn amber(&self) -> Style {
+        fg(self.palette.amber)
+    }
+
+    pub fn border(&self) -> Style {
+        fg(self.palette.border)
+    }
+
+    pub fn notice_rail(&self) -> Style {
+        fg(self.palette.notice_rail)
+    }
+
+    pub fn status_rail(&self) -> Style {
+        fg(self.palette.status_rail)
+    }
+
+    pub fn tool_title(&self) -> Style {
+        fg(self.palette.tool_title)
+    }
+
+    pub fn tool_output(&self) -> Style {
+        fg(self.palette.tool_output)
+    }
+
+    /// A `[paste #N …]` chip inside the composer.
+    pub fn paste_chip(&self) -> Style {
+        bg(self.palette.paste_bg)
+            .patch(fg(self.palette.user_rail))
+            .add_modifier(Modifier::BOLD)
     }
 
     pub fn composer(&self) -> Style {
@@ -203,6 +299,18 @@ impl Styles {
 
     pub fn card_failure(&self) -> Style {
         bg(self.palette.card_failure_bg)
+    }
+
+    pub fn card_rail(&self) -> Style {
+        fg(self.palette.card_rail)
+    }
+
+    pub fn card_success_rail(&self) -> Style {
+        fg(self.palette.card_success_rail)
+    }
+
+    pub fn card_failure_rail(&self) -> Style {
+        fg(self.palette.card_failure_rail)
     }
 
     /// Mouse selection; reverse video when the palette has no colors.
