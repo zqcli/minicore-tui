@@ -197,6 +197,7 @@ pub fn append_history_item(transcript: &mut Transcript, item: &RawHistoryItem, s
             if let Some(output) = &result.output {
                 call.apply_result(&output.content);
             }
+            call.settle();
         }
         RuntimeItem::Summary(summary) => {
             transcript.push(Block::Compaction {

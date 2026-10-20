@@ -12,7 +12,7 @@ use super::theme::Styles;
 use crate::protocol::read::UserKind;
 use crate::transcript::layout::Fold;
 use crate::transcript::{Block, ToolCall};
-use crate::transcript::{TRUNCATED_MARKER, ToolState};
+use crate::transcript::{EXPANDED_ROWS, TRUNCATED_MARKER, ToolState};
 use crate::wrap;
 
 /// Columns before block text: the rail and one pad cell.
@@ -23,9 +23,6 @@ pub const FULL_OUTPUT_HINT: &str = "click for full output";
 
 /// Thinking rows a long block shows before its expand hint.
 const THINKING_ROWS: usize = 3;
-
-/// Body rows of an expanded card; the tool view has the rest.
-const EXPANDED_ROWS: usize = 200;
 
 /// The column text wraps at in a block `width` wide, keeping one pad cell on
 /// the right.
@@ -923,6 +920,26 @@ mod tests {
                 "▎ ... (14 more lines, click or ctrl+o to expand)".into(),
             ]
         );
+    }
+
+    #[test]
+    fn a_settled_card_looks_the_same_as_one_that_kept_all_its_output() {
+        let mut bash = call();
+        for line in 0..400 {
+            bash.push_output(&format!("line {line}\n"));
+        }
+        let mut read = call();
+        read.name = "read".into();
+        read.output = (0..400).map(|line| format!("line {line}")).collect();
+        read.output_lines = Some(400);
+        for call in [bash, read] {
+            let mut settled = call.clone();
+            settled.settle();
+            assert!(settled.output.len() < call.output.len());
+            for fold in [fold(), expanded()] {
+                assert_eq!(card(settled.clone(), fold), card(call.clone(), fold));
+            }
+        }
     }
 
     #[test]

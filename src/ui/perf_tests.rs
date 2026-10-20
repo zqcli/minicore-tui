@@ -178,6 +178,18 @@ fn long_answer() -> String {
     text
 }
 
+/// Bytes of tool output the transcript keeps.
+fn retained_output(transcript: &Transcript) -> usize {
+    transcript
+        .blocks()
+        .iter()
+        .map(|block| match block {
+            Block::Tool(call) => call.output.iter().map(String::capacity).sum(),
+            _ => 0,
+        })
+        .sum()
+}
+
 fn micros(duration: Duration) -> f64 {
     duration.as_secs_f64() * 1e6
 }
@@ -268,4 +280,15 @@ fn perf() {
         transcript.insert(0, user(10_000 + index));
     }
     println!("prepend 20 items: {:?}", bench.draw());
+
+    println!(
+        "retained tool output: {} bytes",
+        retained_output(bench.transcript())
+    );
+    bench.app.session.as_mut().expect("session").settle_cards(0);
+    println!(
+        "retained tool output after settling: {} bytes",
+        retained_output(bench.transcript())
+    );
+    println!("draw after settling every card: {:?}", bench.draw());
 }

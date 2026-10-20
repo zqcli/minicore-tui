@@ -196,6 +196,36 @@ impl ToolCall {
         }
     }
 
+    /// Drops the output a finished card can no longer show. An expanded card
+    /// shows `EXPANDED_ROWS` lines, the tail for `bash` and the head otherwise;
+    /// the rest stays behind `tool.output`.
+    pub fn settle(&mut self) {
+        let content = self.output_content().len();
+        if content <= EXPANDED_ROWS {
+            return;
+        }
+        if self.name == "bash" {
+            // The open last line stays so the kept lines are the same ones.
+            let drop = self.output.len().saturating_sub(EXPANDED_ROWS + 1);
+            self.output.drain(..drop);
+            self.output_dropped += drop;
+        } else {
+            // The Agent's total counts the cut marker, which the head loses.
+            let markers = self
+                .output
+                .iter()
+                .filter(|line| *line == TRUNCATED_MARKER)
+                .count();
+            self.output_lines = Some(
+                self.output_lines
+                    .map_or(0, |total| total.saturating_sub(markers))
+                    .max(content),
+            );
+            self.output.truncate(EXPANDED_ROWS);
+        }
+        self.output.shrink_to_fit();
+    }
+
     /// Carries over what only live events knew when history replaces this card.
     pub fn keep_live_facts(&mut self, live: &ToolCall) {
         if self.detail.is_empty() {
@@ -437,6 +467,8 @@ impl ToolCall {
     }
 }
 
+/// Body rows of an expanded card; the tool view has the rest.
+pub const EXPANDED_ROWS: usize = 200;
 /// Lines of process output kept per card; the tool view pages the rest.
 pub const OUTPUT_TAIL_LINES: usize = 400;
 /// Byte cap for a card's stored output tail.
@@ -560,6 +592,48 @@ mod tests {
             OUTPUT_TAIL_LINES + 20,
             "dropped and kept lines add up to what arrived"
         );
+    }
+
+    #[test]
+    fn settling_a_bash_card_keeps_the_tail_an_expanded_card_shows() {
+        let mut call = ToolCall::new(key("c"), "bash");
+        for line in 0..400 {
+            call.push_output(&format!("line {line}\n"));
+        }
+        call.settle();
+        assert_eq!(call.output.len(), EXPANDED_ROWS + 1);
+        assert_eq!(call.output_content().last(), Some(&"line 399"));
+        assert_eq!(
+            call.output_dropped + call.output_content().len(),
+            400,
+            "dropped and kept lines still add up"
+        );
+    }
+
+    #[test]
+    fn settling_a_read_card_keeps_the_head_and_the_total() {
+        let mut call = ToolCall::new(key("c"), "read");
+        let content: String = (0..399).map(|line| format!("line {line}\n")).collect();
+        call.apply_result(&format!("{content}{TRUNCATED_MARKER}\n"));
+        call.output_lines = Some(400);
+        call.settle();
+        assert_eq!(call.output.len(), EXPANDED_ROWS);
+        assert_eq!(call.output[0], "line 0");
+        assert_eq!(
+            call.output_lines,
+            Some(399),
+            "the marker is no longer a line"
+        );
+    }
+
+    #[test]
+    fn a_short_card_is_left_alone() {
+        let mut call = ToolCall::new(key("c"), "bash");
+        call.push_output("a\nb\n");
+        let before = call.output.clone();
+        call.settle();
+        assert_eq!(call.output, before);
+        assert_eq!(call.output_dropped, 0);
     }
 
     #[test]

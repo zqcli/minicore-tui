@@ -12,7 +12,7 @@ use crate::protocol::ToolRef;
 
 pub use block::{Block, ChangeSummary, RequestKey};
 pub use history::{append_history, append_history_item, merge_live, to_markdown};
-pub use tool_call::{TRUNCATED_MARKER, ToolCall, ToolState};
+pub use tool_call::{EXPANDED_ROWS, TRUNCATED_MARKER, ToolCall, ToolState};
 
 /// Revisions come from one counter, so no two blocks of any session share one and
 /// the layout cache can follow a block that moved.

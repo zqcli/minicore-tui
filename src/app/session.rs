@@ -11,7 +11,7 @@ use crate::protocol::{
     SessionContext, SessionInfo, SessionPresentation, ToolRef, TurnRef, TurnWaitResult, Usage,
     UsageTotals,
 };
-use crate::transcript::{Block, RequestKey, ToolCall, ToolState, Transcript};
+use crate::transcript::{Block, EXPANDED_ROWS, RequestKey, ToolCall, ToolState, Transcript};
 use crate::transcript::{append_history, append_history_item, merge_live};
 
 use super::tasks::History;
@@ -522,6 +522,21 @@ impl Session {
         }
     }
 
+    /// Trims the output of the finished cards from block `from` on.
+    pub fn settle_cards(&mut self, from: usize) {
+        let long: Vec<usize> = (from..self.transcript.len())
+            .filter(|index| {
+                matches!(&self.transcript.blocks()[*index], Block::Tool(call)
+                    if call.output_content().len() > EXPANDED_ROWS)
+            })
+            .collect();
+        for index in long {
+            if let Some(Block::Tool(call)) = self.transcript.block_mut(index) {
+                call.settle();
+            }
+        }
+    }
+
     /// Ends the live turn when `wait` is about it, appending the turn-end line.
     /// Returns whether the durable items must replace what was streamed.
     pub fn end_turn(&mut self, wait: &TurnWaitResult) -> Option<bool> {
@@ -544,6 +559,7 @@ impl Session {
             self.usage = live.usage_base;
             self.usage.add(&usage);
         }
+        self.settle_cards(live.start);
         let tools = self.tools_since(live.start);
         self.transcript.push(Block::TurnEnd {
             loop_id: wait.turn.loop_id.clone(),
