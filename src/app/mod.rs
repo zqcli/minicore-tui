@@ -343,25 +343,33 @@ impl App {
         }
     }
 
-    /// Expires info notices and the flash; errors stay until the next key press.
+    /// Expires info notices, the flash and the scrollbar; errors stay until the next key press.
     pub fn tick(&mut self) {
         self.notices.retain(|notice| {
             notice.level == NoticeLevel::Error || notice.at.elapsed() < NOTICE_TTL
         });
         self.flash = self.flash.take().filter(|(_, at)| at.elapsed() < FLASH_TTL);
+        self.scrolled_at = self.scrolled_at.filter(|at| at.elapsed() < FLASH_TTL);
         self.watch_context();
         self.refresh_running_cards();
     }
 
-    /// Whether something on screen moves with the clock.
-    pub fn wants_tick(&self) -> bool {
+    /// Whether the Working line or a running card changes with every frame.
+    pub fn animating(&self) -> bool {
         self.status_label().is_some()
-            || self.flash.is_some()
-            || self.scrollbar_shown()
-            || self
-                .notices
-                .iter()
-                .any(|notice| notice.level == NoticeLevel::Info)
+    }
+
+    /// When the next flash, scrollbar or info notice goes away, which is the
+    /// only frame they need.
+    pub fn next_expiry(&self) -> Option<tokio::time::Instant> {
+        let notices = self
+            .notices
+            .iter()
+            .filter(|notice| notice.level == NoticeLevel::Info)
+            .map(|notice| notice.at + NOTICE_TTL);
+        let flash = self.flash.iter().map(|(_, at)| *at + FLASH_TTL);
+        let scrollbar = self.scrolled_at.map(|at| at + FLASH_TTL);
+        notices.chain(flash).chain(scrollbar).min()
     }
 
     /// The scrollbar shows while its thumb is held and briefly after a scroll.

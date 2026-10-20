@@ -17,7 +17,7 @@ use minicore_tui::ui::theme::{Palette, Styles};
 
 /// Frame cap: coalesce bursts instead of drawing on every event.
 const FRAME: Duration = Duration::from_millis(16);
-/// Clock while something animates: one spinner frame.
+/// Clock while the Working line or a card animates: one spinner frame.
 const TICK: Duration = minicore_tui::ui::status::SPINNER_FRAME;
 
 /// What made a frame necessary; the order indexes `Frames::draws`.
@@ -217,7 +217,11 @@ async fn run() -> i32 {
     let mut agent_open = true;
 
     loop {
-        let tick_due = app.wants_tick();
+        let wake = if app.animating() {
+            Some(next_tick)
+        } else {
+            app.next_expiry()
+        };
         tokio::select! {
             biased;
             incoming = incoming_rx.recv(), if agent_open => match incoming {
@@ -263,7 +267,7 @@ async fn run() -> i32 {
                     _ => {}
                 }
             }
-            _ = tokio::time::sleep_until(next_tick), if tick_due => {
+            _ = tokio::time::sleep_until(wake.unwrap_or(next_tick)), if wake.is_some() => {
                 app.tick();
                 next_tick = tokio::time::Instant::now() + TICK;
                 frames.mark(Cause::Tick);

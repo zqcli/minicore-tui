@@ -4,7 +4,7 @@ use crossterm::event::{KeyCode, KeyModifiers, MouseEvent, MouseEventKind};
 use serde_json::json;
 
 use super::harness::*;
-use crate::app::{Action, NoticeLevel, Overlay, Scroll};
+use crate::app::{Action, FLASH_TTL, Msg, NoticeLevel, Overlay, Scroll};
 use crate::protocol::ToolRef;
 use crate::protocol::read::UserKind;
 use crate::transcript::{Block, RequestKey, ToolCall};
@@ -461,18 +461,36 @@ async fn errors_stay_until_a_key_and_info_notices_expire() {
     h.app.tick();
     assert_eq!(h.notices(), ["boom"]);
     assert!(
-        !h.app.wants_tick(),
+        h.app.next_expiry().is_none(),
         "an error alone does not keep the clock running"
     );
     h.press(KeyCode::Left);
     assert!(h.notices().is_empty());
 
     h.app.notice(NoticeLevel::Info, "copied");
-    assert!(h.app.wants_tick());
     tokio::time::advance(Duration::from_secs(6)).await;
     h.app.tick();
     assert!(h.notices().is_empty());
-    assert!(!h.app.wants_tick());
+    assert!(h.app.next_expiry().is_none());
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_flash_and_the_scrollbar_wake_the_clock_once_at_their_end() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    let flashed = tokio::time::Instant::now();
+    h.app.on_msg(Msg::Flash("Copied!".into()));
+    let step = Duration::from_millis(300);
+    tokio::time::advance(step).await;
+    h.app.scrolled_at = Some(tokio::time::Instant::now());
+    assert!(!h.app.animating(), "nothing moves on every frame");
+    assert_eq!(h.app.next_expiry(), Some(flashed + FLASH_TTL));
+
+    tokio::time::advance(FLASH_TTL - step).await;
+    h.app.tick();
+    assert_eq!(h.app.next_expiry(), Some(flashed + step + FLASH_TTL));
+    tokio::time::advance(step).await;
+    h.app.tick();
+    assert!(h.app.next_expiry().is_none() && !h.app.scrollbar_shown());
 }
 
 #[tokio::test(start_paused = true)]
