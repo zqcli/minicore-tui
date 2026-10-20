@@ -9,13 +9,13 @@ rewrite of the v0.3 frontend; see [CHANGELOG.md](CHANGELOG.md).
 ## Requirements
 
 - Rust 1.88 or newer (edition 2024, `rust-version` in `Cargo.toml`) to build;
-- a `minicore-agent` 0.7.0 executable (the TUI writes the Agent configuration itself);
+- a `minicore-agent` 0.7.1 executable (the TUI writes the Agent configuration itself);
 - a terminal with an alternate screen, raw mode and bracketed paste. Mouse
   reporting is used for the wheel, clicks and selection. `Shift+Enter` and
   `Alt+Enter` need a terminal with the kitty keyboard protocol; `Ctrl+J` always
   inserts a newline.
 
-Backend contract: Agent 0.7.0 (`4102719`) and Runtime 0.7.0 (`b93aea3`) are the
+Backend contract: Agent 0.7.1 (`004dbf2`) and Runtime 0.7.1 (`c0181d1`) are the
 versions CI pins. The Runtime is linked by the Agent, not by the TUI. At startup
 the TUI requires Protocol v1 and these Agent capabilities, and refuses an Agent
 that lacks one: `session.read`, `session.read.display`, `session.context`,
@@ -42,6 +42,14 @@ before the screen switches, so a bad configuration is an ordinary terminal error
 naming the file, line and key. The TUI then opens or creates a session and waits
 for your first message; no model is called until you send one. A draft typed
 meanwhile is kept. Full reference: [docs/configuration.md](docs/configuration.md).
+
+Prebuilt packages: every CI run uploads one per platform (Linux x86_64, macOS
+arm64 and x86_64, Windows x86_64) as a workflow artifact,
+`minicore-tui-<version>-<target>`. Each is a TUI directory with
+`bin/minicore-tui` and the pinned `bin/minicore-agent` (`.exe` on Windows);
+`BUILD.txt` names the three revisions. Unpack it anywhere and run
+`bin/minicore-tui` from the project directory. On macOS a downloaded binary may
+need `xattr -d com.apple.quarantine bin/*` first.
 
 ### Options
 
@@ -106,7 +114,7 @@ history is `history.jsonl` in the TUI directory.
 ## Screen
 
 ```text
- minicore-tui v0.5.0                                  (welcome header)
+ minicore-tui v0.5.1                                  (welcome header)
  esc interrupt · ctrl+c clear · / commands · @ files · ctrl+o expand · ctrl+r sessions
  transcript (scrollable, 1-column gutter, ▎ rails)
  …

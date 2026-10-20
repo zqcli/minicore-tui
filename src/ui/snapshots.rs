@@ -652,7 +652,7 @@ fn the_gutter_column_stays_blank_and_ignores_clicks() {
         offset: 0,
     };
     let top = render(app, 70, 20);
-    assert!(top.contains(" minicore-tui v0.5.0"), "{top}");
+    assert!(top.contains(" minicore-tui v0.5.1"), "{top}");
     assert!(
         top.contains("esc interrupt · ctrl+c clear · / commands"),
         "{top}"

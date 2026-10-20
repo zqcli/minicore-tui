@@ -1,6 +1,21 @@
 # Changelog
 
-## Unreleased — 0.5
+## 0.5.1 — 2026-10-21
+
+0.5.0 was never tagged; 0.5.1 is the first 0.5 release and includes everything
+below.
+
+### Platforms and packaging
+
+- CI uploads a package per platform (Linux x86_64, macOS arm64 and x86_64,
+  Windows x86_64): `bin/minicore-tui` with the pinned `bin/minicore-agent`, the
+  README, the changelog, the configuration reference and `BUILD.txt`.
+- On Windows the bundled Agent is found as `bin/minicore-agent.exe`.
+- The backend pins are Agent 0.7.1 (`004dbf2`) and Runtime 0.7.1 (`c0181d1`),
+  by full SHA.
+- The test suite passes on Windows: render fixtures need no child process,
+  configuration tests compare paths the way the platform writes them, and the
+  escape-sequence test runs only where crossterm writes sequences.
 
 ### Configuration (breaking)
 
