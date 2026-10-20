@@ -100,9 +100,9 @@ fn summary_lines(
     });
     let budget = context.and_then(|context| context.budget.as_ref());
     let estimated = budget.and_then(|budget| {
-        let used = budget
-            .estimated_request_context_tokens
-            .or(budget.estimated_history_tokens)?;
+        // The request estimate is the last request's and goes stale once a
+        // compaction shrinks the history, so only the history estimate is shown.
+        let used = budget.estimated_history_tokens?;
         let limit = budget.input_budget_tokens?;
         let percent = if limit > 0 {
             format!(" ({:.0}%)", used as f64 / limit as f64 * 100.0)

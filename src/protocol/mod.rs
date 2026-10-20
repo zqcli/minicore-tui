@@ -602,7 +602,6 @@ pub struct ContextCoverage {
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct ContextBudget {
     pub estimated_history_tokens: Option<u64>,
-    pub estimated_request_context_tokens: Option<u64>,
     pub input_budget_tokens: Option<u64>,
     pub trigger_tokens: Option<u64>,
     pub target_tokens: Option<u64>,

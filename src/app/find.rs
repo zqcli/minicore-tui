@@ -43,10 +43,21 @@ fn searchable(block: &Block, show_reasoning: bool) -> Vec<(Field, String)> {
             (Field::Detail, call.detail.clone()),
             (Field::Output, call.output_content().join("\n")),
         ],
-        Block::Compaction { summary, .. } => summary
-            .iter()
-            .map(|summary| (Field::Text, summary.clone()))
-            .collect(),
+        Block::Compaction {
+            before,
+            after,
+            coverage,
+            summary,
+            ..
+        } => {
+            let label = blocks::compaction_label(*before, *after, *coverage);
+            let label = format!("[compaction] {label}");
+            [label]
+                .into_iter()
+                .chain(summary.clone())
+                .map(|text| (Field::Text, text))
+                .collect()
+        }
         Block::TurnEnd { .. } | Block::EarlierHistory { .. } => Vec::new(),
     }
 }
@@ -293,15 +304,24 @@ mod tests {
     }
 
     #[test]
-    fn summaries_are_searchable() {
-        let summary = Block::Compaction {
+    fn a_compaction_marker_is_found_by_its_label_and_its_summary() {
+        let marker = |summary: Option<&str>| Block::Compaction {
             operation_id: "op".into(),
-            before: None,
-            after: None,
+            before: Some(32_400),
+            after: Some(7_000),
             coverage: None,
-            summary: Some("compaction failed".into()),
+            summary: summary.map(Into::into),
         };
-        assert_eq!(find_matches(&[summary], "compaction", true).len(), 1);
+        // A live marker has no summary, only the label it shows.
+        assert_eq!(find_matches(&[marker(None)], "compaction", true).len(), 1);
+        assert_eq!(
+            find_matches(&[marker(None)], "compacted from", true).len(),
+            1
+        );
+        assert_eq!(
+            find_matches(&[marker(Some("kept the plan"))], "the plan", true).len(),
+            1
+        );
     }
 
     #[test]

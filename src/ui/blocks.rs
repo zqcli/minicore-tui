@@ -653,17 +653,13 @@ pub fn turn_end_line(
     parts.join(" · ")
 }
 
-/// A compaction marker: a labelled box whose summary opens with Ctrl+O.
-fn compaction(
+/// The marker's one-line account: token figures, else the item counts.
+pub fn compaction_label(
     before: Option<u64>,
     after: Option<u64>,
     coverage: Option<(Option<usize>, Option<usize>)>,
-    summary: Option<&str>,
-    styles: Styles,
-    width: usize,
-    expanded: bool,
-) -> Vec<Line<'static>> {
-    let text = match (before, after) {
+) -> String {
+    match (before, after) {
         (Some(before), Some(after)) => format!(
             "Compacted from {} to {} tokens",
             crate::ui::format_tokens(before),
@@ -680,7 +676,20 @@ fn compaction(
             }
             None => "Context compacted".to_owned(),
         },
-    };
+    }
+}
+
+/// A compaction marker: a labelled box whose summary opens with Ctrl+O.
+fn compaction(
+    before: Option<u64>,
+    after: Option<u64>,
+    coverage: Option<(Option<usize>, Option<usize>)>,
+    summary: Option<&str>,
+    styles: Styles,
+    width: usize,
+    expanded: bool,
+) -> Vec<Line<'static>> {
+    let text = compaction_label(before, after, coverage);
     let surface = styles.custom_message();
     let row = |spans: Vec<Span<'static>>| Line::from(fill(surface, spans, width));
     let text = wrap::truncate(&text, width - INSET);
