@@ -443,7 +443,7 @@ fn expanded_title(call: &ToolCall) -> String {
 /// and exit code in its footer instead.
 fn meta(call: &ToolCall, styles: Styles, facts: bool) -> Vec<Span<'static>> {
     let mut items: Vec<Vec<Span<'static>>> = Vec::new();
-    if call.state == ToolState::Running
+    if call.is_running()
         && let Some(started) = call.started_at
     {
         let elapsed = started.elapsed();
@@ -1281,19 +1281,26 @@ mod tests {
 
     #[test]
     fn a_running_card_shows_a_spinner_and_its_elapsed_time() {
-        let mut running = call();
-        running.state = ToolState::Running;
-        running.duration = None;
-        running.exit_code = None;
-        running.started_at = Some(std::time::Instant::now() - Duration::from_secs(30));
-        let title = card(running, fold()).remove(0);
-        assert!(title.ends_with("30s"), "{title}");
-        assert!(
-            title[..title.len() - 3]
-                .trim_end()
-                .ends_with(|glyph: char| "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏".contains(glyph)),
-            "{title}"
-        );
+        // A card made from a preview is `Pending` until its end, though it started.
+        for state in [ToolState::Pending, ToolState::Running] {
+            let mut running = call();
+            running.state = state;
+            running.duration = None;
+            running.exit_code = None;
+            running.started_at = Some(std::time::Instant::now() - Duration::from_secs(30));
+            let title = card(running, fold()).remove(0);
+            assert!(title.ends_with("30s"), "{title}");
+            assert!(
+                title[..title.len() - 3]
+                    .trim_end()
+                    .ends_with(|glyph: char| "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏".contains(glyph)),
+                "{title}"
+            );
+        }
+        let mut waiting = call();
+        waiting.state = ToolState::Pending;
+        waiting.duration = None;
+        assert_eq!(card(waiting, fold())[0], "▎ bash", "not started: no timer");
     }
 
     #[test]

@@ -108,6 +108,13 @@ async fn a_tick_redraws_only_the_running_cards() {
     h.fake.script_held("turn.wait", waited("l1", completed()));
     h.submit("go");
     h.until(|app| app.is_busy()).await;
+    // The Agent previews a call before it starts, which makes a pending card.
+    h.emit(
+        "tool_presentation",
+        json!({"turn": turn("l1"), "request_index": 0, "tool_call_id": "c2",
+               "tool_name": "bash", "display": {"detail": "$ sleep 9", "truncated": false}}),
+    )
+    .await;
     for id in ["c1", "c2"] {
         h.emit(
             "tool_started",
@@ -142,7 +149,7 @@ async fn a_tick_redraws_only_the_running_cards() {
         .blocks()
         .iter()
         .enumerate()
-        .filter(|(_, block)| matches!(block, Block::Tool(call) if call.state == ToolState::Running))
+        .filter(|(_, block)| matches!(block, Block::Tool(call) if call.is_running()))
         .map(|(at, _)| at)
         .collect();
     assert_eq!(running.len(), 1, "c1 finished, c2 runs");

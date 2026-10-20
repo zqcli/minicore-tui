@@ -5,7 +5,6 @@ use serde_json::json;
 use super::tasks::StreamText;
 use super::{App, Overlay, Panel, Scroll, SessionOp, tasks};
 use crate::protocol::{self, RpcError, ToolReadResult, ToolRef};
-use crate::transcript::block::ToolState as CardState;
 use crate::transcript::{Block, NoticeLevel};
 use crate::ui::views::{self, tool::ToolRow};
 
@@ -104,9 +103,7 @@ impl App {
             .iter()
             .enumerate()
             .skip(start)
-            .filter(
-                |(_, block)| matches!(block, Block::Tool(call) if call.state == CardState::Running),
-            )
+            .filter(|(_, block)| matches!(block, Block::Tool(call) if call.is_running()))
             .map(|(index, _)| index)
             .collect();
         for index in running {
