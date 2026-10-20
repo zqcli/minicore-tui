@@ -263,7 +263,7 @@ async fn run() -> i32 {
             let edited = match result {
                 Ok(text) => text,
                 Err(error) => {
-                    app.notice(minicore_tui::transcript::NoticeLevel::Error, error);
+                    app.notice(minicore_tui::app::NoticeLevel::Error, error);
                     // A failed editor must not cost the user what they typed.
                     Some(draft)
                 }

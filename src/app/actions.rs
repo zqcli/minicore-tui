@@ -4,14 +4,14 @@
 use serde_json::{Value, json};
 
 use super::{
-    App, InteractionKind, Msg, Queued, QueuedKind, Scroll, Session, SessionOp, commands, tasks,
-    templates,
+    App, InteractionKind, Msg, NoticeLevel, Queued, QueuedKind, Scroll, Session, SessionOp,
+    commands, tasks, templates,
 };
 use crate::config::ThemeKind;
 use crate::protocol::{
     self, CompactionPhase, CompactionProgress, Reasoning, SessionResult, TurnSendResult,
 };
-use crate::transcript::{Block, NoticeLevel};
+use crate::transcript::Block;
 use crate::ui::theme::{Palette, Styles};
 
 /// How often the context report is asked for while a turn runs.

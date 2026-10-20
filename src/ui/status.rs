@@ -9,8 +9,8 @@ use ratatui::text::{Line, Span};
 
 use super::theme::Styles;
 use super::{composer, sheets, wrap};
-use crate::app::{App, Notice, QueuedKind, Session};
-use crate::transcript::{Block, NoticeLevel};
+use crate::app::{App, Notice, NoticeLevel, QueuedKind, Session};
+use crate::transcript::Block;
 
 /// Queued messages listed before the rest are summarized.
 const QUEUE_ROWS: usize = 3;

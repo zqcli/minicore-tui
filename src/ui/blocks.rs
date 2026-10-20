@@ -13,7 +13,7 @@ use super::wrap;
 use crate::protocol::read::UserKind;
 use crate::transcript::layout::Fold;
 use crate::transcript::{Block, ToolCall};
-use crate::transcript::{NoticeLevel, TRUNCATED_MARKER, ToolState};
+use crate::transcript::{TRUNCATED_MARKER, ToolState};
 
 /// Columns before block text: the rail and one pad cell.
 pub const INSET: usize = 2;
@@ -115,16 +115,6 @@ pub fn render(block: &Block, styles: Styles, width: u16, fold: Fold) -> Vec<Line
             width,
             fold.expanded,
         ),
-        Block::Notice { level, text } => {
-            let (rail, style) = match level {
-                NoticeLevel::Error => (styles.failure(), styles.failure()),
-                NoticeLevel::Info => (styles.status_rail(), styles.faint()),
-            };
-            wrap::wrap(text, width - 1)
-                .into_iter()
-                .map(|line| rail_row(rail, vec![Span::styled(line, style)], width))
-                .collect()
-        }
         Block::EarlierHistory { hidden_items } => vec![indent(
             Line::styled(
                 format!("↑ {hidden_items} earlier items · home to load"),
@@ -140,7 +130,6 @@ pub fn plain_text(block: &Block) -> String {
     match block {
         Block::User { text, .. } | Block::Assistant { text, .. } => text.clone(),
         Block::Tool(call) => format!("{} {}", call.name, call.header_detail()),
-        Block::Notice { text, .. } => text.clone(),
         Block::Compaction { summary, .. } => summary.clone().unwrap_or_default(),
         _ => String::new(),
     }
@@ -1257,15 +1246,7 @@ mod tests {
     }
 
     #[test]
-    fn notices_are_status_lines_and_errors_are_red() {
-        let error = Block::Notice {
-            level: NoticeLevel::Error,
-            text: "turn failed".into(),
-        };
-        let lines = render(&error, styles(), 40, fold());
-        assert_eq!(lines[0].to_string(), "▎turn failed");
-        assert_eq!(lines[0].spans[1].style.fg, Some(Palette::dark().failure));
-
+    fn earlier_history_names_the_hidden_items() {
         let history = Block::EarlierHistory { hidden_items: 40 };
         let body = text(&render(&history, styles(), 40, fold()));
         assert!(body[0].contains("40 earlier items"));

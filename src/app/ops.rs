@@ -3,12 +3,12 @@
 use serde_json::{Value, json};
 
 use super::tasks::{self, History, Window};
-use super::{App, LiveTurn, Overlay, Scroll, Session, SessionOp, find};
+use super::{App, LiveTurn, NoticeLevel, Overlay, Scroll, Session, SessionOp, find};
 use crate::protocol::{
     self, AgentEvent, CompactStatus, CompactionResult, RpcError, SessionInfo, SessionState,
     TurnRef, TurnWaitResult,
 };
-use crate::transcript::{Block, ChangeSummary, NoticeLevel};
+use crate::transcript::{Block, ChangeSummary};
 
 /// Pages read on open to reach the latest answer behind a compaction summary.
 const BACKFILL_PAGES: u8 = 4;

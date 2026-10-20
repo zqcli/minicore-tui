@@ -5,10 +5,9 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde_json::json;
 
 use super::diff::DiffState;
-use super::tool::ToolState;
-use super::{App, DiffScope, Msg, SessionOp, commands, find, tasks};
+use super::tool::ToolView;
+use super::{App, DiffScope, Msg, NoticeLevel, SessionOp, commands, find, tasks};
 use crate::protocol::{self, FilesPage, ModelInfo, RpcError, SessionInfo, ToolRef};
-use crate::transcript::NoticeLevel;
 use crate::ui::picker::fuzzy_match;
 use crate::ui::sheets;
 
@@ -50,7 +49,7 @@ pub enum Overlay {
         scroll: usize,
     },
     Diff(DiffState),
-    Tool(ToolState),
+    Tool(ToolView),
     /// Find in the transcript.
     Find {
         query: String,

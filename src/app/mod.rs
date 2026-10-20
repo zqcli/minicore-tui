@@ -39,7 +39,7 @@ use crate::protocol::{
 };
 use crate::rpc::Client;
 use crate::transcript::layout::Layout;
-use crate::transcript::{Block, ChangeSummary, NoticeLevel};
+use crate::transcript::{Block, ChangeSummary};
 use crate::ui::theme::{Palette, Styles};
 use crate::ui::transcript::RenderState;
 use crate::ui::{sheets, views};
@@ -133,6 +133,12 @@ impl LaunchSettings {
         }
         fields
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NoticeLevel {
+    Info,
+    Error,
 }
 
 #[derive(Clone, Debug)]

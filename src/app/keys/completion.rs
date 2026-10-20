@@ -5,8 +5,7 @@ use crossterm::event::{KeyCode, KeyEvent};
 
 use crate::app::commands::{self, Executed};
 use crate::app::overlay::matching_paths;
-use crate::app::{Action, App, Overlay};
-use crate::transcript::NoticeLevel;
+use crate::app::{Action, App, NoticeLevel, Overlay};
 
 impl App {
     /// Keeps the inline completion list in step with the draft: an edit resets

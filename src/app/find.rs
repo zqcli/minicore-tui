@@ -29,7 +29,7 @@ pub struct FindMatch {
 /// The texts of a block that find reads, in the order the block shows them.
 fn searchable(block: &Block, show_reasoning: bool) -> Vec<(Field, String)> {
     match block {
-        Block::User { text, .. } | Block::Notice { text, .. } => vec![(Field::Text, text.clone())],
+        Block::User { text, .. } => vec![(Field::Text, text.clone())],
         Block::Assistant {
             reasoning, text, ..
         } => {
@@ -293,12 +293,15 @@ mod tests {
     }
 
     #[test]
-    fn notices_and_summaries_are_searchable() {
-        let notice = Block::Notice {
-            level: crate::transcript::NoticeLevel::Error,
-            text: "compaction failed".into(),
+    fn summaries_are_searchable() {
+        let summary = Block::Compaction {
+            operation_id: "op".into(),
+            before: None,
+            after: None,
+            coverage: None,
+            summary: Some("compaction failed".into()),
         };
-        assert_eq!(find_matches(&[notice], "compaction", true).len(), 1);
+        assert_eq!(find_matches(&[summary], "compaction", true).len(), 1);
     }
 
     #[test]

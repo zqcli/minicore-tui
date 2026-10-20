@@ -4,10 +4,10 @@ use crossterm::event::{KeyCode, KeyModifiers, MouseEvent, MouseEventKind};
 use serde_json::json;
 
 use super::harness::*;
-use crate::app::{Action, Overlay, Scroll};
+use crate::app::{Action, NoticeLevel, Overlay, Scroll};
 use crate::protocol::ToolRef;
 use crate::protocol::read::UserKind;
-use crate::transcript::{Block, NoticeLevel, RequestKey, ToolCall};
+use crate::transcript::{Block, RequestKey, ToolCall};
 
 /// `count` prompts, each followed by a three-line answer.
 fn conversation(h: &mut Harness, count: usize) {

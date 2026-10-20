@@ -4,9 +4,9 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::app::commands::{self, Executed};
-use crate::app::{Action, App, Panel, Scroll};
+use crate::app::{Action, App, NoticeLevel, Panel, Scroll};
 use crate::protocol::Reasoning;
-use crate::transcript::{Block, NoticeLevel};
+use crate::transcript::Block;
 
 /// A second Ctrl+C within this long of the first quits.
 const QUIT_WINDOW: std::time::Duration = std::time::Duration::from_millis(500);

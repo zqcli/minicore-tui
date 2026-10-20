@@ -4,8 +4,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::app::overlay::matching_models;
-use crate::app::{Action, App, Overlay, find};
-use crate::transcript::NoticeLevel;
+use crate::app::{Action, App, NoticeLevel, Overlay, find};
 use crate::ui::{picker, sheets};
 
 impl App {

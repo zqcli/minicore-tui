@@ -6,7 +6,7 @@ use ratatui::text::Line;
 
 use crate::app::Session;
 use crate::app::tasks::StreamText;
-use crate::app::tool::ToolState;
+use crate::app::tool::ToolView;
 use crate::transcript::ToolCall;
 
 use super::{chrome, styled};
@@ -108,7 +108,7 @@ fn tool_input(call: &ToolCall) -> &str {
 }
 
 /// The text of the tool view, input then output, for `c`.
-pub fn text(tool: &ToolState, session: Option<&Session>) -> String {
+pub fn text(tool: &ToolView, session: Option<&Session>) -> String {
     let input = session
         .and_then(|session| session.transcript.find_tool(&tool.key))
         .map_or("", tool_input);
@@ -128,7 +128,7 @@ pub fn render(
     frame: &mut Frame,
     area: Rect,
     styles: Styles,
-    tool: &ToolState,
+    tool: &ToolView,
     session: Option<&Session>,
 ) {
     let Some((session, call)) =

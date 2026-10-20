@@ -40,10 +40,6 @@ pub enum Block {
         coverage: Option<(Option<usize>, Option<usize>)>,
         summary: Option<String>,
     },
-    Notice {
-        level: NoticeLevel,
-        text: String,
-    },
     EarlierHistory {
         hidden_items: usize,
     },
@@ -75,12 +71,6 @@ impl Block {
             _ => None,
         }
     }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum NoticeLevel {
-    Info,
-    Error,
 }
 
 /// What one turn changed.

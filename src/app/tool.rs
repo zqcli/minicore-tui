@@ -3,15 +3,15 @@
 use serde_json::json;
 
 use super::tasks::StreamText;
-use super::{App, Overlay, Panel, Scroll, SessionOp, tasks};
+use super::{App, NoticeLevel, Overlay, Panel, Scroll, SessionOp, tasks};
 use crate::protocol::{self, RpcError, ToolReadResult, ToolRef};
-use crate::transcript::{Block, NoticeLevel};
+use crate::transcript::Block;
 use crate::ui::views::{self, tool::ToolRow};
 
 /// The open tool view. Its header and input are read from the card when drawn;
 /// the output starts as the card's tail until the full streams arrive.
 #[derive(Debug)]
-pub struct ToolState {
+pub struct ToolView {
     pub key: ToolRef,
     pub rows: Vec<ToolRow>,
     /// Full output per stream, `None` while loading; bash's two streams have no
@@ -21,7 +21,7 @@ pub struct ToolState {
     pub status: String,
 }
 
-impl ToolState {
+impl ToolView {
     pub fn scroll_by(&mut self, delta: isize, rows: usize) {
         let max = self.rows.len().saturating_sub(rows);
         self.scroll = (self.scroll as isize)
@@ -47,7 +47,7 @@ impl ToolState {
 impl App {
     /// The view of one tool call, and the reads that fill it: the card refreshed
     /// by `tool.read` and the full output of each stream.
-    pub(super) fn open_tool(&self, key: ToolRef) -> Option<ToolState> {
+    pub(super) fn open_tool(&self, key: ToolRef) -> Option<ToolView> {
         let call = self.session.as_ref()?.transcript.find_tool(&key)?;
         let streams: &[&str] = if call.name == "bash" {
             &["stdout", "stderr"]
@@ -63,7 +63,7 @@ impl App {
                 SessionOp::ToolOutput(key, stream, output)
             });
         }
-        Some(ToolState {
+        Some(ToolView {
             rows: views::tool::text_rows(&call.output.join("\n")),
             streams: streams
                 .iter()
@@ -161,8 +161,8 @@ impl App {
 mod tests {
     use super::*;
 
-    fn state(streams: &[&str]) -> ToolState {
-        ToolState {
+    fn state(streams: &[&str]) -> ToolView {
+        ToolView {
             key: ToolRef {
                 session_id: "s".into(),
                 loop_id: "l".into(),
@@ -186,7 +186,7 @@ mod tests {
         }
     }
 
-    fn shown(state: &ToolState) -> String {
+    fn shown(state: &ToolView) -> String {
         views::tool::text(state, None)
     }
 

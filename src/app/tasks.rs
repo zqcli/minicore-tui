@@ -7,7 +7,7 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
-use super::{App, BUSY_RETRY, Msg, SessionOp};
+use super::{App, BUSY_RETRY, Msg, NoticeLevel, SessionOp};
 use crate::protocol::changes::{ChangeList, DiffPage};
 use crate::protocol::read::{RawHistoryItem, TurnRecord};
 use crate::protocol::tool::ToolOutputPage;
@@ -17,7 +17,7 @@ use crate::protocol::{
     ToolRef, TurnRef, TurnResultPage, TurnWaitResult, Usage,
 };
 use crate::rpc::Client;
-use crate::transcript::{ChangeSummary, NoticeLevel};
+use crate::transcript::ChangeSummary;
 
 pub type Tx = mpsc::UnboundedSender<Msg>;
 
