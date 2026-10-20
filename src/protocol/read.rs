@@ -258,6 +258,8 @@ impl ChunkAssembler {
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct RawHistoryItem {
     pub item: RuntimeItem,
+    /// RFC3339; only user items have one, and old history none.
+    pub timestamp: Option<String>,
     /// Only display reads carry summaries.
     #[serde(default)]
     pub tool_summaries: Vec<ToolSummary>,
@@ -482,5 +484,19 @@ mod tests {
         };
         assert_eq!(user.input.text, "focus on tests");
         assert_eq!(user.kind, UserKind::Steering);
+    }
+
+    #[test]
+    fn the_envelope_timestamp_is_read_when_present() {
+        let item = json!({"type": "user", "data": {
+            "loop_id": "l", "kind": "prompt", "input": {"text": "hi"}
+        }});
+        let stamped = json!({"item": item, "timestamp": "2026-10-20T21:38:00Z"}).to_string();
+        let plain = json!({"item": item, "timestamp": null}).to_string();
+        assert_eq!(
+            decode_item(&stamped).unwrap().timestamp.as_deref(),
+            Some("2026-10-20T21:38:00Z")
+        );
+        assert_eq!(decode_item(&plain).unwrap().timestamp, None);
     }
 }

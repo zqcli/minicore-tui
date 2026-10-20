@@ -533,6 +533,7 @@ async fn find_counts_matches_and_highlights_them_on_screen() {
             Block::User {
                 text: "the parser bug".into(),
                 kind: UserKind::Prompt,
+                at: None,
             },
             assistant(1, "", "parser here and parser there"),
         ],
@@ -642,6 +643,7 @@ async fn the_title_follows_the_session_and_the_exit_prints_the_resume_command() 
         vec![Block::User {
             text: "hi".into(),
             kind: UserKind::Prompt,
+            at: None,
         }],
     );
     assert_eq!(

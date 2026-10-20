@@ -11,6 +11,7 @@ use tokio::sync::mpsc;
 
 use crate::app::{App, Msg, Overlay, Scroll, Session};
 use crate::protocol::read::UserKind;
+use crate::protocol::stamp::unix_millis;
 use crate::protocol::{LoopOutcome, Reasoning, SessionInfo, ToolRef, TurnRef};
 use crate::transcript::{Block, ChangeSummary, RequestKey, ToolCall, ToolState, Transcript};
 use crate::ui::theme::{Palette, Styles};
@@ -102,6 +103,7 @@ fn conversation(app: &mut App) {
     transcript.push(Block::User {
         text: "Why does the parser re-parse the whole message on every delta?".into(),
         kind: UserKind::Prompt,
+        at: None,
     });
     transcript.push(Block::Assistant {
         key: RequestKey {
@@ -176,6 +178,7 @@ fn the_screen_shows_earlier_content_while_streaming() {
     session.transcript.push(Block::User {
         text: "Now stream a longer answer.".into(),
         kind: UserKind::Prompt,
+        at: unix_millis("2026-10-20T21:41:09Z"),
     });
     session.transcript.push(Block::Assistant {
         key: RequestKey {
@@ -329,6 +332,7 @@ fn a_blank_row_separates_the_transcript_and_the_composer_band_is_full_width() {
             .push(Block::User {
                 text: format!("prompt {index}"),
                 kind: UserKind::Prompt,
+                at: None,
             });
     }
     let backend = TestBackend::new(50, 14);
@@ -480,6 +484,7 @@ fn a_queued_steer_is_shown_above_the_composer() {
         .push(crate::app::Queued {
             text: "focus on the parser first".into(),
             kind: crate::app::QueuedKind::Steer,
+            at: None,
         });
     let rendered = render(&mut app, 60, 12);
     assert!(
@@ -499,6 +504,7 @@ fn steering_is_listed_before_follow_ups_with_the_recall_hint() {
         queue.push(crate::app::Queued {
             text: text.into(),
             kind,
+            at: None,
         });
     }
     let rendered = render(&mut app, 60, 12);

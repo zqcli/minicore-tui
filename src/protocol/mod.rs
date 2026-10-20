@@ -634,6 +634,12 @@ pub struct CompactionResult {
 #[derive(Clone, Debug, Deserialize)]
 pub struct TurnSendResult {
     pub turn: TurnRef,
+    pub accepted_at: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct SteerResult {
+    pub accepted_at: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]

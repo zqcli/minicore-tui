@@ -113,6 +113,8 @@ impl LiveTurn {
 pub struct Queued {
     pub text: String,
     pub kind: QueuedKind,
+    /// A steer's send time in Unix milliseconds; it becomes a block when applied.
+    pub at: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -271,6 +273,7 @@ impl Session {
                 Block::User {
                     text,
                     kind: UserKind::Prompt,
+                    ..
                 } => Some(text.as_str()),
                 _ => None,
             })
@@ -619,10 +622,34 @@ impl Session {
         self.next_turn_start = None;
     }
 
+    /// The Agent's acceptance time replaces the clock reading on the sent prompt.
+    pub fn stamp_prompt(&mut self, text: &str, accepted: u64) {
+        let index = self.transcript.blocks().iter().rposition(
+            |block| matches!(block, Block::User { text: sent, kind: UserKind::Prompt, .. } if sent == text),
+        );
+        if let Some(Block::User { at, .. }) =
+            index.and_then(|index| self.transcript.block_mut(index))
+        {
+            *at = Some(accepted);
+        }
+    }
+
+    /// The Agent's acceptance time replaces the clock reading on a queued steer.
+    pub fn stamp_steer(&mut self, text: &str, accepted: u64) {
+        let steer = self
+            .queue
+            .iter_mut()
+            .find(|queued| queued.kind == QueuedKind::Steer && queued.text == text);
+        if let Some(queued) = steer {
+            queued.at = Some(accepted);
+        }
+    }
+
     pub fn push_follow_up(&mut self, text: String) {
         self.queue.push(Queued {
             text,
             kind: QueuedKind::Follow,
+            at: None,
         });
     }
 
@@ -689,6 +716,7 @@ impl Session {
                 Block::User {
                     text: queued.text,
                     kind: UserKind::Steering,
+                    at: queued.at,
                 },
             );
             self.applied_steers += 1;
@@ -943,6 +971,7 @@ mod tests {
         session.queue.push(Queued {
             text: text.into(),
             kind,
+            at: None,
         });
     }
 
@@ -964,6 +993,7 @@ mod tests {
                 Block::User {
                     text,
                     kind: UserKind::Steering,
+                    ..
                 } => Some(text.as_str()),
                 _ => None,
             })
@@ -1013,6 +1043,7 @@ mod tests {
         session.transcript.push(Block::User {
             text: "fix it".into(),
             kind: UserKind::Prompt,
+            at: None,
         });
         assert_eq!(session.auto_title().as_deref(), Some("fix it"));
         session.info.title = Some("named".into());

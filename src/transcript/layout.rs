@@ -427,6 +427,7 @@ mod tests {
         Block::User {
             text: text.into(),
             kind: UserKind::Prompt,
+            at: None,
         }
     }
 

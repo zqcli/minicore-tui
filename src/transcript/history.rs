@@ -5,6 +5,7 @@ use crate::protocol::ToolRef;
 use crate::protocol::read::{
     RawHistoryItem, RuntimeAssistantPart, RuntimeItem, TurnRecord, UserKind,
 };
+use crate::protocol::stamp::unix_millis;
 
 /// The blocks of a turn's durable items with what only the live turn showed
 /// put back: card facts, thinking and text the items lack, and the blocks no
@@ -47,6 +48,17 @@ pub fn merge_live(mut durable: Vec<Block>, live: &[Block]) -> Vec<Block> {
                     }
                     *expanded = expanded.or(*known_expanded);
                 }
+            }
+            // The turn's own read omits the time, which only the live block has.
+            Block::User { text, at, .. } if at.is_none() => {
+                *at = live.iter().find_map(|live| match live {
+                    Block::User {
+                        text: known,
+                        at: known_at,
+                        ..
+                    } if known == text => *known_at,
+                    _ => None,
+                });
             }
             _ => {}
         }
@@ -136,6 +148,7 @@ pub fn append_history_item(transcript: &mut Transcript, item: &RawHistoryItem, s
             transcript.push(Block::User {
                 text: user.input.text.clone(),
                 kind: user.kind,
+                at: item.timestamp.as_deref().and_then(unix_millis),
             });
         }
         RuntimeItem::Assistant(assistant) => {
@@ -279,7 +292,7 @@ pub fn to_markdown(items: &[RawHistoryItem]) -> String {
 mod tests {
     use super::*;
     use crate::protocol::read::decode_item;
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     fn key(call: &str) -> ToolRef {
         ToolRef {
@@ -288,6 +301,52 @@ mod tests {
             request_index: 1,
             tool_call_id: call.into(),
         }
+    }
+
+    fn user_item(timestamp: Value) -> RawHistoryItem {
+        decode_item(
+            &json!({"item": {"type": "user", "data": {
+                "loop_id": "l", "kind": "prompt", "input": {"text": "hello"}
+            }}, "timestamp": timestamp})
+            .to_string(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_user_block_carries_the_item_time_and_old_history_has_none() {
+        let mut transcript = Transcript::default();
+        append_history_item(
+            &mut transcript,
+            &user_item(json!("2026-10-20T21:38:00Z")),
+            "s",
+        );
+        append_history_item(&mut transcript, &user_item(json!(null)), "s");
+        let times: Vec<Option<u64>> = transcript
+            .blocks()
+            .iter()
+            .map(|block| match block {
+                Block::User { at, .. } => *at,
+                _ => panic!("expected user"),
+            })
+            .collect();
+        assert_eq!(times, [unix_millis("2026-10-20T21:38:00Z"), None]);
+    }
+
+    #[test]
+    fn merging_keeps_the_live_prompt_time_the_turn_read_lacks() {
+        let mut durable = Transcript::default();
+        append_history_item(&mut durable, &user_item(json!(null)), "s");
+        let live = [Block::User {
+            text: "hello".into(),
+            kind: UserKind::Prompt,
+            at: Some(42),
+        }];
+        let merged = merge_live(durable.into_blocks(), &live);
+        assert!(matches!(
+            merged.as_slice(),
+            [Block::User { at: Some(42), .. }]
+        ));
     }
 
     #[test]

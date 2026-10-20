@@ -198,6 +198,7 @@ mod tests {
         transcript.push(Block::User {
             text: "again".into(),
             kind: UserKind::Prompt,
+            at: None,
         });
         assert_eq!(transcript.last_answer(), None);
     }
@@ -207,6 +208,7 @@ mod tests {
         let user = || Block::User {
             text: "a".into(),
             kind: UserKind::Prompt,
+            at: None,
         };
         let mut first = Transcript::default();
         let mut second = Transcript::default();
