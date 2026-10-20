@@ -69,16 +69,20 @@ Clicks do nothing while a picker or view is open.
 
 ## Pickers and sheets
 
-Pickers, the approval prompt and find share one bottom sheet. `Esc` closes it
-without changing anything. Moving the selection works with `↑` / `↓`, `Tab`, and
-`PageUp` / `PageDown` (ten rows; in Find they step through matches).
+Pickers, the approval prompt and find share one bottom sheet that takes the
+editor's place. `Esc` closes it without changing anything. `↑` / `↓` move the
+selection and wrap at the ends, as do `Tab`; `PageUp` / `PageDown` move ten
+rows (in Find they step through matches). The command and `@` lists are not
+sheets: they sit under the editor text, five rows at a time with an `(i/N)`
+counter.
 
 | Sheet | Keys |
 |---|---|
-| Command palette | The text after `/` stays in the composer and filters the commands fuzzily. `Enter` runs the highlighted command with the argument typed after its name. `Esc` also drops a draft that is only the command. |
+| Command list | The text after `/` stays in the composer and filters the commands fuzzily, best match first. `Enter` runs the highlighted command with the argument typed after its name; `Tab` completes `/name ` without running. `Esc` closes the list and leaves the draft as it is; deleting the `/` closes it too. |
 | Sessions | Type to filter by title. `Enter` opens the session. `Ctrl+D` twice deletes the selected one; the open session cannot be deleted. Sessions of this workspace come first, newest first; the open one is marked. |
-| Model, Reasoning | `Enter` applies the highlighted entry. There is no text filter. |
-| Files (`@`) | Type to filter by path substring (up to 500 workspace files). `Enter` replaces the `@` token with `@path`; with no match the picker stays open. `Esc` removes the `@` token. |
+| Model | Type to filter by id. `Enter` switches to the highlighted model; the current one is marked `✓`. |
+| Reasoning | `Enter` applies the highlighted level; the current one is marked `✓`. |
+| Files (`@`) | The `@word` before the cursor filters workspace paths (up to 500 files). `Enter` or `Tab` replaces it with `@path `; with no match `Enter` does nothing. `Esc` closes the list and leaves the text. |
 | Find | Type to search (case-insensitive, one match per block: messages, notices, tool details, compaction summaries); the view shows match 1 as you type. `Enter`, `↓`, `Tab` go to the next match; `Shift+Enter`, `↑` to the previous. `Esc` closes and leaves the view where it is. |
 
 ## Approval and choice prompts
