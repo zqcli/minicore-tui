@@ -28,7 +28,10 @@ async fn a_manual_compaction_adds_one_marker_and_keeps_what_is_loaded() {
     assert_eq!(h.calls("session.compact")[0]["operation_id"], "tui-1");
     assert_eq!(h.texts(), ["loaded"]);
     assert_eq!(h.compactions(), ["tui-1"]);
-    assert!(h.screen(80, 12).contains("32.2k → 2.7k"));
+    assert!(
+        h.screen(80, 12)
+            .contains("Compacted from 32.2k to 2.7k tokens")
+    );
 
     h.fake.script(
         "session.compact",

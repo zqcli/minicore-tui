@@ -393,10 +393,7 @@ async fn a_session_that_opens_on_its_summary_loads_the_latest_answer_behind_it()
     assert_eq!(h.marker(), Some(198));
     assert_eq!(h.app.scroll, Scroll::Follow);
     let screen = h.screen(100, 12);
-    let (answer, marker) = (
-        screen.find("the final answer"),
-        screen.find("─ Context compacted ─"),
-    );
+    let (answer, marker) = (screen.find("the final answer"), screen.find("[compaction]"));
     assert!(answer.is_some() && answer < marker, "{screen}");
 }
 
@@ -500,8 +497,9 @@ async fn canonical_cards_take_their_detail_and_facts_from_tool_read() {
     assert_eq!(card.state, crate::transcript::ToolState::Failed);
     assert_eq!(card.exit_code, Some(2));
     assert_eq!(card.duration, Some(std::time::Duration::from_millis(1500)));
-    let screen = h.screen(100, 12);
-    assert!(screen.contains("bash  ls -la"), "{screen}");
+    let screen = h.screen(100, 40);
+    assert!(screen.contains("▎ ls -la"), "{screen}");
+    assert!(screen.contains("1.5s · exit 2"), "{screen}");
 }
 
 #[tokio::test(start_paused = true)]

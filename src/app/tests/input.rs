@@ -25,15 +25,16 @@ fn conversation(h: &mut Harness, count: usize) {
             reasoning: String::new(),
             text: format!("answer {index}\n\nline two\n\nline three"),
             streaming: false,
+            expanded: None,
         });
     }
 }
 
 /// The first transcript row with text; an anchored block may start with the
-/// blank row that separates it from the one above.
+/// blank row that separates it from the one above, or a card's pad row.
 fn first_row(h: &mut Harness) -> String {
     let screen = h.screen(60, 24);
-    let row = screen.lines().find(|row| !row.trim().is_empty());
+    let row = screen.lines().find(|row| !matches!(row.trim(), "" | "▎"));
     row.unwrap_or_default().to_owned()
 }
 

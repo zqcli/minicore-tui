@@ -439,8 +439,24 @@ impl App {
                 self.composer.delete();
             }
             KeyCode::Char('g') if ctrl => return Some(Action::EditDraft),
-            KeyCode::Char('o') if ctrl => self.tools_expanded = !self.tools_expanded,
-            KeyCode::Char('t') if ctrl => self.show_reasoning = !self.show_reasoning,
+            KeyCode::Char('o') if ctrl => {
+                self.tools_expanded = !self.tools_expanded;
+                let state = if self.tools_expanded {
+                    "expanded"
+                } else {
+                    "collapsed"
+                };
+                self.notice(NoticeLevel::Info, format!("Tool output: {state}"));
+            }
+            KeyCode::Char('t') if ctrl => {
+                self.show_reasoning = !self.show_reasoning;
+                let state = if self.show_reasoning {
+                    "visible"
+                } else {
+                    "hidden"
+                };
+                self.notice(NoticeLevel::Info, format!("Thinking blocks: {state}"));
+            }
             KeyCode::Char('r') if ctrl => self.open_panel(Panel::Sessions),
             KeyCode::Char('l') if ctrl => self.open_panel(Panel::Models),
             KeyCode::Char('f') if ctrl => self.open_panel(Panel::Find),
@@ -617,33 +633,46 @@ impl App {
         }
     }
 
-    /// A click: a card header folds the card, its hint opens the tool view, and
-    /// a turn-end line opens the turn's diff.
+    /// A click: a card or a thinking row folds that block, a card's full-output
+    /// hint opens the tool view, and a turn-end line opens the turn's diff.
     fn click_transcript(&mut self, (column, row): (u16, u16)) {
         if !self.overlay.is_none() {
             return;
         }
-        let Some((index, line)) = self.layout.hit(column, row) else {
+        let Some((index, _)) = self.layout.hit(column, row) else {
             return;
         };
         let all_expanded = self.tools_expanded;
+        let text = self.rendered.row(row).unwrap_or_default().trim().to_owned();
+        // The clicked block stays where it is instead of following the tail.
+        let pinned = match self.scroll {
+            Scroll::Follow => {
+                let (block, offset) = self.layout.anchor(self.layout.viewport.top);
+                Scroll::Anchor { block, offset }
+            }
+            anchored => anchored,
+        };
         let Some(session) = self.session.as_mut() else {
             return;
         };
         match session.transcript.blocks().get(index) {
-            Some(Block::Tool(call)) => {
+            Some(Block::Tool(call)) if text.ends_with(blocks::FULL_OUTPUT_HINT) => {
                 let key = call.key.clone();
-                // The hint is a card's last row; the drawn row is what was clicked.
-                let on_hint = self
-                    .rendered
-                    .row(row)
-                    .is_some_and(|text| text.trim_end().ends_with(blocks::FULL_OUTPUT_HINT));
-                if line == 0 {
-                    if let Some(call) = session.transcript.find_tool_mut(&key) {
-                        call.toggle_expanded(all_expanded);
-                    }
-                } else if on_hint {
-                    self.open_panel(Panel::Tool(key));
+                self.open_panel(Panel::Tool(key));
+            }
+            Some(Block::Tool(call)) if !text.is_empty() => {
+                let key = call.key.clone();
+                if let Some(call) = session.transcript.find_tool_mut(&key) {
+                    call.toggle_expanded(all_expanded);
+                    self.scroll = pinned;
+                }
+            }
+            Some(Block::Assistant { .. }) if text.starts_with(crate::ui::rails::RAIL) => {
+                if let Some(Block::Assistant { expanded, .. }) = session.transcript.block_mut(index)
+                {
+                    let open = !expanded.unwrap_or(all_expanded);
+                    *expanded = (open != all_expanded).then_some(open);
+                    self.scroll = pinned;
                 }
             }
             Some(Block::TurnEnd { .. }) => self.open_panel(Panel::Diff(super::DiffScope::Turn)),

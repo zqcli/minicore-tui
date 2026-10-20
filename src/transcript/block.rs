@@ -22,6 +22,8 @@ pub enum Block {
         reasoning: String,
         text: String,
         streaming: bool,
+        /// The reader's thinking fold; `None` follows the global Ctrl+O.
+        expanded: Option<bool>,
     },
     Tool(Box<ToolCall>),
     TurnEnd {
@@ -662,6 +664,7 @@ impl Transcript {
                     reasoning: String::new(),
                     text: String::new(),
                     streaming: true,
+                    expanded: None,
                 });
                 self.revisions.push(self.next_revision);
                 self.blocks.len() - 1
@@ -730,6 +733,7 @@ pub fn append_history_item(transcript: &mut Transcript, item: &RawHistoryItem, s
                 reasoning,
                 text,
                 streaming: false,
+                expanded: None,
             });
             for call in calls {
                 transcript.push(Block::Tool(Box::new(call)));
@@ -1192,6 +1196,7 @@ mod tests {
             reasoning: "thinking".into(),
             text: String::new(),
             streaming: false,
+            expanded: None,
         });
         transcript.push(Block::User {
             text: "again".into(),

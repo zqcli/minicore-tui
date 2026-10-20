@@ -203,7 +203,7 @@ impl App {
             notices: VecDeque::new(),
             scroll: Scroll::Follow,
             tools_expanded: false,
-            show_reasoning: false,
+            show_reasoning: true,
             quit: false,
             quit_armed: None,
             ready: false,

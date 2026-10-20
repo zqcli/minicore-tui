@@ -75,6 +75,7 @@ mod tests {
             reasoning: String::new(),
             text: text.into(),
             streaming: false,
+            expanded: None,
         }
     }
 

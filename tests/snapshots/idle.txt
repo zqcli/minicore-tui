@@ -1,20 +1,20 @@
+▎
 ▎ Why does the parser re-parse the whole message on every delta?
+▎
 
-▏ Thought · 1 line
+▎ The layout cache only keyed on the block revision...
 
-  It does not any more. The streaming renderer keeps the stable prefix
-  and re-renders only the tail, so a delta costs one small parse.
+  It does not any more. The streaming renderer keeps the stable
+  prefix and re-renders only the tail, so a delta costs one small
+  parse.
 
-▎ ✓ bash  $ cargo test --lib                             4.2s · exit 0
-▎   running 131 tests
-▎   test result: ok
-▎   … 14 earlier lines · ctrl+o to expand
-
-── completed in 12s · 2 requests · 1 tool · 2 files changed (+40 −7) …
+▎ bash                                                           4.2s
+▎ $ cargo test --lib
+▎ ... (16 more lines, ctrl+o to expand)
 
 
- ▎
- ▎Ask anything · / commands · @ files
- ▎
- ▎
- ▸ minicore-tui · gpt 6 luna · max · 0m                       ↑0 ↓0 R0
+  completed in 12s · 2 requests · 1 tool · 2 files changed (+40 −7)
+
+
+▎ Ask anything · / commands · @ files
+minicore-tui · Cache the parser · gpt-6-luna · max · ● ready     ctx ?

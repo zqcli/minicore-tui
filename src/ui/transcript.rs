@@ -12,7 +12,7 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use super::markdown::StreamRenderer;
 use super::theme::Styles;
-use super::{blocks, rails, selection};
+use super::{blocks, selection};
 use crate::app::{App, Scroll};
 use crate::transcript::Block;
 use crate::transcript::layout::{Fold, Viewport};
@@ -51,37 +51,31 @@ impl RenderState {
             reasoning,
             text,
             streaming: true,
+            expanded,
             ..
         } = block
         else {
             self.streams.remove(&index);
             return blocks::render(block, styles, width, fold);
         };
-        let inner = width as usize - blocks::INSET;
+        let inner = blocks::text_width(width as usize);
         let stream = self.streams.entry(index).or_insert_with(|| Stream {
             text: StreamRenderer::new(inner, styles.text()),
-            reasoning: StreamRenderer::new(inner, styles.dim()),
+            reasoning: StreamRenderer::new(inner, blocks::thinking_style(styles)),
         });
         stream.text.reset(text);
         stream.reasoning.reset(&blocks::reasoning_source(reasoning));
-        // Long reasoning must not push the answer off screen while it streams.
-        let reasoning = stream.reasoning.lines(&styles);
-        let shown = if fold.show_reasoning {
-            &reasoning[..]
-        } else {
-            &reasoning[reasoning.len().saturating_sub(3)..]
-        };
-        let mut lines: Vec<Line<'static>> = shown
-            .iter()
-            .map(|line| rails::reasoning_rail(line.clone(), styles))
-            .collect();
-        if !lines.is_empty() && !text.trim().is_empty() {
-            lines.push(Line::default());
-        }
-        for line in stream.text.lines(&styles).iter() {
-            lines.push(rails::rail(line.clone(), styles));
-        }
-        lines
+        let thinking = stream.reasoning.lines(&styles);
+        let reply = stream.text.lines(&styles);
+        blocks::assistant_rows(
+            reasoning,
+            &thinking,
+            &reply,
+            expanded.unwrap_or(fold.expanded),
+            fold.show_reasoning,
+            styles,
+            width as usize,
+        )
     }
 }
 
@@ -103,7 +97,7 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, styles: Styles) {
     // Block renderers subtract their inset from the width.
     let width = area.width.max(blocks::INSET as u16 + 1);
     let fold = Fold {
-        expanded_tools: app.tools_expanded,
+        expanded: app.tools_expanded,
         show_reasoning: app.show_reasoning,
     };
     let key = (width, fold, styles);

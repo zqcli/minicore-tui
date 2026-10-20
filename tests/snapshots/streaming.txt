@@ -1,20 +1,20 @@
-▎ ✓ bash  $ cargo test --lib                             4.2s · exit 0
-▎   running 131 tests
-▎   test result: ok
-▎   … 14 earlier lines · ctrl+o to expand
 
-── completed in 12s · 2 requests · 1 tool · 2 files changed (+40 −7) …
+▎ bash                                                           4.2s
+▎ $ cargo test --lib
+▎ ... (16 more lines, ctrl+o to expand)
 
+
+  completed in 12s · 2 requests · 1 tool · 2 files changed (+40 −7)
+
+▎
 ▎ Now stream a longer answer.
+▎
 
-▏ I should explain the anchor rule first, then show it.
+▎ I should explain the anchor rule first, then show it.
 
   An anchored view keeps its block and row, so new output below never
   moves the text you are reading. Only scrolling to the end returns
   to following.
 
- ▎
- ▎Ask anything · / commands · @ files
- ▎
- ▎
- ▸ minicore-tui · gpt 6 luna · max · 0m                       ↑0 ↓0 R0
+▎ Ask anything · / commands · @ files
+minicore-tui · Cache the parser · gpt-6-luna · max · ● ready     ctx ?
