@@ -109,6 +109,15 @@ pub fn matching_models<'a>(models: &'a [ModelInfo], filter: &str) -> Vec<&'a Mod
 }
 
 impl App {
+    /// The reasoning levels this session's model supports, in Agent order.
+    pub fn reasoning_levels(&self) -> Vec<protocol::Reasoning> {
+        self.session
+            .as_ref()
+            .and_then(|session| session.model(&self.models))
+            .map(|model| model.supported_reasoning.clone())
+            .unwrap_or_default()
+    }
+
     /// Opens a picker or view, seeding it from the current state.
     pub fn open_panel(&mut self, panel: Panel) {
         self.overlay = match panel {

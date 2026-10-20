@@ -10,6 +10,7 @@ pub mod composer;
 pub mod diff;
 pub mod find;
 pub mod keys;
+mod mouse;
 mod notify;
 mod ops;
 pub mod overlay;
