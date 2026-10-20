@@ -48,6 +48,10 @@ const KEYS: &[KeyRow] = &[
         action: "pull the last queued message back",
     },
     KeyRow {
+        keys: "ctrl+x",
+        action: "copy the last answer",
+    },
+    KeyRow {
         keys: "ctrl+g",
         action: "edit the draft in `editor`, $VISUAL or $EDITOR",
     },
@@ -58,6 +62,10 @@ const KEYS: &[KeyRow] = &[
     KeyRow {
         keys: "ctrl+w, ctrl/alt+backspace",
         action: "delete the previous word",
+    },
+    KeyRow {
+        keys: "alt+d, alt+delete",
+        action: "delete the next word",
     },
     KeyRow {
         keys: "/",

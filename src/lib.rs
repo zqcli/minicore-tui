@@ -8,6 +8,7 @@ pub mod cli;
 pub mod clipboard;
 pub mod config;
 pub mod editor;
+pub mod prompt_history;
 pub mod protocol;
 pub mod rpc;
 pub mod terminal;

@@ -18,8 +18,9 @@ the kitty keyboard protocol; `Ctrl+J` always inserts a newline.
 | `Esc` | Interrupt the running turn; when idle, clear the draft. Closes an open picker or view first. |
 | `Ctrl+C` | Clear the draft; a second press within 500 ms quits. |
 | `Ctrl+D` | Quit when the draft is empty; otherwise delete the character after the cursor. |
-| `↑` / `↓` | Move between lines of a multi-line draft; on the first or last line, browse prompt history (100 kept). |
+| `↑` / `↓` | Move between lines of a multi-line draft; on the first or last line, browse prompt history. The last 100 prompts, paste chips included, are kept in `history.jsonl` next to the TUI config and survive a restart; a prompt over 32 KiB stays in memory only. |
 | `Alt+↑` | Take the newest queued follow-up back into an empty draft. |
+| `Ctrl+X` | Copy the last assistant answer, as `/copy` does. |
 | `Ctrl+G` | Edit the draft in the `editor` from the TUI config, else `$VISUAL`, else `$EDITOR`. |
 | `/` at the start of the draft | Open the command palette. `Enter` runs the highlighted command; with no match it sends the line as a prompt. |
 | `@` at the start of a word | Open the workspace file picker. In the middle of a word (`me@example.com`) it is plain text. |
@@ -28,9 +29,10 @@ the kitty keyboard protocol; `Ctrl+J` always inserts a newline.
 | `Ctrl+←` / `Ctrl+→`, `Alt+←` / `Alt+→` | Move by word. |
 | `Backspace` / `Delete` | Delete before or after the cursor. |
 | `Ctrl+W`, `Ctrl+Backspace` (terminals that send it as `Ctrl+H` too), `Alt+Backspace` | Delete the previous word. |
+| `Alt+D`, `Alt+Delete` | Delete to the end of the next word. |
 | `Ctrl+U` / `Ctrl+K` | Delete to the start or end of the line. |
 | `Ctrl+Z` / `Ctrl+Y` | Undo / redo (200 steps). |
-| Paste | Insert as one edit. A paste of more than 3 lines or 400 bytes shows as a `[pasted N lines]` (or `[pasted N chars]`) token and expands on send. |
+| Paste | Insert as one edit. A paste of more than 10 lines or 1000 characters shows as a `[paste #N +L lines]` (or `[paste #N C chars]`) chip and expands on send; recalling a prompt from history brings the chip back. |
 
 Cursor movement and deletion respect whole graphemes and treat a paste token as
 one unit. `Esc` while busy only interrupts; it does not clear the draft.

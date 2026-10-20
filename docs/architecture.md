@@ -31,25 +31,27 @@ src/
     tasks.rs      async operations: bootstrap, waits, history reads, changes, export
     keys.rs       key, paste and mouse dispatch per focused surface
     commands.rs   slash-command table and parsing
+    composer.rs   draft model: cursor, paste chips, undo, prompt history
     overlay.rs    Overlay (the one open picker or view) and Panel
     diff.rs, tool.rs, find.rs   state and reads of the diff view, tool view, find
     tests/        reducer tests through the scripted Agent
   transcript/   block.rs (Block, ToolCall, Transcript, history to blocks, export)
                 layout.rs (per-block line cache, prefix heights, viewport, anchors)
-  ui/           mod (draw), transcript, blocks, rails, markdown, wrap, composer,
+  ui/           mod (draw), transcript, blocks, rails, markdown, wrap, composer (render),
                 status (status line, queue, notice, footer), panel + sheets + picker
                 (the one bottom-sheet style), selection, theme (Palette, Styles),
                 views/{diff, tool, context, help}, snapshots (test only)
   terminal.rs   alternate screen, raw mode, paste, mouse, kitty keys, panic hook
   clipboard.rs  pbcopy / xclip / clip with an OSC 52 fallback
   editor.rs     external editor for Ctrl+G
+  prompt_history.rs  the prompt history file (JSON lines, atomic rewrite)
   testing.rs    FakeAgent: scripted in-process Agent behind a real Client (test only)
 ```
 
 Dependency direction: `protocol` ← `rpc` ← `app` → `transcript` → `ui`.
 `transcript` and `ui` never call the Agent. `ui::draw` takes `&mut App` only to
 update the layout cache and the rows recorded for copy. `app` reuses `ui` pieces
-that are models or row types (`composer`, `sheets`, `views::{diff, tool}`), so
+that are models or row types (`sheets`, `views::{diff, tool}`), so
 the module graph is not acyclic, but domain state has exactly one writer.
 
 ## Main loop and message flow
