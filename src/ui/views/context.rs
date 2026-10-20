@@ -184,6 +184,26 @@ fn summary_lines(
             };
             lines.push(styled(&format!("{label}: {detail}"), styles.dim()));
         }
+        if let Some(last) = context
+            .automatic
+            .as_ref()
+            .and_then(|view| view.last.as_ref())
+        {
+            let detail = match (last.before_tokens, last.after_tokens) {
+                (Some(before), Some(after)) if last.outcome == "compacted" => {
+                    format!(
+                        "{} → {} tokens",
+                        format_tokens(before),
+                        format_tokens(after)
+                    )
+                }
+                _ => last.outcome.replace('_', " "),
+            };
+            lines.push(styled(
+                &format!("Last compaction between requests: {detail}"),
+                styles.dim(),
+            ));
+        }
         if let Some(coverage) = &context.coverage {
             lines.push(styled(
                 &format!(
@@ -564,6 +584,26 @@ mod tests {
         );
         assert!(
             text.contains(&"Summary covers 5 turns · 64 items · 0 kept".to_owned()),
+            "{text:?}"
+        );
+    }
+
+    #[test]
+    fn a_compaction_between_requests_is_listed_beside_the_last_check() {
+        let context: SessionContext = serde_json::from_value(json!({
+            "session_id": "ses_1",
+            "last_result": {"operation_id": "auto-2", "origin": "automatic", "status": "noop"},
+            "automatic": {"last": {"operation_id": "auto-boundary-l1-1", "before_tokens": 35300,
+                                   "after_tokens": 8000, "outcome": "compacted"}}
+        }))
+        .unwrap();
+        let text = lines_of(summary_lines(
+            Some(&context),
+            None,
+            Styles::of(Palette::dark()),
+        ));
+        assert!(
+            text.contains(&"Last compaction between requests: 35.3k → 8k tokens".to_owned()),
             "{text:?}"
         );
     }
