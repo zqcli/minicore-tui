@@ -4,6 +4,7 @@
 use std::ops::Range;
 
 use ratatui::text::{Line, Span};
+use unicode_segmentation::UnicodeSegmentation;
 
 use super::theme::Styles;
 use crate::app::composer::Composer;
@@ -23,8 +24,7 @@ pub fn max_rows(height: u16) -> usize {
 /// Shown instead while a full-screen view owns the keys.
 const VIEW_PLACEHOLDER: &str = "view open · esc to return";
 
-/// Sanitized projection and the legal editing stops on it. A paste chip has
-/// only two stops, so a click or Shift motion cannot split its hidden payload.
+/// The sanitized draft and its editing stops, of which a paste chip has only two.
 struct Shown {
     text: String,
     chips: Vec<Range<usize>>,
@@ -90,8 +90,6 @@ impl Shown {
         }
     }
 }
-
-use unicode_segmentation::UnicodeSegmentation;
 
 struct Geometry {
     shown: Shown,
@@ -168,14 +166,8 @@ fn geometry(composer: &Composer, width: u16, max_rows: usize) -> Geometry {
     }
 }
 
-/// Maps a cell in the rendered editor (including its rail/padding) back to a
-/// grapheme or chip boundary. Rendering and hit-testing share all geometry.
-pub fn hit_test(composer: &Composer, width: u16, max_rows: usize, row: u16, column: u16) -> usize {
-    hit_test_row(composer, width, max_rows, row as isize, column)
-}
-
-/// A drag just outside the viewport reaches the adjacent wrapped row, allowing
-/// the next frame to scroll the editor without moving the transcript.
+/// The editing stop under an editor cell; a `row` just outside the viewport
+/// reaches the adjacent wrapped row, so a drag there scrolls the draft.
 pub fn hit_test_row(
     composer: &Composer,
     width: u16,
@@ -359,7 +351,7 @@ mod tests {
                 let mut c = composer(text);
                 loop {
                     let (_, caret) = render(&c, styles(), width, 4, true);
-                    let at = hit_test(&c, width, 4, caret.0, caret.1);
+                    let at = hit_test_row(&c, width, 4, caret.0 as isize, caret.1);
                     assert_eq!(at, c.cursor(), "{text:?} width={width} caret={caret:?}");
                     if c.cursor() == 0 {
                         break;
@@ -376,8 +368,11 @@ mod tests {
         let payload = big_paste(12);
         c.insert(&payload);
         let (_, caret) = render(&c, styles(), 60, 12, true);
-        assert_eq!(hit_test(&c, 60, 12, caret.0, 6), 4);
-        assert_eq!(hit_test(&c, 60, 12, caret.0, caret.1 - 1), c.text().len());
+        assert_eq!(hit_test_row(&c, 60, 12, caret.0 as isize, 6), 4);
+        assert_eq!(
+            hit_test_row(&c, 60, 12, caret.0 as isize, caret.1 - 1),
+            c.text().len()
+        );
     }
 
     #[test]

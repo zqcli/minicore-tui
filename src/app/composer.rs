@@ -12,10 +12,6 @@ use unicode_segmentation::UnicodeSegmentation;
 use crate::prompt_history::{self, Record};
 use crate::wrap;
 
-#[cfg(test)]
-#[path = "composer_selection_tests.rs"]
-mod selection_tests;
-
 /// Pastes of more lines or characters than these become a chip.
 const TOKEN_LINES: usize = 10;
 const TOKEN_CHARS: usize = 1000;
@@ -258,43 +254,19 @@ impl Composer {
         self.anchor = None;
     }
 
-    /// Runs a keyboard motion with a stable Shift anchor.
-    pub fn move_selection(&mut self, extend: bool, motion: impl FnOnce(&mut Self)) {
-        self.commit();
-        let origin = self.cursor;
-        let anchor = self.anchor;
-        if extend {
-            self.anchor = None;
-        }
+    /// Runs a caret motion that extends the selection from its anchor.
+    pub fn extend_selection(&mut self, motion: impl FnOnce(&mut Self)) {
+        self.close_gesture();
+        let anchor = self.anchor.take().unwrap_or(self.cursor);
         motion(self);
-        self.anchor = extend.then_some(anchor.unwrap_or(origin));
+        self.anchor = Some(anchor);
     }
 
-    /// Places the caret at a hit-tested offset, outside graphemes and chips.
+    /// Moves the caret to `at`, an editing stop from the editor's hit test.
     pub fn place_cursor(&mut self, at: usize, extend: bool) {
-        self.commit();
-        let anchor = self.anchor.unwrap_or(self.cursor);
-        let mut at = at.min(self.text.len());
-        while !self.text.is_char_boundary(at) {
-            at -= 1;
-        }
-        if at < self.text.len() {
-            at = self
-                .text
-                .grapheme_indices(true)
-                .take_while(|(start, _)| *start <= at)
-                .last()
-                .map_or(0, |(start, _)| start);
-        }
-        if let Some(paste) = self
-            .pastes
-            .iter()
-            .find(|p| p.range.start < at && at < p.range.end)
-        {
-            at = paste.range.start;
-        }
+        self.close_gesture();
+        self.anchor = extend.then_some(self.anchor.unwrap_or(self.cursor));
         self.cursor = at;
-        self.anchor = extend.then_some(anchor);
         self.column = None;
     }
 
@@ -434,6 +406,12 @@ impl Composer {
 
     fn commit(&mut self) {
         self.recall = None;
+        self.close_gesture();
+    }
+
+    /// Closes the open edit gesture as one undo step; a caret move does this
+    /// without leaving a recalled prompt.
+    fn close_gesture(&mut self) {
         let Some(snapshot) = self.gesture.take() else {
             return;
         };
@@ -1576,6 +1554,80 @@ mod tests {
         c.insert("   ");
         c.submit();
         assert!(!c.history_prev());
+    }
+
+    #[test]
+    fn shift_arrows_extend_shrink_reverse_and_never_split_graphemes() {
+        let mut c = composer("a中e\u{301}👨‍👩‍👧‍👦z");
+        c.extend_selection(Composer::move_left);
+        assert_eq!(c.selected_text(), Some("z"));
+        c.extend_selection(Composer::move_left);
+        assert_eq!(c.selected_text(), Some("👨‍👩‍👧‍👦z"));
+        c.extend_selection(Composer::move_right);
+        assert_eq!(c.selected_text(), Some("z"));
+        c.extend_selection(Composer::move_right);
+        assert!(c.selection().is_none());
+        c.place_cursor(1, false);
+        c.extend_selection(Composer::move_left);
+        assert_eq!(c.selected_text(), Some("a"));
+        c.extend_selection(Composer::move_right);
+        c.extend_selection(Composer::move_right);
+        assert_eq!(c.selected_text(), Some("中"));
+        c.move_right();
+        assert_eq!(c.cursor(), "a中".len());
+        assert!(c.selection().is_none());
+    }
+
+    #[test]
+    fn typing_pasting_newline_and_delete_replace_selection_in_one_undo_step() {
+        for operation in 0..4 {
+            let mut c = composer("one中two");
+            c.place_cursor(3, false);
+            c.place_cursor(6, true);
+            match operation {
+                0 => c.type_char('X'),
+                1 => c.insert("X\nY"),
+                2 => c.newline(),
+                _ => c.backspace(),
+            }
+            assert_eq!(
+                c.text(),
+                ["oneXtwo", "oneX\nYtwo", "one\ntwo", "onetwo"][operation]
+            );
+            assert!(c.selection().is_none());
+            assert!(c.undo());
+            assert_eq!(c.text(), "one中two");
+            assert_eq!(c.selected_text(), Some("中"));
+            assert!(c.redo());
+            assert!(c.selection().is_none());
+        }
+    }
+
+    #[test]
+    fn paste_payload_is_selected_replaced_and_restored_as_an_atomic_chip() {
+        let mut c = composer("prefix ");
+        let payload = "line\n".repeat(12);
+        c.insert(&payload);
+        c.extend_selection(Composer::move_left);
+        assert_eq!(c.selected_text(), Some(payload.as_str()));
+        c.type_char('X');
+        assert_eq!(c.text(), "prefix X");
+        assert!(c.pastes().is_empty());
+        c.undo();
+        assert_eq!(c.pastes().len(), 1);
+        assert_eq!(c.selected_text(), Some(payload.as_str()));
+    }
+
+    #[test]
+    fn selecting_in_a_recalled_prompt_keeps_the_draft_to_return_to() {
+        let mut c = composer("first");
+        c.submit();
+        c.type_char('d');
+        assert!(c.history_prev());
+        c.extend_selection(Composer::move_left);
+        c.place_cursor(0, false);
+        assert!(c.history_next());
+        assert_eq!(c.text(), "d");
     }
 }
 

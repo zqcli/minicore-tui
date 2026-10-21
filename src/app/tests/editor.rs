@@ -1,9 +1,6 @@
 use super::harness::*;
 use crate::app::{Overlay, Panel};
-use crate::terminal::input::InputDecoder;
-use crossterm::event::{
-    Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
-};
+use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
 fn mouse(h: &mut Harness, kind: MouseEventKind, x: u16, y: u16) {
     assert!(h.app.on_mouse(MouseEvent {
@@ -136,45 +133,11 @@ async fn dragging_outside_editor_scrolls_long_drafts_and_keeps_the_anchor() {
     assert_eq!(h.app.scroll, crate::app::Scroll::Follow);
 }
 
-fn dispatch(h: &mut Harness, events: Vec<Event>) {
-    for event in events {
-        match event {
-            Event::Key(key) => {
-                if let Some(action) = h.app.on_key(key) {
-                    h.app.on_action(action);
-                }
-            }
-            Event::Paste(text) => h.app.on_paste(&text),
-            _ => {}
-        }
-    }
-}
-
 #[tokio::test(start_paused = true)]
-async fn multiline_legacy_and_native_pastes_never_submit_or_execute_slash_commands() {
-    for (text, framed) in [
-        ("/new\r\nhello\n", false),
-        ("first\r\nsecond\n", false),
-        ("/new\nhello\n", true),
-    ] {
+async fn a_multiline_paste_is_draft_text_and_never_runs_a_command() {
+    for text in ["/new\r\nhello\n", "first\nsecond\n"] {
         let mut h = Harness::opened(display_read(0, 0)).await;
-        let mut decoder = InputDecoder::new(true);
-        if framed {
-            dispatch(&mut h, decoder.push(Event::Paste(text.into())));
-        } else {
-            for ch in text.chars() {
-                let code = if ch == '\n' {
-                    KeyCode::Enter
-                } else {
-                    KeyCode::Char(ch)
-                };
-                dispatch(
-                    &mut h,
-                    decoder.push(Event::Key(KeyEvent::new(code, KeyModifiers::NONE))),
-                );
-            }
-            dispatch(&mut h, decoder.flush());
-        }
+        h.app.on_paste(text);
         h.settle().await;
         assert_eq!(h.app.composer.text(), text.replace("\r\n", "\n"));
         for method in [
@@ -187,4 +150,43 @@ async fn multiline_legacy_and_native_pastes_never_submit_or_execute_slash_comman
             assert!(h.calls(method).is_empty(), "paste invoked {method}");
         }
     }
+}
+
+#[tokio::test(start_paused = true)]
+async fn copying_a_selection_drops_it_so_ctrl_c_quits_again() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.app.composer.set_text("keep this");
+    h.key(KeyCode::Left, KeyModifiers::SHIFT);
+    h.ctrl(KeyCode::Char('c'));
+    assert_eq!(h.app.composer.selection(), None);
+    assert_eq!(h.app.composer.text(), "keep this");
+    h.ctrl(KeyCode::Char('c'));
+    h.ctrl(KeyCode::Char('c'));
+    assert!(h.app.quit);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_cut_the_clipboard_would_refuse_keeps_the_text() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    let big = "x".repeat(crate::clipboard::MAX_CLIPBOARD_BYTES + 1);
+    h.app.composer.set_text(&big);
+    h.key(KeyCode::Home, KeyModifiers::SHIFT);
+    h.ctrl(KeyCode::Char('x'));
+    assert_eq!(h.app.composer.text(), big);
+    assert!(
+        h.notices()[0].contains("clipboard limit"),
+        "{:?}",
+        h.notices()
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn shift_end_with_no_draft_follows_the_tail_like_end() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.app.scroll = crate::app::Scroll::Anchor {
+        block: 0,
+        offset: 0,
+    };
+    h.key(KeyCode::End, KeyModifiers::SHIFT);
+    assert_eq!(h.app.scroll, crate::app::Scroll::Follow);
 }

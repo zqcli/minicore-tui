@@ -4,6 +4,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::app::commands::{self, Executed};
+use crate::app::composer::Composer;
 use crate::app::{Action, App, NoticeLevel, Panel, Scroll};
 use crate::protocol::Reasoning;
 use crate::transcript::Block;
@@ -29,55 +30,48 @@ impl App {
         action
     }
 
+    /// Copies the draft's selection and drops it, so Ctrl+C can quit again; a
+    /// cut removes the text only when the clipboard will take it.
+    fn copy_draft_selection(&mut self, cut: bool) {
+        let Some(text) = self.composer.selected_text().map(str::to_owned) else {
+            return;
+        };
+        if cut {
+            if let Err(error) = crate::clipboard::check(&text) {
+                self.notice(NoticeLevel::Error, error);
+                return;
+            }
+            self.composer.delete_selection();
+        } else {
+            self.composer.clear_selection();
+        }
+        self.copy(text);
+    }
+
     fn on_composer_key(&mut self, key: KeyEvent) -> Option<Action> {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
         let shift = key.modifiers.contains(KeyModifiers::SHIFT);
-        if shift {
-            let moved = match key.code {
-                KeyCode::Left => {
-                    self.composer.move_selection(true, |c| {
-                        if ctrl || alt {
-                            c.move_word_left();
-                        } else {
-                            c.move_left();
-                        }
-                    });
-                    true
-                }
-                KeyCode::Right => {
-                    self.composer.move_selection(true, |c| {
-                        if ctrl || alt {
-                            c.move_word_right();
-                        } else {
-                            c.move_right();
-                        }
-                    });
-                    true
-                }
-                KeyCode::Home => {
-                    self.composer.move_selection(true, |c| c.move_home());
-                    true
-                }
-                KeyCode::End => {
-                    self.composer.move_selection(true, |c| c.move_end());
-                    true
-                }
-                KeyCode::Up if !ctrl && !alt => {
-                    self.composer.move_selection(true, |c| {
-                        c.move_up();
-                    });
-                    true
-                }
-                KeyCode::Down if !ctrl && !alt => {
-                    self.composer.move_selection(true, |c| {
-                        c.move_down();
-                    });
-                    true
-                }
-                _ => false,
+        // With no draft, Shift+Home and Shift+End keep scrolling like Home and End.
+        if shift && !self.composer.is_empty() {
+            let word = ctrl || alt;
+            let motion: Option<fn(&mut Composer)> = match key.code {
+                KeyCode::Left if word => Some(Composer::move_word_left),
+                KeyCode::Left => Some(Composer::move_left),
+                KeyCode::Right if word => Some(Composer::move_word_right),
+                KeyCode::Right => Some(Composer::move_right),
+                KeyCode::Home => Some(Composer::move_home),
+                KeyCode::End => Some(Composer::move_end),
+                KeyCode::Up if !word => Some(|c| {
+                    c.move_up();
+                }),
+                KeyCode::Down if !word => Some(|c| {
+                    c.move_down();
+                }),
+                _ => None,
             };
-            if moved {
+            if let Some(motion) = motion {
+                self.composer.extend_selection(motion);
                 return None;
             }
         }
@@ -92,9 +86,7 @@ impl App {
             KeyCode::Esc if self.composer.selection().is_some() => self.composer.clear_selection(),
             KeyCode::Esc => self.escape(),
             KeyCode::Char('c') if ctrl && self.composer.selection().is_some() => {
-                if let Some(text) = self.composer.selected_text() {
-                    self.copy(text.to_owned());
-                }
+                self.copy_draft_selection(false);
                 self.quit_armed = None;
             }
             KeyCode::Char('c') if ctrl => {
@@ -117,10 +109,7 @@ impl App {
             }
             KeyCode::Char('g') if ctrl => return Some(Action::EditDraft),
             KeyCode::Char('x') if ctrl && self.composer.selection().is_some() => {
-                if let Some(text) = self.composer.selected_text() {
-                    self.copy(text.to_owned());
-                }
-                self.composer.delete_selection();
+                self.copy_draft_selection(true);
             }
             KeyCode::Char('x') if ctrl => return Some(Action::CopyLastAnswer),
             KeyCode::Char('o') if ctrl => {

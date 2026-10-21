@@ -50,8 +50,8 @@ const fn adapter() -> Option<Adapter> {
     }
 }
 
-/// Copies `text` through the native program, falling back to OSC 52.
-pub async fn copy(text: &str) -> Result<Copied, String> {
+/// Whether [`copy`] accepts `text`.
+pub fn check(text: &str) -> Result<(), String> {
     if text.is_empty() {
         return Err("nothing to copy".into());
     }
@@ -61,6 +61,12 @@ pub async fn copy(text: &str) -> Result<Copied, String> {
             text.len()
         ));
     }
+    Ok(())
+}
+
+/// Copies `text` through the native program, falling back to OSC 52.
+pub async fn copy(text: &str) -> Result<Copied, String> {
+    check(text)?;
     if let Some(adapter) = adapter()
         && write_native(adapter, text).await.is_ok()
     {
