@@ -1,8 +1,10 @@
 //! The row builders every block renderer shares: a bare rail, a rail on a
 //! surface, and the inset of rail-less text. Rows are cut at their width with
-//! no ellipsis.
+//! no ellipsis. They also tell a selection which cells hold content.
 
-use ratatui::style::Style;
+use std::ops::Range;
+
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use crate::wrap;
@@ -56,6 +58,56 @@ pub fn indent(line: Line<'static>, columns: usize) -> Line<'static> {
     }
 }
 
+// Removing a modifier no cell has changes nothing on screen, so this style
+// can tag a row without a field of its own.
+const CHROME: Style = Style::new().remove_modifier(Modifier::HIDDEN);
+
+/// Tags a row the UI adds around content, a hint, a timestamp or a spacer,
+/// which a selection skips.
+pub fn chrome(line: Line<'static>) -> Line<'static> {
+    line.patch_style(CHROME)
+}
+
+/// Tags a span the UI adds after a row's content, such as a card's duration.
+pub fn chrome_span(span: Span<'static>) -> Span<'static> {
+    span.patch_style(CHROME)
+}
+
+fn is_chrome(style: Style) -> bool {
+    style.sub_modifier.contains(Modifier::HIDDEN)
+}
+
+/// The cells of `line` a selection covers: none on a chrome row, otherwise
+/// from past the rail and its pad or indent to the last visible character
+/// before any chrome span.
+pub fn content_cells(line: &Line) -> Range<u16> {
+    if is_chrome(line.style) {
+        return 0..0;
+    }
+    let mut spans = line.spans.as_slice();
+    let mut start = 0;
+    if let [first, rest @ ..] = spans
+        && first.content == RAIL
+    {
+        start += 1;
+        spans = rest;
+    }
+    if let [first, rest @ ..] = spans
+        && !first.content.is_empty()
+        && first.content.trim().is_empty()
+    {
+        start += wrap::width(&first.content);
+        spans = rest;
+    }
+    let text: String = spans
+        .iter()
+        .take_while(|span| !is_chrome(span.style))
+        .map(|span| span.content.as_ref())
+        .collect();
+    let end = start + wrap::width(text.trim_end());
+    start as u16..end as u16
+}
+
 /// `spans` cut at `width` cells.
 fn clip(spans: Vec<Span<'static>>, width: usize) -> Vec<Span<'static>> {
     let mut left = width;
@@ -93,5 +145,30 @@ mod tests {
                 .iter()
                 .all(|span| span.style.bg == surface.bg)
         );
+    }
+
+    #[test]
+    fn content_starts_past_the_rail_and_its_pad_and_chrome_has_none() {
+        let surface = Style::new().bg(ratatui::style::Color::Blue);
+        let card = surface_row(
+            Style::new(),
+            surface,
+            vec![Span::raw(" "), Span::raw("  indented"), Span::raw(" ")],
+            20,
+        );
+        assert_eq!(content_cells(&card), 2..12, "{card}");
+        let reply = indent(Line::from("text"), 2);
+        assert_eq!(content_cells(&reply), 2..6);
+        assert_eq!(content_cells(&chrome(card)), 0..0);
+        let titled = rail_row(
+            Style::new(),
+            vec![
+                Span::raw(" "),
+                Span::raw("bash"),
+                chrome_span(Span::raw("   4.2s")),
+            ],
+            20,
+        );
+        assert_eq!(content_cells(&titled), 2..6);
     }
 }

@@ -485,6 +485,15 @@ impl App {
         self.scroll_to(top.saturating_add_signed(delta));
     }
 
+    /// Holds the top of the view where it is, so a block that folds or unfolds
+    /// grows or shrinks downward instead of pushing the rows above it up.
+    pub fn pin_view(&mut self) {
+        if self.scroll == Scroll::Follow {
+            let (block, offset) = self.layout.anchor(self.layout.viewport.top);
+            self.scroll = Scroll::Anchor { block, offset };
+        }
+    }
+
     /// Puts transcript row `top` at the top of the view; the bottom follows.
     pub fn scroll_to(&mut self, top: usize) {
         let layout = &self.layout;
@@ -507,7 +516,10 @@ impl App {
     /// The drag as text, from the rows the last frame drew.
     pub fn selected_text(&self, drag: selection::Drag) -> Option<String> {
         let text = selection::text(
-            |row| self.layout.row_text(row),
+            |row| {
+                let line = self.layout.row_line(row)?;
+                Some((line.to_string(), crate::ui::rails::content_cells(line)))
+            },
             self.layout.viewport.area(),
             drag,
         );

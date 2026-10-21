@@ -91,7 +91,6 @@ impl RenderState {
             &thinking,
             expanded.unwrap_or(fold.expanded),
             fold.show_reasoning,
-            text.trim().is_empty(),
             styles,
             width as usize,
         );
@@ -214,7 +213,8 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, styles: Styles) {
     };
     if let Some(drag) = app.selection {
         for (index, row) in rows.iter_mut().enumerate() {
-            if let Some(span) = selection::row_span(area.y + index as u16, drag, area) {
+            let content = super::rails::content_cells(row);
+            if let Some(span) = selection::row_span(area.y + index as u16, drag, area, content) {
                 *row = Cow::Owned(highlight(row, span.start, span.end));
             }
         }
@@ -304,7 +304,7 @@ fn header(styles: Styles, width: u16, workspace: &Path) -> Vec<Line<'static>> {
         styles.faint(),
     ));
     lines.push(Line::default());
-    lines
+    lines.into_iter().map(super::rails::chrome).collect()
 }
 
 fn hint_line(hints: &[(&str, &str)], styles: Styles) -> Line<'static> {

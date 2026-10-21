@@ -28,13 +28,15 @@ impl Drag {
     }
 }
 
-/// The visible text of `drag` inside `area`, joined with newlines.
-pub fn text(row_text: impl Fn(u16) -> Option<String>, area: Rect, drag: Drag) -> String {
+/// The visible text of `drag` inside `area`, joined with newlines; `row`
+/// gives a screen row's text and the cells of it that are content.
+pub fn text(row: impl Fn(u16) -> Option<(String, Range<u16>)>, area: Rect, drag: Drag) -> String {
     let (from, to) = drag.ordered();
     let lines: Vec<String> = (from.1..=to.1)
-        .filter_map(|row| {
-            let span = row_span(row, drag, area)?;
-            Some(slice_cells(&row_text(row)?, span.start, span.end))
+        .filter_map(|screen_row| {
+            let (text, content) = row(screen_row)?;
+            let span = row_span(screen_row, drag, area, content)?;
+            Some(slice_cells(&text, span.start, span.end))
         })
         .collect();
     lines.join("\n").trim_end().to_owned()
@@ -59,8 +61,9 @@ fn slice_cells(text: &str, from: u16, to: u16) -> String {
     out.trim_end().to_owned()
 }
 
-/// The cells a drag covers on one screen row, counted from `area`'s left edge.
-pub fn row_span(row: u16, drag: Drag, area: Rect) -> Option<Range<u16>> {
+/// The content cells a drag covers on one screen row, counted from `area`'s
+/// left edge.
+pub fn row_span(row: u16, drag: Drag, area: Rect, content: Range<u16>) -> Option<Range<u16>> {
     let (from, to) = drag.ordered();
     if row < from.1 || row > to.1 || row < area.y || row >= area.bottom() {
         return None;
@@ -75,7 +78,9 @@ pub fn row_span(row: u16, drag: Drag, area: Rect) -> Option<Range<u16>> {
     } else {
         area.right()
     };
-    (end > start).then(|| start - area.x..end - area.x)
+    let start = (start - area.x).max(content.start);
+    let end = (end - area.x).min(content.end);
+    (end > start).then_some(start..end)
 }
 
 /// The cells of the word under `column`, as a double-click selects it: paths
@@ -123,10 +128,13 @@ mod tests {
     use super::*;
 
     /// The text lookup of a screen whose first row is `top`.
-    fn screen(rows: &[&str], top: u16) -> impl Fn(u16) -> Option<String> {
+    fn screen(rows: &[&str], top: u16) -> impl Fn(u16) -> Option<(String, Range<u16>)> {
         let rows: Vec<String> = rows.iter().map(|row| (*row).to_owned()).collect();
-        move |row| rows.get(row.checked_sub(top)? as usize).cloned()
+        move |row| Some((rows.get(row.checked_sub(top)? as usize)?.clone(), ALL))
     }
+
+    /// Every cell of a row is content.
+    const ALL: Range<u16> = 0..u16::MAX;
 
     fn area() -> Rect {
         Rect::new(0, 0, 40, 10)
@@ -219,7 +227,7 @@ mod tests {
             to: (5, 0),
         };
         assert_eq!(text(&screen, area, drag), "hello");
-        assert_eq!(row_span(0, drag, area), Some(0..5));
+        assert_eq!(row_span(0, drag, area, ALL), Some(0..5));
     }
 
     #[test]
@@ -228,11 +236,11 @@ mod tests {
             from: (4, 1),
             to: (9, 3),
         };
-        assert_eq!(row_span(0, drag, area()), None, "above the drag");
-        assert_eq!(row_span(1, drag, area()), Some(4..40));
-        assert_eq!(row_span(2, drag, area()), Some(0..40));
-        assert_eq!(row_span(3, drag, area()), Some(0..10));
-        assert_eq!(row_span(4, drag, area()), None, "below the drag");
+        assert_eq!(row_span(0, drag, area(), ALL), None, "above the drag");
+        assert_eq!(row_span(1, drag, area(), ALL), Some(4..40));
+        assert_eq!(row_span(2, drag, area(), ALL), Some(0..40));
+        assert_eq!(row_span(3, drag, area(), ALL), Some(0..10));
+        assert_eq!(row_span(4, drag, area(), ALL), None, "below the drag");
     }
 
     #[test]
@@ -255,6 +263,21 @@ mod tests {
             from: (3, 2),
             to: (3, 2),
         };
-        assert_eq!(row_span(2, drag, area()), Some(3..4));
+        assert_eq!(row_span(2, drag, area(), ALL), Some(3..4));
+    }
+
+    #[test]
+    fn only_the_content_cells_of_a_row_are_taken() {
+        let drag = Drag {
+            from: (0, 0),
+            to: (39, 1),
+        };
+        let rows = |row: u16| {
+            let text = ["▎ $ cargo test", "▎ ... (3 more lines)"][row as usize];
+            Some((text.to_owned(), [2..14, 0..0][row as usize].clone()))
+        };
+        assert_eq!(row_span(0, drag, area(), 2..14), Some(2..14));
+        assert_eq!(row_span(1, drag, area(), 0..0), None);
+        assert_eq!(text(rows, area(), drag), "$ cargo test");
     }
 }

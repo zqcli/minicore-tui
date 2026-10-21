@@ -113,22 +113,28 @@ impl App {
             }
             KeyCode::Char('x') if ctrl => return Some(Action::CopyLastAnswer),
             KeyCode::Char('o') if ctrl => {
+                self.pin_view();
                 self.tools_expanded = !self.tools_expanded;
                 let state = if self.tools_expanded {
                     "expanded"
                 } else {
                     "collapsed"
                 };
-                self.notice(NoticeLevel::Info, format!("Tool output: {state}"));
+                // A flash leaves the dock alone, so the pinned view does not move.
+                self.flash = Some((format!("Tool output: {state}"), tokio::time::Instant::now()));
             }
             KeyCode::Char('t') if ctrl => {
+                self.pin_view();
                 self.show_reasoning = !self.show_reasoning;
                 let state = if self.show_reasoning {
                     "visible"
                 } else {
                     "hidden"
                 };
-                self.notice(NoticeLevel::Info, format!("Thinking blocks: {state}"));
+                self.flash = Some((
+                    format!("Thinking blocks: {state}"),
+                    tokio::time::Instant::now(),
+                ));
             }
             KeyCode::Char('r') if ctrl => self.open_panel(Panel::Sessions),
             KeyCode::Char('l') if ctrl => self.open_panel(Panel::Models),

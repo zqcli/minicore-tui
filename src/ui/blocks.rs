@@ -10,7 +10,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use super::markdown;
-use super::rails::{fill, indent, rail_row, surface_row};
+use super::rails::{chrome, chrome_span, fill, indent, rail_row, surface_row};
 use super::theme::Styles;
 use crate::protocol::read::UserKind;
 use crate::transcript::layout::Fold;
@@ -53,7 +53,6 @@ pub fn render(block: &Block, styles: Styles, width: u16, fold: Fold) -> Vec<Line
         Block::Assistant {
             reasoning,
             text,
-            streaming,
             expanded,
             ..
         } => {
@@ -69,7 +68,6 @@ pub fn render(block: &Block, styles: Styles, width: u16, fold: Fold) -> Vec<Line
                 &reply,
                 expanded.unwrap_or(fold.expanded),
                 fold.show_reasoning,
-                *streaming,
                 styles,
                 width,
             )
@@ -98,7 +96,7 @@ pub fn render(block: &Block, styles: Styles, width: u16, fold: Fold) -> Vec<Line
             {
                 spans.push(Span::styled(next, styles.dim()));
             }
-            vec![indent(Line::from(spans), INSET)]
+            vec![chrome(indent(Line::from(spans), INSET))]
         }
         Block::Compaction {
             operation_id: _,
@@ -115,13 +113,13 @@ pub fn render(block: &Block, styles: Styles, width: u16, fold: Fold) -> Vec<Line
             width,
             fold.expanded,
         ),
-        Block::EarlierHistory { hidden_items } => vec![indent(
+        Block::EarlierHistory { hidden_items } => vec![chrome(indent(
             Line::styled(
                 format!("↑ {hidden_items} earlier items · home to load"),
                 styles.faint(),
             ),
             INSET,
-        )],
+        ))],
     }
 }
 
@@ -150,7 +148,7 @@ fn user(
     let row = |spans: Vec<Span<'static>>| {
         surface_row(styles.user_rail(), styles.composer(), spans, width)
     };
-    let mut lines = vec![row(Vec::new())];
+    let mut lines = vec![chrome(row(Vec::new()))];
     for line in markdown::render(text, text_width(width), &styles, styles.text()) {
         lines.push(row(padded(line.spans)));
     }
@@ -160,12 +158,12 @@ fn user(
         meta.push("↳ steering".to_owned());
     }
     if !meta.is_empty() {
-        lines.push(row(padded(vec![Span::styled(
+        lines.push(chrome(row(padded(vec![Span::styled(
             meta.join(" · "),
             styles.meta(),
-        )])));
+        )]))));
     }
-    lines.push(row(Vec::new()));
+    lines.push(chrome(row(Vec::new())));
     lines
 }
 
@@ -204,13 +202,11 @@ pub fn assistant_rows(
     reply: &[Line<'static>],
     expanded: bool,
     show_reasoning: bool,
-    streaming: bool,
     styles: Styles,
     width: usize,
 ) -> Vec<Line<'static>> {
     let thinking: Vec<&Line<'static>> = thinking.iter().collect();
-    let live = streaming && reply.is_empty();
-    let mut lines = thinking_rows(&thinking, expanded, show_reasoning, live, styles, width);
+    let mut lines = thinking_rows(&thinking, expanded, show_reasoning, styles, width);
     if !reply.is_empty() {
         if !lines.is_empty() {
             lines.push(Line::default());
@@ -220,49 +216,37 @@ pub fn assistant_rows(
     lines
 }
 
-/// The thinking half of an assistant message. While `live` (streaming with no
-/// reply yet) a fold shows the newest rows under the hint, so the height stays
-/// the same once it settles on the first rows.
+/// The thinking half of an assistant message; a fold keeps the newest rows
+/// under a hint for the earlier ones.
 pub fn thinking_rows(
     thinking: &[&Line<'static>],
     expanded: bool,
     show_reasoning: bool,
-    live: bool,
     styles: Styles,
     width: usize,
 ) -> Vec<Line<'static>> {
     let rail = styles.reasoning_rail();
     let mut lines = Vec::new();
     if !thinking.is_empty() && !show_reasoning {
-        lines.push(rail_row(
+        lines.push(chrome(rail_row(
             rail,
             padded(vec![Span::styled("Thinking...", thinking_style(styles))]),
             width,
-        ));
+        )));
     } else if !thinking.is_empty() {
         let total = thinking.len();
-        let folded = !expanded && total > THINKING_ROWS;
-        let tail = folded && live;
-        let hint = |noun| {
-            let hint = expand_hint(total - THINKING_ROWS, noun, true, width - 2, styles);
-            rail_row(rail, hint, width)
-        };
-        if tail {
-            lines.push(hint("earlier"));
-        }
-        let shown = match (folded, tail) {
-            (false, _) => thinking,
-            (true, false) => &thinking[..THINKING_ROWS],
-            (true, true) => &thinking[total - THINKING_ROWS..],
+        let shown = if !expanded && total > THINKING_ROWS {
+            let hint = expand_hint(total - THINKING_ROWS, "earlier", true, width - 2, styles);
+            lines.push(chrome(rail_row(rail, hint, width)));
+            &thinking[total - THINKING_ROWS..]
+        } else {
+            thinking
         };
         lines.extend(
             shown
                 .iter()
                 .map(|line| rail_row(rail, padded(line.spans.clone()), width)),
         );
-        if folded && !tail {
-            lines.push(hint("more"));
-        }
     }
     lines
 }
@@ -336,19 +320,20 @@ fn tool(call: &ToolCall, styles: Styles, width: usize, expanded: bool) -> Vec<Li
         }
         let hidden = body.lines.len() + body.hidden;
         if hidden > 0 {
-            lines.push(row(padded(expand_hint(
+            lines.push(chrome(row(padded(expand_hint(
                 hidden,
                 "more",
                 true,
                 inner.saturating_sub(1),
                 styles,
-            ))));
+            )))));
         }
         return lines;
     }
 
     let bash = call.name == "bash";
-    let mut lines = vec![row(Vec::new())];
+    let spacer = || chrome(row(Vec::new()));
+    let mut lines = vec![spacer()];
     let title_style = styles.tool_title().add_modifier(Modifier::BOLD);
     let mut right = meta(call, styles, !bash);
     let title = expanded_title(call);
@@ -396,10 +381,10 @@ fn tool(call: &ToolCall, styles: Styles, width: usize, expanded: bool) -> Vec<Li
             hint.push_str(&format!("{} · ", plural(body.hidden as u64, noun)));
         }
         hint.push_str(FULL_OUTPUT_HINT);
-        let hint = row(padded(vec![Span::styled(
+        let hint = chrome(row(padded(vec![Span::styled(
             wrap::truncate(&hint, inner),
             styles.meta(),
-        )]));
+        )])));
         if body.tail {
             body_rows.insert(0, hint);
         } else {
@@ -407,7 +392,7 @@ fn tool(call: &ToolCall, styles: Styles, width: usize, expanded: bool) -> Vec<Li
         }
     }
     if !body_rows.is_empty() {
-        lines.push(row(Vec::new()));
+        lines.push(spacer());
         lines.extend(body_rows);
     }
     if bash {
@@ -425,11 +410,11 @@ fn tool(call: &ToolCall, styles: Styles, width: usize, expanded: bool) -> Vec<Li
             footer.push(Span::styled(format!("exit {code}"), styles.failure()));
         }
         if !footer.is_empty() {
-            lines.push(row(Vec::new()));
-            lines.push(row(padded(footer)));
+            lines.push(spacer());
+            lines.push(chrome(row(padded(footer))));
         }
     }
-    lines.push(row(Vec::new()));
+    lines.push(spacer());
     lines
 }
 
@@ -534,7 +519,9 @@ fn title_spans(
     let (left_width, right_width) = (cells(&left), cells(&right));
     let mut spans = padded(left);
     if right_width > 0 && left_width + right_width < inner {
-        spans.push(Span::raw(" ".repeat(inner - left_width - right_width)));
+        spans.push(chrome_span(Span::raw(
+            " ".repeat(inner - left_width - right_width),
+        )));
         spans.extend(right);
     }
     spans
@@ -719,32 +706,33 @@ fn compaction(
     let text = compaction_label(before, after, coverage);
     let surface = styles.custom_message();
     let row = |spans: Vec<Span<'static>>| Line::from(fill(surface, spans, width));
+    let label = |spans: Vec<Span<'static>>| chrome(row(spans));
     let text = wrap::truncate(&text, width - INSET);
     let mut lines = vec![
-        row(Vec::new()),
-        row(padded(vec![Span::styled(
+        label(Vec::new()),
+        label(padded(vec![Span::styled(
             "[compaction]",
             styles.reasoning_rail().add_modifier(Modifier::BOLD),
         )])),
-        row(Vec::new()),
+        label(Vec::new()),
     ];
     match summary.filter(|summary| !summary.trim().is_empty()) {
         Some(summary) if expanded => {
-            lines.push(row(padded(vec![Span::styled(text, styles.bold())])));
-            lines.push(row(Vec::new()));
+            lines.push(label(padded(vec![Span::styled(text, styles.bold())])));
+            lines.push(label(Vec::new()));
             for line in markdown::render(summary, text_width(width), &styles, styles.text()) {
                 lines.push(row(padded(line.spans)));
             }
         }
-        Some(_) => lines.push(row(padded(vec![
+        Some(_) => lines.push(label(padded(vec![
             Span::styled(text, styles.text()),
             Span::styled(" (", styles.meta()),
             Span::styled("ctrl+o", styles.faint()),
             Span::styled(" to expand)", styles.meta()),
         ]))),
-        None => lines.push(row(padded(vec![Span::styled(text, styles.text())]))),
+        None => lines.push(label(padded(vec![Span::styled(text, styles.text())]))),
     }
-    lines.push(row(Vec::new()));
+    lines.push(label(Vec::new()));
     lines
 }
 
@@ -876,52 +864,34 @@ mod tests {
     }
 
     #[test]
-    fn long_thinking_shows_its_first_rows_and_how_many_follow() {
+    fn folded_thinking_keeps_its_newest_rows_whether_streaming_or_done() {
         let reasoning = "one\ntwo\nthree\nfour\nfive";
-        let block = assistant("the answer", reasoning, false);
-        let folded = text(&render(&block, styles(), 60, fold()));
-        assert_eq!(
-            folded[..4],
-            [
-                "▎ one",
-                "▎ two",
-                "▎ three",
-                "▎... (2 more lines, click or ctrl+o to expand)"
-            ],
-            "{folded:?}"
-        );
-        // Once the reply starts, the thinking has ended and shows its final fold.
-        let writing = assistant("the answer", reasoning, true);
-        assert_eq!(
-            text(&render(&writing, styles(), 60, fold()))[..4],
-            folded[..4]
-        );
-        let block = assistant("the answer", reasoning, false);
-        let open = text(&render(&block, styles(), 60, expanded()));
-        assert_eq!(open[4], "▎ five", "{open:?}");
-        assert!(open.iter().all(|line| !line.contains("ctrl+o")));
-    }
-
-    #[test]
-    fn streaming_thinking_shows_its_newest_rows_in_the_height_it_ends_with() {
-        let reasoning = "one\ntwo\nthree\nfour\nfive";
-        let live = text(&render(
-            &assistant("", reasoning, true),
+        for (reply, streaming) in [("", true), ("the answer", true), ("the answer", false)] {
+            let folded = text(&render(
+                &assistant(reply, reasoning, streaming),
+                styles(),
+                60,
+                fold(),
+            ));
+            assert_eq!(
+                folded[..4],
+                [
+                    "▎... (2 earlier lines, click or ctrl+o to expand)",
+                    "▎ three",
+                    "▎ four",
+                    "▎ five"
+                ],
+                "{folded:?}"
+            );
+        }
+        let open = text(&render(
+            &assistant("the answer", reasoning, false),
             styles(),
             60,
-            fold(),
+            expanded(),
         ));
-        assert_eq!(
-            live,
-            [
-                "▎... (2 earlier lines, click or ctrl+o to expand)",
-                "▎ three",
-                "▎ four",
-                "▎ five"
-            ]
-        );
-        let done = render(&assistant("", reasoning, false), styles(), 60, fold());
-        assert_eq!(live.len(), done.len(), "no jump when the block ends");
+        assert_eq!(open[0], "▎ one", "{open:?}");
+        assert!(open.iter().all(|line| !line.contains("ctrl+o")));
     }
 
     #[test]

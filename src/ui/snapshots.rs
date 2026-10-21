@@ -632,41 +632,49 @@ fn clicking_a_card_header_toggles_that_card_and_its_hint_opens_the_tool_view() {
 }
 
 #[test]
-fn expanding_the_running_card_keeps_its_new_output_above_the_working_row() {
-    let mut fixture = app();
-    let app = &mut fixture.app;
-    conversation(app);
-    let session = app.session.as_mut().unwrap();
-    let start = session.transcript.blocks().len();
-    let mut call = tool();
-    call.state = ToolState::Running;
-    call.duration = None;
-    call.exit_code = None;
-    call.output = vec!["item 1".into()];
-    call.output_dropped = 0;
-    session.transcript.push(Block::Tool(Box::new(call)));
-    let turn = TurnRef {
-        session_id: session.info.session_id.clone(),
-        loop_id: "loop_2".into(),
-    };
-    session.live = Some(crate::app::LiveTurn::new(turn, start));
-    let folded = render(app, 70, 20);
-    let rows: Vec<&str> = folded.lines().collect();
-    let header = rows.iter().rposition(|row| row.starts_with(" ▎ bash"));
-    click(app, 10, header.expect("running card") as u16);
-    let session = app.session.as_mut().unwrap();
-    if let Some(Block::Tool(call)) = session.transcript.block_mut(start) {
-        call.output
-            .extend((2..=12).map(|index| format!("item {index}")));
+fn a_card_opens_downward_from_its_header_by_click_or_ctrl_o() {
+    for by_click in [true, false] {
+        let mut fixture = app();
+        let app = &mut fixture.app;
+        conversation(app);
+        let session = app.session.as_mut().unwrap();
+        let mut call = tool();
+        call.state = ToolState::Running;
+        call.duration = None;
+        call.exit_code = None;
+        call.output = (1..=12).map(|index| format!("item {index}")).collect();
+        call.output_dropped = 0;
+        session.transcript.push(Block::Tool(Box::new(call)));
+        let folded = render(app, 70, 20);
+        let header = |screen: &str| {
+            let rows: Vec<&str> = screen.lines().collect();
+            rows.iter().rposition(|row| row.starts_with(" ▎ bash"))
+        };
+        let before = header(&folded).expect("running card");
+        if by_click {
+            click(app, 10, before as u16);
+        } else {
+            app.on_key(crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char('o'),
+                crossterm::event::KeyModifiers::CONTROL,
+            ));
+        }
+        let expanded = render(app, 70, 20);
+        // The first row carries the Ctrl+O flash.
+        let top = |screen: &str| {
+            screen
+                .lines()
+                .skip(1)
+                .take(3)
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        assert_eq!(top(&expanded), top(&folded), "{expanded}");
+        if by_click {
+            let title = expanded.lines().nth(before + 1).unwrap_or_default();
+            assert!(title.contains("$ cargo test --lib"), "{expanded}");
+        }
     }
-    let grown = render(app, 70, 20);
-    let rows: Vec<&str> = grown.lines().collect();
-    let working = rows
-        .iter()
-        .position(|row| row.contains("Working (esc to interrupt)"))
-        .expect("working row");
-    assert_eq!(rows[working - 3], " ▎ item 12", "{grown}");
-    assert_eq!(app.scroll, Scroll::Follow);
 }
 
 #[test]
@@ -708,6 +716,23 @@ fn a_drag_over_a_card_header_selects_instead_of_toggling() {
     }
     let after = render(app, 70, 20);
     assert!(after.contains("ctrl+o to expand"), "still folded:\n{after}");
+}
+
+#[test]
+fn a_drag_across_a_card_takes_its_text_without_rails_or_hints() {
+    let mut fixture = app();
+    let app = &mut fixture.app;
+    conversation(app);
+    let screen = render(app, 70, 20);
+    let header = row_of(&screen, " ▎ bash");
+    let drag = crate::app::selection::Drag {
+        from: (1, header),
+        to: (69, header + 2),
+    };
+    assert_eq!(
+        app.selected_text(drag).as_deref(),
+        Some("bash\n$ cargo test --lib")
+    );
 }
 
 #[test]
@@ -784,8 +809,8 @@ fn a_double_click_selects_a_word_and_a_triple_click_the_row() {
     left(app, Up, column, row);
     assert_eq!(
         selected(app).as_deref(),
-        Some("  prefix and re-renders only the tail, so a delta costs one small"),
-        "the row without the gutter"
+        Some("prefix and re-renders only the tail, so a delta costs one small"),
+        "the row without its indent"
     );
     left(app, Down, column, row);
     assert_eq!(app.selection, None, "a fourth press starts over");
