@@ -190,3 +190,19 @@ async fn shift_end_with_no_draft_follows_the_tail_like_end() {
     h.key(KeyCode::End, KeyModifiers::SHIFT);
     assert_eq!(h.app.scroll, crate::app::Scroll::Follow);
 }
+
+#[tokio::test(start_paused = true)]
+async fn a_drag_in_the_editor_copies_on_release_and_stays_selected() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.app.composer.set_text("copy me");
+    h.screen(60, 24);
+    let area = h.app.composer_area;
+    let (x, y) = (area.x + 1, area.y + 1);
+    mouse(&mut h, MouseEventKind::Down(MouseButton::Left), x, y);
+    mouse(&mut h, MouseEventKind::Drag(MouseButton::Left), x + 3, y);
+    assert!(h.app.flash.is_none(), "nothing is copied mid-drag");
+    mouse(&mut h, MouseEventKind::Up(MouseButton::Left), x + 3, y);
+    h.settle().await;
+    assert!(h.app.flash.is_some(), "{:?}", h.notices());
+    assert_eq!(h.app.composer.selected_text(), Some("cop"));
+}

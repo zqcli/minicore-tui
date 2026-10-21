@@ -41,8 +41,12 @@ impl App {
                 if editor {
                     self.place_composer_cursor(cell, true);
                 }
+                // Like a transcript selection, a draft one is copied on release.
                 if matches!(mouse.kind, MouseEventKind::Up(_)) {
                     self.composer_dragging = false;
+                    if let Some(text) = self.composer.selected_text() {
+                        self.copy(text.to_owned());
+                    }
                 }
                 return true;
             }
