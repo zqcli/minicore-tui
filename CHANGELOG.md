@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.3 — 2026-10-21
 
 - Built-in backend: Agent 0.7.3 with Runtime 0.7.3, pinned by release tag.
 - No minimum Rust version is declared or tested; build with current stable.
