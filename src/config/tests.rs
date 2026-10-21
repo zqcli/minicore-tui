@@ -21,7 +21,7 @@ model_timeout_seconds = 900
 
 const MODELS: &str = r#"[providers.luna]
 api = "open_ai_responses"
-base_url = "https://ai.789210.xyz/v1"
+base_url = "https://api.example.com/v1"
 api_key_env = "LUNA_API_KEY"
 request_timeout_seconds = 900
 
@@ -111,7 +111,7 @@ file = {review}
 [models.gpt-6-luna]
 provider = "open_ai_responses"
 model = "gpt-6-luna"
-base_url = "https://ai.789210.xyz/v1"
+base_url = "https://api.example.com/v1"
 api_key_env = "LUNA_API_KEY"
 physical_context_window = 64000
 output_budget_tokens = 20000

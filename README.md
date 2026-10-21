@@ -95,7 +95,7 @@ bell = true                        # ring when a turn over 10 s ends or asks app
 # models.toml
 [providers.luna]
 api = "open_ai_responses"
-base_url = "https://ai.789210.xyz/v1"
+base_url = "https://api.openai.com/v1"
 api_key_env = "LUNA_API_KEY"       # the NAME of the variable
 
 [models.gpt-6-luna]

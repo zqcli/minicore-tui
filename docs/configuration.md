@@ -87,7 +87,7 @@ never go here: `api_key_env` is the *name* of an environment variable.
 # models.toml
 [providers.luna]
 api = "open_ai_responses"          # required; the only API the Agent implements
-base_url = "https://ai.789210.xyz/v1"   # required; http(s) URL, no credentials or query
+base_url = "https://api.openai.com/v1"   # required; http(s) URL, no credentials or query
 api_key_env = "LUNA_API_KEY"       # required; a variable NAME, never the key
 request_timeout_seconds = 900      # optional default for this provider's models
 
