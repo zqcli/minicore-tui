@@ -5,11 +5,6 @@ on:
   pull_request:
   workflow_dispatch:
 
-# The Agent and Runtime revisions the E2E job tests and the packages ship.
-env:
-  AGENT_REV: 004dbf2832f50083199ec2c703f5df364ff2acf5
-  RUNTIME_REV: c0181d1983280c8cdd14a3196b1ea199b7e6206d
-
 jobs:
   quality:
     name: quality (fmt, clippy, docs, deps)
@@ -53,54 +48,6 @@ jobs:
       - name: Run offline tests
         run: cargo test --locked --offline --all-targets
 
-  fixed-backend:
-    name: fixed Agent/Runtime and loopback E2E
-    runs-on: ubuntu-latest
-    env:
-      MINICORE_E2E_MOCK_API_KEY: ci-loopback-only
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
-        with:
-          repository: zqcli/minicore-agent
-          ref: ${{ env.AGENT_REV }}
-          path: .ci-fixed/minicore-agent
-          fetch-depth: 1
-      - uses: actions/checkout@v4
-        with:
-          repository: zqcli/minicore-runtime
-          ref: ${{ env.RUNTIME_REV }}
-          path: .ci-fixed/minicore-runtime
-          fetch-depth: 1
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
-        with:
-          toolchain: 1.88.0
-      - name: Fetch locked TUI dependencies
-        run: cargo fetch --locked
-      - name: Fetch locked backend dependencies
-        run: |
-          cargo fetch --locked --manifest-path .ci-fixed/minicore-runtime/Cargo.toml
-          cargo fetch --locked --manifest-path .ci-fixed/minicore-agent/Cargo.toml
-      - name: Build fixed Runtime offline
-        run: |
-          cargo build --locked --offline --manifest-path .ci-fixed/minicore-runtime/Cargo.toml
-      - name: Build fixed Agent offline
-        env:
-          CARGO_TARGET_DIR: ${{ runner.temp }}/minicore-agent-target
-        run: |
-          cargo build --locked --offline --manifest-path .ci-fixed/minicore-agent/Cargo.toml
-      - name: Record fixed source and binary identity
-        env:
-          CARGO_TARGET_DIR: ${{ runner.temp }}/minicore-agent-target
-        run: |
-          test "$(git -C .ci-fixed/minicore-agent rev-parse HEAD)" = "$AGENT_REV"
-          test "$(git -C .ci-fixed/minicore-runtime rev-parse HEAD)" = "$RUNTIME_REV"
-          sha256sum "$CARGO_TARGET_DIR/debug/minicore-agent"
-      - name: Run the test suite against the fixed Agent
-        env:
-          MINICORE_AGENT_BIN: ${{ runner.temp }}/minicore-agent-target/debug/minicore-agent
-        run: cargo test --locked --offline --all-targets
-
   package:
     name: package (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
@@ -118,22 +65,13 @@ jobs:
             target: x86_64-pc-windows-msvc
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
-        with:
-          repository: zqcli/minicore-agent
-          ref: ${{ env.AGENT_REV }}
-          path: .ci-fixed/minicore-agent
-          fetch-depth: 1
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: stable
           target: ${{ matrix.target }}
           rustflags: ""
-      - name: Build the TUI and the pinned Agent
-        shell: bash
-        run: |
-          cargo build --locked --release --target ${{ matrix.target }}
-          cargo build --locked --release --target ${{ matrix.target }} --manifest-path .ci-fixed/minicore-agent/Cargo.toml --target-dir target/agent
+      - name: Build
+        run: cargo build --locked --release --target ${{ matrix.target }}
       - name: Stage
         id: stage
         shell: bash
@@ -145,11 +83,13 @@ jobs:
           # The package is a TUI directory: bin/ beside the files a first run writes.
           mkdir -p "$name/bin" "$name/docs"
           cp "target/${{ matrix.target }}/release/minicore-tui$EXE" "$name/bin/"
-          cp "target/agent/${{ matrix.target }}/release/minicore-agent$EXE" "$name/bin/"
           cp README.md CHANGELOG.md "$name/"
           cp docs/configuration.md "$name/docs/"
-          printf 'minicore-tui %s %s\nminicore-agent %s\nminicore-runtime %s\n' \
-            "$version" "$GITHUB_SHA" "$AGENT_REV" "$RUNTIME_REV" > "$name/BUILD.txt"
+          # The built-in Agent and its Runtime, as Cargo.lock pins them.
+          {
+            echo "minicore-tui $version $GITHUB_SHA"
+            sed -n 's|^source = "git+.*/\(minicore-[a-z]*\)?rev=.*#\([0-9a-f]*\)"$|\1 \2|p' Cargo.lock
+          } > "$name/BUILD.txt"
           # A tarball keeps the executable bits, which artifact zips drop.
           if [ -z "$EXE" ]; then
             tar -czf "$name.tar.gz" "$name"
