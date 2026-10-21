@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use crossterm::event::{Event as TermEvent, EventStream};
+#[cfg(not(windows))]
 use futures_util::StreamExt;
 use tokio::sync::mpsc;
 
@@ -204,26 +205,14 @@ async fn run() -> i32 {
     let (term_tx, mut term_rx) = mpsc::unbounded_channel::<TermEvent>();
     tokio::spawn(async move {
         let mut events = EventStream::new();
-        // Console-record input on Windows loses Paste framing on some hosts.
-        // Unix backends already decode Paste; do not add typing latency there.
-        let mut decoder = terminal::input::InputDecoder::new(cfg!(windows));
-        loop {
-            let ready = tokio::select! {
-                biased;
-                event = events.next() => match event {
-                    Some(Ok(event)) => decoder.push(event),
-                    Some(Err(_)) => continue,
-                    None => {
-                        for event in decoder.finish() { let _ = term_tx.send(event); }
-                        break;
-                    }
-                },
-                _ = tokio::time::sleep(terminal::input::QUIET), if decoder.pending() => decoder.flush(),
-            };
-            for event in ready {
-                if term_tx.send(event).is_err() {
-                    return;
-                }
+        #[cfg(windows)]
+        terminal::input::forward(&mut events, &term_tx).await;
+        #[cfg(not(windows))]
+        while let Some(event) = events.next().await {
+            if let Ok(event) = event
+                && term_tx.send(event).is_err()
+            {
+                break;
             }
         }
     });

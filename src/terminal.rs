@@ -18,8 +18,6 @@ use ratatui::layout::Position;
 use ratatui::{Frame, Terminal};
 
 pub mod input;
-
-#[cfg(windows)]
 pub mod windows_frames;
 
 #[cfg(not(windows))]
@@ -27,13 +25,9 @@ pub type Term = Terminal<CrosstermBackend<io::Stdout>>;
 #[cfg(windows)]
 pub type Term = Terminal<CrosstermBackend<windows_frames::FrameWriter<io::Stdout>>>;
 
-/// Draw with the hardware cursor hidden, then position it before showing it.
-///
-/// Ratatui 0.30.2 applies the buffer diff before hiding/showing the cursor, and
-/// shows a requested cursor before moving it. With Crossterm's separate flushes
-/// that exposes the output cursor beside animated glyphs. The callback returns
-/// the desired caret instead of calling `Frame::set_cursor_position`, so Ratatui
-/// keeps the cursor hidden until this function has moved it to the input field.
+/// Draws with the cursor hidden and shows it only once it is at the caret.
+// Ratatui shows a requested cursor before moving it, which flashes the cursor
+// where painting stopped, so `render` returns the caret instead of setting it.
 pub fn draw_frame<B: Backend>(
     terminal: &mut Terminal<B>,
     render: impl FnOnce(&mut Frame) -> Option<Position>,
@@ -84,10 +78,9 @@ fn leave_screen<W: Write>(writer: &mut W) -> io::Result<()> {
 /// Owns the fullscreen terminal and restores it on drop.
 pub struct Guard {
     terminal: Term,
+    /// Collects each frame for one write, when the console speaks ANSI.
     #[cfg(windows)]
-    frame_control: windows_frames::FrameControl,
-    #[cfg(windows)]
-    buffer_frames: bool,
+    frame: Option<windows_frames::FrameBuffer>,
     /// False while the screen is handed to a child process (the editor) or
     /// after a completed restore.
     active: bool,
@@ -103,11 +96,11 @@ impl Guard {
         let enhanced_keys = push_keyboard_flags(&mut stdout).is_ok();
         let screen = enter_screen(&mut stdout);
         #[cfg(windows)]
-        let frame_control = windows_frames::FrameControl::default();
+        let frame = windows_frames::FrameBuffer::default();
         let terminal = screen.and_then(|()| {
             let stdout = io::stdout();
             #[cfg(windows)]
-            let stdout = windows_frames::FrameWriter::new(stdout, frame_control.clone());
+            let stdout = windows_frames::FrameWriter::new(stdout, frame.clone());
             Terminal::new(CrosstermBackend::new(stdout)).inspect_err(|_| {
                 let mut stdout = io::stdout();
                 let _ = leave_screen(&mut stdout);
@@ -116,10 +109,9 @@ impl Guard {
         match terminal {
             Ok(terminal) => Ok(Self {
                 terminal,
+                // The WinAPI console takes cursor commands outside `Write`.
                 #[cfg(windows)]
-                frame_control,
-                #[cfg(windows)]
-                buffer_frames: crossterm::ansi_support::supports_ansi(),
+                frame: crossterm::ansi_support::supports_ansi().then_some(frame),
                 active: true,
                 enhanced_keys,
             }),
@@ -130,21 +122,10 @@ impl Guard {
         }
     }
 
-    pub fn terminal(&mut self) -> &mut Term {
-        &mut self.terminal
-    }
-
-    /// The live render path; keeps animation updates from exposing the cursor.
     pub fn draw(&mut self, render: impl FnOnce(&mut Frame) -> Option<Position>) -> io::Result<()> {
-        // WinAPI cursor commands bypass Write, so only batch the VT path.
-        // Unix/macOS and legacy Windows consoles keep the existing sequence.
         #[cfg(windows)]
-        if self.buffer_frames {
-            return windows_frames::draw_synchronized_frame(
-                &mut self.terminal,
-                &self.frame_control,
-                render,
-            );
+        if let Some(frame) = &self.frame {
+            return windows_frames::draw(&mut self.terminal, frame, render);
         }
         draw_frame(&mut self.terminal, render)
     }
@@ -213,21 +194,6 @@ pub fn install_panic_hook() {
 
 #[cfg(test)]
 mod frame_tests {
-    #[test]
-    fn cursor_styles_are_steady_block_and_user_default_on_exit() {
-        use crossterm::Command;
-        let mut enter = String::new();
-        super::SetCursorStyle::SteadyBlock
-            .write_ansi(&mut enter)
-            .unwrap();
-        assert_eq!(enter, "\x1b[2 q");
-        let mut leave = String::new();
-        super::SetCursorStyle::DefaultUserShape
-            .write_ansi(&mut leave)
-            .unwrap();
-        assert_eq!(leave, "\x1b[0 q");
-    }
-
     use ratatui::backend::{ClearType, TestBackend, WindowSize};
     use ratatui::buffer::Cell;
     use ratatui::layout::Size;
@@ -343,29 +309,6 @@ mod frame_tests {
     }
 
     #[test]
-    fn stock_frame_cursor_exposes_the_output_position() {
-        let mut terminal = Terminal::new(RecordingBackend::new()).unwrap();
-        let caret = Position::new(2, 8);
-        terminal.hide_cursor().unwrap();
-        for step in 0..2 {
-            terminal
-                .draw(|frame| {
-                    paint(frame, step);
-                    frame.set_cursor_position(caret);
-                })
-                .unwrap();
-        }
-        let ops = &terminal.backend().ops;
-        assert!(ops.contains(&Op::Paint {
-            cursor_visible: true
-        }));
-        assert!(
-            ops.iter()
-                .any(|op| matches!(op, Op::Show(pos) if *pos != caret))
-        );
-    }
-
-    #[test]
     fn every_frame_paints_hidden_and_moves_before_showing() {
         let mut terminal = Terminal::new(RecordingBackend::new()).unwrap();
         for step in 0..3 {
@@ -415,43 +358,26 @@ mod frame_tests {
     }
 
     #[test]
-    fn failed_paint_never_shows_the_output_cursor() {
-        let mut backend = RecordingBackend::new();
-        backend.fail_paint = true;
-        let mut terminal = Terminal::new(backend).unwrap();
-        let result = draw_frame(&mut terminal, |frame| {
-            paint(frame, 0);
-            Some(Position::new(2, 8))
-        });
-        assert!(result.is_err());
-        assert!(!terminal.backend().inner.cursor_visible());
-        assert!(
-            !terminal
-                .backend()
-                .ops
-                .iter()
-                .any(|op| matches!(op, Op::Show(_)))
-        );
-    }
-
-    #[test]
-    fn failed_positioning_does_not_show_the_cursor_in_the_status_line() {
-        let mut backend = RecordingBackend::new();
-        backend.fail_move = true;
-        let mut terminal = Terminal::new(backend).unwrap();
-        let result = draw_frame(&mut terminal, |frame| {
-            paint(frame, 0);
-            Some(Position::new(2, 8))
-        });
-        assert!(result.is_err());
-        assert!(!terminal.backend().inner.cursor_visible());
-        assert!(
-            !terminal
-                .backend()
-                .ops
-                .iter()
-                .any(|op| matches!(op, Op::Show(_)))
-        );
+    fn a_failed_paint_or_move_never_shows_the_cursor() {
+        for (fail_paint, fail_move) in [(true, false), (false, true)] {
+            let mut backend = RecordingBackend::new();
+            backend.fail_paint = fail_paint;
+            backend.fail_move = fail_move;
+            let mut terminal = Terminal::new(backend).unwrap();
+            let result = draw_frame(&mut terminal, |frame| {
+                paint(frame, 0);
+                Some(Position::new(2, 8))
+            });
+            assert!(result.is_err());
+            assert!(!terminal.backend().inner.cursor_visible());
+            assert!(
+                !terminal
+                    .backend()
+                    .ops
+                    .iter()
+                    .any(|op| matches!(op, Op::Show(_)))
+            );
+        }
     }
 }
 
