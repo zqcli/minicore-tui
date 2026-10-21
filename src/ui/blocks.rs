@@ -11,7 +11,6 @@ use ratatui::text::{Line, Span};
 
 use super::markdown;
 use super::rails::{fill, indent, rail_row, surface_row};
-use super::status::spinner;
 use super::theme::Styles;
 use crate::protocol::read::UserKind;
 use crate::transcript::layout::Fold;
@@ -179,6 +178,9 @@ fn stamp_label(millis: u64, zone: &TimeZone) -> Option<String> {
 }
 
 fn local_zone() -> &'static TimeZone {
+    // Windows reports an IANA name but supplies no zoneinfo database. Keep
+    // jiff's tzdb-bundle-platform feature enabled: without it system() can
+    // silently fall back to UTC, rendering 06:54 instead of local 14:54.
     // Tests render in UTC so snapshots do not depend on the machine.
     static ZONE: LazyLock<TimeZone> = LazyLock::new(|| match cfg!(test) {
         true => TimeZone::UTC,
@@ -476,21 +478,11 @@ fn expanded_title(call: &ToolCall) -> String {
     }
 }
 
-/// What a card adds right of its title: duration, an unusual end, a failing
-/// exit code and the size of a change. An expanded `bash` card puts duration
-/// and exit code in its footer instead.
+/// What a card adds right of its title: completed duration, an unusual end, a
+/// failing exit code and the size of a change. Running cards have no spinner or
+/// timer. An expanded `bash` card puts duration and exit code in its footer.
 fn meta(call: &ToolCall, styles: Styles, facts: bool) -> Vec<Span<'static>> {
     let mut items: Vec<Vec<Span<'static>>> = Vec::new();
-    if call.is_running()
-        && let Some(started) = call.started_at
-    {
-        let elapsed = started.elapsed();
-        items.push(vec![
-            Span::styled(spinner(elapsed), styles.accent()),
-            Span::raw(" "),
-            Span::styled(format_duration(elapsed), styles.meta()),
-        ]);
-    }
     // "0.0s" says nothing, so instant tools show no time.
     if facts && let Some(duration) = call.duration.filter(|d| d.as_millis() >= 50) {
         items.push(vec![Span::styled(format_duration(duration), styles.meta())]);
@@ -586,7 +578,7 @@ fn card_body(call: &ToolCall) -> Body<'_> {
     }
     // A failed change explains itself in its result, not in its input.
     if let Some(input) = call.expanded_input.as_deref()
-        && !(failed && !call.output.is_empty())
+        && (!failed || call.output.is_empty())
     {
         let write = call.name == "write";
         let source: Vec<&str> = input
@@ -1353,22 +1345,23 @@ mod tests {
     }
 
     #[test]
-    fn a_running_card_shows_a_spinner_and_its_elapsed_time() {
+    fn running_cards_have_no_spinner_or_elapsed_time() {
         // A card made from a preview is `Pending` until its end, though it started.
-        for state in [ToolState::Pending, ToolState::Running] {
-            let mut running = call();
-            running.state = state;
-            running.duration = None;
-            running.exit_code = None;
-            running.started_at = Some(std::time::Instant::now() - Duration::from_secs(30));
-            let title = card(running, fold()).remove(0);
-            assert!(title.ends_with("30s"), "{title}");
-            assert!(
-                title[..title.len() - 3]
-                    .trim_end()
-                    .ends_with(|glyph: char| "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏".contains(glyph)),
-                "{title}"
-            );
+        for name in ["bash", "read", "apply_patch"] {
+            for state in [ToolState::Pending, ToolState::Running] {
+                for mode in [fold(), expanded()] {
+                    let mut running = call();
+                    running.name = name.into();
+                    running.state = state;
+                    running.duration = None;
+                    running.exit_code = None;
+                    running.started_at = Some(std::time::Instant::now() - Duration::from_secs(30));
+                    assert!(meta(&running, styles(), true).is_empty());
+                    let body = card(running, mode).join("\n");
+                    assert!(!body.contains("30s"), "{body}");
+                    assert!(!body.chars().any(|ch| "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏".contains(ch)), "{body}");
+                }
+            }
         }
         let mut waiting = call();
         waiting.state = ToolState::Pending;

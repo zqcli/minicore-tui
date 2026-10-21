@@ -74,10 +74,10 @@ pub fn merge_live(mut durable: Vec<Block>, live: &[Block]) -> Vec<Block> {
                     reasoning,
                     text,
                     ..
-                } => !(reasoning.is_empty() && text.is_empty())
-                    && !durable.iter().any(
+                } => !(reasoning.is_empty() && text.is_empty()
+                    || durable.iter().any(
                         |kept| matches!(kept, Block::Assistant { key: kept, .. } if kept == key),
-                    ),
+                    )),
                 Block::User { text, .. } => !durable
                     .iter()
                     .any(|kept| matches!(kept, Block::User { text: kept, .. } if kept == text)),

@@ -14,6 +14,7 @@ impl App {
     pub fn on_key(&mut self, key: KeyEvent) -> Option<Action> {
         self.notices.clear();
         self.selection = None;
+        self.composer_dragging = false;
         if self.fatal.is_some() {
             return matches!(key.code, KeyCode::Char('q') | KeyCode::Esc).then_some(Action::Quit);
         }

@@ -14,6 +14,44 @@ impl App {
     /// have changed; plain pointer motion elsewhere does not.
     pub fn on_mouse(&mut self, mouse: MouseEvent) -> bool {
         let cell = (mouse.column, mouse.row);
+        let editor = !self.has_interaction()
+            && self.fatal.is_none()
+            && matches!(
+                self.overlay,
+                Overlay::None | Overlay::Palette { .. } | Overlay::Files { .. }
+            )
+            && !self.composer_area.is_empty();
+        match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left)
+                if editor
+                    && self
+                        .composer_area
+                        .contains(ratatui::layout::Position::new(cell.0, cell.1)) =>
+            {
+                self.press = None;
+                self.selection = None;
+                self.scrollbar_grab = None;
+                self.place_composer_cursor(cell, mouse.modifiers.contains(KeyModifiers::SHIFT));
+                self.composer_dragging = true;
+                return true;
+            }
+            MouseEventKind::Drag(MouseButton::Left) | MouseEventKind::Up(MouseButton::Left)
+                if self.composer_dragging =>
+            {
+                if editor {
+                    self.place_composer_cursor(cell, true);
+                }
+                if matches!(mouse.kind, MouseEventKind::Up(_)) {
+                    self.composer_dragging = false;
+                }
+                return true;
+            }
+            MouseEventKind::Down(_) => {
+                self.composer_dragging = false;
+                self.composer.clear_selection();
+            }
+            _ => {}
+        }
         // A full-screen view hides the transcript the press would land on.
         let view = self.overlay.is_view();
         match mouse.kind {
@@ -86,6 +124,23 @@ impl App {
             }
             _ => false,
         }
+    }
+
+    fn place_composer_cursor(&mut self, cell: (u16, u16), extend: bool) {
+        let area = self.composer_area;
+        let row = (cell.1 as isize - area.y as isize).clamp(-1, area.height as isize);
+        let column = cell
+            .0
+            .saturating_sub(area.x)
+            .min(area.width.saturating_sub(1));
+        let at = crate::ui::composer::hit_test_row(
+            &self.composer,
+            area.width,
+            self.composer_max_rows,
+            row,
+            column,
+        );
+        self.composer.place_cursor(at, extend);
     }
 
     /// A left press: a click, or the second or third of one on the same word,

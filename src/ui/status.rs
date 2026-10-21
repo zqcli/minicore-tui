@@ -21,6 +21,7 @@ pub struct Dock {
     pub above: Vec<Line<'static>>,
     /// The editor body, then the completion rows.
     pub editor: Vec<Line<'static>>,
+    pub editor_rows: u16,
     /// The cursor as (row, column) within `editor`.
     pub cursor: (u16, u16),
     pub footer: Line<'static>,
@@ -50,6 +51,7 @@ pub fn dock(app: &App, styles: Styles, width: u16, height: u16) -> Dock {
         composer::max_rows(height),
         !app.overlay.is_view(),
     );
+    let editor_rows = editor.len() as u16;
     if let Some(rows) = sheets::completion(app, styles, width.saturating_sub(1)) {
         editor.extend(rows.into_iter().map(|line| {
             let spans = line
@@ -66,6 +68,7 @@ pub fn dock(app: &App, styles: Styles, width: u16, height: u16) -> Dock {
     Dock {
         above,
         editor,
+        editor_rows,
         cursor,
         footer: footer(app, styles, width),
     }
@@ -122,7 +125,7 @@ fn queued_rows(session: &Session, styles: Styles, width: u16) -> Vec<Line<'stati
     rows
 }
 
-/// `⠋ Working (esc to interrupt) · Running bash … · 42s · request 3` while
+/// `⠋ Working (esc to interrupt) · Running bash … · request 3` while
 /// something is in flight.
 fn working_line(app: &App, styles: Styles, width: u16) -> Option<Line<'static>> {
     let live = app
@@ -160,7 +163,6 @@ fn working_line(app: &App, styles: Styles, width: u16) -> Option<Line<'static>> 
             None if !quiet => extras.push(live.phase.label().to_owned()),
             None => {}
         }
-        extras.push(super::blocks::format_duration(live.started.elapsed()));
         if live.requests > 1 {
             extras.push(format!("request {}", live.requests));
         }
@@ -205,7 +207,7 @@ fn notice_line(notice: &Notice, styles: Styles, width: u16) -> Line<'static> {
     ])
 }
 
-/// `▸ dir@branch · model · reasoning · profile · state · 3m · queued` and,
+/// `▸ dir@branch · model · reasoning · 3m · queued` and,
 /// right-aligned, `↑in ↓out Rcache · ctx N%`. Short of room, the directory and
 /// branch give way first, then the elapsed time and queue mark, then the model;
 /// the reasoning level stays.
@@ -233,9 +235,6 @@ fn footer(app: &App, styles: Styles, width: u16) -> Line<'static> {
         priority.push(Span::styled(session.info.reasoning.label(), styles.amber()));
     }
     let mut extras = Vec::new();
-    if let Some(profile) = session.and_then(|session| guarded_profile(app, session)) {
-        extras.push(Span::styled(profile.to_owned(), styles.reasoning_rail()));
-    }
     if let Some(session) = session.filter(|session| !session.allowed_tools.is_empty()) {
         let tools: Vec<&str> = session.allowed_tools.iter().map(String::as_str).collect();
         extras.push(Span::styled(
@@ -243,18 +242,6 @@ fn footer(app: &App, styles: Styles, width: u16) -> Line<'static> {
             styles.amber(),
         ));
     }
-    let state = if app.has_interaction() {
-        Some(("approval", styles.amber()))
-    } else if app.compacting() {
-        Some(("compacting", styles.user_rail()))
-    } else if app.is_busy() {
-        Some(("working", styles.user_rail()))
-    } else if !app.ready || app.loading_session {
-        Some(("connecting", styles.user_rail()))
-    } else {
-        None
-    };
-    extras.extend(state.map(|(text, style)| Span::styled(text, style)));
     for extra in extras {
         if !priority.is_empty() {
             priority.push(Span::styled(" · ", styles.meta()));
@@ -313,17 +300,6 @@ fn footer(app: &App, styles: Styles, width: u16) -> Line<'static> {
         spans.extend(right);
     }
     Line::from(spans)
-}
-
-/// The session's profile when it asks before acting, which the footer would
-/// otherwise never reveal.
-fn guarded_profile<'a>(app: &App, session: &'a Session) -> Option<&'a str> {
-    let profile = app
-        .profiles
-        .iter()
-        .find(|profile| profile.id == session.info.profile)?;
-    let approval = profile.approval.as_deref()?;
-    (approval != "auto").then_some(session.info.profile.as_str())
 }
 
 /// `▸ dir@branch` in at most `room` cells: the directory is cut first (to 6

@@ -204,11 +204,26 @@ async fn run() -> i32 {
     let (term_tx, mut term_rx) = mpsc::unbounded_channel::<TermEvent>();
     tokio::spawn(async move {
         let mut events = EventStream::new();
-        while let Some(event) = events.next().await {
-            if let Ok(event) = event
-                && term_tx.send(event).is_err()
-            {
-                break;
+        // Console-record input on Windows loses Paste framing on some hosts.
+        // Unix backends already decode Paste; do not add typing latency there.
+        let mut decoder = terminal::input::InputDecoder::new(cfg!(windows));
+        loop {
+            let ready = tokio::select! {
+                biased;
+                event = events.next() => match event {
+                    Some(Ok(event)) => decoder.push(event),
+                    Some(Err(_)) => continue,
+                    None => {
+                        for event in decoder.finish() { let _ = term_tx.send(event); }
+                        break;
+                    }
+                },
+                _ = tokio::time::sleep(terminal::input::QUIET), if decoder.pending() => decoder.flush(),
+            };
+            for event in ready {
+                if term_tx.send(event).is_err() {
+                    return;
+                }
             }
         }
     });
@@ -249,7 +264,7 @@ async fn run() -> i32 {
             maybe_event = term_rx.recv() => {
                 match maybe_event {
                     Some(TermEvent::Key(key)) => {
-                        if key.is_press() {
+                        if !key.is_release() {
                             if let Some(action) = app.on_key(key) {
                                 app.on_action(action);
                             }
@@ -322,10 +337,7 @@ async fn run() -> i32 {
 
         if frames.wanted() && guard.is_active() && tokio::time::Instant::now() >= next_frame {
             let started = Instant::now();
-            if let Err(error) = guard
-                .terminal()
-                .draw(|frame| minicore_tui::ui::draw(frame, &mut app))
-            {
+            if let Err(error) = guard.draw(|frame| minicore_tui::ui::draw(frame, &mut app)) {
                 eprintln!("draw failed: {error}");
                 break;
             }

@@ -20,57 +20,106 @@ pub fn max_rows(height: u16) -> usize {
     (usize::from(height) * 32 / 100).clamp(MIN_ROWS, MAX_ROWS)
 }
 
-const PLACEHOLDER: &str = "Ask anything · / commands · @ files";
 /// Shown instead while a full-screen view owns the keys.
 const VIEW_PLACEHOLDER: &str = "view open · esc to return";
 
-/// The draft as drawn: sanitized text with chips in place of payloads, the
-/// chips' byte ranges in it and the cursor's byte offset in it.
-fn shown(composer: &Composer) -> (String, Vec<Range<usize>>, usize) {
-    let (text, pastes, cursor) = (composer.text(), composer.pastes(), composer.cursor());
-    let mut shown = String::with_capacity(text.len());
-    let mut chips = Vec::new();
-    let mut caret = None;
-    let mut at = 0;
-    let ends = pastes.iter().map(|paste| paste.range.start);
-    for (index, end) in ends.chain([text.len()]).enumerate() {
-        if caret.is_none() && (at..=end).contains(&cursor) {
-            // Sanitizing the prefix keeps an escape sequence whole; a cursor
-            // inside one lands on the cell before it.
-            caret = Some(shown.len() + wrap::sanitize(&text[at..cursor]).len());
-        }
-        shown.push_str(&wrap::sanitize(&text[at..end]));
-        let Some(paste) = pastes.get(index) else {
-            break;
-        };
-        let start = shown.len();
-        shown.push_str(&paste.label(index + 1));
-        chips.push(start..shown.len());
-        at = paste.range.end;
-    }
-    let caret = caret.unwrap_or(shown.len());
-    (shown, chips, caret)
+/// Sanitized projection and the legal editing stops on it. A paste chip has
+/// only two stops, so a click or Shift motion cannot split its hidden payload.
+struct Shown {
+    text: String,
+    chips: Vec<Range<usize>>,
+    stops: Vec<(usize, usize)>, // (display byte, buffer byte)
 }
 
-/// The editor body for a band `width` cells wide: the rail at column 0 and the
-/// draft from column 1, padded or scrolled to between [`MIN_ROWS`] and
-/// `max_rows` rows, dimmed with its own placeholder when `active` is false.
-/// Returns the rows and the cursor as (row, column).
-pub fn render(
-    composer: &Composer,
-    styles: Styles,
-    width: u16,
-    max_rows: usize,
-    active: bool,
-) -> (Vec<Line<'static>>, (u16, u16)) {
-    let width = usize::from(width).max(3);
-    // One cell stays free after the text, so a cursor at the end of a full row
-    // does not wrap.
-    let limit = width - 2;
-    let (shown, chips, caret) = shown(composer);
-    // A chip wraps as one word: its spaces are masked while finding breaks.
-    let mut shape = shown.clone().into_bytes();
-    for chip in &chips {
+impl Shown {
+    fn new(composer: &Composer) -> Self {
+        let mut out = Self {
+            text: String::new(),
+            chips: Vec::new(),
+            stops: vec![(0, 0)],
+        };
+        let mut at = 0;
+        for (index, end) in composer
+            .pastes()
+            .iter()
+            .map(|p| p.range.start)
+            .chain([composer.text().len()])
+            .enumerate()
+        {
+            let raw = &composer.text()[at..end];
+            let safe = wrap::sanitize(raw);
+            let base = out.text.len();
+            // The common printable path is linear. Only sanitized control text
+            // needs prefix projection to keep escape sequences indivisible.
+            let unchanged = safe.as_ref() == raw;
+            for (offset, grapheme) in raw.grapheme_indices(true) {
+                let end = offset + grapheme.len();
+                let display = if unchanged {
+                    end
+                } else {
+                    wrap::sanitize(&raw[..end]).len()
+                };
+                out.stops.push((base + display, at + end));
+            }
+            out.text.push_str(&safe);
+            if let Some(paste) = composer.pastes().get(index) {
+                let start = out.text.len();
+                out.text.push_str(&paste.label(index + 1));
+                out.chips.push(start..out.text.len());
+                out.stops.push((out.text.len(), paste.range.end));
+                at = paste.range.end;
+            }
+        }
+        out
+    }
+
+    fn display(&self, raw: usize) -> usize {
+        self.stops
+            .iter()
+            .rev()
+            .find(|(_, at)| *at <= raw)
+            .map_or(0, |(at, _)| *at)
+    }
+
+    fn raw(&self, display: usize) -> usize {
+        let index = self.stops.partition_point(|(at, _)| *at <= display);
+        let left = self.stops[index.saturating_sub(1)];
+        match self.stops.get(index) {
+            Some(right) if display - left.0 > right.0 - display => right.1,
+            _ => left.1,
+        }
+    }
+}
+
+use unicode_segmentation::UnicodeSegmentation;
+
+struct Geometry {
+    shown: Shown,
+    rows: Vec<Range<usize>>,
+    cursor: (usize, usize),
+    target: usize,
+    top: usize,
+    blank: usize,
+    limit: usize,
+}
+
+fn visible_end(text: &str, range: &Range<usize>, limit: usize) -> usize {
+    let mut used = 0;
+    for (at, grapheme) in text[range.clone()].grapheme_indices(true) {
+        used += wrap::width(grapheme);
+        if used > limit {
+            return range.start + at;
+        }
+    }
+    range.end
+}
+
+fn geometry(composer: &Composer, width: u16, max_rows: usize) -> Geometry {
+    let limit = usize::from(width).max(3) - 2;
+    let shown = Shown::new(composer);
+    let caret = shown.display(composer.cursor());
+    let mut shape = shown.text.clone().into_bytes();
+    for chip in &shown.chips {
         for byte in &mut shape[chip.clone()] {
             if *byte == b' ' {
                 *byte = b'_';
@@ -78,8 +127,7 @@ pub fn render(
         }
     }
     let shape = String::from_utf8(shape).expect("only ASCII spaces were replaced");
-
-    let mut body: Vec<Vec<Span<'static>>> = Vec::new();
+    let mut rows = Vec::new();
     let mut cursor = (0, 0);
     let mut offset = 0;
     for line in shape.split('\n') {
@@ -87,95 +135,162 @@ pub fn render(
         let end = offset + line.len();
         if (offset..=end).contains(&caret) {
             let at = caret - offset;
-            let index = ranges
-                .iter()
-                .rposition(|range| range.start <= at)
-                .unwrap_or(0);
+            let index = ranges.iter().rposition(|r| r.start <= at).unwrap_or(0);
             let from = offset + ranges[index].start.min(at);
             cursor = (
-                body.len() + index,
-                wrap::width(&shown[from..caret]).min(limit),
+                rows.len() + index,
+                wrap::width(&shown.text[from..caret]).min(limit),
             );
         }
-        for range in ranges {
-            let start = offset + range.start;
-            let text = shown[start..offset + range.end].trim_end();
-            body.push(styled(&shown, &chips, start..start + text.len(), styles));
-        }
+        rows.extend(ranges.into_iter().map(|r| offset + r.start..offset + r.end));
         offset = end + 1;
     }
-    if composer.is_empty() {
-        let placeholder = if active {
-            PLACEHOLDER
-        } else {
-            VIEW_PLACEHOLDER
-        };
-        let hint = wrap::truncate(placeholder, limit);
-        body = vec![vec![Span::styled(hint, styles.faint())]];
-    }
-
-    let rows = body.len();
-    let target = rows.clamp(MIN_ROWS, max_rows.max(MIN_ROWS));
-    let top = if rows > target {
-        let top = composer
+    let target = rows.len().clamp(MIN_ROWS, max_rows.max(MIN_ROWS));
+    let top = if rows.len() > target {
+        composer
             .view_top
             .get()
-            .min(rows - target)
+            .min(rows.len() - target)
             .min(cursor.0)
-            .max((cursor.0 + 1).saturating_sub(target));
-        composer.view_top.set(top);
-        top
+            .max((cursor.0 + 1).saturating_sub(target))
     } else {
         0
     };
-    // A short draft sits in the middle, a single line on the second row.
-    let blank = target.saturating_sub(rows) / 2;
-    let mut lines: Vec<Line<'static>> =
-        (0..blank).map(|_| row(Vec::new(), width, styles)).collect();
+    let blank = target.saturating_sub(rows.len()) / 2;
+    Geometry {
+        shown,
+        rows,
+        cursor,
+        target,
+        top,
+        blank,
+        limit,
+    }
+}
+
+/// Maps a cell in the rendered editor (including its rail/padding) back to a
+/// grapheme or chip boundary. Rendering and hit-testing share all geometry.
+pub fn hit_test(composer: &Composer, width: u16, max_rows: usize, row: u16, column: u16) -> usize {
+    hit_test_row(composer, width, max_rows, row as isize, column)
+}
+
+/// A drag just outside the viewport reaches the adjacent wrapped row, allowing
+/// the next frame to scroll the editor without moving the transcript.
+pub fn hit_test_row(
+    composer: &Composer,
+    width: u16,
+    max_rows: usize,
+    row: isize,
+    column: u16,
+) -> usize {
+    let g = geometry(composer, width, max_rows);
+    let index =
+        (g.top as isize + row - g.blank as isize).clamp(0, g.rows.len() as isize - 1) as usize;
+    let range = &g.rows[index];
+    let text = &g.shown.text[range.start..visible_end(&g.shown.text, range, g.limit)];
+    let column = usize::from(column.saturating_sub(1)).min(g.limit);
+    let mut used = 0;
+    let mut display = range.start + text.len();
+    for (at, grapheme) in text.grapheme_indices(true) {
+        let cells = wrap::width(grapheme);
+        if used + cells > column {
+            display = range.start + at;
+            break;
+        }
+        used += cells;
+    }
+    g.shown.raw(display)
+}
+
+/// The editor rows and caret (row, column), including padding and scrolling.
+pub fn render(
+    composer: &Composer,
+    styles: Styles,
+    width: u16,
+    max_rows: usize,
+    active: bool,
+) -> (Vec<Line<'static>>, (u16, u16)) {
+    let g = geometry(composer, width, max_rows);
+    composer.view_top.set(g.top);
+    let selection = composer
+        .selection()
+        .map(|r| g.shown.display(r.start)..g.shown.display(r.end));
+    let mut body: Vec<Vec<Span<'static>>> = g
+        .rows
+        .iter()
+        .map(|range| {
+            let text = &g.shown.text[range.start..visible_end(&g.shown.text, range, g.limit)];
+            let end = range.start + text.len();
+            let mut boundaries = vec![range.start, end];
+            for chip in &g.shown.chips {
+                boundaries.extend([
+                    chip.start.clamp(range.start, end),
+                    chip.end.clamp(range.start, end),
+                ]);
+            }
+            if let Some(selected) = &selection {
+                boundaries.extend([
+                    selected.start.clamp(range.start, end),
+                    selected.end.clamp(range.start, end),
+                ]);
+            }
+            boundaries.sort_unstable();
+            boundaries.dedup();
+            let mut spans: Vec<_> = boundaries
+                .windows(2)
+                .map(|pair| {
+                    let from = pair[0];
+                    let to = pair[1];
+                    let mut style = if g.shown.chips.iter().any(|r| r.contains(&from)) {
+                        styles.paste_chip()
+                    } else {
+                        styles.text()
+                    };
+                    if selection
+                        .as_ref()
+                        .is_some_and(|r| r.start < to && r.end > from)
+                    {
+                        style = style.patch(styles.selection());
+                    }
+                    Span::styled(g.shown.text[from..to].to_owned(), style)
+                })
+                .collect();
+            // A selected newline has one visible cell even on an otherwise empty row.
+            if g.shown.text.as_bytes().get(range.end) == Some(&b'\n')
+                && selection.as_ref().is_some_and(|r| r.contains(&range.end))
+            {
+                spans.push(Span::styled(" ", styles.selection()));
+            }
+            spans
+        })
+        .collect();
+    if composer.is_empty() && !active {
+        body = vec![vec![Span::styled(
+            wrap::truncate(VIEW_PLACEHOLDER, g.limit),
+            styles.faint(),
+        )]];
+    }
+    let width = usize::from(width).max(3);
+    let mut lines: Vec<_> = (0..g.blank)
+        .map(|_| row(Vec::new(), width, styles))
+        .collect();
     lines.extend(
         body.into_iter()
-            .skip(top)
-            .take(target)
+            .skip(g.top)
+            .take(g.target)
             .map(|spans| row(spans, width, styles)),
     );
-    lines.resize_with(target, || row(Vec::new(), width, styles));
+    lines.resize_with(g.target, || row(Vec::new(), width, styles));
     if !active {
         for span in lines.iter_mut().flat_map(|line| &mut line.spans) {
             span.style = span.style.patch(styles.faint());
         }
     }
-    let cursor = (blank + cursor.0 - top, 1 + cursor.1);
-    (lines, (cursor.0 as u16, cursor.1 as u16))
-}
-
-/// The spans of `shown[range]`, with the parts inside a chip styled as one.
-fn styled(
-    shown: &str,
-    chips: &[Range<usize>],
-    range: Range<usize>,
-    styles: Styles,
-) -> Vec<Span<'static>> {
-    let mut spans = Vec::new();
-    let mut at = range.start;
-    for chip in chips
-        .iter()
-        .filter(|chip| chip.start < range.end && chip.end > range.start)
-    {
-        let start = chip.start.max(range.start);
-        let end = chip.end.min(range.end);
-        if at < start {
-            spans.push(Span::styled(shown[at..start].to_owned(), styles.text()));
-        }
-        spans.push(Span::styled(
-            shown[start..end].to_owned(),
-            styles.paste_chip(),
-        ));
-        at = end;
-    }
-    if at < range.end {
-        spans.push(Span::styled(shown[at..range.end].to_owned(), styles.text()));
-    }
-    spans
+    let cursor = (
+        (g.blank + g.cursor.0 - g.top) as u16,
+        (1 + g.cursor.1) as u16,
+    );
+    (lines, cursor)
 }
 
 /// One editor row exactly `width` cells wide: the rail, then `spans` on the
@@ -228,6 +343,70 @@ mod tests {
             .map(|line| line.to_string().trim_end().to_owned())
             .collect();
         (rows, caret)
+    }
+
+    #[test]
+    fn click_geometry_round_trips_rendered_carets_including_unicode_wraps_and_scroll() {
+        for text in [
+            "",
+            "abc  ",
+            "a中e\u{301}👨‍👩‍👧‍👦z",
+            "aaa bbb ccc ddd",
+            "one\n\nthree",
+            "row\n".repeat(20).as_str(),
+        ] {
+            for width in [8, 16, 50] {
+                let mut c = composer(text);
+                loop {
+                    let (_, caret) = render(&c, styles(), width, 4, true);
+                    let at = hit_test(&c, width, 4, caret.0, caret.1);
+                    assert_eq!(at, c.cursor(), "{text:?} width={width} caret={caret:?}");
+                    if c.cursor() == 0 {
+                        break;
+                    }
+                    c.move_left();
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_paste_chip_click_snaps_to_its_nearest_edge() {
+        let mut c = composer("see ");
+        let payload = big_paste(12);
+        c.insert(&payload);
+        let (_, caret) = render(&c, styles(), 60, 12, true);
+        assert_eq!(hit_test(&c, 60, 12, caret.0, 6), 4);
+        assert_eq!(hit_test(&c, 60, 12, caret.0, caret.1 - 1), c.text().len());
+    }
+
+    #[test]
+    fn selected_unicode_and_newlines_are_highlighted_in_every_palette() {
+        let mut c = composer("a中\n\nlast");
+        c.place_cursor(1, false);
+        c.place_cursor("a中\n\n".len(), true);
+        for palette in [
+            crate::ui::theme::Palette::dark(),
+            crate::ui::theme::Palette::light(),
+            crate::ui::theme::Palette::plain(),
+        ] {
+            let styles = Styles::of(palette);
+            let (rows, _) = render(&c, styles, 40, 12, true);
+            let selected: String = rows
+                .iter()
+                .flat_map(|r| &r.spans)
+                .filter(|s| {
+                    s.style
+                        == styles
+                            .composer()
+                            .patch(styles.text())
+                            .patch(styles.selection())
+                        || s.style == styles.composer().patch(styles.selection())
+                })
+                .map(|s| s.content.as_ref())
+                .collect();
+            assert_eq!(selected, "中  ");
+        }
     }
 
     #[test]
@@ -296,10 +475,31 @@ mod tests {
     fn the_editor_pads_short_drafts_and_starts_text_after_the_rail() {
         let (rows, cursor) = drawn(&Composer::new(), 50);
         assert_eq!(rows.len(), MIN_ROWS);
-        assert_eq!(rows[1], format!("▎{PLACEHOLDER}"));
+        assert!(rows.iter().all(|row| row == "▎"), "no empty-draft hint");
         assert_eq!(cursor, (1, 1), "the cursor sits on the second row");
         let (lines, _) = render(&Composer::new(), styles(), 50, 12, true);
         assert!(lines.iter().all(|line| line.width() == 50), "full rows");
+    }
+
+    #[test]
+    fn an_empty_editor_has_no_hint_at_any_width() {
+        for width in [3, 8, 30, 80] {
+            let (rows, cursor) = drawn(&Composer::new(), width);
+            assert!(rows.iter().all(|row| row == "▎"), "{width}: {rows:?}");
+            assert_eq!(cursor, (1, 1), "{width}: empty-draft caret");
+        }
+    }
+
+    #[test]
+    fn clearing_a_draft_leaves_the_editor_blank() {
+        let mut c = composer("hello 中文");
+        let (rows, _) = drawn(&c, 50);
+        assert_eq!(rows[1], "▎hello 中文");
+
+        c.set_text("");
+        let (rows, cursor) = drawn(&c, 50);
+        assert!(rows.iter().all(|row| row == "▎"), "{rows:?}");
+        assert_eq!(cursor, (1, 1));
     }
 
     #[test]

@@ -268,8 +268,7 @@ impl Harness {
     pub fn fg_of(&mut self, needle: &str) -> ratatui::style::Color {
         let mut terminal =
             ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
-        terminal
-            .draw(|frame| crate::ui::draw(frame, &mut self.app))
+        crate::terminal::draw_frame(&mut terminal, |frame| crate::ui::draw(frame, &mut self.app))
             .unwrap();
         let buffer = terminal.backend().buffer();
         (0..30)
@@ -284,8 +283,7 @@ impl Harness {
     pub fn screen(&mut self, width: u16, height: u16) -> String {
         let mut terminal =
             ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
-        terminal
-            .draw(|frame| crate::ui::draw(frame, &mut self.app))
+        crate::terminal::draw_frame(&mut terminal, |frame| crate::ui::draw(frame, &mut self.app))
             .unwrap();
         let buffer = terminal.backend().buffer();
         (0..height)

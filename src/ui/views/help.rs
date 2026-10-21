@@ -30,11 +30,11 @@ const KEYS: &[KeyRow] = &[
     },
     KeyRow {
         keys: "esc",
-        action: "close view · interrupt turn · clear draft",
+        action: "close view · clear selection · interrupt turn · clear draft",
     },
     KeyRow {
         keys: "ctrl+c",
-        action: "clear the composer; twice to quit",
+        action: "copy selection; otherwise clear, twice to quit",
     },
     KeyRow {
         keys: "ctrl+d",
@@ -50,7 +50,7 @@ const KEYS: &[KeyRow] = &[
     },
     KeyRow {
         keys: "ctrl+x",
-        action: "copy the last answer",
+        action: "cut selection; otherwise copy the last answer",
     },
     KeyRow {
         keys: "ctrl+g",
@@ -117,7 +117,15 @@ const KEYS: &[KeyRow] = &[
         action: "jump between user messages",
     },
     KeyRow {
-        keys: "drag, double/triple-click",
+        keys: "editor: click / drag",
+        action: "place caret / select draft text",
+    },
+    KeyRow {
+        keys: "shift+arrows/home/end",
+        action: "extend or shrink editor selection",
+    },
+    KeyRow {
+        keys: "transcript: drag, 2/3-click",
         action: "select text, a word, a line; copies on release",
     },
     KeyRow {
@@ -225,6 +233,9 @@ mod tests {
     fn help_lists_every_key_row_and_command() {
         let text = text(&lines(COMMANDS, styles(), 80)).join("\n");
         assert!(text.contains("ctrl+f"), "{text}");
+        assert!(text.contains("copy selection"), "{text}");
+        assert!(text.contains("editor: click / drag"), "{text}");
+        assert!(text.contains("shift+arrows"), "{text}");
         assert!(text.contains("/compact"), "{text}");
         assert!(text.contains("Compact the session context now"), "{text}");
     }

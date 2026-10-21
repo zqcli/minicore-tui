@@ -132,9 +132,7 @@ fn conversation(app: &mut App) {
 fn render(app: &mut App, width: u16, height: u16) -> String {
     let backend = TestBackend::new(width, height);
     let mut terminal = Terminal::new(backend).expect("terminal");
-    terminal
-        .draw(|frame| crate::ui::draw(frame, app))
-        .expect("draw");
+    crate::terminal::draw_frame(&mut terminal, |frame| crate::ui::draw(frame, app)).expect("draw");
     let buffer = terminal.backend().buffer().clone();
     let mut out = String::new();
     for row in 0..buffer.area.height {
@@ -255,7 +253,7 @@ fn the_editor_grows_with_its_content_and_caps_at_twelve_rows() {
 }
 
 #[test]
-fn the_footer_reports_the_state_and_context() {
+fn the_footer_reports_model_and_reasoning_without_duplicate_status() {
     let mut app = app();
     app.composer.set_text("hello");
     let rendered = render(&mut app, 80, 12);
@@ -336,8 +334,7 @@ fn a_blank_row_separates_the_transcript_and_the_composer_band_is_full_width() {
     }
     let backend = TestBackend::new(50, 14);
     let mut terminal = Terminal::new(backend).expect("terminal");
-    terminal
-        .draw(|frame| crate::ui::draw(frame, &mut app))
+    crate::terminal::draw_frame(&mut terminal, |frame| crate::ui::draw(frame, &mut app))
         .expect("draw");
     let buffer = terminal.backend().buffer().clone();
     let row = |y: u16| -> String {
@@ -347,9 +344,8 @@ fn a_blank_row_separates_the_transcript_and_the_composer_band_is_full_width() {
             .trim_end()
             .to_owned()
     };
-    let composer = (0..14)
-        .find(|y| row(*y).starts_with(" ▎Ask anything"))
-        .expect("composer row");
+    let composer = terminal.backend().cursor_position().y;
+    assert_eq!(row(composer), " ▎", "the empty editor has no hint");
     assert_eq!(row(composer - 2), "", "the gap row above the editor");
     assert_eq!(row(composer - 3).trim(), "▎", "the card's bottom pad row");
     assert!(
@@ -469,7 +465,7 @@ fn a_view_dims_the_composer_and_keys_typed_in_it_do_not_edit_the_draft() {
 
     app.overlay = Overlay::None;
     let rendered = render(&mut app, 60, 12);
-    assert!(rendered.contains("Ask anything"), "{rendered}");
+    assert!(!rendered.contains("Ask anything"), "{rendered}");
     assert!(!rendered.contains("view open"), "{rendered}");
 }
 
@@ -525,7 +521,7 @@ fn steering_is_listed_before_follow_ups_with_the_recall_hint() {
 }
 
 #[test]
-fn a_running_turn_shows_the_status_line_with_elapsed_time() {
+fn a_running_turn_keeps_elapsed_time_only_in_the_footer() {
     let mut app = app();
     let session = app.session.as_mut().expect("session");
     session.live = Some(crate::app::LiveTurn::new(
@@ -541,7 +537,48 @@ fn a_running_turn_shows_the_status_line_with_elapsed_time() {
         "{rendered}"
     );
     assert!(rendered.contains("Thinking"), "{rendered}");
-    assert!(rendered.contains("max · working"), "{rendered}");
+    let footer = rendered.lines().last().unwrap();
+    assert!(footer.contains("gpt 6 luna · max"), "{footer}");
+    assert!(!footer.contains("working"), "{footer}");
+    let working = rendered
+        .lines()
+        .find(|line| line.contains("Working (esc to interrupt)"))
+        .expect("working row");
+    assert!(working.ends_with(" · Thinking"), "{working}");
+    assert!(
+        rendered.lines().last().unwrap().ends_with(" · 0m"),
+        "{rendered}"
+    );
+}
+
+#[test]
+fn a_long_running_turn_has_no_duplicate_timer_in_the_working_row() {
+    let mut fixture = app();
+    let app = &mut fixture.app;
+    let session = app.session.as_mut().unwrap();
+    let mut live = crate::app::LiveTurn::new(
+        TurnRef {
+            session_id: session.info.session_id.clone(),
+            loop_id: "loop_9".into(),
+        },
+        0,
+    );
+    live.started = std::time::Instant::now() - std::time::Duration::from_secs(649);
+    live.running_tool = Some(("read".into(), "src/main.rs".into()));
+    live.requests = 3;
+    session.live = Some(live);
+    let rendered = render(app, 110, 12);
+    let working = rendered
+        .lines()
+        .find(|line| line.contains("Working (esc to interrupt)"))
+        .expect("working row");
+    assert!(working.contains("Running read src/main.rs"), "{working}");
+    assert!(working.ends_with(" · request 3"), "{working}");
+    assert!(!working.contains("10m49s"), "{working}");
+    assert!(
+        rendered.lines().last().unwrap().ends_with(" · 10m"),
+        "{rendered}"
+    );
 }
 
 /// A left press and release on one cell: a click, not a drag.

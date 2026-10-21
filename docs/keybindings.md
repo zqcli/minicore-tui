@@ -15,27 +15,36 @@ the kitty keyboard protocol; `Ctrl+J` always inserts a newline.
 | `Enter` | Send when the session is idle; steer the running turn when it is busy. A draft whose first word names a command (`/model`, `/rename x`) or a prompt template runs it. A bare `/word` that names nothing (`/modle`) is not sent: a notice offers the nearest command, and a second `Enter` (or a leading `//`, which sends the rest) sends it as text. Any other draft, `/usr/bin/env is broken` and `/usr/bin` included, is a prompt. |
 | `Alt+Enter` | Queue the draft as a follow-up while a turn runs; send it when idle. |
 | `Shift+Enter`, `Ctrl+J` | Newline. |
-| `Esc` | Interrupt the running turn; cancel a running compaction; else clear the draft. Closes an open picker or view first. |
-| `Ctrl+C` | Clear the draft; a second press within 500 ms quits. |
+| `Esc` | Close an open picker or view first; in the editor, cancel an active selection before interrupting a turn, cancelling a compaction or clearing the draft. |
+| `Ctrl+C` | Copy the editor selection when one exists; otherwise clear the draft, with a second press within 500 ms quitting. |
 | `Ctrl+D` | Quit when the draft is empty; otherwise delete the character after the cursor. |
 | `↑` / `↓` | Move between lines of a multi-line draft; on the first or last line, browse prompt history. The last 100 prompts, paste chips included, are kept in `history.jsonl` in the TUI directory and survive a restart; a prompt over 32 KiB stays in memory only. |
 | `Alt+↑` | Take the queued follow-ups back into an empty draft, separated by blank lines. |
-| `Ctrl+X` | Copy the last assistant answer, as `/copy` does. |
+| `Ctrl+X` | Cut the editor selection when one exists; otherwise copy the last assistant answer, as `/copy` does. |
 | `Ctrl+G` | Edit the draft in `[ui] editor` from `config.toml`, else `$VISUAL`, else `$EDITOR`. |
 | `/` at the start of the draft | Open the command palette. `Enter` runs the highlighted command; with no match it sends the line as a prompt. |
 | `@` at the start of a word | Open the workspace file picker. In the middle of a word (`me@example.com`) it is plain text. |
 | `Home` / `End`, `Ctrl+A` / `Ctrl+E` | Start or end of the current line (`Home` with an empty draft and `End` also scroll, see below). |
 | `←` / `→` | Move by character. |
 | `Ctrl+←` / `Ctrl+→`, `Alt+←` / `Alt+→` | Move by word. |
-| `Backspace` / `Delete` | Delete before or after the cursor. |
+| `Backspace` / `Delete` | Delete the selection, or the character before or after the cursor. |
 | `Ctrl+W`, `Ctrl+Backspace` (terminals that send it as `Ctrl+H` too), `Alt+Backspace` | Delete the previous word. |
 | `Alt+D`, `Alt+Delete` | Delete to the end of the next word. |
 | `Ctrl+U` / `Ctrl+K` | Delete to the start or end of the line. |
 | `Ctrl+Z` / `Ctrl+Y` | Undo / redo (200 steps). |
-| Paste | Insert as one edit. A paste of more than 10 lines or 1000 characters shows as a `[paste #N +L lines]` (or `[paste #N C chars]`) chip and expands on send; recalling a prompt from history brings the chip back. |
+| Paste | Insert as one edit, replacing the selection. Newlines, including a trailing newline, are draft text rather than send commands. A paste of more than 10 lines or 1000 characters shows as a `[paste #N +L lines]` (or `[paste #N C chars]`) chip and expands on send; recalling a prompt from history brings the chip back. |
+
+Hold `Shift` with Left/Right, Up/Down, Home/End to extend or shrink a selection;
+Ctrl/Alt+Shift+Left/Right extends by word. Typing, pasting or inserting a newline
+replaces the selection. Plain Left/Right collapses it to the corresponding end.
+Edits and selection replacements support undo/redo.
 
 Cursor movement and deletion respect whole graphemes and treat a paste token as
-one unit. `Esc` while busy only interrupts; it does not clear the draft.
+one unit. With no selection, `Esc` while busy only interrupts; it does not clear
+the draft. The editor requests a non-blinking block cursor on compatible
+terminals and restores the terminal default on exit or external-editor handoff.
+See [terminal and editor fixes](terminal-editor-fixes.md) for platform details
+and the limits of legacy paste detection.
 
 ## Transcript and global keys
 
@@ -67,9 +76,14 @@ are above the bottom. `End` or scrolling to the bottom resumes following the tai
 | Click a tool card's header row | Toggle that card. |
 | Click a card's `click for full output` row | Open the tool view. Expanded cards end in this row; so does a card reloaded from history, whose row reads `… N lines · click for full output`. |
 | Click a turn-end line | Open the diff view for that turn. |
-| Drag | Select transcript text; releasing copies it. |
+| Click in the editor | Place the caret at a grapheme or paste-chip boundary, respecting wrapping, padding and editor scrolling. |
+| Drag in the editor | Select draft text; releasing keeps it highlighted without copying transcript text. Typing replaces it; `Ctrl+C` copies it. Moving outside the editor reaches adjacent rows and scrolls the draft. |
+| Shift+click in the editor | Extend the selection from its fixed anchor. |
+| Drag in the transcript | Select transcript text; releasing copies it. |
 
-Clicks do nothing while a picker or view is open.
+Editor clicks are accepted while an inline command or file completion list is
+open, but completion rows are not editor text. Full-screen views, approval
+prompts and bottom sheets do not expose the hidden draft for mouse editing.
 
 ## Pickers and sheets
 

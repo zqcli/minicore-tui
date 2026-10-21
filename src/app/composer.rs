@@ -12,6 +12,10 @@ use unicode_segmentation::UnicodeSegmentation;
 use crate::prompt_history::{self, Record};
 use crate::wrap;
 
+#[cfg(test)]
+#[path = "composer_selection_tests.rs"]
+mod selection_tests;
+
 /// Pastes of more lines or characters than these become a chip.
 const TOKEN_LINES: usize = 10;
 const TOKEN_CHARS: usize = 1000;
@@ -118,6 +122,7 @@ impl<'a> Projection<'a> {
 struct Snapshot {
     text: String,
     cursor: usize,
+    anchor: Option<usize>,
     pastes: Vec<Paste>,
 }
 
@@ -182,6 +187,8 @@ pub struct Composer {
     text: String,
     /// Cursor byte offset, at a grapheme boundary and outside every payload.
     cursor: usize,
+    /// Fixed end of the editor selection, separate from transcript selection.
+    anchor: Option<usize>,
     /// Display column to keep while moving between lines.
     column: Option<usize>,
     pastes: Vec<Paste>,
@@ -238,6 +245,59 @@ impl Composer {
         self.cursor
     }
 
+    pub fn selection(&self) -> Option<Range<usize>> {
+        let anchor = self.anchor.filter(|&at| at != self.cursor)?;
+        Some(anchor.min(self.cursor)..anchor.max(self.cursor))
+    }
+
+    pub fn selected_text(&self) -> Option<&str> {
+        self.selection().map(|range| &self.text[range])
+    }
+
+    pub fn clear_selection(&mut self) {
+        self.anchor = None;
+    }
+
+    /// Runs a keyboard motion with a stable Shift anchor.
+    pub fn move_selection(&mut self, extend: bool, motion: impl FnOnce(&mut Self)) {
+        self.commit();
+        let origin = self.cursor;
+        let anchor = self.anchor;
+        if extend {
+            self.anchor = None;
+        }
+        motion(self);
+        self.anchor = extend.then_some(anchor.unwrap_or(origin));
+    }
+
+    /// Places the caret at a hit-tested offset, outside graphemes and chips.
+    pub fn place_cursor(&mut self, at: usize, extend: bool) {
+        self.commit();
+        let anchor = self.anchor.unwrap_or(self.cursor);
+        let mut at = at.min(self.text.len());
+        while !self.text.is_char_boundary(at) {
+            at -= 1;
+        }
+        if at < self.text.len() {
+            at = self
+                .text
+                .grapheme_indices(true)
+                .take_while(|(start, _)| *start <= at)
+                .last()
+                .map_or(0, |(start, _)| start);
+        }
+        if let Some(paste) = self
+            .pastes
+            .iter()
+            .find(|p| p.range.start < at && at < p.range.end)
+        {
+            at = paste.range.start;
+        }
+        self.cursor = at;
+        self.anchor = extend.then_some(anchor);
+        self.column = None;
+    }
+
     pub fn pastes(&self) -> &[Paste] {
         &self.pastes
     }
@@ -275,6 +335,7 @@ impl Composer {
         self.text = text;
         self.version += 1;
         self.cursor = self.text.len();
+        self.anchor = None;
         self.pastes.clear();
         self.undo.clear();
         self.redo.clear();
@@ -294,6 +355,7 @@ impl Composer {
         self.text = text;
         self.version += 1;
         self.cursor = self.text.len();
+        self.anchor = None;
         self.pastes.clear();
         self.column = None;
     }
@@ -307,6 +369,7 @@ impl Composer {
         self.text.clear();
         self.version += 1;
         self.cursor = 0;
+        self.anchor = None;
         self.pastes.clear();
         self.column = None;
         self.commit();
@@ -328,6 +391,7 @@ impl Composer {
         };
         self.version += 1;
         self.cursor = 0;
+        self.anchor = None;
         self.column = None;
         self.recall = None;
         self.draft = Entry::default();
@@ -363,6 +427,7 @@ impl Composer {
         self.gesture.get_or_insert_with(|| Snapshot {
             text: self.text.clone(),
             cursor: self.cursor,
+            anchor: self.anchor,
             pastes: self.pastes.clone(),
         });
     }
@@ -387,6 +452,7 @@ impl Composer {
         Snapshot {
             text: self.text.clone(),
             cursor: self.cursor,
+            anchor: self.anchor,
             pastes: self.pastes.clone(),
         }
     }
@@ -395,6 +461,7 @@ impl Composer {
         self.text = snapshot.text;
         self.version += 1;
         self.cursor = snapshot.cursor;
+        self.anchor = snapshot.anchor;
         self.pastes = snapshot.pastes;
         self.column = None;
     }
@@ -427,6 +494,7 @@ impl Composer {
         let text = normalize(text);
         let text = text.as_str();
         self.snapshot();
+        self.erase_selection();
         let start = self.cursor;
         self.text.insert_str(start, text);
         self.version += 1;
@@ -448,6 +516,7 @@ impl Composer {
             return;
         }
         self.snapshot();
+        self.erase_selection();
         let mut buf = [0u8; 4];
         let text = ch.encode_utf8(&mut buf);
         let start = self.cursor;
@@ -460,6 +529,7 @@ impl Composer {
 
     pub fn newline(&mut self) {
         self.snapshot();
+        self.erase_selection();
         let start = self.cursor;
         self.text.insert(start, '\n');
         self.version += 1;
@@ -491,6 +561,13 @@ impl Composer {
     // ---- movement -----------------------------------------------------
 
     pub fn move_left(&mut self) {
+        if let Some(range) = self.selection() {
+            self.cursor = range.start;
+            self.anchor = None;
+            self.column = None;
+            return;
+        }
+        self.anchor = None;
         self.cursor = match self.paste_ending_at(self.cursor) {
             Some(paste) => paste.range.start,
             None => prev_grapheme(&self.text, self.cursor),
@@ -499,6 +576,13 @@ impl Composer {
     }
 
     pub fn move_right(&mut self) {
+        if let Some(range) = self.selection() {
+            self.cursor = range.end;
+            self.anchor = None;
+            self.column = None;
+            return;
+        }
+        self.anchor = None;
         self.cursor = match self.paste_starting_at(self.cursor) {
             Some(paste) => paste.range.end,
             None => next_grapheme(&self.text, self.cursor),
@@ -507,11 +591,13 @@ impl Composer {
     }
 
     pub fn move_home(&mut self) {
+        self.anchor = None;
         self.cursor = self.line_start(self.cursor_position().0);
         self.column = None;
     }
 
     pub fn move_end(&mut self) {
+        self.anchor = None;
         self.cursor = self.line_end(self.cursor_position().0);
         self.column = None;
     }
@@ -519,6 +605,7 @@ impl Composer {
     /// Moves one logical line up. False on the first line, where the caller
     /// may switch to prompt recall.
     pub fn move_up(&mut self) -> bool {
+        self.anchor = None;
         let line = self.cursor_position().0;
         if line == 0 {
             return false;
@@ -531,6 +618,7 @@ impl Composer {
 
     /// Moves one logical line down. False on the last line.
     pub fn move_down(&mut self) -> bool {
+        self.anchor = None;
         let line = self.cursor_position().0;
         if line + 1 >= self.display().split('\n').count() {
             return false;
@@ -542,6 +630,7 @@ impl Composer {
     }
 
     pub fn move_word_left(&mut self) {
+        self.anchor = None;
         if let Some(paste) = self.paste_ending_at(self.cursor) {
             self.cursor = paste.range.start;
             self.column = None;
@@ -571,6 +660,7 @@ impl Composer {
     }
 
     pub fn move_word_right(&mut self) {
+        self.anchor = None;
         let mut at = self.cursor;
         if let Some(paste) = self.paste_starting_at(at) {
             at = paste.range.end;
@@ -598,7 +688,26 @@ impl Composer {
 
     // ---- deletion -----------------------------------------------------
 
+    fn erase_selection(&mut self) {
+        if let Some(range) = self.selection() {
+            self.erase_range(range);
+        }
+        self.anchor = None;
+    }
+
+    pub fn delete_selection(&mut self) -> bool {
+        let Some(range) = self.selection() else {
+            return false;
+        };
+        self.commit();
+        self.delete_range(range, true);
+        true
+    }
+
     pub fn backspace(&mut self) {
+        if self.delete_selection() {
+            return;
+        }
         if self.cursor == 0 {
             return;
         }
@@ -612,6 +721,9 @@ impl Composer {
     }
 
     pub fn delete(&mut self) {
+        if self.delete_selection() {
+            return;
+        }
         self.commit();
         if self.cursor >= self.text.len() {
             return;
@@ -626,6 +738,9 @@ impl Composer {
     }
 
     pub fn delete_word_left(&mut self) {
+        if self.delete_selection() {
+            return;
+        }
         self.commit();
         let end = self.cursor;
         self.move_word_left();
@@ -636,6 +751,9 @@ impl Composer {
 
     /// Deletes to the end of the next word, or a whole chip.
     pub fn delete_word_right(&mut self) {
+        if self.delete_selection() {
+            return;
+        }
         self.commit();
         let start = self.cursor;
         let blank = |from: usize, to: usize| self.text[from..to].chars().all(char::is_whitespace);
@@ -657,6 +775,9 @@ impl Composer {
     }
 
     pub fn delete_to_line_start(&mut self) {
+        if self.delete_selection() {
+            return;
+        }
         self.commit();
         let end = self.cursor;
         let start = self.line_start(self.cursor_position().0);
@@ -665,6 +786,9 @@ impl Composer {
     }
 
     pub fn delete_to_line_end(&mut self) {
+        if self.delete_selection() {
+            return;
+        }
         self.commit();
         let start = self.cursor;
         let end = self.line_end(self.cursor_position().0);
@@ -681,6 +805,11 @@ impl Composer {
         if snapshot {
             self.snapshot();
         }
+        self.erase_range(range);
+        self.commit();
+    }
+
+    fn erase_range(&mut self, range: Range<usize>) {
         let mut start = range.start;
         let mut end = range.end;
         for paste in &self.pastes {
@@ -701,8 +830,8 @@ impl Composer {
             }
         }
         self.cursor = self.cursor.min(start);
+        self.anchor = None;
         self.column = None;
-        self.commit();
     }
 
     // ---- prompt history -----------------------------------------------
@@ -751,6 +880,7 @@ impl Composer {
         self.text = entry.text;
         self.version += 1;
         self.cursor = self.text.len();
+        self.anchor = None;
         self.pastes = entry.pastes;
         self.column = None;
     }

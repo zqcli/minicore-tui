@@ -182,6 +182,10 @@ pub struct App {
     /// Settings requested on the command line, used once by the first session.
     pub launch: LaunchSettings,
     pub composer: composer::Composer,
+    /// Editor-only hit area from the last frame (not completion/sheet rows).
+    pub composer_area: ratatui::layout::Rect,
+    pub composer_max_rows: usize,
+    pub composer_dragging: bool,
     pub notices: VecDeque<Notice>,
     pub scroll: Scroll,
     pub tools_expanded: bool,
@@ -251,6 +255,9 @@ impl App {
             profiles: Vec::new(),
             launch: LaunchSettings::default(),
             composer: composer::Composer::new(),
+            composer_area: ratatui::layout::Rect::default(),
+            composer_max_rows: crate::ui::composer::MIN_ROWS,
+            composer_dragging: false,
             notices: VecDeque::new(),
             scroll: Scroll::Follow,
             tools_expanded: false,
@@ -351,10 +358,9 @@ impl App {
         self.flash = self.flash.take().filter(|(_, at)| at.elapsed() < FLASH_TTL);
         self.scrolled_at = self.scrolled_at.filter(|at| at.elapsed() < FLASH_TTL);
         self.watch_context();
-        self.refresh_running_cards();
     }
 
-    /// Whether the Working line or a running card changes with every frame.
+    /// Whether the Working line's spinner changes with every frame.
     pub fn animating(&self) -> bool {
         self.status_label().is_some()
     }

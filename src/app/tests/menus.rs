@@ -283,6 +283,7 @@ async fn allowing_a_tool_for_the_session_answers_its_later_approvals_itself() {
         h.screen(100, 24).contains("allow bash"),
         "the footer says so"
     );
+    assert_eq!(footer_fg(&mut h, "allow bash"), Palette::dark().amber);
 
     ask(&mut h, "i3", "write").await;
     assert!(h.app.has_interaction(), "another tool still asks");
@@ -311,9 +312,7 @@ async fn the_third_row_allows_the_tool_for_the_session() {
 
 fn buffer(h: &mut Harness, width: u16, height: u16) -> Buffer {
     let mut terminal = ratatui::Terminal::new(TestBackend::new(width, height)).unwrap();
-    terminal
-        .draw(|frame| crate::ui::draw(frame, &mut h.app))
-        .unwrap();
+    crate::terminal::draw_frame(&mut terminal, |frame| crate::ui::draw(frame, &mut h.app)).unwrap();
     terminal.backend().buffer().clone()
 }
 
@@ -328,7 +327,7 @@ fn footer_fg(h: &mut Harness, word: &str) -> Color {
 }
 
 #[tokio::test(start_paused = true)]
-async fn the_footer_names_an_asking_profile_and_an_approval_in_amber() {
+async fn profile_and_approval_stay_out_of_the_footer_but_approval_is_visible() {
     let mut h = Harness::new();
     script_turn(&h);
     h.fake.script("interaction.answer", json!({"ok": true}));
@@ -343,13 +342,25 @@ async fn the_footer_names_an_asking_profile_and_an_approval_in_amber() {
     h.submit("work");
     h.until(|app| app.is_busy()).await;
     let footer = h.screen(100, 30).lines().last().unwrap().to_owned();
-    assert!(footer.contains("medium · ask · working"), "{footer}");
+    assert!(footer.contains("mock · medium"), "{footer}");
+    assert!(
+        !footer.contains("ask") && !footer.contains("working"),
+        "{footer}"
+    );
 
     ask(&mut h, "i1", "bash").await;
-    let footer = h.screen(100, 30).lines().last().unwrap().to_owned();
-    assert!(footer.contains("medium · ask · approval"), "{footer}");
+    let screen = h.screen(100, 30);
+    let footer = screen.lines().last().unwrap();
+    assert!(footer.contains("mock · medium"), "{footer}");
+    assert!(
+        !footer.contains("ask") && !footer.contains("approval"),
+        "{footer}"
+    );
     assert!(!footer.contains("working"), "{footer}");
-    assert_eq!(footer_fg(&mut h, "approval"), Palette::dark().amber);
+    assert!(screen.contains("Waiting for approval"), "{screen}");
+    assert!(screen.contains("Allow bash?"), "{screen}");
+    assert!(h.app.has_interaction(), "approval is still required");
+    assert_eq!(h.app.session.as_ref().unwrap().info.profile, "ask");
 }
 
 #[tokio::test(start_paused = true)]
@@ -378,9 +389,9 @@ async fn a_narrow_footer_cuts_the_directory_and_keeps_the_model_and_level() {
         let screen = h.screen(columns, 24);
         let footer = screen.lines().last().unwrap();
         assert!(footer.contains("mock · medium"), "{columns}: {footer}");
-        assert!(footer.contains("working"), "{columns}: {footer}");
+        assert!(!footer.contains("working"), "{columns}: {footer}");
     }
-    let screen = h.screen(60, 24);
+    let screen = h.screen(40, 24);
     let footer = screen.lines().last().unwrap();
     assert!(footer.contains("▸ live-"), "{footer}");
     assert!(footer.contains('…'), "{footer}");

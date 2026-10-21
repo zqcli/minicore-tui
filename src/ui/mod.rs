@@ -19,7 +19,7 @@ pub mod views;
 
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
+use ratatui::layout::{Position, Rect};
 use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::widgets::Widget;
@@ -30,12 +30,14 @@ use crate::wrap;
 
 use self::theme::Styles;
 
-/// Draws one frame. Fatal errors take the whole screen.
-pub fn draw(frame: &mut Frame, app: &mut App) {
+/// Draws one frame and returns the caret to `terminal::draw_frame`.
+/// Fatal errors take the whole screen. The terminal owns cursor visibility.
+pub fn draw(frame: &mut Frame, app: &mut App) -> Option<Position> {
     let area = frame.area();
+    app.composer_area = Rect::default();
     if let Some(fatal) = &app.fatal {
         draw_fatal(frame, area, fatal);
-        return;
+        return None;
     }
     let styles = app.styles;
     let sheet = sheets::sheet(app, styles);
@@ -81,7 +83,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let slot_area = gutter(slot_area);
     if let Some(sheet) = sheet {
         panel::render(frame, slot_area, styles, &sheet);
-        return;
+        return None;
     }
     draw_rows(frame, slot_area, &dock.editor);
     // The composer has the keys while no view or picker does; a completion
@@ -91,11 +93,17 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         Overlay::None | Overlay::Palette { .. } | Overlay::Files { .. }
     ) && slot_area.height > 0
     {
-        frame.set_cursor_position((
-            slot_area.x + dock.cursor.1,
-            slot_area.y + dock.cursor.0.min(slot_area.height - 1),
-        ));
+        app.composer_max_rows = composer::max_rows(area.height);
+        app.composer_area = Rect {
+            height: slot_area.height.min(dock.editor_rows),
+            ..slot_area
+        };
+        return Some(Position {
+            x: (slot_area.x + dock.cursor.1).min(area.right().saturating_sub(1)),
+            y: slot_area.y + dock.cursor.0.min(slot_area.height - 1),
+        });
     }
+    None
 }
 
 /// `area` without the left gutter column, which the dock never paints.

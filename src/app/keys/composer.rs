@@ -33,6 +33,54 @@ impl App {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
         let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+        if shift {
+            let moved = match key.code {
+                KeyCode::Left => {
+                    self.composer.move_selection(true, |c| {
+                        if ctrl || alt {
+                            c.move_word_left();
+                        } else {
+                            c.move_left();
+                        }
+                    });
+                    true
+                }
+                KeyCode::Right => {
+                    self.composer.move_selection(true, |c| {
+                        if ctrl || alt {
+                            c.move_word_right();
+                        } else {
+                            c.move_right();
+                        }
+                    });
+                    true
+                }
+                KeyCode::Home => {
+                    self.composer.move_selection(true, |c| c.move_home());
+                    true
+                }
+                KeyCode::End => {
+                    self.composer.move_selection(true, |c| c.move_end());
+                    true
+                }
+                KeyCode::Up if !ctrl && !alt => {
+                    self.composer.move_selection(true, |c| {
+                        c.move_up();
+                    });
+                    true
+                }
+                KeyCode::Down if !ctrl && !alt => {
+                    self.composer.move_selection(true, |c| {
+                        c.move_down();
+                    });
+                    true
+                }
+                _ => false,
+            };
+            if moved {
+                return None;
+            }
+        }
         if !matches!(key.code, KeyCode::Char('c') if ctrl) {
             self.quit_armed = None;
         }
@@ -41,7 +89,14 @@ impl App {
             KeyCode::Enter if shift => self.composer.newline(),
             KeyCode::Enter => return self.submit_or_command(),
             KeyCode::Char('j') if ctrl => self.composer.newline(),
+            KeyCode::Esc if self.composer.selection().is_some() => self.composer.clear_selection(),
             KeyCode::Esc => self.escape(),
+            KeyCode::Char('c') if ctrl && self.composer.selection().is_some() => {
+                if let Some(text) = self.composer.selected_text() {
+                    self.copy(text.to_owned());
+                }
+                self.quit_armed = None;
+            }
             KeyCode::Char('c') if ctrl => {
                 let now = tokio::time::Instant::now();
                 if self.quit_armed.is_some_and(|at| now - at <= QUIT_WINDOW) {
@@ -61,6 +116,12 @@ impl App {
                 self.composer.delete();
             }
             KeyCode::Char('g') if ctrl => return Some(Action::EditDraft),
+            KeyCode::Char('x') if ctrl && self.composer.selection().is_some() => {
+                if let Some(text) = self.composer.selected_text() {
+                    self.copy(text.to_owned());
+                }
+                self.composer.delete_selection();
+            }
             KeyCode::Char('x') if ctrl => return Some(Action::CopyLastAnswer),
             KeyCode::Char('o') if ctrl => {
                 self.tools_expanded = !self.tools_expanded;
@@ -158,7 +219,15 @@ impl App {
     /// A terminal paste. The composer decides whether the payload becomes a
     /// single token; a pasted `/name` opens the command list like typing does.
     pub fn on_paste(&mut self, text: &str) {
-        if self.has_interaction() {
+        if self.has_interaction()
+            || self.fatal.is_some()
+            || !matches!(
+                self.overlay,
+                crate::app::Overlay::None
+                    | crate::app::Overlay::Palette { .. }
+                    | crate::app::Overlay::Files { .. }
+            )
+        {
             return;
         }
         self.composer.insert(text);

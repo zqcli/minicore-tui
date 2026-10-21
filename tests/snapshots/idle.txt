@@ -14,7 +14,7 @@
    completed in 12s · 2 requests · 1 tool · 2 files changed (+40 −7)
 
  ▎
- ▎Ask anything · / commands · @ files
+ ▎
  ▎
  ▎
  ▸ minicore-tui · gpt 6 luna · max · 0m

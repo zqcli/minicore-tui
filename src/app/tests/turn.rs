@@ -103,7 +103,7 @@ async fn a_turn_streams_tool_facts_and_ends_on_its_wait() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_tick_redraws_only_the_running_cards() {
+async fn a_tick_keeps_tool_cards_cached_until_a_tool_event_changes_them() {
     let mut h = Harness::opened(display_read(0, 0)).await;
     h.fake.script("turn.send", json!({"turn": turn("l1")}));
     h.fake.script_held("turn.wait", waited("l1", completed()));
@@ -154,7 +154,23 @@ async fn a_tick_redraws_only_the_running_cards() {
         .map(|(at, _)| at)
         .collect();
     assert_eq!(running.len(), 1, "c1 finished, c2 runs");
-    assert_eq!(changed, running);
+    assert!(changed.is_empty(), "no tool animations: {changed:?}");
+
+    h.emit(
+        "tool_finished",
+        json!({"turn": turn("l1"), "request_index": 0, "tool_call_id": "c2",
+               "result": {"outcome": "success", "content_bytes": 0}}),
+    )
+    .await;
+    h.settle().await;
+    let after_event = revisions(&h);
+    let changed: Vec<usize> = (0..after.len())
+        .filter(|&at| after[at] != after_event[at])
+        .collect();
+    assert_eq!(
+        changed, running,
+        "real tool updates still invalidate the card"
+    );
 }
 
 #[tokio::test(start_paused = true)]

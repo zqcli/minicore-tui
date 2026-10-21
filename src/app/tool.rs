@@ -108,28 +108,6 @@ impl App {
         self.call(protocol::METHOD_TOOL_READ, fields, wrap);
     }
 
-    /// Marks the running cards changed so their spinner and timer follow the clock.
-    pub(super) fn refresh_running_cards(&mut self) {
-        let Some(session) = self.session.as_mut() else {
-            return;
-        };
-        let Some(start) = session.live.as_ref().map(|live| live.start) else {
-            return;
-        };
-        let running: Vec<usize> = session
-            .transcript
-            .blocks()
-            .iter()
-            .enumerate()
-            .skip(start)
-            .filter(|(_, block)| matches!(block, Block::Tool(call) if call.is_running()))
-            .map(|(index, _)| index)
-            .collect();
-        for index in running {
-            session.transcript.block_mut(index);
-        }
-    }
-
     /// `[` / `]` in the tool view: the previous or next tool card.
     pub fn step_tool(&mut self, delta: isize) {
         let Overlay::Tool(tool) = &self.overlay else {

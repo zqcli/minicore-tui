@@ -63,9 +63,10 @@ impl Bench {
 
     fn draw(&mut self) -> Duration {
         let start = Instant::now();
-        self.terminal
-            .draw(|frame| crate::ui::draw(frame, &mut self.app))
-            .expect("draw");
+        crate::terminal::draw_frame(&mut self.terminal, |frame| {
+            crate::ui::draw(frame, &mut self.app)
+        })
+        .expect("draw");
         start.elapsed()
     }
 
