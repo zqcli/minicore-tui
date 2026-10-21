@@ -41,10 +41,18 @@ Edits and selection replacements support undo/redo.
 
 Cursor movement and deletion respect whole graphemes and treat a paste token as
 one unit. With no selection, `Esc` while busy only interrupts; it does not clear
-the draft. The editor requests a non-blinking block cursor on compatible
-terminals and restores the terminal default on exit or external-editor handoff.
-See [terminal and editor fixes](terminal-editor-fixes.md) for platform details
-and the limits of legacy paste detection.
+the draft. Copying or cutting a selection drops it, so `Ctrl+C` can quit again;
+a cut too large for the clipboard is refused and leaves the text. With no draft,
+`Shift+Home` and `Shift+End` scroll like `Home` and `End`. Selecting in a
+recalled prompt keeps the draft that `↓` returns to. The editor requests a
+non-blinking block cursor and restores the terminal default on exit or
+external-editor handoff.
+
+On Windows the console reports a bracketed paste as its keys, so the TUI decodes
+the markers itself; a paste whose end marker does not come within a second is
+taken as it is. Unbracketed text that ends with Enter and arrives within 30 ms
+counts as one paste, which delays typed keys by that much on Windows only. A
+paste slower than that is indistinguishable from typing.
 
 ## Transcript and global keys
 
@@ -73,12 +81,12 @@ are above the bottom. `End` or scrolling to the bottom resumes following the tai
 | Gesture | Action |
 |---|---|
 | Wheel | Scroll one row per notch, five with `Alt`. With a view open it scrolls that view (help three rows per notch, diff, tool output; the context view does not scroll); over a picker it moves the selection. It never scrolls the transcript behind them. |
-| Click a tool card's header row | Toggle that card. |
+| Click a tool card's header row | Toggle that card. The view stays where it is, except on a card of the running turn, where it keeps following the tail. |
 | Click a card's `click for full output` row | Open the tool view. Expanded cards end in this row; so does a card reloaded from history, whose row reads `… N lines · click for full output`. |
 | Click a turn-end line | Open the diff view for that turn. |
 | Click in the editor | Place the caret at a grapheme or paste-chip boundary, respecting wrapping, padding and editor scrolling. |
 | Drag in the editor | Select draft text; releasing keeps it highlighted without copying transcript text. Typing replaces it; `Ctrl+C` copies it. Moving outside the editor reaches adjacent rows and scrolls the draft. |
-| Shift+click in the editor | Extend the selection from its fixed anchor. |
+| Shift+click in the editor | Extend the selection from its fixed anchor. Many terminals keep Shift+click for their own selection and never send it. |
 | Drag in the transcript | Select transcript text; releasing copies it. |
 
 Editor clicks are accepted while an inline command or file completion list is

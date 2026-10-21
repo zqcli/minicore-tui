@@ -7,16 +7,14 @@
 - Paint with the hardware cursor hidden, position the editor caret before showing
   it, and leave the cursor hidden when painting or positioning fails. This
   prevents stray cursors beside the Working spinner and changing timer digits.
-- On Windows ANSI/VT output, buffer the complete frame and bracket its single
-  physical submission with synchronized-update sequences. Keep legacy Windows
-  and non-Windows output on their existing paths; actual synchronization depends
-  on terminal support. Preserve this mitigation independently of cursor blinking.
-- Request a steady block cursor on compatible terminals, restoring the terminal
-  default on exit, panic cleanup and external-editor handoff.
+- On a Windows console that speaks ANSI, a frame is written in one flush inside a
+  synchronized update. Other terminals and the legacy Windows console flush as
+  before.
+- Request a steady block cursor, restoring the terminal default on exit, panic
+  cleanup and external-editor handoff.
 - Bundle IANA time-zone data on platforms without system zoneinfo, notably
   Windows, so user-message timestamps use the system zone instead of silently
-  falling back to UTC. Include concatenated zoneinfo support and test local date
-  rollover and daylight saving through the production rendering path.
+  falling back to UTC. Linux and macOS keep reading the system zoneinfo.
 
 ### Composer and paste
 
@@ -24,14 +22,20 @@
   selections with Shift+arrows or Shift+Home/End. Word modifiers select by word;
   graphemes and paste chips remain atomic across wrapping and scrolling.
 - Replace selections by typing, pasting or inserting newlines; delete and
-  undo/redo selections. Ctrl+C copies a selection and Ctrl+X cuts it, preserving
-  their previous behavior when no selection exists.
-- Decode raw bracketed-paste markers in addition to native Paste events, keeping
-  embedded commands and trailing newlines in the draft. On Windows console-record
-  input only, use a 30 ms quiet-window fallback for unframed multiline bursts.
-  Arbitrarily slow unframed input remains indistinguishable from manual typing.
+  undo/redo selections. Ctrl+C copies a selection and Ctrl+X cuts it, then drop
+  it, so a second Ctrl+C quits again; a cut the clipboard would refuse keeps the
+  text. Without a selection both keep their previous meaning.
+- Selecting inside a recalled prompt no longer loses the draft `↓` returns to,
+  and Shift+Home/End with no draft scroll like Home/End again.
+- On Windows the console reports a bracketed paste as its keys; the markers are
+  decoded so embedded commands, Ctrl+J and trailing newlines stay draft text, and
+  a paste whose end marker never comes is released after a second instead of
+  swallowing all input. Unbracketed multiline bursts within 30 ms count as one
+  paste. Linux and macOS pass crossterm's paste events through with no delay.
 - Keep editor hit targets and paste input out of full-screen views, approval
   sheets and completion rows.
+- Clicking a card of the running turn no longer pins the view, so its new
+  output stays above the Working row instead of growing out of sight.
 
 ### UI simplification
 
@@ -41,7 +45,6 @@
   still refresh them. Preserve the main Working spinner, completed tool durations,
   footer elapsed/model/reasoning/usage/context, queue and allowed-tool indicators,
   and all actual profile and approval behavior.
-
 
 ## 0.5.1 — 2026-10-21
 

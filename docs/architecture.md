@@ -116,7 +116,8 @@ missing binary or a bad configuration stays an ordinary terminal error. It then
 starts `tasks::bootstrap` (ping, capability check, models, profiles, sessions)
 and loops on one `biased` `select!`: Agent events, `Msg` values from tasks,
 terminal input (a task forwards crossterm's `EventStream`; polling it from the
-loop costs about 15 `sched_yield` calls per turn), an 80 ms tick (one spinner
+loop costs about 15 `sched_yield` calls per turn; on Windows the task decodes
+bracketed paste first, see `terminal/input.rs`), an 80 ms tick (one spinner
 frame, armed only while a turn or compaction animates; a flash, the scrollbar or
 an info notice sleeps until it expires instead) and the frame deadline (armed
 only while dirty). A frame is drawn at
@@ -316,8 +317,8 @@ the history length.
   with no reply yet it shows the newest three under an `earlier` hint instead.
 - **Cards.** Tool output is a bounded tail (400 lines, 64 KiB) while a turn runs;
   when it ends (and for any card read from history) a card keeps the 200 rows an
-  expanded one shows. A collapsed card is a title row with its facts (a running
-  card's spinner and timer, duration, exit code, `+a −b`), the call's detail, a
+  expanded one shows. A collapsed card is a title row with its facts (duration,
+  exit code, `+a −b`; a running card has none), the call's detail, a
   failure's first line and a `... (N lines, click or ctrl+o to expand)` hint;
   the rest is in the tool view. A reloaded card shows `… N lines · click for
   full output` from the line count in its summary; that row (or `/tool`) opens
@@ -330,6 +331,11 @@ the history length.
   label, and a scrollbar overlays the right column for a second after a scroll.
 - **Text.** Agent and tool text passes `wrap::sanitize` (control characters and
   ANSI removed) before layout; wrapping never splits a grapheme.
+
+A frame is painted with the cursor hidden and shows it only once it sits at the
+editor caret (`terminal::draw_frame`). On a Windows console that speaks ANSI,
+`terminal/windows_frames.rs` collects the frame and writes it in one flush inside
+a synchronized update, because the console shows every flush.
 
 The transcript and the bottom band leave column 0 as a gutter. The band is plain
 rows so the editor can grow: queue rows, the Working line (busy only), the
