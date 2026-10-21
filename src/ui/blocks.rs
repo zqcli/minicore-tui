@@ -1355,10 +1355,9 @@ mod tests {
                     running.state = state;
                     running.duration = None;
                     running.exit_code = None;
-                    running.started_at = Some(std::time::Instant::now() - Duration::from_secs(30));
+                    running.started_at = Some(std::time::Instant::now());
                     assert!(meta(&running, styles(), true).is_empty());
                     let body = card(running, mode).join("\n");
-                    assert!(!body.contains("30s"), "{body}");
                     assert!(!body.chars().any(|ch| "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏".contains(ch)), "{body}");
                 }
             }

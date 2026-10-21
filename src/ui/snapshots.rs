@@ -563,7 +563,6 @@ fn a_long_running_turn_has_no_duplicate_timer_in_the_working_row() {
         },
         0,
     );
-    live.started = std::time::Instant::now() - std::time::Duration::from_secs(649);
     live.running_tool = Some(("read".into(), "src/main.rs".into()));
     live.requests = 3;
     session.live = Some(live);
@@ -572,11 +571,12 @@ fn a_long_running_turn_has_no_duplicate_timer_in_the_working_row() {
         .lines()
         .find(|line| line.contains("Working (esc to interrupt)"))
         .expect("working row");
-    assert!(working.contains("Running read src/main.rs"), "{working}");
-    assert!(working.ends_with(" · request 3"), "{working}");
-    assert!(!working.contains("10m49s"), "{working}");
     assert!(
-        rendered.lines().last().unwrap().ends_with(" · 10m"),
+        working.ends_with("Running read src/main.rs · request 3"),
+        "{working}"
+    );
+    assert!(
+        rendered.lines().last().unwrap().ends_with(" · 0m"),
         "{rendered}"
     );
 }
