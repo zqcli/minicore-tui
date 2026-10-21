@@ -25,7 +25,7 @@ approval = \"ask\"        # ask | auto | read_only
 # editor = [\"code\", \"--wait\"]     # default: $VISUAL, then $EDITOR
 
 # [agent]
-# binary = \"bin/minicore-agent\"   # default: that file if present, else PATH
+# binary = \"bin/minicore-agent\"   # an external Agent; default: the built-in one
 
 # [compaction]                    # Agent defaults shown
 # enabled = true

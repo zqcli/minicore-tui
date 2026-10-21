@@ -75,7 +75,7 @@ impl Default for Ui {
 #[derive(Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AgentSection {
-    /// Relative to the TUI directory.
+    /// An external Agent, relative to the TUI directory.
     pub binary: Option<PathBuf>,
 }
 

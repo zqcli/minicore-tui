@@ -15,7 +15,7 @@ Resolved in this order:
 1. `--home DIR`
 2. `$MINICORE_HOME`
 3. the directory of the running executable, or its parent when that directory is
-   named `bin`. A release bundle (`bin/minicore-tui`, `bin/minicore-agent`) is
+   named `bin`. A release bundle (`bin/minicore-tui`, the Agent built in) is
    therefore self-contained, with no flag or variable.
 
 On Linux the executable path is the resolved one, so a symlink in `bin/` leads
@@ -31,7 +31,7 @@ to the symlink's target directory; use `--home` or `MINICORE_HOME` there.
   session/                   the Agent's data_dir: all sessions and Agent stores
     agent.toml               generated Agent config (mode 0600), rewritten each start
   history.jsonl              prompt history (↑ in the composer)
-  bin/minicore-agent         optional bundled Agent
+  bin/minicore-tui           the executable in a release bundle, Agent included
 ```
 
 `history.jsonl` stays outside `session/` on purpose: it belongs to the composer,
@@ -60,7 +60,9 @@ Before the terminal switches to the alternate screen the TUI:
 4. writes `session/agent.toml` atomically (mode 0600) with
    `system_prompt = { file = … }` pointing at the absolute prompt path, so the
    Agent reads the prompt itself;
-5. starts `minicore-agent --config <home>/session/agent.toml --stdio`.
+5. starts the built-in Agent, `minicore-tui agent --config
+   <home>/session/agent.toml --stdio`, or the external one from `--agent` or
+   `[agent] binary`.
 
 Errors name the file, the line when the parser knows it, and the key, and exit
 with status 2 before any screen change:
@@ -149,8 +151,8 @@ bell = true                        # ring when a long turn ends or waits for app
 editor = ["code", "--wait"]        # Ctrl+G; default $VISUAL, then $EDITOR
 
 [agent]
-binary = "bin/minicore-agent"      # relative to the TUI directory (or absolute);
-                                   # default: that file if present, else minicore-agent on PATH
+binary = "bin/minicore-agent"      # an external Agent, relative to the TUI directory
+                                   # (or absolute); default: the built-in Agent
 
 [compaction]                       # Agent-wide; unset keys keep the Agent's defaults
 enabled = true
@@ -176,7 +178,7 @@ instead of being ignored.
 | Option | Meaning |
 | --- | --- |
 | `--home DIR` | the TUI directory (see above) |
-| `--agent BIN` | Agent executable; beats `[agent] binary` |
+| `--agent BIN` | an external Agent executable instead of the built-in one; beats `[agent] binary` |
 | `--agent-config FILE` | use this Agent config as is: no composition, no first-run files, no `models.toml`. `config.toml` is still read for `[ui]` if it exists. For tests and advanced use. |
 | `--profile ID`, `--model ID`, `--reasoning LEVEL` | settings of a new session |
 | `--theme dark\|light` | theme for this run |

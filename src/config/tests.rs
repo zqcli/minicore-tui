@@ -370,24 +370,20 @@ fn a_raw_agent_config_skips_composition_and_first_run() {
     assert_eq!(launch.agent_config, raw);
     assert!(!launch.composed);
     assert!(!home.config_file().exists() && !home.session_dir().exists());
-    assert_eq!(launch.agent_binary, Path::new("minicore-agent"));
+    assert_eq!(launch.agent_binary, None);
 }
 
 #[test]
-fn the_agent_binary_is_the_flag_then_the_setting_then_the_bundled_one() {
+fn the_agent_binary_is_the_flag_then_the_setting_then_the_built_in_one() {
     let dir = tempfile::tempdir().unwrap();
     let home = Home(dir.path().to_path_buf());
-    assert_eq!(agent_binary(&home, None, None), Path::new("minicore-agent"));
-    let bundled = dir
-        .path()
-        .join("bin")
-        .join(format!("minicore-agent{}", std::env::consts::EXE_SUFFIX));
+    // A leftover bundled agent from an older package is not picked up.
     std::fs::create_dir(dir.path().join("bin")).unwrap();
-    std::fs::write(&bundled, "").unwrap();
-    assert_eq!(agent_binary(&home, None, None), bundled);
+    std::fs::write(dir.path().join("bin/minicore-agent"), "").unwrap();
+    assert_eq!(agent_binary(&home, None, None), None);
     assert_eq!(
         agent_binary(&home, None, Some("other/agent".into())),
-        dir.path().join("other/agent")
+        Some(dir.path().join("other/agent"))
     );
     assert_eq!(
         agent_binary(
@@ -395,7 +391,7 @@ fn the_agent_binary_is_the_flag_then_the_setting_then_the_bundled_one() {
             Some(Path::new("/x/agent")),
             Some("other/agent".into())
         ),
-        Path::new("/x/agent")
+        Some(PathBuf::from("/x/agent"))
     );
 }
 

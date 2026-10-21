@@ -3,7 +3,7 @@ name = "minicore-tui"
 version = "0.5.1"
 edition = "2024"
 rust-version = "1.88.0"
-description = "A pi-style coding agent TUI frontend for minicore-agent over stdio JSON-RPC"
+description = "A pi-style coding agent TUI with minicore-agent built in, spoken to over stdio JSON-RPC"
 license = "MIT OR Apache-2.0"
 keywords = ["tui", "ratatui", "coding-agent", "jsonrpc"]
 categories = ["command-line-utilities"]
@@ -12,6 +12,8 @@ categories = ["command-line-utilities"]
 base64 = "0.22"
 crossterm = { version = "0.29", features = ["event-stream"] }
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
+# The Agent is built in and runs as this executable's `agent` subcommand.
+minicore-agent = { git = "https://github.com/zqcli/minicore-agent", rev = "141396f6d7a85f0675b05f49a18b92b2ba96a78f", version = "0.7.2" }
 jiff = { version = "0.2", default-features = false, features = ["std", "tz-system", "tzdb-zoneinfo", "tzdb-concatenated", "tzdb-bundle-platform"] }
 pulldown-cmark = { version = "0.13", default-features = false }
 ratatui = { version = "0.30", default-features = false, features = ["crossterm"] }

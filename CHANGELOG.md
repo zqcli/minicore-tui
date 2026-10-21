@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### One executable
+
+- The Agent is built into `minicore-tui`: the TUI starts itself as
+  `minicore-tui agent --config … --stdio` and still talks to it over stdio
+  JSON-RPC, so the process boundary, stderr capture and protocol checks are
+  unchanged. Packages hold only `bin/minicore-tui`.
+- `--agent` and `[agent] binary` now name an external Agent to run instead of
+  the built-in one; there is no `bin/minicore-agent` or `PATH` lookup any more.
+- Built-in backend: Agent 0.7.2 (`141396f`) with Runtime 0.7.1 (`c0181d1`).
+
 ### Terminal rendering and local time
 
 - Paint with the hardware cursor hidden, position the editor caret before showing

@@ -8,10 +8,12 @@ file gets fixed.
 ## What This Project Is
 
 `minicore-tui` is a fullscreen terminal frontend (Rust, ratatui + crossterm) for
-[minicore-agent](https://github.com/zqcli/minicore-agent). It spawns one Agent
-child and talks to it over stdio NDJSON JSON-RPC (Protocol v1). It links
-neither `minicore-agent` nor `minicore-runtime`, never reads the Agent store or
-the workspace, runs no tool, calls no provider and holds no credential. Its look
+[minicore-agent](https://github.com/zqcli/minicore-agent). The Agent is built
+into the same executable: the TUI starts itself as `minicore-tui agent` in one
+child process and talks to it over stdio NDJSON JSON-RPC (Protocol v1). The RPC
+contract is the only interface; the only Agent Rust API used is
+`minicore_agent::cli::run` for that subcommand. The TUI never reads the Agent
+store or the workspace, runs no tool, calls no provider and holds no credential. Its look
 follows pi's rail UI: rails, tinted cards, a dock with the Working line, the
 editor and a footer.
 
@@ -26,7 +28,7 @@ backend repository only after confirming that is where the behavior belongs.
 
 | Path | Responsibility |
 |---|---|
-| `src/main.rs` | Startup, Agent spawn, terminal guard, the `select!` main loop, frame pacing |
+| `src/main.rs` | The `agent` subcommand, startup, Agent spawn, terminal guard, the `select!` main loop, frame pacing |
 | `src/config/` | The TUI directory: `config.toml`, `models.toml`, prompts, scaffolding, the composed Agent config |
 | `src/rpc.rs`, `src/protocol/` | Agent child and JSON-RPC client; serde DTOs and constants only |
 | `src/app/` | The reducer: all mutable state, keys (`keys/`), mouse, selection, composer, overlays, async tasks |
@@ -37,7 +39,7 @@ backend repository only after confirming that is where the behavior belongs.
 | `src/app/tests/` | Reducer tests through `FakeAgent` with paused time |
 | `src/ui/snapshots.rs`, `tests/snapshots/` | `TestBackend` frame tests and checked-in frames |
 | `src/ui/perf_tests.rs` | Frame-cost benches (`#[ignore]`) |
-| `tests/local_timezone.rs` | Integration test of the production local-time path |
+| `tests/local_timezone.rs`, `tests/built_in_agent.rs` | Integration tests: the production local-time path; the built-in Agent serving a composed config |
 | `docs/` | `architecture.md` (modules and invariants), `configuration.md`, `keybindings.md`; `design-v0.4.md` is historical |
 
 Dependency direction: `protocol` ← `rpc` ← `transcript` ← `app` ← `ui`. `ui`
@@ -128,8 +130,9 @@ Keep these unless the user asks to change them:
 - Platform-neutral fixtures: no Windows reserved names (`nul`, `con`, `aux`),
   no hard-coded `/` paths in expectations, LF endings for byte-compared files
   (`.gitattributes`), and no non-UTF-8 file names outside Linux-only tests.
-- Snapshot changes are reviewed as diffs of `tests/snapshots/*.txt`. Tests
-  never need a real Agent, provider or credential; real-model runs are manual.
+- Snapshot changes are reviewed as diffs of `tests/snapshots/*.txt`. Only
+  `tests/built_in_agent.rs` starts the real Agent, and no test needs a provider
+  or credential; real-model runs are manual.
 
 ## Docs
 
@@ -141,15 +144,17 @@ to it. Do not rewrite released changelog sections.
 
 ## Backends, CI And Releases
 
-- `.github/workflows/ci.yml` pins the Agent and Runtime by full SHA in its
-  top-level `env` (`AGENT_REV`, `RUNTIME_REV`). Move both when a backend
-  release is adopted, and update the README backend contract line.
-- CI uploads a package per platform (`minicore-tui-<version>-<target>`) holding
-  `bin/minicore-tui` and the pinned `bin/minicore-agent`.
+- `Cargo.toml` pins `minicore-agent` by the full SHA of its release tag;
+  `Cargo.lock` then fixes the Runtime the Agent pins. To adopt an Agent
+  release, move the `rev` and `version`, let Cargo update only the Agent and
+  Runtime entries (the Agent's exact `=` pins may force a few shared crates
+  down), and update the README backend line.
+- CI tests on Linux, macOS and Windows (MSRV and stable) and uploads a package
+  per platform (`minicore-tui-<version>-<target>`) holding `bin/minicore-tui`,
+  with `BUILD.txt` naming the three revisions.
 - A release bumps `version` in `Cargo.toml` and the `minicore-tui` entry in
-  `Cargo.lock` only, moves `Unreleased` to the version in `CHANGELOG.md`, and
-  updates tests that show the version in the welcome header. Tag `vX.Y.Z`
-  (annotated) only after CI is green on that commit.
+  `Cargo.lock` only, and moves `Unreleased` to the version in `CHANGELOG.md`.
+  Tag `vX.Y.Z` (annotated) only after CI is green on that commit.
 
 ## Commits
 

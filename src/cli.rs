@@ -10,13 +10,14 @@ pub const USAGE: &str = "\
 minicore-tui — a pi-style coding agent TUI for minicore-agent
 
 Usage: minicore-tui [OPTIONS]
+       minicore-tui agent --config <FILE> --stdio   (the built-in Agent the TUI starts)
 
 Options:
   --home <DIR>           TUI directory: config.toml, models.toml, prompt/, session/
                          [default: $MINICORE_HOME, else the executable's directory,
                          or its parent when that is named bin]
-  --agent <BIN>          minicore-agent executable [default: [agent] binary in
-                         config.toml, else <home>/bin/minicore-agent, else PATH]
+  --agent <BIN>          run this external minicore-agent instead of the built-in
+                         one [default: [agent] binary in config.toml, if set]
   --agent-config <FILE>  use this Agent config as is; skips config.toml, models.toml
                          and the first-run files (for tests and advanced use)
   --workspace <DIR>      workspace for a new session [default: cwd]

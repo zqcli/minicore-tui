@@ -13,7 +13,7 @@ use minicore_tui::app::{App, Msg};
 use minicore_tui::cli::{Args, USAGE};
 use minicore_tui::config::{self, Home, Prepared, Request};
 use minicore_tui::protocol::SessionInfo;
-use minicore_tui::rpc::{Client, Incoming};
+use minicore_tui::rpc::{self, Client, Incoming};
 use minicore_tui::terminal;
 use minicore_tui::ui::theme::{Palette, Styles};
 
@@ -107,6 +107,13 @@ impl Frames {
 }
 
 fn main() -> std::io::Result<()> {
+    let mut args = std::env::args().skip(1).peekable();
+    if args
+        .next_if(|first| first == rpc::AGENT_SUBCOMMAND)
+        .is_some()
+    {
+        std::process::exit(minicore_agent::cli::run(args));
+    }
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
@@ -164,7 +171,10 @@ async fn run() -> i32 {
 
     let (msg_tx, mut msg_rx) = mpsc::unbounded_channel::<Msg>();
     let (incoming_tx, mut incoming_rx) = mpsc::channel::<Incoming>(256);
-    let client = match Client::spawn(&launch.agent_binary, &launch.agent_config, incoming_tx) {
+    let client = match rpc::agent_command(launch.agent_binary.as_deref(), &launch.agent_config)
+        .map_err(|error| format!("cannot locate the running executable: {error}"))
+        .and_then(|command| Client::spawn(command, incoming_tx).map_err(|error| error.to_string()))
+    {
         Ok(client) => client,
         Err(error) => {
             eprintln!("{error}");

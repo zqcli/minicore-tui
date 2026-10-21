@@ -7,8 +7,10 @@ document and the code win.
 ## Scope
 
 `minicore-tui` is the terminal frontend of `minicore-agent` (which links
-`minicore-runtime`). It talks to one Agent child over stdio NDJSON JSON-RPC
-(Protocol v1) and links neither backend crate. It never reads the Agent store or
+`minicore-runtime`). The Agent crate is linked only to serve as this
+executable's `agent` subcommand: `main` hands those arguments to
+`minicore_agent::cli::run` before anything else. The TUI talks to that child over
+stdio NDJSON JSON-RPC (Protocol v1) and calls no other Agent API. It never reads the Agent store or
 the workspace, runs a tool, calls a provider or keeps credentials; its two
 settings files name environment variables, never keys.
 
@@ -110,8 +112,9 @@ Agent config is never parsed back: `AgentFile` only serializes.
 ## Main loop and message flow
 
 `main` resolves the TUI directory, runs `config::prepare` (scaffold, validate,
-compose; see Configuration) and spawns `minicore-agent --config
-<home>/session/agent.toml --stdio` **before** entering the alternate screen, so a
+compose; see Configuration) and spawns the Agent (`rpc::agent_command`: itself
+with `agent --config <home>/session/agent.toml --stdio`, or the external
+`--agent` / `[agent] binary`) **before** entering the alternate screen, so a
 missing binary or a bad configuration stays an ordinary terminal error. It then
 starts `tasks::bootstrap` (ping, capability check, models, profiles, sessions)
 and loops on one `biased` `select!`: Agent events, `Msg` values from tasks,
@@ -387,8 +390,9 @@ reason and the last 20 stderr lines; `q` or `Esc` quits.
 
 ## Testing
 
-Plain `cargo test`; the one `tests/*.rs` target, `local_timezone.rs`, checks the
-production local-time path. Unit tests sit next to pure
+Plain `cargo test`. Two `tests/*.rs` targets run outside `cfg(test)`:
+`local_timezone.rs` checks the production local-time path and
+`built_in_agent.rs` serves a composed config from the real built-in Agent. Unit tests sit next to pure
 logic (wrapping, Markdown incremental-equals-full, composer, chunk assembly,
 layout cache, config, CLI). `src/app/tests` drives a real `App` through
 `testing::FakeAgent` over an in-memory pipe with paused time. `ui/snapshots.rs`

@@ -165,7 +165,8 @@ pub struct Request<'a> {
 pub struct Launch {
     pub ui: Ui,
     pub agent_config: PathBuf,
-    pub agent_binary: PathBuf,
+    /// An external Agent; `None` runs the one built into this executable.
+    pub agent_binary: Option<PathBuf>,
     /// False when `--agent-config` named a raw file, so `/reload` cannot recompose.
     pub composed: bool,
 }
@@ -218,24 +219,10 @@ fn read_optional(home: &Home) -> Result<Option<Settings>, ConfigError> {
     Source::read(home.config_file())?.parse().map(Some)
 }
 
-/// `--agent`, else `[agent] binary`, else `bin/minicore-agent` (`.exe` on
-/// Windows) when it exists, else `minicore-agent` from `PATH`.
-fn agent_binary(home: &Home, flag: Option<&Path>, configured: Option<PathBuf>) -> PathBuf {
-    if let Some(flag) = flag {
-        return flag.to_owned();
-    }
-    if let Some(configured) = configured {
-        return home.join(&configured);
-    }
-    let bundled = home
-        .dir()
-        .join("bin")
-        .join(format!("minicore-agent{}", std::env::consts::EXE_SUFFIX));
-    if bundled.exists() {
-        bundled
-    } else {
-        PathBuf::from("minicore-agent")
-    }
+/// `--agent`, else `[agent] binary`, else none: the built-in Agent.
+fn agent_binary(home: &Home, flag: Option<&Path>, configured: Option<PathBuf>) -> Option<PathBuf> {
+    flag.map(Path::to_owned)
+        .or_else(|| configured.map(|configured| home.join(&configured)))
 }
 
 /// Replaces `path` through a temporary file, so a crash leaves the old content

@@ -1,24 +1,24 @@
 # minicore-tui
 
 `minicore-tui` is a fullscreen terminal frontend for [`minicore-agent`]: a
-scrolling transcript, a status line, a composer and a footer, over one Agent
-child process that it talks to with stdio NDJSON JSON-RPC (Protocol v1). It does
-not link the `minicore-agent` or `minicore-runtime` crates. Version 0.4 is a
-rewrite of the v0.3 frontend; see [CHANGELOG.md](CHANGELOG.md).
+scrolling transcript, a status line, a composer and a footer. The Agent is built
+into the same executable: the TUI starts itself as `minicore-tui agent` in a
+child process and talks to it with stdio NDJSON JSON-RPC (Protocol v1), so one
+file is the whole program. Version 0.4 is a rewrite of the v0.3 frontend; see
+[CHANGELOG.md](CHANGELOG.md).
 
 ## Requirements
 
 - Rust 1.88 or newer (edition 2024, `rust-version` in `Cargo.toml`) to build;
-- a `minicore-agent` 0.7.1 executable (the TUI writes the Agent configuration itself);
 - a terminal with an alternate screen, raw mode and bracketed paste. Mouse
   reporting is used for the wheel, clicks and selection. `Shift+Enter` and
   `Alt+Enter` need a terminal with the kitty keyboard protocol; `Ctrl+J` always
   inserts a newline.
 
-Backend contract: Agent 0.7.1 (`004dbf2`) and Runtime 0.7.1 (`c0181d1`) are the
-versions CI pins. The Runtime is linked by the Agent, not by the TUI. At startup
-the TUI requires Protocol v1 and these Agent capabilities, and refuses an Agent
-that lacks one: `session.read`, `session.read.display`, `session.context`,
+Built-in backend: Agent 0.7.2 (`141396f`), which links Runtime 0.7.1
+(`c0181d1`); `Cargo.toml` pins the Agent by revision and `Cargo.lock` both. An
+external Agent can still be named with `--agent`. At startup the TUI requires
+Protocol v1 and these Agent capabilities, and refuses an Agent that lacks one: `session.read`, `session.read.display`, `session.context`,
 `turn.result`, `tool.read`, `tool.read.display`, `tool.output`,
 `workspace.files`, `changes.list`, `changes.diff`.
 
@@ -32,13 +32,14 @@ target/release/minicore-tui --workspace ./project   # first run writes starter f
 
 Everything lives in one *TUI directory*: `--home`, else `$MINICORE_HOME`, else
 the directory of the executable (its parent when that is named `bin`, so a
-bundle with `bin/minicore-tui` and `bin/minicore-agent` needs nothing set).
+bundle with `bin/minicore-tui` needs nothing set).
 Providers and models are in `models.toml`, profiles and preferences in
 `config.toml`, the system prompt in `prompt/SYSTEM_PROMPT.md`, and every session
 in `session/`. On the first run the TUI writes commented starters, says what to
 fill in and exits; after that it validates both files, writes the Agent config
-to `session/agent.toml` and spawns `<agent> --config session/agent.toml --stdio`
-before the screen switches, so a bad configuration is an ordinary terminal error
+to `session/agent.toml` and starts the built-in Agent with it
+(`minicore-tui agent --config session/agent.toml --stdio`) before the screen
+switches, so a bad configuration is an ordinary terminal error
 naming the file, line and key. The TUI then opens or creates a session and waits
 for your first message; no model is called until you send one. A draft typed
 meanwhile is kept. Full reference: [docs/configuration.md](docs/configuration.md).
@@ -46,8 +47,8 @@ meanwhile is kept. Full reference: [docs/configuration.md](docs/configuration.md
 Prebuilt packages: every CI run uploads one per platform (Linux x86_64, macOS
 arm64 and x86_64, Windows x86_64) as a workflow artifact,
 `minicore-tui-<version>-<target>`. Each is a TUI directory with
-`bin/minicore-tui` and the pinned `bin/minicore-agent` (`.exe` on Windows);
-`BUILD.txt` names the three revisions. Unpack it anywhere and run
+`bin/minicore-tui` (`.exe` on Windows), the Agent included; `BUILD.txt` names
+the three revisions. Unpack it anywhere and run
 `bin/minicore-tui` from the project directory. On macOS a downloaded binary may
 need `xattr -d com.apple.quarantine bin/*` first.
 
@@ -56,7 +57,7 @@ need `xattr -d com.apple.quarantine bin/*` first.
 | Option | Meaning |
 |---|---|
 | `--home <DIR>` | The TUI directory. Default: `$MINICORE_HOME`, else the executable's directory (its parent when named `bin`). |
-| `--agent <BIN>` | Agent executable. Default: `[agent] binary` in `config.toml`, else `<home>/bin/minicore-agent`, else `minicore-agent` from `PATH`. |
+| `--agent <BIN>` | Run this external Agent executable instead of the built-in one. Default: `[agent] binary` in `config.toml`, if set. |
 | `--agent-config <FILE>` | Use this Agent config as is; no composition, no `models.toml`. For tests and advanced use. Replaces `--config`. |
 | `--workspace <DIR>` | Workspace of a new session. Default: the current directory. |
 | `--session <ID>` | Open this session. |
@@ -194,7 +195,8 @@ The complete map is [docs/keybindings.md](docs/keybindings.md). The essentials:
 
 ## Troubleshooting
 
-- **Agent not found:** pass `--agent` or put `minicore-agent` on `PATH`.
+- **Agent not found:** the external Agent named by `--agent` or `[agent] binary`
+  does not exist; drop both to use the built-in one.
 - **Fatal screen:** the Agent exited, sent an unreadable frame or lacks a
   required capability. The screen shows the reason and the last 20 lines of the
   Agent's stderr; `q` or `Esc` quits.

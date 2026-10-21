@@ -1,4 +1,5 @@
-//! The agent child process and its JSON-RPC client.
+//! The agent child process and its JSON-RPC client. By default the child is this
+//! same executable running the built-in Agent.
 //!
 //! Four background tasks own the pipes: one writer, one stdout reader, one
 //! stderr reader (bounded tail) and one child waiter. Requests are routed by id
@@ -53,25 +54,40 @@ pub struct Client {
     tasks: Mutex<Vec<JoinHandle<()>>>,
 }
 
+/// The command serving the Agent on stdio: `binary` when set, else the Agent
+/// built into this executable as its `agent` subcommand.
+pub fn agent_command(binary: Option<&Path>, config: &Path) -> std::io::Result<Command> {
+    let mut command = match binary {
+        Some(binary) => Command::new(binary),
+        None => {
+            let mut command = Command::new(std::env::current_exe()?);
+            command.arg(AGENT_SUBCOMMAND);
+            command
+        }
+    };
+    command.arg("--config").arg(config).arg("--stdio");
+    Ok(command)
+}
+
+/// The first argument that turns this executable into the Agent.
+pub const AGENT_SUBCOMMAND: &str = "agent";
+
 impl Client {
-    /// Spawns the agent and starts its pipe tasks. `incoming` receives events
-    /// and the terminal close notice.
+    /// Spawns the agent `command` and starts its pipe tasks. `incoming` receives
+    /// events and the terminal close notice.
     pub fn spawn(
-        agent_bin: &Path,
-        agent_config: &Path,
+        mut command: Command,
         incoming: mpsc::Sender<Incoming>,
     ) -> Result<Arc<Self>, RpcError> {
-        let mut child = Command::new(agent_bin)
-            .arg("--config")
-            .arg(agent_config)
-            .arg("--stdio")
+        let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true)
             .spawn()
             .map_err(|error| {
-                RpcError::closed(format!("could not start {}: {error}", agent_bin.display()))
+                let program = Path::new(command.as_std().get_program());
+                RpcError::closed(format!("could not start {}: {error}", program.display()))
             })?;
         let stdin = child
             .stdin
