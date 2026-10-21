@@ -214,7 +214,8 @@ cargo test --locked
 The suite needs no Agent: reducer tests drive the app through a scripted
 in-process Agent, and `TestBackend` snapshot tests cover the main screen states.
 CI runs the same checks on Linux, macOS and Windows with Rust 1.88 and stable.
-Module layout and invariants are in [docs/architecture.md](docs/architecture.md).
+Module layout and invariants are in [docs/architecture.md](docs/architecture.md);
+coding agents should read [AGENTS.md](AGENTS.md).
 
 ## License
 

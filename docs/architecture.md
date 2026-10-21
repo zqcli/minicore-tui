@@ -43,7 +43,7 @@ src/
     picker.rs     fuzzy_match, window and step for every list
     commands.rs   slash-command table, parsing and the unknown-command guard
     composer.rs   draft model: cursor, paste chips, undo, prompt history
-    templates.rs  prompt templates from `prompts/*.md`
+    templates.rs  prompt templates from `prompt/commands/*.md`
     notify.rs     feeds title.rs from the app state; the exit hint
     overlay.rs    Overlay (the one open picker or view), Panel, the filters behind
                   the pickers (sessions, models, files)
@@ -387,7 +387,8 @@ reason and the last 20 stderr lines; `q` or `Esc` quits.
 
 ## Testing
 
-Plain `cargo test`; there is no `tests/*.rs` target. Unit tests sit next to pure
+Plain `cargo test`; the one `tests/*.rs` target, `local_timezone.rs`, checks the
+production local-time path. Unit tests sit next to pure
 logic (wrapping, Markdown incremental-equals-full, composer, chunk assembly,
 layout cache, config, CLI). `src/app/tests` drives a real `App` through
 `testing::FakeAgent` over an in-memory pipe with paused time. `ui/snapshots.rs`
