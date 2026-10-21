@@ -258,9 +258,15 @@ impl App {
             .unwrap_or_default()
             .trim()
             .to_owned();
-        // The clicked block stays where it is instead of following the tail.
+        // The clicked block stays where it is instead of following the tail,
+        // unless it belongs to the running turn, whose new output must show.
+        let live = self
+            .session
+            .as_ref()
+            .and_then(|session| session.live.as_ref())
+            .is_some_and(|live| index >= live.start);
         let pinned = match self.scroll {
-            Scroll::Follow => {
+            Scroll::Follow if !live => {
                 let (block, offset) = self.layout.anchor(self.layout.viewport.top);
                 Scroll::Anchor { block, offset }
             }

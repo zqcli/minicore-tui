@@ -632,6 +632,44 @@ fn clicking_a_card_header_toggles_that_card_and_its_hint_opens_the_tool_view() {
 }
 
 #[test]
+fn expanding_the_running_card_keeps_its_new_output_above_the_working_row() {
+    let mut fixture = app();
+    let app = &mut fixture.app;
+    conversation(app);
+    let session = app.session.as_mut().unwrap();
+    let start = session.transcript.blocks().len();
+    let mut call = tool();
+    call.state = ToolState::Running;
+    call.duration = None;
+    call.exit_code = None;
+    call.output = vec!["item 1".into()];
+    call.output_dropped = 0;
+    session.transcript.push(Block::Tool(Box::new(call)));
+    let turn = TurnRef {
+        session_id: session.info.session_id.clone(),
+        loop_id: "loop_2".into(),
+    };
+    session.live = Some(crate::app::LiveTurn::new(turn, start));
+    let folded = render(app, 70, 20);
+    let rows: Vec<&str> = folded.lines().collect();
+    let header = rows.iter().rposition(|row| row.starts_with(" ▎ bash"));
+    click(app, 10, header.expect("running card") as u16);
+    let session = app.session.as_mut().unwrap();
+    if let Some(Block::Tool(call)) = session.transcript.block_mut(start) {
+        call.output
+            .extend((2..=12).map(|index| format!("item {index}")));
+    }
+    let grown = render(app, 70, 20);
+    let rows: Vec<&str> = grown.lines().collect();
+    let working = rows
+        .iter()
+        .position(|row| row.contains("Working (esc to interrupt)"))
+        .expect("working row");
+    assert_eq!(rows[working - 3], " ▎ item 12", "{grown}");
+    assert_eq!(app.scroll, Scroll::Follow);
+}
+
+#[test]
 fn clicking_a_turn_end_line_opens_the_turn_diff() {
     let mut fixture = app();
     let _runtime = fixture._runtime.enter();
