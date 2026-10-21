@@ -317,7 +317,7 @@ fn the_footer_names_the_branch_and_right_aligns_the_totals() {
 }
 
 /// The last transcript row never touches the stack below it, and the
-/// composer's tint spans the whole row like `reference.png`.
+/// composer's tint spans the whole row.
 #[test]
 fn a_blank_row_separates_the_transcript_and_the_composer_band_is_full_width() {
     let mut app = app();

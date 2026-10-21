@@ -36,7 +36,7 @@ Inputs (read before working):
 
 1. Carry large, long-running coding sessions smoothly: hours of work, hundreds
    of turns, thousands of tool calls, repeated compaction, max-reasoning waits.
-2. One coherent pi-style "rail" UI (see `reference.png`): transcript, one status
+2. One coherent pi-style "rail" UI: transcript, one status
    line, composer, one footer. One visual system for every panel. English only.
 3. Never stuck, never lying: the UI state always converges to the Agent's
    authoritative state (`turn.wait`, `turn.result`, `session.state`).
@@ -461,7 +461,7 @@ chars) via `session.rename` after the first turn is accepted, unless titled.
 ### 7.7 Theme
 
 Dark (default) and light palettes; respect `NO_COLOR` (no colors, keep
-attributes). RGB colors close to `reference.png`: page bg terminal default,
+attributes). RGB colors close to pi's rail UI: page bg terminal default,
 composer band `#404256`-ish, tool card bands tinted by state, thinking rail
 purple, user rail blue.
 
