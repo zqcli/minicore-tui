@@ -31,20 +31,23 @@ jobs:
           test "$(cargo tree --locked --offline -p crossterm | grep -c '^crossterm v')" -eq 1
 
   test:
-    name: test (${{ matrix.os }}, Rust ${{ matrix.toolchain }})
+    name: clippy and test (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        toolchain: [1.88.0, stable]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          toolchain: ${{ matrix.toolchain }}
+          toolchain: stable
+          components: clippy
       - name: Fetch locked dependencies
         run: cargo fetch --locked
+      # Platform-only code is linted where it compiles.
+      - name: Clippy (deny warnings)
+        run: cargo clippy --locked --offline --all-targets -- -D warnings
       - name: Run offline tests
         run: cargo test --locked --offline --all-targets
 
@@ -88,7 +91,7 @@ jobs:
           # The built-in Agent and its Runtime, as Cargo.lock pins them.
           {
             echo "minicore-tui $version $GITHUB_SHA"
-            sed -n 's|^source = "git+.*/\(minicore-[a-z]*\)?rev=.*#\([0-9a-f]*\)"$|\1 \2|p' Cargo.lock
+            sed -n 's|^source = "git+.*/\(minicore-[a-z]*\)?tag=\(.*\)#\([0-9a-f]*\)"$|\1 \2 \3|p' Cargo.lock
           } > "$name/BUILD.txt"
           # A tarball keeps the executable bits, which artifact zips drop.
           if [ -z "$EXE" ]; then

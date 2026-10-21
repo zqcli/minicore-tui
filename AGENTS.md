@@ -53,18 +53,21 @@ cargo fmt --all -- --check
 cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked --all-targets
 RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps
-cargo +1.88.0 test --locked --all-targets                                   # MSRV
 cargo clippy --locked --all-targets --target x86_64-pc-windows-gnu -- -D warnings   # Windows-only code
 UPDATE_SNAPSHOTS=1 cargo test --locked --lib ui::snapshots                  # rewrite tests/snapshots/*.txt
 cargo test --locked --lib perf_tests -- --ignored --nocapture               # frame-cost benches
 ```
 
-Always pass `--locked`; do not run a broad `cargo update`. `MINICORE_TUI_PERF_STATS=1`
+Always pass `--locked`. Updating dependencies is its own commit: run
+`cargo update`, then the full checks. `MINICORE_TUI_PERF_STATS=1`
 prints draw counts and timings on exit of a live run.
 
 ## Code Rules
 
-- Rust edition 2024, MSRV 1.88 (`rust-version`). `unsafe` is forbidden.
+- Rust edition 2024 on current stable; no minimum version is declared or
+  tested. `unsafe` is forbidden.
+- Dependencies use plain version requirements (`"1"`, `"0.30"`), never `=`
+  pins; `Cargo.lock` and `--locked` make builds reproducible.
 - Write the least code that solves the problem. No speculative features,
   configuration, abstractions with one implementation, or state machines for
   cases that cannot happen. Reuse the patterns and helpers already here.
@@ -144,13 +147,13 @@ to it. Do not rewrite released changelog sections.
 
 ## Backends, CI And Releases
 
-- `Cargo.toml` pins `minicore-agent` by the full SHA of its release tag;
+- `Cargo.toml` pins `minicore-agent` by its release tag (`tag = "vX.Y.Z"`);
   `Cargo.lock` then fixes the Runtime the Agent pins. To adopt an Agent
-  release, move the `rev` and `version`, let Cargo update only the Agent and
-  Runtime entries (the Agent's exact `=` pins may force a few shared crates
-  down), and update the README backend line.
-- CI tests on Linux, macOS and Windows (MSRV and stable) and uploads a package
-  per platform (`minicore-tui-<version>-<target>`) holding `bin/minicore-tui`,
+  release, move the `tag` and `version`, run `cargo update`, and update the
+  README backend line. Tags are never moved.
+- CI runs Clippy and the tests on Linux, macOS and Windows with stable Rust and
+  uploads a package per platform (`minicore-tui-<version>-<target>`) holding
+  `bin/minicore-tui`,
   with `BUILD.txt` naming the three revisions.
 - A release bumps `version` in `Cargo.toml` and the `minicore-tui` entry in
   `Cargo.lock` only, and moves `Unreleased` to the version in `CHANGELOG.md`.

@@ -9,14 +9,14 @@ file is the whole program. Version 0.4 is a rewrite of the v0.3 frontend; see
 
 ## Requirements
 
-- Rust 1.88 or newer (edition 2024, `rust-version` in `Cargo.toml`) to build;
+- current stable Rust (edition 2024) to build; no older toolchain is tested;
 - a terminal with an alternate screen, raw mode and bracketed paste. Mouse
   reporting is used for the wheel, clicks and selection. `Shift+Enter` and
   `Alt+Enter` need a terminal with the kitty keyboard protocol; `Ctrl+J` always
   inserts a newline.
 
-Built-in backend: Agent 0.7.2 (`141396f`), which links Runtime 0.7.1
-(`c0181d1`); `Cargo.toml` pins the Agent by revision and `Cargo.lock` both. An
+Built-in backend: Agent 0.7.3, which links Runtime 0.7.3; `Cargo.toml` pins the
+Agent by its release tag and `Cargo.lock` fixes both. An
 external Agent can still be named with `--agent`. At startup the TUI requires
 Protocol v1 and these Agent capabilities, and refuses an Agent that lacks one: `session.read`, `session.read.display`, `session.context`,
 `turn.result`, `tool.read`, `tool.read.display`, `tool.output`,
@@ -213,9 +213,10 @@ cargo clippy --all-targets -- -D warnings
 cargo test --locked
 ```
 
-The suite needs no Agent: reducer tests drive the app through a scripted
-in-process Agent, and `TestBackend` snapshot tests cover the main screen states.
-CI runs the same checks on Linux, macOS and Windows with Rust 1.88 and stable.
+Reducer tests drive the app through a scripted in-process Agent, and
+`TestBackend` snapshot tests cover the main screen states; only
+`tests/built_in_agent.rs` starts the real built-in Agent, with no provider.
+CI runs Clippy and the tests on Linux, macOS and Windows with stable Rust.
 Module layout and invariants are in [docs/architecture.md](docs/architecture.md);
 coding agents should read [AGENTS.md](AGENTS.md).
 

@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Built-in backend: Agent 0.7.3 with Runtime 0.7.3, pinned by release tag.
+- No minimum Rust version is declared or tested; build with current stable.
+  Every dependency is at its latest release, including toml 1 and toml_edit
+  0.25; the Agent no longer forces shared crates down.
+- CI runs Clippy on Linux, macOS and Windows.
+- The configuration examples use a public provider URL, and the repository no
+  longer ships `reference.png`.
+
 ## 0.5.2 — 2026-10-21
 
 ### One executable
