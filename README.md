@@ -142,7 +142,7 @@ without a report. The TUI never estimates it.
 
 - **Conversation.** User messages and Markdown answers stream with an incremental
   renderer. User messages are tinted cards; thinking has a purple rail and
-  folds to its first three rows plus `... (N more lines, ctrl+o to expand)` (the newest three while it streams);
+  folds to its newest three rows under `... (N earlier lines, ctrl+o to expand)`;
   `Ctrl+T` collapses it to one `Thinking...` row.
 - **Tool cards** start folded to three rows on a state-coloured band (running,
   done, failed): tool name, target (`$ cmd`, `path:range`, `pattern in path`)

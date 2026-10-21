@@ -34,8 +34,16 @@
   paste. Linux and macOS pass crossterm's paste events through with no delay.
 - Keep editor hit targets and paste input out of full-screen views, approval
   sheets and completion rows.
-- Clicking a card of the running turn no longer pins the view, so its new
-  output stays above the Working row instead of growing out of sight.
+- A tool card or thinking block opens and closes downward, whether by click,
+  `Ctrl+O` or `Ctrl+T`: the top of the view stays put. `Ctrl+O` and `Ctrl+T`
+  confirm with a flash, so the dock does not move the view either.
+- Folded thinking always keeps its newest rows under an `earlier` hint, while it
+  streams and after, instead of switching to its first rows when it ends.
+- A drag in the editor copies on release, like one in the transcript, and the
+  editor selection has a stronger background.
+- A transcript selection takes only content: rails, padding, card durations,
+  expand hints, timestamps, turn-end lines and the welcome header are neither
+  highlighted nor copied.
 
 ### UI simplification
 

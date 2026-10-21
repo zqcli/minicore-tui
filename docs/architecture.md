@@ -313,8 +313,8 @@ the history length.
   and keeps the lines before it as shared chunks (`Rows`, `Arc<[Line]>`), so a
   delta hands the cache the committed chunks without copying them and renders
   only the tail. Tests assert that the incremental result equals a full render
-  at every byte. Thinking shows its first three rows folded; while it streams
-  with no reply yet it shows the newest three under an `earlier` hint instead.
+  at every byte. Folded thinking shows its newest three rows under an `earlier`
+  hint, while it streams and after.
 - **Cards.** Tool output is a bounded tail (400 lines, 64 KiB) while a turn runs;
   when it ends (and for any card read from history) a card keeps the 200 rows an
   expanded one shows. A collapsed card is a title row with its facts (duration,
@@ -323,8 +323,13 @@ the history length.
   the rest is in the tool view. A reloaded card shows `… N lines · click for
   full output` from the line count in its summary; that row (or `/tool`) opens
   the full output.
+- **Selection.** A row the UI adds around content (hints, timestamps,
+  spacers) and a span after content (a card's duration) carry `rails::chrome`,
+  a style that changes nothing on screen. `rails::content_cells` gives the cells
+  past the rail and its pad, so highlight and copy take only content.
 - **Scroll anchoring.** `Scroll` is `Follow` (stick to the bottom) or
-  `Anchor { block, offset }`. Any upward scroll turns the position into an
+  `Anchor { block, offset }`. Folding or unfolding a block pins the view's top
+  (`App::pin_view`), so blocks open and close downward. Any upward scroll turns the position into an
   anchor, resolved against the current layout each frame, so growth below it
   moves nothing; reaching the bottom returns to `Follow`. While anchored and not
   at the bottom the last row carries a centred ` ↓ Jump to latest message · End `

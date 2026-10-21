@@ -66,8 +66,8 @@ paste slower than that is indistinguishable from typing.
 | `Ctrl+L` | Model picker. |
 | `Ctrl+P` / `Shift+Ctrl+P` | Switch to the next or previous model in the catalog (`Shift+Ctrl+P` needs the kitty keyboard protocol; other terminals send `Ctrl+P` for both). |
 | `Shift+Tab` | Switch to the next reasoning level the model supports. |
-| `Ctrl+O` | Expand or collapse all tool cards, thinking and compaction summaries. |
-| `Ctrl+T` | Collapse thinking to one `Thinking...` row, or show it again. |
+| `Ctrl+O` | Expand or collapse all tool cards, thinking and compaction summaries. The top of the view stays put, so blocks open and close downward. |
+| `Ctrl+T` | Collapse thinking to one `Thinking...` row, or show it again; the top of the view stays put. |
 | `Ctrl+F` | Find in the transcript. |
 | `F1` | Help view. |
 | `q` or `Esc` | Quit from the fatal screen. |
@@ -81,13 +81,13 @@ are above the bottom. `End` or scrolling to the bottom resumes following the tai
 | Gesture | Action |
 |---|---|
 | Wheel | Scroll one row per notch, five with `Alt`. With a view open it scrolls that view (help three rows per notch, diff, tool output; the context view does not scroll); over a picker it moves the selection. It never scrolls the transcript behind them. |
-| Click a tool card's header row | Toggle that card. The view stays where it is, except on a card of the running turn, where it keeps following the tail. |
+| Click a tool card's header row | Toggle that card. It opens and closes downward: the rows above it stay put, and `End` follows the tail again. |
 | Click a card's `click for full output` row | Open the tool view. Expanded cards end in this row; so does a card reloaded from history, whose row reads `… N lines · click for full output`. |
 | Click a turn-end line | Open the diff view for that turn. |
 | Click in the editor | Place the caret at a grapheme or paste-chip boundary, respecting wrapping, padding and editor scrolling. |
-| Drag in the editor | Select draft text; releasing keeps it highlighted without copying transcript text. Typing replaces it; `Ctrl+C` copies it. Moving outside the editor reaches adjacent rows and scrolls the draft. |
+| Drag in the editor | Select draft text; releasing copies it and keeps it highlighted. Typing replaces it. Moving outside the editor reaches adjacent rows and scrolls the draft. |
 | Shift+click in the editor | Extend the selection from its fixed anchor. Many terminals keep Shift+click for their own selection and never send it. |
-| Drag in the transcript | Select transcript text; releasing copies it. |
+| Drag in the transcript | Select transcript text; releasing copies it. Only content is taken: rails, padding, card durations, expand hints, timestamps, turn-end lines and the welcome header are neither highlighted nor copied. |
 
 Editor clicks are accepted while an inline command or file completion list is
 open, but completion rows are not editor text. Full-screen views, approval
