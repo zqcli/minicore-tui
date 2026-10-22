@@ -142,14 +142,23 @@ impl Entry {
             end = range.end;
             ok
         });
-        let pastes = if valid {
+        // Prompts saved before byte order marks were dropped still carry them.
+        let bom = '\u{feff}';
+        let at = |at: usize| at - text[..at].matches(bom).count() * bom.len_utf8();
+        let pastes: Vec<_> = if valid {
             pastes
                 .into_iter()
-                .map(|range| Paste::new(&text, range))
+                .map(|range| at(range.start)..at(range.end))
+                .filter(|range| !range.is_empty())
                 .collect()
         } else {
             Vec::new()
         };
+        let text = text.replace(bom, "");
+        let pastes = pastes
+            .into_iter()
+            .map(|range| Paste::new(&text, range))
+            .collect();
         Self { text, pastes }
     }
 
@@ -166,14 +175,20 @@ impl Entry {
 }
 
 /// Text from a paste, an editor or a file: line endings become `\n`, tabs four
-/// spaces, and other control bytes are dropped before they reach the Agent.
+/// spaces, and other control bytes and byte order marks are dropped before they
+/// reach the Agent.
 fn normalize(text: &str) -> String {
     let mut text = text.replace("\r\n", "\n").replace('\r', "\n");
     if text.contains('\t') {
         text = text.replace('\t', "    ");
     }
-    if text.chars().any(|ch| ch != '\n' && ch < ' ') {
-        text.retain(|ch| ch == '\n' || ch >= ' ');
+    // Windows Terminal draws U+FEFF as a cell its width says it lacks, which
+    // shifts the text past the caret.
+    if text
+        .chars()
+        .any(|ch| (ch != '\n' && ch < ' ') || ch == '\u{feff}')
+    {
+        text.retain(|ch| ch == '\n' || (ch >= ' ' && ch != '\u{feff}'));
     }
     text
 }
@@ -1101,6 +1116,25 @@ mod tests {
         c.insert("one\r\ntwo\rthree\tfour\u{7}five");
         assert_eq!(c.text(), "one\ntwo\nthree    fourfive");
         assert!(!c.text().contains('\r'));
+    }
+
+    #[test]
+    fn a_pasted_byte_order_mark_is_dropped() {
+        let mut c = Composer::new();
+        c.insert("\u{feff}作用abc");
+        assert_eq!(c.text(), "作用abc");
+        assert_eq!(c.cursor, c.text().len());
+    }
+
+    #[test]
+    fn a_saved_prompt_with_a_byte_order_mark_is_recalled_without_it() {
+        let entry = Entry::from_record(Record {
+            text: "\u{feff}ab\u{feff}cd".into(),
+            pastes: vec![3..5, 8..10],
+        });
+        assert_eq!(entry.text, "abcd");
+        let ranges: Vec<_> = entry.pastes.iter().map(|p| p.range.clone()).collect();
+        assert_eq!(ranges, [0..2, 2..4]);
     }
 
     #[test]

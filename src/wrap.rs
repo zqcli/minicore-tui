@@ -193,6 +193,7 @@ pub fn sanitize(text: &str) -> Cow<'_, str> {
                 }
             }
             '\u{1b}' => skip_escape(&mut chars),
+            '\u{feff}' => {}
             '\u{9b}' => skip_csi(&mut chars),
             ch if needs_escaping(ch) => push_picture(&mut out, ch),
             ch => out.push(ch),
@@ -206,6 +207,7 @@ fn needs_escaping(ch: char) -> bool {
         && (ch == '\t'
             || ch == '\r'
             || ch.is_control()
+            || ch == '\u{feff}'
             || matches!(
                 ch,
                 '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'
@@ -401,6 +403,11 @@ mod tests {
         assert_eq!(sanitize("bell\u{7}"), "bell␇");
         assert_eq!(sanitize("cr\rtwo"), "cr␍two");
         assert_eq!(sanitize("del\u{7f}"), "del␡");
+    }
+
+    #[test]
+    fn sanitize_drops_byte_order_marks() {
+        assert_eq!(sanitize("\u{feff}作用abc"), "作用abc");
     }
 
     #[test]
