@@ -1,9 +1,11 @@
 //! The transcript pane: block rendering through the layout cache, scroll
-//! resolution and the overlays drawn over the rows: drag highlight, jump label,
-//! scrollbar and copy flash. A frame touches only the visible rows.
+//! resolution, the welcome header and the overlays drawn over the rows: drag
+//! highlight, jump label, scrollbar and copy flash. A frame touches only the
+//! visible rows.
 
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::path::Path;
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -12,14 +14,24 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use unicode_segmentation::UnicodeSegmentation;
 
-use super::blocks;
 use super::markdown::StreamRenderer;
 use super::theme::Styles;
+use super::{blocks, views};
 use crate::app::scrollbar::{JUMP_LABEL, jump_label, thumb};
 use crate::app::selection;
 use crate::app::{App, Overlay, Scroll, find};
 use crate::transcript::layout::{Fold, Layout, Rows, Viewport};
 use crate::transcript::{Block, RequestKey};
+
+/// The bindings the welcome header advertises, as `(key, action)`.
+const HEADER_HINTS: &[(&str, &str)] = &[
+    ("esc", "interrupt"),
+    ("ctrl+c", "clear"),
+    ("/", "commands"),
+    ("@", "files"),
+    ("ctrl+o", "expand"),
+    ("ctrl+r", "sessions"),
+];
 
 /// Streaming markdown renderers of live assistant blocks, by request. Each
 /// caches its stable prefix, so a delta re-parses only the tail.
@@ -28,6 +40,8 @@ pub struct RenderState {
     streams: HashMap<RequestKey, Stream>,
     /// What the streams were rendered for; any change restarts them.
     key: Option<(u16, Fold, Styles)>,
+    /// Rows of the welcome header cached in front of block 0.
+    pub header_rows: usize,
 }
 
 struct Stream {
@@ -105,8 +119,9 @@ pub fn inner(area: Rect) -> Rect {
 /// Draws the transcript into `area` and records the drawn rows for copy.
 pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, styles: Styles) {
     let area = inner(area);
+    let welcome = || header(styles, area.width, &app.workspace);
     let Some(session) = app.session.as_ref() else {
-        // A draft is an empty transcript; only waiting gets a line.
+        // A draft shows the header; only waiting gets a line under it.
         let status = if !app.ready {
             Some("Connecting to minicore-agent…")
         } else if app.first_message.is_some() {
@@ -116,10 +131,11 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, styles: Styles) {
         } else {
             None
         };
+        let mut lines = welcome();
         if let Some(status) = status {
-            let line = Line::styled(format!(" {status}"), styles.dim());
-            frame.render_widget(Paragraph::new(line), area);
+            lines.push(Line::styled(format!(" {status}"), styles.dim()));
         }
+        frame.render_widget(Paragraph::new(lines), area);
         draw_flash(frame, area, app, styles);
         return;
     };
@@ -133,7 +149,17 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, styles: Styles) {
     let layout = &mut app.layout;
     let blocks = session.transcript.blocks();
     layout.state.prepare(key, blocks);
-    let mut render = |state: &mut RenderState, _: usize, block: &Block| state.render(block, key);
+    // The header rides in front of block 0, so it scrolls and anchors with the
+    // transcript without being a block.
+    let mut render = |state: &mut RenderState, index: usize, block: &Block| {
+        let mut rows = state.render(block, key);
+        if index == 0 {
+            let header = welcome();
+            state.header_rows = header.len();
+            rows.prepend(header);
+        }
+        rows
+    };
     layout.prepare(
         blocks,
         session.transcript.revisions(),
@@ -182,11 +208,17 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, styles: Styles) {
         width: area.width,
         origin: (area.x, area.y),
     };
-    let mut rows: Vec<Cow<Line>> = layout
-        .visible(top, height)
-        .into_iter()
-        .map(Cow::Borrowed)
-        .collect();
+    let mut rows: Vec<Cow<Line>> = if blocks.is_empty() {
+        let header = welcome();
+        layout.state.header_rows = header.len();
+        header.into_iter().map(Cow::Owned).collect()
+    } else {
+        layout
+            .visible(top, height)
+            .into_iter()
+            .map(Cow::Borrowed)
+            .collect()
+    };
     if let Some(drag) = app.selection {
         for (index, row) in rows.iter_mut().enumerate() {
             let content = super::rails::content_cells(row);
@@ -238,6 +270,55 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, styles: Styles) {
         }
     }
     draw_flash(frame, area, app, styles);
+}
+
+/// The welcome rows: name and version, the main bindings, the workspace.
+fn header(styles: Styles, width: u16, workspace: &Path) -> Vec<Line<'static>> {
+    let mut lines = vec![
+        Line::default(),
+        Line::from(vec![
+            Span::raw(" "),
+            Span::styled("minicore-tui", styles.title()),
+            Span::styled(concat!(" v", env!("CARGO_PKG_VERSION")), styles.faint()),
+        ]),
+    ];
+    // Hints wrap whole, so a narrow terminal never splits a key from its action.
+    let room = (width as usize).saturating_sub(1);
+    let mut row: Vec<(&str, &str)> = Vec::new();
+    let mut used = 0;
+    for &(key, action) in HEADER_HINTS {
+        let cells = key.len() + 1 + action.len();
+        if !row.is_empty() && used + 3 + cells > room {
+            lines.push(hint_line(&row, styles));
+            row.clear();
+        }
+        used = match row.is_empty() {
+            true => cells,
+            false => used + 3 + cells,
+        };
+        row.push((key, action));
+    }
+    lines.push(hint_line(&row, styles));
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    let shown = match home
+        .as_deref()
+        .and_then(|home| workspace.strip_prefix(home).ok())
+    {
+        Some(rest) => Path::new("~").join(rest),
+        None => workspace.to_path_buf(),
+    };
+    lines.push(Line::styled(
+        format!(" {}", shown.display()),
+        styles.faint(),
+    ));
+    lines.push(Line::default());
+    lines.into_iter().map(super::rails::chrome).collect()
+}
+
+fn hint_line(hints: &[(&str, &str)], styles: Styles) -> Line<'static> {
+    let mut spans = vec![Span::raw(" ")];
+    spans.extend(views::key_hints(hints, styles));
+    Line::from(spans)
 }
 
 /// ` Copied! ` in reverse video at the top-right corner while it is fresh.

@@ -1,4 +1,4 @@
-//! The draft: the conversation screen before any session exists. A session is
+//! The draft: the welcome screen before any session exists. A session is
 //! created by the first message and takes the settings picked meanwhile.
 
 use serde_json::json;

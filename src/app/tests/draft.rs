@@ -76,6 +76,37 @@ async fn the_first_submit_creates_the_session_with_the_draft_settings_then_sends
     );
 }
 
+const HEADER: &str = concat!("minicore-tui v", env!("CARGO_PKG_VERSION"));
+
+#[tokio::test(start_paused = true)]
+async fn the_draft_shows_the_welcome_header_and_creates_no_session() {
+    let mut h = draft().await;
+    h.settle().await;
+    let screen = h.screen(70, 14);
+    assert!(screen.contains(HEADER), "{screen}");
+    for status in ["Connecting", "Creating", "Opening", "No session"] {
+        assert!(!screen.contains(status), "no status line:\n{screen}");
+    }
+    assert!(h.app.session.is_none());
+    assert!(h.calls("session.create").is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_header_stays_at_the_top_when_the_first_message_creates_the_session() {
+    let mut h = draft().await;
+    h.submit("hello there");
+    h.until(|app| app.is_busy()).await;
+    h.settle().await;
+    let screen = h.screen(70, 30);
+    let row = |text: &str| {
+        screen
+            .lines()
+            .position(|line| line.contains(text))
+            .unwrap_or_else(|| panic!("no {text:?}:\n{screen}"))
+    };
+    assert!(row(HEADER) < row("hello there"), "{screen}");
+}
+
 #[tokio::test(start_paused = true)]
 async fn alt_enter_in_the_draft_starts_the_session_like_enter() {
     let mut h = draft().await;
@@ -116,7 +147,9 @@ async fn enter_while_the_session_is_being_created_keeps_the_text_in_the_editor()
     h.submit("first");
     h.run_for(Duration::from_millis(50)).await;
     assert!(h.app.session.is_none());
-    assert!(h.screen(60, 12).contains("Creating the session…"));
+    let screen = h.screen(60, 20);
+    assert!(screen.contains(HEADER), "{screen}");
+    assert!(screen.contains("Creating the session…"), "{screen}");
 
     h.app.composer.set_text("second");
     h.press(KeyCode::Enter);
@@ -163,6 +196,7 @@ async fn new_returns_to_the_draft_without_creating_and_records_the_profile() {
     assert_eq!(h.app.launch.profile.as_deref(), Some("ask"));
     let screen = h.screen(60, 12);
     assert!(!screen.contains("an old question"), "{screen}");
+    assert!(screen.contains(HEADER), "{screen}");
 
     h.action(Action::NewSession);
     assert_eq!(

@@ -287,6 +287,15 @@ impl App {
         let Some((index, line)) = self.layout.hit(column, row) else {
             return;
         };
+        // Block 0's rows start with the welcome header.
+        let header = if index == 0 {
+            self.layout.state.header_rows
+        } else {
+            0
+        };
+        let Some(line) = line.checked_sub(header) else {
+            return;
+        };
         let all_expanded = self.tools_expanded;
         let text = self
             .layout

@@ -129,7 +129,7 @@ scrollbar draws nothing. `MINICORE_TUI_PERF_STATS` prints the draws per cause
 and their times on exit. After bootstrap the loop opens a session once, for
 `--session`, else the newest for the workspace with `--continue`. Without one the
 app stays in the draft (`app/draft.rs`): `app.session` is `None`, the screen is
-the conversation UI with an empty transcript, and nothing is created.
+the welcome header over an empty transcript, and nothing is created.
 
 ### Single writer
 
@@ -342,7 +342,10 @@ the history length.
   visible rows by reference (`Layout::visible`), no copy. The text a click or
   drag needs is read back from the same cache (`Layout::row_text`), at the
   position the last frame recorded in `Layout::viewport`; the cache only
-  changes inside `draw`, so that is what the screen shows.
+  changes inside `draw`, so that is what the screen shows. The welcome header
+  is cached in front of block 0 (`RenderState::header_rows`), and clicks and the
+  find bar skip it; on a draft or an empty transcript it is not in the cache and
+  cannot be selected.
 - **Streaming Markdown.** A streaming assistant block renders through a
   `StreamRenderer` (`ui/markdown/stream.rs`), keyed by request. It scans line
   by line for the last cut later text cannot change (a blank line outside a

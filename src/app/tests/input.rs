@@ -415,14 +415,15 @@ async fn paging_keeps_four_rows_and_ctrl_arrows_jump_between_prompts() {
 
     h.ctrl(KeyCode::Home);
     assert!(
-        first_row(&mut h).ends_with("prompt 0"),
-        "ctrl+home goes to the first prompt"
+        first_row(&mut h).ends_with(concat!("minicore-tui v", env!("CARGO_PKG_VERSION"))),
+        "the header tops the transcript"
     );
+    assert!(h.screen(60, 24).contains("prompt 0"));
     h.ctrl(KeyCode::End);
     assert_eq!(h.app.scroll, Scroll::Follow);
     h.press(KeyCode::Home);
     assert!(
-        first_row(&mut h).ends_with("prompt 0"),
+        first_row(&mut h).ends_with(concat!("minicore-tui v", env!("CARGO_PKG_VERSION"))),
         "home with no draft goes to the top"
     );
     h.press(KeyCode::End);
@@ -458,6 +459,20 @@ async fn the_find_bar_moves_the_view_with_every_step() {
     assert!(
         screen.contains("3 of 3") && screen.contains("prompt 11"),
         "{screen}"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_match_in_block_0_is_shown_below_the_welcome_header() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    conversation(&mut h, 12);
+    h.screen(60, 24);
+    h.ctrl(KeyCode::Char('f'));
+    h.type_text("prompt 0");
+    assert!(
+        first_row(&mut h).ends_with("prompt 0"),
+        "the view lands on the match, not on the header:\n{}",
+        h.screen(60, 24)
     );
 }
 

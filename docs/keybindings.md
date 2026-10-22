@@ -57,7 +57,8 @@ paste slower than that is indistinguishable from typing.
 ## Before the first message
 
 With no session open (a start without `--session` or `--continue`, or after
-`/new`) the transcript is empty and no session exists. `Enter` or `Alt+Enter`
+`/new`) the screen shows the welcome header over an empty transcript and no
+session exists; the header stays at the top of the new session. `Enter` or `Alt+Enter`
 with text creates the session with the profile, model and reasoning chosen so
 far and sends the text as its first message; if the creation fails the text is
 back in the editor with the error. While the session is being created another
@@ -102,7 +103,7 @@ are above the bottom. `End` or scrolling to the bottom resumes following the tai
 | Click in the editor | Place the caret at a grapheme or paste-chip boundary, respecting wrapping, padding and editor scrolling. |
 | Drag in the editor | Select draft text; releasing copies it and keeps it highlighted. Typing replaces it. Moving outside the editor reaches adjacent rows and scrolls the draft. |
 | Shift+click in the editor | Extend the selection from its fixed anchor. Many terminals keep Shift+click for their own selection and never send it. |
-| Drag in the transcript | Select transcript text; releasing copies it. Only content is taken: rails, padding, card durations, expand hints, timestamps and turn-end lines are neither highlighted nor copied. |
+| Drag in the transcript | Select transcript text; releasing copies it. Only content is taken: rails, padding, card durations, expand hints, timestamps, turn-end lines and the welcome header are neither highlighted nor copied. |
 
 Editor clicks are accepted while an inline command or file completion list is
 open, but completion rows are not editor text. Full-screen views, approval

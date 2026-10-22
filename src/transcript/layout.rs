@@ -82,6 +82,11 @@ impl Rows {
         }
     }
 
+    pub fn prepend(&mut self, lines: Vec<Line<'static>>) {
+        self.len += lines.len();
+        self.chunks.insert(0, lines.into());
+    }
+
     fn len(&self) -> usize {
         self.len
     }

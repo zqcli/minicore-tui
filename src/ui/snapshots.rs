@@ -169,7 +169,7 @@ fn idle_screen_shows_the_rail_composer_and_footer() {
 }
 
 #[test]
-fn the_draft_is_an_empty_transcript_over_the_editor_and_the_footer() {
+fn the_draft_is_the_welcome_header_over_the_editor_and_the_footer() {
     let mut app = app();
     app.session = None;
     app.profiles = vec![
@@ -181,11 +181,11 @@ fn the_draft_is_an_empty_transcript_over_the_editor_and_the_footer() {
     app.default_profile = Some("coding".into());
     let screen = render(&mut app, 70, 12);
     snapshot("tests/snapshots/draft.txt", DRAFT, screen.clone());
-    assert!(!screen.contains("minicore-tui v"), "no welcome header");
     assert!(!screen.contains("No session"), "a draft shows no status");
 
     app.ready = false;
-    let screen = render(&mut app, 70, 12);
+    let screen = render(&mut app, 70, 14);
+    assert!(screen.contains("minicore-tui v"), "{screen}");
     assert!(screen.contains("Connecting to minicore-agent…"), "{screen}");
 }
 
@@ -1001,12 +1001,71 @@ fn the_gutter_column_stays_blank_and_ignores_clicks() {
     for line in screen.lines().take(area.height as usize) {
         assert!(!line.starts_with(|c: char| c != ' '), "{line:?}\n{screen}");
     }
+    app.scroll = Scroll::Anchor {
+        block: 0,
+        offset: 0,
+    };
+    let top = render(app, 70, 20);
+    assert!(
+        top.contains(concat!("minicore-tui v", env!("CARGO_PKG_VERSION"))),
+        "{top}"
+    );
+    assert!(
+        top.contains("esc interrupt · ctrl+c clear · / commands"),
+        "{top}"
+    );
+    assert!(top.contains("/work/minicore-tui"), "{top}");
+    app.scroll = Scroll::Follow;
     let header = row_of(&screen, " ▎ bash");
     click(app, 0, header);
     assert!(
         render(app, 70, 20).contains("ctrl+o to expand"),
         "still folded"
     );
+}
+
+/// A transcript whose block 0 is the card, so the welcome header sits in front of it.
+fn card_first(app: &mut App) {
+    let session = app.session.as_mut().expect("session");
+    session.transcript.push(Block::Tool(Box::new(tool())));
+}
+
+#[test]
+fn a_click_on_a_card_in_block_0_maps_below_the_welcome_header() {
+    let mut fixture = app();
+    let _runtime = fixture._runtime.enter();
+    let app = &mut fixture.app;
+    card_first(app);
+    let folded = render(app, 70, 30);
+    click(app, 10, row_of(&folded, " ▎ bash"));
+    let expanded = render(app, 70, 30);
+    assert!(expanded.contains("click for full output"), "{expanded}");
+    let title = row_of(&expanded, " ▎ $ cargo test --lib");
+
+    click(app, 10, title + 1);
+    assert!(matches!(app.overlay, Overlay::Tool(_)), "{:?}", app.overlay);
+
+    app.overlay = Overlay::None;
+    render(app, 70, 30);
+    click(app, 10, title);
+    let refolded = render(app, 70, 30);
+    assert!(refolded.contains("ctrl+o to expand"), "{refolded}");
+}
+
+#[test]
+fn a_click_on_a_welcome_header_row_does_nothing() {
+    let mut fixture = app();
+    let _runtime = fixture._runtime.enter();
+    let app = &mut fixture.app;
+    card_first(app);
+    let folded = render(app, 70, 30);
+    let rows = app.layout.state.header_rows as u16;
+    assert!(rows > 0, "the header is cached in front of block 0");
+    for row in 0..rows {
+        click(app, 10, row);
+    }
+    assert_eq!(render(app, 70, 30), folded);
+    assert!(matches!(app.overlay, Overlay::None), "{:?}", app.overlay);
 }
 
 fn left(
