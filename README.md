@@ -109,7 +109,7 @@ Command-line options win. A malformed file, an unknown key or a dangling
 reference stops the start with `file:line: key: reason`; nothing is ignored
 silently. `/theme` edits only the `theme` key and keeps comments. `/reload`
 composes the Agent config again, so editing `SYSTEM_PROMPT.md` or a profile and
-running `/reload` applies it. With `NO_COLOR` set the UI uses no colors. Prompt
+running `/reload` applies it, to open sessions too from their next turn. With `NO_COLOR` set the UI uses no colors. Prompt
 history is `history.jsonl` in the TUI directory.
 
 ## Screen

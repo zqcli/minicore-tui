@@ -73,7 +73,9 @@ with status 2 before any screen change:
 ```
 
 `/reload` composes the file again before asking the Agent to reload, so editing
-`SYSTEM_PROMPT.md`, a profile or a model and running `/reload` is enough. A
+`SYSTEM_PROMPT.md`, a profile or a model and running `/reload` is enough. An
+open session takes its profile's new system prompt from its next turn, as does
+a session reopened after a restart; the new prompt replaces the old one. A
 rejected edit leaves the running Agent untouched and shows the error as a notice.
 `[ui]` and `[agent]` are read at start only; `/theme` writes `[ui] theme` back
 into `config.toml` without disturbing the rest of the file or its comments.

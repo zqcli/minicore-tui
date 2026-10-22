@@ -127,7 +127,11 @@ impl App {
                         .call::<_, Value>(protocol::METHOD_RELOAD, &Value::Null)
                         .await
                     {
-                        Ok(_) => Msg::Notice(NoticeLevel::Info, "Agent reloaded".into()),
+                        Ok(_) => Msg::Notice(
+                            NoticeLevel::Info,
+                            "Agent reloaded; the new system prompt applies from the next turn"
+                                .into(),
+                        ),
                         Err(error) => Msg::Notice(NoticeLevel::Error, error.message),
                     }
                 });
