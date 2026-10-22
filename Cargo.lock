@@ -1038,8 +1038,8 @@ checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
 name = "minicore-agent"
-version = "0.7.3"
-source = "git+https://github.com/zqcli/minicore-agent?tag=v0.7.3#56c1c728eece60953113e225b54c1bdd8a1d8d53"
+version = "0.7.4"
+source = "git+https://github.com/zqcli/minicore-agent?tag=v0.7.4#6407430872a02ef039def3dd7cc02cfbd720d3ac"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -1067,8 +1067,8 @@ dependencies = [
 
 [[package]]
 name = "minicore-runtime"
-version = "0.7.3"
-source = "git+https://github.com/zqcli/minicore-runtime?tag=v0.7.3#e0f945f43de986aff5156c630e64e1d7169872ca"
+version = "0.7.4"
+source = "git+https://github.com/zqcli/minicore-runtime?tag=v0.7.4#d920218f7a2617536c89a885809aab7d20ea8e0a"
 dependencies = [
  "futures-util",
  "getrandom 0.4.3",
