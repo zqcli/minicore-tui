@@ -307,6 +307,17 @@ async fn esc_cancels_the_compaction_that_owns_the_session() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_failed_automatic_compaction_is_reported_once() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    let failed = json!({"session_id": "s1",
+        "last_result": {"origin": "automatic", "operation_id": "auto-before-l1",
+                        "status": "failed", "failure_kind": "model_failure"}});
+    h.context(failed.clone());
+    h.context(failed);
+    assert_eq!(h.notices(), ["Automatic compaction failed: model_failure"]);
+}
+
+#[tokio::test(start_paused = true)]
 async fn a_cancelled_manual_compaction_says_so() {
     let mut h = Harness::opened(display_read(0, 0)).await;
     h.fake.script_held(

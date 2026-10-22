@@ -477,7 +477,13 @@ async fn a_refused_send_returns_its_text_without_losing_a_newer_draft() {
     h.settle().await;
     assert_eq!(h.app.composer.text(), "ship it!");
     assert!(h.texts().is_empty());
-    assert_eq!(h.notices(), ["history too large"]);
+    assert_eq!(
+        h.notices(),
+        [
+            "History is too large to send and compaction could not shrink it; \
+          /compact retries it, /new starts a fresh session"
+        ]
+    );
     h.ctrl(KeyCode::Char('z'));
     assert_eq!(h.app.composer.text(), "ship it", "undo reaches the draft");
     h.ctrl(KeyCode::Char('z'));

@@ -36,8 +36,13 @@ impl App {
             // A failed status still leaves the footer's other figures to read.
             SessionOp::WorkspaceStatus(_) => self.refresh_presentation(),
             SessionOp::Context(result) => {
-                if let Some(context) = self.ok(result) {
-                    self.session_mut().apply_context(context);
+                if let Some(context) = self.ok(result)
+                    && let Some(reason) = self.session_mut().apply_context(context)
+                {
+                    self.notice(
+                        NoticeLevel::Error,
+                        format!("Automatic compaction failed: {reason}"),
+                    );
                 }
             }
             SessionOp::Sent(text, result) => self.on_sent(text, result),
@@ -284,7 +289,15 @@ impl App {
             Err(error) => {
                 self.session_mut().unsend_prompt(&text);
                 self.restore_draft(&text);
-                self.error(error);
+                if error.kind == "history_too_large" {
+                    self.notice(
+                        NoticeLevel::Error,
+                        "History is too large to send and compaction could not shrink it; \
+                         /compact retries it, /new starts a fresh session",
+                    );
+                } else {
+                    self.error(error);
+                }
             }
         }
     }

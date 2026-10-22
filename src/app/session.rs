@@ -36,6 +36,8 @@ pub struct Session {
     pub context_asked: Option<tokio::time::Instant>,
     /// The latest automatic compaction `session.context` reported.
     auto_seen: Option<String>,
+    /// The latest failed automatic compaction operation `session.context` reported.
+    failure_seen: Option<String>,
     pub compaction: Option<CompactionProgress>,
     /// Coverage of the current summary from `session.context`; a summary
     /// replayed from history carries none of its own.
@@ -211,6 +213,7 @@ impl Session {
             context: None,
             context_asked: None,
             auto_seen: None,
+            failure_seen: None,
             compaction: None,
             summary_coverage: None,
             interaction: None,
@@ -842,8 +845,9 @@ impl Session {
     }
 
     /// Takes a `session.context` report: compaction progress, the last result
-    /// as a marker, and the coverage of the current summary.
-    pub fn apply_context(&mut self, context: SessionContext) {
+    /// as a marker, and the coverage of the current summary. Returns the reason
+    /// of an automatic compaction that failed since the previous report.
+    pub fn apply_context(&mut self, context: SessionContext) -> Option<String> {
         let automatic = context.automatic.as_ref();
         // A compaction between two requests has no event or operation of its own.
         self.compaction = context.current_operation.clone().or_else(|| {
@@ -887,7 +891,26 @@ impl Session {
         if let Some(coverage) = coverage {
             self.cover_replayed_compaction(coverage);
         }
+        let failure = context.last_result.as_ref().filter(|last| {
+            last.origin.as_deref() == Some("automatic")
+                && last.status == CompactStatus::Failed
+                && last.failure_kind.as_deref() != Some("cancelled")
+        });
+        let failure = failure
+            .filter(|last| {
+                self.failure_seen
+                    .replace(last.operation_id.clone())
+                    .as_ref()
+                    != Some(&last.operation_id)
+                    && self.context.is_some()
+            })
+            .map(|last| {
+                last.failure_kind
+                    .clone()
+                    .unwrap_or_else(|| "no progress".into())
+            });
         self.context = Some(context);
+        failure
     }
 
     /// Adds the one-line compaction marker, once per operation: the manual
