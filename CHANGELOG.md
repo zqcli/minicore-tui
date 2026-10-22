@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- A folded tool card previews its output under the command: `bash` its two
+  newest lines, which roll up while it runs; another tool one line, its newest
+  input line while the model writes it, then the first change of a patch or the
+  first line of its result. A multi-line command folds to one row ending in `…`
+  when cut.
+- An expanded card starts with the same title and command rows as the folded
+  one and opens below them; duration and exit code stay on the title row.
+
 ## 0.5.4 — 2026-10-22
 
 - Built-in backend: Agent 0.7.4 with Runtime 0.7.4, pinned by release tag.
