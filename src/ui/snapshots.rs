@@ -660,13 +660,12 @@ fn a_card_opens_downward_from_its_header_by_click_or_ctrl_o() {
             ));
         }
         let expanded = render(app, 70, 20);
-        // The first row carries the Ctrl+O flash. A card keeps its title and
-        // command rows; what a `bash` card shows below them opens upward.
+        // The first row carries the Ctrl+O flash.
         let top = |screen: &str| {
             screen
                 .lines()
                 .skip(1)
-                .take(2)
+                .take(3)
                 .collect::<Vec<_>>()
                 .join("\n")
         };
@@ -728,11 +727,11 @@ fn a_drag_across_a_card_takes_its_text_without_rails_or_hints() {
     let header = row_of(&screen, " ▎ bash");
     let drag = crate::app::selection::Drag {
         from: (1, header),
-        to: (69, header + 4),
+        to: (69, header + 2),
     };
     assert_eq!(
         app.selected_text(drag).as_deref(),
-        Some("bash\n$ cargo test --lib\nrunning 131 tests\ntest result: ok")
+        Some("bash\n$ cargo test --lib")
     );
 }
 

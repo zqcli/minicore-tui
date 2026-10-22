@@ -325,13 +325,10 @@ the history length.
   hint, while it streams and after.
 - **Cards.** Tool output is a bounded tail (400 lines, 64 KiB) while a turn runs;
   when it ends (and for any card read from history) a card keeps the 200 rows an
-  expanded one shows. Both folds start with a title row with its facts
-  (duration, exit code, `+a −b`; a running card has none) and the command.
-  Folded, the command is one row and `preview_rows` adds the two newest output
-  lines of `bash` (after the last carriage return of a line), or for another
-  tool its newest input line while it generates, then the first change of a
-  patch or the first body line, and a `... (N more lines, click or ctrl+o to
-  expand)` hint; the rest is in the tool view. A reloaded card shows `… N lines · click for
+  expanded one shows. A collapsed card is a title row with its facts (duration,
+  exit code, `+a −b`; a running card has none), the call's detail, a
+  failure's first line and a `... (N lines, click or ctrl+o to expand)` hint;
+  the rest is in the tool view. A reloaded card shows `… N lines · click for
   full output` from the line count in its summary; that row (or `/tool`) opens
   the full output.
 - **Selection.** A row the UI adds around content (hints, timestamps,

@@ -295,31 +295,30 @@ fn tool(call: &ToolCall, styles: Styles, width: usize, expanded: bool) -> Vec<Li
     let row = |spans: Vec<Span<'static>>| surface_row(rail, surface, spans, width);
     let inner = text_width(width);
     let body = card_body(call);
-    // Both folds start with the same title and command rows, so a card opens
-    // and closes below them.
-    let name = Span::styled(
-        wrap::truncate(&card_title(call), inner),
-        styles.tool_title(),
-    );
-    let mut lines = vec![row(title_spans(vec![name], meta(call, styles), inner))];
-    let command = command_text(call);
     if !expanded {
-        let command = one_line(&command);
-        if !command.is_empty() {
+        let name = Span::styled(
+            wrap::truncate(&card_title(call), inner),
+            styles.tool_title(),
+        );
+        let mut lines = vec![row(title_spans(
+            vec![name],
+            meta(call, styles, true),
+            inner,
+        ))];
+        let detail = one_line(&call.header_detail());
+        if !detail.is_empty() {
             lines.push(row(padded(vec![Span::styled(
-                wrap::truncate(&command, inner),
+                detail,
                 styles.tool_output(),
             )])));
         }
-        let preview = preview_rows(call, &body);
-        let hidden = (body.lines.len() + body.hidden).saturating_sub(preview.len());
-        for line in preview {
-            let style = body_style(call, &body, line, styles);
+        if let Some(error) = error_line(call) {
             lines.push(row(padded(vec![Span::styled(
-                wrap::truncate(&wrap::sanitize(line), inner),
-                style,
+                one_line(error),
+                styles.failure(),
             )])));
         }
+        let hidden = body.lines.len() + body.hidden;
         if hidden > 0 {
             lines.push(chrome(row(padded(expand_hint(
                 hidden,
@@ -332,22 +331,41 @@ fn tool(call: &ToolCall, styles: Styles, width: usize, expanded: bool) -> Vec<Li
         return lines;
     }
 
-    let command_rows = command
+    let bash = call.name == "bash";
+    let spacer = || chrome(row(Vec::new()));
+    let mut lines = vec![spacer()];
+    let title_style = styles.tool_title().add_modifier(Modifier::BOLD);
+    let mut right = meta(call, styles, !bash);
+    let title = expanded_title(call);
+    let title_rows = title
         .lines()
         .take(EXPANDED_ROWS)
         .flat_map(|line| wrap::wrap_line(&wrap::sanitize(line), inner));
-    lines.extend(
-        command_rows.map(|line| row(padded(vec![Span::styled(line, styles.tool_output())]))),
-    );
+    for (index, line) in title_rows.enumerate() {
+        let left = vec![Span::styled(line, title_style)];
+        lines.push(row(if index == 0 {
+            title_spans(left, std::mem::take(&mut right), inner)
+        } else {
+            padded(left)
+        }));
+    }
+
+    let failed = call.state == ToolState::Failed && !bash;
     let mut body_rows: Vec<Line<'static>> = body
         .lines
         .iter()
         .map(|line| {
+            let style = if body.patch && is_patch_header(line) {
+                styles.dim()
+            } else if body.patch {
+                styles.patch(line)
+            } else if failed {
+                styles.failure()
+            } else {
+                styles.tool_output()
+            };
             let text = wrap::truncate(&wrap::sanitize(line), inner);
-            row(padded(vec![Span::styled(
-                text,
-                body_style(call, &body, line, styles),
-            )]))
+            row(padded(vec![Span::styled(text, style)]))
         })
         .collect();
     if body.hidden > 0 || call.truncated {
@@ -373,65 +391,31 @@ fn tool(call: &ToolCall, styles: Styles, width: usize, expanded: bool) -> Vec<Li
             body_rows.push(hint);
         }
     }
-    lines.extend(body_rows);
-    // A pad row parts a long open card from the block below it.
-    lines.push(chrome(row(Vec::new())));
-    lines
-}
-
-/// How a body line is drawn, folded or not.
-fn body_style(call: &ToolCall, body: &Body, line: &str, styles: Styles) -> Style {
-    if body.patch && is_patch_header(line) {
-        styles.dim()
-    } else if body.patch {
-        styles.patch(line)
-    } else if call.state == ToolState::Failed && call.name != "bash" {
-        styles.failure()
-    } else {
-        styles.tool_output()
+    if !body_rows.is_empty() {
+        lines.push(spacer());
+        lines.extend(body_rows);
     }
-}
-
-/// The body lines a folded card shows: the two newest output lines of `bash`;
-/// for another tool the newest input line while it generates, then the first
-/// change of a patch or the first line of the body.
-fn preview_rows<'a>(call: &'a ToolCall, body: &Body<'a>) -> Vec<&'a str> {
-    let shown = |line: &&str| !line.trim().is_empty();
-    if call.name == "bash" {
-        let mut rows: Vec<&str> = body
-            .lines
-            .iter()
-            .rev()
-            .map(|line| overwritten(line))
-            .filter(shown)
-            .take(2)
-            .collect();
-        rows.reverse();
-        return rows;
-    }
-    let newest = (!call.state.is_terminal())
-        .then_some(call.expanded_input.as_deref())
-        .flatten()
-        .and_then(|input| input.lines().rev().find(shown));
-    let first = || {
-        let change = |line: &&str| {
-            !is_patch_header(line) && (line.starts_with('+') || line.starts_with('-'))
-        };
-        match body.patch {
-            true => body.lines.iter().copied().find(change),
-            false => None,
+    if bash {
+        let mut footer: Vec<Span<'static>> = Vec::new();
+        if let Some(duration) = call.duration {
+            footer.push(Span::styled(
+                format!("Took {}", format_duration(duration)),
+                styles.meta(),
+            ));
         }
-        .or_else(|| body.lines.iter().copied().find(shown))
-    };
-    newest.or_else(first).into_iter().collect()
-}
-
-/// What a terminal shows of a line that redraws itself with carriage returns.
-fn overwritten(line: &str) -> &str {
-    line.trim_end_matches('\r')
-        .rsplit('\r')
-        .next()
-        .unwrap_or_default()
+        if let Some(code) = call.exit_code.filter(|code| *code != 0) {
+            if !footer.is_empty() {
+                footer.push(Span::styled(" · ", styles.meta()));
+            }
+            footer.push(Span::styled(format!("exit {code}"), styles.failure()));
+        }
+        if !footer.is_empty() {
+            lines.push(spacer());
+            lines.push(chrome(row(padded(footer))));
+        }
+    }
+    lines.push(spacer());
+    lines
 }
 
 fn display_name(call: &ToolCall) -> &str {
@@ -441,17 +425,7 @@ fn display_name(call: &ToolCall) -> &str {
     }
 }
 
-/// The card's command: the whole script for `bash`, else the tool's subject.
-fn command_text(call: &ToolCall) -> String {
-    match call.expanded_input.as_deref() {
-        Some(command) if call.name == "bash" && !command.trim().is_empty() => {
-            format!("$ {}", command.trim())
-        }
-        _ => call.header_detail(),
-    }
-}
-
-/// The card title: the tool, and for a patch how many lines it has.
+/// The collapsed title: the tool, and for a patch how many lines it has.
 fn card_title(call: &ToolCall) -> String {
     match (call.name.as_str(), call.expanded_input.as_deref()) {
         ("apply_patch", Some(input)) => {
@@ -462,13 +436,40 @@ fn card_title(call: &ToolCall) -> String {
     }
 }
 
+/// Why a call failed without running to an exit code, for its collapsed card.
+fn error_line(call: &ToolCall) -> Option<&str> {
+    if call.state != ToolState::Failed || call.exit_code.is_some() {
+        return None;
+    }
+    call.output_content()
+        .into_iter()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+}
+
+/// The bold first rows of an expanded card: the whole command for `bash`,
+/// else the tool name and its subject.
+fn expanded_title(call: &ToolCall) -> String {
+    let detail = call.header_detail();
+    if call.name == "bash"
+        && let Some(command) = call.expanded_input.as_deref()
+    {
+        return format!("$ {}", command.trim());
+    }
+    match (call.name == "bash", detail.is_empty()) {
+        (_, true) => display_name(call).to_owned(),
+        (true, false) => detail,
+        (false, false) => format!("{} {detail}", display_name(call)),
+    }
+}
+
 /// What a card adds right of its title: completed duration, an unusual end, a
 /// failing exit code and the size of a change. Running cards have no spinner or
-/// timer.
-fn meta(call: &ToolCall, styles: Styles) -> Vec<Span<'static>> {
+/// timer. An expanded `bash` card puts duration and exit code in its footer.
+fn meta(call: &ToolCall, styles: Styles, facts: bool) -> Vec<Span<'static>> {
     let mut items: Vec<Vec<Span<'static>>> = Vec::new();
     // "0.0s" says nothing, so instant tools show no time.
-    if let Some(duration) = call.duration.filter(|d| d.as_millis() >= 50) {
+    if facts && let Some(duration) = call.duration.filter(|d| d.as_millis() >= 50) {
         items.push(vec![Span::styled(format_duration(duration), styles.meta())]);
     }
     match call.state {
@@ -479,7 +480,7 @@ fn meta(call: &ToolCall, styles: Styles) -> Vec<Span<'static>> {
         }
         _ => {}
     }
-    if let Some(code) = call.exit_code.filter(|code| *code != 0) {
+    if facts && let Some(code) = call.exit_code.filter(|code| *code != 0) {
         items.push(vec![Span::styled(format!("exit {code}"), styles.failure())]);
     }
     // A change that did not apply is not counted as one.
@@ -955,68 +956,15 @@ mod tests {
     }
 
     #[test]
-    fn a_folded_bash_card_is_title_command_newest_two_lines_and_hint() {
+    fn a_folded_card_is_title_detail_and_hint() {
         assert_eq!(
             card(call(), fold()),
             [
                 format!("▎ bash{}0.4s", " ".repeat(49)),
                 "▎ $ python3 -m unittest".into(),
-                "▎ Ran 30 tests".into(),
-                "▎ OK".into(),
-                "▎ ... (12 more lines, click or ctrl+o to expand)".into(),
+                "▎ ... (14 more lines, click or ctrl+o to expand)".into(),
             ]
         );
-    }
-
-    #[test]
-    fn a_running_bash_card_rolls_its_newest_lines_up() {
-        let mut running = call();
-        running.state = ToolState::Running;
-        running.duration = None;
-        running.output = Vec::new();
-        running.output_dropped = 0;
-        let preview = |call: &ToolCall| card(call.clone(), fold())[2..].to_vec();
-        assert_eq!(
-            card(running.clone(), fold()).len(),
-            2,
-            "no output, no preview"
-        );
-        running.push_output("compiling\n");
-        assert_eq!(preview(&running), ["▎ compiling"]);
-        running.push_output("\ntesting 10%\rtesting 60%");
-        assert_eq!(
-            preview(&running),
-            [
-                "▎ compiling",
-                "▎ testing 60%",
-                "▎ ... (1 more line, click or ctrl+o to expand)"
-            ]
-        );
-        running.push_output("\rtesting 100%\ndone\n");
-        assert_eq!(
-            preview(&running),
-            [
-                "▎ testing 100%",
-                "▎ done",
-                "▎ ... (2 more lines, click or ctrl+o to expand)"
-            ]
-        );
-    }
-
-    #[test]
-    fn a_generating_card_shows_its_newest_input_line_then_its_first() {
-        let mut write = call();
-        write.name = "write".into();
-        write.detail = "notes.md".into();
-        write.state = ToolState::Pending;
-        write.duration = None;
-        write.exit_code = None;
-        write.output = Vec::new();
-        write.output_dropped = 0;
-        write.expanded_input = Some("# Notes\n\nsecond paragraph".into());
-        assert_eq!(card(write.clone(), fold())[2], "▎ second paragraph");
-        write.state = ToolState::Succeeded;
-        assert_eq!(card(write, fold())[2], "▎ # Notes");
     }
 
     #[test]
@@ -1044,7 +992,7 @@ mod tests {
         let mut long = call();
         long.detail = format!("$ cd app &&\n  {}", "x".repeat(80));
         let body = card(long, fold());
-        assert_eq!(body[1], format!("▎ $ cd app && {}…", "x".repeat(44)));
+        assert_eq!(body[1], format!("▎ $ cd app && {}", "x".repeat(46)));
     }
 
     #[test]
@@ -1086,38 +1034,41 @@ mod tests {
     }
 
     #[test]
-    fn a_multiline_command_folds_to_one_row_and_expands_to_all_of_them() {
+    fn an_expanded_bash_card_shows_the_command_output_and_time() {
         let mut long = call();
         long.exit_code = Some(2);
         long.expanded_input = Some("cd app\npython3 -m unittest".into());
         assert_eq!(
-            card(long.clone(), fold())[1],
-            "▎ $ cd app python3 -m unittest"
-        );
-        assert_eq!(
             card(long, expanded()),
             [
-                format!("▎ bash{}0.4s · exit 2", " ".repeat(40)),
-                "▎ $ cd app".into(),
-                "▎ python3 -m unittest".into(),
-                "▎ … 12 earlier lines · click for full output".into(),
-                "▎ Ran 30 tests".into(),
-                "▎ OK".into(),
-                "▎".into(),
+                "▎",
+                "▎ $ cd app",
+                "▎ python3 -m unittest",
+                "▎",
+                "▎ … 12 earlier lines · click for full output",
+                "▎ Ran 30 tests",
+                "▎ OK",
+                "▎",
+                "▎ Took 0.4s · exit 2",
+                "▎",
             ]
         );
     }
 
     #[test]
-    fn a_card_opens_below_the_title_and_command_rows_it_folds_to() {
+    fn expanded_titles_are_bold_and_name_the_subject() {
         let mut read = call();
         read.name = "read".into();
         read.detail = "src/app.py:1-40".into();
         read.exit_code = None;
-        for call in [call(), read] {
-            let folded = card(call.clone(), fold());
-            assert_eq!(card(call, expanded())[..2], folded[..2]);
-        }
+        let lines = render(&Block::Tool(Box::new(read)), styles(), 60, expanded());
+        assert!(lines[1].to_string().starts_with("▎ read src/app.py:1-40"));
+        assert!(
+            lines[1].spans[2]
+                .style
+                .add_modifier
+                .contains(Modifier::BOLD)
+        );
     }
 
     fn patch_card() -> ToolCall {
@@ -1143,8 +1094,7 @@ mod tests {
             "{folded:?}"
         );
         assert!(folded[0].ends_with("0.4s · +1 −0"), "{folded:?}");
-        assert_eq!(folded[2], "▎ +    \"\"\"Greet.\"\"\"", "the first change");
-        assert_eq!(folded[3], "▎ ... (7 more lines, click or ctrl+o to expand)");
+        assert_eq!(folded[2], "▎ ... (8 more lines, click or ctrl+o to expand)");
 
         let lines = render(
             &Block::Tool(Box::new(patch_card())),
@@ -1153,10 +1103,13 @@ mod tests {
             expanded(),
         );
         let body = text(&lines);
-        assert_eq!(body[..2], folded[..2]);
-        assert_eq!(body[6], "▎ @@ -1,2 +1,3 @@");
-        assert_eq!(body[8], "▎ +    \"\"\"Greet.\"\"\"");
-        assert_eq!(lines[8].spans[2].style.fg, Some(Palette::dark().added));
+        assert_eq!(
+            body[1],
+            format!("▎ apply-patch app.py{}0.4s · +1 −0", " ".repeat(27))
+        );
+        assert_eq!(body[7], "▎ @@ -1,2 +1,3 @@");
+        assert_eq!(body[9], "▎ +    \"\"\"Greet.\"\"\"");
+        assert_eq!(lines[9].spans[2].style.fg, Some(Palette::dark().added));
     }
 
     #[test]
@@ -1172,15 +1125,12 @@ mod tests {
         // The 2,000 line result as previewed: cut inside line 5, then marked.
         read.apply_result("1: alpha\n2: beta\n3: gamma\n4: delta\n1\n[truncated]");
         assert_eq!(
-            card(read.clone(), fold())[2..],
-            [
-                "▎ 1: alpha",
-                "▎ ... (1999 more lines, click or ctrl+o to expand)"
-            ]
+            card(read.clone(), fold())[2],
+            "▎ ... (2000 more lines, click or ctrl+o to expand)"
         );
         let open = card(read, expanded());
         assert_eq!(
-            open[2..8],
+            open[3..9],
             [
                 "▎ 1: alpha",
                 "▎ 2: beta",
@@ -1218,13 +1168,9 @@ mod tests {
         one.expanded = Some(true);
         let body = card(one, fold());
         assert_eq!(
-            body[2..],
-            [
-                "▎ … 12 earlier lines · click for full output",
-                "▎ Ran 30 tests",
-                "▎ OK",
-                "▎"
-            ]
+            body.last().unwrap(),
+            "▎",
+            "an expanded card ends on its pad row"
         );
     }
 
@@ -1380,7 +1326,7 @@ mod tests {
                     running.duration = None;
                     running.exit_code = None;
                     running.started_at = Some(std::time::Instant::now());
-                    assert!(meta(&running, styles()).is_empty());
+                    assert!(meta(&running, styles(), true).is_empty());
                     let body = card(running, mode).join("\n");
                     assert!(!body.chars().any(|ch| "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏".contains(ch)), "{body}");
                 }
@@ -1408,7 +1354,7 @@ mod tests {
         );
         assert_eq!(body[1], "▎ app.py");
         assert_eq!(body[2], "▎ tool invocation is invalid");
-        assert_eq!(body[3], "▎ ... (1 more line, click or ctrl+o to expand)");
+        assert_eq!(body[3], "▎ ... (2 more lines, click or ctrl+o to expand)");
     }
 
     #[test]
@@ -1418,7 +1364,7 @@ mod tests {
         bash.expanded_input = Some("\ngit diff -- README.md && git diff --check\necho done".into());
         assert_eq!(
             card(bash, fold())[1],
-            "▎ $ git diff -- README.md && git diff --check echo done"
+            "▎ $ git diff -- README.md && git diff --check"
         );
     }
 
