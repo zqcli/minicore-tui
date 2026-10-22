@@ -1,18 +1,25 @@
-//! Clipboard writes: one platform program with a deadline, and an OSC 52
-//! escape as the fallback that also works over SSH and inside tmux.
+//! Clipboard writes: the Win32 clipboard on Windows, a platform program with a
+//! deadline elsewhere, and an OSC 52 escape as the fallback that also works
+//! over SSH and inside tmux.
 
 use std::io;
+#[cfg(not(windows))]
 use std::process::Stdio;
+#[cfg(not(windows))]
 use std::time::Duration;
 
 use base64::Engine;
+#[cfg(not(windows))]
 use tokio::io::AsyncWriteExt;
+#[cfg(not(windows))]
 use tokio::process::Command;
+#[cfg(not(windows))]
 use tokio::time::timeout;
 
 /// A selection larger than this is refused instead of handed to an OS process.
 pub const MAX_CLIPBOARD_BYTES: usize = 1_000_000;
 
+#[cfg(not(windows))]
 const WRITE_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Which transport carried the text, so the caller can say so when the native
@@ -23,12 +30,14 @@ pub enum Copied {
     Osc52,
 }
 
+#[cfg(not(windows))]
 #[derive(Clone, Copy, Debug)]
 struct Adapter {
     program: &'static str,
     args: &'static [&'static str],
 }
 
+#[cfg(not(windows))]
 const fn adapter() -> Option<Adapter> {
     if cfg!(target_os = "macos") {
         Some(Adapter {
@@ -39,11 +48,6 @@ const fn adapter() -> Option<Adapter> {
         Some(Adapter {
             program: "xclip",
             args: &["-selection", "clipboard"],
-        })
-    } else if cfg!(target_os = "windows") {
-        Some(Adapter {
-            program: "clip",
-            args: &[],
         })
     } else {
         None
@@ -67,15 +71,31 @@ pub fn check(text: &str) -> Result<(), String> {
 /// Copies `text` through the native program, falling back to OSC 52.
 pub async fn copy(text: &str) -> Result<Copied, String> {
     check(text)?;
-    if let Some(adapter) = adapter()
-        && write_native(adapter, text).await.is_ok()
-    {
+    if write_native(text).await.is_ok() {
         return Ok(Copied::Native);
     }
     write_osc52(text)
 }
 
-async fn write_native(adapter: Adapter, text: &str) -> io::Result<()> {
+// `clip.exe` needs a UTF-16 byte order mark and keeps it in the copied text,
+// where a paste then carries an invisible U+FEFF.
+#[cfg(windows)]
+async fn write_native(text: &str) -> io::Result<()> {
+    let text = text.to_owned();
+    tokio::task::spawn_blocking(move || clipboard_win::set_clipboard_string(&text))
+        .await
+        .map_err(io::Error::other)?
+        .map_err(|error| io::Error::other(error.to_string()))
+}
+
+#[cfg(not(windows))]
+async fn write_native(text: &str) -> io::Result<()> {
+    let adapter = adapter().ok_or_else(|| io::Error::other("no clipboard program"))?;
+    write_program(adapter, text).await
+}
+
+#[cfg(not(windows))]
+async fn write_program(adapter: Adapter, text: &str) -> io::Result<()> {
     let mut child = Command::new(adapter.program)
         .args(adapter.args)
         .stdin(Stdio::piped())
@@ -87,7 +107,7 @@ async fn write_native(adapter: Adapter, text: &str) -> io::Result<()> {
         .stdin
         .take()
         .ok_or_else(|| io::Error::other("clipboard stdin is unavailable"))?;
-    let payload = native_payload(text);
+    let payload = text.as_bytes().to_vec();
     // One future owns stdin: dropping it at the deadline closes our write end,
     // so a child that never drains the pipe cannot hold the caller.
     let deadline = timeout(WRITE_TIMEOUT, async move {
@@ -106,20 +126,6 @@ async fn write_native(adapter: Adapter, text: &str) -> io::Result<()> {
         Ok(Err(error)) => Err(error),
         Err(_) => Err(io::Error::other("clipboard program did not exit")),
     }
-}
-
-/// Windows `clip.exe` reads the console codepage; UTF-16LE with a BOM is the
-/// encoding it round-trips. Every other adapter takes UTF-8.
-fn native_payload(text: &str) -> Vec<u8> {
-    if !cfg!(target_os = "windows") {
-        return text.as_bytes().to_vec();
-    }
-    let mut bytes = Vec::with_capacity(2 + text.len() * 2);
-    bytes.extend_from_slice(&[0xff, 0xfe]);
-    for unit in text.encode_utf16() {
-        bytes.extend_from_slice(&unit.to_le_bytes());
-    }
-    bytes
 }
 
 /// The OSC 52 sequence for `text`. tmux only forwards it when wrapped in its
@@ -162,16 +168,6 @@ mod tests {
         assert!(sequence.contains("YWJj"));
     }
 
-    #[test]
-    fn native_payload_is_utf8_everywhere_but_windows() {
-        let payload = native_payload("café");
-        if cfg!(target_os = "windows") {
-            assert_eq!(payload[..2], [0xff, 0xfe]);
-        } else {
-            assert_eq!(payload, "café".as_bytes());
-        }
-    }
-
     #[tokio::test]
     async fn empty_and_oversized_selections_are_refused_before_spawning() {
         assert!(copy("").await.is_err());
@@ -180,12 +176,13 @@ mod tests {
         assert!(error.contains("limit"), "{error}");
     }
 
+    #[cfg(not(windows))]
     #[tokio::test]
     async fn a_child_that_never_drains_its_input_is_bounded() {
         // `cat` with stdout nulled reads its input; a sleeping child does not.
         let result = timeout(
             Duration::from_secs(10),
-            write_native(
+            write_program(
                 Adapter {
                     program: "sleep",
                     args: &["30"],
@@ -195,5 +192,12 @@ mod tests {
         )
         .await;
         assert!(matches!(result, Ok(Err(_))), "{result:?}");
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn a_windows_copy_holds_the_text_without_a_byte_order_mark() {
+        assert_eq!(copy("作用abc").await, Ok(Copied::Native));
+        assert_eq!(clipboard_win::get_clipboard_string().unwrap(), "作用abc");
     }
 }
