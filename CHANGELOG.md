@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Built-in backend: Agent 0.7.5, pinned by tag. Thinking from DeepSeek through
+  a Responses proxy (the legacy `response.reasoning.delta` event) now shows,
+  and providers that report no cache writes still report input tokens.
 - A session exists only once you send a message. Starting without `--session`
   or `--continue` (or with `--continue` and nothing to continue) shows the
   conversation screen with an empty transcript; the first `Enter` creates the
