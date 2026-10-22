@@ -281,6 +281,11 @@ reported becomes a marker. All carry
 an operation id and `push_compaction` skips one it already shows. `Esc` outside
 a turn sends `session.compact.cancel` for the operation shown; inside a turn it
 interrupts the turn, which ends the compaction too.
+A `last_result` of a failed automatic compaction becomes one error notice. A
+send whose history is over the loop limits waits while the Agent compacts it
+first (`auto-before-…`, shown like any compaction); a `history_too_large` reply
+means that compaction failed, and the text returns to the draft with a notice
+naming `/compact` and `/new`.
 The footer's `ctx` is the reported tokens over `budget.input_budget_tokens`
 (over the model window when the Agent reports no budget).
 Loaded blocks are never removed. A summary replayed from history is a block of
