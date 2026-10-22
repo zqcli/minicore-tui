@@ -95,7 +95,7 @@ are above the bottom. `End` or scrolling to the bottom resumes following the tai
 | Gesture | Action |
 |---|---|
 | Wheel | Scroll one row per notch, five with `Alt`. With a view open it scrolls that view (help three rows per notch, diff, tool output; the context view does not scroll); over a picker it moves the selection. It never scrolls the transcript behind them. |
-| Click a tool card's header row, or an expanded card's title or command rows | Toggle that card. It opens and closes downward: the rows above it stay put, and `End` follows the tail again. Clicking an expanded card's output or footer rows does nothing, so reading or selecting does not collapse it. |
+| Click a folded tool card's text, or any row of an expanded card but its `click for full output` row | Toggle that card. It opens and closes downward: the rows above it stay put, and `End` follows the tail again. Dragging over a card selects instead. |
 | Click an expanded card's `click for full output` row | Open the tool view. The row is always the first under the title or command; it reads `… N earlier lines · click for full output` when lines are hidden (`… N lines · …` on a card reloaded from history) and just `click for full output` otherwise. |
 | Click a turn-end line | Open the diff view for that turn. |
 | Click in the editor | Place the caret at a grapheme or paste-chip boundary, respecting wrapping, padding and editor scrolling. |

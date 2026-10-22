@@ -237,10 +237,10 @@ impl App {
                 .is_some_and(|column| scrollbar::jump_label(area.width).contains(&column))
     }
 
-    /// A click: the jump label follows the tail again, a folded card, an
-    /// expanded card's title or a thinking row toggles that block, an expanded
-    /// card's full-output row opens the tool view, and a turn-end line opens the
-    /// turn's diff.
+    /// A click: the jump label follows the tail again, a folded card's text or
+    /// any row of an expanded card or a thinking header toggles that block, an
+    /// expanded card's full-output row opens the tool view, and a turn-end line
+    /// opens the turn's diff.
     fn click_transcript(&mut self, (column, row): (u16, u16)) {
         if !self.overlay.is_none() {
             return;
@@ -264,23 +264,14 @@ impl App {
             return;
         };
         match session.transcript.blocks().get(index) {
-            Some(Block::Tool(call)) if call.is_expanded(all_expanded) => {
-                // Only the title and the pad above it fold the card, so reading
-                // its body does not.
-                let output = blocks::full_output_row(call, width);
+            Some(Block::Tool(call)) => {
+                let expanded = call.is_expanded(all_expanded);
                 let key = call.key.clone();
-                if line == output {
+                if expanded && line == blocks::full_output_row(call, width) {
                     self.open_panel(Panel::Tool(key));
-                } else if line < output
+                } else if (expanded || !text.is_empty())
                     && let Some(call) = session.transcript.find_tool_mut(&key)
                 {
-                    call.toggle_expanded(all_expanded);
-                    self.pin_view();
-                }
-            }
-            Some(Block::Tool(call)) if !text.is_empty() => {
-                let key = call.key.clone();
-                if let Some(call) = session.transcript.find_tool_mut(&key) {
                     call.toggle_expanded(all_expanded);
                     self.pin_view();
                 }

@@ -362,9 +362,11 @@ the history length.
   (`bash` shows its tail), `… N more lines · …` (head tools), `… N lines · …`
   for a reloaded card (the line count comes from its summary), or just `click
   for full output` when nothing is hidden. That row (or `/tool`) opens the full
-  output. A click on a folded card toggles it; on an expanded one only the
-  title rows toggle, found through `blocks::full_output_row` so the hit test and
-  the renderer share the title computation, and body and footer rows do nothing.
+  output. A click on a folded card's text toggles it; on an expanded
+  one every row toggles it except the full-output row, found through
+  `blocks::full_output_row` so the hit test and the renderer share the title
+  computation. A drag selects and never reaches the click: `click_transcript` runs
+  only on a release at the press cell.
 - **Selection.** A row the UI adds around content (hints, timestamps,
   spacers) and a span after content (a card's duration) carry `rails::chrome`,
   a style that changes nothing on screen. `rails::content_cells` gives the cells

@@ -661,24 +661,45 @@ fn clicking_a_card_title_toggles_that_card_and_its_full_output_row_opens_the_too
 }
 
 #[test]
-fn clicking_the_body_of_an_expanded_card_keeps_it_open() {
+fn clicking_the_body_or_the_footer_of_an_expanded_card_collapses_it() {
+    for prefix in [" ▎ test result: ok", " ▎ Took 4.2s"] {
+        let mut fixture = app();
+        let _runtime = fixture._runtime.enter();
+        let app = &mut fixture.app;
+        conversation(app);
+        let folded = render(app, 70, 30);
+        click(app, 10, row_of(&folded, " ▎ bash"));
+        let open = render(app, 70, 30);
+        assert!(open.contains("click for full output"), "{open}");
+        click(app, 10, row_of(&open, prefix));
+        let collapsed = render(app, 70, 30);
+        assert!(
+            collapsed.contains("ctrl+o to expand"),
+            "a click on {prefix:?} left the card open:\n{collapsed}"
+        );
+        assert!(matches!(app.overlay, Overlay::None), "{:?}", app.overlay);
+    }
+}
+
+#[test]
+fn a_drag_across_an_expanded_card_body_selects_and_leaves_it_open() {
+    use crossterm::event::MouseEventKind::{Down, Drag, Up};
     let mut fixture = app();
+    // The copy is queued on the runtime and never runs.
     let _runtime = fixture._runtime.enter();
     let app = &mut fixture.app;
     conversation(app);
     let folded = render(app, 70, 30);
     click(app, 10, row_of(&folded, " ▎ bash"));
     let open = render(app, 70, 30);
-    assert!(open.contains("click for full output"), "{open}");
-    for prefix in [" ▎ running 131 tests", " ▎ test result: ok", " ▎ Took 4.2s"] {
-        click(app, 10, row_of(&open, prefix));
-        assert_eq!(
-            render(app, 70, 30),
-            open,
-            "a click on {prefix:?} changed the card"
-        );
-        assert!(matches!(app.overlay, Overlay::None), "{:?}", app.overlay);
-    }
+    let body = row_of(&open, " ▎ running 131 tests");
+    left(app, Down, 4, body);
+    left(app, Drag, 12, body + 1);
+    left(app, Up, 12, body + 1);
+    assert!(app.selection.is_some());
+    assert!(matches!(app.overlay, Overlay::None), "{:?}", app.overlay);
+    let after = render(app, 70, 30);
+    assert!(after.contains("click for full output"), "{after}");
 }
 
 #[test]

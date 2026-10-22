@@ -19,9 +19,10 @@
   transcript starts with the conversation, and the footer already shows the
   workspace.
 - An expanded tool card always has a `click for full output` row directly
-  under its title or command, above the output, for every tool. Clicking the
-  title collapses the card and that row opens the tool view; clicking the
-  output or the `Took` footer no longer collapses the card.
+  under its title or command, above the output, for every tool. Clicking
+  that row opens the tool view, and a click on any other row of an expanded
+  card (title, output or `Took` footer) collapses it. Dragging over a card
+  still selects without collapsing it.
 - Collapsing a card, `Ctrl+O` or a resize no longer leaves blank rows under the
   transcript: the view stops at the end and follows new output again.
 
