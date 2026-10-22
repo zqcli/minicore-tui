@@ -115,7 +115,7 @@ history is `history.jsonl` in the TUI directory.
 ## Screen
 
 ```text
- minicore-tui v0.5.3                                  (welcome header)
+ minicore-tui v0.5.4                                  (welcome header)
  esc interrupt · ctrl+c clear · / commands · @ files · ctrl+o expand · ctrl+r sessions
  transcript (scrollable, 1-column gutter, ▎ rails)
  …

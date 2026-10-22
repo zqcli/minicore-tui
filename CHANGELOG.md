@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.5.4 — 2026-10-22
+
+- Built-in backend: Agent 0.7.4 with Runtime 0.7.4, pinned by release tag.
+- A history too large to send is compacted first: the send waits under
+  `Compacting context` and then runs. When that compaction fails, the text
+  returns to the draft with a notice naming `/compact` and `/new`, and any
+  failed automatic compaction now leaves an error notice.
+- An open session takes a reloaded system prompt from its next turn, and a
+  reopened session takes the current one; the new prompt replaces the old.
+- On Windows, copying goes through the Win32 clipboard instead of `clip.exe`,
+  which kept a byte order mark in the copied text. Pasted, recalled and drawn
+  text drops byte order marks, which shifted the editor caret off its text.
+
 ## 0.5.3 — 2026-10-21
 
 - Built-in backend: Agent 0.7.3 with Runtime 0.7.3, pinned by release tag.
