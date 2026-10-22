@@ -22,6 +22,8 @@
   under its title or command, above the output, for every tool. Clicking the
   title collapses the card and that row opens the tool view; clicking the
   output or the `Took` footer no longer collapses the card.
+- Collapsing a card, `Ctrl+O` or a resize no longer leaves blank rows under the
+  transcript: the view stops at the end and follows new output again.
 
 ## 0.5.4 — 2026-10-22
 

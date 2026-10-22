@@ -251,6 +251,11 @@ fn an_anchored_view_does_not_move_when_content_grows() {
         after.contains("↓ Jump to latest message · End"),
         "the label marks content below an anchored view:\n{after}"
     );
+    assert!(
+        matches!(app.scroll, Scroll::Anchor { .. }),
+        "{:?}",
+        app.scroll
+    );
 }
 
 #[test]
@@ -720,6 +725,28 @@ fn a_card_opens_downward_from_its_header_by_click_or_ctrl_o() {
             assert!(title.contains("$ cargo test --lib"), "{expanded}");
         }
     }
+}
+
+#[test]
+fn collapsing_a_card_while_following_leaves_no_blank_rows_under_the_content() {
+    let mut fixture = app();
+    let _runtime = fixture._runtime.enter();
+    let app = &mut fixture.app;
+    conversation(app);
+    let folded = render(app, 70, 16);
+    click(app, 10, row_of(&folded, " ▎ bash"));
+    let open = render(app, 70, 16);
+    assert!(open.contains("click for full output"), "{open}");
+    // Following the longer transcript, the collapsing click pins a top that
+    // the shorter one no longer reaches.
+    app.scroll_to(usize::MAX);
+    let open = render(app, 70, 16);
+    click(app, 10, row_of(&open, " ▎ $ cargo test --lib"));
+    let collapsed = render(app, 70, 16);
+    let end = |screen: &str| row_of(screen, "   completed in 12s");
+    assert_eq!(end(&collapsed), end(&folded), "{collapsed}");
+    assert_eq!(app.scroll, Scroll::Follow);
+    assert!(!collapsed.contains("Jump to latest"), "{collapsed}");
 }
 
 #[test]

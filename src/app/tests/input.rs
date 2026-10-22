@@ -444,12 +444,21 @@ async fn the_find_bar_moves_the_view_with_every_step() {
     );
     h.press(KeyCode::Down);
     assert!(first_row(&mut h).ends_with("prompt 10"));
+    // The last match cannot reach the top: the view stops at the end.
     h.press(KeyCode::Tab);
-    assert!(first_row(&mut h).ends_with("prompt 11"));
+    let screen = h.screen(60, 24);
+    assert!(
+        screen.contains("3 of 3") && screen.contains("prompt 11"),
+        "{screen}"
+    );
     h.press(KeyCode::Up);
     assert!(first_row(&mut h).ends_with("prompt 10"));
     h.press(KeyCode::Enter);
-    assert!(first_row(&mut h).ends_with("prompt 11"));
+    let screen = h.screen(60, 24);
+    assert!(
+        screen.contains("3 of 3") && screen.contains("prompt 11"),
+        "{screen}"
+    );
 }
 
 #[tokio::test(start_paused = true)]

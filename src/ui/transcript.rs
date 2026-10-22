@@ -155,20 +155,23 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, styles: Styles) {
     }
     let scroll = app.scroll;
     let resolve = |layout: &Layout<RenderState>| {
-        let total = layout.total_rows();
+        let max_top = layout.total_rows().saturating_sub(height);
         match scroll {
-            Scroll::Follow => total.saturating_sub(height),
+            Scroll::Follow => max_top,
             // An anchor is resolved against the current layout, so content
-            // growing below it does not move the view.
-            Scroll::Anchor { block, offset } => layout.anchor_row(block, offset),
+            // growing below it does not move the view; shrinking cannot blank it.
+            Scroll::Anchor { block, offset } => layout.anchor_row(block, offset).min(max_top),
         }
-        .min(total.saturating_sub(1))
     };
     let mut top = resolve(layout);
     while layout.settle(blocks, top, height, &mut render) {
         top = resolve(layout);
     }
     let total = layout.total_rows();
+    // An anchor a shrink pushed to the end follows again, as in `scroll_to`.
+    if matches!(app.scroll, Scroll::Anchor { .. }) && top == total.saturating_sub(height) {
+        app.scroll = Scroll::Follow;
+    }
     // A selection marks screen cells, so it means nothing once the rows move.
     if top != layout.viewport.top {
         app.selection = None;

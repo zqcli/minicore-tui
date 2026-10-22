@@ -373,7 +373,8 @@ the history length.
   `Anchor { block, offset }`. Folding or unfolding a block pins the view's top
   (`App::pin_view`), so blocks open and close downward. Any upward scroll turns the position into an
   anchor, resolved against the current layout each frame, so growth below it
-  moves nothing; reaching the bottom returns to `Follow`. While anchored and not
+  moves nothing; reaching the bottom, by scrolling or because content shrank
+  under the anchor, returns to `Follow`. While anchored and not
   at the bottom the last row carries a centred ` ↓ Jump to latest message · End `
   label, and a scrollbar overlays the right column for a second after a scroll.
 - **Text.** Agent and tool text passes `wrap::sanitize` (control characters and
