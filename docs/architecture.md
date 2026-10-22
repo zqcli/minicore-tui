@@ -357,9 +357,14 @@ the history length.
   expanded one shows. A collapsed card is a title row with its facts (duration,
   exit code, `+a −b`; a running card has none), the call's detail, a
   failure's first line and a `... (N lines, click or ctrl+o to expand)` hint;
-  the rest is in the tool view. A reloaded card shows `… N lines · click for
-  full output` from the line count in its summary; that row (or `/tool`) opens
-  the full output.
+  the rest is in the tool view. An expanded card always has a chrome row
+  directly under its title rows: `… N earlier lines · click for full output`
+  (`bash` shows its tail), `… N more lines · …` (head tools), `… N lines · …`
+  for a reloaded card (the line count comes from its summary), or just `click
+  for full output` when nothing is hidden. That row (or `/tool`) opens the full
+  output. A click on a folded card toggles it; on an expanded one only the
+  title rows toggle, found through `blocks::full_output_row` so the hit test and
+  the renderer share the title computation, and body and footer rows do nothing.
 - **Selection.** A row the UI adds around content (hints, timestamps,
   spacers) and a span after content (a card's duration) carry `rails::chrome`,
   a style that changes nothing on screen. `rails::content_cells` gives the cells

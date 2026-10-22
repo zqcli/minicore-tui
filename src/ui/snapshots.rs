@@ -627,30 +627,53 @@ fn row_of(screen: &str, prefix: &str) -> u16 {
 }
 
 #[test]
-fn clicking_a_card_header_toggles_that_card_and_its_hint_opens_the_tool_view() {
+fn clicking_a_card_title_toggles_that_card_and_its_full_output_row_opens_the_tool_view() {
     let mut fixture = app();
     // Opening a view starts a read; it only needs a runtime to be queued on.
     let _runtime = fixture._runtime.enter();
     let app = &mut fixture.app;
     conversation(app);
-    let folded = render(app, 70, 20);
+    let folded = render(app, 70, 30);
     let header = row_of(&folded, " ▎ bash");
     click(app, 10, header);
-    let expanded = render(app, 70, 20);
+    let expanded = render(app, 70, 30);
     assert!(
         expanded.contains("… 14 earlier lines · click for full output"),
         "{expanded}"
     );
     assert!(!app.tools_expanded, "only that card changed");
+    let title = row_of(&expanded, " ▎ $ cargo test --lib");
+    assert_eq!(row_of(&expanded, " ▎ … 14 earlier lines"), title + 1);
 
-    click(app, 10, row_of(&expanded, " ▎ … 14 earlier lines"));
+    click(app, 10, title + 1);
     assert!(matches!(app.overlay, Overlay::Tool(_)), "{:?}", app.overlay);
 
     app.overlay = Overlay::None;
-    render(app, 70, 20);
-    click(app, 10, header);
-    let refolded = render(app, 70, 20);
+    render(app, 70, 30);
+    click(app, 10, title);
+    let refolded = render(app, 70, 30);
     assert!(refolded.contains("ctrl+o to expand"), "{refolded}");
+}
+
+#[test]
+fn clicking_the_body_of_an_expanded_card_keeps_it_open() {
+    let mut fixture = app();
+    let _runtime = fixture._runtime.enter();
+    let app = &mut fixture.app;
+    conversation(app);
+    let folded = render(app, 70, 30);
+    click(app, 10, row_of(&folded, " ▎ bash"));
+    let open = render(app, 70, 30);
+    assert!(open.contains("click for full output"), "{open}");
+    for prefix in [" ▎ running 131 tests", " ▎ test result: ok", " ▎ Took 4.2s"] {
+        click(app, 10, row_of(&open, prefix));
+        assert_eq!(
+            render(app, 70, 30),
+            open,
+            "a click on {prefix:?} changed the card"
+        );
+        assert!(matches!(app.overlay, Overlay::None), "{:?}", app.overlay);
+    }
 }
 
 #[test]

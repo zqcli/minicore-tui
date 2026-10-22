@@ -237,9 +237,10 @@ impl App {
                 .is_some_and(|column| scrollbar::jump_label(area.width).contains(&column))
     }
 
-    /// A click: the jump label follows the tail again, a card or a thinking row
-    /// folds that block, a card's full-output hint opens the tool view, and a
-    /// turn-end line opens the turn's diff.
+    /// A click: the jump label follows the tail again, a folded card, an
+    /// expanded card's title or a thinking row toggles that block, an expanded
+    /// card's full-output row opens the tool view, and a turn-end line opens the
+    /// turn's diff.
     fn click_transcript(&mut self, (column, row): (u16, u16)) {
         if !self.overlay.is_none() {
             return;
@@ -248,7 +249,7 @@ impl App {
             self.scroll = Scroll::Follow;
             return;
         }
-        let Some(index) = self.layout.hit(column, row) else {
+        let Some((index, line)) = self.layout.hit(column, row) else {
             return;
         };
         let all_expanded = self.tools_expanded;
@@ -258,13 +259,24 @@ impl App {
             .unwrap_or_default()
             .trim()
             .to_owned();
+        let width = self.layout.width();
         let Some(session) = self.session.as_mut() else {
             return;
         };
         match session.transcript.blocks().get(index) {
-            Some(Block::Tool(call)) if text.ends_with(blocks::FULL_OUTPUT_HINT) => {
+            Some(Block::Tool(call)) if call.is_expanded(all_expanded) => {
+                // Only the title and the pad above it fold the card, so reading
+                // its body does not.
+                let output = blocks::full_output_row(call, width);
                 let key = call.key.clone();
-                self.open_panel(Panel::Tool(key));
+                if line == output {
+                    self.open_panel(Panel::Tool(key));
+                } else if line < output
+                    && let Some(call) = session.transcript.find_tool_mut(&key)
+                {
+                    call.toggle_expanded(all_expanded);
+                    self.pin_view();
+                }
             }
             Some(Block::Tool(call)) if !text.is_empty() => {
                 let key = call.key.clone();

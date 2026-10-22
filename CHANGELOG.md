@@ -15,6 +15,10 @@
 - The welcome header (name, version, key hints, workspace) is gone: the
   transcript starts with the conversation, and the footer already shows the
   workspace.
+- An expanded tool card always has a `click for full output` row directly
+  under its title or command, above the output, for every tool. Clicking the
+  title collapses the card and that row opens the tool view; clicking the
+  output or the `Took` footer no longer collapses the card.
 
 ## 0.5.4 — 2026-10-22
 

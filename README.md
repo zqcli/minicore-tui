@@ -149,8 +149,10 @@ without a report. The TUI never estimates it.
 - **Tool cards** start folded to three rows on a state-coloured band (running,
   done, failed): tool name, target (`$ cmd`, `path:range`, `pattern in path`)
   and a hidden-line hint, with duration, exit code or line changes on the
-  right. `Ctrl+O` expands all cards and thinking, a click toggles one, and an
-  expanded card's `click for full output` row opens the tool view.
+  right. `Ctrl+O` expands all cards and thinking, and a click toggles one. An
+  expanded card has a `click for full output` row right under its title or
+  command, which opens the tool view; only the title collapses the card, so
+  reading or selecting its output does not.
 - **Turn end** is one dim line: outcome, duration, requests, tools and, when files
   changed, `N files changed (+a −b)`. A failed or cancelled turn shows its reason.
 - **Sessions.** None exists until the first message: the first `Enter` creates
