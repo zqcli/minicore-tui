@@ -6,6 +6,7 @@ use super::tasks::StreamText;
 use super::{App, NoticeLevel, Overlay, Panel, Scroll, Session, SessionOp, tasks};
 use crate::protocol::{self, RpcError, ToolReadResult, ToolRef};
 use crate::transcript::{Block, ToolCall};
+use crate::ui::views;
 use crate::wrap::sanitize;
 
 /// One row of the tool view's output, before it is styled.
@@ -106,6 +107,16 @@ impl App {
             "tool_call_id": key.tool_call_id, "display": true,
         });
         self.call(protocol::METHOD_TOOL_READ, fields, wrap);
+    }
+
+    /// Rows the last frame gave the tool view's output.
+    pub(super) fn tool_output_rows(&self, tool: &ToolView) -> usize {
+        self.session
+            .as_ref()
+            .and_then(|session| session.transcript.find_tool(&tool.key))
+            .map_or(0, |call| {
+                views::tool::output_span(self.view_area, call).len()
+            })
     }
 
     /// `[` / `]` in the tool view: the previous or next tool card.

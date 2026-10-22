@@ -97,6 +97,7 @@ are above the bottom. `End` or scrolling to the bottom resumes following the tai
 | Wheel | Scroll one row per notch, five with `Alt`. With a view open it scrolls that view (help three rows per notch, diff, tool output; the context view does not scroll); over a picker it moves the selection. It never scrolls the transcript behind them. |
 | Click a folded tool card's text, or any row of an expanded card but its `click for full output` row | Toggle that card. It opens and closes downward: the rows above it stay put, and `End` follows the tail again. Dragging over a card selects instead. |
 | Click an expanded card's `click for full output` row | Open the tool view. The row is always the first under the title or command; it reads `… N earlier lines · click for full output` when lines are hidden (`… N lines · …` on a card reloaded from history) and just `click for full output` otherwise. |
+| Click `↑ top` or `↓ bottom` in the tool view's title row | Scroll the output to its first or last row. |
 | Click a turn-end line | Open the diff view for that turn. |
 | Click in the editor | Place the caret at a grapheme or paste-chip boundary, respecting wrapping, padding and editor scrolling. |
 | Drag in the editor | Select draft text; releasing copies it and keeps it highlighted. Typing replaces it. Moving outside the editor reaches adjacent rows and scrolls the draft. |
@@ -145,7 +146,7 @@ A view owns the keys: the composer below it is dimmed and reads `view open · es
 | View | Keys |
 |---|---|
 | Diff | `Tab` cycles the scope (turn, session, workspace); `↑` / `↓` select a file; `PageUp` / `PageDown`, `Home` / `End` and the wheel scroll the diff; `c` copies it. |
-| Tool output | `[` `]` or `←` `→` show the previous or next tool call; `↑` / `↓` scroll a row; `PageUp` / `PageDown`, `Home` / `End` and the wheel scroll; `c` copies the output. |
+| Tool output | `[` `]` or `←` `→` show the previous or next tool call; `↑` / `↓` scroll a row; `PageUp` / `PageDown` and the wheel scroll; `Home` / `End` jump to the top or bottom; `c` copies the output. When the output does not fit, the title row ends with the visible range (`31–60 of 412`) and the `↑ top` / `↓ bottom` buttons. |
 | Context | `r` re-reads the context (it also reads on open); `c` copies it. |
 | Help | `↑` / `↓` scroll three rows, `PageUp` / `PageDown` thirty. |
 

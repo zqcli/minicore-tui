@@ -205,7 +205,7 @@ pub fn render(
     } else {
         vec![("esc", "back")]
     };
-    chrome(frame, area, styles, "Help", &hints);
+    chrome(frame, area, styles, "Help", "", &hints);
     for (row, line) in lines.iter().skip(start).take(rows).enumerate() {
         frame
             .buffer_mut()

@@ -6,7 +6,7 @@ use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use super::{App, DOUBLE_CLICK, Overlay, Panel, Press, Scroll};
 use super::{scrollbar, selection};
 use crate::transcript::Block;
-use crate::ui::blocks;
+use crate::ui::{blocks, views};
 
 impl App {
     /// Mouse: wheel scrolling, the scrollbar, click-to-open, and drag, word or
@@ -58,6 +58,7 @@ impl App {
         }
         // A full-screen view hides the transcript the press would land on.
         let view = self.overlay.is_view();
+        let tool = matches!(self.overlay, Overlay::Tool(_));
         match mouse.kind {
             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
                 let step = if mouse.modifiers.contains(KeyModifiers::ALT) {
@@ -76,6 +77,23 @@ impl App {
                     Overlay::Diff(_) | Overlay::Tool(_) => self.scroll_view(delta),
                     _ => self.overlay_move(delta.signum()),
                 }
+                true
+            }
+            // The tool view's buttons click like the transcript: press and
+            // release on one cell.
+            MouseEventKind::Down(MouseButton::Left) if tool => {
+                self.press = Some(Press {
+                    cell,
+                    at: tokio::time::Instant::now(),
+                    clicks: 1,
+                    word: None,
+                });
+                false
+            }
+            MouseEventKind::Up(MouseButton::Left)
+                if tool && self.press.as_ref().is_some_and(|press| press.cell == cell) =>
+            {
+                self.click_tool(cell);
                 true
             }
             _ if view => false,
@@ -235,6 +253,23 @@ impl App {
             && column
                 .checked_sub(area.x)
                 .is_some_and(|column| scrollbar::jump_label(area.width).contains(&column))
+    }
+
+    /// A click in the tool view: `↑ top` and `↓ bottom` in the title row jump
+    /// to the ends of the output.
+    fn click_tool(&mut self, (column, row): (u16, u16)) {
+        let Overlay::Tool(tool) = &self.overlay else {
+            return;
+        };
+        if row != self.view_area.y {
+            return;
+        }
+        let controls = views::tool::controls(self.view_area, tool, self.tool_output_rows(tool));
+        if controls.top.contains(&column) {
+            self.scroll_view(isize::MIN);
+        } else if controls.bottom.contains(&column) {
+            self.scroll_view(isize::MAX);
+        }
     }
 
     /// A click: the jump label follows the tail again, a folded card's text or

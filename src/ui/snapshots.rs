@@ -702,6 +702,167 @@ fn a_drag_across_an_expanded_card_body_selects_and_leaves_it_open() {
     assert!(after.contains("click for full output"), "{after}");
 }
 
+/// Opens the tool view of the conversation's card on `rows` output rows.
+fn open_tool_view(app: &mut App, rows: usize) {
+    use crate::app::Panel;
+    conversation(app);
+    app.open_panel(Panel::Tool(tool().key));
+    let Overlay::Tool(tool) = &mut app.overlay else {
+        panic!("no tool view: {:?}", app.overlay);
+    };
+    tool.status.clear();
+    tool.rows = (0..rows)
+        .map(|index| crate::app::tool::ToolRow::Text(format!("line {index}")))
+        .collect();
+}
+
+fn tool_scroll(app: &App) -> usize {
+    match &app.overlay {
+        Overlay::Tool(tool) => tool.scroll,
+        other => panic!("no tool view: {other:?}"),
+    }
+}
+
+/// The column of the first cell of `label` in the title row.
+fn column_of(screen: &str, label: &str) -> u16 {
+    let title = screen.lines().next().unwrap();
+    let at = title
+        .find(label)
+        .unwrap_or_else(|| panic!("no {label:?} in {title:?}"));
+    title[..at].chars().count() as u16
+}
+
+/// The tool view's title row at `width`: the gutter, the left part and the
+/// right part at the right edge.
+fn title_row(width: usize, left: &str, right: &str) -> String {
+    let gap = width - 1 - left.chars().count() - right.chars().count();
+    format!(" {left}{}{right}", " ".repeat(gap))
+}
+
+#[test]
+fn the_tool_view_title_shows_where_the_output_is_and_the_jump_buttons() {
+    let mut fixture = app();
+    let _runtime = fixture._runtime.enter();
+    let app = &mut fixture.app;
+    open_tool_view(app, 100);
+    let title = |screen: &str| screen.lines().next().unwrap().to_owned();
+    let left = "← bash · succeeded · tool 1 of 1";
+
+    let top = render(app, 80, 20);
+    assert_eq!(
+        title(&top),
+        title_row(80, left, "1–10 of 100 · ↓ bottom"),
+        "{top}"
+    );
+    assert!(top.contains("line 9") && !top.contains("line 10"), "{top}");
+
+    app.scroll_view(30);
+    let middle = render(app, 80, 20);
+    assert_eq!(
+        title(&middle),
+        title_row(80, left, "31–40 of 100 · ↑ top · ↓ bottom"),
+        "{middle}"
+    );
+
+    app.on_key(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::End,
+        crossterm::event::KeyModifiers::NONE,
+    ));
+    let bottom = render(app, 80, 20);
+    assert_eq!(
+        title(&bottom),
+        title_row(80, left, "91–100 of 100 · ↑ top"),
+        "{bottom}"
+    );
+    assert!(
+        bottom.contains("line 99"),
+        "the last row is reachable:\n{bottom}"
+    );
+    assert!(
+        bottom
+            .lines()
+            .any(|line| line.ends_with("home/end top/bottom · c copy · esc back")),
+        "{bottom}"
+    );
+}
+
+#[test]
+fn the_tool_view_title_has_no_readout_when_the_output_fits() {
+    let mut fixture = app();
+    let _runtime = fixture._runtime.enter();
+    let app = &mut fixture.app;
+    open_tool_view(app, 5);
+    let screen = render(app, 80, 20);
+    assert_eq!(
+        screen.lines().next().unwrap().trim_end(),
+        " ← bash · succeeded · tool 1 of 1",
+        "{screen}"
+    );
+}
+
+#[test]
+fn a_narrow_tool_view_title_gives_way_to_the_readout() {
+    let mut fixture = app();
+    let _runtime = fixture._runtime.enter();
+    let app = &mut fixture.app;
+    open_tool_view(app, 100);
+    app.scroll_view(30);
+    let screen = render(app, 50, 20);
+    assert_eq!(
+        screen.lines().next().unwrap().trim_end(),
+        " ← bash · succeede 31–40 of 100 · ↑ top · ↓ bottom",
+        "{screen}"
+    );
+}
+
+#[test]
+fn clicking_top_or_bottom_in_the_tool_view_jumps_there_and_other_clicks_do_nothing() {
+    use crossterm::event::MouseEventKind::{Down, Up};
+    let mut fixture = app();
+    let _runtime = fixture._runtime.enter();
+    let app = &mut fixture.app;
+    open_tool_view(app, 100);
+    app.scroll_view(30);
+    let screen = render(app, 80, 20);
+    let (top, bottom) = (column_of(&screen, "↑ top"), column_of(&screen, "↓ bottom"));
+
+    click(app, column_of(&screen, "31–40"), 0);
+    click(app, top.saturating_sub(2), 0);
+    click(app, top, 1);
+    click(app, bottom - 1, 0);
+    assert_eq!(tool_scroll(app), 30, "clicks off the buttons do nothing");
+    // A drag that ends elsewhere is not a click.
+    left(app, Down, top, 0);
+    left(app, Up, top + 1, 0);
+    assert_eq!(tool_scroll(app), 30);
+
+    // The last cell of each button counts.
+    click(app, bottom + 7, 0);
+    assert_eq!(tool_scroll(app), 90);
+    let screen = render(app, 80, 20);
+    assert!(!screen.contains("↓ bottom"), "{screen}");
+    click(app, column_of(&screen, "↑ top") + 4, 0);
+    assert_eq!(tool_scroll(app), 0);
+    let screen = render(app, 80, 20);
+    assert!(!screen.contains("↑ top"), "{screen}");
+    // Where the button was, a click does nothing now.
+    click(app, top, 0);
+    assert_eq!(tool_scroll(app), 0);
+}
+
+#[test]
+fn the_tool_view_buttons_follow_a_resize() {
+    let mut fixture = app();
+    let _runtime = fixture._runtime.enter();
+    let app = &mut fixture.app;
+    open_tool_view(app, 100);
+    app.scroll_view(30);
+    render(app, 80, 20);
+    let screen = render(app, 90, 20);
+    click(app, column_of(&screen, "↑ top"), 0);
+    assert_eq!(tool_scroll(app), 0);
+}
+
 #[test]
 fn a_card_opens_downward_from_its_header_by_click_or_ctrl_o() {
     for by_click in [true, false] {

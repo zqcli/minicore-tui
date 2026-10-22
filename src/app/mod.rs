@@ -190,6 +190,8 @@ pub struct App {
     pub composer_area: ratatui::layout::Rect,
     pub composer_max_rows: usize,
     pub composer_dragging: bool,
+    /// Where the last frame drew a full-screen view, for its click hit tests.
+    pub view_area: ratatui::layout::Rect,
     pub notices: VecDeque<Notice>,
     pub scroll: Scroll,
     pub tools_expanded: bool,
@@ -265,6 +267,7 @@ impl App {
             default_profile: None,
             composer: composer::Composer::new(),
             composer_area: ratatui::layout::Rect::default(),
+            view_area: ratatui::layout::Rect::default(),
             composer_max_rows: crate::ui::composer::MIN_ROWS,
             composer_dragging: false,
             notices: VecDeque::new(),

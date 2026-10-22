@@ -1,15 +1,18 @@
 //! The tool-output view: a card's input, then the streams it printed.
 
+use std::ops::Range;
+
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::text::Line;
 
 use crate::app::Session;
 use crate::app::tool::{ToolRow, ToolView, tool_input};
+use crate::transcript::ToolCall;
 
-use super::{chrome, styled};
+use super::{chrome, right_edge, styled};
 use crate::ui::theme::Styles;
-use crate::wrap::sanitize;
+use crate::wrap::{self, sanitize};
 
 fn state_label(state: crate::transcript::ToolState) -> &'static str {
     match state {
@@ -39,6 +42,66 @@ impl ToolRow {
     }
 }
 
+/// The title row's right part: the place in the output and the jump buttons,
+/// with the columns the buttons occupy for the click hit test.
+pub struct Controls {
+    pub text: String,
+    pub top: Range<u16>,
+    pub bottom: Range<u16>,
+}
+
+/// The controls for an output of `rows` rows; none while it fits.
+pub fn controls(area: Rect, tool: &ToolView, rows: usize) -> Controls {
+    let total = tool.rows.len();
+    let mut controls = Controls {
+        text: String::new(),
+        top: 0..0,
+        bottom: 0..0,
+    };
+    if total <= rows {
+        return controls;
+    }
+    let last = (tool.scroll + rows).min(total);
+    let mut text = format!("{}–{last} of {total}", tool.scroll + 1);
+    // The button's columns within `text`, which `right_edge` then places.
+    fn button(text: &mut String, label: &str) -> Range<usize> {
+        text.push_str(" · ");
+        let start = wrap::width(text);
+        text.push_str(label);
+        start..wrap::width(text)
+    }
+    let top = (tool.scroll > 0).then(|| button(&mut text, "↑ top"));
+    let bottom = (last < total).then(|| button(&mut text, "↓ bottom"));
+    let x = right_edge(area, &text) as usize;
+    let place = |range: Option<Range<usize>>| {
+        range.map_or(0..0, |range| {
+            (x + range.start) as u16..(x + range.end) as u16
+        })
+    };
+    controls.top = place(top);
+    controls.bottom = place(bottom);
+    controls.text = text;
+    controls
+}
+
+/// The rows of `area` that show the output: under the heading and the input,
+/// above the hint row.
+pub fn output_span(area: Rect, call: &ToolCall) -> Range<u16> {
+    let bottom = area.bottom().saturating_sub(1);
+    let above = 1 + usize::from(!heading(call).is_empty()) + tool_input(call).lines().count();
+    let end = (area.y as usize + above).min(bottom as usize) as u16;
+    // A blank row separates the input from the output when there is room.
+    end + u16::from(end < bottom)..bottom
+}
+
+fn heading(call: &ToolCall) -> &str {
+    match (call.name == "bash", call.detail.is_empty()) {
+        (true, _) if !tool_input(call).is_empty() => "command",
+        (_, false) => call.detail.as_str(),
+        _ => "",
+    }
+}
+
 pub fn render(
     frame: &mut Frame,
     area: Rect,
@@ -59,43 +122,28 @@ pub fn render(
     if !tool.status.is_empty() && !tool.rows.is_empty() {
         title.push_str(&format!(" · {}", tool.status));
     }
+    let output = output_span(area, call);
     chrome(
         frame,
         area,
         styles,
         &title,
+        &controls(area, tool, output.len()).text,
         &[
-            ("[ ]", "previous/next tool"),
+            ("[ ]", "prev/next"),
             ("↑↓ pgup/pgdn", "scroll"),
+            ("home/end", "top/bottom"),
             ("c", "copy"),
             ("esc", "back"),
         ],
     );
-    let mut y = area.y + 1;
-    let bottom = area.bottom().saturating_sub(1);
-    let heading = match (call.name == "bash", call.detail.is_empty()) {
-        (true, _) if !tool_input(call).is_empty() => "command",
-        (_, false) => call.detail.as_str(),
-        _ => "",
-    };
-    if !heading.is_empty() {
-        let heading = styled(&sanitize(heading), styles.dim());
-        frame.buffer_mut().set_line(area.x, y, &heading, area.width);
-        y += 1;
-    }
-    for text in tool_input(call).lines() {
-        if y >= bottom {
-            return;
-        }
+    let heading = Some(heading(call)).filter(|heading| !heading.is_empty());
+    let above = heading.into_iter().chain(tool_input(call).lines());
+    for (y, text) in (area.y + 1..output.start).zip(above) {
         let line = styled(&sanitize(text), styles.dim());
         frame.buffer_mut().set_line(area.x, y, &line, area.width);
-        y += 1;
     }
-    if y < bottom {
-        y += 1;
-    }
-    let rows = bottom.saturating_sub(y) as usize;
-    if rows == 0 {
+    if output.is_empty() {
         return;
     }
     if tool.rows.is_empty() {
@@ -104,14 +152,17 @@ pub fn render(
         } else {
             tool.status.as_str()
         };
-        frame
-            .buffer_mut()
-            .set_line(area.x, y, &styled(message, styles.dim()), area.width);
+        frame.buffer_mut().set_line(
+            area.x,
+            output.start,
+            &styled(message, styles.dim()),
+            area.width,
+        );
         return;
     }
-    for (offset, row) in tool.rows.iter().skip(tool.scroll).take(rows).enumerate() {
+    for (y, row) in output.zip(tool.rows.iter().skip(tool.scroll)) {
         frame
             .buffer_mut()
-            .set_line(area.x, y + offset as u16, &row.line(styles), area.width);
+            .set_line(area.x, y, &row.line(styles), area.width);
     }
 }

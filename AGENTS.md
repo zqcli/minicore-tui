@@ -44,7 +44,7 @@ backend repository only after confirming that is where the behavior belongs.
 
 Dependency direction: `protocol` ← `rpc` ← `transcript` ← `app` ← `ui`. `ui`
 keeps no state; `ui::draw` writes only the layout cache, the selection reset and
-the editor hit area.
+the editor and view hit areas.
 
 ## Commands
 

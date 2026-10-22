@@ -71,8 +71,8 @@ Dependency direction: `protocol` ← `rpc` ← `transcript` ← `app` ← `ui`.
 `transcript` and `ui` never call the Agent, and `ui` holds no state of its own:
 it draws `&App`. The models (composer, selection, pickers, row types of the
 views, scrollbar geometry) live in `app`. `ui::draw` takes `&mut App` for
-exactly two writes: the layout cache with its viewport, and clearing the
-selection when the rows move. What `app` still imports from `ui`:
+a few writes: the layout cache with its viewport, clearing the selection when
+the rows move, and the hit areas of the editor and of the open view. What `app` still imports from `ui`:
 
 - `ui::theme::{Palette, Styles}`: the app owns the active `Styles`.
 - `ui::transcript::RenderState`: the type parameter of `App::layout`, the
@@ -394,6 +394,15 @@ from `sheets::completion`), the footer. A selector sheet (sessions, models,
 reasoning, approval, find) replaces the editor band; views replace the
 transcript area. A view owns the keys, so the editor under it is drawn dimmed
 with the placeholder `view open · esc to return`.
+
+The tool view's title row ends with a position readout (`31–60 of 412`, only
+while the output does not fit its rows) and the `↑ top` / `↓ bottom` buttons
+that show when there is something above or below. `views::tool::controls`
+places them for the renderer and the click hit test alike, and `ui::draw`
+records the view's area in `App::view_area` for that test and for the output
+height `scroll_view` clamps to. A press and release on one cell is a click, as
+in the transcript. The view's rows change once, when the full streams replace
+the card's tail, so there is no output to follow.
 
 ### Composer, templates, title
 

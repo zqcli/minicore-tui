@@ -148,8 +148,11 @@ impl App {
 
     /// Scrolls the diff or tool view by `delta` rows; they clamp at the ends.
     pub(crate) fn scroll_view(&mut self, delta: isize) {
-        // The view's title and hint rows are not content.
-        let rows = self.viewport_rows().saturating_sub(2);
+        let rows = match &self.overlay {
+            Overlay::Tool(tool) => self.tool_output_rows(tool),
+            // The view's title and hint rows are not content.
+            _ => self.viewport_rows().saturating_sub(2),
+        };
         match &mut self.overlay {
             Overlay::Diff(diff) => diff.scroll_by(delta, rows),
             Overlay::Tool(tool) => tool.scroll_by(delta, rows),

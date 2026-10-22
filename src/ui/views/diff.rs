@@ -73,6 +73,7 @@ pub fn render(frame: &mut Frame, area: Rect, styles: Styles, diff: &DiffState) {
         area,
         styles,
         &title,
+        "",
         &[
             ("tab", "scope"),
             ("↑↓", "file"),

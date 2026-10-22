@@ -23,6 +23,11 @@
   that row opens the tool view, and a click on any other row of an expanded
   card (title, output or `Took` footer) collapses it. Dragging over a card
   still selects without collapsing it.
+- The tool-output view shows `31–60 of 412` in its title row when the output
+  does not fit, with clickable `↑ top` and `↓ bottom` buttons (`Home` / `End`
+  do the same and are now in the hint row). Its last rows were out of reach
+  when the view had a command or detail line above the output; they scroll into
+  view now.
 - Collapsing a card, `Ctrl+O` or a resize no longer leaves blank rows under the
   transcript: the view stops at the end and follows new output again.
 

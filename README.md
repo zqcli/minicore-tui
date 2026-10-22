@@ -174,7 +174,9 @@ without a report. The TUI never estimates it.
   `/tool` opens the same view.
 - **Views** replace the transcript and keep the footer: diff (turn, session or
   workspace scope), tool output, context budget and help. `Esc` returns; the
-  composer is dimmed meanwhile, because the view owns the keys.
+  composer is dimmed meanwhile, because the view owns the keys. A long tool
+  output shows which rows are on screen in the title row, with `↑ top` and
+  `↓ bottom` buttons (also `Home` / `End`).
 - **Completion and selectors.** `/` and `@` open a list inside the editor that
   filters as you type (`Tab` inserts, `Enter` runs, `Esc` closes and keeps the
   text). Sessions with delete (`Ctrl+R`), model (`Ctrl+L`), reasoning

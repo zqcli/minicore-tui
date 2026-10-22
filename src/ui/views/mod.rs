@@ -14,6 +14,7 @@ use ratatui::text::{Line, Span};
 
 use crate::app::commands::COMMANDS;
 use crate::app::{App, Overlay};
+use crate::wrap;
 
 use super::theme::Styles;
 
@@ -35,9 +36,24 @@ pub fn key_hints(hints: &[(&str, &str)], styles: Styles) -> Vec<Span<'static>> {
     spans
 }
 
+/// The column where `text` starts when it ends at the right edge of `area`.
+fn right_edge(area: Rect, text: &str) -> u16 {
+    area.right()
+        .saturating_sub(wrap::width(text) as u16)
+        .max(area.x)
+}
+
 /// Shared view chrome: the title row, its name bold and its context in the
-/// meta colour, and the key-hint row at the bottom.
-fn chrome(frame: &mut Frame, area: Rect, styles: Styles, title: &str, hints: &[(&str, &str)]) {
+/// meta colour, `right` in meta at the row's right edge, and the key-hint row
+/// at the bottom.
+fn chrome(
+    frame: &mut Frame,
+    area: Rect,
+    styles: Styles,
+    title: &str,
+    right: &str,
+    hints: &[(&str, &str)],
+) {
     let (name, context) = title.split_once(" · ").unwrap_or((title, ""));
     let mut spans = vec![
         Span::styled("← ", styles.meta()),
@@ -47,7 +63,20 @@ fn chrome(frame: &mut Frame, area: Rect, styles: Styles, title: &str, hints: &[(
         spans.push(Span::styled(format!(" · {context}"), styles.meta()));
     }
     let buffer = frame.buffer_mut();
-    buffer.set_line(area.x, area.y, &Line::from(spans), area.width);
+    // The right part keeps its cells; the title gives way, its context first.
+    let right_x = right_edge(area, right);
+    let title_width = if right.is_empty() {
+        area.width
+    } else {
+        (right_x - area.x).saturating_sub(1)
+    };
+    buffer.set_line(area.x, area.y, &Line::from(spans), title_width);
+    buffer.set_line(
+        right_x,
+        area.y,
+        &styled(right, styles.meta()),
+        area.right() - right_x,
+    );
     if area.height > 1 {
         buffer.set_line(
             area.x,
