@@ -106,15 +106,20 @@ pub fn inner(area: Rect) -> Rect {
 pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, styles: Styles) {
     let area = inner(area);
     let Some(session) = app.session.as_ref() else {
+        // A draft is an empty transcript; only waiting gets a line.
         let status = if !app.ready {
-            "Connecting to minicore-agent…"
+            Some("Connecting to minicore-agent…")
+        } else if app.first_message.is_some() {
+            Some("Creating the session…")
         } else if app.loading_session {
-            "Opening the session…"
+            Some("Opening the session…")
         } else {
-            "No session yet · enter starts one"
+            None
         };
-        let line = Line::styled(format!(" {status}"), styles.dim());
-        frame.render_widget(Paragraph::new(line), area);
+        if let Some(status) = status {
+            let line = Line::styled(format!(" {status}"), styles.dim());
+            frame.render_widget(Paragraph::new(line), area);
+        }
         draw_flash(frame, area, app, styles);
         return;
     };

@@ -7,7 +7,7 @@ use crate::protocol::event::{PreviewState, ToolOutcome};
 use crate::protocol::read::TurnRecord;
 use crate::protocol::read::{RawHistoryItem, UserKind};
 use crate::protocol::{
-    AgentEvent, CompactStatus, CompactionPhase, CompactionProgress, CompactionResult, ModelInfo,
+    AgentEvent, CompactStatus, CompactionPhase, CompactionProgress, CompactionResult,
     SessionContext, SessionInfo, SessionPresentation, ToolRef, TurnRef, TurnWaitResult, Usage,
     UsageTotals,
 };
@@ -261,10 +261,6 @@ impl Session {
             true => "Interrupting",
             false => live.phase.label(),
         })
-    }
-
-    pub fn model<'a>(&self, models: &'a [ModelInfo]) -> Option<&'a ModelInfo> {
-        models.iter().find(|model| model.id == self.info.model)
     }
 
     /// The first prompt the user typed, as loaded.

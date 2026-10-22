@@ -150,6 +150,7 @@ fn render(app: &mut App, width: u16, height: u16) -> String {
 /// `UPDATE_SNAPSHOTS=1 cargo test` rewrites them.
 const IDLE: &str = include_str!("../../tests/snapshots/idle.txt");
 const STREAMING: &str = include_str!("../../tests/snapshots/streaming.txt");
+const DRAFT: &str = include_str!("../../tests/snapshots/draft.txt");
 
 fn snapshot(path: &str, expected: &str, rendered: String) {
     if std::env::var_os("UPDATE_SNAPSHOTS").is_some() {
@@ -165,6 +166,27 @@ fn idle_screen_shows_the_rail_composer_and_footer() {
     let mut app = app();
     conversation(&mut app);
     snapshot("tests/snapshots/idle.txt", IDLE, render(&mut app, 70, 20));
+}
+
+#[test]
+fn the_draft_is_an_empty_transcript_over_the_editor_and_the_footer() {
+    let mut app = app();
+    app.session = None;
+    app.profiles = vec![
+        serde_json::from_value(
+            serde_json::json!({"id": "coding", "model": "gpt-6-luna", "reasoning": "max"}),
+        )
+        .expect("profile"),
+    ];
+    app.default_profile = Some("coding".into());
+    let screen = render(&mut app, 70, 12);
+    snapshot("tests/snapshots/draft.txt", DRAFT, screen.clone());
+    assert!(!screen.contains("minicore-tui v"), "no welcome header");
+    assert!(!screen.contains("No session"), "a draft shows no status");
+
+    app.ready = false;
+    let screen = render(&mut app, 70, 12);
+    assert!(screen.contains("Connecting to minicore-agent…"), "{screen}");
 }
 
 #[test]

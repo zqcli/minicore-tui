@@ -126,8 +126,10 @@ an info notice sleeps until it expires instead) and the frame deadline (armed
 only while dirty). A frame is drawn at
 most every 16 ms, so a burst of deltas costs one draw; pointer motion off the
 scrollbar draws nothing. `MINICORE_TUI_PERF_STATS` prints the draws per cause
-and their times on exit. After bootstrap the loop opens a session once:
-`--session`, else the newest for the workspace with `--continue`, else a new one.
+and their times on exit. After bootstrap the loop opens a session once, for
+`--session`, else the newest for the workspace with `--continue`. Without one the
+app stays in the draft (`app/draft.rs`): `app.session` is `None`, the screen is
+the conversation UI with an empty transcript, and nothing is created.
 
 ### Single writer
 
@@ -153,11 +155,39 @@ enum Msg {
 `ToolRead`, `DiffFile`, …). `App::spawn` and `App::call` stamp each task with
 the resident session's `epoch`; `on_msg` drops a `Session` message whose epoch is
 not the resident one. `adopt` makes an opened or created session resident with
-`epoch + 1`, so every open or create, even of the same session, orphans what is
-still in flight for the old one. There are no other generation counters.
+`App::epoch + 1`, a counter that never resets, so every open or create, even of
+the same session, orphans what is still in flight for the old one. There are no
+other generation counters.
 
 Only the active session is resident; opening another drops the old transcript
 and coming back reloads it. A turn keeps running in the Agent meanwhile.
+
+### The draft
+
+A session is created by the first message, never at startup, so the session
+list holds no empty sessions. While `app.session` is `None`:
+
+- `App::launch` holds the settings the next session takes: the command-line
+  flags, then what `/model`, `/reasoning`, `Ctrl+L`, `Ctrl+P`, `Shift+Tab` and
+  `/new <profile>` set, which confirm with a notice instead of `session.update`.
+  The footer resolves them with the profile's defaults (`profile.list`; the
+  Agent's default profile comes from `config.toml` and is unknown for a raw
+  `--agent-config`) through `App::model_id` and `App::reasoning`.
+- The first `Enter` takes the editor's text (and records it in the prompt
+  history), parks it in `App::first_message` and sends `session.create`.
+  `Msg::Created` adopts the session and sends that text through the ordinary
+  `send`, so the user block, timestamps and auto title behave as for any first
+  message. A new session has no history, so no tail is read; it would clear the
+  prompt block. A failure puts the text back with `restore_draft` and shows the
+  error. While `loading_session` is set `Enter` does nothing, so a second
+  session cannot start and the text typed meanwhile stays in the editor.
+- `/new` calls `show_session(None)`, which resets the view like `adopt` does and
+  leaves the old session to the Agent, as opening another session does.
+- Actions and panels that read a session (`Action::needs_session`,
+  `Panel::needs_session`) answer one info notice; `@` completion needs
+  `workspace.files`, which needs a loaded session, so it answers its own notice.
+  The transcript area shows a dim line only while the Agent connects, a session
+  opens or one is created.
 
 ### RPC client
 

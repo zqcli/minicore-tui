@@ -225,14 +225,14 @@ fn footer(app: &App, styles: Styles, width: u16) -> Line<'static> {
         .and_then(|presentation| presentation.git_branch.as_deref())
         .filter(|branch| !branch.trim().is_empty());
 
-    let model = session.map_or_else(Vec::new, |session| {
-        let model = wrap::truncate(&model_label(&session.info.model), 24);
+    let model = app.model_id().map_or_else(Vec::new, |id| {
+        let model = wrap::truncate(&model_label(id), 24);
         vec![Span::styled(model, styles.user_rail())]
     });
 
     let mut priority = Vec::new();
-    if let Some(session) = session {
-        priority.push(Span::styled(session.info.reasoning.label(), styles.amber()));
+    if let Some(level) = app.reasoning() {
+        priority.push(Span::styled(level.label(), styles.amber()));
     }
     let mut extras = Vec::new();
     if let Some(session) = session.filter(|session| !session.allowed_tools.is_empty()) {

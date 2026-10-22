@@ -24,9 +24,10 @@ async fn a_new_session_carries_only_the_launch_flags_given() {
         let mut h = Harness::new();
         h.fake
             .script("session.create", json!({"session": session_info("s1")}));
+        h.fake.script("turn.send", json!({"turn": turn("l1")}));
         h.app.launch = launch;
         h.boot().await;
-        h.action(Action::NewSession);
+        h.submit("hello");
         h.until(|app| app.session.is_some()).await;
         let create = h.calls("session.create").remove(0);
         assert_eq!(create["workspace"], json!(h.app.workspace));
@@ -54,29 +55,6 @@ async fn launch_flags_apply_to_an_opened_session_once() {
     assert_eq!(update[0]["model"], "deep");
     assert_eq!(update[0]["reasoning"], "max");
     assert_eq!(h.app.session.as_ref().unwrap().info.model, "deep");
-}
-
-#[tokio::test(start_paused = true)]
-async fn a_failed_create_waits_for_enter_to_try_again() {
-    let mut h = Harness::new();
-    h.fake.script_error(
-        "session.create",
-        -32008,
-        "profile not found",
-        "profile_not_found",
-    );
-    h.boot().await;
-    h.action(Action::NewSession);
-    h.settle().await;
-    assert_eq!(h.calls("session.create").len(), 1);
-    assert_eq!(h.notices(), ["profile not found"]);
-    assert!(h.screen(60, 24).contains("enter starts one"));
-
-    h.app.composer.set_text("a draft");
-    h.press(KeyCode::Enter);
-    h.settle().await;
-    assert_eq!(h.calls("session.create").len(), 2);
-    assert_eq!(h.app.composer.text(), "a draft", "the draft is kept");
 }
 
 #[tokio::test(start_paused = true)]
@@ -146,8 +124,10 @@ async fn copy_never_takes_the_answer_of_the_previous_session() {
 
     h.fake
         .script("session.create", json!({"session": session_info("s2")}));
-    h.fake.script("session.read", display_read(0, 0));
+    h.fake.script("turn.send", json!({"turn": turn("l2")}));
+    h.fake.script_held("turn.wait", waited("l2", completed()));
     h.action(Action::NewSession);
+    h.submit("a new question");
     h.until(|app| {
         app.session
             .as_ref()

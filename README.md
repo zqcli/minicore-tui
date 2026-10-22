@@ -40,9 +40,12 @@ fill in and exits; after that it validates both files, writes the Agent config
 to `session/agent.toml` and starts the built-in Agent with it
 (`minicore-tui agent --config session/agent.toml --stdio`) before the screen
 switches, so a bad configuration is an ordinary terminal error
-naming the file, line and key. The TUI then opens or creates a session and waits
-for your first message; no model is called until you send one. A draft typed
-meanwhile is kept. Full reference: [docs/configuration.md](docs/configuration.md).
+naming the file, line and key. The TUI then opens the session `--session` or
+`--continue` names. Otherwise it starts on an empty conversation with the editor
+and the footer, and creates the session only when you send the first message, so
+quitting first leaves no empty session behind. `--profile`, `--model`,
+`--reasoning`, `/model`, `/reasoning` and `/new <profile>` set what that session
+starts with. A draft typed meanwhile is kept. Full reference: [docs/configuration.md](docs/configuration.md).
 
 Prebuilt packages: every CI run uploads one per platform (Linux x86_64, macOS
 arm64 and x86_64, Windows x86_64) as a workflow artifact,
@@ -61,8 +64,8 @@ need `xattr -d com.apple.quarantine bin/*` first.
 | `--agent-config <FILE>` | Use this Agent config as is; no composition, no `models.toml`. For tests and advanced use. Replaces `--config`. |
 | `--workspace <DIR>` | Workspace of a new session. Default: the current directory. |
 | `--session <ID>` | Open this session. |
-| `--continue` | Open the most recent session of the workspace, or create one. Cannot be combined with `--session`. |
-| `--profile <ID>` | Profile of a new session. |
+| `--continue` | Open the most recent session of the workspace; with none, start on an empty conversation. Cannot be combined with `--session`. |
+| `--profile <ID>` | Profile of a new session (created by the first message). |
 | `--model <ID>` | Model for the session; applied to an opened session with `session.update`. |
 | `--reasoning <LEVEL>` | `auto`, `disabled`, `low`, `medium`, `high`, `xhigh`, `max` or `ultra`; applied like `--model`. |
 | `--theme <dark\|light>` | Palette for this run. |
@@ -150,6 +153,12 @@ without a report. The TUI never estimates it.
   expanded card's `click for full output` row opens the tool view.
 - **Turn end** is one dim line: outcome, duration, requests, tools and, when files
   changed, `N files changed (+a −b)`. A failed or cancelled turn shows its reason.
+- **Sessions.** None exists until the first message: the first `Enter` creates
+  it with the profile, model and reasoning picked so far and sends the text.
+  `/new` leaves the open session and returns to that state. Until then the
+  commands that read a session (`/compact`, `/context`, `/diff`, `/tool`,
+  `/rename`, `/export`, `/copy`, `/session`) and the `@` file picker say
+  `No session yet: send a message first`.
 - **Steering and queue.** `Enter` while a turn runs steers it; `Alt+Enter` queues
   a follow-up sent after the turn; `Alt+↑` takes the queued follow-ups back.
   `Esc` interrupts. A message sent while the Agent still compacts after a turn

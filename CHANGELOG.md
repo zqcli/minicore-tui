@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- A session exists only once you send a message. Starting without `--session`
+  or `--continue` (or with `--continue` and nothing to continue) shows the
+  conversation screen with an empty transcript; the first `Enter` creates the
+  session and sends the text, and a failed creation puts the text back in the
+  editor. Quitting before that leaves no empty session in the list.
+- `/new [profile]` leaves the open session for that empty screen instead of
+  creating one. Before the first message `/model`, `/reasoning`, `Ctrl+L`,
+  `Ctrl+P`, `Shift+Tab` and `/new <profile>` choose the settings the session
+  will start with, and the footer shows them; the commands that need a session
+  and the `@` file picker say `No session yet: send a message first`.
 - The welcome header (name, version, key hints, workspace) is gone: the
   transcript starts with the conversation, and the footer already shows the
   workspace.

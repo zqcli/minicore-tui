@@ -23,7 +23,7 @@ the kitty keyboard protocol; `Ctrl+J` always inserts a newline.
 | `Ctrl+X` | Cut the editor selection when one exists; otherwise copy the last assistant answer, as `/copy` does. |
 | `Ctrl+G` | Edit the draft in `[ui] editor` from `config.toml`, else `$VISUAL`, else `$EDITOR`. |
 | `/` at the start of the draft | Open the command palette. `Enter` runs the highlighted command; with no match it sends the line as a prompt. |
-| `@` at the start of a word | Open the workspace file picker. In the middle of a word (`me@example.com`) it is plain text. |
+| `@` at the start of a word | Open the workspace file picker. In the middle of a word (`me@example.com`) it is plain text. Before the first message there is no session to list files from: `@` stays text and a notice says so. |
 | `Home` / `End`, `Ctrl+A` / `Ctrl+E` | Start or end of the current line (`Home` with an empty draft and `End` also scroll, see below). |
 | `←` / `→` | Move by character. |
 | `Ctrl+←` / `Ctrl+→`, `Alt+←` / `Alt+→` | Move by word. |
@@ -53,6 +53,20 @@ the markers itself; a paste whose end marker does not come within a second is
 taken as it is. Unbracketed text that ends with Enter and arrives within 30 ms
 counts as one paste, which delays typed keys by that much on Windows only. A
 paste slower than that is indistinguishable from typing.
+
+## Before the first message
+
+With no session open (a start without `--session` or `--continue`, or after
+`/new`) the transcript is empty and no session exists. `Enter` or `Alt+Enter`
+with text creates the session with the profile, model and reasoning chosen so
+far and sends the text as its first message; if the creation fails the text is
+back in the editor with the error. While the session is being created another
+`Enter` leaves its text in the editor. `/model`, `/reasoning`, `Ctrl+L`,
+`Ctrl+P` and `Shift+Tab` choose the settings of that session and confirm with a
+notice, and `/new <profile>` chooses its profile. `Ctrl+R` opens a stored
+session. Commands that need a session (`/compact`, `/context`, `/diff`,
+`/tool`, `/rename`, `/export`, `/copy`, `/session`) answer
+`No session yet: send a message first`. Quitting creates nothing.
 
 ## Transcript and global keys
 
@@ -142,7 +156,7 @@ the name.
 
 | Command | Effect |
 |---|---|
-| `/new [profile]` | Create a session with the Agent's default profile, or the named one. |
+| `/new [profile]` | Leave the open session for an empty conversation; the first message creates the new session, with the Agent's default profile or the named one. |
 | `/sessions`, `/resume` | Open the sessions picker. |
 | `/rename <title>` | Rename the current session (an empty title is an error). |
 | `/model [id]` | Switch to the model (an exact id or a unique fuzzy match), or open the picker. |

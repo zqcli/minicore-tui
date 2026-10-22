@@ -316,7 +316,7 @@ impl App {
 
     /// Shift+Tab: the next supported reasoning level.
     fn next_reasoning(&self) -> Option<Reasoning> {
-        let current = self.session.as_ref()?.info.reasoning;
+        let current = self.reasoning()?;
         let levels = self.reasoning_levels();
         let next = levels
             .iter()

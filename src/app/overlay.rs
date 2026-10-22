@@ -5,6 +5,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde_json::json;
 
 use super::diff::DiffState;
+use super::draft::NO_SESSION;
 use super::session::auto_title;
 use super::tool::ToolView;
 use super::{App, DiffScope, Msg, NoticeLevel, Session, SessionOp, commands, find, tasks};
@@ -88,6 +89,16 @@ pub enum Panel {
     Tool(ToolRef),
 }
 
+impl Panel {
+    /// Whether the panel reads a session, so a draft has nothing to show in it.
+    fn needs_session(&self) -> bool {
+        matches!(
+            self,
+            Self::Context | Self::SessionInfo | Self::Diff(_) | Self::Tool(_)
+        )
+    }
+}
+
 /// The workspace paths containing the typed filter, case-insensitively; a
 /// match in the file name ranks before one only in the directories.
 pub fn matching_paths<'a>(paths: &'a [String], filter: &str) -> Vec<&'a String> {
@@ -155,17 +166,32 @@ pub fn filtered_sessions<'a>(
 }
 
 impl App {
-    /// The reasoning levels this session's model supports, in Agent order.
+    /// The reasoning levels the current model supports, in Agent order.
     pub fn reasoning_levels(&self) -> Vec<protocol::Reasoning> {
-        self.session
-            .as_ref()
-            .and_then(|session| session.model(&self.models))
+        let id = self.model_id();
+        self.models
+            .iter()
+            .find(|model| Some(model.id.as_str()) == id)
             .map(|model| model.supported_reasoning.clone())
             .unwrap_or_default()
     }
 
     /// Opens a picker or view, seeding it from the current state.
     pub fn open_panel(&mut self, panel: Panel) {
+        if self.session.is_none() {
+            // `workspace.files` needs a loaded session.
+            let hint = match panel {
+                Panel::Files => Some("@ file completion needs a session: send a message first"),
+                _ if panel.needs_session() => Some(NO_SESSION),
+                _ => None,
+            };
+            if let Some(hint) = hint {
+                // The command list the panel was picked from closes too.
+                self.overlay = Overlay::None;
+                self.notice(NoticeLevel::Info, hint);
+                return;
+            }
+        }
         self.overlay = match panel {
             Panel::Sessions => Overlay::Sessions {
                 filter: String::new(),
@@ -179,7 +205,7 @@ impl App {
                 selected: self.current_model_row(),
             },
             Panel::Reasoning => {
-                let current = self.session.as_ref().map(|session| session.info.reasoning);
+                let current = self.reasoning();
                 let levels = self.reasoning_levels();
                 Overlay::Reasoning {
                     selected: levels
@@ -413,12 +439,12 @@ impl App {
             .map_or(0, |(at, ch)| at + ch.len_utf8())
     }
 
-    /// The model picker opens on the session's model.
+    /// The model picker opens on the current model.
     fn current_model_row(&self) -> usize {
-        let current = self.session.as_ref().map(|session| &session.info.model);
+        let current = self.model_id();
         self.models
             .iter()
-            .position(|model| Some(&model.id) == current)
+            .position(|model| Some(model.id.as_str()) == current)
             .unwrap_or(0)
     }
 

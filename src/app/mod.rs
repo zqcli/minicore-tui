@@ -8,6 +8,7 @@ pub mod actions;
 pub mod commands;
 pub mod composer;
 pub mod diff;
+mod draft;
 pub mod find;
 pub mod keys;
 mod mouse;
@@ -179,8 +180,11 @@ pub struct App {
     pub sessions: Vec<SessionInfo>,
     pub models: Vec<ModelInfo>,
     pub profiles: Vec<ProfileInfo>,
-    /// Settings requested on the command line, used once by the first session.
+    /// Settings for the next session: the command-line flags, then what a
+    /// draft changes. The session that adopts them takes them.
     pub launch: LaunchSettings,
+    /// The Agent's default profile, which a new session takes without a `--profile`.
+    pub default_profile: Option<String>,
     pub composer: composer::Composer,
     /// Editor-only hit area from the last frame (not completion/sheet rows).
     pub composer_area: ratatui::layout::Rect,
@@ -217,6 +221,10 @@ pub struct App {
     /// An open or create request is in flight, so no session yet means
     /// waiting rather than start one.
     pub loading_session: bool,
+    /// The draft's text while its session is being created; sent once it exists.
+    pub first_message: Option<String>,
+    /// Numbers the sessions made resident, so a late result never reaches a later one.
+    pub epoch: u64,
     pub templates: Vec<templates::Template>,
     /// The TUI directory; `None` in tests, which touch no files.
     pub home: Option<crate::config::Home>,
@@ -254,6 +262,7 @@ impl App {
             models: Vec::new(),
             profiles: Vec::new(),
             launch: LaunchSettings::default(),
+            default_profile: None,
             composer: composer::Composer::new(),
             composer_area: ratatui::layout::Rect::default(),
             composer_max_rows: crate::ui::composer::MIN_ROWS,
@@ -280,6 +289,8 @@ impl App {
             layout: Layout::default(),
             edit_request: None,
             loading_session: false,
+            first_message: None,
+            epoch: 0,
             templates: Vec::new(),
             home: None,
             composed: false,
@@ -312,8 +323,11 @@ impl App {
                 self.templates = templates::load(self.home.as_ref());
                 self.ready = true;
             }
-            Msg::Opened(result) => self.adopt(result, false),
-            Msg::Created(result) => self.adopt(result, true),
+            Msg::Opened(result) => self.adopt(result, None),
+            Msg::Created(result) => {
+                let first = self.first_message.take();
+                self.adopt(result, first);
+            }
             Msg::Deleted(id, result) => {
                 if self.ok(result).is_some() {
                     self.sessions.retain(|session| session.session_id != id);

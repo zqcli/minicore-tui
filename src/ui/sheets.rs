@@ -195,14 +195,14 @@ fn sessions_sheet(app: &App, rows: &[SessionInfo], state: &SessionsState, styles
 }
 
 fn models_sheet(app: &App, filter: &str, selected: usize, styles: Styles) -> Sheet {
-    let current = app.session.as_ref().map(|session| &session.info.model);
+    let current = app.model_id();
     let shown = matching_models(&app.models, filter);
     let rows = shown
         .iter()
         .map(|model| {
             let provider = provider(model).map(|name| format!("[{name}]"));
             Row::new(model.id.clone(), provider.unwrap_or_default())
-                .mark(Some(&model.id) == current)
+                .mark(Some(model.id.as_str()) == current)
         })
         .collect::<Vec<_>>();
     let notes = match shown.get(selected) {
@@ -248,7 +248,7 @@ pub fn model_details(model: &ModelInfo) -> String {
 }
 
 fn reasoning_sheet(app: &App, selected: usize) -> Sheet {
-    let current = app.session.as_ref().map(|session| session.info.reasoning);
+    let current = app.reasoning();
     let rows = app
         .reasoning_levels()
         .iter()

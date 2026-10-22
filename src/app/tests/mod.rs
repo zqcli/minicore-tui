@@ -3,6 +3,7 @@
 mod compaction;
 mod config;
 mod diff;
+mod draft;
 mod editor;
 mod harness;
 mod history;

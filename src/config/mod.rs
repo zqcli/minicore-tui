@@ -169,6 +169,8 @@ pub struct Launch {
     pub agent_binary: Option<PathBuf>,
     /// False when `--agent-config` named a raw file, so `/reload` cannot recompose.
     pub composed: bool,
+    /// The profile a new session takes without `--profile`; unknown for a raw Agent config.
+    pub default_profile: Option<String>,
 }
 
 pub enum Prepared {
@@ -193,6 +195,7 @@ pub fn prepare(
             agent_config: raw.to_owned(),
             agent_binary: agent_binary(home, request.agent, binary),
             composed: false,
+            default_profile: None,
         }));
     }
     if home.is_fresh() {
@@ -209,6 +212,7 @@ pub fn prepare(
         ui: loaded.ui,
         agent_config,
         composed: true,
+        default_profile: Some(loaded.agent.default_profile),
     }))
 }
 

@@ -201,6 +201,7 @@ async fn run() -> i32 {
     app.notifier.bell = launch.ui.bell;
     app.editor = launch.ui.editor;
     app.composed = launch.composed;
+    app.default_profile = launch.default_profile;
     app.composer = minicore_tui::app::composer::Composer::with_history_file(home.history_file());
     app.home = Some(home);
     app.styles = Styles::of(Palette::for_kind(theme));
@@ -317,8 +318,9 @@ async fn run() -> i32 {
             frames.mark(Cause::Event);
         }
 
-        // Startup opens or creates a session once; after a failure Enter or
-        // `/new` retries, so a bad flag cannot loop on `session.create`.
+        // Startup opens the session `--session` or `--continue` names, once;
+        // without one the screen is a draft that creates a session at its
+        // first message.
         if app.ready
             && let Some(session) = startup.take()
         {
@@ -326,12 +328,10 @@ async fn run() -> i32 {
                 .continue_recent
                 .then(|| pick_recent(&app.sessions, &workspace))
                 .flatten();
-            let action = match session.or_else(|| recent.cloned()) {
-                Some(id) => minicore_tui::app::Action::OpenSession(id),
-                None => minicore_tui::app::Action::NewSession,
-            };
-            app.on_action(action);
-            frames.mark(Cause::Event);
+            if let Some(id) = session.or_else(|| recent.cloned()) {
+                app.on_action(minicore_tui::app::Action::OpenSession(id));
+                frames.mark(Cause::Event);
+            }
         }
 
         if frames.wanted() && guard.is_active() && tokio::time::Instant::now() >= next_frame {

@@ -182,9 +182,9 @@ instead of being ignored.
 | `--home DIR` | the TUI directory (see above) |
 | `--agent BIN` | an external Agent executable instead of the built-in one; beats `[agent] binary` |
 | `--agent-config FILE` | use this Agent config as is: no composition, no first-run files, no `models.toml`. `config.toml` is still read for `[ui]` if it exists. For tests and advanced use. |
-| `--profile ID`, `--model ID`, `--reasoning LEVEL` | settings of a new session |
+| `--profile ID`, `--model ID`, `--reasoning LEVEL` | settings of the next new session, which the first message creates |
 | `--theme dark\|light` | theme for this run |
-| `--workspace DIR`, `--session ID`, `--continue` | which workspace and session |
+| `--workspace DIR`, `--session ID`, `--continue` | which workspace and session; with neither of the last two the TUI creates no session until the first message |
 
 `--config` was removed; the parser says so instead of reporting an unknown option.
 

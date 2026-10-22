@@ -168,8 +168,6 @@ fn profiles(h: &Harness) {
 async fn new_takes_a_profile_that_completes() {
     let mut h = Harness::new();
     profiles(&h);
-    h.fake
-        .script("session.create", json!({"session": session_info("s1")}));
     h.open().await;
 
     h.type_text("/new ");
@@ -180,14 +178,12 @@ async fn new_takes_a_profile_that_completes() {
     assert_eq!(h.app.palette_rows()[0].1, "mock ask");
     h.press(KeyCode::Enter);
     h.settle().await;
-    let created = h.calls("session.create");
-    assert_eq!(created.len(), 1);
-    assert_eq!(created[0]["profile"], "ask");
+    assert_eq!(h.app.launch.profile.as_deref(), Some("ask"));
 
     h.type_text("/new nope");
     h.press(KeyCode::Enter);
     assert_eq!(h.notices(), ["Unknown profile nope"]);
-    assert_eq!(h.calls("session.create").len(), 1);
+    assert_eq!(h.app.launch.profile.as_deref(), Some("ask"));
 }
 
 #[tokio::test(start_paused = true)]

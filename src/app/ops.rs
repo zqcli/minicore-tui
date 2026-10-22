@@ -111,26 +111,44 @@ impl App {
         }
     }
 
-    /// Makes the opened or created session resident and loads its tail.
-    pub(super) fn adopt(&mut self, result: Result<SessionInfo, RpcError>, created: bool) {
-        self.loading_session = false;
-        let Some(info) = self.ok(result) else {
-            return;
-        };
-        self.merge_catalog_info(info.clone());
-        let epoch = self.session.as_ref().map_or(0, |old| old.epoch) + 1;
-        self.session = Some(Session::new(info, epoch));
+    /// Makes `session` the resident one, or none for a draft, and drops the
+    /// view state of the old one.
+    pub(super) fn show_session(&mut self, session: Option<Session>) {
+        self.session = session;
         self.layout.clear();
         self.scroll = Scroll::Follow;
         self.waiting_for_compaction = false;
-        self.read_history(Window::Tail);
+    }
+
+    /// Makes the opened or created session resident. A created one comes with
+    /// the draft's `first` message, which it sends; an opened one loads its tail.
+    pub(super) fn adopt(&mut self, result: Result<SessionInfo, RpcError>, first: Option<String>) {
+        self.loading_session = false;
+        let Some(info) = self.ok(result) else {
+            if let Some(text) = first {
+                self.restore_draft(&text);
+            }
+            return;
+        };
+        self.merge_catalog_info(info.clone());
+        self.epoch += 1;
+        self.show_session(Some(Session::new(info, self.epoch)));
+        // A new session has no history to read, and the tail would clear the
+        // prompt block of the first send.
+        if first.is_none() {
+            self.read_history(Window::Tail);
+        }
         self.refresh_branch();
         self.refresh_context();
         // A new session already carries its settings; an opened one takes them
         // through `session.update`, so a flag is never silently dropped.
         let launch = std::mem::take(&mut self.launch);
-        if !created && (launch.model.is_some() || launch.reasoning.is_some()) {
-            self.update_session(launch.fields(false));
+        match first {
+            Some(text) => self.send(text),
+            None if launch.model.is_some() || launch.reasoning.is_some() => {
+                self.update_session(launch.fields(false));
+            }
+            None => {}
         }
     }
 

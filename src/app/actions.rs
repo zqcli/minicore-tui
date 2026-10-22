@@ -3,6 +3,7 @@
 
 use serde_json::{Value, json};
 
+use super::draft::NO_SESSION;
 use super::{
     App, InteractionKind, Msg, NoticeLevel, Queued, QueuedKind, Scroll, Session, SessionOp,
     commands, tasks, templates,
@@ -61,8 +62,27 @@ pub enum Answer {
     Choice(usize),
 }
 
+impl Action {
+    /// Whether the action works on a session, so a draft has nothing for it.
+    fn needs_session(&self) -> bool {
+        matches!(
+            self,
+            Self::Rename(_)
+                | Self::Compact
+                | Self::CopyLastAnswer
+                | Self::Export(_)
+                | Self::LoadOlder
+                | Self::ShowTool
+        )
+    }
+}
+
 impl App {
     pub fn on_action(&mut self, action: Action) {
+        if self.session.is_none() && action.needs_session() {
+            self.notice(NoticeLevel::Info, NO_SESSION);
+            return;
+        }
         match action {
             Action::Submit => self.submit(),
             Action::QueueFollowUp => self.submit_follow_up(),
@@ -74,9 +94,9 @@ impl App {
                     Msg::Opened(tasks::session(client, protocol::METHOD_SESSION_OPEN, params).await)
                 });
             }
-            Action::NewSession => self.create_session(None),
+            Action::NewSession => self.new_draft(None),
             Action::NewSessionWith(profile) if self.profiles.iter().any(|p| p.id == profile) => {
-                self.create_session(Some(profile));
+                self.new_draft(Some(profile));
             }
             Action::NewSessionWith(profile) => {
                 self.notice(NoticeLevel::Error, format!("Unknown profile {profile}"));
@@ -86,13 +106,13 @@ impl App {
                 self.spawn_msg(tasks::delete_session(client, id));
             }
             Action::Rename(title) => self.rename(&title),
-            Action::SetModel(id) => self.update_session(json!({ "model": id })),
+            Action::SetModel(id) => self.set_model(id),
             Action::SwitchModel(text) => match commands::resolve_model(&self.models, &text) {
-                Ok(model) => self.update_session(json!({ "model": model.id })),
+                Ok(model) => self.set_model(model.id.clone()),
                 Err(message) => self.notice(NoticeLevel::Error, message),
             },
             Action::CycleModel { forward } => self.cycle_model(forward),
-            Action::SetReasoning(level) => self.update_session(json!({ "reasoning": level })),
+            Action::SetReasoning(level) => self.set_reasoning(level),
             Action::Compact => self.compact(),
             Action::CopyLastAnswer => self.copy_last_answer(),
             Action::Export(path) => {
@@ -141,12 +161,10 @@ impl App {
     }
 
     /// Enter: send when idle, steer when a turn is running. Without a session
-    /// it starts one and keeps the draft.
+    /// the draft's text starts one.
     fn submit(&mut self) {
         if self.session.is_none() {
-            if !self.loading_session {
-                self.create_session(None);
-            }
+            self.start_session();
             return;
         }
         let text = self.composer.submit().trim_end().to_owned();
@@ -163,6 +181,10 @@ impl App {
 
     /// Alt+Enter: queue a follow-up; when idle it just sends.
     fn submit_follow_up(&mut self) {
+        if self.session.is_none() {
+            self.start_session();
+            return;
+        }
         let text = self.composer.submit().trim_end().to_owned();
         if text.is_empty() {
             return;
@@ -176,12 +198,8 @@ impl App {
         }
     }
 
-    fn send(&mut self, text: String) {
-        let Some(session) = self.session.as_mut() else {
-            self.composer.restore_text(&text);
-            self.notice(NoticeLevel::Error, "No session is open");
-            return;
-        };
+    pub(super) fn send(&mut self, text: String) {
+        let session = self.session_mut();
         // The durable history echoes this prompt, so the turn's region starts
         // before it: reconciling replaces the prompt rather than doubling it.
         session.next_turn_start = Some(session.transcript.len());
@@ -268,14 +286,11 @@ impl App {
         self.refresh_context();
     }
 
-    pub(super) fn create_session(&mut self, profile: Option<String>) {
+    pub(super) fn create_session(&mut self) {
         self.loading_session = true;
         // Without a profile the Agent picks its configured default; choosing
         // one here would override that.
         let mut params = self.launch.fields(true);
-        if let Some(profile) = profile {
-            params["profile"] = json!(profile);
-        }
         params["workspace"] = json!(self.workspace);
         let client = self.client.clone();
         self.spawn_msg(async move {
@@ -305,22 +320,20 @@ impl App {
 
     /// Ctrl+P: the next model in the catalog, wrapping at the end.
     fn cycle_model(&mut self, forward: bool) {
-        let Some(session) = self.session.as_ref() else {
-            return;
-        };
         if self.models.len() < 2 {
             self.notice(NoticeLevel::Info, "Only one model is available");
             return;
         }
+        let current = self.model_id();
         let at = self
             .models
             .iter()
-            .position(|model| model.id == session.info.model);
+            .position(|model| Some(model.id.as_str()) == current);
         let delta = if forward { 1 } else { -1 };
         let next = at.map_or(0, |at| {
             crate::app::picker::step(at, delta, self.models.len())
         });
-        self.update_session(json!({ "model": self.models[next].id }));
+        self.set_model(self.models[next].id.clone());
     }
 
     fn compact(&mut self) {
