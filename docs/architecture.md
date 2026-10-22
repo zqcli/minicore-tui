@@ -312,8 +312,7 @@ the history length.
   visible rows by reference (`Layout::visible`), no copy. The text a click or
   drag needs is read back from the same cache (`Layout::row_text`), at the
   position the last frame recorded in `Layout::viewport`; the cache only
-  changes inside `draw`, so that is what the screen shows. The welcome header
-  of an empty transcript is not in the cache and cannot be selected.
+  changes inside `draw`, so that is what the screen shows.
 - **Streaming Markdown.** A streaming assistant block renders through a
   `StreamRenderer` (`ui/markdown/stream.rs`), keyed by request. It scans line
   by line for the last cut later text cannot change (a blank line outside a

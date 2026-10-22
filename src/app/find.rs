@@ -186,11 +186,8 @@ impl App {
             show_reasoning: self.show_reasoning,
         };
         let lines = blocks::render(block, self.styles, width, fold);
-        // A block sits behind a separator row, or behind the welcome header.
-        let lead = match found.block {
-            0 => self.layout.state.header_rows,
-            _ => 1,
-        };
+        // Every block but the first sits behind a separator row.
+        let lead = usize::from(found.block > 0);
         let row = match_row(&lines, &query, found.ordinal).map_or(0, |row| lead + row);
         self.scroll = Scroll::Anchor {
             block: found.block,

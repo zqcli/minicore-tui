@@ -415,15 +415,14 @@ async fn paging_keeps_four_rows_and_ctrl_arrows_jump_between_prompts() {
 
     h.ctrl(KeyCode::Home);
     assert!(
-        first_row(&mut h).ends_with(concat!("minicore-tui v", env!("CARGO_PKG_VERSION"))),
-        "the header tops the transcript"
+        first_row(&mut h).ends_with("prompt 0"),
+        "ctrl+home goes to the first prompt"
     );
-    assert!(h.screen(60, 24).contains("prompt 0"));
     h.ctrl(KeyCode::End);
     assert_eq!(h.app.scroll, Scroll::Follow);
     h.press(KeyCode::Home);
     assert!(
-        first_row(&mut h).ends_with(concat!("minicore-tui v", env!("CARGO_PKG_VERSION"))),
+        first_row(&mut h).ends_with("prompt 0"),
         "home with no draft goes to the top"
     );
     h.press(KeyCode::End);

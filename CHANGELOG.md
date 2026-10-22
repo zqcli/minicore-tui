@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- The welcome header (name, version, key hints, workspace) is gone: the
+  transcript starts with the conversation, and the footer already shows the
+  workspace.
+
 ## 0.5.4 — 2026-10-22
 
 - Built-in backend: Agent 0.7.4 with Runtime 0.7.4, pinned by release tag.

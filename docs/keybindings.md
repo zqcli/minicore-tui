@@ -87,7 +87,7 @@ are above the bottom. `End` or scrolling to the bottom resumes following the tai
 | Click in the editor | Place the caret at a grapheme or paste-chip boundary, respecting wrapping, padding and editor scrolling. |
 | Drag in the editor | Select draft text; releasing copies it and keeps it highlighted. Typing replaces it. Moving outside the editor reaches adjacent rows and scrolls the draft. |
 | Shift+click in the editor | Extend the selection from its fixed anchor. Many terminals keep Shift+click for their own selection and never send it. |
-| Drag in the transcript | Select transcript text; releasing copies it. Only content is taken: rails, padding, card durations, expand hints, timestamps, turn-end lines and the welcome header are neither highlighted nor copied. |
+| Drag in the transcript | Select transcript text; releasing copies it. Only content is taken: rails, padding, card durations, expand hints, timestamps and turn-end lines are neither highlighted nor copied. |
 
 Editor clicks are accepted while an inline command or file completion list is
 open, but completion rows are not editor text. Full-screen views, approval

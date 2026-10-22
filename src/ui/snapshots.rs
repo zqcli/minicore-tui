@@ -747,20 +747,6 @@ fn the_gutter_column_stays_blank_and_ignores_clicks() {
     for line in screen.lines().take(area.height as usize) {
         assert!(!line.starts_with(|c: char| c != ' '), "{line:?}\n{screen}");
     }
-    app.scroll = Scroll::Anchor {
-        block: 0,
-        offset: 0,
-    };
-    let top = render(app, 70, 20);
-    assert!(
-        top.contains(concat!("minicore-tui v", env!("CARGO_PKG_VERSION"))),
-        "{top}"
-    );
-    assert!(
-        top.contains("esc interrupt · ctrl+c clear · / commands"),
-        "{top}"
-    );
-    app.scroll = Scroll::Follow;
     let header = row_of(&screen, " ▎ bash");
     click(app, 0, header);
     assert!(

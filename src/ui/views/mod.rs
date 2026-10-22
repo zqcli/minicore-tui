@@ -22,8 +22,7 @@ fn styled(text: &str, style: Style) -> Line<'static> {
     Line::from(Span::styled(text.to_owned(), style))
 }
 
-/// Key hints as the welcome header draws them: the key faint, what it does
-/// dim, `·` between pairs.
+/// Key hints: the key faint, what it does dim, `·` between pairs.
 pub fn key_hints(hints: &[(&str, &str)], styles: Styles) -> Vec<Span<'static>> {
     let mut spans = Vec::with_capacity(hints.len() * 3);
     for (index, (key, action)) in hints.iter().enumerate() {

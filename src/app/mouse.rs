@@ -248,13 +248,9 @@ impl App {
             self.scroll = Scroll::Follow;
             return;
         }
-        let Some((index, line)) = self.layout.hit(column, row) else {
+        let Some(index) = self.layout.hit(column, row) else {
             return;
         };
-        // Block 0's rows start with the welcome header.
-        if index == 0 && line < self.layout.state.header_rows {
-            return;
-        }
         let all_expanded = self.tools_expanded;
         let text = self
             .layout
