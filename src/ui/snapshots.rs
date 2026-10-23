@@ -179,12 +179,12 @@ fn the_draft_is_the_welcome_header_over_the_editor_and_the_footer() {
         .expect("profile"),
     ];
     app.default_profile = Some("coding".into());
-    let screen = render(&mut app, 70, 12);
+    let screen = render(&mut app, 70, 14);
     snapshot("tests/snapshots/draft.txt", DRAFT, screen.clone());
     assert!(!screen.contains("No session"), "a draft shows no status");
 
     app.ready = false;
-    let screen = render(&mut app, 70, 14);
+    let screen = render(&mut app, 70, 16);
     assert!(screen.contains("minicore-tui v"), "{screen}");
     assert!(screen.contains("Connecting to minicore-agent…"), "{screen}");
 }
@@ -667,12 +667,12 @@ fn clicking_the_body_or_the_footer_of_an_expanded_card_collapses_it() {
         let _runtime = fixture._runtime.enter();
         let app = &mut fixture.app;
         conversation(app);
-        let folded = render(app, 70, 30);
+        let folded = render(app, 70, 34);
         click(app, 10, row_of(&folded, " ▎ bash"));
-        let open = render(app, 70, 30);
+        let open = render(app, 70, 34);
         assert!(open.contains("click for full output"), "{open}");
         click(app, 10, row_of(&open, prefix));
-        let collapsed = render(app, 70, 30);
+        let collapsed = render(app, 70, 34);
         assert!(
             collapsed.contains("ctrl+o to expand"),
             "a click on {prefix:?} left the card open:\n{collapsed}"

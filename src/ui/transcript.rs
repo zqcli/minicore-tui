@@ -272,7 +272,8 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, styles: Styles) {
     draw_flash(frame, area, app, styles);
 }
 
-/// The welcome rows: name and version, the main bindings, the workspace.
+/// The welcome rows, each group set off by a blank row: name and version, the
+/// main bindings, the workspace.
 fn header(styles: Styles, width: u16, workspace: &Path) -> Vec<Line<'static>> {
     let mut lines = vec![
         Line::default(),
@@ -281,6 +282,7 @@ fn header(styles: Styles, width: u16, workspace: &Path) -> Vec<Line<'static>> {
             Span::styled("minicore-tui", styles.title()),
             Span::styled(concat!(" v", env!("CARGO_PKG_VERSION")), styles.faint()),
         ]),
+        Line::default(),
     ];
     // Hints wrap whole, so a narrow terminal never splits a key from its action.
     let room = (width as usize).saturating_sub(1);
@@ -299,6 +301,7 @@ fn header(styles: Styles, width: u16, workspace: &Path) -> Vec<Line<'static>> {
         row.push((key, action));
     }
     lines.push(hint_line(&row, styles));
+    lines.push(Line::default());
     let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
     let shown = match home
         .as_deref()

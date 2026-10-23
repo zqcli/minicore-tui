@@ -27,6 +27,8 @@
   view now.
 - Collapsing a card, `Ctrl+O` or a resize no longer leaves blank rows under the
   transcript: the view stops at the end and follows new output again.
+- The welcome header has an empty row between its title, its key hints and the
+  workspace; hints that wrap stay together as one group.
 
 ## 0.5.4 — 2026-10-22
 
