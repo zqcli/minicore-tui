@@ -295,6 +295,9 @@ fn tool(call: &ToolCall, styles: Styles, width: usize, expanded: bool) -> Vec<Li
     let row = |spans: Vec<Span<'static>>| surface_row(rail, surface, spans, width);
     let inner = text_width(width);
     let body = card_body(call);
+    // A bash call can take seconds to print anything; say it is alive.
+    let waiting = call.is_running() && body.lines.is_empty() && body.hidden == 0;
+    let running_row = || chrome(row(padded(vec![Span::styled("running…", styles.meta())])));
     if !expanded {
         let name = Span::styled(
             wrap::truncate(&card_title(call), inner),
@@ -327,6 +330,8 @@ fn tool(call: &ToolCall, styles: Styles, width: usize, expanded: bool) -> Vec<Li
                 inner.saturating_sub(1),
                 styles,
             )))));
+        } else if waiting {
+            lines.push(running_row());
         }
         return lines;
     }
@@ -386,6 +391,9 @@ fn tool(call: &ToolCall, styles: Styles, width: usize, expanded: bool) -> Vec<Li
     if !body_rows.is_empty() {
         lines.push(spacer());
         lines.extend(body_rows);
+    } else if waiting {
+        lines.push(spacer());
+        lines.push(running_row());
     }
     if bash {
         let mut footer: Vec<Span<'static>> = Vec::new();
@@ -749,6 +757,7 @@ mod tests {
     use crate::protocol::read::UserKind;
     use crate::protocol::{LoopOutcome, ToolRef};
     use crate::transcript::{ChangeSummary, RequestKey};
+    use crate::ui::rails::content_cells;
     use crate::ui::theme::Palette;
     use std::time::Duration;
 
@@ -972,6 +981,99 @@ mod tests {
                 "▎ ... (14 more lines, click or ctrl+o to expand)".into(),
             ]
         );
+    }
+
+    fn quiet(state: ToolState) -> ToolCall {
+        let mut quiet = call();
+        quiet.state = state;
+        quiet.duration = None;
+        quiet.exit_code = None;
+        quiet.output.clear();
+        quiet.output_dropped = 0;
+        quiet
+    }
+
+    // The live path: the invocation makes a Pending card and `tool_started`
+    // only stamps `started_at`.
+    fn started() -> ToolCall {
+        let mut started = quiet(ToolState::Pending);
+        started.started_at = Some(std::time::Instant::now());
+        started
+    }
+
+    #[test]
+    fn a_started_card_without_output_says_running_where_the_hint_goes() {
+        assert_eq!(
+            card(started(), fold()),
+            ["▎ bash", "▎ $ python3 -m unittest", "▎ running…"]
+        );
+    }
+
+    #[test]
+    fn running_gives_way_to_the_hint_once_output_arrives() {
+        let mut running = started();
+        running.push_output("Ran 30 tests\n");
+        let body = card(running, fold());
+        assert_eq!(body[2], "▎ ... (1 more line, click or ctrl+o to expand)");
+        assert!(!body.join("\n").contains("running…"));
+    }
+
+    #[test]
+    fn a_card_that_has_not_started_says_nothing_running() {
+        // `awaiting_policy` maps to Running while the call waits for approval.
+        for state in [ToolState::Pending, ToolState::Running] {
+            for mode in [fold(), expanded()] {
+                let body = card(quiet(state), mode).join("\n");
+                assert!(!body.contains("running…"), "{state:?}: {body}");
+            }
+        }
+        assert_eq!(card(quiet(ToolState::Running), fold()).len(), 2);
+    }
+
+    #[test]
+    fn a_finished_card_says_nothing_running() {
+        for state in [
+            ToolState::Succeeded,
+            ToolState::Failed,
+            ToolState::Denied,
+            ToolState::Cancelled,
+        ] {
+            for mode in [fold(), expanded()] {
+                let mut finished = quiet(state);
+                finished.started_at = Some(std::time::Instant::now());
+                let body = card(finished, mode).join("\n");
+                assert!(!body.contains("running…"), "{state:?}: {body}");
+            }
+        }
+    }
+
+    #[test]
+    fn an_expanded_started_card_without_output_says_running_as_its_body() {
+        let body = card(started(), expanded());
+        assert_eq!(
+            body,
+            [
+                "▎",
+                "▎ $ python3 -m unittest",
+                "▎ click for full output",
+                "▎",
+                "▎ running…",
+                "▎",
+            ]
+        );
+    }
+
+    #[test]
+    fn the_running_row_is_chrome_that_a_selection_skips() {
+        for mode in [fold(), expanded()] {
+            let block = Block::Tool(Box::new(started()));
+            let lines = render(&block, styles(), 60, mode);
+            let row = lines
+                .iter()
+                .find(|line| line.to_string().contains("running…"))
+                .unwrap();
+            assert_eq!(content_cells(row), 0..0);
+        }
     }
 
     #[test]

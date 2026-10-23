@@ -155,11 +155,12 @@ without a report. The TUI never estimates it.
   `Ctrl+T` collapses it to one `Thinking...` row.
 - **Tool cards** start folded to three rows on a state-coloured band (running,
   done, failed): tool name, target (`$ cmd`, `path:range`, `pattern in path`)
-  and a hidden-line hint, with duration, exit code or line changes on the
-  right. `Ctrl+O` expands all cards and thinking, and a click toggles one. An
-  expanded card has a `click for full output` row right under its title or
-  command, which opens the tool view; a click on any other row of an expanded
-  card collapses it, while dragging over its output selects without collapsing.
+  and a hidden-line hint (`running…` while a running call has no output yet),
+  with duration, exit code or line changes on the right. `Ctrl+O` expands all
+  cards and thinking, and a click toggles one. An expanded card has a `click
+  for full output` row right under its title or command, which opens the tool
+  view; a click on any other row of an expanded card collapses it, while
+  dragging over its output selects without collapsing.
 - **Turn end** is one dim line: outcome, duration, requests, tools and, when files
   changed, `N files changed (+a −b)`. A failed or cancelled turn shows its reason.
 - **Sessions.** None exists until the first message: the first `Enter` creates

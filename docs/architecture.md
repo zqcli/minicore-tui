@@ -359,10 +359,12 @@ the history length.
   when it ends (and for any card read from history) a card keeps the 200 rows an
   expanded one shows. A collapsed card is a title row with its facts (duration,
   exit code, `+a −b`; a running card has none), the call's detail, a
-  failure's first line and a `... (N lines, click or ctrl+o to expand)` hint;
-  the rest is in the tool view. An expanded card always has a chrome row
-  directly under its title rows: `… N earlier lines · click for full output`
-  (`bash` shows its tail), `… N more lines · …` (head tools), `… N lines · …`
+  failure's first line and a `... (N lines, click or ctrl+o to expand)` hint,
+  or a `running…` chrome row while a running call has no output yet (also the
+  body of an expanded one); the rest is in the tool view. An expanded card
+  always has a chrome row directly under its title rows:
+  `… N earlier lines · click for full output` (`bash` shows its tail),
+  `… N more lines · …` (head tools), `… N lines · …`
   for a reloaded card (the line count comes from its summary), or just `click
   for full output` when nothing is hidden. That row (or `/tool`) opens the full
   output. A click on a folded card's text toggles it; on an expanded

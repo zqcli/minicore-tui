@@ -972,6 +972,110 @@ fn a_drag_over_a_card_header_selects_instead_of_toggling() {
     assert!(after.contains("ctrl+o to expand"), "still folded:\n{after}");
 }
 
+/// Feeds one Agent event through the reducer, as the live loop does.
+fn emit(app: &mut App, kind: &str, mut data: serde_json::Value) {
+    data["meta"] = serde_json::json!({"session_id": "ses_0123456789abcdef", "dropped_before": 0});
+    let event = serde_json::from_value(serde_json::json!({"type": kind, "data": data})).unwrap();
+    app.session.as_mut().unwrap().apply_event(event);
+}
+
+/// A live turn whose bash call is announced by a preview, the way the Agent does.
+fn previewed_bash(app: &mut App) -> ToolRef {
+    let turn = TurnRef::new("ses_0123456789abcdef", "loop_1");
+    app.session.as_mut().unwrap().live = Some(crate::app::LiveTurn::new(turn.clone(), 0));
+    emit(
+        app,
+        "tool_arguments_preview",
+        serde_json::json!({
+            "turn": turn, "request_index": 1, "tool_call_id": "call_1", "tool_name": "bash",
+            "state": "generating", "display": {"detail": "$ cargo test --lib"},
+        }),
+    );
+    tool().key
+}
+
+#[test]
+fn a_running_card_without_output_shows_running_until_output_arrives() {
+    let mut fixture = app();
+    let app = &mut fixture.app;
+    let key = previewed_bash(app);
+    assert!(!render(app, 70, 30).contains("running…"));
+    emit(
+        app,
+        "tool_started",
+        serde_json::json!({
+            "turn": TurnRef::new("ses_0123456789abcdef", "loop_1"), "request_index": 1,
+            "tool_call_id": "call_1", "tool_name": "bash",
+        }),
+    );
+    let folded = render(app, 70, 30);
+    let header = row_of(&folded, " ▎ bash");
+    assert_eq!(row_of(&folded, " ▎ running…"), header + 2);
+    let drag = crate::app::selection::Drag {
+        from: (1, header),
+        to: (69, header + 2),
+    };
+    assert_eq!(
+        app.selected_text(drag).as_deref(),
+        Some("bash\n$ cargo test --lib")
+    );
+
+    click(app, 10, header + 2);
+    let open = render(app, 70, 30);
+    assert!(open.contains("click for full output"), "{open}");
+    assert!(open.contains(" ▎ running…"), "{open}");
+    click(app, 10, row_of(&open, " ▎ running…"));
+    assert!(render(app, 70, 30).contains(" ▎ running…"));
+
+    let session = app.session.as_mut().unwrap();
+    session
+        .transcript
+        .find_tool_mut(&key)
+        .unwrap()
+        .push_output("Compiling\n");
+    let streaming = render(app, 70, 30);
+    assert!(
+        streaming.contains("(1 more line, click or ctrl+o to expand)"),
+        "{streaming}"
+    );
+    assert!(!streaming.contains("running…"), "{streaming}");
+
+    let session = app.session.as_mut().unwrap();
+    session
+        .transcript
+        .find_tool_mut(&key)
+        .unwrap()
+        .output
+        .clear();
+    emit(
+        app,
+        "tool_finished",
+        serde_json::json!({
+            "turn": TurnRef::new("ses_0123456789abcdef", "loop_1"), "request_index": 1,
+            "tool_call_id": "call_1", "result": {"outcome": "success", "content_bytes": 0},
+        }),
+    );
+    assert!(!render(app, 70, 30).contains("running…"));
+}
+
+#[test]
+fn a_card_waiting_for_approval_does_not_say_running() {
+    let mut fixture = app();
+    let app = &mut fixture.app;
+    let key = previewed_bash(app);
+    emit(
+        app,
+        "tool_execution",
+        serde_json::json!({
+            "turn": TurnRef::new("ses_0123456789abcdef", "loop_1"),
+            "data": {"tool_ref": key, "state": "awaiting_policy", "result_truncated": false},
+        }),
+    );
+    let call = app.session.as_ref().unwrap().transcript.find_tool(&key);
+    assert_eq!(call.unwrap().state, ToolState::Running);
+    assert!(!render(app, 70, 20).contains("running…"));
+}
+
 #[test]
 fn a_drag_across_a_card_takes_its_text_without_rails_or_hints() {
     let mut fixture = app();
