@@ -15,7 +15,7 @@ file is the whole program. Version 0.4 is a rewrite of the v0.3 frontend; see
   `Alt+Enter` need a terminal with the kitty keyboard protocol; `Ctrl+J` always
   inserts a newline.
 
-Built-in backend: Agent 0.7.6, which links Runtime 0.7.4; `Cargo.toml` pins the
+Built-in backend: Agent 0.8.0, which links Runtime 0.8.0; `Cargo.toml` pins the
 Agent by its release tag and `Cargo.lock` fixes both. An
 external Agent can still be named with `--agent`. At startup the TUI requires
 Protocol v1 and these Agent capabilities, and refuses an Agent that lacks one: `session.read`, `session.read.display`, `session.context`,
