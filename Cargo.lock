@@ -1038,8 +1038,8 @@ checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
 name = "minicore-agent"
-version = "0.7.5"
-source = "git+https://github.com/zqcli/minicore-agent?tag=v0.7.5#825efe6656cd7c2474a2bdfff9bbd15151e1ad56"
+version = "0.7.6"
+source = "git+https://github.com/zqcli/minicore-agent?tag=v0.7.6#a4f40c4afed368511f0beadde9a0a24c4f5720ea"
 dependencies = [
  "base64 0.22.1",
  "bytes",

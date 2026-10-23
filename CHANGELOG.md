@@ -6,7 +6,7 @@
   expand hint goes (and as the body of an expanded card), so a slow first
   output, such as a new PowerShell on Windows, no longer looks stuck. The first
   output line replaces it.
-- Built-in backend: Agent 0.7.5, pinned by tag. Thinking from DeepSeek through
+- Built-in backend: Agent 0.7.6, pinned by tag (0.7.5 before). Thinking from DeepSeek through
   a Responses proxy (the legacy `response.reasoning.delta` event) now shows,
   and providers that report no cache writes still report input tokens.
 - A session exists only once you send a message. Starting without `--session`
