@@ -309,15 +309,7 @@ impl App {
             Err(error) => {
                 self.session_mut().unsend_prompt(&text);
                 self.restore_draft(&text);
-                if error.kind == "history_too_large" {
-                    self.notice(
-                        NoticeLevel::Error,
-                        "History is too large to send and compaction could not shrink it; \
-                         /compact retries it, /new starts a fresh session",
-                    );
-                } else {
-                    self.error(error);
-                }
+                self.error(error);
             }
         }
     }

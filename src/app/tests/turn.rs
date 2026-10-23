@@ -465,25 +465,15 @@ async fn a_busy_refusal_queues_the_text_and_sends_it_once_when_idle() {
 #[tokio::test(start_paused = true)]
 async fn a_refused_send_returns_its_text_without_losing_a_newer_draft() {
     let mut h = Harness::opened(display_read(0, 0)).await;
-    h.fake.script_error(
-        "turn.send",
-        -32015,
-        "history too large",
-        "history_too_large",
-    );
+    h.fake
+        .script_error("turn.send", -32603, "provider unavailable", "internal");
     h.app.composer.insert("ship it");
     h.app.composer.type_char('!');
     h.action(Action::Submit);
     h.settle().await;
     assert_eq!(h.app.composer.text(), "ship it!");
     assert!(h.texts().is_empty());
-    assert_eq!(
-        h.notices(),
-        [
-            "History is too large to send and compaction could not shrink it; \
-          /compact retries it, /new starts a fresh session"
-        ]
-    );
+    assert_eq!(h.notices(), ["provider unavailable"]);
     h.ctrl(KeyCode::Char('z'));
     assert_eq!(h.app.composer.text(), "ship it", "undo reaches the draft");
     h.ctrl(KeyCode::Char('z'));

@@ -173,8 +173,8 @@ without a report. The TUI never estimates it.
   `No session yet: send a message first`.
 - **Steering and queue.** `Enter` while a turn runs steers it; `Alt+Enter` queues
   a follow-up sent after the turn; `Alt+↑` takes the queued follow-ups back.
-  `Esc` interrupts. A message sent while the Agent still compacts after a turn
-  waits in the queue and is sent when the session is idle.
+  `Esc` interrupts. A message sent while a compaction after a turn is
+  running waits in the queue and is sent when the session is idle.
 - **Compaction** shows as a status phase and leaves a `[compaction]` box with
   the token counts and the summary behind `Ctrl+O`; loaded content is never
   removed. `/compact` runs it manually.
@@ -221,7 +221,7 @@ The complete map is [docs/keybindings.md](docs/keybindings.md). The essentials:
 - **Fatal screen:** the Agent exited, sent an unreadable frame or lacks a
   required capability. The screen shows the reason and the last 20 lines of the
   Agent's stderr; `q` or `Esc` quits.
-- **Waiting for compaction:** the Agent is still compacting after the last turn;
+- **Waiting for compaction:** a compaction after the last turn is still running;
   your message is queued and sent when it finishes.
 - **Older history does not load:** the history changed while it was read. The
   read is retried once on its own; scroll up again if a notice says so.

@@ -220,7 +220,7 @@ hints.
    adopted from `turn_started` or `session.state` is never waited on twice.
    Opening a session reads `session.state` once its tail is installed, so a turn
    still running in the Agent is adopted and waited on. On
-   `session_busy` (post-turn compaction) the prompt block is removed, the text
+   `session_busy` (a post-turn compaction that is really running) the prompt block is removed, the text
    becomes a queued follow-up, the status line says `Waiting for compaction`, and
    `session.state` is polled every 700 ms until the session accepts a turn. Any
    other refusal puts the text back in the draft.
@@ -318,11 +318,9 @@ reported becomes a marker. All carry
 an operation id and `push_compaction` skips one it already shows. `Esc` outside
 a turn sends `session.compact.cancel` for the operation shown; inside a turn it
 interrupts the turn, which ends the compaction too.
-A `last_result` of a failed automatic compaction becomes one error notice. A
-send whose history is over the loop limits waits while the Agent compacts it
-first (`auto-before-…`, shown like any compaction); a `history_too_large` reply
-means that compaction failed, and the text returns to the draft with a notice
-naming `/compact` and `/new`.
+A `last_result` of a failed automatic compaction becomes one error notice. The
+Agent's post-turn check is silent unless it compacts, so only a real compaction
+shows as one; a send never triggers a compaction first.
 The footer's `ctx` is the reported tokens over `budget.input_budget_tokens`
 (over the model window when the Agent reports no budget).
 Loaded blocks are never removed. A summary replayed from history is a block of

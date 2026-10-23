@@ -473,7 +473,7 @@ pub const EXPANDED_ROWS: usize = 200;
 pub const OUTPUT_TAIL_LINES: usize = 400;
 /// Byte cap for a card's stored output tail.
 pub const OUTPUT_TAIL_BYTES: usize = 64 * 1024;
-/// The line the Agent's `read` and `bash` results end with when cut.
+/// The line older Agents' `read` and `bash` results end with when cut; stored history keeps it.
 pub const TRUNCATED_MARKER: &str = "[truncated]";
 
 /// Appends to one stored line within the byte cap; returns whether anything was cut.

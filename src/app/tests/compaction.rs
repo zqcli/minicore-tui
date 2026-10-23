@@ -310,7 +310,7 @@ async fn esc_cancels_the_compaction_that_owns_the_session() {
 async fn a_failed_automatic_compaction_is_reported_once() {
     let mut h = Harness::opened(display_read(0, 0)).await;
     let failed = json!({"session_id": "s1",
-        "last_result": {"origin": "automatic", "operation_id": "auto-before-l1",
+        "last_result": {"origin": "automatic", "operation_id": "auto-l1",
                         "status": "failed", "failure_kind": "model_failure"}});
     h.context(failed.clone());
     h.context(failed);
