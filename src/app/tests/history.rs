@@ -604,7 +604,6 @@ async fn a_reopened_session_gets_its_turn_end_lines_and_totals_from_the_read() {
         shape(&h),
         [
             "user",
-            "assistant",
             "tool",
             "assistant",
             "other",
@@ -676,4 +675,37 @@ async fn an_opened_session_shows_the_times_the_agent_stored_and_none_for_old_pro
     let screen = h.screen(60, 20);
     assert_eq!(screen.matches("· 10/20/2026").count(), 1, "{screen}");
     assert!(screen.contains("21:38 · 10/20/2026"), "{screen}");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_request_that_only_called_tools_adds_no_row_between_its_neighbours_cards() {
+    let request = |index: usize, tool: &str| {
+        chunk(
+            index,
+            json!({"type": "assistant", "data": {"loop_id": "l1", "request_index": index - 1,
+                "model": "mock", "content": [
+                    {"type": "reasoning", "data": {"text": null, "summary": null}},
+                    {"type": "tool_call", "data": {"tool_call_id": tool, "name": tool}}]}}),
+        )
+    };
+    let items = vec![
+        user(0, "l1", "go"),
+        request(1, "bash"),
+        request(2, "read"),
+        request(3, "grep"),
+    ];
+    let mut h = Harness::opened(page(4, 0, items)).await;
+    let screen = h.screen(60, 30);
+    let row = |name: &str| {
+        screen
+            .lines()
+            .position(|line| line.starts_with(&format!(" ▎ {name}")))
+            .unwrap_or_else(|| panic!("no {name} card:\n{screen}"))
+    };
+    let gap = |from: &str, to: &str| row(to) - row(from) - 1;
+    assert_eq!(
+        (gap("bash", "read"), gap("read", "grep")),
+        (1, 1),
+        "{screen}"
+    );
 }

@@ -63,30 +63,26 @@ pub fn merge_live(mut durable: Vec<Block>, live: &[Block]) -> Vec<Block> {
             _ => {}
         }
     }
-    let uncovered: Vec<Block> =
-        live.iter()
-            .filter(|block| match block {
-                Block::Tool(call) => !durable
-                    .iter()
-                    .any(|kept| matches!(kept, Block::Tool(kept) if kept.key == call.key)),
-                Block::Assistant {
-                    key,
-                    reasoning,
-                    text,
-                    ..
-                } => !(reasoning.is_empty() && text.is_empty()
-                    || durable.iter().any(
-                        |kept| matches!(kept, Block::Assistant { key: kept, .. } if kept == key),
-                    )),
-                Block::User { text, .. } => !durable
-                    .iter()
-                    .any(|kept| matches!(kept, Block::User { text: kept, .. } if kept == text)),
-                Block::Compaction { .. } => true,
-                _ => false,
-            })
-            .cloned()
-            .collect();
+    let uncovered: Vec<Block> = live
+        .iter()
+        .filter(|block| match block {
+            Block::Tool(call) => !durable
+                .iter()
+                .any(|kept| matches!(kept, Block::Tool(kept) if kept.key == call.key)),
+            Block::Assistant { key, .. } => !durable
+                .iter()
+                .any(|kept| matches!(kept, Block::Assistant { key: kept, .. } if kept == key)),
+            Block::User { text, .. } => !durable
+                .iter()
+                .any(|kept| matches!(kept, Block::User { text: kept, .. } if kept == text)),
+            Block::Compaction { .. } => true,
+            _ => false,
+        })
+        .cloned()
+        .collect();
     durable.extend(uncovered);
+    // Blank blocks stayed until now so live text could fill them in place.
+    durable.retain(|block| !block.is_blank_assistant());
     durable
 }
 
@@ -136,12 +132,22 @@ pub fn append_history(
             RuntimeItem::Assistant(assistant) => open = Some(&assistant.loop_id),
             _ => {}
         }
+        let first = transcript.len();
         append_history_item(transcript, item, session_id);
+        // A request that only called tools would add a second separator row.
+        if transcript
+            .blocks()
+            .get(first)
+            .is_some_and(Block::is_blank_assistant)
+        {
+            transcript.remove(first);
+        }
     }
     close(transcript, open, whole);
 }
 
-/// Converts one decoded history item into blocks appended to the transcript.
+/// Converts one decoded history item into blocks appended to the transcript,
+/// blank assistant blocks included.
 pub fn append_history_item(transcript: &mut Transcript, item: &RawHistoryItem, session_id: &str) {
     match &item.item {
         RuntimeItem::User(user) => {
@@ -408,6 +414,75 @@ mod tests {
         };
         assert_eq!(call.state, ToolState::Succeeded);
         assert_eq!(call.output, vec!["ok".to_owned()]);
+    }
+
+    fn request_item(request_index: u64, content: Value) -> RawHistoryItem {
+        decode_item(
+            &json!({"item": {"type": "assistant", "data": {
+                "loop_id": "l", "request_index": request_index, "model": "m",
+                "content": content
+            }}})
+            .to_string(),
+        )
+        .unwrap()
+    }
+
+    fn call(id: &str) -> Value {
+        json!({"type": "tool_call", "data": {"tool_call_id": id, "name": "bash"}})
+    }
+
+    #[test]
+    fn merging_fills_a_blank_durable_block_in_place_and_drops_the_ones_left_blank() {
+        let mut durable = Transcript::default();
+        for (request, call_id) in [(0, "c0"), (1, "c1"), (2, "c2")] {
+            let reasoning = json!({"type": "reasoning", "data": {"text": null, "summary": null}});
+            let item = request_item(request, json!([reasoning, call(call_id)]));
+            append_history_item(&mut durable, &item, "s");
+        }
+        let live = [Block::Assistant {
+            key: RequestKey {
+                loop_id: "l".into(),
+                request_index: 1,
+            },
+            reasoning: String::new(),
+            text: "live words".into(),
+            streaming: false,
+            expanded: None,
+        }];
+        let merged = merge_live(durable.into_blocks(), &live);
+        let shape: Vec<String> = merged
+            .iter()
+            .map(|block| match block {
+                Block::Assistant { text, .. } => format!("assistant {text}"),
+                Block::Tool(call) => format!("tool {}", call.key.tool_call_id),
+                _ => "other".into(),
+            })
+            .collect();
+        assert_eq!(
+            shape,
+            ["tool c0", "assistant live words", "tool c1", "tool c2"]
+        );
+    }
+
+    #[test]
+    fn reloading_history_keeps_no_assistant_block_without_thinking_or_text() {
+        let items = [
+            request_item(0, json!([{"type": "text", "data": "start"}, call("c0")])),
+            request_item(1, json!([call("c1")])),
+            request_item(2, json!([{"type": "text", "data": " \n"}, call("c2")])),
+        ];
+        let mut transcript = Transcript::default();
+        append_history(&mut transcript, &items, &[], "s");
+        let kinds: Vec<&str> = transcript
+            .blocks()
+            .iter()
+            .map(|block| match block {
+                Block::Assistant { .. } => "assistant",
+                Block::Tool(_) => "tool",
+                _ => "other",
+            })
+            .collect();
+        assert_eq!(kinds, ["assistant", "tool", "tool", "tool"]);
     }
 
     #[test]

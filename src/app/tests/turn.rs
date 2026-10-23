@@ -717,12 +717,9 @@ async fn a_follow_up_sent_before_the_cancelled_turn_reconciles_stays_after_it() 
             _ => "other",
         })
         .collect();
-    assert_eq!(
-        shape,
-        ["user", "assistant", "tool", "assistant", "end", "user"]
-    );
+    assert_eq!(shape, ["user", "tool", "assistant", "end", "user"]);
     let live = h.app.session.as_ref().unwrap().live.as_ref().unwrap();
-    assert_eq!(live.start, 5, "the running turn still starts at its prompt");
+    assert_eq!(live.start, 4, "the running turn still starts at its prompt");
 
     h.run_for(Duration::from_secs(120)).await;
     assert_eq!(turn_ends(&h), ["l1", "l2"]);

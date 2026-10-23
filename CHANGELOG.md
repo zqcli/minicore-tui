@@ -29,6 +29,9 @@
   transcript: the view stops at the end and follows new output again.
 - The welcome header has an empty row between its title, its key hints and the
   workspace; hints that wrap stay together as one group.
+- Tool cards of consecutive requests are one blank row apart after a turn is
+  reconciled or a session is reopened, as they were while streaming; a request
+  that only called tools no longer leaves an empty block between them.
 
 ## 0.5.4 — 2026-10-22
 

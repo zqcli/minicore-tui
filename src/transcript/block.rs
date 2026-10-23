@@ -65,6 +65,12 @@ impl Block {
         )
     }
 
+    /// An assistant block with no thinking and no text, such as a request that only called tools.
+    pub fn is_blank_assistant(&self) -> bool {
+        matches!(self, Block::Assistant { reasoning, text, .. }
+            if reasoning.trim().is_empty() && text.trim().is_empty())
+    }
+
     pub fn loop_id(&self) -> Option<&str> {
         match self {
             Block::Assistant { key, .. } => Some(&key.loop_id),
