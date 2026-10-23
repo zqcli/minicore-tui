@@ -238,8 +238,11 @@ hints.
    chunk-assembled) and **reconciled**: they replace the blocks the turn streamed,
    up to its turn-end line and no further, so a follow-up already sent stays
    after it. Cards keep the detail, input and output the live events knew,
-   thinking and text the items lack stay, and so do blocks no item covers (the
-   request an interrupt cut short, compaction markers). In every case `changes.list` for the turn fills the change
+   thinking and text the items lack stay, and so do blocks no item covers
+   (compaction markers). The page's `interrupted` partial reply, when the
+   cancel cut a request short, is the durable block of that request and
+   replaces the streamed one in place; the streamed text stays only when the
+   Agent sent none. In every case `changes.list` for the turn fills the change
    summary, `session.presentation` and `session.context` are refreshed, and the
    next follow-up is sent.
 4. **`turn_finished`** only changes the phase text. A wait answer for another
@@ -253,7 +256,11 @@ hints.
 The `(+a −b)` counts of the turn-end line are not in `changes.list`; they come
 from paging `changes.diff` for each of the first 100 records. The turn-end line
 of an old turn is rebuilt from its turn record when history is loaded, without
-the duration and the counts, which are not stored; its only hint is `/diff`. A record without
+the duration and the counts, which are not stored; its only hint is `/diff`.
+When the record carries `interrupted` (the display-only partial reply of a
+request a cancel cut short, not a history item), it becomes an assistant block
+of that request just before the line, so a reopened session shows the reply the
+interrupt left on screen. A record without
 details, or with a binary, truncated, stale or unreadable diff, makes the total
 unknown, and the line then shows only `N files changed`, never a zero.
 

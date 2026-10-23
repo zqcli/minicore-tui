@@ -44,6 +44,15 @@ pub struct TurnRecord {
     pub usage: Usage,
     #[serde(default)]
     pub requests: u32,
+    pub interrupted: Option<InterruptedRequest>,
+}
+
+/// What a cancelled request had streamed; display-only, never a history item.
+#[derive(Clone, Debug, Deserialize)]
+pub struct InterruptedRequest {
+    pub request_index: u32,
+    pub reasoning: String,
+    pub text: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -284,6 +293,7 @@ pub enum RuntimeItem {
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct RuntimeUserItem {
+    pub loop_id: String,
     pub kind: UserKind,
     pub input: RuntimeUserInput,
 }
@@ -367,6 +377,7 @@ pub struct TurnResultPage {
     pub usage: Option<super::Usage>,
     pub requests: Option<u32>,
     pub tool_rounds: Option<u64>,
+    pub interrupted: Option<InterruptedRequest>,
 }
 
 #[cfg(test)]

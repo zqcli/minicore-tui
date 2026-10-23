@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- The partial reply of an interrupted request (reasoning and text, as the Agent
+  stored it) is shown again after reopening a session or loading older pages,
+  above the `interrupted` turn-end line. At the end of a live turn it replaces
+  the streamed block instead of repeating it.
 - A running tool card with no output yet shows a dim `running…` row where the
   expand hint goes (and as the body of an expanded card), so a slow first
   output, such as a new PowerShell on Windows, no longer looks stuck. The first

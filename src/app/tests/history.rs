@@ -620,6 +620,78 @@ async fn a_reopened_session_gets_its_turn_end_lines_and_totals_from_the_read() {
     assert_eq!((usage.input, usage.output, usage.cached), (150, 15, 40));
 }
 
+fn partial(request_index: u32, reasoning: &str, text: &str) -> Value {
+    json!({"stop_reason": "aborted", "request_index": request_index, "model": "mock",
+           "reasoning": reasoning, "text": text})
+}
+
+/// The `(request_index, reasoning, text)` of every assistant block of `loop_id`.
+fn replies(h: &Harness, loop_id: &str) -> Vec<(u32, String, String)> {
+    h.blocks()
+        .iter()
+        .filter_map(|block| match block {
+            Block::Assistant {
+                key,
+                reasoning,
+                text,
+                ..
+            } if key.loop_id == loop_id => {
+                Some((key.request_index, reasoning.clone(), text.clone()))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_reopened_session_shows_the_interrupted_reply_before_the_turn_end_line() {
+    let items = vec![user(0, "l1", "go"), assistant_tool(1, "l1", "c1", "bash")];
+    let records = json!([{"loop_id": "l1", "outcome": cancelled(), "requests": 2,
+                          "interrupted": partial(1, "weighing it", "I will start by readi")}]);
+    let mut h = Harness::opened(with_records(page(2, 0, items), records)).await;
+    assert_eq!(shape(&h), ["user", "tool", "assistant", "other"]);
+    assert_eq!(
+        replies(&h, "l1"),
+        [(1, "weighing it".into(), "I will start by readi".into())]
+    );
+    assert_eq!(turn_end_lines(&mut h), ["interrupted · 1 tool"]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_turn_interrupted_in_its_first_request_still_ends_with_its_partial_reply() {
+    let records = json!([{"loop_id": "l1", "outcome": cancelled(), "requests": 1,
+                          "interrupted": partial(0, "", "Let me che")}]);
+    let mut h = Harness::opened(with_records(page(1, 0, vec![user(0, "l1", "go")]), records)).await;
+    assert_eq!(shape(&h), ["user", "assistant", "other"]);
+    assert_eq!(h.texts(), ["go", "Let me che"]);
+    assert_eq!(turn_end_lines(&mut h), ["interrupted"]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_turn_without_an_interrupted_reply_gets_no_extra_block_or_line() {
+    let records = json!([{"loop_id": "l1", "outcome": cancelled(), "requests": 1}]);
+    let h = Harness::opened(with_records(page(1, 0, vec![user(0, "l1", "go")]), records)).await;
+    assert_eq!(shape(&h), ["user"]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_record_repeated_on_an_older_page_adds_its_interrupted_reply_once() {
+    let records = json!([{"loop_id": "l1", "outcome": cancelled(), "requests": 3,
+                          "interrupted": partial(2, "", "half an answer")}]);
+    let tail = page(80, 0, vec![assistant_tool(79, "l1", "c2", "bash")]);
+    let mut h = Harness::opened(with_records(tail, records.clone())).await;
+    assert_eq!(replies(&h, "l1").len(), 1);
+
+    let older = vec![user(18, "l1", "go"), assistant_tool(19, "l1", "c1", "bash")];
+    h.fake
+        .script("session.read", with_records(page(80, 0, older), records));
+    h.action(Action::LoadOlder);
+    h.settle().await;
+    let halves = h.texts().iter().filter(|t| *t == "half an answer").count();
+    assert_eq!(halves, 1, "{:?}", h.blocks());
+    assert_eq!(turn_end_lines(&mut h).len(), 1);
+}
+
 #[tokio::test(start_paused = true)]
 async fn a_turn_cut_by_the_window_leaves_its_tool_count_out() {
     // The window starts after the turn's prompt and first cards.

@@ -796,6 +796,44 @@ async fn an_interrupted_turn_keeps_its_card_details_and_unfinished_thinking() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn the_interrupted_reply_of_a_cancelled_turn_replaces_its_streamed_block_in_place() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.fake.script("turn.send", json!({"turn": turn("l1")}));
+    h.fake.script_held("turn.wait", waited("l1", cancelled()));
+    let mut result = turn_result(
+        "l1",
+        vec![user(0, "l1", "go"), assistant_tool(1, "l1", "c1", "bash")],
+    );
+    result["interrupted"] = json!({"stop_reason": "aborted", "request_index": 1, "model": "mock",
+                                   "reasoning": "", "text": "I will start by readi"});
+    h.fake.script("turn.result", result);
+    h.submit("go");
+    h.until(|app| app.is_busy()).await;
+    h.emit(
+        "output_delta",
+        json!({"turn": turn("l1"), "request_index": 1, "channel": "text", "delta": "I will st"}),
+    )
+    .await;
+    h.settle().await;
+    h.fake.release("turn.wait");
+    h.settle().await;
+
+    let shape: Vec<&str> = h
+        .blocks()
+        .iter()
+        .map(|block| match block {
+            Block::User { .. } => "user",
+            Block::Assistant { .. } => "assistant",
+            Block::Tool(_) => "tool",
+            Block::TurnEnd { .. } => "end",
+            _ => "other",
+        })
+        .collect();
+    assert_eq!(shape, ["user", "tool", "assistant", "end"]);
+    assert_eq!(h.texts(), ["go", "I will start by readi"]);
+}
+
+#[tokio::test(start_paused = true)]
 async fn the_turn_start_and_end_leave_an_anchored_view_where_it_is() {
     let anchor = Scroll::Anchor {
         block: 2,

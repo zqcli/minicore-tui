@@ -163,6 +163,8 @@ without a report. The TUI never estimates it.
   dragging over its output selects without collapsing.
 - **Turn end** is one dim line: outcome, duration, requests, tools and, when files
   changed, `N files changed (+a −b)`. A failed or cancelled turn shows its reason.
+  The reply an interrupt cut short stays above that line, also after the
+  session is reopened.
 - **Sessions.** None exists until the first message: the first `Enter` creates
   it with the profile, model and reasoning picked so far and sends the text.
   `/new` leaves the open session and returns to that state. Until then the

@@ -20,8 +20,10 @@ impl App {
             SessionOp::Tail(result) => self.on_tail(result),
             SessionOp::Page(result) => self.on_page(result),
             SessionOp::TurnItems(loop_id, result) => {
-                if let Some(items) = self.ok(result)
-                    && let Some((at, grown)) = self.session_mut().reconcile_turn(&loop_id, &items)
+                if let Some((items, interrupted)) = self.ok(result)
+                    && let Some((at, grown)) =
+                        self.session_mut()
+                            .reconcile_turn(&loop_id, &items, interrupted.as_ref())
                 {
                     self.blocks_moved(at, grown);
                 }

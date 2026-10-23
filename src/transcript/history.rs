@@ -3,7 +3,7 @@
 use super::{Block, RequestKey, ToolCall, ToolState, Transcript};
 use crate::protocol::ToolRef;
 use crate::protocol::read::{
-    RawHistoryItem, RuntimeAssistantPart, RuntimeItem, TurnRecord, UserKind,
+    InterruptedRequest, RawHistoryItem, RuntimeAssistantPart, RuntimeItem, TurnRecord, UserKind,
 };
 use crate::protocol::stamp::unix_millis;
 
@@ -106,6 +106,9 @@ pub fn append_history(
                 .count() as u64,
             false => 0,
         };
+        if let Some(partial) = &record.interrupted {
+            push_interrupted(transcript, &record.loop_id, partial);
+        }
         transcript.push(Block::TurnEnd {
             loop_id: record.loop_id.clone(),
             outcome: record.outcome.clone(),
@@ -124,6 +127,11 @@ pub fn append_history(
             RuntimeItem::User(user) if user.kind != UserKind::Steering => {
                 close(transcript, open.take(), whole);
                 whole = true;
+                // A turn cut in its first request has no assistant item to open it.
+                open = records
+                    .iter()
+                    .find(|r| r.loop_id == user.loop_id && r.interrupted.is_some())
+                    .map(|r| r.loop_id.as_str());
             }
             RuntimeItem::Summary(_) => {
                 close(transcript, open.take(), whole);
@@ -144,6 +152,20 @@ pub fn append_history(
         }
     }
     close(transcript, open, whole);
+}
+
+/// Appends the partial reply of a cancelled request as an assistant block.
+pub fn push_interrupted(transcript: &mut Transcript, loop_id: &str, partial: &InterruptedRequest) {
+    transcript.push(Block::Assistant {
+        key: RequestKey {
+            loop_id: loop_id.to_owned(),
+            request_index: partial.request_index,
+        },
+        reasoning: partial.reasoning.clone(),
+        text: partial.text.clone(),
+        streaming: false,
+        expanded: None,
+    });
 }
 
 /// Converts one decoded history item into blocks appended to the transcript,

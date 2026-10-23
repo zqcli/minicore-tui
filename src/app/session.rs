@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
 
 use crate::protocol::event::{PreviewState, ToolOutcome};
-use crate::protocol::read::TurnRecord;
+use crate::protocol::read::{InterruptedRequest, TurnRecord};
 use crate::protocol::read::{RawHistoryItem, UserKind};
 use crate::protocol::{
     AgentEvent, CompactStatus, CompactionPhase, CompactionProgress, CompactionResult,
@@ -12,7 +12,7 @@ use crate::protocol::{
     UsageTotals,
 };
 use crate::transcript::{Block, EXPANDED_ROWS, RequestKey, ToolCall, ToolState, Transcript};
-use crate::transcript::{append_history, append_history_item, merge_live};
+use crate::transcript::{append_history, append_history_item, merge_live, push_interrupted};
 
 use super::tasks::History;
 
@@ -588,6 +588,7 @@ impl Session {
         &mut self,
         loop_id: &str,
         items: &[RawHistoryItem],
+        interrupted: Option<&InterruptedRequest>,
     ) -> Option<(usize, isize)> {
         let at = self
             .reconcile_from
@@ -600,6 +601,9 @@ impl Session {
         let mut durable = Transcript::default();
         for item in items {
             append_history_item(&mut durable, item, &self.info.session_id);
+        }
+        if let Some(partial) = interrupted {
+            push_interrupted(&mut durable, loop_id, partial);
         }
         let blocks = merge_live(durable.into_blocks(), &self.transcript.blocks()[start..end]);
         let grown = blocks.len() as isize - (end - start) as isize;

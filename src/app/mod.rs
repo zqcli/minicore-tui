@@ -35,7 +35,7 @@ use serde_json::{Value, json};
 
 use crate::config::ThemeKind;
 use crate::protocol::changes::DiffPage;
-use crate::protocol::read::RawHistoryItem;
+use crate::protocol::read::{InterruptedRequest, RawHistoryItem};
 use crate::protocol::{
     AgentEvent, ChangeRecord, CompactionResult, ModelInfo, ProfileInfo, Reasoning, RpcError,
     SessionContext, SessionInfo, SessionPresentation, SessionState, SteerResult, ToolReadResult,
@@ -86,7 +86,10 @@ pub struct Ready {
 pub enum SessionOp {
     Tail(Result<tasks::History, RpcError>),
     Page(Result<tasks::History, RpcError>),
-    TurnItems(String, Result<Vec<RawHistoryItem>, RpcError>),
+    TurnItems(
+        String,
+        Result<(Vec<RawHistoryItem>, Option<InterruptedRequest>), RpcError>,
+    ),
     State(Result<SessionState, RpcError>),
     Presentation(Result<SessionPresentation, RpcError>),
     /// A `workspace.status` answer, wanted only for the branch it caches in the presentation.

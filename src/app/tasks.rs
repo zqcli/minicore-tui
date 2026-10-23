@@ -9,7 +9,7 @@ use tokio::sync::mpsc;
 
 use super::{App, BUSY_RETRY, Msg, NoticeLevel, SessionOp};
 use crate::protocol::changes::{ChangeList, DiffPage};
-use crate::protocol::read::{RawHistoryItem, TurnRecord};
+use crate::protocol::read::{InterruptedRequest, RawHistoryItem, TurnRecord};
 use crate::protocol::tool::ToolOutputPage;
 use crate::protocol::{
     self, ChunkAssembler, ChunkOutcome, ModelListResult, PingResult, ProfileListResult, ReadCursor,
@@ -283,11 +283,12 @@ async fn read_window(
     Ok((items, records))
 }
 
-/// One turn's durable items, read after a gap or an unfinished outcome.
+/// One turn's durable items and its interrupted partial reply, read after a
+/// gap or an unfinished outcome.
 pub async fn read_turn(
     client: Arc<Client>,
     turn: TurnRef,
-) -> Result<Vec<RawHistoryItem>, RpcError> {
+) -> Result<(Vec<RawHistoryItem>, Option<InterruptedRequest>), RpcError> {
     let mut assembler = ChunkAssembler::new();
     let mut items = Vec::new();
     let mut cursor: Option<Value> = None;
@@ -310,8 +311,9 @@ pub async fn read_turn(
             }
         }
         cursor = page.next_cursor;
+        // Every page carries it.
         if cursor.is_none() {
-            return Ok(items);
+            return Ok((items, page.interrupted));
         }
     }
 }
