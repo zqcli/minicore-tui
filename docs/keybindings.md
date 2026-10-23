@@ -161,7 +161,7 @@ the name.
 | `/new [profile]` | Leave the open session for an empty conversation; the first message creates the new session, with the Agent's default profile or the named one. |
 | `/sessions`, `/resume` | Open the sessions picker. |
 | `/rename <title>` | Rename the current session (an empty title is an error). |
-| `/model [id]` | Switch to the model (an exact id or a unique fuzzy match), or open the picker. |
+| `/model [id]` | Switch to the model (an exact id or a unique fuzzy match), or open the picker. When the model does not support the current reasoning level, the switch also moves to the nearest level it supports (the higher one on a tie) and a notice names it. `Ctrl+P` and `Ctrl+L` do the same, and a draft adjusts the level its session will start with. |
 | `/session` | Show the open session's id, workspace, profile, model, item count and token totals. |
 | `/reasoning [level]` | Set the level directly, or open the picker when no valid level is given. |
 | `/compact` | Run manual compaction; refused while a turn runs. |

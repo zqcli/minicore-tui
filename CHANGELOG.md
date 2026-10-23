@@ -32,6 +32,11 @@
 - Tool cards of consecutive requests are one blank row apart after a turn is
   reconciled or a session is reopened, as they were while streaming; a request
   that only called tools no longer leaves an empty block between them.
+- Switching to a model that does not support the current reasoning level no
+  longer fails with `invalid session settings`: the switch also sets the
+  nearest supported level (the higher one on a tie) and a notice names it, for
+  `/model`, the model picker and `Ctrl+P`, and in a draft for the settings the
+  session will start with.
 
 ## 0.5.4 — 2026-10-22
 

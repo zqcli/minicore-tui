@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 
 use super::harness::*;
 use crate::app::templates::Template;
-use crate::app::{Overlay, Scroll};
+use crate::app::{Action, Overlay, Scroll};
 use crate::protocol::ToolRef;
 use crate::protocol::read::UserKind;
 use crate::transcript::{Block, RequestKey, ToolCall};
@@ -98,6 +98,62 @@ fn updated_to(model: &str) -> Value {
     let mut info = session_info("s1");
     info["model"] = json!(model);
     json!({"session": info})
+}
+
+/// An open session on `gpt-6.1-sol` at `xhigh`, with models that support other levels.
+async fn xhigh_session() -> Harness {
+    let mut h = Harness::new();
+    h.fake.script(
+        "model.list",
+        json!({"models": [
+            {"id": "gpt-6.1-sol", "supported_reasoning": ["low", "high", "xhigh"]},
+            {"id": "gpt-6.1-luna", "supported_reasoning": ["high", "xhigh"]},
+            {"id": "deepseek-v4.1-flash", "supported_reasoning": ["high", "max"]},
+        ]}),
+    );
+    let mut info = session_info("s1");
+    info["model"] = json!("gpt-6.1-sol");
+    info["reasoning"] = json!("xhigh");
+    h.fake.script("session.open", json!({"session": info}));
+    h.open().await;
+    h
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_model_without_the_current_reasoning_is_switched_to_with_the_nearest_level() {
+    let mut h = xhigh_session().await;
+    let mut info = session_info("s1");
+    info["model"] = json!("deepseek-v4.1-flash");
+    info["reasoning"] = json!("max");
+    h.fake.script("session.update", json!({"session": info}));
+
+    h.action(Action::SetModel("deepseek-v4.1-flash".into()));
+    h.settle().await;
+    let updates = h.calls("session.update");
+    assert_eq!(updates.len(), 1, "one update carries both fields");
+    assert_eq!(updates[0]["model"], "deepseek-v4.1-flash");
+    assert_eq!(updates[0]["reasoning"], "max");
+    assert_eq!(
+        h.notices(),
+        ["deepseek-v4.1-flash does not support reasoning xhigh; using max"]
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_model_that_supports_the_current_reasoning_is_switched_to_as_it_is() {
+    let mut h = xhigh_session().await;
+    let mut info = session_info("s1");
+    info["model"] = json!("gpt-6.1-luna");
+    info["reasoning"] = json!("xhigh");
+    h.fake.script("session.update", json!({"session": info}));
+
+    h.action(Action::SetModel("gpt-6.1-luna".into()));
+    h.settle().await;
+    let updates = h.calls("session.update");
+    assert_eq!(updates.len(), 1);
+    assert_eq!(updates[0]["model"], "gpt-6.1-luna");
+    assert!(updates[0].get("reasoning").is_none(), "{:?}", updates[0]);
+    assert!(h.notices().is_empty(), "{:?}", h.notices());
 }
 
 #[tokio::test(start_paused = true)]

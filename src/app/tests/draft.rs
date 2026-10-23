@@ -257,6 +257,38 @@ async fn the_model_and_reasoning_picked_in_the_draft_reach_session_create() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_draft_model_without_the_reasoning_level_adjusts_the_one_session_create_gets() {
+    let mut h = Harness::new();
+    h.fake.script(
+        "model.list",
+        json!({"models": [
+            {"id": "gpt-6.1-sol", "supported_reasoning": ["low", "high", "xhigh"]},
+            {"id": "deepseek-v4.1-flash", "supported_reasoning": ["high", "max"]},
+        ]}),
+    );
+    script_first_message(&h);
+    h.app.launch = LaunchSettings {
+        profile: None,
+        model: Some("gpt-6.1-sol".into()),
+        reasoning: Some(Reasoning::XHigh),
+    };
+    h.boot().await;
+
+    h.action(Action::SetModel("deepseek-v4.1-flash".into()));
+    assert_eq!(h.app.launch.reasoning, Some(Reasoning::Max));
+    assert_eq!(
+        h.notices().last().map(String::as_str),
+        Some("deepseek-v4.1-flash does not support reasoning xhigh; using max")
+    );
+
+    h.submit("go");
+    h.until(|app| app.is_busy()).await;
+    let create = h.calls("session.create").remove(0);
+    assert_eq!(create["model"], "deepseek-v4.1-flash");
+    assert_eq!(create["reasoning"], "max");
+}
+
+#[tokio::test(start_paused = true)]
 async fn commands_that_need_a_session_say_so_in_the_draft() {
     let mut h = draft().await;
     for action in [
