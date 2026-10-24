@@ -534,7 +534,7 @@ async fn a_flash_and_the_scrollbar_wake_the_clock_once_at_their_end() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn r_in_the_context_view_reads_the_ledger_again() {
+async fn r_in_the_context_sheet_reads_the_ledger_again() {
     let mut h = Harness::opened(display_read(0, 0)).await;
     h.type_text("/context");
     h.press(KeyCode::Enter);
@@ -543,7 +543,7 @@ async fn r_in_the_context_view_reads_the_ledger_again() {
     h.press(KeyCode::Char('r'));
     h.settle().await;
     assert_eq!(h.calls("session.context").len(), before + 1);
-    assert!(h.screen(80, 20).starts_with(" ← Context"));
+    assert!(h.screen(80, 20).contains("r refresh · c copy · esc close"));
 }
 
 #[tokio::test(start_paused = true)]

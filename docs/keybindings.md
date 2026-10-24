@@ -95,7 +95,7 @@ are above the bottom. `End` or scrolling to the bottom resumes following the tai
 
 | Gesture | Action |
 |---|---|
-| Wheel | Scroll one row per notch, five with `Alt`. With a view open it scrolls that view (help three rows per notch, diff; the context view does not scroll); over a picker it moves the selection. It never scrolls the transcript behind them. |
+| Wheel | Scroll one row per notch, five with `Alt`. With a view open it scrolls that view (help three rows per notch, diff); over a picker it moves the selection. It never scrolls the transcript behind an open view or sheet. |
 | Click a folded tool card's text, or any row of an expanded card | Toggle that card. It opens and closes downward: the rows above it stay put, and `End` follows the tail again. Dragging over a card selects instead. |
 | Click a turn-end line | Open the workspace's live Git diff (the same as `/diff`). |
 | Click in the editor | Place the caret at a grapheme or paste-chip boundary, respecting wrapping, padding and editor scrolling. |
@@ -109,9 +109,9 @@ prompts and bottom sheets do not expose the hidden draft for mouse editing.
 
 ## Pickers and sheets
 
-Pickers, the approval prompt and find share one bottom sheet that takes the
-editor's place. `Esc` closes it without changing anything. `↑` / `↓` move the
-selection and wrap at the ends, as do `Tab`; `PageUp` / `PageDown` move ten
+Pickers, session and context reports, the approval prompt and find share one
+bottom sheet that takes the editor's place. `Esc` closes it without changing
+anything. `↑` / `↓` move the selection and wrap at the ends, as do `Tab`; `PageUp` / `PageDown` move ten
 rows (in Find they step through matches). The command and `@` lists are not
 sheets: they sit under the editor text, five rows at a time with an `(i/N)`
 counter.
@@ -121,6 +121,7 @@ counter.
 | Command list | The text after `/` stays in the composer and filters the commands fuzzily, best match first. `Enter` runs the highlighted command with the argument typed after its name; `Tab` completes `/name ` without running. After `/model `, `/new `, `/reasoning ` or `/theme ` the list offers that command's arguments (model ids, profiles, levels) and `Enter` runs the command with the highlighted one. Prompt templates are listed with their description. `Esc` closes the list and leaves the draft as it is; deleting the `/` closes it too. |
 | Sessions | Type to filter by title. `Enter` opens the session. `Ctrl+N` renames the selected one (`Enter` saves, `Esc` cancels; an empty title clears it). `Ctrl+D` twice deletes the selected one; the open session cannot be deleted. Sessions of this workspace come first, newest first. Each row ends with its last activity; the open one says `current`, one from another workspace names it, and a title shared with another row adds the short id. |
 | Session (`/session`) | Id, title, workspace, profile, model, history items and token totals. `Enter` or `c` copies the id. |
+| Context (`/context`) | Show context usage. `r` re-reads the report (it also reads on open); `c` copies it; `Esc` closes. |
 | Model | Type to filter by id. `Enter` switches to the highlighted model; the current one is marked `✓`. |
 | Reasoning | `Enter` applies the highlighted level; the current one is marked `✓`. |
 | Files (`@`) | The `@word` before the cursor filters workspace paths (up to 500 files). `Enter` or `Tab` replaces it with `@path `; with no match `Enter` does nothing. `Esc` closes the list and leaves the text. |
@@ -145,7 +146,6 @@ A view owns the keys: the composer below it is dimmed and reads `view open · es
 | View | Keys |
 |---|---|
 | Git diff | Live tracked changes and untracked files in the workspace. `↑` / `↓` select a file; `PageUp` / `PageDown`, `Home` / `End` and the wheel scroll the diff; `c` copies it. |
-| Context | `r` re-reads the context (it also reads on open); `c` copies it. |
 | Help | `↑` / `↓` scroll three rows, `PageUp` / `PageDown` thirty. |
 
 ## Commands
@@ -163,7 +163,7 @@ the name.
 | `/reasoning [level]` | Set the level directly, or open the picker when no valid level is given. |
 | `/compact` | Run manual compaction; refused while a turn runs. |
 | `/diff` | Show the workspace's live Git working-tree changes, including untracked files. |
-| `/context` | Open the context view. |
+| `/context` | Show context usage. |
 | `/copy` | Copy the last assistant answer as Markdown. |
 | `/export [path]` | Write the conversation as Markdown; the default is `./minicore-<session>-<date>.md`. |
 | `/theme [dark\|light]` | Switch the palette and save it; without an argument, toggle. |

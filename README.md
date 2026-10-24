@@ -181,15 +181,15 @@ without a report. The TUI never estimates it.
 - **History.** Opening a session loads the latest items; scrolling to the top
   loads older pages, including the history behind a compaction summary.
   A card whose output is not loaded shows its line count.
-- **Views** replace the transcript and keep the footer: Git diff, context budget
-  and help. `/diff` shows the workspace's live tracked changes and untracked
-  files, also when opened by clicking a turn-end line. `Esc` returns; the
+- **Views** replace the transcript and keep the footer: Git diff and help.
+  `/diff` shows the workspace's live tracked changes and untracked files,
+  also when opened by clicking a turn-end line. `Esc` returns; the
   composer is dimmed meanwhile, because the view owns the keys.
 - **Completion and selectors.** `/` and `@` open a list inside the editor that
   filters as you type (`Tab` inserts, `Enter` runs, `Esc` closes and keeps the
   text). Sessions with delete (`Ctrl+R`), model (`Ctrl+L`), reasoning
-  (`Shift+Tab` cycles), find (`Ctrl+F`) and approval prompts replace the editor
-  with a bordered selector.
+  (`Shift+Tab` cycles), find (`Ctrl+F`), session info (`/session`), context usage
+  (`/context`) and approval prompts replace the editor with a bordered sheet.
 - **Copy and export.** Dragging copies the selection on release (native
   clipboard, OSC 52 fallback) and flashes `Copied!`; double-click selects a
   word, triple-click a line. `/copy` copies the last answer, `/export [path]` writes the

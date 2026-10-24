@@ -1,18 +1,15 @@
-//! The context view: how full the context is and what compaction did.
+//! The context sheet's report lines and plain text.
 
-use ratatui::Frame;
-use ratatui::layout::Rect;
-use ratatui::text::{Line, Span};
+use ratatui::text::Line;
 
 use crate::app::Session;
 use crate::protocol::{CompactStatus, SessionContext, SessionPresentation};
 
-use super::{chrome, styled};
+use super::styled;
 use crate::ui::format_tokens;
 use crate::ui::theme::Styles;
-use crate::wrap::wrap;
 
-/// The summary lines of the context view.
+/// The summary lines of the context sheet.
 pub fn lines(session: Option<&Session>, styles: Styles) -> Vec<Line<'static>> {
     summary_lines(
         session.and_then(|session| session.context.as_ref()),
@@ -21,7 +18,7 @@ pub fn lines(session: Option<&Session>, styles: Styles) -> Vec<Line<'static>> {
     )
 }
 
-/// The context view as plain text, for `c`.
+/// The context report as plain text, for `c`.
 pub fn text(session: Option<&Session>, styles: Styles) -> String {
     let lines = lines(session, styles);
     lines
@@ -260,45 +257,6 @@ fn compact_status(status: crate::protocol::CompactStatus) -> &'static str {
         crate::protocol::CompactStatus::Failed => "failed",
         crate::protocol::CompactStatus::UnknownWrite => "write outcome unknown",
         crate::protocol::CompactStatus::Unknown => "unknown",
-    }
-}
-
-pub fn render(frame: &mut Frame, area: Rect, styles: Styles, lines: &[Line<'static>]) {
-    chrome(
-        frame,
-        area,
-        styles,
-        "Context",
-        &[("r", "refresh"), ("esc", "back")],
-    );
-    let bottom = area.bottom().saturating_sub(1);
-    let mut y = area.y + 1;
-    for line in lines {
-        if y >= bottom {
-            break;
-        }
-        let text: String = line
-            .spans
-            .iter()
-            .map(|span| span.content.as_ref())
-            .collect();
-        for chunk in wrap(&text, area.width as usize) {
-            if y >= bottom {
-                return;
-            }
-            let style = line
-                .spans
-                .first()
-                .map(|span| span.style)
-                .unwrap_or_default();
-            frame.buffer_mut().set_line(
-                area.x,
-                y,
-                &Line::from(Span::styled(chunk, style)),
-                area.width,
-            );
-            y += 1;
-        }
     }
 }
 

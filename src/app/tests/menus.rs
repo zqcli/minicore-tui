@@ -288,6 +288,26 @@ async fn session_shows_the_facts_and_the_item_count() {
     assert!(h.app.overlay.is_none());
 }
 
+#[tokio::test(start_paused = true)]
+async fn context_opens_as_a_sheet_below_the_transcript() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    push_blocks(&mut h, vec![assistant(0, "", "Transcript stays visible")]);
+    h.type_text("/context");
+    h.press(KeyCode::Enter);
+    h.settle().await;
+
+    let screen = h.screen(100, 30);
+    assert!(
+        screen.contains("r refresh · c copy · esc close"),
+        "{screen}"
+    );
+    assert!(screen.contains("Context: 1.2k of 200k tokens"), "{screen}");
+    assert!(!screen.contains("← Context"), "{screen}");
+    let transcript = screen.find("Transcript stays visible").expect(&screen);
+    let context = screen.find("Context: 1.2k").expect(&screen);
+    assert!(transcript < context, "{screen}");
+}
+
 async fn ask(h: &mut Harness, id: &str, tool: &str) {
     h.emit(
         "interaction_requested",

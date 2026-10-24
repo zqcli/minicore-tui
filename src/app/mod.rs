@@ -540,7 +540,7 @@ impl App {
         (!text.is_empty()).then_some(text)
     }
 
-    /// `c` in a view: copies what the view shows.
+    /// Copies the diff or context report for `c`.
     pub fn copy_view(&mut self) {
         let text = match &self.overlay {
             Overlay::Diff(diff) => diff::text(diff),

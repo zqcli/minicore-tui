@@ -39,6 +39,7 @@ pub fn sheet(app: &App, styles: Styles) -> Option<Sheet> {
             sessions_sheet(app, rows, &state, styles)
         }
         Overlay::SessionInfo { items } => session_info_sheet(app, *items, styles),
+        Overlay::Context => context_sheet(app, styles),
         Overlay::Models { filter, selected } => models_sheet(app, filter, *selected, styles),
         Overlay::Reasoning { selected } => reasoning_sheet(app, *selected),
         Overlay::Find {
@@ -49,7 +50,6 @@ pub fn sheet(app: &App, styles: Styles) -> Option<Sheet> {
         // The completion lists live in the editor band and views own the transcript area.
         Overlay::Palette { .. }
         | Overlay::Files { .. }
-        | Overlay::Context
         | Overlay::Help { .. }
         | Overlay::Diff(_) => return None,
     })
@@ -454,6 +454,11 @@ fn session_row(info: &SessionInfo, label: String, context: &RowContext, now_seco
         parts.push(age);
     }
     Row::new(label, parts.join(" · ")).mark(context.current)
+}
+
+fn context_sheet(app: &App, styles: Styles) -> Sheet {
+    let lines = crate::ui::views::context::lines(app.session.as_ref(), styles);
+    Sheet::new("Context", "r refresh · c copy · esc close").body(lines)
 }
 
 /// `/session`: the facts about the resident session; Enter or `c` copies its id.

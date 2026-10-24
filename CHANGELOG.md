@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `/context` opens as a sheet below the transcript like `/session`, instead of a
+  full-screen view.
+
 - `/diff` shows the workspace's live Git changes, including untracked files.
   Turn-end clicks open the same view; turn/session scopes and Tab scope cycling
   are gone.

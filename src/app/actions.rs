@@ -491,7 +491,7 @@ impl App {
         });
     }
 
-    /// Asks for a fresh context report; the view never shows a stale one.
+    /// Asks for a fresh context report.
     pub fn refresh_context(&self) {
         self.call(
             protocol::METHOD_SESSION_CONTEXT,

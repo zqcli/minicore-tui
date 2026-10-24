@@ -1,4 +1,4 @@
-//! Full-screen views: diff, context and help. Each replaces the
+//! Full-screen views: diff and help. Each replaces the
 //! transcript area right of its gutter and keeps the footer; the app owns
 //! scrolling and selection.
 
@@ -62,10 +62,6 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App, styles: Styles) -> bool {
     let area = super::transcript::inner(area);
     match &app.overlay {
         Overlay::Diff(diff) => diff::render(frame, area, styles, diff),
-        Overlay::Context => {
-            let lines = context::lines(app.session.as_ref(), styles);
-            context::render(frame, area, styles, &lines);
-        }
         Overlay::Help { scroll } => help::render(frame, area, styles, COMMANDS, *scroll),
         _ => return false,
     }

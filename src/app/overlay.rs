@@ -65,7 +65,7 @@ impl Overlay {
 
     /// A full-screen view, which hides the transcript and the keys of the composer.
     pub fn is_view(&self) -> bool {
-        matches!(self, Self::Diff(_) | Self::Context | Self::Help { .. })
+        matches!(self, Self::Diff(_) | Self::Help { .. })
     }
 }
 

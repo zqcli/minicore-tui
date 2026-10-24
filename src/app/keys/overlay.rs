@@ -1,5 +1,4 @@
-//! Keys for the pickers and views: sessions, models, reasoning, find, diff,
-//! help and context.
+//! Keys for pickers, sheets and views.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 

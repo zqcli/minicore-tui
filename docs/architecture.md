@@ -60,7 +60,8 @@ src/
                 markdown + markdown/stream (incremental renderer), composer (render),
                 status (status line, queue, notice, footer), panel + sheets (the one
                 bottom-sheet style), theme (Palette, Styles),
-                views/{diff, tool, context, help}, snapshots and perf_tests (test only)
+                views/{diff, help} (full-screen), views/context (sheet report),
+                snapshots and perf_tests (test only)
   terminal.rs   alternate screen, raw mode, paste, mouse, kitty keys, panic hook
   clipboard.rs  pbcopy / xclip / clip with an OSC 52 fallback
   editor.rs     external editor for Ctrl+G
@@ -81,7 +82,7 @@ the rows move, and the hit areas of the editor and of the open view. What `app` 
   searches the rows a block renders, and a click is matched to a card's hint
   row or an assistant rail by the text drawn there.
 - `ui::views::context::text` and `ui::sheets::model_details`: the copy of the
-  context view and the model note, which are formatting of what is shown.
+  context report and the model note, which are formatting of what is shown.
 
 ## Configuration
 
@@ -309,7 +310,7 @@ history.
 Agent has no completed event, so the one-line marker comes from the
 `session.compact` result of a compaction the TUI started, or from `last_result`
 in a `session.context` read (on open, after each turn, when a compaction ends,
-when the Context view opens). A compaction between two requests of a turn
+when the Context sheet opens). A compaction between two requests of a turn
 reaches neither: it is only in `session.context.automatic.current` and `.last`,
 so the context is read every 2 s while a turn runs (`watch_context`, on the
 tick), and a `last` that differs from the one the first read of the session
@@ -430,7 +431,7 @@ The footer shows `ctx N%` only from `session.presentation.context`, as the Agent
 reported it for the last request, and `ctx ?` otherwise; the TUI never
 substitutes an estimate. `presentation` is read on open, after each turn and
 compaction, and on request-usage events at most every 2 s while a turn runs. The
-Context view also shows the budget's history estimate, labelled as one. The git
+Context sheet also shows the budget's history estimate, labelled as one. The git
 branch comes from the same answer, which only caches it after a complete
 `workspace.status`, so one runs on open and after each turn; until then the
 branch is omitted.
