@@ -1,5 +1,5 @@
 //! Keys for the pickers and views: sessions, models, reasoning, find, diff,
-//! tool, help and context.
+//! help and context.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -26,13 +26,10 @@ impl App {
             return None;
         }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        let tool = matches!(self.overlay, Overlay::Tool(_));
-        let scrolling = tool || matches!(self.overlay, Overlay::Diff(_));
+        let scrolling = matches!(self.overlay, Overlay::Diff(_));
         let page = self.viewport_rows().saturating_sub(2) as isize;
         match key.code {
             KeyCode::Esc => self.overlay = Overlay::None,
-            KeyCode::Char('[') | KeyCode::Left if tool => self.step_tool(-1),
-            KeyCode::Char(']') | KeyCode::Right if tool => self.step_tool(1),
             KeyCode::PageUp if scrolling => self.scroll_view(-page),
             KeyCode::PageDown if scrolling => self.scroll_view(page),
             KeyCode::Home if scrolling => self.scroll_view(isize::MIN),
@@ -140,23 +137,17 @@ impl App {
                 }
             }
             Overlay::Help { scroll } => *scroll = scroll.saturating_add_signed(delta * 3),
-            Overlay::Tool(_) => self.scroll_view(delta),
             Overlay::Find { .. } => self.find_step(delta > 0),
             Overlay::Context | Overlay::SessionInfo { .. } | Overlay::None => {}
         }
     }
 
-    /// Scrolls the diff or tool view by `delta` rows; they clamp at the ends.
+    /// Scrolls the diff view by `delta` rows, clamping at the ends.
     pub(crate) fn scroll_view(&mut self, delta: isize) {
-        let rows = match &self.overlay {
-            Overlay::Tool(tool) => self.tool_output_rows(tool),
-            // The view's title and hint rows are not content.
-            _ => self.viewport_rows().saturating_sub(2),
-        };
-        match &mut self.overlay {
-            Overlay::Diff(diff) => diff.scroll_by(delta, rows),
-            Overlay::Tool(tool) => tool.scroll_by(delta, rows),
-            _ => {}
+        // The title and hint rows are not content.
+        let rows = self.viewport_rows().saturating_sub(2);
+        if let Overlay::Diff(diff) = &mut self.overlay {
+            diff.scroll_by(delta, rows);
         }
     }
 
@@ -226,7 +217,6 @@ impl App {
             | Overlay::Context
             | Overlay::Help { .. }
             | Overlay::Diff(_)
-            | Overlay::Tool(_)
             | Overlay::None => None,
         }
     }

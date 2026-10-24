@@ -1,5 +1,4 @@
-//! Tool-data DTOs: the display summary used by cards, the authoritative
-//! invocation/execution records, and the paged output reader.
+//! Tool-data DTOs: card summaries and invocation/execution records.
 
 use serde::{Deserialize, Serialize};
 
@@ -91,37 +90,12 @@ pub enum ToolExecutionState {
     Unknown,
 }
 
-/// `tool.read` result; raw arguments come from `tool.output{stream:"input"}`.
+/// Display facts returned by `tool.read`.
 #[derive(Clone, Debug, Deserialize)]
 pub struct ToolReadResult {
     pub display: Option<ToolDisplay>,
     pub invocation: Option<ToolInvocation>,
     pub execution: Option<ToolExecution>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-pub struct ToolOutputPage {
-    pub encoding: String,
-    pub base_offset: u64,
-    pub next_offset: u64,
-    pub eof: bool,
-    pub truncated: bool,
-    pub availability: Option<String>,
-    pub data: String,
-}
-
-impl ToolOutputPage {
-    /// Decodes one page. Process streams are base64, text streams are UTF-8.
-    pub fn bytes(&self) -> Vec<u8> {
-        if self.encoding == "base64" {
-            use base64::Engine;
-            base64::engine::general_purpose::STANDARD
-                .decode(self.data.as_bytes())
-                .unwrap_or_default()
-        } else {
-            self.data.clone().into_bytes()
-        }
-    }
 }
 
 /// Summary of one tool call as carried by the history display projection.
@@ -149,18 +123,6 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(invocation.detail(), "$ ls");
-    }
-
-    #[test]
-    fn process_pages_decode_from_base64() {
-        let page: ToolOutputPage = serde_json::from_value(serde_json::json!({
-            "stream": "stdout", "encoding": "base64", "base_offset": 0,
-            "next_offset": 5, "observed_end": 5, "eof": true, "truncated": false,
-            "availability": "available", "data": "aGVsbG8="
-        }))
-        .unwrap();
-        assert_eq!(page.bytes(), b"hello");
-        assert!(page.eof);
     }
 
     #[test]

@@ -269,7 +269,6 @@ pub fn render(frame: &mut Frame, area: Rect, styles: Styles, lines: &[Line<'stat
         area,
         styles,
         "Context",
-        "",
         &[("r", "refresh"), ("esc", "back")],
     );
     let bottom = area.bottom().saturating_sub(1);

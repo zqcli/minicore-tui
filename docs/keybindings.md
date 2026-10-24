@@ -66,7 +66,7 @@ back in the editor with the error. While the session is being created another
 `Ctrl+P` and `Shift+Tab` choose the settings of that session and confirm with a
 notice, and `/new <profile>` chooses its profile. `Ctrl+R` opens a stored
 session. Commands that need a session (`/compact`, `/context`, `/diff`,
-`/tool`, `/rename`, `/export`, `/copy`, `/session`) answer
+`/rename`, `/export`, `/copy`, `/session`) answer
 `No session yet: send a message first`. Quitting creates nothing.
 
 ## Transcript and global keys
@@ -95,10 +95,8 @@ are above the bottom. `End` or scrolling to the bottom resumes following the tai
 
 | Gesture | Action |
 |---|---|
-| Wheel | Scroll one row per notch, five with `Alt`. With a view open it scrolls that view (help three rows per notch, diff, tool output; the context view does not scroll); over a picker it moves the selection. It never scrolls the transcript behind them. |
-| Click a folded tool card's text, or any row of an expanded card but its `click for full output` row | Toggle that card. It opens and closes downward: the rows above it stay put, and `End` follows the tail again. Dragging over a card selects instead. |
-| Click an expanded card's `click for full output` row | Open the tool view. The row is always the first under the title or command; it reads `… N earlier lines · click for full output` when lines are hidden (`… N lines · …` on a card reloaded from history) and just `click for full output` otherwise. |
-| Click `↑ top` or `↓ bottom` in the tool view's title row | Scroll the output to its first or last row. |
+| Wheel | Scroll one row per notch, five with `Alt`. With a view open it scrolls that view (help three rows per notch, diff; the context view does not scroll); over a picker it moves the selection. It never scrolls the transcript behind them. |
+| Click a folded tool card's text, or any row of an expanded card | Toggle that card. It opens and closes downward: the rows above it stay put, and `End` follows the tail again. Dragging over a card selects instead. |
 | Click a turn-end line | Open the diff view for that turn. |
 | Click in the editor | Place the caret at a grapheme or paste-chip boundary, respecting wrapping, padding and editor scrolling. |
 | Drag in the editor | Select draft text; releasing copies it and keeps it highlighted. Typing replaces it. Moving outside the editor reaches adjacent rows and scrolls the draft. |
@@ -147,7 +145,6 @@ A view owns the keys: the composer below it is dimmed and reads `view open · es
 | View | Keys |
 |---|---|
 | Diff | `Tab` cycles the scope (turn, session, workspace); `↑` / `↓` select a file; `PageUp` / `PageDown`, `Home` / `End` and the wheel scroll the diff; `c` copies it. |
-| Tool output | `[` `]` or `←` `→` show the previous or next tool call; `↑` / `↓` scroll a row; `PageUp` / `PageDown` and the wheel scroll; `Home` / `End` jump to the top or bottom; `c` copies the output. When the output does not fit, the title row ends with the visible range (`31–60 of 412`) and the `↑ top` / `↓ bottom` buttons. |
 | Context | `r` re-reads the context (it also reads on open); `c` copies it. |
 | Help | `↑` / `↓` scroll three rows, `PageUp` / `PageDown` thirty. |
 
@@ -166,7 +163,6 @@ the name.
 | `/reasoning [level]` | Set the level directly, or open the picker when no valid level is given. |
 | `/compact` | Run manual compaction; refused while a turn runs. |
 | `/diff [session\|workspace]` | Open the diff view for the last turn, or the given scope. |
-| `/tool` | Open the full output of the tool card at the top of the view, else the newest. |
 | `/context` | Open the context view. |
 | `/copy` | Copy the last assistant answer as Markdown. |
 | `/export [path]` | Write the conversation as Markdown; the default is `./minicore-<session>-<date>.md`. |

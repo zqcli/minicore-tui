@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- The tool output view and `/tool` command are gone. Expanded cards show plain
+  hidden-line counts where output is cut; clicking any row collapses the card.
+
 - The partial reply of an interrupted request (reasoning and text, as the Agent
   stored it) is shown again after reopening a session or loading older pages,
   above the `interrupted` turn-end line. At the end of a live turn it replaces
@@ -29,16 +32,6 @@
   `Ctrl+P`, `Shift+Tab` and `/new <profile>` choose the settings the session
   will start with, and the footer shows them; the commands that need a session
   and the `@` file picker say `No session yet: send a message first`.
-- An expanded tool card always has a `click for full output` row directly
-  under its title or command, above the output, for every tool. Clicking
-  that row opens the tool view, and a click on any other row of an expanded
-  card (title, output or `Took` footer) collapses it. Dragging over a card
-  still selects without collapsing it.
-- The tool-output view shows `31–60 of 412` in its title row when the output
-  does not fit, with clickable `↑ top` and `↓ bottom` buttons (`Home` / `End`
-  do the same and are now in the hint row). Its last rows were out of reach
-  when the view had a command or detail line above the output; they scroll into
-  view now.
 - Collapsing a card, `Ctrl+O` or a resize no longer leaves blank rows under the
   transcript: the view stops at the end and follows new output again.
 - The welcome header has an empty row between its title, its key hints and the

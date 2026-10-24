@@ -49,7 +49,7 @@ src/
     notify.rs     feeds title.rs from the app state; the exit hint
     overlay.rs    Overlay (the one open picker or view), Panel, the filters behind
                   the pickers (sessions, models, files)
-    diff.rs, tool.rs, find.rs   state, rows and reads of the diff view, tool view, find
+    diff.rs, tool.rs, find.rs   diff state and reads, card hydration, transcript find
     tests/        reducer tests through the scripted Agent
   transcript/   mod (Transcript: blocks with a revision each)
                 block.rs (Block, RequestKey, ChangeSummary)
@@ -152,7 +152,7 @@ enum Msg {
 
 `SessionOp` holds the results of everything done for the resident session
 (`Tail`, `Page`, `Waited`, `Sent`, `Context`, `Presentation`, `Changes`,
-`ToolRead`, `DiffFile`, …). `App::spawn` and `App::call` stamp each task with
+`ToolHydrated`, `DiffFile`, …). `App::spawn` and `App::call` stamp each task with
 the resident session's `epoch`; `on_msg` drops a `Session` message whose epoch is
 not the resident one. `adopt` makes an opened or created session resident with
 `App::epoch + 1`, a counter that never resets, so every open or create, even of
@@ -296,11 +296,10 @@ history.
 - **Tool cards.** Display items carry per-call summaries (detail, input, state,
   line count) but no bodies. Canonical items carry no summaries, so each card of
   a canonical page is read once with `tool.read {display: true}`; a failed read
-  leaves the card as is. The tool view repeats that read and pages `tool.output`
-  per stream (`stdout` and `stderr` for `bash`, else `output`), up to 1 MiB each.
+  leaves the card as is.
   A card whose turn ended, and every card read from history, keeps only the
   200 output rows an expanded card shows (the tail for `bash`, the head for
-  other tools; `ToolCall::settle`); the tool view fetches the rest.
+  other tools; `ToolCall::settle`).
 - `/export` reads the whole canonical history the same way and writes Markdown.
 
 ## Compaction
@@ -366,17 +365,12 @@ the history length.
   exit code, `+a −b`; a running card has none), the call's detail, a
   failure's first line and a `... (N lines, click or ctrl+o to expand)` hint,
   or a `running…` chrome row while a running call has no output yet (also the
-  body of an expanded one); the rest is in the tool view. An expanded card
-  always has a chrome row directly under its title rows:
-  `… N earlier lines · click for full output` (`bash` shows its tail),
-  `… N more lines · …` (head tools), `… N lines · …`
-  for a reloaded card (the line count comes from its summary), or just `click
-  for full output` when nothing is hidden. That row (or `/tool`) opens the full
-  output. A click on a folded card's text toggles it; on an expanded
-  one every row toggles it except the full-output row, found through
-  `blocks::full_output_row` so the hit test and the renderer share the title
-  computation. A drag selects and never reaches the click: `click_transcript` runs
-  only on a release at the press cell.
+  body of an expanded one). An expanded card shows a plain meta chrome row
+  only when lines are hidden: `… N earlier lines` above a bash tail,
+  `… N more lines` below other tools' head, or `… N lines` for unloaded
+  history output. A click on a folded card's non-empty row expands it; on an
+  expanded card any row collapses it. A drag selects and never reaches the
+  click: `click_transcript` runs only on a release at the press cell.
 - **Selection.** A row the UI adds around content (hints, timestamps,
   spacers) and a span after content (a card's duration) carry `rails::chrome`,
   a style that changes nothing on screen. `rails::content_cells` gives the cells
@@ -404,15 +398,6 @@ from `sheets::completion`), the footer. A selector sheet (sessions, models,
 reasoning, approval, find) replaces the editor band; views replace the
 transcript area. A view owns the keys, so the editor under it is drawn dimmed
 with the placeholder `view open · esc to return`.
-
-The tool view's title row ends with a position readout (`31–60 of 412`, only
-while the output does not fit its rows) and the `↑ top` / `↓ bottom` buttons
-that show when there is something above or below. `views::tool::controls`
-places them for the renderer and the click hit test alike, and `ui::draw`
-records the view's area in `App::view_area` for that test and for the output
-height `scroll_view` clamps to. A press and release on one cell is a click, as
-in the transcript. The view's rows change once, when the full streams replace
-the card's tail, so there is no output to follow.
 
 ### Composer, templates, title
 

@@ -19,7 +19,7 @@ Built-in backend: Agent 0.8.0, which links Runtime 0.8.0; `Cargo.toml` pins the
 Agent by its release tag and `Cargo.lock` fixes both. An
 external Agent can still be named with `--agent`. At startup the TUI requires
 Protocol v1 and these Agent capabilities, and refuses an Agent that lacks one: `session.read`, `session.read.display`, `session.context`,
-`turn.result`, `tool.read`, `tool.read.display`, `tool.output`,
+`turn.result`, `tool.read`, `tool.read.display`,
 `workspace.files`, `changes.list`, `changes.diff`.
 
 ## Build and run
@@ -157,9 +157,9 @@ without a report. The TUI never estimates it.
   done, failed): tool name, target (`$ cmd`, `path:range`, `pattern in path`)
   and a hidden-line hint (`running…` while a running call has no output yet),
   with duration, exit code or line changes on the right. `Ctrl+O` expands all
-  cards and thinking, and a click toggles one. An expanded card has a `click
-  for full output` row right under its title or command, which opens the tool
-  view; a click on any other row of an expanded card collapses it, while
+  cards and thinking, and a click toggles one. Expanded cards show a plain
+  hidden-line count where output is cut: above the tail for `bash`, below the
+  head for other tools. Any row of an expanded card collapses it on click;
   dragging over its output selects without collapsing.
 - **Turn end** is one dim line: outcome, duration, requests, tools and, when files
   changed, `N files changed (+a −b)`. A failed or cancelled turn shows its reason.
@@ -168,7 +168,7 @@ without a report. The TUI never estimates it.
 - **Sessions.** None exists until the first message: the first `Enter` creates
   it with the profile, model and reasoning picked so far and sends the text.
   `/new` leaves the open session and returns to that state. Until then the
-  commands that read a session (`/compact`, `/context`, `/diff`, `/tool`,
+  commands that read a session (`/compact`, `/context`, `/diff`,
   `/rename`, `/export`, `/copy`, `/session`) and the `@` file picker say
   `No session yet: send a message first`.
 - **Steering and queue.** `Enter` while a turn runs steers it; `Alt+Enter` queues
@@ -180,13 +180,10 @@ without a report. The TUI never estimates it.
   removed. `/compact` runs it manually.
 - **History.** Opening a session loads the latest items; scrolling to the top
   loads older pages, including the history behind a compaction summary.
-  A reloaded `bash` card shows its line count and a `click for full output` row;
-  `/tool` opens the same view.
+  A card whose output is not loaded shows its line count.
 - **Views** replace the transcript and keep the footer: diff (turn, session or
-  workspace scope), tool output, context budget and help. `Esc` returns; the
-  composer is dimmed meanwhile, because the view owns the keys. A long tool
-  output shows which rows are on screen in the title row, with `↑ top` and
-  `↓ bottom` buttons (also `Home` / `End`).
+  workspace scope), context budget and help. `Esc` returns; the
+  composer is dimmed meanwhile, because the view owns the keys.
 - **Completion and selectors.** `/` and `@` open a list inside the editor that
   filters as you type (`Tab` inserts, `Enter` runs, `Esc` closes and keeps the
   text). Sessions with delete (`Ctrl+R`), model (`Ctrl+L`), reasoning
@@ -210,7 +207,7 @@ The complete map is [docs/keybindings.md](docs/keybindings.md). The essentials:
 - `PageUp` / `PageDown`, `Ctrl+Home` / `End`, `Ctrl+↑` / `Ctrl+↓` and the
   wheel navigate; `/` opens the command palette and `@` the file picker;
 - `/new [profile]`, `/sessions` (`/resume`), `/session`, `/rename`, `/model [id]`,
-  `/reasoning`, `/compact`, `/diff`, `/tool`, `/context`, `/copy`, `/export`,
+  `/reasoning`, `/compact`, `/diff`, `/context`, `/copy`, `/export`,
   `/theme`, `/reload`, `/help`, `/quit`, and a command per prompt template in
   `<home>/prompt/commands/*.md`; `Ctrl+P` cycles models.
 

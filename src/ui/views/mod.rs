@@ -1,11 +1,10 @@
-//! Full-screen views: diff, tool output, context and help. Each replaces the
+//! Full-screen views: diff, context and help. Each replaces the
 //! transcript area right of its gutter and keeps the footer; the app owns
 //! scrolling and selection.
 
 pub mod context;
 pub mod diff;
 pub mod help;
-pub mod tool;
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -14,7 +13,6 @@ use ratatui::text::{Line, Span};
 
 use crate::app::commands::COMMANDS;
 use crate::app::{App, Overlay};
-use crate::wrap;
 
 use super::theme::Styles;
 
@@ -37,24 +35,8 @@ pub fn key_hints(hints: &[(&str, &str)], styles: Styles) -> Vec<Span<'static>> {
     spans
 }
 
-/// The column where `text` starts when it ends at the right edge of `area`.
-fn right_edge(area: Rect, text: &str) -> u16 {
-    area.right()
-        .saturating_sub(wrap::width(text) as u16)
-        .max(area.x)
-}
-
-/// Shared view chrome: the title row, its name bold and its context in the
-/// meta colour, `right` in meta at the row's right edge, and the key-hint row
-/// at the bottom.
-fn chrome(
-    frame: &mut Frame,
-    area: Rect,
-    styles: Styles,
-    title: &str,
-    right: &str,
-    hints: &[(&str, &str)],
-) {
+/// The title row with its context in meta colour, and the bottom key hints.
+fn chrome(frame: &mut Frame, area: Rect, styles: Styles, title: &str, hints: &[(&str, &str)]) {
     let (name, context) = title.split_once(" · ").unwrap_or((title, ""));
     let mut spans = vec![
         Span::styled("← ", styles.meta()),
@@ -64,20 +46,7 @@ fn chrome(
         spans.push(Span::styled(format!(" · {context}"), styles.meta()));
     }
     let buffer = frame.buffer_mut();
-    // The right part keeps its cells; the title gives way, its context first.
-    let right_x = right_edge(area, right);
-    let title_width = if right.is_empty() {
-        area.width
-    } else {
-        (right_x - area.x).saturating_sub(1)
-    };
-    buffer.set_line(area.x, area.y, &Line::from(spans), title_width);
-    buffer.set_line(
-        right_x,
-        area.y,
-        &styled(right, styles.meta()),
-        area.right() - right_x,
-    );
+    buffer.set_line(area.x, area.y, &Line::from(spans), area.width);
     if area.height > 1 {
         buffer.set_line(
             area.x,
@@ -93,7 +62,6 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App, styles: Styles) -> bool {
     let area = super::transcript::inner(area);
     match &app.overlay {
         Overlay::Diff(diff) => diff::render(frame, area, styles, diff),
-        Overlay::Tool(tool) => tool::render(frame, area, styles, tool, app.session.as_ref()),
         Overlay::Context => {
             let lines = context::lines(app.session.as_ref(), styles);
             context::render(frame, area, styles, &lines);

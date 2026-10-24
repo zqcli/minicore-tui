@@ -107,11 +107,8 @@ pub enum SessionOp {
     /// The number of history items, for `/session`.
     ItemCount(Result<usize, RpcError>),
     Changes(String, Result<ChangeSummary, RpcError>),
-    ToolRead(ToolRef, Result<ToolReadResult, RpcError>),
     /// The facts of a card loaded without its detail; `None` when the read failed.
     ToolHydrated(ToolRef, Option<ToolReadResult>),
-    /// One stream of a tool call's full output, for the tool view.
-    ToolOutput(ToolRef, String, Result<tasks::StreamText, RpcError>),
     Files(Result<Vec<String>, RpcError>),
     ChangeFiles(DiffScope, Result<Vec<ChangeRecord>, RpcError>),
     DiffFile(DiffQuery, Result<Vec<DiffPage>, RpcError>),
@@ -193,8 +190,6 @@ pub struct App {
     pub composer_area: ratatui::layout::Rect,
     pub composer_max_rows: usize,
     pub composer_dragging: bool,
-    /// Where the last frame drew a full-screen view, for its click hit tests.
-    pub view_area: ratatui::layout::Rect,
     pub notices: VecDeque<Notice>,
     pub scroll: Scroll,
     pub tools_expanded: bool,
@@ -270,7 +265,6 @@ impl App {
             default_profile: None,
             composer: composer::Composer::new(),
             composer_area: ratatui::layout::Rect::default(),
-            view_area: ratatui::layout::Rect::default(),
             composer_max_rows: crate::ui::composer::MIN_ROWS,
             composer_dragging: false,
             notices: VecDeque::new(),
@@ -550,7 +544,6 @@ impl App {
     pub fn copy_view(&mut self) {
         let text = match &self.overlay {
             Overlay::Diff(diff) => diff::text(diff),
-            Overlay::Tool(tool) => tool::text(tool, self.session.as_ref()),
             _ => views::context::text(self.session.as_ref(), self.styles),
         };
         if text.trim().is_empty() {

@@ -1,0 +1,32 @@
+
+  minicore-tui v0.5.4
+
+  esc interrupt · ctrl+c clear · / commands · @ files · ctrl+o expand
+  ctrl+r sessions
+
+  /work/minicore-tui
+
+ ▎
+ ▎ $ cargo test --lib
+ ▎
+ ▎ … 14 earlier lines
+ ▎ running 131 tests
+ ▎ test result: ok
+ ▎
+ ▎ Took 4.2s
+ ▎
+
+ ▎
+ ▎ read src/main.rs:1-40
+ ▎
+ ▎ 1: fn main() {
+ ▎ 2:     run();
+ ▎ … 38 more lines
+ ▎
+
+
+ ▎
+ ▎
+ ▎
+ ▎
+ ▸ minicore-tui · gpt 6 luna · max

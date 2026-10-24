@@ -47,8 +47,6 @@ pub enum Action {
     Answer(Answer),
     LoadOlder,
     RecallQueued,
-    /// `/tool`: open the full output of the tool card in view.
-    ShowTool,
     Quit,
 }
 
@@ -72,7 +70,6 @@ impl Action {
                 | Self::CopyLastAnswer
                 | Self::Export(_)
                 | Self::LoadOlder
-                | Self::ShowTool
         )
     }
 }
@@ -125,7 +122,6 @@ impl App {
             Action::EditDraft => self.edit_request = Some(self.composer.submit()),
             Action::Answer(answer) => self.answer(answer),
             Action::LoadOlder => self.load_older(),
-            Action::ShowTool => self.show_tool(),
             Action::RecallQueued => self.recall_queued(),
             Action::SetTheme(kind) => self.apply_theme(kind),
             Action::ToggleTheme => self.apply_theme(match self.theme {

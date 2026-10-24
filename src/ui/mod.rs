@@ -70,7 +70,6 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Option<Position> {
         height: footer,
         ..area
     };
-    app.view_area = transcript::inner(main);
     if !views::draw(frame, main, app, styles) {
         transcript::draw(frame, main, app, styles);
     }

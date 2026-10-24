@@ -7,10 +7,9 @@ use serde_json::json;
 use super::diff::DiffState;
 use super::draft::NO_SESSION;
 use super::session::auto_title;
-use super::tool::ToolView;
 use super::{App, DiffScope, Msg, NoticeLevel, Session, SessionOp, commands, find, tasks};
 use crate::app::picker::fuzzy_match;
-use crate::protocol::{self, FilesPage, ModelInfo, RpcError, SessionInfo, ToolRef};
+use crate::protocol::{self, FilesPage, ModelInfo, RpcError, SessionInfo};
 use crate::ui::sheets;
 
 #[derive(Debug)]
@@ -51,7 +50,6 @@ pub enum Overlay {
         scroll: usize,
     },
     Diff(DiffState),
-    Tool(ToolView),
     /// Find in the transcript.
     Find {
         query: String,
@@ -67,10 +65,7 @@ impl Overlay {
 
     /// A full-screen view, which hides the transcript and the keys of the composer.
     pub fn is_view(&self) -> bool {
-        matches!(
-            self,
-            Self::Diff(_) | Self::Tool(_) | Self::Context | Self::Help { .. }
-        )
+        matches!(self, Self::Diff(_) | Self::Context | Self::Help { .. })
     }
 }
 
@@ -86,16 +81,12 @@ pub enum Panel {
     Help,
     Diff(DiffScope),
     Find,
-    Tool(ToolRef),
 }
 
 impl Panel {
     /// Whether the panel reads a session, so a draft has nothing to show in it.
     fn needs_session(&self) -> bool {
-        matches!(
-            self,
-            Self::Context | Self::SessionInfo | Self::Diff(_) | Self::Tool(_)
-        )
+        matches!(self, Self::Context | Self::SessionInfo | Self::Diff(_))
     }
 }
 
@@ -236,7 +227,6 @@ impl App {
                 matches: Vec::new(),
                 current: 0,
             },
-            Panel::Tool(key) => self.open_tool(key).map_or(Overlay::None, Overlay::Tool),
         };
     }
 

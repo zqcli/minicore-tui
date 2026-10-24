@@ -68,36 +68,12 @@ impl App {
                 }
             }
             SessionOp::Changes(loop_id, result) => self.on_changes(&loop_id, result),
-            SessionOp::ToolRead(key, result) => {
-                if let Some(read) = self.ok(result)
-                    && let Some(card) = self.session_mut().transcript.find_tool_mut(&key)
-                {
-                    card.apply_read(&read);
-                }
-            }
             // A call the Agent no longer knows keeps its card as it is.
             SessionOp::ToolHydrated(key, read) => {
                 if let Some(read) = read
                     && let Some(card) = self.session_mut().transcript.find_tool_mut(&key)
                 {
                     card.apply_read(&read);
-                }
-            }
-            SessionOp::ToolOutput(key, stream, result) => {
-                // Pages for a call the view no longer shows are dropped.
-                let Overlay::Tool(tool) = &mut self.overlay else {
-                    return;
-                };
-                if tool.key != key {
-                    return;
-                }
-                match result {
-                    Ok(text) => tool.set_stream(&stream, text),
-                    // The other streams still show; the view says what failed.
-                    Err(error) => {
-                        tool.set_stream(&stream, Default::default());
-                        tool.status = error.message;
-                    }
                 }
             }
             SessionOp::Files(result) => {

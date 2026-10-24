@@ -21,9 +21,6 @@ use crate::wrap;
 /// Columns before block text: the rail and one pad cell.
 pub const INSET: usize = 2;
 
-/// The end of an expanded card's full-output row.
-const FULL_OUTPUT_HINT: &str = "click for full output";
-
 /// Thinking rows a long block shows before its expand hint.
 const THINKING_ROWS: usize = 3;
 
@@ -341,7 +338,12 @@ fn tool(call: &ToolCall, styles: Styles, width: usize, expanded: bool) -> Vec<Li
     let mut lines = vec![spacer()];
     let title_style = styles.tool_title().add_modifier(Modifier::BOLD);
     let mut right = meta(call, styles, !bash);
-    for (index, line) in title_rows(call, inner).into_iter().enumerate() {
+    let title = expanded_title(call);
+    let title_rows = title
+        .lines()
+        .take(EXPANDED_ROWS)
+        .flat_map(|line| wrap::wrap_line(&wrap::sanitize(line), inner));
+    for (index, line) in title_rows.enumerate() {
         let left = vec![Span::styled(line, title_style)];
         lines.push(row(if index == 0 {
             title_spans(left, std::mem::take(&mut right), inner)
@@ -351,27 +353,7 @@ fn tool(call: &ToolCall, styles: Styles, width: usize, expanded: bool) -> Vec<Li
     }
 
     let failed = call.state == ToolState::Failed && !bash;
-    // The row under the title opens the tool view, so it is there even when
-    // nothing is hidden.
-    let mut hint = String::new();
-    if body.hidden > 0 || call.truncated {
-        hint.push_str("… ");
-    }
-    if body.hidden > 0 {
-        // A card from display history knows its size but holds no lines.
-        let noun = match (body.lines.is_empty(), body.tail) {
-            (true, _) => "line",
-            (false, true) => "earlier line",
-            (false, false) => "more line",
-        };
-        hint.push_str(&format!("{} · ", plural(body.hidden as u64, noun)));
-    }
-    hint.push_str(FULL_OUTPUT_HINT);
-    lines.push(chrome(row(padded(vec![Span::styled(
-        wrap::truncate(&hint, inner),
-        styles.meta(),
-    )]))));
-    let body_rows: Vec<Line<'static>> = body
+    let mut body_rows: Vec<Line<'static>> = body
         .lines
         .iter()
         .map(|line| {
@@ -388,6 +370,23 @@ fn tool(call: &ToolCall, styles: Styles, width: usize, expanded: bool) -> Vec<Li
             row(padded(vec![Span::styled(text, style)]))
         })
         .collect();
+    if body.hidden > 0 {
+        let noun = match (body.lines.is_empty(), body.tail) {
+            (true, _) => "line",
+            (false, true) => "earlier line",
+            (false, false) => "more line",
+        };
+        let hint = format!("… {}", plural(body.hidden as u64, noun));
+        let hint = chrome(row(padded(vec![Span::styled(
+            wrap::truncate(&hint, inner),
+            styles.meta(),
+        )])));
+        if body.tail {
+            body_rows.insert(0, hint);
+        } else {
+            body_rows.push(hint);
+        }
+    }
     if !body_rows.is_empty() {
         lines.push(spacer());
         lines.extend(body_rows);
@@ -416,21 +415,6 @@ fn tool(call: &ToolCall, styles: Styles, width: usize, expanded: bool) -> Vec<Li
     }
     lines.push(spacer());
     lines
-}
-
-/// The wrapped rows of an expanded card's title, `inner` cells wide.
-fn title_rows(call: &ToolCall, inner: usize) -> Vec<String> {
-    expanded_title(call)
-        .lines()
-        .take(EXPANDED_ROWS)
-        .flat_map(|line| wrap::wrap_line(&wrap::sanitize(line), inner))
-        .collect()
-}
-
-/// The row of an expanded card, rendered `width` wide, that opens the full
-/// output; the title rows sit between it and the pad row above them.
-pub fn full_output_row(call: &ToolCall, width: u16) -> usize {
-    1 + title_rows(call, text_width(width as usize)).len()
 }
 
 fn display_name(call: &ToolCall) -> &str {
@@ -1052,14 +1036,7 @@ mod tests {
         let body = card(started(), expanded());
         assert_eq!(
             body,
-            [
-                "▎",
-                "▎ $ python3 -m unittest",
-                "▎ click for full output",
-                "▎",
-                "▎ running…",
-                "▎",
-            ]
+            ["▎", "▎ $ python3 -m unittest", "▎", "▎ running…", "▎",]
         );
     }
 
@@ -1153,8 +1130,8 @@ mod tests {
                 "▎",
                 "▎ $ cd app",
                 "▎ python3 -m unittest",
-                "▎ … 12 earlier lines · click for full output",
                 "▎",
+                "▎ … 12 earlier lines",
                 "▎ Ran 30 tests",
                 "▎ OK",
                 "▎",
@@ -1165,36 +1142,30 @@ mod tests {
     }
 
     #[test]
-    fn the_full_output_row_is_the_first_row_under_the_title_of_every_card() {
-        let mut bash = call();
-        bash.expanded_input = Some("cd app\npython3 -m unittest".into());
+    fn hidden_line_counts_mark_the_truncated_end_and_are_meta_chrome() {
         let mut read = call();
         read.name = "read".into();
-        read.detail = "src/app.py:1-40".into();
         read.output_lines = Some(500);
         let mut whole = call();
         whole.output_dropped = 0;
-        for (call, hint) in [
-            (bash, "▎ … 12 earlier lines · click for full output"),
-            (read, "▎ … 498 more lines · click for full output"),
-            (whole, "▎ click for full output"),
+        for (call, hint, before) in [
+            (call(), Some("▎ … 12 earlier lines"), true),
+            (read, Some("▎ … 498 more lines"), false),
+            (whole, None, false),
         ] {
-            let rows = card(call.clone(), expanded());
-            let at = full_output_row(&call, 60);
-            assert_eq!(rows[at], hint, "{rows:?}");
-            assert!(rows[1..at].iter().all(|row| !row.contains("full output")));
-            assert_eq!(rows[at + 1], "▎", "the pad row follows: {rows:?}");
-            let hints = rows.iter().filter(|row| row.contains("full output"));
-            assert_eq!(hints.count(), 1, "{rows:?}");
+            let lines = render(&Block::Tool(Box::new(call)), styles(), 60, expanded());
+            let rows = text(&lines);
+            assert!(!rows.iter().any(|row| row.contains("full output")));
+            if let Some(hint) = hint {
+                let at = rows.iter().position(|row| row == hint).unwrap();
+                let body = rows.iter().position(|row| row == "▎ Ran 30 tests").unwrap();
+                assert_eq!(at < body, before, "{rows:?}");
+                assert_eq!(lines[at].spans[2].style.fg, Some(Palette::dark().meta));
+                assert!(lines[at].style.sub_modifier.contains(Modifier::HIDDEN));
+            } else {
+                assert!(!rows.iter().any(|row| row.starts_with("▎ …")), "{rows:?}");
+            }
         }
-    }
-
-    #[test]
-    fn the_full_output_row_is_chrome_in_meta_style() {
-        let lines = render(&Block::Tool(Box::new(call())), styles(), 60, expanded());
-        let at = full_output_row(&call(), 60);
-        assert_eq!(lines[at].spans[2].style.fg, Some(Palette::dark().meta));
-        assert!(lines[at].style.sub_modifier.contains(Modifier::HIDDEN));
     }
 
     #[test]
@@ -1249,9 +1220,9 @@ mod tests {
             body[1],
             format!("▎ apply-patch app.py{}0.4s · +1 −0", " ".repeat(27))
         );
-        assert_eq!(body[8], "▎ @@ -1,2 +1,3 @@");
-        assert_eq!(body[10], "▎ +    \"\"\"Greet.\"\"\"");
-        assert_eq!(lines[10].spans[2].style.fg, Some(Palette::dark().added));
+        assert_eq!(body[7], "▎ @@ -1,2 +1,3 @@");
+        assert_eq!(body[9], "▎ +    \"\"\"Greet.\"\"\"");
+        assert_eq!(lines[9].spans[2].style.fg, Some(Palette::dark().added));
     }
 
     #[test]
@@ -1274,19 +1245,19 @@ mod tests {
         assert_eq!(
             open[2..9],
             [
-                "▎ … 1995 more lines · click for full output",
                 "▎",
                 "▎ 1: alpha",
                 "▎ 2: beta",
                 "▎ 3: gamma",
                 "▎ 4: delta",
                 "▎ 1",
+                "▎ … 1995 more lines",
             ]
         );
     }
 
     #[test]
-    fn a_card_from_history_shows_its_size_and_opens_the_tool_view() {
+    fn a_card_from_history_shows_its_unloaded_line_count() {
         for name in ["bash", "read"] {
             let mut card = call();
             card.name = name.into();
@@ -1298,10 +1269,7 @@ mod tests {
                 "▎ ... (42 more lines, click or ctrl+o to expand)"
             );
             let open = self::card(card, expanded());
-            assert!(
-                open.contains(&format!("▎ … 42 lines · {FULL_OUTPUT_HINT}")),
-                "{open:?}"
-            );
+            assert!(open.contains(&"▎ … 42 lines".to_owned()), "{open:?}");
         }
     }
 

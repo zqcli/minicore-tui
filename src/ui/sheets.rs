@@ -51,8 +51,7 @@ pub fn sheet(app: &App, styles: Styles) -> Option<Sheet> {
         | Overlay::Files { .. }
         | Overlay::Context
         | Overlay::Help { .. }
-        | Overlay::Diff(_)
-        | Overlay::Tool(_) => return None,
+        | Overlay::Diff(_) => return None,
     })
 }
 

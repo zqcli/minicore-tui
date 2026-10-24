@@ -10,11 +10,10 @@ use tokio::sync::mpsc;
 use super::{App, BUSY_RETRY, Msg, NoticeLevel, SessionOp};
 use crate::protocol::changes::{ChangeList, DiffPage};
 use crate::protocol::read::{InterruptedRequest, RawHistoryItem, TurnRecord};
-use crate::protocol::tool::ToolOutputPage;
 use crate::protocol::{
     self, ChunkAssembler, ChunkOutcome, ModelListResult, PingResult, ProfileListResult, ReadCursor,
     ReadSessionResult, RpcError, SessionInfo, SessionListResult, SessionResult, SnapshotPin,
-    ToolRef, TurnRef, TurnResultPage, TurnWaitResult, Usage,
+    TurnRef, TurnResultPage, TurnWaitResult, Usage,
 };
 use crate::rpc::Client;
 use crate::transcript::ChangeSummary;
@@ -406,59 +405,6 @@ async fn read_diff(
 }
 
 const DIFF_RETRIES: u32 = 2;
-
-/// One stream of a tool call's full output, as the tool view shows it.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct StreamText {
-    pub text: String,
-    /// The Agent no longer retains the start of the stream.
-    pub dropped_head: bool,
-    /// The retained bytes were evicted; empty text does not mean no output.
-    pub expired: bool,
-    /// Reading stopped at [`MAX_TOOL_VIEW_BYTES`].
-    pub cut: bool,
-}
-
-/// Ceiling for one tool view; the Agent keeps 1 MiB per stream anyway.
-pub const MAX_TOOL_VIEW_BYTES: usize = 1024 * 1024;
-
-pub async fn read_output(
-    client: Arc<Client>,
-    key: ToolRef,
-    stream: String,
-) -> Result<StreamText, RpcError> {
-    let mut bytes = Vec::new();
-    let mut result = StreamText::default();
-    let mut offset = 0u64;
-    loop {
-        let params = json!({
-            "session_id": key.session_id,
-            "loop_id": key.loop_id,
-            "request_index": key.request_index,
-            "tool_call_id": key.tool_call_id,
-            "stream": stream,
-            "offset": offset,
-            "max_bytes": protocol::PAGE_MAX_BYTES,
-        });
-        let page: ToolOutputPage = client.call(protocol::METHOD_TOOL_OUTPUT, &params).await?;
-        if offset == 0 && (page.base_offset > 0 || page.truncated) {
-            result.dropped_head = true;
-        }
-        result.expired |= page.availability.as_deref() == Some("expired");
-        bytes.extend_from_slice(&page.bytes());
-        if bytes.len() >= MAX_TOOL_VIEW_BYTES {
-            result.cut = true;
-            break;
-        }
-        if page.eof || page.next_offset <= offset {
-            break;
-        }
-        offset = page.next_offset;
-    }
-    // Decoded once: a multi-byte character can straddle two pages.
-    result.text = String::from_utf8_lossy(&bytes).into_owned();
-    Ok(result)
-}
 
 /// Writes the canonical conversation as Markdown and reports where.
 pub async fn export(client: Arc<Client>, session_id: String, path: Option<String>) -> Msg {

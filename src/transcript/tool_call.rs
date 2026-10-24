@@ -8,7 +8,7 @@ use crate::protocol::{
     ToolSummary,
 };
 
-/// One tool call card; its output is a bounded tail, the rest is behind `tool.output`.
+/// One tool call card with a bounded output tail.
 #[derive(Clone, Debug)]
 pub struct ToolCall {
     pub key: ToolRef,
@@ -196,9 +196,7 @@ impl ToolCall {
         }
     }
 
-    /// Drops the output a finished card can no longer show. An expanded card
-    /// shows `EXPANDED_ROWS` lines, the tail for `bash` and the head otherwise;
-    /// the rest stays behind `tool.output`.
+    /// Keeps only the expanded rows of a finished card: the tail for `bash`, otherwise the head.
     pub fn settle(&mut self) {
         let content = self.output_content().len();
         if content <= EXPANDED_ROWS {
@@ -467,9 +465,9 @@ impl ToolCall {
     }
 }
 
-/// Body rows of an expanded card; the tool view has the rest.
+/// Maximum body rows of an expanded card.
 pub const EXPANDED_ROWS: usize = 200;
-/// Lines of process output kept per card; the tool view pages the rest.
+/// Lines of process output kept per running card.
 pub const OUTPUT_TAIL_LINES: usize = 400;
 /// Byte cap for a card's stored output tail.
 pub const OUTPUT_TAIL_BYTES: usize = 64 * 1024;

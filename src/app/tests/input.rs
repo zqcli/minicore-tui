@@ -4,10 +4,9 @@ use crossterm::event::{KeyCode, KeyModifiers, MouseEvent, MouseEventKind};
 use serde_json::json;
 
 use super::harness::*;
-use crate::app::{Action, FLASH_TTL, Msg, NoticeLevel, Overlay, Scroll};
-use crate::protocol::ToolRef;
+use crate::app::{FLASH_TTL, Msg, NoticeLevel, Overlay, Scroll};
 use crate::protocol::read::UserKind;
-use crate::transcript::{Block, RequestKey, ToolCall};
+use crate::transcript::{Block, RequestKey};
 
 /// `count` prompts, each followed by a three-line answer.
 fn conversation(h: &mut Harness, count: usize) {
@@ -201,6 +200,24 @@ async fn a_slash_line_that_names_no_command_is_a_prompt() {
     h.press(KeyCode::Enter);
     h.settle().await;
     assert_eq!(h.calls("turn.steer")[0]["text"], "/var/log is huge");
+}
+
+#[tokio::test(start_paused = true)]
+async fn slash_tool_is_an_unknown_command() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    assert!(crate::app::commands::execute("tool", "").is_none());
+    assert!(crate::app::commands::filter("tool", &[]).is_empty());
+    h.type_text("/tool");
+    h.press(KeyCode::Enter);
+    assert_eq!(
+        h.notices(),
+        ["Unknown command /tool · enter again sends it as text"]
+    );
+    assert!(h.app.overlay.is_none());
+    assert_eq!(h.app.composer.text(), "/tool");
+    h.settle().await;
+    assert!(h.calls("tool.read").is_empty());
+    assert!(h.sends().is_empty());
 }
 
 #[tokio::test(start_paused = true)]
@@ -527,87 +544,6 @@ async fn r_in_the_context_view_reads_the_ledger_again() {
     h.settle().await;
     assert_eq!(h.calls("session.context").len(), before + 1);
     assert!(h.screen(80, 20).starts_with(" ← Context"));
-}
-
-fn card(id: &str, name: &str) -> Block {
-    Block::Tool(Box::new(ToolCall::new(
-        ToolRef {
-            session_id: "s1".into(),
-            loop_id: "l1".into(),
-            request_index: 0,
-            tool_call_id: id.into(),
-        },
-        name,
-    )))
-}
-
-fn title(h: &mut Harness) -> String {
-    h.screen(80, 20)
-        .lines()
-        .next()
-        .unwrap_or_default()
-        .to_owned()
-}
-
-#[tokio::test(start_paused = true)]
-async fn slash_tool_opens_a_card_and_brackets_step_between_cards() {
-    let mut h = Harness::opened(display_read(0, 0)).await;
-    h.fake.script(
-        "tool.output",
-        json!({"stream": "stdout", "encoding": "base64", "base_offset": 0, "next_offset": 6,
-               "observed_end": 6, "eof": true, "truncated": false, "availability": "available",
-               "data": "aGVsbG8K"}),
-    );
-    let transcript = &mut h.app.session.as_mut().unwrap().transcript;
-    transcript.push(Block::User {
-        text: "go".into(),
-        kind: UserKind::Prompt,
-        at: None,
-    });
-    transcript.push(card("c1", "bash"));
-    transcript.push(card("c2", "read"));
-
-    h.type_text("/tool");
-    h.press(KeyCode::Enter);
-    assert!(title(&mut h).starts_with(" ← read"), "the newest card");
-    assert!(title(&mut h).contains("tool 2 of 2"));
-    h.settle().await;
-    let screen = h.screen(80, 20);
-    assert!(screen.contains("hello"), "{screen}");
-    assert!(
-        !screen.contains("── "),
-        "one stream needs no section: {screen}"
-    );
-
-    h.press(KeyCode::Char('['));
-    assert!(title(&mut h).contains("tool 1 of 2"));
-    h.settle().await;
-    let screen = h.screen(80, 20);
-    assert!(
-        screen.contains("── stdout ──") && screen.contains("── stderr ──"),
-        "{screen}"
-    );
-    let streams: Vec<_> = h
-        .calls("tool.output")
-        .iter()
-        .map(|params| params["stream"].clone())
-        .collect();
-    assert_eq!(streams, ["output", "stdout", "stderr"]);
-    h.press(KeyCode::Char('['));
-    assert!(title(&mut h).contains("tool 1 of 2"), "stops at the first");
-    h.press(KeyCode::Right);
-    assert!(title(&mut h).contains("tool 2 of 2"));
-
-    h.press(KeyCode::Esc);
-    h.app.scroll = Scroll::Anchor {
-        block: 1,
-        offset: 0,
-    };
-    h.action(Action::ShowTool);
-    assert!(
-        title(&mut h).contains("tool 1 of 2"),
-        "the card at the top of the view"
-    );
 }
 
 #[tokio::test(start_paused = true)]

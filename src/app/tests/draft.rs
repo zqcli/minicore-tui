@@ -296,7 +296,6 @@ async fn commands_that_need_a_session_say_so_in_the_draft() {
         Action::Rename("title".into()),
         Action::Export(None),
         Action::CopyLastAnswer,
-        Action::ShowTool,
         Action::LoadOlder,
     ] {
         h.app.notices.clear();

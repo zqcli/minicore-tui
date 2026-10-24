@@ -169,6 +169,28 @@ fn idle_screen_shows_the_rail_composer_and_footer() {
 }
 
 #[test]
+fn expanded_cards_show_hidden_lines_at_the_cut() {
+    let mut app = app();
+    let mut read = tool();
+    read.name = "read".into();
+    read.detail = "src/main.rs:1-40".into();
+    read.duration = None;
+    read.exit_code = None;
+    read.output = vec!["1: fn main() {".into(), "2:     run();".into()];
+    read.output_dropped = 0;
+    read.output_lines = Some(40);
+    let transcript = &mut app.session.as_mut().unwrap().transcript;
+    transcript.push(Block::Tool(Box::new(tool())));
+    transcript.push(Block::Tool(Box::new(read)));
+    app.tools_expanded = true;
+    snapshot(
+        "tests/snapshots/expanded-cards.txt",
+        include_str!("../../tests/snapshots/expanded-cards.txt"),
+        render(&mut app, 70, 32),
+    );
+}
+
+#[test]
 fn the_draft_is_the_welcome_header_over_the_editor_and_the_footer() {
     let mut app = app();
     app.session = None;
@@ -632,9 +654,8 @@ fn row_of(screen: &str, prefix: &str) -> u16 {
 }
 
 #[test]
-fn clicking_a_card_title_toggles_that_card_and_its_full_output_row_opens_the_tool_view() {
+fn clicking_a_hidden_lines_row_collapses_the_expanded_card_without_opening_an_overlay() {
     let mut fixture = app();
-    // Opening a view starts a read; it only needs a runtime to be queued on.
     let _runtime = fixture._runtime.enter();
     let app = &mut fixture.app;
     conversation(app);
@@ -642,20 +663,11 @@ fn clicking_a_card_title_toggles_that_card_and_its_full_output_row_opens_the_too
     let header = row_of(&folded, " ▎ bash");
     click(app, 10, header);
     let expanded = render(app, 70, 30);
-    assert!(
-        expanded.contains("… 14 earlier lines · click for full output"),
-        "{expanded}"
-    );
+    assert!(expanded.contains("… 14 earlier lines"), "{expanded}");
     assert!(!app.tools_expanded, "only that card changed");
-    let title = row_of(&expanded, " ▎ $ cargo test --lib");
-    assert_eq!(row_of(&expanded, " ▎ … 14 earlier lines"), title + 1);
 
-    click(app, 10, title + 1);
-    assert!(matches!(app.overlay, Overlay::Tool(_)), "{:?}", app.overlay);
-
-    app.overlay = Overlay::None;
-    render(app, 70, 30);
-    click(app, 10, title);
+    click(app, 10, row_of(&expanded, " ▎ … 14 earlier lines"));
+    assert!(matches!(app.overlay, Overlay::None), "{:?}", app.overlay);
     let refolded = render(app, 70, 30);
     assert!(refolded.contains("ctrl+o to expand"), "{refolded}");
 }
@@ -670,7 +682,7 @@ fn clicking_the_body_or_the_footer_of_an_expanded_card_collapses_it() {
         let folded = render(app, 70, 34);
         click(app, 10, row_of(&folded, " ▎ bash"));
         let open = render(app, 70, 34);
-        assert!(open.contains("click for full output"), "{open}");
+        assert!(open.contains(" ▎ $ cargo test --lib"), "{open}");
         click(app, 10, row_of(&open, prefix));
         let collapsed = render(app, 70, 34);
         assert!(
@@ -699,168 +711,7 @@ fn a_drag_across_an_expanded_card_body_selects_and_leaves_it_open() {
     assert!(app.selection.is_some());
     assert!(matches!(app.overlay, Overlay::None), "{:?}", app.overlay);
     let after = render(app, 70, 30);
-    assert!(after.contains("click for full output"), "{after}");
-}
-
-/// Opens the tool view of the conversation's card on `rows` output rows.
-fn open_tool_view(app: &mut App, rows: usize) {
-    use crate::app::Panel;
-    conversation(app);
-    app.open_panel(Panel::Tool(tool().key));
-    let Overlay::Tool(tool) = &mut app.overlay else {
-        panic!("no tool view: {:?}", app.overlay);
-    };
-    tool.status.clear();
-    tool.rows = (0..rows)
-        .map(|index| crate::app::tool::ToolRow::Text(format!("line {index}")))
-        .collect();
-}
-
-fn tool_scroll(app: &App) -> usize {
-    match &app.overlay {
-        Overlay::Tool(tool) => tool.scroll,
-        other => panic!("no tool view: {other:?}"),
-    }
-}
-
-/// The column of the first cell of `label` in the title row.
-fn column_of(screen: &str, label: &str) -> u16 {
-    let title = screen.lines().next().unwrap();
-    let at = title
-        .find(label)
-        .unwrap_or_else(|| panic!("no {label:?} in {title:?}"));
-    title[..at].chars().count() as u16
-}
-
-/// The tool view's title row at `width`: the gutter, the left part and the
-/// right part at the right edge.
-fn title_row(width: usize, left: &str, right: &str) -> String {
-    let gap = width - 1 - left.chars().count() - right.chars().count();
-    format!(" {left}{}{right}", " ".repeat(gap))
-}
-
-#[test]
-fn the_tool_view_title_shows_where_the_output_is_and_the_jump_buttons() {
-    let mut fixture = app();
-    let _runtime = fixture._runtime.enter();
-    let app = &mut fixture.app;
-    open_tool_view(app, 100);
-    let title = |screen: &str| screen.lines().next().unwrap().to_owned();
-    let left = "← bash · succeeded · tool 1 of 1";
-
-    let top = render(app, 80, 20);
-    assert_eq!(
-        title(&top),
-        title_row(80, left, "1–10 of 100 · ↓ bottom"),
-        "{top}"
-    );
-    assert!(top.contains("line 9") && !top.contains("line 10"), "{top}");
-
-    app.scroll_view(30);
-    let middle = render(app, 80, 20);
-    assert_eq!(
-        title(&middle),
-        title_row(80, left, "31–40 of 100 · ↑ top · ↓ bottom"),
-        "{middle}"
-    );
-
-    app.on_key(crossterm::event::KeyEvent::new(
-        crossterm::event::KeyCode::End,
-        crossterm::event::KeyModifiers::NONE,
-    ));
-    let bottom = render(app, 80, 20);
-    assert_eq!(
-        title(&bottom),
-        title_row(80, left, "91–100 of 100 · ↑ top"),
-        "{bottom}"
-    );
-    assert!(
-        bottom.contains("line 99"),
-        "the last row is reachable:\n{bottom}"
-    );
-    assert!(
-        bottom
-            .lines()
-            .any(|line| line.ends_with("home/end top/bottom · c copy · esc back")),
-        "{bottom}"
-    );
-}
-
-#[test]
-fn the_tool_view_title_has_no_readout_when_the_output_fits() {
-    let mut fixture = app();
-    let _runtime = fixture._runtime.enter();
-    let app = &mut fixture.app;
-    open_tool_view(app, 5);
-    let screen = render(app, 80, 20);
-    assert_eq!(
-        screen.lines().next().unwrap().trim_end(),
-        " ← bash · succeeded · tool 1 of 1",
-        "{screen}"
-    );
-}
-
-#[test]
-fn a_narrow_tool_view_title_gives_way_to_the_readout() {
-    let mut fixture = app();
-    let _runtime = fixture._runtime.enter();
-    let app = &mut fixture.app;
-    open_tool_view(app, 100);
-    app.scroll_view(30);
-    let screen = render(app, 50, 20);
-    assert_eq!(
-        screen.lines().next().unwrap().trim_end(),
-        " ← bash · succeede 31–40 of 100 · ↑ top · ↓ bottom",
-        "{screen}"
-    );
-}
-
-#[test]
-fn clicking_top_or_bottom_in_the_tool_view_jumps_there_and_other_clicks_do_nothing() {
-    use crossterm::event::MouseEventKind::{Down, Up};
-    let mut fixture = app();
-    let _runtime = fixture._runtime.enter();
-    let app = &mut fixture.app;
-    open_tool_view(app, 100);
-    app.scroll_view(30);
-    let screen = render(app, 80, 20);
-    let (top, bottom) = (column_of(&screen, "↑ top"), column_of(&screen, "↓ bottom"));
-
-    click(app, column_of(&screen, "31–40"), 0);
-    click(app, top.saturating_sub(2), 0);
-    click(app, top, 1);
-    click(app, bottom - 1, 0);
-    assert_eq!(tool_scroll(app), 30, "clicks off the buttons do nothing");
-    // A drag that ends elsewhere is not a click.
-    left(app, Down, top, 0);
-    left(app, Up, top + 1, 0);
-    assert_eq!(tool_scroll(app), 30);
-
-    // The last cell of each button counts.
-    click(app, bottom + 7, 0);
-    assert_eq!(tool_scroll(app), 90);
-    let screen = render(app, 80, 20);
-    assert!(!screen.contains("↓ bottom"), "{screen}");
-    click(app, column_of(&screen, "↑ top") + 4, 0);
-    assert_eq!(tool_scroll(app), 0);
-    let screen = render(app, 80, 20);
-    assert!(!screen.contains("↑ top"), "{screen}");
-    // Where the button was, a click does nothing now.
-    click(app, top, 0);
-    assert_eq!(tool_scroll(app), 0);
-}
-
-#[test]
-fn the_tool_view_buttons_follow_a_resize() {
-    let mut fixture = app();
-    let _runtime = fixture._runtime.enter();
-    let app = &mut fixture.app;
-    open_tool_view(app, 100);
-    app.scroll_view(30);
-    render(app, 80, 20);
-    let screen = render(app, 90, 20);
-    click(app, column_of(&screen, "↑ top"), 0);
-    assert_eq!(tool_scroll(app), 0);
+    assert!(after.contains(" ▎ $ cargo test --lib"), "{after}");
 }
 
 #[test]
@@ -918,7 +769,7 @@ fn collapsing_a_card_while_following_leaves_no_blank_rows_under_the_content() {
     let folded = render(app, 70, 16);
     click(app, 10, row_of(&folded, " ▎ bash"));
     let open = render(app, 70, 16);
-    assert!(open.contains("click for full output"), "{open}");
+    assert!(open.contains(" ▎ $ cargo test --lib"), "{open}");
     // Following the longer transcript, the collapsing click pins a top that
     // the shorter one no longer reaches.
     app.scroll_to(usize::MAX);
@@ -1022,7 +873,7 @@ fn a_running_card_without_output_shows_running_until_output_arrives() {
 
     click(app, 10, header + 2);
     let open = render(app, 70, 30);
-    assert!(open.contains("click for full output"), "{open}");
+    assert!(open.contains(" ▎ $ cargo test --lib"), "{open}");
     assert!(open.contains(" ▎ running…"), "{open}");
     click(app, 10, row_of(&open, " ▎ running…"));
     assert!(render(app, 70, 30).contains(" ▎ running…"));
@@ -1143,15 +994,10 @@ fn a_click_on_a_card_in_block_0_maps_below_the_welcome_header() {
     let folded = render(app, 70, 30);
     click(app, 10, row_of(&folded, " ▎ bash"));
     let expanded = render(app, 70, 30);
-    assert!(expanded.contains("click for full output"), "{expanded}");
-    let title = row_of(&expanded, " ▎ $ cargo test --lib");
+    assert!(expanded.contains(" ▎ $ cargo test --lib"), "{expanded}");
 
-    click(app, 10, title + 1);
-    assert!(matches!(app.overlay, Overlay::Tool(_)), "{:?}", app.overlay);
-
-    app.overlay = Overlay::None;
-    render(app, 70, 30);
-    click(app, 10, title);
+    click(app, 10, row_of(&expanded, " ▎ … 14 earlier lines"));
+    assert!(matches!(app.overlay, Overlay::None), "{:?}", app.overlay);
     let refolded = render(app, 70, 30);
     assert!(refolded.contains("ctrl+o to expand"), "{refolded}");
 }

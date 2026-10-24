@@ -54,7 +54,6 @@ pub const METHOD_TURN_CANCEL: &str = "turn.cancel";
 pub const METHOD_TURN_WAIT: &str = "turn.wait";
 pub const METHOD_TURN_RESULT: &str = "turn.result";
 pub const METHOD_TOOL_READ: &str = "tool.read";
-pub const METHOD_TOOL_OUTPUT: &str = "tool.output";
 pub const METHOD_WORKSPACE_FILES: &str = "workspace.files";
 pub const METHOD_WORKSPACE_STATUS: &str = "workspace.status";
 pub const METHOD_CHANGES_LIST: &str = "changes.list";
@@ -81,7 +80,6 @@ pub const REQUIRED_CAPABILITIES: &[&str] = &[
     "turn.result",
     "tool.read",
     "tool.read.display",
-    "tool.output",
     "workspace.files",
     "changes.list",
     "changes.diff",

@@ -6,7 +6,6 @@ use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use super::{App, DOUBLE_CLICK, Overlay, Panel, Press, Scroll};
 use super::{scrollbar, selection};
 use crate::transcript::Block;
-use crate::ui::{blocks, views};
 
 impl App {
     /// Mouse: wheel scrolling, the scrollbar, click-to-open, and drag, word or
@@ -58,7 +57,6 @@ impl App {
         }
         // A full-screen view hides the transcript the press would land on.
         let view = self.overlay.is_view();
-        let tool = matches!(self.overlay, Overlay::Tool(_));
         match mouse.kind {
             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
                 let step = if mouse.modifiers.contains(KeyModifiers::ALT) {
@@ -74,26 +72,9 @@ impl App {
                 // The transcript scrolls only while it is the visible surface.
                 match self.overlay {
                     Overlay::None | Overlay::Find { .. } => self.scroll_by(delta),
-                    Overlay::Diff(_) | Overlay::Tool(_) => self.scroll_view(delta),
+                    Overlay::Diff(_) => self.scroll_view(delta),
                     _ => self.overlay_move(delta.signum()),
                 }
-                true
-            }
-            // The tool view's buttons click like the transcript: press and
-            // release on one cell.
-            MouseEventKind::Down(MouseButton::Left) if tool => {
-                self.press = Some(Press {
-                    cell,
-                    at: tokio::time::Instant::now(),
-                    clicks: 1,
-                    word: None,
-                });
-                false
-            }
-            MouseEventKind::Up(MouseButton::Left)
-                if tool && self.press.as_ref().is_some_and(|press| press.cell == cell) =>
-            {
-                self.click_tool(cell);
                 true
             }
             _ if view => false,
@@ -255,27 +236,7 @@ impl App {
                 .is_some_and(|column| scrollbar::jump_label(area.width).contains(&column))
     }
 
-    /// A click in the tool view: `↑ top` and `↓ bottom` in the title row jump
-    /// to the ends of the output.
-    fn click_tool(&mut self, (column, row): (u16, u16)) {
-        let Overlay::Tool(tool) = &self.overlay else {
-            return;
-        };
-        if row != self.view_area.y {
-            return;
-        }
-        let controls = views::tool::controls(self.view_area, tool, self.tool_output_rows(tool));
-        if controls.top.contains(&column) {
-            self.scroll_view(isize::MIN);
-        } else if controls.bottom.contains(&column) {
-            self.scroll_view(isize::MAX);
-        }
-    }
-
-    /// A click: the jump label follows the tail again, a folded card's text or
-    /// any row of an expanded card or a thinking header toggles that block, an
-    /// expanded card's full-output row opens the tool view, and a turn-end line
-    /// opens the turn's diff.
+    /// Toggles cards and thinking, follows the tail, or opens a turn-end diff.
     fn click_transcript(&mut self, (column, row): (u16, u16)) {
         if !self.overlay.is_none() {
             return;
@@ -293,9 +254,9 @@ impl App {
         } else {
             0
         };
-        let Some(line) = line.checked_sub(header) else {
+        if line < header {
             return;
-        };
+        }
         let all_expanded = self.tools_expanded;
         let text = self
             .layout
@@ -303,7 +264,6 @@ impl App {
             .unwrap_or_default()
             .trim()
             .to_owned();
-        let width = self.layout.width();
         let Some(session) = self.session.as_mut() else {
             return;
         };
@@ -311,9 +271,7 @@ impl App {
             Some(Block::Tool(call)) => {
                 let expanded = call.is_expanded(all_expanded);
                 let key = call.key.clone();
-                if expanded && line == blocks::full_output_row(call, width) {
-                    self.open_panel(Panel::Tool(key));
-                } else if (expanded || !text.is_empty())
+                if (expanded || !text.is_empty())
                     && let Some(call) = session.transcript.find_tool_mut(&key)
                 {
                     call.toggle_expanded(all_expanded);
