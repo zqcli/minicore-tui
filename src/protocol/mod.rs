@@ -15,7 +15,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub use changes::{ChangeKind, ChangeList, ChangeRecord, ChangeScope};
+pub use changes::{ChangeKind, ChangeList};
 pub use event::AgentEvent;
 pub use read::{
     ChunkAssembler, ChunkOutcome, DisplayProjection, RawHistoryItem, ReadChunk, ReadCursor,

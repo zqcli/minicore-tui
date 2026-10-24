@@ -64,7 +64,7 @@ impl Harness {
         fake.script("session.read", display_read(0, 0));
         fake.script(
             "changes.list",
-            json!({"records": [], "total": 0, "complete": true}),
+            json!({"records": [], "total": 0, "complete": true, "warnings": []}),
         );
         Self { app, fake, rx }
     }

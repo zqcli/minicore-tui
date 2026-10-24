@@ -7,7 +7,7 @@ use serde_json::json;
 use super::diff::DiffState;
 use super::draft::NO_SESSION;
 use super::session::auto_title;
-use super::{App, DiffScope, Msg, NoticeLevel, Session, SessionOp, commands, find, tasks};
+use super::{App, Msg, NoticeLevel, Session, SessionOp, commands, find, tasks};
 use crate::app::picker::fuzzy_match;
 use crate::protocol::{self, FilesPage, ModelInfo, RpcError, SessionInfo};
 use crate::ui::sheets;
@@ -79,14 +79,14 @@ pub enum Panel {
     Context,
     SessionInfo,
     Help,
-    Diff(DiffScope),
+    Diff,
     Find,
 }
 
 impl Panel {
     /// Whether the panel reads a session, so a draft has nothing to show in it.
     fn needs_session(&self) -> bool {
-        matches!(self, Self::Context | Self::SessionInfo | Self::Diff(_))
+        matches!(self, Self::Context | Self::SessionInfo | Self::Diff)
     }
 }
 
@@ -221,7 +221,7 @@ impl App {
                 Overlay::SessionInfo { items: None }
             }
             Panel::Help => Overlay::Help { scroll: 0 },
-            Panel::Diff(scope) => Overlay::Diff(self.open_diff(scope)),
+            Panel::Diff => Overlay::Diff(self.open_diff()),
             Panel::Find => Overlay::Find {
                 query: String::new(),
                 matches: Vec::new(),
@@ -246,8 +246,7 @@ impl App {
             return None;
         }
         let (name, rest) = text.strip_prefix('/')?.split_once(char::is_whitespace)?;
-        matches!(name, "model" | "new" | "reasoning" | "theme" | "diff")
-            .then_some((name, rest.trim()))
+        matches!(name, "model" | "new" | "reasoning" | "theme").then_some((name, rest.trim()))
     }
 
     /// The command list's rows as `(name, description)`: the commands for the
@@ -299,7 +298,7 @@ impl App {
                 .map(|level| (level.label().to_owned(), String::new()))
                 .collect(),
             "theme" => plain(&["dark", "light"]),
-            _ => plain(&["session", "workspace"]),
+            _ => unreachable!(),
         };
         rows.retain(|(value, _)| fuzzy_match(value, filter));
         rows.sort_by_key(|(value, _)| (value != filter, !value.starts_with(filter)));

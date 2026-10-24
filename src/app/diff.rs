@@ -2,41 +2,14 @@
 
 use serde_json::json;
 
-use super::{App, Overlay, Panel, SessionOp, session::Session, tasks};
+use super::{App, Overlay, SessionOp, tasks};
 use crate::protocol::changes::{DiffLine, DiffPage, LineKind};
-use crate::protocol::{self, ChangeKind, ChangeList, ChangeRecord, ChangeScope, RpcError};
-use crate::transcript::{Block, Transcript};
+use crate::protocol::{self, ChangeKind, ChangeList, RpcError};
 use crate::wrap::sanitize;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DiffScope {
-    Turn,
-    Session,
-    Workspace,
-}
-
-impl DiffScope {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Turn => "turn",
-            Self::Session => "session",
-            Self::Workspace => "workspace",
-        }
-    }
-
-    fn next(self) -> Self {
-        match self {
-            Self::Turn => Self::Session,
-            Self::Session => Self::Workspace,
-            Self::Workspace => Self::Turn,
-        }
-    }
-}
-
-/// Which path's hunks a read is for and which scope asked.
+/// Which path's hunks a read is for.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DiffQuery {
-    pub scope: DiffScope,
     pub path: String,
 }
 
@@ -205,16 +178,14 @@ pub struct DiffFile {
     pub lines: Option<(usize, usize)>,
     /// The read failed, so the row is not left looking unmeasured.
     pub failed: bool,
-    /// Change records that touched this path, oldest first: a turn can change
-    /// one file several times.
+    /// Opaque change references for this path.
     pub change_refs: Vec<String>,
 }
 
 /// The open diff view: the file list from `changes.list` and, for the selected
 /// file, its rows from `changes.diff`.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct DiffState {
-    pub scope: DiffScope,
     pub files: Vec<DiffFile>,
     pub selected: usize,
     pub scroll: usize,
@@ -229,19 +200,6 @@ pub struct DiffState {
 }
 
 impl DiffState {
-    pub fn new(scope: DiffScope) -> Self {
-        Self {
-            scope,
-            files: Vec::new(),
-            selected: 0,
-            scroll: 0,
-            rows: Vec::new(),
-            status: String::new(),
-            pending: Vec::new(),
-            in_flight: None,
-        }
-    }
-
     pub fn set_files(&mut self, files: Vec<DiffFile>) {
         self.files = files;
         self.selected = self.selected.min(self.files.len().saturating_sub(1));
@@ -269,60 +227,26 @@ impl DiffState {
 }
 
 impl App {
-    /// A fresh diff view of `scope`, filled from the cards the session holds;
-    /// the file list follows when `changes.list` answers.
-    pub(super) fn open_diff(&self, scope: DiffScope) -> DiffState {
-        let mut diff = DiffState::new(scope);
-        let Some(session) = self.session.as_ref() else {
-            return diff;
-        };
-        let wire = match (scope, latest_loop(session)) {
-            (DiffScope::Turn, Some(loop_id)) => {
-                diff.set_files(collect_changed_files(&session.transcript, &loop_id));
-                ChangeScope::Turn(loop_id)
-            }
-            (DiffScope::Turn, None) => {
-                diff.status = "No turn has finished yet; tab shows the session.".into();
-                return diff;
-            }
-            (DiffScope::Session, _) => ChangeScope::Session,
-            (DiffScope::Workspace, _) => ChangeScope::Workspace,
-        };
-        if diff.files.is_empty() {
-            diff.status = empty_status(scope, session.is_busy()).into();
-        }
-        let fields = json!({"scope": wire.value(), "limit": 200, "max_bytes": 262_144});
+    /// Opens the workspace's live Git changes through the Agent.
+    pub(super) fn open_diff(&self) -> DiffState {
         self.call(
             protocol::METHOD_CHANGES_LIST,
-            fields,
-            move |result: Result<ChangeList, RpcError>| {
-                SessionOp::ChangeFiles(scope, result.map(|list| list.records))
-            },
+            json!({"scope": "workspace", "limit": 200, "max_bytes": 262_144}),
+            SessionOp::ChangeFiles,
         );
-        diff
-    }
-
-    /// Tab: turn, session, workspace, then turn again.
-    pub fn diff_cycle_scope(&mut self) {
-        if let Overlay::Diff(diff) = &self.overlay {
-            self.open_panel(Panel::Diff(diff.scope.next()));
+        DiffState {
+            status: "Loading working-tree changes…".into(),
+            ..Default::default()
         }
     }
 
     /// Fills the file column, then reads every path once for its counts.
-    pub(super) fn on_change_files(
-        &mut self,
-        scope: DiffScope,
-        result: Result<Vec<ChangeRecord>, RpcError>,
-    ) {
+    pub(super) fn on_change_files(&mut self, result: Result<ChangeList, RpcError>) {
         let Overlay::Diff(diff) = &mut self.overlay else {
             return;
         };
-        if diff.scope != scope {
-            return;
-        }
-        let records = match result {
-            Ok(records) => records,
+        let list = match result {
+            Ok(list) => list,
             Err(error) => {
                 diff.status = error.message;
                 return;
@@ -332,7 +256,7 @@ impl App {
         // the same set.
         let previous = std::mem::take(&mut diff.files);
         let mut files: Vec<DiffFile> = Vec::new();
-        for record in &records {
+        for record in &list.records {
             match files.iter_mut().find(|file| file.path == record.path) {
                 Some(file) => file.change_refs.push(record.change_ref.clone()),
                 None => {
@@ -352,8 +276,22 @@ impl App {
         }
         diff.set_files(files);
         if diff.files.is_empty() {
-            let running = self.session.as_ref().is_some_and(Session::is_busy);
-            diff.status = empty_status(scope, running).into();
+            diff.status = if list
+                .warnings
+                .iter()
+                .any(|warning| warning == "no_repository")
+            {
+                "Git working tree unavailable."
+            } else if list
+                .warnings
+                .iter()
+                .any(|warning| warning == "status_incomplete")
+            {
+                "Git status is incomplete."
+            } else {
+                "No changes in the working tree"
+            }
+            .into();
             return;
         }
         diff.status.clear();
@@ -364,7 +302,6 @@ impl App {
             .filter(|file| file.lines.is_none() && !file.failed && !file.change_refs.is_empty())
             .map(|file| {
                 let query = DiffQuery {
-                    scope,
                     path: file.path.clone(),
                 };
                 (query, file.change_refs.clone())
@@ -401,7 +338,6 @@ impl App {
             return;
         };
         let query = DiffQuery {
-            scope: diff.scope,
             path: file.path.clone(),
         };
         if diff.in_flight.as_ref() == Some(&query) {
@@ -433,9 +369,6 @@ impl App {
         let Overlay::Diff(diff) = &mut self.overlay else {
             return;
         };
-        if diff.scope != query.scope {
-            return;
-        }
         if diff.in_flight.as_ref() == Some(&query) {
             diff.in_flight = None;
         }
@@ -469,7 +402,7 @@ impl App {
                         .iter()
                         .all(|page| page.hunks.is_empty() && !page.binary);
                     diff.status = if unchanged {
-                        "No line changes in these records (content unchanged).".into()
+                        "No line changes (content unchanged).".into()
                     } else {
                         String::new()
                     };
@@ -489,56 +422,6 @@ impl App {
     }
 }
 
-fn empty_status(scope: DiffScope, running: bool) -> &'static str {
-    match (scope, running) {
-        (DiffScope::Turn, true) => "This turn has no recorded changes yet; tab shows the session.",
-        _ => "No file changes are recorded for this scope.",
-    }
-}
-
-/// The running turn's loop, else the newest finished turn's, for the turn scope.
-fn latest_loop(session: &Session) -> Option<String> {
-    if let Some(live) = session.live.as_ref() {
-        return Some(live.turn.loop_id.clone());
-    }
-    session
-        .transcript
-        .blocks()
-        .iter()
-        .rev()
-        .find_map(|block| match block {
-            Block::TurnEnd { loop_id, .. } => Some(loop_id.clone()),
-            _ => None,
-        })
-}
-
-/// The files a turn touched, from its write and edit cards, so the view lists
-/// something before `changes.list` answers.
-fn collect_changed_files(transcript: &Transcript, loop_id: &str) -> Vec<DiffFile> {
-    let mut files: Vec<DiffFile> = Vec::new();
-    for call in transcript.tool_calls() {
-        let path = call.detail.trim();
-        let writes = matches!(
-            call.name.as_str(),
-            "write" | "edit" | "apply_patch" | "patch"
-        );
-        if call.key.loop_id != loop_id || !writes || path.is_empty() {
-            continue;
-        }
-        if files.iter().any(|file| file.path == path) {
-            continue;
-        }
-        files.push(DiffFile {
-            path: path.to_owned(),
-            kind: ChangeKind::Modified,
-            lines: None,
-            failed: false,
-            change_refs: Vec::new(),
-        });
-    }
-    files
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -551,7 +434,7 @@ mod tests {
             failed: false,
             change_refs: Vec::new(),
         };
-        let mut diff = DiffState::new(DiffScope::Session);
+        let mut diff = DiffState::default();
         diff.set_files(vec![file("a.rs"), file("b.rs")]);
         diff
     }

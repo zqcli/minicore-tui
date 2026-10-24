@@ -63,7 +63,7 @@ fn split(area: Rect) -> (Option<Rect>, Rect) {
 }
 
 pub fn render(frame: &mut Frame, area: Rect, styles: Styles, diff: &DiffState) {
-    let mut title = format!("Diff · {}", diff.scope.label());
+    let mut title = "Git diff".to_owned();
     if let Some(file) = diff.current() {
         title.push_str(" · ");
         title.push_str(&file.path);
@@ -74,7 +74,6 @@ pub fn render(frame: &mut Frame, area: Rect, styles: Styles, diff: &DiffState) {
         styles,
         &title,
         &[
-            ("tab", "scope"),
             ("↑↓", "file"),
             ("pgup/pgdn", "scroll"),
             ("c", "copy"),
@@ -227,7 +226,6 @@ mod tests {
     use serde_json::json;
 
     use super::super::capture;
-    use crate::app::diff::DiffScope;
     use crate::ui::theme::Palette;
 
     fn page() -> DiffPage {
@@ -395,7 +393,7 @@ mod tests {
     }
 
     fn view() -> DiffState {
-        let mut view = DiffState::new(DiffScope::Session);
+        let mut view = DiffState::default();
         view.set_files(vec![
             DiffFile {
                 path: "a.rs".into(),
@@ -459,7 +457,7 @@ mod tests {
         let mut view = view();
         view.rows = hunk_rows(&page());
         let text = capture(|frame| render(frame, frame.area(), styles, &view), 60, 16);
-        assert!(text[0].contains("Diff · session · a.rs"), "{}", text[0]);
+        assert!(text[0].contains("Git diff · a.rs"), "{}", text[0]);
         assert!(
             !text.iter().any(|row| row.contains("+3 −1 a.rs")),
             "{text:?}"

@@ -399,6 +399,17 @@ reasoning, approval, find) replaces the editor band; views replace the
 transcript area. A view owns the keys, so the editor under it is drawn dimmed
 with the placeholder `view open · esc to return`.
 
+The Git diff view reads `changes.list` with `scope: "workspace"` on open and
+passes each opaque `workspace:` reference to `changes.diff`, paging its hunks
+without a `comparison` override. The Agent chooses index-to-worktree for
+unstaged or untracked entries, otherwise HEAD-to-index. `/diff` takes no
+argument; a turn-end click opens the same working-tree view. It needs a loaded
+session because the Agent's workspace queries require one. Empty results say
+`No changes in the working tree`; `no_repository` says the Git working tree is
+unavailable (the Agent also uses this warning when Git is unavailable), and
+`status_incomplete` says Git status is incomplete. RPC errors show their message.
+Turn-end change counts still read the turn's retained changes independently.
+
 ### Composer, templates, title
 
 The draft model is `app/composer.rs` (text, cursor, paste chips, undo, the

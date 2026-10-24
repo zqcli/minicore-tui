@@ -97,7 +97,7 @@ are above the bottom. `End` or scrolling to the bottom resumes following the tai
 |---|---|
 | Wheel | Scroll one row per notch, five with `Alt`. With a view open it scrolls that view (help three rows per notch, diff; the context view does not scroll); over a picker it moves the selection. It never scrolls the transcript behind them. |
 | Click a folded tool card's text, or any row of an expanded card | Toggle that card. It opens and closes downward: the rows above it stay put, and `End` follows the tail again. Dragging over a card selects instead. |
-| Click a turn-end line | Open the diff view for that turn. |
+| Click a turn-end line | Open the workspace's live Git diff (the same as `/diff`). |
 | Click in the editor | Place the caret at a grapheme or paste-chip boundary, respecting wrapping, padding and editor scrolling. |
 | Drag in the editor | Select draft text; releasing copies it and keeps it highlighted. Typing replaces it. Moving outside the editor reaches adjacent rows and scrolls the draft. |
 | Shift+click in the editor | Extend the selection from its fixed anchor. Many terminals keep Shift+click for their own selection and never send it. |
@@ -118,7 +118,7 @@ counter.
 
 | Sheet | Keys |
 |---|---|
-| Command list | The text after `/` stays in the composer and filters the commands fuzzily, best match first. `Enter` runs the highlighted command with the argument typed after its name; `Tab` completes `/name ` without running. After `/model `, `/new `, `/reasoning `, `/theme ` or `/diff ` the list offers that command's arguments (model ids, profiles, levels) and `Enter` runs the command with the highlighted one. Prompt templates are listed with their description. `Esc` closes the list and leaves the draft as it is; deleting the `/` closes it too. |
+| Command list | The text after `/` stays in the composer and filters the commands fuzzily, best match first. `Enter` runs the highlighted command with the argument typed after its name; `Tab` completes `/name ` without running. After `/model `, `/new `, `/reasoning ` or `/theme ` the list offers that command's arguments (model ids, profiles, levels) and `Enter` runs the command with the highlighted one. Prompt templates are listed with their description. `Esc` closes the list and leaves the draft as it is; deleting the `/` closes it too. |
 | Sessions | Type to filter by title. `Enter` opens the session. `Ctrl+N` renames the selected one (`Enter` saves, `Esc` cancels; an empty title clears it). `Ctrl+D` twice deletes the selected one; the open session cannot be deleted. Sessions of this workspace come first, newest first. Each row ends with its last activity; the open one says `current`, one from another workspace names it, and a title shared with another row adds the short id. |
 | Session (`/session`) | Id, title, workspace, profile, model, history items and token totals. `Enter` or `c` copies the id. |
 | Model | Type to filter by id. `Enter` switches to the highlighted model; the current one is marked `✓`. |
@@ -144,7 +144,7 @@ A view owns the keys: the composer below it is dimmed and reads `view open · es
 
 | View | Keys |
 |---|---|
-| Diff | `Tab` cycles the scope (turn, session, workspace); `↑` / `↓` select a file; `PageUp` / `PageDown`, `Home` / `End` and the wheel scroll the diff; `c` copies it. |
+| Git diff | Live tracked changes and untracked files in the workspace. `↑` / `↓` select a file; `PageUp` / `PageDown`, `Home` / `End` and the wheel scroll the diff; `c` copies it. |
 | Context | `r` re-reads the context (it also reads on open); `c` copies it. |
 | Help | `↑` / `↓` scroll three rows, `PageUp` / `PageDown` thirty. |
 
@@ -162,7 +162,7 @@ the name.
 | `/session` | Show the open session's id, workspace, profile, model, item count and token totals. |
 | `/reasoning [level]` | Set the level directly, or open the picker when no valid level is given. |
 | `/compact` | Run manual compaction; refused while a turn runs. |
-| `/diff [session\|workspace]` | Open the diff view for the last turn, or the given scope. |
+| `/diff` | Show the workspace's live Git working-tree changes, including untracked files. |
 | `/context` | Open the context view. |
 | `/copy` | Copy the last assistant answer as Markdown. |
 | `/export [path]` | Write the conversation as Markdown; the default is `./minicore-<session>-<date>.md`. |

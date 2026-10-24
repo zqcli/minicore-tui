@@ -40,7 +40,6 @@ impl App {
             KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => self.find_step(false),
             KeyCode::Enter => return self.on_overlay_accept(),
             KeyCode::Up => self.overlay_move(-1),
-            KeyCode::Tab if matches!(self.overlay, Overlay::Diff(_)) => self.diff_cycle_scope(),
             KeyCode::Tab | KeyCode::Down => self.overlay_move(1),
             KeyCode::PageUp => self.overlay_move(-10),
             KeyCode::PageDown => self.overlay_move(10),

@@ -783,7 +783,7 @@ fn collapsing_a_card_while_following_leaves_no_blank_rows_under_the_content() {
 }
 
 #[test]
-fn clicking_a_turn_end_line_opens_the_turn_diff() {
+fn clicking_a_turn_end_line_opens_the_git_diff() {
     let mut fixture = app();
     let _runtime = fixture._runtime.enter();
     let app = &mut fixture.app;
@@ -791,7 +791,7 @@ fn clicking_a_turn_end_line_opens_the_turn_diff() {
     let screen = render(app, 70, 20);
     click(app, 5, row_of(&screen, "   completed"));
     assert!(
-        matches!(&app.overlay, Overlay::Diff(diff) if diff.scope == crate::app::DiffScope::Turn),
+        matches!(&app.overlay, Overlay::Diff(_)),
         "{:?}",
         app.overlay
     );

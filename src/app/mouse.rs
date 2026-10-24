@@ -236,7 +236,7 @@ impl App {
                 .is_some_and(|column| scrollbar::jump_label(area.width).contains(&column))
     }
 
-    /// Toggles cards and thinking, follows the tail, or opens a turn-end diff.
+    /// Toggles cards and thinking, follows the tail, or opens the Git diff.
     fn click_transcript(&mut self, (column, row): (u16, u16)) {
         if !self.overlay.is_none() {
             return;
@@ -286,7 +286,7 @@ impl App {
                     self.pin_view();
                 }
             }
-            Some(Block::TurnEnd { .. }) => self.open_panel(Panel::Diff(super::DiffScope::Turn)),
+            Some(Block::TurnEnd { .. }) => self.open_panel(Panel::Diff),
             _ => {}
         }
     }

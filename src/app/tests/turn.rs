@@ -584,7 +584,7 @@ async fn the_turn_end_line_counts_changed_files_and_lines() {
         h.fake.script("turn.wait", waited("l1", completed()));
         h.fake.script(
             "changes.list",
-            json!({"records": records, "total": records.len(), "complete": true}),
+            json!({"records": records, "total": records.len(), "complete": true, "warnings": []}),
         );
         h.fake.script("changes.diff", diff);
         h.submit("change it");

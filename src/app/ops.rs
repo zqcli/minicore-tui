@@ -84,7 +84,7 @@ impl App {
                     *selected = 0;
                 }
             }
-            SessionOp::ChangeFiles(scope, result) => self.on_change_files(scope, result),
+            SessionOp::ChangeFiles(result) => self.on_change_files(result),
             SessionOp::DiffFile(query, result) => self.on_diff_file(query, result),
         }
     }

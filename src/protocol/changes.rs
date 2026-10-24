@@ -9,6 +9,7 @@ use serde_json::Value;
 #[derive(Clone, Debug, Deserialize)]
 pub struct ChangeList {
     pub records: Vec<ChangeRecord>,
+    pub warnings: Vec<String>,
 }
 
 impl ChangeList {
@@ -110,24 +111,6 @@ pub enum LineKind {
     Unknown,
 }
 
-/// `changes.list` scope. Serialized inline into the request params.
-#[derive(Clone, Debug)]
-pub enum ChangeScope {
-    Workspace,
-    Session,
-    Turn(String),
-}
-
-impl ChangeScope {
-    pub fn value(&self) -> Value {
-        match self {
-            Self::Workspace => Value::String("workspace".into()),
-            Self::Session => Value::String("session".into()),
-            Self::Turn(loop_id) => serde_json::json!({"turn": {"loop_id": loop_id}}),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -152,16 +135,8 @@ mod tests {
                        "details_available": true})
             })
             .collect();
-        serde_json::from_value(json!({"records": records, "total": records.len()})).unwrap()
-    }
-
-    #[test]
-    fn turn_scope_serializes_as_nested_object() {
-        assert_eq!(
-            ChangeScope::Turn("lup_1".into()).value(),
-            json!({"turn": {"loop_id": "lup_1"}})
-        );
-        assert_eq!(ChangeScope::Workspace.value(), json!("workspace"));
+        serde_json::from_value(json!({"records": records, "total": records.len(), "warnings": []}))
+            .unwrap()
     }
 
     #[test]

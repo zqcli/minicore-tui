@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `/diff` shows the workspace's live Git changes, including untracked files.
+  Turn-end clicks open the same view; turn/session scopes and Tab scope cycling
+  are gone.
+
 - The tool output view and `/tool` command are gone. Expanded cards show plain
   hidden-line counts where output is cut; clicking any row collapses the card.
 

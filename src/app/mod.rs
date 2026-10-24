@@ -37,7 +37,7 @@ use crate::config::ThemeKind;
 use crate::protocol::changes::DiffPage;
 use crate::protocol::read::{InterruptedRequest, RawHistoryItem};
 use crate::protocol::{
-    AgentEvent, ChangeRecord, CompactionResult, ModelInfo, ProfileInfo, Reasoning, RpcError,
+    AgentEvent, ChangeList, CompactionResult, ModelInfo, ProfileInfo, Reasoning, RpcError,
     SessionContext, SessionInfo, SessionPresentation, SessionState, SteerResult, ToolReadResult,
     ToolRef, TurnSendResult, TurnWaitResult,
 };
@@ -49,7 +49,7 @@ use crate::ui::transcript::RenderState;
 use crate::ui::views;
 
 pub use actions::{Action, Answer};
-pub use diff::{DiffQuery, DiffScope};
+pub use diff::DiffQuery;
 pub use overlay::{Overlay, Panel};
 pub use session::{
     InteractionKind, LiveTurn, PendingInteraction, Phase, Queued, QueuedKind, Session,
@@ -110,7 +110,7 @@ pub enum SessionOp {
     /// The facts of a card loaded without its detail; `None` when the read failed.
     ToolHydrated(ToolRef, Option<ToolReadResult>),
     Files(Result<Vec<String>, RpcError>),
-    ChangeFiles(DiffScope, Result<Vec<ChangeRecord>, RpcError>),
+    ChangeFiles(Result<ChangeList, RpcError>),
     DiffFile(DiffQuery, Result<Vec<DiffPage>, RpcError>),
 }
 

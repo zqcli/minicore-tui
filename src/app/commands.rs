@@ -26,8 +26,8 @@ pub const COMMANDS: &[Command<'static>] = &[
     },
     Command {
         name: "diff",
-        args: "[session|workspace]",
-        description: "Review file changes (the last turn by default)",
+        args: "",
+        description: "Show Git working-tree changes, including untracked files",
     },
     Command {
         name: "context",
@@ -144,11 +144,7 @@ pub fn execute(name: &str, arg: &str) -> Option<Executed> {
             None => Executed::Panel(super::Panel::Reasoning),
         },
         "compact" => Executed::Action(Action::Compact),
-        "diff" => Executed::Panel(super::Panel::Diff(match arg {
-            "session" => super::DiffScope::Session,
-            "workspace" => super::DiffScope::Workspace,
-            _ => super::DiffScope::Turn,
-        })),
+        "diff" => Executed::Panel(super::Panel::Diff),
         "context" => Executed::Panel(super::Panel::Context),
         "copy" => Executed::Action(Action::CopyLastAnswer),
         "export" => Executed::Action(Action::Export((!arg.is_empty()).then(|| arg.to_owned()))),
@@ -321,25 +317,18 @@ mod tests {
     }
 
     #[test]
-    fn diff_scope_comes_from_the_argument() {
-        assert!(matches!(
-            execute("diff", "workspace"),
-            Some(Executed::Panel(crate::app::Panel::Diff(
-                crate::app::DiffScope::Workspace
-            )))
-        ));
-        assert!(matches!(
-            execute("diff", "session"),
-            Some(Executed::Panel(crate::app::Panel::Diff(
-                crate::app::DiffScope::Session
-            )))
-        ));
-        assert!(matches!(
-            execute("diff", ""),
-            Some(Executed::Panel(crate::app::Panel::Diff(
-                crate::app::DiffScope::Turn
-            )))
-        ));
+    fn diff_takes_no_argument_and_ignores_extra_text() {
+        for arg in ["", "session", "workspace", "other text"] {
+            assert_eq!(
+                execute("diff", arg),
+                Some(Executed::Panel(crate::app::Panel::Diff))
+            );
+        }
+        let command = COMMANDS
+            .iter()
+            .find(|command| command.name == "diff")
+            .unwrap();
+        assert!(command.args.is_empty());
     }
 
     #[test]

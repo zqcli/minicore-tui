@@ -181,8 +181,9 @@ without a report. The TUI never estimates it.
 - **History.** Opening a session loads the latest items; scrolling to the top
   loads older pages, including the history behind a compaction summary.
   A card whose output is not loaded shows its line count.
-- **Views** replace the transcript and keep the footer: diff (turn, session or
-  workspace scope), context budget and help. `Esc` returns; the
+- **Views** replace the transcript and keep the footer: Git diff, context budget
+  and help. `/diff` shows the workspace's live tracked changes and untracked
+  files, also when opened by clicking a turn-end line. `Esc` returns; the
   composer is dimmed meanwhile, because the view owns the keys.
 - **Completion and selectors.** `/` and `@` open a list inside the editor that
   filters as you type (`Tab` inserts, `Enter` runs, `Esc` closes and keeps the
