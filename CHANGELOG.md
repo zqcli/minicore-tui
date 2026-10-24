@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.5 — 2026-10-24
 
 - `/context` opens as a sheet below the transcript like `/session`, instead of a
   full-screen view.
