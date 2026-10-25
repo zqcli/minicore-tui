@@ -75,6 +75,9 @@ test('every intent and filesystem request has the contract shape and a bounded u
     [I.newSession('/work', null), { kind: 'new_session', workspace: '/work' }],
     [I.setModel('model'), { kind: 'set_model', model: 'model' }],
     [I.setReasoning('high'), { kind: 'set_reasoning', level: 'high' }],
+    [I.renameSession('ses_one', 'Fix the parser'), { kind: 'rename_session', session_id: 'ses_one', title: 'Fix the parser' }],
+    [I.renameSession('ses_one', ''), { kind: 'rename_session', session_id: 'ses_one', title: '' }],
+    [I.deleteSession('ses_two'), { kind: 'delete_session', session_id: 'ses_two' }],
   ];
   const ids = new Set();
   for (const [spec, fields] of cases) {
@@ -337,4 +340,32 @@ test('elapsed status line and summaries read like the TUI', () => {
   assert.equal(MC.fsError({ error: 'exists' }), 'A folder with that name already exists.');
   assert.equal(MC.fsError({ error: 'io', message: 'Permission denied' }), 'Permission denied');
   assert.deepEqual(plain(MC.recentWorkspaces([{ workspace: '/a' }, { workspace: '/b' }, { workspace: '/a' }, { workspace: '/c' }], 2)), ['/a', '/b']);
+});
+
+test('rename keeps the title exactly, including an empty one that clears it', () => {
+  const { MC, plain } = load();
+  const s = MC.createStore();
+  for (const title of ['', '  spaced  ', 'Ünïcödé — 修复解析器 🚀', 'x'.repeat(200)]) {
+    const msg = plain(MC.intent(s, MC.intents.renameSession('ses_one', title)));
+    assert.deepEqual(Object.keys(msg).sort(), ['id', 'kind', 'session_id', 't', 'title']);
+    assert.equal(msg.title, title);
+    assert.ok(Buffer.byteLength(msg.id) <= 64);
+  }
+  // Rename and delete carry no text, so a dropped connection forgets them instead of offering Send again.
+  MC.intent(s, MC.intents.deleteSession('ses_two'));
+  MC.disconnect(s);
+  assert.equal(s.intents.size, 0);
+  assert.equal(MC.unconfirmed(s).length, 0);
+});
+
+test('the appearance choice overrides the OS scheme and System follows it', () => {
+  const { MC } = load();
+  assert.equal(MC.theme('light', true), 'light');
+  assert.equal(MC.theme('dark', false), 'dark');
+  assert.equal(MC.theme('system', true), 'dark');
+  assert.equal(MC.theme('system', false), 'light');
+  for (const stored of [null, '', 'auto', 'DARK']) {
+    assert.equal(MC.theme(stored, true), 'dark');
+    assert.equal(MC.theme(stored, false), 'light');
+  }
 });

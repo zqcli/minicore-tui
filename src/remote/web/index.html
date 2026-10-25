@@ -3,14 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
-<meta name="color-scheme" content="light dark">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="MiniCore">
 <meta name="format-detection" content="telephone=no">
-<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#0e0f12" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" id="tc" content="#ffffff">
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" href="/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/icon.png">
@@ -26,15 +24,15 @@
   --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
   --s1:4px;--s2:8px;--s3:12px;--s4:16px;--s5:24px;--s6:32px;--r:14px;--ease:cubic-bezier(.2,.8,.2,1);
   --st:env(safe-area-inset-top);--sb:env(safe-area-inset-bottom);--sl:env(safe-area-inset-left);--sr:env(safe-area-inset-right);
-  color-scheme:light dark
+  color-scheme:light
 }
-@media(prefers-color-scheme:dark){:root{
+[data-theme=dark]{color-scheme:dark;
   --bg:#0e0f12;--bg2:#141519;--sf:#17191d;--fill:#1d1f24;--fill2:#272a30;--bd:rgba(255,255,255,.08);--bd2:rgba(255,255,255,.14);
   --tx:#ececef;--tx2:#a3a7b0;--tx3:#6f747d;--ac:#5b8cff;--ac2:#7aa2ff;--acs:rgba(91,140,255,.16);--on:#fff;
   --ok:#3ccf83;--oks:rgba(60,207,131,.14);--wa:#f0b44c;--was:rgba(240,180,76,.14);--er:#ff6b6b;--ers:rgba(255,107,107,.13);
   --ub:#1f2940;--glass:rgba(14,15,18,.8);--acb:#3a6cf0;--banbg:#2b2416;--scrim:rgba(0,0,0,.55);--sh:0 10px 32px rgba(0,0,0,.5),0 1px 3px rgba(0,0,0,.4);
   --add:rgba(60,207,131,.13);--del:rgba(255,107,107,.13);--addt:#5fe0a0;--delt:#ff8f8f
-}}
+}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 [hidden]{display:none!important}
 html,body{margin:0;height:100%;overflow:hidden;overscroll-behavior:none;background:var(--bg);color:var(--tx);font:16px/1.5 var(--font);-webkit-font-smoothing:antialiased;-webkit-text-size-adjust:100%;text-size-adjust:100%}
@@ -71,7 +69,7 @@ input::-ms-reveal,input::-ms-clear{display:none}
 .seg::-webkit-scrollbar{display:none}
 .seg button{flex:1 0 auto;min-height:36px;padding:0 var(--s3);border-radius:9px;font-size:14px;font-weight:500;color:var(--tx2);white-space:nowrap;display:inline-flex;align-items:center;justify-content:center;gap:6px;transition:background .15s,color .15s}
 .seg button[aria-checked=true]{background:var(--sf);color:var(--tx);box-shadow:0 1px 3px rgba(0,0,0,.12)}
-@media(prefers-color-scheme:dark){.seg button[aria-checked=true]{background:var(--fill2)}}
+[data-theme=dark] .seg button[aria-checked=true]{background:var(--fill2)}
 .seg.sm button{min-height:30px;font-size:13px;padding:0 10px}
 input.tf{width:100%;min-height:44px;padding:0 var(--s3);border-radius:12px;border:1px solid var(--bd2);background:var(--sf);font-size:16px;color:var(--tx)}
 input.tf:focus{border-color:var(--ac);box-shadow:0 0 0 3px var(--acs)}
@@ -187,7 +185,7 @@ input.tf:focus{border-color:var(--ac);box-shadow:0 0 0 3px var(--acs)}
 .tl.first{border-radius:var(--r) var(--r) 0 0;box-shadow:inset 0 1px 0 var(--bd),inset 1px 0 0 var(--bd),inset -1px 0 0 var(--bd)}
 .tl.last{border-radius:0 0 var(--r) var(--r);box-shadow:inset 0 -1px 0 var(--bd),inset 1px 0 0 var(--bd),inset -1px 0 0 var(--bd);margin-bottom:var(--s5);padding-bottom:4px}
 .tl.first.last{border-radius:var(--r);box-shadow:inset 0 0 0 1px var(--bd);padding-bottom:0}
-@media(prefers-color-scheme:dark){.tl{background:var(--bg2)}}
+[data-theme=dark] .tl{background:var(--bg2)}
 .ghead{display:flex;align-items:center;gap:10px;width:100%;min-height:52px;padding:var(--s2) var(--s3) var(--s2) 14px;text-align:left}
 .gic{width:28px;height:28px;flex:none;border-radius:9px;display:grid;place-items:center;background:var(--fill);color:var(--tx2)}
 .gic.ok{background:var(--oks);color:var(--ok)}.gic.er{background:var(--ers);color:var(--er)}.gic.run{background:var(--acs);color:var(--ac)}
@@ -265,7 +263,7 @@ input.tf:focus{border-color:var(--ac);box-shadow:0 0 0 3px var(--acs)}
 #modes{margin-bottom:var(--s2);width:max-content;max-width:100%;margin-left:0}
 #comp{display:flex;align-items:flex-end;gap:var(--s1);padding:5px 5px 5px 0;border-radius:24px;background:var(--sf);box-shadow:inset 0 0 0 1px var(--bd2),0 2px 10px rgba(0,0,0,.05);transition:box-shadow .15s}
 #comp:focus-within{box-shadow:inset 0 0 0 1px var(--ac),0 0 0 3px var(--acs)}
-@media(prefers-color-scheme:dark){#comp{background:var(--fill)}}
+[data-theme=dark] #comp{background:var(--fill)}
 #ta{flex:1;min-width:0;display:block;resize:none;border:0;background:none;padding:9px 4px 9px 16px;margin:0;font-size:16px;line-height:1.4;max-height:calc(var(--h,100dvh)*.4);min-height:40px;overflow-y:auto;color:var(--tx)}
 #ta::placeholder{color:var(--tx3)}
 #ta[readonly]{color:var(--tx2)}
@@ -278,15 +276,15 @@ input.tf:focus{border-color:var(--ac);box-shadow:0 0 0 3px var(--acs)}
 #act .spin{width:16px;height:16px}
 
 /* modal surfaces */
-#scrim,#ascrim{position:fixed;inset:0;background:var(--scrim);opacity:0;visibility:hidden;transition:opacity .2s,visibility .2s}
-#scrim{z-index:20}#ascrim{z-index:10;pointer-events:none}
-#scrim.on,#ascrim.on{opacity:1;visibility:visible;transition:opacity .2s,visibility 0s}
+#scrim,#ascrim,#scrim2{position:fixed;inset:0;background:var(--scrim);opacity:0;visibility:hidden;transition:opacity .2s,visibility .2s}
+#scrim{z-index:20}#scrim2{z-index:22}#dlg{z-index:23}#ascrim{z-index:10;pointer-events:none}
+#scrim.on,#ascrim.on,#scrim2.on{opacity:1;visibility:visible;transition:opacity .2s,visibility 0s}
 #drawer{position:fixed;z-index:21;top:0;bottom:0;left:0;width:86%;max-width:360px;height:var(--h,100dvh);display:flex;flex-direction:column;background:var(--bg);padding:var(--st) 0 0 var(--sl);box-shadow:var(--sh);transform:translateX(-100%);visibility:hidden;transition:transform .22s var(--ease),visibility .22s}
 #drawer.on,.sheet.on{transform:none;visibility:visible;transition:transform .22s var(--ease),visibility 0s}
-@media(prefers-color-scheme:dark){#drawer{background:var(--bg2)}}
+[data-theme=dark] #drawer{background:var(--bg2)}
 .sheet{position:fixed;z-index:21;left:0;right:0;bottom:0;margin:0 auto;max-width:640px;max-height:calc(var(--h,100dvh) - var(--st) - 24px);display:flex;flex-direction:column;background:var(--bg);border-radius:20px 20px 0 0;box-shadow:var(--sh);transform:translateY(100%);visibility:hidden;transition:transform .22s var(--ease),visibility .22s}
 .sheet.full{height:calc(var(--h,100dvh) - var(--st) - 12px)}
-@media(prefers-color-scheme:dark){.sheet{background:var(--bg2)}}
+[data-theme=dark] .sheet{background:var(--bg2)}
 .grab{width:36px;height:5px;border-radius:3px;background:var(--fill2);margin:6px auto 0;flex:none}
 .shead{display:flex;align-items:center;gap:var(--s2);min-height:52px;padding:0 var(--s2) 0 calc(var(--s5) - 4px);flex:none}
 .shead h2{flex:1;margin:0;font-size:18px;font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -295,7 +293,7 @@ input.tf:focus{border-color:var(--ac);box-shadow:0 0 0 3px var(--acs)}
 .sec{display:flex;align-items:center;justify-content:space-between;gap:var(--s2);margin:var(--s5) 4px var(--s2);font-size:13px;font-weight:600;color:var(--tx2)}
 .sec:first-child{margin-top:var(--s2)}
 .list{border-radius:var(--r);background:var(--sf);box-shadow:inset 0 0 0 1px var(--bd);overflow:hidden}
-@media(prefers-color-scheme:dark){.list{background:var(--fill)}}
+[data-theme=dark] .list{background:var(--fill)}
 .row{display:flex;align-items:center;gap:var(--s3);width:100%;min-height:52px;padding:var(--s2) var(--s3) var(--s2) 14px;text-align:left;position:relative}
 .row+.row::before{content:"";position:absolute;top:0;left:48px;right:0;height:1px;background:var(--bd)}
 .row.flat+.row.flat::before{left:14px}
@@ -334,19 +332,36 @@ input.tf:focus{border-color:var(--ac);box-shadow:0 0 0 3px var(--acs)}
 .search input::-webkit-search-cancel-button{display:none}
 .dlist{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:0 var(--s2) var(--s3)}
 .dsec{margin:var(--s4) var(--s3) 4px;font-size:12.5px;font-weight:600;color:var(--tx3)}
-.srow{display:flex;align-items:center;gap:var(--s2);width:100%;min-height:52px;padding:6px var(--s3);border-radius:12px;text-align:left}
-.srow:active{background:var(--fill)}
+.srow{display:flex;align-items:center;border-radius:12px}
 .srow.cur{background:var(--acs)}
+.sopen{flex:1;min-width:0;display:flex;align-items:center;gap:var(--s2);min-height:52px;padding:6px 4px 6px var(--s3);border-radius:12px;text-align:left}
+.sopen:active{background:var(--fill)}
 .srow .rt{flex:1;min-width:0}
 .srow .rm{display:block;font-size:15px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .srow.cur .rm{font-weight:650}
 .srow .rs{display:block;font-size:12.5px;color:var(--tx3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.srow .sopen>.ic{color:var(--ac)}
+.srow .more{color:var(--tx3)}
 .dfoot{flex:none;padding:var(--s3) var(--s4) calc(max(var(--sb),var(--s3)));box-shadow:0 -1px 0 var(--bd);font-size:13px;color:var(--tx2)}
 .dfoot .who{display:flex;align-items:center;gap:var(--s2);min-height:28px}
 .dot{width:8px;height:8px;border-radius:50%;background:var(--ok);flex:none}
 .dot.off{background:var(--wa)}
+.dfoot .appear{display:flex;align-items:center;justify-content:space-between;gap:var(--s3);margin-top:var(--s2)}
+.dfoot .appear .seg{flex:0 1 auto}
+.dhead .ib{color:var(--tx2)}
 .dfoot .btn{width:100%;margin-top:var(--s2);color:var(--er);justify-content:flex-start;padding:0 var(--s2);font-weight:500;background:none}
 .mlist .row{min-height:56px}
+.row.bad .rm,.row.bad .ri{color:var(--er)}
+.dtitle{padding:var(--s4) var(--s5) var(--s2);text-align:center}
+.dtitle h2{margin:0;font-size:15px;font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dtitle p{margin:2px 0 0;font-size:13px;color:var(--tx3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dform{display:flex;flex-direction:column;flex:1;min-height:0}
+.dbtns{display:flex;gap:var(--s2)}
+.dbtns .btn{flex:1;min-height:50px;border-radius:14px}
+.btn.dangerfill{background:#d9353a;color:#fff}
+#dlg .hint{margin:var(--s2) 4px 0}
+#dlg .serr{margin:var(--s3) 4px 0}
+#dlg .abtn{padding-top:var(--s4)}
 .mfoot{margin:var(--s4) 4px 0;font-size:12.5px;color:var(--tx3);font-variant-numeric:tabular-nums}
 /* approval */
 #appr{z-index:11;max-height:min(78%,calc(var(--h,100dvh) - var(--st) - 72px))}
@@ -365,108 +380,6 @@ input.tf:focus{border-color:var(--ac);box-shadow:0 0 0 3px var(--acs)}
 @media(max-height:700px){#empty .appicon{display:none}}
 @media(max-width:360px){.sugg{grid-template-columns:1fr}.sugg button{min-height:48px}.bubble{max-width:90%}}
 </style>
-</head>
-<body>
-<svg width="0" height="0" style="position:absolute" aria-hidden="true">
-<defs>
-<symbol id="i-menu" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h10"/></symbol>
-<symbol id="i-compose" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H6.5A2.5 2.5 0 0 0 4 6.5v11A2.5 2.5 0 0 0 6.5 20h11a2.5 2.5 0 0 0 2.5-2.5V13"/><path d="M17.6 3.6a2 2 0 0 1 2.8 2.8L12.5 14.3 9 15l.7-3.5z"/></symbol>
-<symbol id="i-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></symbol>
-<symbol id="i-up" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5.5 11.5 12 5l6.5 6.5"/></symbol>
-<symbol id="i-down" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5.5 12.5 12 19l6.5-6.5"/></symbol>
-<symbol id="i-stop" viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor"/></symbol>
-<symbol id="i-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9.5 6 6 6-6 6"/></symbol>
-<symbol id="i-chevd" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 10 5 5 5-5"/></symbol>
-<symbol id="i-folder" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M3.5 7.5A2 2 0 0 1 5.5 5.5h3.6l2 2h7.4a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/></symbol>
-<symbol id="i-folderplus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 7.5A2 2 0 0 1 5.5 5.5h3.6l2 2h7.4a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2zM12 10.5v5M9.5 13h5"/></symbol>
-<symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7.5"/></symbol>
-<symbol id="i-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/></symbol>
-<symbol id="i-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="8.5" y="8.5" width="11" height="11" rx="2.5"/><path d="M15.5 8.5V6a1.5 1.5 0 0 0-1.5-1.5H6A1.5 1.5 0 0 0 4.5 6v8A1.5 1.5 0 0 0 6 15.5h2.5"/></symbol>
-<symbol id="i-retry" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12a8 8 0 1 0 2.4-5.7L4 8.6"/><path d="M4 4v4.6h4.6"/></symbol>
-<symbol id="i-term" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 7.5 4.5 4.5L5 16.5M12.5 17H19"/></symbol>
-<symbol id="i-edit" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 5.5 18.5 9.5M4.5 19.5l1-4.5L16 4.5a2 2 0 0 1 2.9 0l.6.6a2 2 0 0 1 0 2.9L9 18.5z"/></symbol>
-<symbol id="i-file" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M13.5 3.5H7A2 2 0 0 0 5 5.5v13a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9z"/><path d="M13.5 3.5V9H19"/></symbol>
-<symbol id="i-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></symbol>
-<symbol id="i-tool" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 6.5a4 4 0 0 0 5 5L12 19a2.1 2.1 0 0 1-3-3l7.5-7.5a4 4 0 0 1-2-2z"/></symbol>
-<symbol id="i-sliders" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></symbol>
-<symbol id="i-sparkle" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2.5c.5 4.6 2.9 7 7.5 7.5v.1c-4.6.5-7 2.9-7.5 7.5h-.1c-.5-4.6-2.9-7-7.4-7.5V10c4.5-.5 6.9-2.9 7.4-7.5zM19 15.5c.2 1.9 1.1 2.8 3 3-1.9.2-2.8 1.1-3 3-.2-1.9-1.1-2.8-3-3 1.9-.2 2.8-1.1 3-3z"/></symbol>
-<symbol id="i-warn" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 4.3 2.9 17.5A2 2 0 0 0 4.6 20.5h14.8a2 2 0 0 0 1.7-3L13.7 4.3a2 2 0 0 0-3.4 0z"/><path d="M12 9.5v4M12 17h.01"/></symbol>
-<symbol id="i-info" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5M12 8h.01"/></symbol>
-<symbol id="i-slash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="7.5"/><path d="m6.8 17.2 10.4-10.4"/></symbol>
-<symbol id="i-eye" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3"/></symbol>
-<symbol id="i-eyeoff" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M10 5.8A9.6 9.6 0 0 1 12 5.5c6 0 9.5 6.5 9.5 6.5a16 16 0 0 1-2.6 3.4M6.3 7.3C3.9 8.9 2.5 12 2.5 12s3.5 6.5 9.5 6.5a9 9 0 0 0 4.7-1.3M9.9 9.9a3 3 0 0 0 4.2 4.2M3.5 3.5l17 17"/></symbol>
-<symbol id="i-logout" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 4.5h3a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2h-3M10 16.5 14.5 12 10 7.5M14.5 12H4"/></symbol>
-<symbol id="i-phone" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="6.5" y="2.5" width="11" height="19" rx="2.5"/><path d="M10.5 18.5h3"/></symbol>
-<symbol id="i-power" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3.5v8M7 6.5a7.5 7.5 0 1 0 10 0"/></symbol>
-<symbol id="i-tabs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="14" rx="2.5"/><path d="M3.5 9.5h17M6.5 7.2h.01M9 7.2h.01"/></symbol>
-<symbol id="i-shield" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"><path d="M12 3 19.5 6v5.5c0 4.6-3.2 8.2-7.5 9.5-4.3-1.3-7.5-4.9-7.5-9.5V6z"/><path d="m9 12 2.2 2.2L15.5 10" stroke-linecap="round"/></symbol>
-<symbol id="i-layers" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="m12 4 8.5 4.5L12 13 3.5 8.5z"/><path d="m3.5 12.5 8.5 4.5 8.5-4.5" stroke-linecap="round"/></symbol>
-<symbol id="i-steer" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 19 19 5M10 5h9v9"/></symbol>
-<symbol id="i-cloudoff" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 6.6A6 6 0 0 1 17.6 10a4 4 0 0 1 2.9 5.8M17 18.5H7a4.5 4.5 0 0 1-1.4-8.8M3.5 3.5l17 17"/></symbol>
-</defs>
-</svg>
-
-<section id="signin" class="screen" hidden>
-  <div class="col">
-    <img class="appicon" src="/icon.svg" alt="" width="72" height="72">
-    <h1>Connect to MiniCore</h1>
-    <p class="sub">on <b id="shost"></b></p>
-    <div id="snote" class="note" role="status" hidden><svg class="ic sm"><use href="#i-info"/></svg><span></span></div>
-    <form id="sf" novalidate>
-      <label for="pw">Password</label>
-      <div class="field" id="pwf">
-        <input id="pw" name="password" type="password" autocomplete="current-password" autocapitalize="none" autocorrect="off" spellcheck="false" enterkeyhint="go" placeholder="xxxx-xxxx-xxxx" aria-describedby="serr shelp">
-        <button type="button" id="pweye" class="ib" aria-label="Show password" aria-pressed="false"><svg class="ic"><use href="#i-eye"/></svg></button>
-      </div>
-      <div id="serr" class="ferr" role="alert" hidden></div>
-      <button id="sgo" class="btn primary block" type="submit"><span class="spin" hidden></span><span>Connect</span></button>
-      <p class="help" id="shelp">The password is shown on your computer's MiniCore screen.</p>
-    </form>
-  </div>
-</section>
-
-<section id="gate" class="screen" hidden></section>
-
-<div id="main" hidden>
-  <header id="bar">
-    <button id="menu" class="ib" type="button" aria-label="Sessions" aria-haspopup="dialog"><svg class="ic"><use href="#i-menu"/></svg></button>
-    <div id="ttl">
-      <div id="title">MiniCore</div>
-      <button id="sub" type="button" aria-label="Model and reasoning" aria-haspopup="dialog"><span id="subtxt"></span><svg class="ic xs"><use href="#i-chevd"/></svg></button>
-    </div>
-    <button id="compose" class="ib" type="button" aria-label="New session"><svg class="ic"><use href="#i-compose"/></svg></button>
-  </header>
-  <div id="banner" role="status" aria-live="polite"><span class="spin"></span><span id="bantxt">Reconnecting…</span></div>
-  <div id="mid">
-    <main id="log" aria-label="Conversation">
-      <div id="col">
-        <div id="top"></div>
-        <div id="blocks"></div>
-        <div id="empty" hidden></div>
-      </div>
-    </main>
-    <button id="down" type="button" aria-label="Scroll to bottom" hidden><svg class="ic"><use href="#i-down"/></svg><span class="dot"></span></button>
-    <div id="toasts" aria-live="polite"></div>
-  </div>
-  <footer id="dock">
-    <div id="strip" hidden></div>
-    <div id="tray"></div>
-    <div id="modes" class="seg sm" role="radiogroup" aria-label="When to send" hidden>
-      <button type="button" role="radio" data-mode="submit" aria-checked="true"><svg class="ic xs"><use href="#i-steer"/></svg>Steer now</button>
-      <button type="button" role="radio" data-mode="queue" aria-checked="false">Queue next</button>
-    </div>
-    <form id="comp">
-      <textarea id="ta" rows="1" placeholder="Message MiniCore" aria-label="Message"></textarea>
-      <button id="act" type="submit" aria-label="Send"></button>
-    </form>
-  </footer>
-</div>
-<div id="ascrim"></div>
-<section id="appr" class="sheet" role="dialog" aria-labelledby="atitle" inert></section>
-<div id="scrim"></div>
-<aside id="drawer" role="dialog" aria-modal="true" aria-label="Sessions" tabindex="-1" inert></aside>
-<section id="sheet" class="sheet" role="dialog" aria-modal="true" tabindex="-1" inert></section>
-
 <script id="core">
 'use strict';
 // Pure client logic: no DOM, no network. Everything the UI needs to decide, format or send.
@@ -508,7 +421,11 @@ globalThis.MC = (() => {
     newSession: (workspace, profile) => Object.assign({ kind: 'new_session' }, workspace && { workspace }, profile && { profile }),
     setModel: model => ({ kind: 'set_model', model }),
     setReasoning: level => ({ kind: 'set_reasoning', level }),
+    renameSession: (session_id, title) => ({ kind: 'rename_session', session_id, title }),
+    deleteSession: session_id => ({ kind: 'delete_session', session_id }),
   };
+  // The stored appearance choice ('light', 'dark', anything else = System) and the OS preference give the effective theme.
+  const theme = (choice, osDark) => choice === 'light' || choice === 'dark' ? choice : osDark ? 'dark' : 'light';
   const fs = {
     roots: () => ({ t: 'fs_roots' }),
     list: (path, hidden) => ({ t: 'fs_list', path, hidden: !!hidden }),
@@ -835,7 +752,7 @@ globalThis.MC = (() => {
   }
 
   return {
-    WINDOW, backoff, basename, plural, retireText, mergeReturned, deviceName,
+    WINDOW, backoff, basename, plural, retireText, mergeReturned, deviceName, theme,
     login, hello, intents, fs, createStore, intent, request, pending, disconnect, sendAgain, unconfirmed, diffBlocks, applyBlocks, reduce,
     explain, lockText, fmtClock, unreachable, fsError,
     relTime, dayGroup, groupSessions, fmtElapsed, fmtDur, fmtTok,
@@ -844,6 +761,125 @@ globalThis.MC = (() => {
   };
 })();
 </script>
+<script>
+'use strict';
+// Before first paint: the stored appearance (or the OS) decides data-theme, and System keeps following the OS.
+const osDark = matchMedia('(prefers-color-scheme: dark)');
+function applyTheme() {
+  const t = MC.theme(localStorage.getItem('minicore.theme'), osDark.matches);
+  document.documentElement.dataset.theme = t;
+  document.getElementById('tc').content = t === 'dark' ? '#0e0f12' : '#ffffff';
+}
+applyTheme();
+osDark.addEventListener('change', () => { applyTheme(); if (window.onTheme) onTheme(); });
+</script>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+<defs>
+<symbol id="i-menu" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h10"/></symbol>
+<symbol id="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M4.6 4.6 6 6M18 18l1.4 1.4M2.5 12h2M19.5 12h2M4.6 19.4 6 18M18 6l1.4-1.4"/></symbol>
+<symbol id="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"><path d="M19.5 14.6A8 8 0 1 1 9.4 4.5a6.4 6.4 0 0 0 10.1 10.1z"/></symbol>
+<symbol id="i-trash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 7h15M9.5 7V5.2c0-.9.7-1.7 1.7-1.7h1.6c1 0 1.7.8 1.7 1.7V7M6.5 7l.8 11.6a2 2 0 0 0 2 1.9h5.4a2 2 0 0 0 2-1.9L17.5 7M10 11v5.5M14 11v5.5"/></symbol>
+<symbol id="i-more" viewBox="0 0 24 24" fill="currentColor"><circle cx="5.5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="18.5" cy="12" r="1.7"/></symbol>
+<symbol id="i-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></symbol>
+<symbol id="i-up" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5.5 11.5 12 5l6.5 6.5"/></symbol>
+<symbol id="i-down" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5.5 12.5 12 19l6.5-6.5"/></symbol>
+<symbol id="i-stop" viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor"/></symbol>
+<symbol id="i-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9.5 6 6 6-6 6"/></symbol>
+<symbol id="i-chevd" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 10 5 5 5-5"/></symbol>
+<symbol id="i-folder" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M3.5 7.5A2 2 0 0 1 5.5 5.5h3.6l2 2h7.4a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/></symbol>
+<symbol id="i-folderplus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 7.5A2 2 0 0 1 5.5 5.5h3.6l2 2h7.4a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2zM12 10.5v5M9.5 13h5"/></symbol>
+<symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7.5"/></symbol>
+<symbol id="i-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/></symbol>
+<symbol id="i-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="8.5" y="8.5" width="11" height="11" rx="2.5"/><path d="M15.5 8.5V6a1.5 1.5 0 0 0-1.5-1.5H6A1.5 1.5 0 0 0 4.5 6v8A1.5 1.5 0 0 0 6 15.5h2.5"/></symbol>
+<symbol id="i-retry" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12a8 8 0 1 0 2.4-5.7L4 8.6"/><path d="M4 4v4.6h4.6"/></symbol>
+<symbol id="i-term" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 7.5 4.5 4.5L5 16.5M12.5 17H19"/></symbol>
+<symbol id="i-edit" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 5.5 18.5 9.5M4.5 19.5l1-4.5L16 4.5a2 2 0 0 1 2.9 0l.6.6a2 2 0 0 1 0 2.9L9 18.5z"/></symbol>
+<symbol id="i-file" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M13.5 3.5H7A2 2 0 0 0 5 5.5v13a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9z"/><path d="M13.5 3.5V9H19"/></symbol>
+<symbol id="i-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></symbol>
+<symbol id="i-tool" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 6.5a4 4 0 0 0 5 5L12 19a2.1 2.1 0 0 1-3-3l7.5-7.5a4 4 0 0 1-2-2z"/></symbol>
+<symbol id="i-sliders" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></symbol>
+<symbol id="i-sparkle" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2.5c.5 4.6 2.9 7 7.5 7.5v.1c-4.6.5-7 2.9-7.5 7.5h-.1c-.5-4.6-2.9-7-7.4-7.5V10c4.5-.5 6.9-2.9 7.4-7.5zM19 15.5c.2 1.9 1.1 2.8 3 3-1.9.2-2.8 1.1-3 3-.2-1.9-1.1-2.8-3-3 1.9-.2 2.8-1.1 3-3z"/></symbol>
+<symbol id="i-warn" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 4.3 2.9 17.5A2 2 0 0 0 4.6 20.5h14.8a2 2 0 0 0 1.7-3L13.7 4.3a2 2 0 0 0-3.4 0z"/><path d="M12 9.5v4M12 17h.01"/></symbol>
+<symbol id="i-info" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5M12 8h.01"/></symbol>
+<symbol id="i-slash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="7.5"/><path d="m6.8 17.2 10.4-10.4"/></symbol>
+<symbol id="i-eye" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3"/></symbol>
+<symbol id="i-eyeoff" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M10 5.8A9.6 9.6 0 0 1 12 5.5c6 0 9.5 6.5 9.5 6.5a16 16 0 0 1-2.6 3.4M6.3 7.3C3.9 8.9 2.5 12 2.5 12s3.5 6.5 9.5 6.5a9 9 0 0 0 4.7-1.3M9.9 9.9a3 3 0 0 0 4.2 4.2M3.5 3.5l17 17"/></symbol>
+<symbol id="i-logout" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 4.5h3a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2h-3M10 16.5 14.5 12 10 7.5M14.5 12H4"/></symbol>
+<symbol id="i-phone" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="6.5" y="2.5" width="11" height="19" rx="2.5"/><path d="M10.5 18.5h3"/></symbol>
+<symbol id="i-power" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3.5v8M7 6.5a7.5 7.5 0 1 0 10 0"/></symbol>
+<symbol id="i-tabs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="14" rx="2.5"/><path d="M3.5 9.5h17M6.5 7.2h.01M9 7.2h.01"/></symbol>
+<symbol id="i-shield" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"><path d="M12 3 19.5 6v5.5c0 4.6-3.2 8.2-7.5 9.5-4.3-1.3-7.5-4.9-7.5-9.5V6z"/><path d="m9 12 2.2 2.2L15.5 10" stroke-linecap="round"/></symbol>
+<symbol id="i-layers" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="m12 4 8.5 4.5L12 13 3.5 8.5z"/><path d="m3.5 12.5 8.5 4.5 8.5-4.5" stroke-linecap="round"/></symbol>
+<symbol id="i-steer" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 19 19 5M10 5h9v9"/></symbol>
+<symbol id="i-cloudoff" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 6.6A6 6 0 0 1 17.6 10a4 4 0 0 1 2.9 5.8M17 18.5H7a4.5 4.5 0 0 1-1.4-8.8M3.5 3.5l17 17"/></symbol>
+</defs>
+</svg>
+
+<section id="signin" class="screen" hidden>
+  <div class="col">
+    <img class="appicon" src="/icon.svg" alt="" width="72" height="72">
+    <h1>Connect to MiniCore</h1>
+    <p class="sub">on <b id="shost"></b></p>
+    <div id="snote" class="note" role="status" hidden><svg class="ic sm"><use href="#i-info"/></svg><span></span></div>
+    <form id="sf" novalidate>
+      <label for="pw">Password</label>
+      <div class="field" id="pwf">
+        <input id="pw" name="password" type="password" autocomplete="current-password" autocapitalize="none" autocorrect="off" spellcheck="false" enterkeyhint="go" placeholder="xxxx-xxxx-xxxx" aria-describedby="serr shelp">
+        <button type="button" id="pweye" class="ib" aria-label="Show password" aria-pressed="false"><svg class="ic"><use href="#i-eye"/></svg></button>
+      </div>
+      <div id="serr" class="ferr" role="alert" hidden></div>
+      <button id="sgo" class="btn primary block" type="submit"><span class="spin" hidden></span><span>Connect</span></button>
+      <p class="help" id="shelp">The password is shown on your computer's MiniCore screen.</p>
+    </form>
+  </div>
+</section>
+
+<section id="gate" class="screen" hidden></section>
+
+<div id="main" hidden>
+  <header id="bar">
+    <button id="menu" class="ib" type="button" aria-label="Sessions" aria-haspopup="dialog"><svg class="ic"><use href="#i-menu"/></svg></button>
+    <div id="ttl">
+      <div id="title">MiniCore</div>
+      <button id="sub" type="button" aria-label="Model and reasoning" aria-haspopup="dialog"><span id="subtxt"></span><svg class="ic xs"><use href="#i-chevd"/></svg></button>
+    </div>
+    <button id="rename" class="ib" type="button" aria-label="Rename session" aria-haspopup="dialog"><svg class="ic"><use href="#i-edit"/></svg></button>
+  </header>
+  <div id="banner" role="status" aria-live="polite"><span class="spin"></span><span id="bantxt">Reconnecting…</span></div>
+  <div id="mid">
+    <main id="log" aria-label="Conversation">
+      <div id="col">
+        <div id="top"></div>
+        <div id="blocks"></div>
+        <div id="empty" hidden></div>
+      </div>
+    </main>
+    <button id="down" type="button" aria-label="Scroll to bottom" hidden><svg class="ic"><use href="#i-down"/></svg><span class="dot"></span></button>
+    <div id="toasts" aria-live="polite"></div>
+  </div>
+  <footer id="dock">
+    <div id="strip" hidden></div>
+    <div id="tray"></div>
+    <div id="modes" class="seg sm" role="radiogroup" aria-label="When to send" hidden>
+      <button type="button" role="radio" data-mode="submit" aria-checked="true"><svg class="ic xs"><use href="#i-steer"/></svg>Steer now</button>
+      <button type="button" role="radio" data-mode="queue" aria-checked="false">Queue next</button>
+    </div>
+    <form id="comp">
+      <textarea id="ta" rows="1" placeholder="Message MiniCore" aria-label="Message"></textarea>
+      <button id="act" type="submit" aria-label="Send"></button>
+    </form>
+  </footer>
+</div>
+<div id="ascrim"></div>
+<section id="appr" class="sheet" role="dialog" aria-labelledby="atitle" inert></section>
+<div id="scrim"></div>
+<aside id="drawer" role="dialog" aria-modal="true" aria-label="Sessions" tabindex="-1" inert></aside>
+<section id="sheet" class="sheet" role="dialog" aria-modal="true" tabindex="-1" inert></section>
+<div id="scrim2"></div>
+<section id="dlg" class="sheet" role="dialog" aria-modal="true" aria-labelledby="dtitle" tabindex="-1" inert></section>
+
 <script>
 'use strict';
 // ---- UI: DOM only; decisions come from MC ----
@@ -911,7 +947,7 @@ function show(name) {
   $('signin').hidden = name !== 'signin';
   $('gate').hidden = name !== 'gate';
   $('main').hidden = name !== 'main';
-  if (name !== 'main') { closeModal(); renderAppr(); }
+  if (name !== 'main') { closeDlg(); closeModal(); renderAppr(); }
 }
 function gateScreen(g) {
   const eicon = h('div', 'eicon' + (g.icon === 'warn' ? ' warn' : ''), icon(g.icon, 'lg'));
@@ -1027,6 +1063,7 @@ function lost() {
   fsWait.clear();
   if (ns) { ns.busy = false; ns.starting = false; }
   pendingRow = null; mp.model = mp.level = null;
+  if (dl && dl.busy) { dl.busy = false; dl.err = 'Connection lost. Check the session list before trying again.'; renderDlg(); }
   if (S.state) { renderTray(); renderAppr(); updateComposer(); renderModal(); }
 }
 function closed() {
@@ -1088,7 +1125,10 @@ function onAck(a) {
   if (k === 'set_reasoning') mp.level = null;
   if (k === 'open_session' && pendingRow === a.spec.session_id) { pendingRow = null; if (a.ok && modal === $('drawer')) closeModal(); }
   if (k === 'new_session' && ns && ns.starting) { ns.starting = false; if (a.ok) closeModal(); else ns.err = a.error || 'Could not start the session.'; }
-  if (!a.ok && !(k === 'new_session' && ns)) toast(a.error || 'Request failed', 'error');
+  // Rename and delete answer inside their dialog when it is still waiting for them.
+  const inDlg = (k === 'rename_session' || k === 'delete_session') && dl && dl.busy;
+  if (inDlg) { dl.busy = false; if (a.ok) closeDlg(); else { dl.err = a.error || 'Request failed'; renderDlg(); } }
+  if (!a.ok && !inDlg && !(k === 'new_session' && ns)) toast(a.error || 'Request failed', 'error');
   renderTray(); renderAppr(); updateComposer(); renderModal(); renderTop();
 }
 
@@ -1325,6 +1365,10 @@ function renderState() {
   const s = S.state, c = cur(), live = (s.status.busy || s.status.compacting) && s.status.started_ms;
   $('title').textContent = s.session ? s.session.title || 'Untitled session' : 'New session';
   $('subtxt').textContent = [MC.basename(c.workspace), c.model, c.reasoning].filter(Boolean).join(' · ');
+  $('rename').style.visibility = s.session ? '' : 'hidden';
+  $('rename').disabled = !s.session;
+  // A dialog about a session that left the list (deleted elsewhere) has nothing left to act on.
+  if (dl && !dl.busy && !s.sessions.some(x => x.id === dl.id)) closeDlg();
   if (live && !tick) tick = setInterval(renderStrip, 1000);
   if (!live && tick) { clearInterval(tick); tick = 0; }
   if (!!s.status.busy !== wasBusy) { // carets and the Thinking label follow busy
@@ -1445,16 +1489,17 @@ function closeModal(keepScrim) {
 function renderModal() { if (modal && S.state) modal.render(); }
 $('scrim').addEventListener('click', () => closeModal());
 document.addEventListener('keydown', e => {
-  if (!modal) return;
-  if (e.key === 'Escape') { e.preventDefault(); closeModal(); return; }
+  const top = dl ? $('dlg') : modal;
+  if (!top) return;
+  if (e.key === 'Escape') { e.preventDefault(); dl ? closeDlg() : closeModal(); return; }
   if (e.key !== 'Tab') return;
-  const f = [...modal.querySelectorAll('button,input,select,textarea,a[href]')].filter(x => !x.disabled && x.offsetParent);
+  const f = [...top.querySelectorAll('button,input,select,textarea,a[href]')].filter(x => !x.disabled && x.offsetParent);
   if (!f.length) return;
   const first = f[0], last = f[f.length - 1];
-  if (e.shiftKey && (document.activeElement === first || document.activeElement === modal)) { e.preventDefault(); last.focus(); }
+  if (e.shiftKey && (document.activeElement === first || document.activeElement === top)) { e.preventDefault(); last.focus(); }
   else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
 });
-const shead = (title, extra) => h('div', 'shead', h('h2', { id: 'stitle' }, title), extra, h('button', { class: 'ib', type: 'button', 'aria-label': 'Close', onclick: () => closeModal() }, icon('x')));
+const shead = (title, extra, id = 'stitle', close = () => closeModal()) => h('div', 'shead', h('h2', { id }, title), extra, h('button', { class: 'ib', type: 'button', 'aria-label': 'Close', onclick: close }, icon('x')));
 
 // Sessions drawer: the skeleton is built once per opening so the search field keeps focus.
 function openDrawer() {
@@ -1467,28 +1512,34 @@ function renderDrawer() {
   if (!d.querySelector('.dlist')) {
     const q = h('input', { type: 'search', placeholder: 'Search sessions', 'aria-label': 'Search sessions', autocomplete: 'off', enterKeyHint: 'search', oninput: () => { query = q.value; renderDrawerList(); } });
     fill(d, h('div', 'dhead', h('img', { src: '/icon.svg', alt: '' }), h('div', '', h('b', '', 'MiniCore'), h('small', '', HOST)),
+      h('button', { id: 'themebtn', class: 'ib', type: 'button', onclick: () => setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark') }),
       h('button', { class: 'ib', type: 'button', 'aria-label': 'Close', onclick: () => closeModal() }, icon('x'))),
       h('button', { class: 'btn primary dnew', type: 'button', 'data-focus': true, onclick: openNew }, icon('plus', 'sm'), 'New session'),
       h('label', 'search', icon('search', 'sm'), q), h('div', 'dlist'), h('div', 'dfoot'));
   }
-  renderDrawerList(); renderDrawerFoot();
+  renderDrawerList(); renderDrawerFoot(); renderThemeBtn();
 }
 function renderDrawerList() {
   const s = S.state, list = $('drawer').querySelector('.dlist');
   if (!list) return;
   const groups = MC.groupSessions(s.sessions, hostNow(), tz(), query);
   fill(list, !groups.length && h('div', 'muted', query ? 'No matching sessions' : 'No sessions yet'),
-    groups.map(g => [h('div', 'dsec', g.label), g.items.map(x => h('button', {
-      class: 'srow' + (x.current ? ' cur' : ''), type: 'button', 'aria-current': x.current ? 'true' : null,
+    groups.map(g => [h('div', 'dsec', g.label), g.items.map(x => h('div', 'srow' + (x.current ? ' cur' : ''), h('button', {
+      class: 'sopen', type: 'button', 'aria-current': x.current ? 'true' : null,
       onclick: () => { if (x.current) return closeModal(); if (!pendingRow && intent(MC.intents.openSession(x.id))) { pendingRow = x.id; renderDrawerList(); } },
-    }, h('span', 'rt', h('span', 'rm', x.title || 'Untitled session'), h('span', 'rs', MC.basename(x.workspace) + ' · ' + MC.relTime(Date.parse(x.updated_at), hostNow(), tz()))),
-    pendingRow === x.id ? spin('sm') : x.current && icon('check', 'sm')))]));
+    }, h('span', 'rt', h('span', 'rm', x.title || 'Untitled session'), h('span', 'rs', sessionSub(x))),
+    pendingRow === x.id ? spin('sm') : x.current && icon('check', 'sm')),
+    h('button', { class: 'ib more', type: 'button', 'aria-label': 'Session actions', 'aria-haspopup': 'dialog', onclick: () => openDlg({ view: 'actions', id: x.id }) }, icon('more'))))]));
 }
+const sessionSub = x => MC.basename(x.workspace) + ' · ' + MC.relTime(Date.parse(x.updated_at), hostNow(), tz());
 let signOutArmed = 0;
 function renderDrawerFoot() {
   const f = $('drawer').querySelector('.dfoot');
   if (!f) return;
+  const choice = themeChoice();
   fill(f, h('div', 'who', h('span', 'dot' + (online() ? '' : ' off')), h('span', '', online() ? 'Connected as ' + (S.device || 'this device') : 'Reconnecting…')),
+    h('div', 'appear', h('span', { id: 'aplbl' }, 'Appearance'), h('div', { class: 'seg sm', role: 'radiogroup', 'aria-labelledby': 'aplbl' },
+      [['system', 'System'], ['light', 'Light'], ['dark', 'Dark']].map(([v, l]) => h('button', { type: 'button', role: 'radio', 'aria-checked': String(choice === v), onclick: () => setTheme(v) }, l)))),
     h('button', { class: 'btn', type: 'button', onclick: () => {
       if (signOutArmed) { clearTimeout(signOutArmed); signOutArmed = 0; signOut(); return; }
       signOutArmed = setTimeout(() => { signOutArmed = 0; renderDrawerFoot(); }, 3000); renderDrawerFoot();
@@ -1609,10 +1660,85 @@ function renderModel() {
 
 $('menu').addEventListener('click', openDrawer);
 $('sub').addEventListener('click', openModel);
-$('compose').addEventListener('click', () => {
-  // Like a chat app's compose button: a fresh draft in the same folder; a draft already open picks a folder instead.
-  if (S.state.session) intent(MC.intents.newSession()); else openNew();
-});
+$('rename').addEventListener('click', () => { if (S.state.session) openDlg({ view: 'rename', id: S.state.session.id }); });
+
+// ---- appearance ----
+const themeChoice = () => { const c = localStorage.getItem('minicore.theme'); return c === 'light' || c === 'dark' ? c : 'system'; };
+function setTheme(c) {
+  if (c === 'system') localStorage.removeItem('minicore.theme'); else localStorage.setItem('minicore.theme', c);
+  applyTheme(); onTheme();
+}
+function onTheme() { if (modal === $('drawer')) { renderThemeBtn(); renderDrawerFoot(); } }
+function renderThemeBtn() {
+  const b = $('themebtn'), dark = document.documentElement.dataset.theme === 'dark';
+  b.setAttribute('aria-label', dark ? 'Switch to light appearance' : 'Switch to dark appearance');
+  fill(b, icon(dark ? 'sun' : 'moon'));
+}
+
+// ---- session dialogs: actions, rename, delete; they stack above the drawer ----
+let dl = null, opener2 = null;
+function openDlg(d) {
+  const s = S.state.sessions.find(x => x.id === d.id) || S.state.session;
+  if (!dl) opener2 = document.activeElement;
+  dl = Object.assign({ title: s.title || '', value: s.title || '', current: s.id === S.sid, sub: s.updated_at ? sessionSub(s) : '', busy: false, err: '' }, d);
+  const el = $('dlg');
+  renderDlg();
+  el.inert = false;
+  el.classList.add('on');
+  $('scrim2').classList.add('on');
+  // Synchronous focus inside the tap so iOS opens the keyboard for the rename field.
+  const f = el.querySelector('[data-focus]');
+  if (f && (f.tagName === 'INPUT' || matchMedia('(hover: hover)').matches)) { f.focus({ preventScroll: true }); if (f.select) f.select(); }
+  else el.focus({ preventScroll: true });
+}
+function closeDlg() {
+  if (!dl) return;
+  dl = null;
+  const el = $('dlg');
+  el.classList.remove('on');
+  el.inert = true;
+  $('scrim2').classList.remove('on');
+  if (opener2 && opener2.isConnected) opener2.focus({ preventScroll: true });
+  opener2 = null;
+}
+$('scrim2').addEventListener('click', closeDlg);
+const label = d => '“' + (d.title || 'Untitled session') + '”';
+function renderDlg() {
+  const d = dl, el = $('dlg'), err = d.err && h('div', { class: 'serr', role: 'alert' }, icon('warn', 'sm'), h('span', '', d.err));
+  if (d.view === 'actions') {
+    return fill(el, h('div', 'grab'), h('div', 'dtitle', h('h2', { id: 'dtitle' }, d.title || 'Untitled session'), d.sub && h('p', '', d.sub)),
+      h('div', 'sbody', h('div', 'list',
+        h('button', { class: 'row flat', type: 'button', 'data-focus': true, onclick: () => openDlg({ view: 'rename', id: d.id }) }, icon('edit', 'ri'), h('span', 'rt', h('span', 'rm', 'Rename'))),
+        h('button', { class: 'row flat bad', type: 'button', disabled: d.current, onclick: () => openDlg({ view: 'confirm', id: d.id }) }, icon('trash', 'ri'),
+          h('span', 'rt', h('span', 'rm', 'Delete session'), d.current && h('span', 'rs', 'Open another session first'))))),
+      h('div', 'sfoot', h('button', { class: 'btn block', type: 'button', onclick: closeDlg }, 'Cancel')));
+  }
+  if (d.view === 'confirm') {
+    return fill(el, h('div', 'ahead', h('div', 'eicon warn', icon('trash')), h('div', '', h('h2', { id: 'dtitle' }, 'Delete ' + label(d) + '?'), h('p', '', "This can't be undone."))),
+      err && h('div', 'abody', err),
+      h('div', 'abtn', h('button', { class: 'btn dangerfill', type: 'button', 'data-focus': true, disabled: d.busy || !online(), onclick: () => {
+        d.err = '';
+        if (intent(MC.intents.deleteSession(d.id))) d.busy = true;
+        renderDlg();
+      } }, d.busy && spin(), d.busy ? 'Deleting…' : 'Delete'), h('button', { class: 'btn', type: 'button', onclick: closeDlg }, 'Cancel')));
+  }
+  const had = document.activeElement && document.activeElement.id === 'renin';
+  fill(el, h('div', 'grab'), shead('Rename session', null, 'dtitle', closeDlg),
+    h('form', { class: 'dform', novalidate: true, onsubmit: e => {
+      e.preventDefault();
+      if (d.busy) return;
+      d.err = '';
+      if (intent(MC.intents.renameSession(d.id, d.value.trim()))) d.busy = true;
+      renderDlg();
+    } },
+    h('div', 'sbody', h('input', { id: 'renin', class: 'tf', type: 'text', value: d.value, maxLength: 200, readOnly: d.busy, 'data-focus': true, 'aria-label': 'Session title',
+      placeholder: 'Session title', autocomplete: 'off', enterKeyHint: 'done', 'aria-describedby': 'renhint', oninput: e => { d.value = e.target.value; } }),
+      h('div', { id: 'renhint', class: 'hint' }, 'Leave empty to use the first message'), err),
+    h('div', 'sfoot dbtns', h('button', { class: 'btn', type: 'button', onclick: closeDlg }, 'Cancel'),
+      h('button', { class: 'btn primary', type: 'submit', disabled: d.busy || !online() }, d.busy && spin(), d.busy ? 'Saving…' : 'Save'))));
+  // Keep the caret when a re-render (pending, error) replaces the field the user is typing in.
+  if (had) { const i = $('renin'); i.focus({ preventScroll: true }); i.setSelectionRange(i.value.length, i.value.length); }
+}
 
 // ---- lifecycle ----
 document.addEventListener('visibilitychange', () => { if (document.hidden) hiddenAt = Date.now(); else wake(Date.now() - hiddenAt > 10000); });
