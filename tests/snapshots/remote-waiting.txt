@@ -1,6 +1,7 @@
   Remote control                                          ○ waiting for a phone
 
     Address    http://192.168.20.207:8765
+    Listening  0.0.0.0:8765 · [::]:8765
     Password   k7mq-x2pa-n9dt
     Phones     none yet · open the address on your phone and enter the password
 
@@ -10,7 +11,6 @@
     Now        Idle
 
     /remote off take back control · /remote password new password
-
 
 
 

@@ -55,10 +55,14 @@ document disagree after the feature lands, the code wins and this file is fixed.
   as a home-screen app and opens offline from a service worker cache.
   The protocol below is versioned (`v: 1`) and is the interface a future native
   or Flutter client uses too, so it carries semantic data, never rendered rows.
-- **No built-in TLS.** Default bind is loopback. Across networks use Tailscale,
-  WireGuard, an SSH tunnel or a TLS reverse proxy; `url` names the address the
-  phone uses.
-- **Not in scope:** TLS, sleep prevention, per-device revocation, push
+- **Optional TLS with a user certificate.** Default bind is loopback on both
+  families. `tls = true` serves HTTPS and WSS with a PEM certificate and key the
+  user provides (Let's Encrypt, a Cloudflare Origin CA certificate, a
+  self-signed one the phone trusts); the TUI never makes or renews
+  certificates. Otherwise use Tailscale, WireGuard, an SSH tunnel or a TLS
+  reverse proxy across networks; `url` names the address the phone uses.
+- **Not in scope:** certificate issuance or renewal, HSTS and HTTP-to-HTTPS
+  redirects, sleep prevention, per-device revocation, push
   notifications, delete/move/upload in the directory browser, Git clone,
   `agent.reload` and `agent.shutdown` from the phone.
 
@@ -68,21 +72,32 @@ document disagree after the feature lands, the code wins and this file is fixed.
 
 ```toml
 [remote]
-bind = "127.0.0.1:8765"        # default; host:port
+bind = ["127.0.0.1:8765", "[::1]:8765"]   # default; one host:port or a list
 url = "https://mac.tail1234.ts.net:8765"   # optional; the address the status screen shows
 roots = ["~/Develops", "/srv/work"]        # default: the user's home directory
-allow_insecure = false         # required (true) for a non-loopback bind
+allow_insecure = false         # required (true) for a non-loopback bind without TLS
+tls = false                    # HTTPS and WSS with the files below
+tls_cert = "~/certs/fullchain.pem"         # PEM chain, leaf first
+tls_key = "~/certs/privkey.pem"            # PEM key: PKCS#8, PKCS#1 or SEC1
 ```
 
 - Validated when `config.toml` loads, reported as `file:line: [remote] key: reason`
   with exit status 2 before the screen changes:
-  - `bind` parses as a socket address; a non-loopback IP needs `allow_insecure = true`
-    ("a non-loopback bind sends traffic unencrypted; set allow_insecure = true").
+  - `bind` is a string or a non-empty list of strings without repeats; each
+    parses as a socket address. A non-loopback IP without TLS needs
+    `allow_insecure = true` ("<address>: a non-loopback bind sends traffic
+    unencrypted; set tls = true or allow_insecure = true").
+  - `tls = true` needs `tls_cert` and `tls_key` ("needs tls_cert and tls_key");
+    both expand a leading `~` like `roots`, and are loaded and parsed here, so a
+    missing file, a file without PEM items or a key that does not match the
+    certificate is `[remote] tls_cert: <path>: <reason>` or `tls_key: …`. With
+    `tls = false` the paths are ignored.
   - `roots` entries expand a leading `~`, must exist, must be directories, and are
     stored canonicalized. An empty list is an error.
   - `url` must start with `http://` or `https://`; no trailing `/`.
 - `--remote` starts remote mode at startup. The listener is bound before the
   terminal is taken over; a bind failure prints the error and exits with status 1.
+  Skipped addresses (below) are shown as notices once the screen is up.
 - The password and the remembered phones live in `<TUI dir>/remote.json`,
   written atomically, mode `0600` on Unix:
   `{"password":"k7mq-x2pa-n9dt","devices":[{"name":"iPhone Safari","token_sha256":"<hex>","paired_at":"<RFC 3339>"}]}`.
@@ -119,6 +134,7 @@ line is never written to the prompt history.
                                                    ○ waiting for a phone, amber)
 
      Address     http://192.168.20.207:8765
+     Listening   0.0.0.0:8765 · [::]:8765
      Password    k7mq-x2pa-n9dt
      Phones      iPhone Safari · Fix the parser · connected at 14:02
                  Mac Edge · new session · connected at 14:30
@@ -137,7 +153,8 @@ line is never written to the prompt history.
      /remote off take back control · esc stop the turn · /remote password new password
   ```
 
-  `Phones` has one row per connected device, in admission order, with its
+  `Listening` names every address the listener accepts on, joined with ` · `,
+  then `TLS` when it serves TLS. `Phones` has one row per connected device, in admission order, with its
   session label (or `new session`) and the local time it was admitted
   (a clock time, not a running duration, so the
   idle screen stays still); the header names the one device or counts them.
@@ -173,8 +190,28 @@ line is never written to the prompt history.
 
 ## Transport
 
-One TCP listener on `bind`. Each connection's request head (max 8 KiB, 10 s) is
-peeked:
+One TCP listener per `bind` address, all served by one accept loop with the
+limits below. IPv6 sockets are v6-only (`IPV6_V6ONLY`), so `0.0.0.0:P` and
+`[::]:P` coexist; Unix sockets set `SO_REUSEADDR` as std does, Windows ones do
+not (there it would let another process take the port). A bind failing with
+`AddrInUse` or `PermissionDenied` aborts the start: the port must stay the one
+configured. Any other failure (no IPv6, an address the host no longer has)
+skips that address with the info notice
+`Remote: not listening on <address> (<reason>)`, as long as one address listens;
+otherwise the first error, naming its address, fails the start. The default URL
+uses the first address that listens.
+
+With TLS (rustls with the ring provider, passed to the server configuration
+rather than installed process-wide; TLS 1.2 and 1.3; ALPN `http/1.1`; no client
+certificates) every accepted connection completes its handshake within 10 s
+first; a failed handshake, such as plain HTTP to the TLS port, closes the
+connection without a reply. The certificate and key are read again at every
+start (`--remote`, `/remote on`), so `/remote off` and `/remote on` pick up a
+renewed certificate; files are not watched. The default URL then starts with
+`https://`.
+
+Each connection's request head (max 8 KiB, 10 s) is read up to its blank line;
+plain TCP and TLS streams go through the same handler:
 
 - `GET /` → the web client (`text/html; charset=utf-8`).
 - `GET /sw.js` → the service worker (`text/javascript`).
@@ -182,7 +219,8 @@ peeked:
 - `GET /icon.svg`, `/icon-192.png`, `/icon-512.png`, `/icon-maskable.png`
   (full-bleed for Android masks) and `/apple-touch-icon.png` (180×180, opaque,
   for the iOS home screen) → the icons, embedded with `include_bytes!`.
-- `GET /ws` with `Upgrade: websocket` → the WebSocket. If an `Origin` header is
+- `GET /ws` with `Upgrade: websocket` → the WebSocket; the bytes already read
+  are replayed to the WebSocket handshake. If an `Origin` header is
   present its host:port must equal the `Host` header, else `403`. No `Origin`
   (a non-browser client) is allowed; authentication still applies.
 - Anything else → `404`. Only `GET`. Paths are matched without their query
@@ -212,9 +250,13 @@ and `allow_insecure` is not needed; set `url` to the `https://` hostname. The
 browser's `Origin` is `https://<hostname>` and cloudflared forwards
 `Host: <hostname>`, so the Origin check passes. Overriding the tunnel's HTTP
 Host Header breaks it (`403`); `X-Forwarded-*` headers are never trusted.
-A proxied DNS record to a forwarded port needs a non-loopback bind,
-`allow_insecure = true` and a port Cloudflare proxies, and Cloudflare reaches the
-computer over plain HTTP. The 20 s ping keeps idle sockets well inside
+A proxied DNS record to a forwarded port needs a non-loopback bind and a port
+Cloudflare proxies; with `tls` and a Cloudflare Origin CA certificate the zone's
+**Full (strict)** mode encrypts and verifies the hop to the computer, without
+it `allow_insecure = true` is needed and that hop is plain HTTP. Behind a
+tunnel TLS is optional; enabled, the tunnel's service is `https://127.0.0.1:8765`
+with `originServerName` (or `noTLSVerify`) when the certificate does not name
+`127.0.0.1`. The 20 s ping keeps idle sockets well inside
 Cloudflare's WebSocket idle timeout.
 
 WebSocket rules: text frames of JSON objects with a `"t"` type field; max
@@ -557,7 +599,9 @@ workspace.
 | Path | Contents |
 |---|---|
 | `src/remote/mod.rs` | `RemoteMode`, the handle `App` keeps (start/stop, the admitted phones with their trackers, routed sends, password access, URL, sign-in refusals), `RemoteEvent` posted to the main loop as `Msg::Remote` |
-| `src/remote/server.rs` | Listener, HTTP, WebSocket upgrade, handshake, pings, per-connection tasks |
+| `src/remote/mod.rs` (`Bound`) | Binding every configured address, skipping unavailable ones, the default URL |
+| `src/remote/server.rs` | Accept loop over the listeners, TLS handshake, HTTP, WebSocket upgrade, handshake, pings, per-connection tasks |
+| `src/remote/tls.rs` | Loading the PEM certificate chain and key into a rustls server configuration |
 | `src/remote/auth.rs` | The password, sign-in pauses, token generation and hashing, `remote.json` |
 | `src/remote/wire.rs` | Serde types of every message above |
 | `src/remote/view.rs` | `State`/`Block` projection from `&App`, the shared catalog cache and the per-connection diff tracker |
@@ -574,6 +618,7 @@ gains no new branch beyond calling `sync_remote` once per iteration.
 
 | Limit | Value |
 |---|---|
+| TLS handshake | 10 s |
 | Request head | 8 KiB, 10 s |
 | WebSocket message in | 1 MiB |
 | First message | 10 s |

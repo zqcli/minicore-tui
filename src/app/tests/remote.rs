@@ -59,10 +59,11 @@ fn request_from(h: &mut Harness, connection: u64, intent: Value) {
 
 pub(super) fn config(root: std::path::PathBuf) -> crate::config::Remote {
     crate::config::Remote {
-        bind: "127.0.0.1:0".parse().unwrap(),
+        bind: vec!["127.0.0.1:0".parse().unwrap()],
         url: None,
         roots: vec![root],
         allow_insecure: false,
+        tls: None,
     }
 }
 
@@ -78,7 +79,7 @@ async fn a_real_phone_signs_in_submits_through_the_agent_and_receives_the_user_b
     let bound = Bound::bind(&config, root.path().join("remote.json"))
         .await
         .unwrap();
-    let address = bound.listener.local_addr().unwrap();
+    let address = bound.listening[0];
     let password = bound.auth.lock().unwrap().password().to_owned();
     h.app.remote.config = Some(config);
     h.app.enter_remote(bound);
@@ -291,6 +292,26 @@ async fn local_submit_is_refused_but_phone_submit_preserves_the_local_draft() {
     h.press(KeyCode::Esc);
     h.settle().await;
     assert_eq!(h.calls("turn.cancel").len(), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn entering_remote_names_each_configured_address_it_cannot_listen_on() {
+    let mut h = Harness::new();
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = config(dir.path().canonicalize().unwrap());
+    config.bind.push("192.0.2.1:0".parse().unwrap());
+    let bound = Bound::bind(&config, dir.path().join("remote.json"))
+        .await
+        .unwrap();
+    let reason = bound.skipped[0].1.clone();
+    h.app.remote.config = Some(config);
+    h.app.enter_remote(bound);
+    assert_eq!(
+        h.notices(),
+        [format!("Remote: not listening on 192.0.2.1:0 ({reason})")]
+    );
+    assert_eq!(h.app.remote.listening.len(), 1);
+    h.action(Action::Remote("off".into()));
 }
 
 #[tokio::test(start_paused = true)]

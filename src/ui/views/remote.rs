@@ -49,8 +49,13 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App, styles: Styles) {
     ];
 
     let text = styles.text();
+    let mut listening: Vec<_> = remote.listening.iter().map(ToString::to_string).collect();
+    if remote.tls {
+        listening.push("TLS".into());
+    }
     let mut connect = vec![
         ("Address", remote.url().unwrap_or_default().to_owned(), text),
+        ("Listening", listening.join(" · "), text),
         ("Password", remote.password().unwrap_or_default(), text),
     ];
     if remote.phones.is_empty() {

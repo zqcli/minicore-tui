@@ -214,11 +214,12 @@ doing. Local sending is frozen and the footer shows `remote`; `/remote off`
 takes the keyboard back and shows that foreground transcript again. `/remote password` makes a new password and
 signs phones out. Without `--remote` nothing listens.
 
-The server binds to `127.0.0.1:8765` by default, which only the same machine
-can reach. A phone on the same LAN needs a non-loopback `bind` and
-`allow_insecure = true`, because the TUI has no TLS of its own and the password
-then crosses the network unencrypted. Across networks, keep the loopback bind and
-publish it through Tailscale, an SSH tunnel or a TLS reverse proxy, then set
+The server listens on `127.0.0.1:8765` and `[::1]:8765` by default, which only
+the same machine can reach. A phone on the same LAN needs a non-loopback `bind` and either `tls = true` with
+your own certificate (`tls_cert`, `tls_key`) or `allow_insecure = true`, in which
+case the password crosses the network unencrypted. Across networks, keep the
+loopback bind and publish it through Tailscale, an SSH tunnel or a TLS reverse
+proxy, or listen with TLS on a forwarded port, then set
 `[remote] url` to the address the phone should open; a Cloudflare Tunnel to
 `http://127.0.0.1:8765` works as is. On iPhone, Safari's **Share → Add to Home
 Screen** installs the client as an app (it asks for the password once more);

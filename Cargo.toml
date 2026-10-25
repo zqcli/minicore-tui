@@ -14,16 +14,20 @@ futures-util = { version = "0.3", default-features = false, features = ["std", "
 getrandom = "0.2"
 httparse = "1"
 sha2 = "0.10"
+socket2 = "0.6"
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
 # The Agent is built in and runs as this executable's `agent` subcommand.
 minicore-agent = { git = "https://github.com/zqcli/minicore-agent", tag = "v0.8.0", version = "0.8.0" }
 jiff = { version = "0.2", default-features = false, features = ["std", "tz-system", "tzdb-zoneinfo", "tzdb-concatenated", "tzdb-bundle-platform"] }
 pulldown-cmark = { version = "0.13", default-features = false }
 ratatui = { version = "0.30", default-features = false, features = ["crossterm"] }
+# ring, not aws-lc: aws-lc-sys needs cmake and nasm and breaks cross builds.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 tokio = { version = "1", features = ["rt", "macros", "sync", "time", "io-util", "process", "signal", "net"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 toml = "1"
 toml_edit = "0.25"
 unicode-segmentation = "1"
@@ -33,6 +37,7 @@ unicode-width = "0.2"
 clipboard-win = "5"
 
 [dev-dependencies]
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring"] }
 tempfile = "3"
 tokio = { version = "1", features = ["test-util"] }
 

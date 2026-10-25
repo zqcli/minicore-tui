@@ -64,6 +64,10 @@ impl App {
         if let Some(text) = self.session.as_mut().and_then(Session::recall_follow_ups) {
             self.restore_draft(&text);
         }
+        for (address, reason) in &bound.skipped {
+            let text = format!("Remote: not listening on {address} ({reason})");
+            self.notice(NoticeLevel::Info, text);
+        }
         self.remote.start(bound, self.tx.clone());
         self.overlay = Overlay::None;
     }

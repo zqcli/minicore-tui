@@ -1178,6 +1178,10 @@ fn listening(app: &mut App) {
     auth.set_password(Some("k7mq-x2pa-n9dt")).expect("password");
     app.remote.auth = Some(std::sync::Arc::new(std::sync::Mutex::new(auth)));
     app.remote.url = Some("http://192.168.20.207:8765".into());
+    app.remote.listening = vec![
+        "0.0.0.0:8765".parse().expect("address"),
+        "[::]:8765".parse().expect("address"),
+    ];
 }
 
 /// Admits phone `name`, connected since `at` (UTC).
@@ -1267,6 +1271,20 @@ fn the_remote_status_screen_shows_the_phone_the_work_the_queue_and_refused_sign_
 }
 
 #[test]
+fn the_remote_status_screen_marks_listening_addresses_served_over_tls() {
+    let mut app = app();
+    listening(&mut app);
+    app.remote.tls = true;
+    let screen = render(&mut app, 80, 24);
+    assert!(
+        screen
+            .lines()
+            .any(|line| line == "    Listening  0.0.0.0:8765 · [::]:8765 · TLS"),
+        "{screen}"
+    );
+}
+
+#[test]
 fn a_narrow_remote_status_screen_cuts_values_and_keeps_labels() {
     let mut app = app();
     conversation(&mut app);
@@ -1274,6 +1292,7 @@ fn a_narrow_remote_status_screen_cuts_values_and_keeps_labels() {
     let screen = render(&mut app, 44, 24);
     for label in [
         "Address",
+        "Listening",
         "Password",
         "Phones",
         "Session",

@@ -338,10 +338,11 @@ mod tests {
         let (tx, _rx) = mpsc::unbounded_channel();
         let (fake, mut app) = crate::testing::FakeAgent::start(tx);
         app.remote.config = Some(crate::config::Remote {
-            bind: "127.0.0.1:0".parse().unwrap(),
+            bind: vec!["127.0.0.1:0".parse().unwrap()],
             url: None,
             roots: vec![app.workspace.clone()],
             allow_insecure: false,
+            tls: None,
         });
         app.session = Some(crate::app::Session::new(
             serde_json::from_value(crate::testing::session_info("s1")).unwrap(),
@@ -492,10 +493,11 @@ mod tests {
             .block_on(async {
                 let (_fake, mut app) = connected_app();
                 app.remote.config = Some(crate::config::Remote {
-                    bind: "127.0.0.1:0".parse().unwrap(),
+                    bind: vec!["127.0.0.1:0".parse().unwrap()],
                     url: None,
                     roots: vec![app.workspace.clone()],
                     allow_insecure: false,
+                    tls: None,
                 });
                 for i in 0..500 {
                     let mut info = crate::testing::session_info(&format!("s{i}"));
@@ -551,10 +553,11 @@ mod tests {
         let (_fake, mut app) = crate::testing::FakeAgent::start(tx);
         app.workspace = std::path::PathBuf::from(r"\\?\C:\work");
         app.remote.config = Some(crate::config::Remote {
-            bind: "127.0.0.1:0".parse().unwrap(),
+            bind: vec!["127.0.0.1:0".parse().unwrap()],
             url: None,
             roots: vec![app.workspace.clone()],
             allow_insecure: false,
+            tls: None,
         });
         let mut info = crate::testing::session_info("s1");
         info["workspace"] = json!(app.workspace);
@@ -576,10 +579,11 @@ mod tests {
         let (tx, _rx) = mpsc::unbounded_channel();
         let (_fake, mut app) = crate::testing::FakeAgent::start(tx);
         app.remote.config = Some(crate::config::Remote {
-            bind: "127.0.0.1:0".parse().unwrap(),
+            bind: vec!["127.0.0.1:0".parse().unwrap()],
             url: None,
             roots: vec![app.workspace.clone()],
             allow_insecure: false,
+            tls: None,
         });
         let mut view = View::default();
         assert_eq!(sync(&mut view, &mut app)[0]["t"], "snapshot");

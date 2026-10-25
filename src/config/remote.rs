@@ -1,7 +1,7 @@
 //! Validated listener settings and directory-picker roots.
 
-use std::net::{Ipv4Addr, SocketAddr};
-use std::path::PathBuf;
+use std::net::SocketAddr;
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 use toml::Spanned;
@@ -10,19 +10,53 @@ use super::{ConfigError, Source};
 
 #[derive(Clone, Debug)]
 pub struct Remote {
-    pub bind: SocketAddr,
+    /// Addresses to listen on, in configured order.
+    pub bind: Vec<SocketAddr>,
     pub url: Option<String>,
     pub roots: Vec<PathBuf>,
     pub allow_insecure: bool,
+    /// Set when `tls = true`; the files parsed when the settings loaded.
+    pub tls: Option<Tls>,
+}
+
+/// The expanded paths of the PEM certificate chain and private key.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Tls {
+    pub cert: PathBuf,
+    pub key: PathBuf,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum Bind {
+    One(String),
+    Many(Vec<String>),
 }
 
 #[derive(Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub(super) struct RemoteSection {
-    bind: Option<Spanned<String>>,
+    bind: Option<Spanned<Bind>>,
     url: Option<Spanned<String>>,
     roots: Option<Spanned<Vec<String>>>,
     allow_insecure: bool,
+    tls: Option<Spanned<bool>>,
+    tls_cert: Option<Spanned<String>>,
+    tls_key: Option<Spanned<String>>,
+}
+
+/// `value` with a leading `~` replaced by `home`; `None` when that needs an unset home.
+fn expand(value: &str, home: Option<&Path>) -> Option<PathBuf> {
+    if value == "~" {
+        return home.map(Path::to_path_buf);
+    }
+    match value
+        .strip_prefix("~/")
+        .or_else(|| value.strip_prefix("~\\"))
+    {
+        Some(rest) => home.map(|home| home.join(rest)),
+        None => Some(PathBuf::from(value)),
+    }
 }
 
 impl RemoteSection {
@@ -45,19 +79,38 @@ impl RemoteSection {
             )
         };
         let bind_span = self.bind.as_ref().map(Spanned::span);
-        let bind = match &self.bind {
-            Some(value) => value
-                .get_ref()
-                .parse::<SocketAddr>()
-                .map_err(|cause| error("bind", bind_span.clone(), cause.to_string()))?,
-            None => SocketAddr::from((Ipv4Addr::LOCALHOST, 8765)),
+        let tls_on = self.tls.as_ref().is_some_and(|tls| *tls.get_ref());
+        let defaults = ["127.0.0.1:8765".to_owned(), "[::1]:8765".to_owned()];
+        let entries = match self.bind.as_ref().map(Spanned::get_ref) {
+            Some(Bind::One(value)) => std::slice::from_ref(value),
+            Some(Bind::Many(values)) => values.as_slice(),
+            None => &defaults,
         };
-        if !bind.ip().is_loopback() && !self.allow_insecure {
-            return Err(error(
-                "bind",
-                bind_span,
-                "a non-loopback bind sends traffic unencrypted; set allow_insecure = true".into(),
-            ));
+        if entries.is_empty() {
+            return Err(error("bind", bind_span, "must not be empty".into()));
+        }
+        let mut bind = Vec::new();
+        for value in entries {
+            let address = value
+                .parse::<SocketAddr>()
+                .map_err(|cause| error("bind", bind_span.clone(), format!("{value:?}: {cause}")))?;
+            if bind.contains(&address) {
+                return Err(error(
+                    "bind",
+                    bind_span.clone(),
+                    format!("{value:?} is listed twice"),
+                ));
+            }
+            if !address.ip().is_loopback() && !tls_on && !self.allow_insecure {
+                return Err(error(
+                    "bind",
+                    bind_span.clone(),
+                    format!(
+                        "{address}: a non-loopback bind sends traffic unencrypted; set tls = true or allow_insecure = true"
+                    ),
+                ));
+            }
+            bind.push(address);
         }
         let url = self.url.as_ref().map(|value| value.get_ref().clone());
         if let Some(value) = &self.url {
@@ -71,39 +124,22 @@ impl RemoteSection {
             }
         }
         let roots_span = self.roots.as_ref().map(Spanned::span);
-        let home = || {
-            home.clone().ok_or_else(|| {
-                error(
-                    "roots",
-                    roots_span.clone(),
-                    "user home directory is not set".into(),
-                )
-            })
+        let home = home.as_deref();
+        let expanded = |key: &str, span: Option<std::ops::Range<usize>>, value: &str| {
+            expand(value, home)
+                .ok_or_else(|| error(key, span, "user home directory is not set".into()))
         };
-        let paths = match &self.roots {
-            Some(values) => {
-                if values.get_ref().is_empty() {
-                    return Err(error("roots", roots_span, "must not be empty".into()));
-                }
-                values
-                    .get_ref()
-                    .iter()
-                    .map(|value| {
-                        if value == "~" {
-                            home()
-                        } else if let Some(rest) = value
-                            .strip_prefix("~/")
-                            .or_else(|| value.strip_prefix("~\\"))
-                        {
-                            Ok(home()?.join(rest))
-                        } else {
-                            Ok(PathBuf::from(value))
-                        }
-                    })
-                    .collect::<Result<Vec<_>, ConfigError>>()?
-            }
-            None => vec![home()?],
+        let roots = match &self.roots {
+            Some(values) => values.get_ref().as_slice(),
+            None => &["~".to_owned()],
         };
+        if roots.is_empty() {
+            return Err(error("roots", roots_span, "must not be empty".into()));
+        }
+        let paths = roots
+            .iter()
+            .map(|value| expanded("roots", roots_span.clone(), value))
+            .collect::<Result<Vec<_>, ConfigError>>()?;
         let roots = paths
             .into_iter()
             .map(|path| {
@@ -124,11 +160,31 @@ impl RemoteSection {
                 Ok(canonical)
             })
             .collect::<Result<Vec<_>, ConfigError>>()?;
+        let tls = match (&self.tls_cert, &self.tls_key) {
+            // Paths may stay while TLS is off, so the switch is one line.
+            _ if !tls_on => None,
+            (Some(cert), Some(key)) => {
+                let tls = Tls {
+                    cert: expanded("tls_cert", Some(cert.span()), cert.get_ref())?,
+                    key: expanded("tls_key", Some(key.span()), key.get_ref())?,
+                };
+                crate::remote::tls::load(&tls.cert, &tls.key).map_err(|(name, reason)| {
+                    let span = if name == "tls_cert" { cert } else { key }.span();
+                    error(name, Some(span), reason)
+                })?;
+                Some(tls)
+            }
+            _ => {
+                let span = self.tls.as_ref().map(Spanned::span);
+                return Err(error("tls", span, "needs tls_cert and tls_key".into()));
+            }
+        };
         Ok(Remote {
             bind,
             url,
             roots,
             allow_insecure: self.allow_insecure,
+            tls,
         })
     }
 }
@@ -153,27 +209,142 @@ mod tests {
     }
 
     #[test]
-    fn omitted_settings_restrict_the_listener_and_roots_to_local_defaults() {
+    fn omitted_settings_listen_on_both_loopbacks_and_root_at_home() {
         let home = tempfile::tempdir().unwrap();
         let config = build("", home.path()).unwrap();
-        assert_eq!(config.bind.to_string(), "127.0.0.1:8765");
+        let bind: Vec<_> = config.bind.iter().map(ToString::to_string).collect();
+        assert_eq!(bind, ["127.0.0.1:8765", "[::1]:8765"]);
         assert_eq!(config.roots, [home.path().canonicalize().unwrap()]);
         assert!(config.url.is_none());
         assert!(!config.allow_insecure);
     }
 
     #[test]
+    fn bind_takes_one_address_or_a_list_in_order() {
+        let home = tempfile::tempdir().unwrap();
+        for (text, expected) in [
+            ("bind = '[::1]:9000'", vec!["[::1]:9000"]),
+            (
+                "bind = ['[::1]:9000', '127.0.0.1:9000']",
+                vec!["[::1]:9000", "127.0.0.1:9000"],
+            ),
+        ] {
+            let bind = build(text, home.path()).unwrap().bind;
+            let bind: Vec<_> = bind.iter().map(ToString::to_string).collect();
+            assert_eq!(bind, expected, "{text}");
+        }
+    }
+
+    #[test]
+    fn empty_unparsable_and_duplicate_bind_lists_are_errors_at_the_bind_line() {
+        let home = tempfile::tempdir().unwrap();
+        for (text, reason) in [
+            ("bind = []", "must not be empty"),
+            (
+                "bind = ['127.0.0.1:1', 'x']",
+                "\"x\": invalid socket address syntax",
+            ),
+            (
+                "bind = ['127.0.0.1:1', '127.0.0.1:1']",
+                "\"127.0.0.1:1\" is listed twice",
+            ),
+        ] {
+            assert_eq!(
+                build(text, home.path()).unwrap_err().to_string(),
+                format!("config.toml:2: [remote] bind: {reason}")
+            );
+        }
+    }
+
+    #[test]
     fn public_listeners_require_explicit_consent_at_the_bind_line() {
         let home = tempfile::tempdir().unwrap();
-        let error = build("bind = '0.0.0.0:8765'", home.path())
+        let error = build("bind = ['127.0.0.1:8765', '[::]:8765']", home.path())
             .unwrap_err()
             .to_string();
         assert_eq!(
             error,
-            "config.toml:2: [remote] bind: a non-loopback bind sends traffic unencrypted; set allow_insecure = true"
+            "config.toml:2: [remote] bind: [::]:8765: a non-loopback bind sends traffic unencrypted; set tls = true or allow_insecure = true"
         );
-        assert!(build("bind = '[::]:8765'\nallow_insecure = true", home.path()).is_ok());
+        assert!(build("bind = '0.0.0.0:8765'\nallow_insecure = true", home.path()).is_ok());
         assert!(build("bind = '[::1]:8765'", home.path()).is_ok());
+    }
+
+    #[test]
+    fn tls_needs_both_files_and_keeps_their_expanded_paths() {
+        let home = tempfile::tempdir().unwrap();
+        crate::remote::tls::self_signed(home.path(), "server");
+        for text in ["tls = true", "tls = true\ntls_cert = '~/server.crt'"] {
+            assert_eq!(
+                build(text, home.path()).unwrap_err().to_string(),
+                "config.toml:2: [remote] tls: needs tls_cert and tls_key"
+            );
+        }
+        let files = "tls_cert = '~/server.crt'\ntls_key = '~/server.key'";
+        let config = build(
+            &format!("bind = '0.0.0.0:8765'\ntls = true\n{files}"),
+            home.path(),
+        )
+        .unwrap();
+        assert_eq!(
+            config.tls,
+            Some(Tls {
+                cert: home.path().join("server.crt"),
+                key: home.path().join("server.key"),
+            })
+        );
+        let off = "tls = false\ntls_cert = '~/missing'\ntls_key = '~/missing'";
+        assert_eq!(build(off, home.path()).unwrap().tls, None);
+    }
+
+    #[test]
+    fn unreadable_unparsable_and_mismatched_tls_files_name_their_key_line_and_path() {
+        let home = tempfile::tempdir().unwrap();
+        let (cert, key) = crate::remote::tls::self_signed(home.path(), "server");
+        let (_, other_key) = crate::remote::tls::self_signed(home.path(), "other");
+        std::fs::write(home.path().join("text"), "not a certificate").unwrap();
+        let missing = std::fs::read(home.path().join("missing")).unwrap_err();
+        for (cert_file, key_file, error) in [
+            (
+                "missing",
+                "server.key",
+                format!(
+                    "3: [remote] tls_cert: {}: I/O error: {missing}",
+                    home.path().join("missing").display()
+                ),
+            ),
+            (
+                "text",
+                "server.key",
+                format!(
+                    "3: [remote] tls_cert: {}: no PEM certificate found",
+                    home.path().join("text").display()
+                ),
+            ),
+            (
+                "server.crt",
+                "text",
+                format!(
+                    "4: [remote] tls_key: {}: no items found",
+                    home.path().join("text").display()
+                ),
+            ),
+            (
+                "server.crt",
+                "other.key",
+                format!(
+                    "4: [remote] tls_key: {}: does not match the certificate",
+                    other_key.display()
+                ),
+            ),
+        ] {
+            let text = format!("tls = true\ntls_cert = '~/{cert_file}'\ntls_key = '~/{key_file}'");
+            assert_eq!(
+                build(&text, home.path()).unwrap_err().to_string(),
+                format!("config.toml:{error}")
+            );
+        }
+        assert!(crate::remote::tls::load(&cert, &key).is_ok());
     }
 
     #[test]
