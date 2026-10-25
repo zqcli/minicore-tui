@@ -16,6 +16,17 @@ use crate::remote::{
 pub const REMOTE_FLASH: &str = "Remote control is on · /remote off to take back";
 
 impl App {
+    pub fn sync_remote(&mut self) {
+        if self.remote.connection.is_none() {
+            return;
+        }
+        let mut view = std::mem::take(&mut self.remote.view);
+        for message in view.sync(self) {
+            self.remote.send(message);
+        }
+        self.remote.view = view;
+    }
+
     pub fn local_allowed(&self, action: &Action) -> bool {
         !self.remote.active()
             || matches!(

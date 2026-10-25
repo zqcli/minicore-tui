@@ -355,6 +355,7 @@ async fn run() -> i32 {
             }
         }
 
+        app.sync_remote();
         if frames.wanted() && guard.is_active() && tokio::time::Instant::now() >= next_frame {
             let started = Instant::now();
             if let Err(error) = guard.draw(|frame| minicore_tui::ui::draw(frame, &mut app)) {

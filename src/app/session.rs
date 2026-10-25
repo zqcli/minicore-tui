@@ -981,6 +981,29 @@ pub fn auto_title(prompt: &str) -> Option<String> {
     })
 }
 
+pub(crate) fn input_budget(context: Option<&SessionContext>) -> Option<u64> {
+    context?
+        .budget
+        .as_ref()?
+        .input_budget_tokens
+        .filter(|budget| *budget > 0)
+}
+
+/// The last reported context usage as a percentage of its input budget or model window.
+pub fn context_percent(session: &Session) -> Option<f64> {
+    let usage = session.presentation.as_ref()?.context.as_ref()?;
+    let tokens = usage.tokens?;
+    match input_budget(session.context.as_ref()) {
+        Some(budget) => Some(tokens as f64 / budget as f64 * 100.0),
+        None => usage.percent.or_else(|| {
+            usage
+                .window
+                .filter(|window| *window > 0)
+                .map(|window| tokens as f64 / window as f64 * 100.0)
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

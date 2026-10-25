@@ -55,6 +55,73 @@ fn config(root: std::path::PathBuf) -> crate::config::Remote {
     }
 }
 
+#[tokio::test]
+async fn a_real_phone_pairs_submits_through_the_agent_and_receives_the_user_block() {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.fake.script("turn.send", json!({"turn":turn("l1")}));
+    h.fake.script_held("turn.wait", waited("l1", completed()));
+    let root = tempfile::tempdir().unwrap();
+    let config = config(root.path().canonicalize().unwrap());
+    let bound = Bound::bind(&config, root.path().join("remote-devices.json"))
+        .await
+        .unwrap();
+    let address = bound.listener.local_addr().unwrap();
+    let code = bound.auth.lock().unwrap().pairing.code.clone();
+    h.app.remote.config = Some(config);
+    h.app.enter_remote(bound);
+    h.app.composer.set_text("untouched");
+    let client = tokio::spawn(async move {
+        let stream = tokio::net::TcpStream::connect(address).await.unwrap();
+        let (mut socket, _) = tokio_tungstenite::client_async(format!("ws://{address}/ws"), stream)
+            .await
+            .unwrap();
+        socket
+            .send(Message::Text(
+                json!({"t":"pair", "v":1, "code":code, "device":"test phone"})
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .unwrap();
+        for kind in ["paired", "welcome", "snapshot"] {
+            let reply: Value =
+                serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap())
+                    .unwrap();
+            assert_eq!(reply["t"], kind);
+        }
+        socket
+            .send(Message::Text(
+                json!({"t":"intent", "id":"send", "kind":"submit", "text":"real phone text"})
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .unwrap();
+        loop {
+            let reply: Value =
+                serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap())
+                    .unwrap();
+            if reply["t"] == "blocks" {
+                assert_eq!(reply["upserts"][0]["block"]["text"], "real phone text");
+                break;
+            }
+        }
+    });
+    h.until(|app| app.remote.connection.is_some()).await;
+    h.app.sync_remote();
+    h.until(|app| app.is_busy()).await;
+    h.app.sync_remote();
+    tokio::time::timeout(std::time::Duration::from_secs(5), client)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(h.sends(), ["real phone text"]);
+    assert_eq!(h.app.composer.text(), "untouched");
+    h.action(Action::Remote("off".into()));
+}
+
 #[tokio::test(start_paused = true)]
 async fn local_submit_is_refused_but_phone_submit_preserves_the_local_draft() {
     let mut h = Harness::opened(display_read(0, 0)).await;

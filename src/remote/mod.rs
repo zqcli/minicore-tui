@@ -2,6 +2,7 @@
 
 pub mod auth;
 pub mod server;
+pub mod view;
 pub mod wire;
 
 use std::path::PathBuf;
@@ -90,6 +91,7 @@ impl Bound {
 
 #[derive(Default)]
 pub struct Remote {
+    pub view: view::View,
     pub mode: RemoteMode,
     pub connection: Option<Connection>,
     pub config: Option<crate::config::Remote>,
