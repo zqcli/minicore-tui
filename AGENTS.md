@@ -13,7 +13,10 @@ into the same executable: the TUI starts itself as `minicore-tui agent` in one
 child process and talks to it over stdio NDJSON JSON-RPC (Protocol v1). The RPC
 contract is the only interface; the only Agent Rust API used is
 `minicore_agent::cli::run` for that subcommand. The TUI never reads the Agent
-store or the workspace, runs no tool, calls no provider and holds no credential. Its look
+store or the workspace, runs no tool, calls no provider and holds no credential.
+The one exception is remote mode ([docs/design-remote.md](docs/design-remote.md)):
+it lists host directories under the configured roots and creates folders for the
+phone's directory picker, and never reads file contents. Its look
 follows pi's rail UI: rails, tinted cards, a dock with the Working line, the
 editor and a footer.
 
@@ -32,6 +35,7 @@ backend repository only after confirming that is where the behavior belongs.
 | `src/config/` | The TUI directory: `config.toml`, `models.toml`, prompts, scaffolding, the composed Agent config |
 | `src/rpc.rs`, `src/protocol/` | Agent child and JSON-RPC client; serde DTOs and constants only |
 | `src/app/` | The reducer: all mutable state, keys (`keys/`), mouse, selection, composer, overlays, async tasks |
+| `src/remote/` | Remote mode: listener, web client, pairing, the phone protocol, the projection and host directories |
 | `src/transcript/` | Blocks with revisions, tool calls, history mapping, the per-block layout cache |
 | `src/ui/` | Drawing from `&App`: transcript, blocks, rails, markdown, dock, sheets, views, theme |
 | `src/terminal.rs`, `src/terminal/` | Terminal guard and frame drawing; Windows paste decoding (`input.rs`) and frame batching (`windows_frames.rs`) |
