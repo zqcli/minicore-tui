@@ -674,7 +674,7 @@ globalThis.MC = (() => {
       if (k === 'edit' || k === 'read') n[k].add(b.detail || b.call_id); else n[k]++;
     }
     const parts = [
-      n.cmd && 'ran ' + plural(n.cmd, 'command'), n.edit.size && 'edited ' + plural(n.edit.size, 'file'),
+      n.cmd && (tools.some(b => b.state === 'running' || b.state === 'pending') ? 'running ' : 'ran ') + plural(n.cmd, 'command'), n.edit.size && 'edited ' + plural(n.edit.size, 'file'),
       n.read.size && 'read ' + plural(n.read.size, 'file'), n.search && 'ran ' + plural(n.search, 'search', 'searches'),
       n.web && 'fetched ' + plural(n.web, 'page'), n.other && 'used ' + plural(n.other, 'tool'),
     ].filter(Boolean);

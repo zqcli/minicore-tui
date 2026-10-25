@@ -321,6 +321,7 @@ test('elapsed status line and summaries read like the TUI', () => {
   const tool = (name, detail) => ({ type: 'tool', call_id: name + detail, name, detail });
   assert.equal(MC.activitySummary([tool('bash', 'a'), tool('bash', 'b'), tool('bash', 'c'), tool('edit', 'x.rs'), tool('apply_patch', 'y.rs'), tool('edit', 'x.rs')]),
     'Ran 3 commands · edited 2 files');
+  assert.equal(MC.activitySummary([{ name: 'bash', state: 'running', call_id: 'c' }]), 'Running 1 command');
   assert.equal(MC.activitySummary([tool('read', 'a'), tool('grep', 'b')]), 'Read 1 file · ran 1 search');
   assert.equal(MC.diffClass('+added'), 'add');
   assert.equal(MC.diffClass('-gone'), 'del');
