@@ -31,11 +31,17 @@ pub struct Dock {
 /// The dock for a band `width` cells wide on a terminal `height` rows tall.
 pub fn dock(app: &App, styles: Styles, width: u16, height: u16) -> Dock {
     let mut above = Vec::new();
-    if let Some(session) = app.session.as_ref().filter(|s| !s.queue.is_empty()) {
+    // The remote status screen shows the work and the queue instead.
+    let local = !app.remote.active();
+    if let Some(session) = app
+        .session
+        .as_ref()
+        .filter(|s| local && !s.queue.is_empty())
+    {
         above.push(Line::default());
         above.extend(queued_rows(session, styles, width));
     }
-    if let Some(line) = working_line(app, styles, width) {
+    if local && let Some(line) = working_line(app, styles, width) {
         above.push(Line::default());
         above.push(line);
     }
@@ -146,8 +152,6 @@ fn working_line(app: &App, styles: Styles, width: u16) -> Option<Line<'static>> 
         .and_then(|session| session.compaction_label());
     let text = if let Some(label) = &compaction {
         label.as_str()
-    } else if app.has_interaction() && app.remote.active() {
-        "Waiting for approval · answer on the phone"
     } else if app.has_interaction() {
         // Esc answers the prompt with a denial; it does not cancel the turn.
         "Waiting for approval (esc to deny)"

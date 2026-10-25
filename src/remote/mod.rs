@@ -109,8 +109,8 @@ pub struct Remote {
     /// Wrong passwords since remote control started or the password changed.
     pub failed_logins: u32,
     pub paused_until: Option<tokio::time::Instant>,
-    /// Unix milliseconds when the connected phone was admitted.
-    pub connected_at: u64,
+    /// When the connected phone was admitted.
+    pub connected_at: jiff::Timestamp,
     stop: Option<oneshot::Sender<()>>,
     server_task: Option<tokio::task::JoinHandle<()>>,
 }

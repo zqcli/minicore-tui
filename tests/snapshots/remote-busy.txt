@@ -1,0 +1,24 @@
+  Remote control                                              ● phone connected
+
+    Address    http://192.168.20.207:8765
+    Password   k7mq-x2pa-n9dt
+    Phone      iPhone Safari · connected at 14:02
+
+    Session    Cache the parser
+    Workspace  /work/minicore-tui
+    Model      gpt-6-luna · max
+    Now        ⠋ Running bash · cargo test --workspace · 0s
+    Queue      2 messages waiting
+    Sign-in    3 wrong passwords · paused for 30 s
+
+    /remote off take back control · esc stop the turn
+
+
+
+
+
+ ▎
+ ▎Remote control is on · /remote off to take back
+ ▎
+ ▎
+ ▸ minicore-tui · gpt 6 luna · max · 0m · queued · remote · iPhone Safari

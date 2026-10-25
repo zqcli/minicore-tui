@@ -565,3 +565,26 @@ async fn refused_sign_ins_are_counted_and_announced() {
         "Remote: sign-in paused for 30 s"
     );
 }
+
+#[tokio::test(start_paused = true)]
+async fn the_status_screen_neither_scrolls_nor_selects() {
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.app.remote.url = Some("http://localhost:8765".into());
+    for kind in [
+        MouseEventKind::ScrollUp,
+        MouseEventKind::Down(MouseButton::Left),
+        MouseEventKind::Drag(MouseButton::Left),
+        MouseEventKind::Up(MouseButton::Left),
+    ] {
+        let mouse = MouseEvent {
+            kind,
+            column: 5,
+            row: 2,
+            modifiers: KeyModifiers::NONE,
+        };
+        assert!(!h.app.on_mouse(mouse), "{kind:?} redraws nothing");
+    }
+    assert!(h.app.press.is_none() && h.app.selection.is_none());
+    assert_eq!(h.app.scroll, crate::app::Scroll::Follow);
+}

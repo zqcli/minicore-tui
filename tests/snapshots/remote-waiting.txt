@@ -1,0 +1,24 @@
+  Remote control                                          ○ waiting for a phone
+
+    Address    http://192.168.20.207:8765
+    Password   k7mq-x2pa-n9dt
+    Phone      none yet · open the address on your phone and enter the password
+
+    Session    New session · starts with the phone's first message
+    Workspace  /work/minicore-tui
+    Model      gpt-6-luna · max
+    Now        Idle
+
+    /remote off take back control · /remote password new password
+
+
+
+
+
+
+
+ ▎
+ ▎Remote control is on · /remote off to take back
+ ▎
+ ▎
+ ▸ minicore-tui · gpt 6 luna · max · remote

@@ -167,7 +167,7 @@ impl App {
                 if accepted.send(true).is_err() {
                     return;
                 }
-                self.remote.connected_at = protocol::stamp::now_millis();
+                self.remote.connected_at = jiff::Timestamp::now();
                 if let Some(old) = self.remote.connection.replace(connection) {
                     old.bye("replaced");
                 }

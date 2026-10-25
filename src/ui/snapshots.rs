@@ -1171,12 +1171,16 @@ fn an_approval_shows_the_tool_its_target_and_its_input() {
     );
 }
 
-/// Remote control listening at a fixed address.
+/// Remote control listening at a fixed address with a fixed password.
 fn listening(app: &mut App) {
-    app.remote.url = Some("http://192.168.1.20:8765".into());
+    let dir = tempfile::tempdir().expect("dir");
+    let mut auth = crate::remote::auth::Auth::load(dir.path().join("remote.json")).expect("auth");
+    auth.set_password(Some("k7mq-x2pa-n9dt")).expect("password");
+    app.remote.auth = Some(std::sync::Arc::new(std::sync::Mutex::new(auth)));
+    app.remote.url = Some("http://192.168.20.207:8765".into());
 }
 
-/// A phone is in control.
+/// A phone in control since 14:02.
 fn connected(app: &mut App) {
     listening(app);
     let (outbound, _output) = mpsc::channel(1);
@@ -1192,19 +1196,164 @@ fn connected(app: &mut App) {
         outbound,
         close,
     });
+    app.remote.connected_at = "2026-10-25T14:02:00Z".parse().expect("time");
+}
+
+/// A turn running `bash` in the resident session, its spinner on its first frame.
+fn running_bash(app: &mut App) {
+    let session = app.session.as_mut().expect("session");
+    let mut live = crate::app::LiveTurn::new(
+        TurnRef {
+            session_id: "ses_0123456789abcdef".into(),
+            loop_id: "loop_2".into(),
+        },
+        session.transcript.len(),
+    );
+    live.running_tool = Some(("bash".into(), "cargo test --workspace".into()));
+    session.live = Some(live);
+    app.started = std::time::Instant::now();
 }
 
 #[test]
-fn a_connected_phone_freezes_the_editor_and_marks_the_footer() {
+fn the_remote_status_screen_waits_for_a_phone_on_a_draft() {
+    let mut app = app();
+    app.session = None;
+    app.profiles = vec![
+        serde_json::from_value(
+            serde_json::json!({"id": "coding", "model": "gpt-6-luna", "reasoning": "max"}),
+        )
+        .expect("profile"),
+    ];
+    app.default_profile = Some("coding".into());
+    listening(&mut app);
+    snapshot(
+        "tests/snapshots/remote-waiting.txt",
+        include_str!("../../tests/snapshots/remote-waiting.txt"),
+        render(&mut app, 80, 24),
+    );
+}
+
+#[test]
+fn the_remote_status_screen_shows_the_phone_the_work_the_queue_and_refused_sign_ins() {
     let mut app = app();
     conversation(&mut app);
     connected(&mut app);
-    let screen = render(&mut app, 80, 20);
+    running_bash(&mut app);
+    let session = app.session.as_mut().expect("session");
+    for text in ["then update the docs", "and the changelog"] {
+        session.queue.push(crate::app::Queued {
+            text: text.into(),
+            kind: crate::app::QueuedKind::Follow,
+            at: None,
+        });
+    }
+    app.remote.failed_logins = 3;
+    app.remote.paused_until =
+        Some(tokio::time::Instant::now() + std::time::Duration::from_secs(30));
     snapshot(
-        "tests/snapshots/remote-connected.txt",
-        include_str!("../../tests/snapshots/remote-connected.txt"),
-        screen,
+        "tests/snapshots/remote-busy.txt",
+        include_str!("../../tests/snapshots/remote-busy.txt"),
+        render(&mut app, 80, 24),
     );
+}
+
+#[test]
+fn a_narrow_remote_status_screen_cuts_values_and_keeps_labels() {
+    let mut app = app();
+    conversation(&mut app);
+    listening(&mut app);
+    let screen = render(&mut app, 44, 24);
+    for label in [
+        "Address",
+        "Password",
+        "Phone",
+        "Session",
+        "Workspace",
+        "Model",
+        "Now",
+    ] {
+        assert!(
+            screen
+                .lines()
+                .any(|line| line.starts_with(&format!("    {label}"))),
+            "{label}:\n{screen}"
+        );
+    }
+    let phone = screen
+        .lines()
+        .find(|line| line.contains("Phone"))
+        .expect("phone row");
+    assert!(
+        phone.contains("none yet · open the") && phone.ends_with('…'),
+        "{screen}"
+    );
+}
+
+#[test]
+fn a_remote_approval_waits_on_the_phone() {
+    let mut app = app();
+    listening(&mut app);
+    let session = app.session.as_mut().expect("session");
+    let mut call = tool();
+    call.key.tool_call_id = "call_rm".into();
+    call.detail = "rm -rf build".into();
+    call.state = ToolState::Pending;
+    session.transcript.push(Block::Tool(Box::new(call)));
+    session.interaction = Some(crate::app::PendingInteraction {
+        turn: TurnRef {
+            session_id: "ses_0123456789abcdef".into(),
+            loop_id: "loop_9".into(),
+        },
+        interaction_id: "i1".into(),
+        tool_call_id: "call_rm".into(),
+        tool_name: "bash".into(),
+        prompt: "Allow tool `bash` for this call?".into(),
+        kind: crate::app::InteractionKind::Approval,
+        selected: 0,
+    });
+    let screen = render(&mut app, 80, 24);
+    assert!(
+        screen.contains("Waiting for approval on the phone · bash · rm -rf build"),
+        "{screen}"
+    );
+    assert!(!screen.contains("Allow once"), "{screen}");
+    assert!(!screen.contains("esc to deny"), "{screen}");
+}
+
+#[test]
+fn an_idle_remote_status_screen_reports_the_last_turn() {
+    let mut app = app();
+    conversation(&mut app);
+    listening(&mut app);
+    let screen = render(&mut app, 80, 24);
+    assert!(
+        screen.contains("Now        Idle · last turn completed in 12s"),
+        "{screen}"
+    );
+}
+
+#[test]
+fn a_full_screen_view_draws_over_the_remote_status_screen() {
+    let mut app = app();
+    listening(&mut app);
+    app.overlay = Overlay::Help { scroll: 0 };
+    let screen = render(&mut app, 80, 24);
+    assert!(screen.contains("← Help"), "{screen}");
+    assert!(!screen.contains("Password"), "{screen}");
+}
+
+#[test]
+fn remote_control_hides_the_transcript_until_it_is_turned_off() {
+    let mut app = app();
+    conversation(&mut app);
+    listening(&mut app);
+    let screen = render(&mut app, 80, 24);
+    assert!(screen.contains("Remote control"), "{screen}");
+    assert!(!screen.contains("re-parse the whole message"), "{screen}");
+    app.remote.stop("remote_off");
+    let screen = render(&mut app, 80, 24);
+    assert!(screen.contains("re-parse the whole message"), "{screen}");
+    assert!(!screen.contains("Password"), "{screen}");
 }
 
 #[test]
@@ -1223,29 +1372,4 @@ fn the_remote_footer_mark_gives_way_before_the_rest() {
         narrow.contains("max"),
         "the reasoning level stays: {narrow}"
     );
-}
-
-#[test]
-fn a_remote_approval_says_to_answer_on_the_phone() {
-    let mut app = app();
-    listening(&mut app);
-    let session = app.session.as_mut().expect("session");
-    session.interaction = Some(crate::app::PendingInteraction {
-        turn: TurnRef {
-            session_id: "ses_0123456789abcdef".into(),
-            loop_id: "loop_9".into(),
-        },
-        interaction_id: "i1".into(),
-        tool_call_id: "call_w".into(),
-        tool_name: "write".into(),
-        prompt: "Allow tool `write` for this call?".into(),
-        kind: crate::app::InteractionKind::Approval,
-        selected: 0,
-    });
-    let screen = render(&mut app, 80, 16);
-    assert!(
-        screen.contains("Waiting for approval · answer on the phone"),
-        "{screen}"
-    );
-    assert!(!screen.contains("Allow once"), "{screen}");
 }

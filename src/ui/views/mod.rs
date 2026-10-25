@@ -1,10 +1,11 @@
-//! Full-screen views: diff and help. Each replaces the
-//! transcript area right of its gutter and keeps the footer; the app owns
-//! scrolling and selection.
+//! Full-screen views: diff and help, and the remote status screen. Each
+//! replaces the transcript area right of its gutter and keeps the footer; the
+//! app owns scrolling and selection.
 
 pub mod context;
 pub mod diff;
 pub mod help;
+pub mod remote;
 
 use ratatui::Frame;
 use ratatui::layout::Rect;

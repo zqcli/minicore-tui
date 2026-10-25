@@ -1,6 +1,7 @@
-//! Rendering from `&App`: the transcript or a full-screen view, an optional
-//! the dock below it, where a bottom sheet takes the editor's place. Only the
-//! transcript's layout cache and the rows recorded for copy are written.
+//! Rendering from `&App`: the transcript, the remote status screen or a
+//! full-screen view, then the dock below it, where a bottom sheet takes the
+//! editor's place. Only the transcript's layout cache and the rows recorded
+//! for copy are written.
 
 pub mod blocks;
 pub mod composer;
@@ -71,7 +72,11 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Option<Position> {
         ..area
     };
     if !views::draw(frame, main, app, styles) {
-        transcript::draw(frame, main, app, styles);
+        if app.remote.active() {
+            views::remote::draw(frame, main, app, styles);
+        } else {
+            transcript::draw(frame, main, app, styles);
+        }
     }
     let skip = dock.above.len() - usize::from(above);
     draw_rows(frame, gutter(above_area), &dock.above[skip..]);
