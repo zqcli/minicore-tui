@@ -168,26 +168,31 @@ the name.
 | `/export [path]` | Write the conversation as Markdown; the default is `./minicore-<session>-<date>.md`. |
 | `/theme [dark\|light]` | Switch the palette and save it; without an argument, toggle. |
 | `/reload` | Compose the Agent config again from `config.toml`, `models.toml` and the prompt, reload the Agent and the templates. |
-| `/remote [on\|off\|pair\|status]` | Phone control: open the Remote sheet (status, address, pairing QR code and code), start listening, stop and unfreeze local input, or make a new pairing code. See [Remote mode](#remote-mode). |
+| `/remote [on\|off\|status\|password [text]]` | Phone control: start listening and show the status screen, stop and unfreeze local input, or set a new password (generated, or `<text>` of at least 8 characters), which signs phones out. `/remote` with remote control off says how to start it. See [Remote mode](#remote-mode). |
 | `/help` | Open the help view. |
 | `/quit` | Quit. |
 
 ## Remote mode
 
-While remote control is on (`remote` in the footer, `remote · <device>` with a
-phone connected) the phone sends messages and answers approvals; the keyboard
-cannot. The editor is dimmed and reads `Remote control is on · /remote off to
-take back`, the draft and slash commands still work, and a refused action
-flashes the same text. What stays available:
+While remote control is on, the transcript area is a status screen: the address
+to open on the phone, the password to enter there, the phone in control and when
+it connected, the session, workspace and model, what the Agent is doing now
+(running a tool, waiting for an approval on the phone, compacting, or idle with
+the last turn's outcome), queued messages and refused sign-ins. It is read-only:
+the wheel and clicks over it do nothing. The footer shows `remote`, or
+`remote · <device>` with a phone connected.
+
+The phone sends messages and answers approvals; the keyboard cannot. The editor
+keeps its draft and slash commands, an empty one reads `Remote control is on ·
+/remote off to take back`, and a refused action flashes the same text. What
+stays available:
 
 - `Esc` interrupts a running turn or cancels a compaction.
-- Looking and copying: `/theme`, `/copy` (`Ctrl+X`), `/export`, `F1` help,
-  `/session`, `/context`, `/diff`, the sessions picker (picking is refused) and
-  scrolling.
-- `/remote` opens the Remote sheet (`Esc` closes it); `/remote pair` makes a new
-  code and `/remote off` stops the listener and returns the editor to normal.
-- A pending approval is not drawn as a sheet and takes no keys here; the status
-  line says `Waiting for approval · answer on the phone`.
+- Looking and copying: `/theme`, `/copy` (`Ctrl+X`), `/export`, `F1` help and
+  `/diff` (which draw over the status screen), `/session`, `/context` and the
+  sessions picker (picking is refused).
+- `/remote password [text]` sets a new password; `/remote off` stops the
+  listener, shows the transcript again and returns the editor to normal.
 - Quitting asks twice: `Ctrl+C` or `/quit` flashes `quit again to end it`, and a
   second request within 3 seconds quits.
 

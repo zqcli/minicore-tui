@@ -200,19 +200,27 @@ optionally including hidden names, and can create a single child directory.
 It cannot read file contents, upload, delete or move entries.
 Errors name `config.toml`, the line and the `[remote]` key.
 
-Start with `--remote` or `/remote on`; `/remote` (or `/remote status`) opens the
-Remote sheet. The displayed URL carries the pairing code only in its fragment.
-A code lasts ten minutes, works once and is invalidated after five failed attempts.
-`/remote pair` replaces it while listening; when Off, start with `/remote on` first.
+Start with `--remote` or `/remote on`; the transcript area then shows the
+remote status screen with the address and the password to enter on the phone.
 The default URL is `http://<bind>`; an unspecified bind host is replaced by the
 address the OS selects for LAN routing. Set `url` explicitly when using a tunnel,
 reverse proxy or a machine with multiple networks.
 
-Paired-device names, pairing timestamps and SHA-256 token hashes are stored in
-`<TUI dir>/remote-devices.json`, atomically and with mode 0600 on Unix. Windows
-inherits the directory's permissions; the TUI does not harden Windows ACLs, so
-restrict access to the TUI directory yourself. Plain tokens
-are never stored there. Delete the file and restart remote mode to forget devices.
+The password and the remembered phones are stored in `<TUI dir>/remote.json`,
+atomically and with mode 0600 on Unix. Windows inherits the directory's
+permissions; the TUI does not harden Windows ACLs, so restrict access to the TUI
+directory yourself. The first start of remote mode creates the file with a
+generated password such as `k7mq-x2pa-n9dt`; spaces and dashes do not count when
+it is typed, letter case does. A phone that signs in gets a token and reconnects
+with it later; only SHA-256 token hashes are stored, and at most 20 phones are
+remembered (the oldest is forgotten first). Five wrong passwords in a row pause
+sign-in for 30 seconds, each further five double the pause up to 15 minutes, and
+remembered phones are never paused.
+
+`/remote password` makes a new password and `/remote password <text>` sets one
+(at least 8 characters, spaces and dashes not counted), also while remote mode is
+off. Either forgets every phone and signs out the connected one. Deleting
+`remote.json` forgets every phone and makes a new password at the next start.
 `/remote off` disconnects the phone, stops listening and restores local input;
 a phone disconnect alone leaves remote mode Waiting. A second device is refused,
 while reconnecting with the same token replaces its previous connection.

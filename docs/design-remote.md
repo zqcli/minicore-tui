@@ -115,9 +115,11 @@ line is never written to the prompt history.
   ```
 
   The home directory reads `~`. Values are cut to the width (never wrapped);
-  on a narrow terminal the label column shrinks to the widest label. `Now` uses
-  the same spinner and elapsed format as the Working line and animates only
-  while the TUI already animates (`App::animating`); an idle screen does not tick.
+  the label column is the widest label plus two cells. Hints that do not fit
+  give way whole, from the end. `Now` uses the Working line's spinner and the
+  turn's elapsed whole seconds (`4s`, `3m07s`), and animates only while the TUI
+  already animates (`App::animating`); an idle screen does not tick, so the
+  sign-in pause countdown refreshes with the next frame.
 - The dock in remote mode shows notices, the editor and the footer only: no
   Working line, no queue rows and no approval sheet (the status screen says it).
   The editor keeps its draft and slash input but cannot send; an empty editor

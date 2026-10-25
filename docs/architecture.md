@@ -13,7 +13,7 @@ executable's `agent` subcommand: `main` hands those arguments to
 stdio NDJSON JSON-RPC (Protocol v1) and calls no other Agent API. It never reads the Agent store or
 workspace file contents, runs a tool, calls a provider or keeps provider credentials;
 its two settings files name environment variables, never keys. Remote mode
-validates host directory paths and stores only hashes of paired-device tokens.
+validates host directory paths and stores only hashes of phone tokens.
 
 ## Modules
 
@@ -65,7 +65,8 @@ src/
                 markdown + markdown/stream (incremental renderer), composer (render),
                 status (status line, queue, notice, footer), panel + sheets (the one
                 bottom-sheet style), theme (Palette, Styles),
-                views/{diff, help} (full-screen), views/context (sheet report),
+                views/{diff, help} (full-screen), views/remote (the remote status
+                screen), views/context (sheet report),
                 snapshots and perf_tests (test only)
   terminal.rs   alternate screen, raw mode, paste, mouse, kitty keys, panic hook
   clipboard.rs  pbcopy / xclip / clip with an OSC 52 fallback
@@ -206,6 +207,13 @@ a different device gets `busy`, the same token replaces the old socket with
 `bye replaced`. Connection ids keep old requests and disconnects from affecting
 the replacement. Off and quit send `bye` before closing the listener.
 
+While remote mode is on, `ui::draw` draws `views::remote` (the status screen) in
+the transcript's place unless a full-screen view is open; the transcript layout
+is left untouched and the mouse neither scrolls nor selects there. The dock drops
+the Working line and the queue rows, which the status screen shows. The screen
+arms no timer: its spinner and elapsed time move only while `App::animating`,
+and the sign-in pause countdown refreshes with the next frame.
+
 `on_action` denies local actions by default while remote is active, with an
 explicit allowlist for viewing, copying/exporting, draft editing, theme changes,
 queue recall, quit and remote commands. Command completion checks before clearing
@@ -235,16 +243,17 @@ time belongs to the client. The footer and projection share the pure
 Only connection tasks own network timers: a 10 s HTTP head/first-message limit,
 20 s pings and a 60 s idle cutoff. At most eight unauthenticated connections can
 wait, messages are limited to 1 MiB and each phone's outbound queue to 512
-messages; overflow drops that connection. Only an open Remote sheet with a valid
-pairing code adds countdown/expiry deadlines to the existing `next_expiry` path.
-QR modules are encoded once on code creation, stored in `Remote`, and rendered
-without encoding or mutable UI state. No remote polling timer wakes the main loop.
-Pairing codes expire after ten minutes, are single-use and lock after five failures.
-Pairing candidates are generated before reducer admission but consumed and persisted
-only after acceptance; rejected admission leaves the code available. Shutdown
-invalidates old codes and allows at most 500 ms for `bye` and WebSocket close.
-Device tokens are OS-random; only SHA-256 hashes reach `remote-devices.json`,
-atomically written with Unix mode 0600. The authenticated connection task runs
+messages; overflow drops that connection. No remote polling timer wakes the main
+loop. Shutdown allows at most 500 ms for `bye` and WebSocket close.
+Phones sign in with the password in `remote.json` (generated on first use,
+atomically written with Unix mode 0600); a right password makes an OS-random
+token that is stored as a SHA-256 hash only after the reducer admits the phone,
+so a `busy` refusal stores nothing. Five wrong passwords pause sign-in for 30 s,
+doubling per further five up to 15 min; `hello` tokens are never paused. Each
+refusal reaches the reducer as `RemoteEvent::LoginRefused` for the status screen.
+`/remote password` replaces the password, forgets every phone and signs out the
+connected one with `bye signed_out`; the command line never enters the prompt
+history. The authenticated connection task runs
 directory-picker requests through `remote::fs` using `spawn_blocking`. Its reducer-owned close signal revokes queued
 work and suppresses late replies after replacement or shutdown; filesystem calls
 already running may finish. Session checks share `fs::within` and

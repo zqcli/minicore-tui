@@ -201,23 +201,26 @@ without a report. The TUI never estimates it.
 ## Remote mode
 
 `--remote`, or `/remote on` in a running TUI, lets a phone drive the open session
-from its browser. The TUI shows a sheet with a QR code and a pairing code; scan
-it with the phone's camera (the code is valid for 10 minutes and works once),
-and the phone's page and this screen show the same session. While remote
-control is on, local sending is frozen and the footer shows `remote`;
-`/remote off` takes the keyboard back. Without `--remote` nothing listens.
+from its browser. The transcript area turns into a status screen with an address
+and a password: open the address on the phone and enter the password once; the
+phone remembers the sign-in. The status screen then names the phone and shows
+what the Agent is doing, while the phone shows the conversation. Local sending
+is frozen and the footer shows `remote`; `/remote off` takes the keyboard back
+and shows the transcript again. `/remote password` makes a new password and
+signs phones out. Without `--remote` nothing listens.
 
 The server binds to `127.0.0.1:8765` by default, which only the same machine
-can reach. To use a phone on another network, keep the loopback bind and
+can reach. A phone on the same LAN needs a non-loopback `bind` and
+`allow_insecure = true`, because the TUI has no TLS of its own and the password
+then crosses the network unencrypted. Across networks, keep the loopback bind and
 publish it through Tailscale, an SSH tunnel or a TLS reverse proxy, then set
-`[remote] url` to the address the phone should open. The TUI has no TLS of its
-own, and a non-loopback bind needs `allow_insecure = true`. The `[remote]`
-settings are in [docs/configuration.md](docs/configuration.md) and the protocol
-in [docs/design-remote.md](docs/design-remote.md).
+`[remote] url` to the address the phone should open. The `[remote]` settings are
+in [docs/configuration.md](docs/configuration.md) and the protocol in
+[docs/design-remote.md](docs/design-remote.md).
 
-Whoever controls the session can have the Agent run commands on this machine
-and answers its approvals: pair only your own devices and run `/remote off`
-when done.
+Whoever signs in controls the session, can have the Agent run commands on this
+machine and answers its approvals: keep the password to yourself, change it with
+`/remote password` if it leaks, and run `/remote off` when done.
 
 ## Keys and commands
 

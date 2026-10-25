@@ -4,17 +4,17 @@
 
 - Remote mode: a phone can drive the TUI. `--remote` or `/remote on` starts a
   listener (loopback by default, configured under `[remote]`) that serves a web
-  client; `/remote` shows the address and a QR code with a single-use pairing
-  code. One paired phone controls the open session: it sends messages, steers,
-  queues follow-ups, answers approvals, stops turns, loads older history,
-  switches model and reasoning, opens sessions, and starts new ones in folders it
-  browses (or creates) under the configured roots. Reconnecting shows the current
-  state again; nothing is resent automatically. See `docs/design-remote.md`.
-- While remote control is on, the editor keeps its draft but cannot send
-  (`Remote control is on · /remote off to take back`), the footer shows `remote`
-  or `remote · <device>`, approvals are answered on the phone, Esc still
-  interrupts, queued follow-ups return to the editor, and quitting asks twice.
-  `/remote off` takes control back.
+  client. The phone signs in once with the password shown in the TUI and then
+  controls the open session: it sends messages, steers, queues follow-ups,
+  answers approvals, stops turns, loads older history, switches model and
+  reasoning, opens sessions, and starts new ones in folders it browses (or
+  creates) under the configured roots. See `docs/design-remote.md`.
+- While remote control is on, the TUI shows a status screen instead of the
+  transcript: the address, the password, the phone in control, the session,
+  workspace and model, what the Agent is doing and refused sign-ins. The editor
+  keeps its draft but cannot send, Esc still interrupts, and quitting asks twice.
+  `/remote password` sets a new password and signs phones out; `/remote off`
+  takes control back.
 - Opening or creating a session makes its workspace the one the next new
   session uses.
 

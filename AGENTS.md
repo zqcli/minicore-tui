@@ -35,7 +35,7 @@ backend repository only after confirming that is where the behavior belongs.
 | `src/config/` | The TUI directory: `config.toml`, `models.toml`, prompts, scaffolding, the composed Agent config |
 | `src/rpc.rs`, `src/protocol/` | Agent child and JSON-RPC client; serde DTOs and constants only |
 | `src/app/` | The reducer: all mutable state, keys (`keys/`), mouse, selection, composer, overlays, async tasks |
-| `src/remote/` | Remote mode: listener, web client, pairing, the phone protocol, the projection and host directories |
+| `src/remote/` | Remote mode: listener, web client, password sign-in, the phone protocol, the projection and host directories |
 | `src/transcript/` | Blocks with revisions, tool calls, history mapping, the per-block layout cache |
 | `src/ui/` | Drawing from `&App`: transcript, blocks, rails, markdown, dock, sheets, views, theme |
 | `src/terminal.rs`, `src/terminal/` | Terminal guard and frame drawing; Windows paste decoding (`input.rs`) and frame batching (`windows_frames.rs`) |
