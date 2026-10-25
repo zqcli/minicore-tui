@@ -253,11 +253,15 @@ remembered phones are never paused.
 
 `/remote password` makes a new password and `/remote password <text>` sets one
 (at least 8 characters, spaces and dashes not counted), also while remote mode is
-off. Either forgets every phone and signs out the connected one. Deleting
+off. Either forgets every phone and signs out every connected one. Deleting
 `remote.json` forgets every phone and makes a new password at the next start.
-`/remote off` disconnects the phone, stops listening and restores local input;
-a phone disconnect alone leaves remote mode Waiting. A second device is refused,
-while reconnecting with the same token replaces its previous connection.
+
+Several devices can be connected at once, a phone and a tablet for example, and
+each can drive the session; the status screen lists them and each client shows
+who else is connected. A device connects once: opening the client in a second
+tab, or reconnecting with the same token, replaces its previous connection.
+`/remote off` disconnects every phone, stops listening and restores local input;
+phones disconnecting alone leave remote mode Waiting.
 
 ## Command line
 

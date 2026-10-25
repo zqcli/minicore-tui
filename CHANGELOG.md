@@ -11,11 +11,16 @@
   it browses (or creates) under the configured roots. See
   `docs/design-remote.md`.
 - While remote control is on, the TUI shows a status screen instead of the
-  transcript: the address, the password, the phone in control, the session,
+  transcript: the address, the password, the connected phones, the session,
   workspace and model, what the Agent is doing and refused sign-ins. The editor
   keeps its draft but cannot send, Esc still interrupts, and quitting asks twice.
   `/remote password` sets a new password and signs phones out; `/remote off`
   takes control back.
+- Several devices can use remote control at the same time, a phone and a
+  tablet for example: each signs in once, any of them can send, answer
+  approvals and switch sessions, and each sees who else is connected. Opening
+  the client in a second tab of the same browser takes over that device's
+  connection.
 - The phone client installs as an app (Safari's Share → Add to Home Screen on
   iPhone, Install app on Android and desktop Chromium) and, over HTTPS, opens
   while the computer is unreachable and reconnects when it is back. The browser

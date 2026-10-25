@@ -1,9 +1,9 @@
 # Remote mode design
 
-Remote mode lets a phone drive this TUI instance. The TUI stays the only host:
-it owns the Agent child, serves a small web client and one WebSocket, and turns
-what the phone asks for into the same reducer operations the keyboard uses. The
-Agent and the Runtime do not change.
+Remote mode lets phones drive this TUI instance. The TUI stays the only host:
+it owns the Agent child, serves a small web client and one WebSocket per
+connected device, and turns what a phone asks for into the same reducer
+operations the keyboard uses. The Agent and the Runtime do not change.
 
 This document is the contract for the implementation. Where the code and this
 document disagree after the feature lands, the code wins and this file is fixed.
@@ -16,17 +16,22 @@ document disagree after the feature lands, the code wins and this file is fixed.
   a snapshot on connect, then changed blocks (by block revision) and state
   changes. Turn lifecycle, reconciliation, approvals, follow-ups and titles stay
   in the Rust reducer only.
-- **One controller.** Remote mode is `Off`, `Waiting` (listening, local input
-  frozen) or `Connected` (one phone in control). A second device is refused; a
-  new connection from the *same* device replaces the old one (a phone that lost
-  its network reconnects before the old socket times out).
-- **Same session.** The phone and the TUI always share the resident session.
-  Opening or creating a session from the phone changes it for the TUI too.
+- **Several devices.** Remote mode is `Off`, `Waiting` (listening, local input
+  frozen) or `Connected` (at least one phone connected). Every signed-in device
+  is admitted and every connected device controls the session; they share it as
+  the phone and the TUI do. A new connection from the *same* device (the same
+  token) replaces that device's older one with `bye replaced`, so a phone that
+  lost its network reconnects before the old socket times out and a second tab
+  does not count twice. There is no separate cap: at most 20 devices are
+  remembered, which bounds the distinct devices that can be connected.
+- **Same session.** The phones and the TUI always share the resident session.
+  Opening or creating a session from a phone changes it for the TUI and every
+  other phone too.
 - **The TUI only reports.** While remote mode is on, the TUI does not show the
   conversation: its transcript area becomes a status screen saying that remote
-  control is on, how to connect, which phone is in control, which session and
+  control is on, how to connect, which phones are connected, which session and
   workspace are open and what the Agent is doing now. The reducer keeps the full
-  session state for the phone; turning remote mode off shows the transcript again.
+  session state for the phones; turning remote mode off shows the transcript again.
 - **Password sign-in.** Turning remote mode on needs nothing. A phone signs in
   with the connection password the status screen shows, once per device; after
   that it reconnects with a remembered token.
@@ -76,13 +81,13 @@ Slash commands (always allowed, also in remote mode):
 | Command | Effect |
 |---|---|
 | `/remote on` | Bind and enter `Waiting`; the status screen replaces the transcript |
-| `/remote off` | Say `bye` to the phone, close it, stop listening, show the transcript and unfreeze local input |
+| `/remote off` | Say `bye` to every phone, close them, stop listening, show the transcript and unfreeze local input |
 | `/remote` or `/remote status` | When on: nothing to open, the status screen already shows everything (close any open picker or view). When off: the info notice `Remote control is off · /remote on starts it` |
 | `/remote password` | Generate a new password |
 | `/remote password <text>` | Use `<text>` (at least 8 characters, spaces and dashes not counted) |
 
 Changing the password signs every phone out: the remembered devices are
-forgotten, a connected phone gets `bye signed_out`, and the notice
+forgotten, every connected phone gets `bye signed_out`, and the notice
 `New remote password · phones must sign in again` is shown. While remote mode is
 off the password still changes (it is in the file). A `/remote password …`
 line is never written to the prompt history.
@@ -95,12 +100,14 @@ line is never written to the prompt history.
   label column dim, values in text colour:
 
   ```text
-   Remote control                                         ● phone connected
-                                                          (○ waiting for a phone, amber)
+   Remote control                                 ● iPhone Safari connected
+                                                  (● 2 phones connected /
+                                                   ○ waiting for a phone, amber)
 
      Address     http://192.168.20.207:8765
      Password    k7mq-x2pa-n9dt
-     Phone       iPhone Safari · connected at 14:02
+     Phones      iPhone Safari · connected at 14:02
+                 Mac Edge · connected at 14:30
                  (none yet · open the address on your phone and enter the password)
 
      Session     Fix the parser          (New session · starts with the phone's first message)
@@ -116,6 +123,9 @@ line is never written to the prompt history.
      /remote off take back control · esc stop the turn · /remote password new password
   ```
 
+  `Phones` has one row per connected device, in admission order, with the
+  local time it was admitted (a clock time, not a running duration, so the
+  idle screen stays still); the header names the one device or counts them.
   The home directory reads `~`. Values are cut to the width (never wrapped);
   the label column is the widest label plus two cells. Hints that do not fit
   give way whole, from the end. `Now` uses the Working line's spinner and the
@@ -126,7 +136,8 @@ line is never written to the prompt history.
   Working line, no queue rows and no approval sheet (the status screen says it).
   The editor keeps its draft and slash input but cannot send; an empty editor
   shows the faint placeholder `Remote control is on · /remote off to take back`.
-  The footer shows `remote` (waiting) or `remote · <device>` (connected).
+  The footer shows `remote` (waiting), `remote · <device>` (one phone) or
+  `remote · 2 phones`.
 - Local `on_action` is **deny by default**. Allowed: `SetTheme`, `ToggleTheme`,
   `CopyLastAnswer`, `Export`, `EditDraft`, `LoadOlder`, `RecallQueued`, `Quit`,
   every `/remote` command and panels that only show (help, session, context,
@@ -140,9 +151,9 @@ line is never written to the prompt history.
   (`restore_draft` of the joined text), so no local message waits to be sent.
 - Quitting asks twice: the first request (Ctrl+C, `/quit`) flashes
   `Remote control is on · quit again to end it`; a second within 3 s quits.
-  Quitting says `bye` to the phone first.
-- When the phone disconnects the mode goes back to `Waiting`; local input stays
-  frozen until `/remote off`.
+  Quitting says `bye` to every phone first.
+- When the last phone disconnects the mode goes back to `Waiting`; local input
+  stays frozen until `/remote off`.
 
 ## Transport
 
@@ -195,7 +206,8 @@ message 1 MiB; the first message must arrive within 10 s; at most 8
 unauthenticated connections at once; the server sends a WebSocket ping every
 20 s and closes a connection that has sent nothing (pong included) for 60 s.
 Each authenticated connection has an outbound queue of 512 messages; when it is
-full the TUI drops the connection (the phone reconnects and gets a snapshot).
+full the TUI drops that connection alone (the phone reconnects and gets a
+snapshot); the others are unaffected.
 After `bye`, the server sends a WebSocket close frame with a bounded handshake.
 Process exit allows at most 500 ms for the connection task to flush and close.
 
@@ -214,8 +226,9 @@ Process exit allows at most 500 ms for the connection task to flush and close.
   password change) and shows the info notice `Remote: wrong password` or
   `Remote: sign-in paused for 30 s`.
 - A right password makes a token (32 random bytes, base64url without padding).
-  The phone is stored only after the reducer admits it (a `busy` refusal stores
-  nothing). The web client keeps the token in `localStorage` (`minicore.token`)
+  The phone is stored only after the reducer admits it. The reducer refuses
+  only a handshake that reaches a listener being stopped; that connection gets
+  `bye remote_off` and nothing is stored. The web client keeps the token in `localStorage` (`minicore.token`)
   and later signs in with `hello`. The server compares SHA-256 hashes.
 
 ## Protocol v1
@@ -247,11 +260,12 @@ with `status.started_ms` for elapsed time. `now_ms` appears only in `welcome`,
 never in snapshots or `State`, so clock passage alone causes no state updates.
 
 On failure, the server sends one error and closes:
-`{"t":"error","code":"wrong_password"|"locked"|"unauthorized"|"busy"|"version"|"bad_request","message":"..."}`.
+`{"t":"error","code":"wrong_password"|"locked"|"unauthorized"|"version"|"bad_request","message":"..."}`.
 `wrong_password`: the login password is wrong. `locked`: sign-in is paused; the
 error carries `"retry_after":<whole seconds, rounded up>`. `unauthorized`: the
 `hello` token is unknown (signed out); the client forgets it and asks for the
-password. `busy`: another device is in control. `version`: `v` is not 1.
+password. `version`: `v` is not 1. Another connected device never refuses a
+sign-in.
 
 ### Client → server (after the handshake)
 
@@ -296,7 +310,13 @@ dispatched it, or refused it):
 `submit` and `queue` trim trailing whitespace like local sends.
 A refused `submit` or `queue` text is never put into the local composer. When the
 Agent later refuses a send (the path that calls `restore_draft` today) while a
-phone is connected, the text goes back to the phone as `returned`.
+phone is connected, the text goes back as `returned` (see the routing below).
+
+Any admitted connection may send intents and filesystem requests; requests
+from a connection that is no longer admitted (replaced, dropped, or from a
+stopped listener) are ignored. Two devices answering the same approval: the
+first answer wins, the second gets `ack` with `error:"stale"` and the client
+says `Already answered` while the next `state` closes its sheet.
 
 ### Server → client
 
@@ -314,6 +334,20 @@ phone is connected, the text goes back to the phone as `returned`.
 {"t":"fs","id":"c27","ok":false,"error":"outside_roots","message":"..."}
 {"t":"bye","reason":"remote_off"|"tui_exit"|"replaced"|"signed_out"}
 ```
+
+Routing, with several devices connected:
+
+| Message | Goes to |
+|---|---|
+| `snapshot`, `blocks`, `state` | Every connection, each from its own tracker |
+| `notice` | Every connection |
+| `ack`, `fs` | Only the connection that sent the request |
+| `returned` | The connection that sent the latest `submit` or `queue` if it is still connected, otherwise every connection |
+| `bye` | `replaced`: only the older connection of that device; `remote_off`, `tui_exit`, `signed_out`: every connection |
+
+`returned` follows the latest text intent, not the refused text itself: when
+two devices send in quick succession and the first send is refused, the text
+goes to the second. This keeps the rule simple and the text is never lost.
 
 `blocks`: the transcript now has `len` blocks; the client truncates its list to
 `len`, then applies each upsert at index `i`. An upsert is exactly one of:
@@ -352,6 +386,7 @@ is forwarded as `notice`.
                 "live":true,"status":"running"|"approval"|"compacting"|"idle","started_ms":1761300000000|null,
                 "unseen":false}],
   "background": {"running":1,"approval":0},
+  "devices": ["iPhone Safari","Mac Edge"],
   "models": [{"id":"gpt-6-luna","reasoning":["low","medium","high"]}],
   "profiles": ["coding","ask"]
 }
@@ -364,6 +399,10 @@ is forwarded as `notice`.
 - `label` is `App::status_label()`. `started_ms` is the Unix time the live turn
   started (stored on `LiveTurn` when it is created, not derived from `Instant`,
   so the state does not change by itself). `loading` is `App::loading_session`.
+- `devices`: the names of the connected devices in admission order, the
+  receiving one included, so a client can show who else is connected (the web
+  client's drawer reads `Also connected: Mac Edge`, dropping one entry of its
+  own name). Two devices may carry the same name.
 - `older`: an older page can be loaded. `sessions`: the catalog filtered to
   workspaces under `roots`, newest first, at most 50. `context_percent` is the
   footer's figure, never an estimate. The pure calculation lives in
@@ -392,10 +431,15 @@ Assistant `text` is raw Markdown; clients render it.
 
 - `App::sync_remote()` runs after each paced frame (at most once per FRAME),
   and once before exit. When the terminal guard is inactive the same frame-pacing
-  branch still synchronizes the phone and clears the pending frame. No extra
+  branch still synchronizes the phones and clears the pending frame. No extra
   timer is introduced; with no connected phone sync returns at once.
+- Each connection has its own tracker (`view::View`): the revisions, streaming
+  offsets and serialized `State` last sent to it. One sync builds the catalog
+  cache and `State` with its serialization once, then lets every tracker diff
+  its blocks and compare the shared serialization; `State` is never rebuilt
+  per connection.
 - A residency change (`Session::epoch` differs from the last one sent, or a
-  session appeared or went away) or a new connection sends `snapshot`.
+  session appeared or went away) or a newly admitted connection sends `snapshot`.
 - Otherwise the transcript's revisions are compared index by index with the
   revisions last sent: every index whose revision differs, or that is new, is an
   upsert; `len` is the current length. Prepending older pages therefore resends
@@ -413,9 +457,10 @@ Assistant `text` is raw Markdown; clients render it.
 
 Only for the phone's directory picker; the model cannot call it. Pure, blocking
 functions in `remote::fs`, run off the main loop by the connection task (they do
-not need `App`). Only the accepted controller can request them. Replacing or
-stopping that controller revokes queued filesystem work and suppresses replies
-from work already in progress. A filesystem operation already started while
+not need `App`). Any admitted connection can request them, and the reply goes
+to that connection only. Replacing, dropping or stopping a connection revokes
+its own queued filesystem work and suppresses replies from its work already in
+progress; other connections are unaffected. A filesystem operation already started while
 authorized may finish; it is not rolled back.
 
 Operations:
@@ -460,11 +505,11 @@ launch workspace.
 
 | Path | Contents |
 |---|---|
-| `src/remote/mod.rs` | `RemoteMode`, the handle `App` keeps (start/stop, outbound sender, password access, URL, sign-in refusals), `RemoteEvent` posted to the main loop as `Msg::Remote` |
+| `src/remote/mod.rs` | `RemoteMode`, the handle `App` keeps (start/stop, the admitted phones with their trackers, routed sends, password access, URL, sign-in refusals), `RemoteEvent` posted to the main loop as `Msg::Remote` |
 | `src/remote/server.rs` | Listener, HTTP, WebSocket upgrade, handshake, pings, per-connection tasks |
 | `src/remote/auth.rs` | The password, sign-in pauses, token generation and hashing, `remote.json` |
 | `src/remote/wire.rs` | Serde types of every message above |
-| `src/remote/view.rs` | `State`/`Block` projection from `&App` and the diff tracker |
+| `src/remote/view.rs` | `State`/`Block` projection from `&App`, the shared catalog cache and the per-connection diff tracker |
 | `src/remote/fs.rs` | Host directory functions |
 | `src/remote/web/` | `index.html` (the whole client: HTML, CSS, JS), `sw.js`, `manifest.webmanifest` and the icons, embedded with `include_bytes!` |
 | `src/app/remote.rs` | `App` side: `/remote` commands, mode changes, local gating, intents, `sync_remote` |
@@ -487,4 +532,4 @@ gains no new branch beyond calling `sync_remote` once per iteration.
 | Directory entries per listing | 1000 |
 | Sessions in `State` | 50 |
 | Wrong passwords | 5 in a row → 30 s pause, doubling per further 5, at most 15 min |
-| Remembered phones | 20 |
+| Remembered phones | 20 (so at most 20 devices connected, one connection each) |

@@ -215,11 +215,14 @@ list holds no empty sessions. While `app.session` is `None`:
 
 `--remote` binds before entering the terminal; `/remote on` binds asynchronously.
 `RemoteMode` is derived as Off, Waiting or Connected from the listener URL and
-accepted connection; it is not independently mutable. Waiting still freezes local sending:
-only `/remote off` restores local control. The reducer alone admits connections:
-a different device gets `busy`, the same token replaces the old socket with
-`bye replaced`. Connection ids keep old requests and disconnects from affecting
-the replacement. Off and quit send `bye` before closing the listener.
+the admitted connections (`Remote::phones`); it is not independently mutable.
+Waiting still freezes local sending: only `/remote off` restores local control.
+The reducer alone admits connections: every signed-in device is admitted, and a
+new connection with the same token replaces that device's older one with
+`bye replaced`. The 20 remembered devices bound the connections. Connection ids
+keep old requests and disconnects from affecting the replacement, and any
+admitted connection may send intents. Off and quit send `bye` to every phone
+before closing the listener.
 
 While remote mode is on, `ui::draw` draws `views::remote` (the status screen) in
 the transcript's place unless a full-screen view is open; the transcript layout
@@ -234,8 +237,10 @@ queue recall, quit and remote commands. Command completion checks before clearin
 the draft. Approval sheets neither render nor take the local keyboard; Esc can
 still interrupt. Entering remote recalls queued follow-ups into the composer.
 Remote text is passed directly to the same submit/send paths without changing
-the local composer or its history. Agent-refused text returns as `returned` while
-a phone is connected. Every notice is also forwarded to that phone.
+the local composer or its history. Agent-refused text returns as `returned` to
+the connection that sent the latest text intent (`Remote::last_sender`) while it
+is connected, else to every phone. Acks answer only the requesting connection;
+every notice is forwarded to every phone.
 
 `App::workspace` follows the workspace of each adopted session and is the default
 for the next draft; a remote `new_session` can choose another existing directory
@@ -244,9 +249,11 @@ still selects against the original launch workspace. Session selection and the
 phone catalog use canonical path-prefix checks, not file-content reads.
 
 After each paced frame (or its inactive-terminal equivalent), and before exit,
-`sync_remote` returns immediately without a phone. Otherwise `remote::view` sends
-a snapshot on connection or residency change, revision-indexed block upserts,
-and state only when its serialized value changes. Streaming assistants use
+`sync_remote` returns immediately without a phone. Otherwise it builds `State`
+and its serialization once (`view::Shared`) and each phone's own tracker
+(`view::View`) sends a snapshot on admission or residency change,
+revision-indexed block upserts, and state only when the serialized value differs
+from what that phone was last sent. A phone whose queue overflows is dropped alone. Streaming assistants use
 append-only suffix updates until they finish, when one full block is sent.
 The tracker keeps resident revisions, streaming keys and byte lengths, and the
 last serialized state; it is not an event log. Catalogs are cached by generation,
@@ -262,13 +269,13 @@ loop. Shutdown allows at most 500 ms for `bye` and WebSocket close.
 Phones sign in with the password in `remote.json` (generated on first use,
 atomically written with Unix mode 0600); a right password makes an OS-random
 token that is stored as a SHA-256 hash only after the reducer admits the phone,
-so a `busy` refusal stores nothing. Five wrong passwords pause sign-in for 30 s,
+so a handshake reaching a stopping listener (answered `bye remote_off`) stores nothing. Five wrong passwords pause sign-in for 30 s,
 doubling per further five up to 15 min; `hello` tokens are never paused. Each
 refusal reaches the reducer as `RemoteEvent::LoginRefused` for the status screen.
 `/remote password` replaces the password, forgets every phone and signs out the
-connected one with `bye signed_out`; the command line never enters the prompt
+connected ones with `bye signed_out`; the command line never enters the prompt
 history. The authenticated connection task runs
-directory-picker requests through `remote::fs` using `spawn_blocking`. Its reducer-owned close signal revokes queued
+directory-picker requests through `remote::fs` using `spawn_blocking`. Each connection's reducer-owned close signal revokes its queued
 work and suppresses late replies after replacement or shutdown; filesystem calls
 already running may finish. Session checks share `fs::within` and
 `fs::canonical_within`; phone-facing paths use `fs::display` to remove Windows

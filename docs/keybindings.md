@@ -184,14 +184,14 @@ the name.
 ## Remote mode
 
 While remote control is on, the transcript area is a status screen: the address
-to open on the phone, the password to enter there, the phone in control and when
+to open on the phone, the password to enter there, each connected phone and when
 it connected, the session, workspace and model, what the Agent is doing now
 (running a tool, waiting for an approval on the phone, compacting, or idle with
 the last turn's outcome), queued messages and refused sign-ins. It is read-only:
-the wheel and clicks over it do nothing. The footer shows `remote`, or
-`remote · <device>` with a phone connected.
+the wheel and clicks over it do nothing. The footer shows `remote`,
+`remote · <device>` with one phone connected, or `remote · 2 phones`.
 
-The phone sends messages and answers approvals; the keyboard cannot. The editor
+The phones send messages and answer approvals; the keyboard cannot. The editor
 keeps its draft and slash commands, an empty one reads `Remote control is on ·
 /remote off to take back`, and a refused action flashes the same text. What
 stays available:
