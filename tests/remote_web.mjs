@@ -315,6 +315,7 @@ test('elapsed status line and summaries read like the TUI', () => {
   assert.equal(MC.fmtElapsed(3725000), '1h 02m');
   assert.equal(MC.fmtElapsed(-500), '0s');
   assert.equal(MC.turnEndText(blocks[3]), 'Completed · 7.8 s · 2 requests · 1 tool · 2 files +10 −3');
+  assert.equal(MC.turnEndText({ ...blocks[3], changes: { files: 0, added: 0, removed: 0 } }), 'Completed · 7.8 s · 2 requests · 1 tool');
   assert.equal(MC.turnEndText({ ...blocks[3], outcome: 'cancelled', changes: null, tools: 0 }), 'Stopped · 7.8 s · 2 requests');
   assert.equal(MC.compactionText(blocks[4]), 'Context compacted · 32.1k → 2.7k tokens');
   const tool = (name, detail) => ({ type: 'tool', call_id: name + detail, name, detail });

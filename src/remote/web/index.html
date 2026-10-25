@@ -685,7 +685,7 @@ globalThis.MC = (() => {
     const c = b.changes;
     return [OUTCOME[b.outcome] || cap(String(b.outcome).replace(/_/g, ' ')), b.duration_ms != null && fmtDur(b.duration_ms),
       b.requests > 0 && plural(b.requests, 'request'), b.tools > 0 && plural(b.tools, 'tool'),
-      c && plural(c.files, 'file') + (c.added != null ? ' +' + c.added : '') + (c.removed != null ? ' −' + c.removed : ''),
+      c && c.files > 0 && plural(c.files, 'file') + (c.added != null ? ' +' + c.added : '') + (c.removed != null ? ' −' + c.removed : ''),
     ].filter(Boolean).join(' · ');
   }
   const compactionText = b => 'Context compacted' + (b.before != null || b.after != null ? ' · ' + fmtTok(b.before) + ' → ' + fmtTok(b.after) + ' tokens' : '');
@@ -1356,7 +1356,9 @@ function renderAppr() {
   const p = MC.pending(S, 'answer'), dis = !online() || !!p;
   const ans = (choice, label, cls) => h('button', { class: 'btn ' + cls, type: 'button', disabled: dis, onclick: () => { if (intent(MC.intents.answer(a.id, choice))) renderAppr(); } },
     p && p.spec.choice === choice && spin(), label);
-  const lines = a.input ? a.input.split('\n') : [], old = sh.querySelector('.abody'), sc = old ? old.scrollTop : 0;
+  // A one-line command already reads in the detail; repeating it says nothing.
+  const input = a.input && a.input.trim() !== (a.detail || '').replace(/^\$ /, '').trim() ? a.input : '';
+  const lines = input ? input.split('\n') : [], old = sh.querySelector('.abody'), sc = old ? old.scrollTop : 0;
   fill(sh,
     h('div', 'ahead', h('div', 'eicon ac', icon(a.kind === 'approval' ? 'shield' : 'info')),
       h('div', '', h('h2', { id: 'atitle' }, a.kind === 'approval' ? 'Approval needed' : 'Choose an option'), a.prompt && h('p', '', a.prompt))),
