@@ -1,6 +1,7 @@
 //! Bounded HTTP and WebSocket connections, with reducer-authorized admission.
 
 use std::io;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -22,7 +23,8 @@ use tokio_tungstenite::{WebSocketStream, accept_hdr_async_with_config};
 use super::{
     Connection, RemoteEvent,
     auth::Auth,
-    wire::{self, Handshake},
+    fs,
+    wire::{self, FsRequest, Handshake},
 };
 use crate::app::{Msg, Tx};
 
@@ -44,6 +46,7 @@ pub async fn serve(
     tx: Tx,
     mut stop: oneshot::Receiver<()>,
     generation: u64,
+    roots: Arc<[PathBuf]>,
 ) {
     let permits = Arc::new(Semaphore::new(8));
     let mut tasks = JoinSet::new();
@@ -55,8 +58,9 @@ pub async fn serve(
                 let Ok(permit) = permits.clone().try_acquire_owned() else { continue };
                 let auth = auth.clone();
                 let tx = tx.clone();
+                let roots = roots.clone();
                 tasks.spawn(async move {
-                    let _ = connection(stream, auth, tx, permit, generation).await;
+                    let _ = connection(stream, auth, tx, permit, generation, roots).await;
                 });
             }
             _ = tasks.join_next(), if !tasks.is_empty() => {}
@@ -121,6 +125,7 @@ async fn connection(
     tx: Tx,
     permit: tokio::sync::OwnedSemaphorePermit,
     generation: u64,
+    roots: Arc<[PathBuf]>,
 ) -> Result<(), String> {
     let bytes = timeout(FIRST, head(&stream))
         .await
@@ -249,6 +254,7 @@ async fn connection(
         return reject(&mut socket, "busy").await;
     }
     drop(permit);
+    let controller = closing.clone();
     let result = tokio::select! {
         biased;
         _ = closing.changed() => Ok(()),
@@ -271,14 +277,23 @@ async fn connection(
                     match frame {
                         Some(Ok(Message::Text(text))) => {
                             let value = serde_json::from_str::<Value>(&text).unwrap_or(Value::Null);
-                            let request = value.get("id").and_then(Value::as_str).filter(|id| id.len() <= 64)
-                                .filter(|_| value["t"] == "intent")
-                                .and_then(|id| serde_json::from_value::<wire::Intent>(value.clone()).ok().map(|intent| (id.to_owned(), intent)));
-                            if let Some((request_id, intent)) = request {
-                                let (done, finished) = oneshot::channel();
-                                tx.send(Msg::Remote(RemoteEvent::Request { connection: id, id: request_id, intent, done })).map_err(|_| "TUI closed")?;
-                                finished.await.map_err(|_| "TUI closed")?;
-                            } else { send(&mut socket, wire::bad_request(&value)).await?; }
+                            let request_id = value.get("id").and_then(Value::as_str).filter(|id| id.len() <= 64);
+                            if let Some(request_id) = request_id {
+                                if value["t"] == "intent" {
+                                    if let Ok(intent) = serde_json::from_value::<wire::Intent>(value.clone()) {
+                                        let (done, finished) = oneshot::channel();
+                                        tx.send(Msg::Remote(RemoteEvent::Request { connection: id, id: request_id.to_owned(), intent, done })).map_err(|_| "TUI closed")?;
+                                        finished.await.map_err(|_| "TUI closed")?;
+                                        continue;
+                                    }
+                                } else if let Ok(request) = serde_json::from_value::<FsRequest>(value.clone()) {
+                                    let reply = filesystem(request_id.to_owned(), request, roots.clone(), controller.clone()).await?;
+                                    let Some(reply) = reply else { break };
+                                    send(&mut socket, reply).await?;
+                                    continue;
+                                }
+                            }
+                            send(&mut socket, wire::bad_request(&value)).await?;
                         }
                         Some(Ok(Message::Ping(_) | Message::Pong(_))) => { socket.flush().await.map_err(|e| e.to_string())?; }
                         Some(Ok(Message::Binary(_))) => send(&mut socket, wire::bad_request(&Value::Null)).await?,
@@ -300,6 +315,45 @@ async fn connection(
     }
     let _ = tx.send(Msg::Remote(RemoteEvent::Disconnected(id)));
     result
+}
+
+async fn filesystem(
+    id: String,
+    request: FsRequest,
+    roots: Arc<[PathBuf]>,
+    controller: watch::Receiver<Option<&'static str>>,
+) -> Result<Option<Value>, String> {
+    let worker = controller.clone();
+    let reply = tokio::task::spawn_blocking(move || {
+        // A queued blocking task must not begin work after its controller was revoked.
+        if worker.has_changed().is_err() || worker.borrow().is_some() {
+            return None;
+        }
+        let result = match request {
+            FsRequest::Roots => Ok(json!({"roots": fs::roots(&roots)})),
+            FsRequest::List { path, hidden } => {
+                fs::list(&roots, &path, hidden).map(|listing| json!({"listing": listing}))
+            }
+            FsRequest::Mkdir { parent, name } => {
+                fs::mkdir(&roots, &parent, &name).map(|created| json!({"created": created}))
+            }
+        };
+        let mut reply = match result {
+            Ok(fields) => fields,
+            Err(error) => json!({"error": error.code(), "message": error.to_string()}),
+        };
+        reply["t"] = json!("fs");
+        reply["id"] = json!(id);
+        reply["ok"] = json!(reply.get("error").is_none());
+        Some(reply)
+    })
+    .await
+    .map_err(|error| error.to_string())?;
+    // Already-running filesystem calls cannot be cancelled; never deliver their late results.
+    if controller.has_changed().is_err() || controller.borrow().is_some() {
+        return Ok(None);
+    }
+    Ok(reply)
 }
 
 async fn send(socket: &mut WebSocketStream<TcpStream>, value: Value) -> Result<(), String> {
@@ -334,9 +388,10 @@ mod tests {
         let (tx, rx) = mpsc::unbounded_channel();
         let server_auth = auth.clone();
         let (stop, stopped) = oneshot::channel();
+        let roots = vec![dir.path().canonicalize().unwrap()].into();
         let task = tokio::spawn(async move {
             let _stop = stop;
-            serve(listener, server_auth, tx, stopped, 0).await;
+            serve(listener, server_auth, tx, stopped, 0, roots).await;
         });
         (dir, address, auth, rx, task)
     }
@@ -359,9 +414,136 @@ mod tests {
             assert!(reply.contains(CSP));
             if status == "200 OK" {
                 assert!(reply.ends_with(include_str!("web/index.html")));
+                assert!(reply.contains("minicore.token"));
             }
         }
         task.abort();
+    }
+
+    async fn receive(socket: &mut WebSocketStream<TcpStream>) -> Value {
+        serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn an_authenticated_controller_browses_and_creates_directories_only_inside_roots() {
+        let (dir, address, auth, mut rx, task) = start().await;
+        let root = dir.path().canonicalize().unwrap();
+        std::fs::create_dir(root.join("existing")).unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let stream = TcpStream::connect(address).await.unwrap();
+        let (mut socket, _) = tokio_tungstenite::client_async(format!("ws://{address}/ws"), stream)
+            .await
+            .unwrap();
+        let code = auth.lock().unwrap().pairing.code.clone();
+        send(
+            &mut socket,
+            json!({"t":"pair", "v":1, "code":code, "device":"phone"}),
+        )
+        .await
+        .unwrap();
+        let Msg::Remote(RemoteEvent::Connect {
+            connection,
+            accepted,
+        }) = rx.recv().await.unwrap()
+        else {
+            panic!("admission")
+        };
+        accepted.send(true).unwrap();
+        connection.send(json!({"t":"snapshot", "state":{}, "blocks":[]}));
+        for kind in ["paired", "welcome", "snapshot"] {
+            assert_eq!(receive(&mut socket).await["t"], kind);
+        }
+        send(&mut socket, json!({"t":"fs_roots", "id":"roots"}))
+            .await
+            .unwrap();
+        assert_eq!(
+            receive(&mut socket).await,
+            json!({"t":"fs", "id":"roots", "ok":true, "roots":fs::roots(std::slice::from_ref(&root))})
+        );
+        send(
+            &mut socket,
+            json!({"t":"fs_list", "id":"list", "path":fs::display(&root), "hidden":false}),
+        )
+        .await
+        .unwrap();
+        let listing = receive(&mut socket).await;
+        assert_eq!(listing["t"], "fs");
+        assert_eq!(listing["id"], "list");
+        assert_eq!(listing["ok"], true);
+        assert_eq!(
+            listing["listing"]["entries"],
+            json!([{"name":"existing", "path":fs::display(&root.join("existing"))}])
+        );
+        send(
+            &mut socket,
+            json!({"t":"fs_mkdir", "id":"mkdir", "parent":fs::display(&root), "name":"created"}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            receive(&mut socket).await,
+            json!({"t":"fs", "id":"mkdir", "ok":true, "created":fs::display(&root.join("created"))})
+        );
+        assert!(root.join("created").is_dir());
+        for request in [
+            json!({"t":"fs_list", "id":"outside", "path":fs::display(outside.path()), "hidden":false}),
+            json!({"t":"fs_mkdir", "id":"outside", "parent":fs::display(outside.path()), "name":"escape"}),
+        ] {
+            send(&mut socket, request).await.unwrap();
+            assert_eq!(
+                receive(&mut socket).await,
+                json!({"t":"fs", "id":"outside", "ok":false, "error":"outside_roots", "message":fs::FsError::OutsideRoots.to_string()})
+            );
+        }
+        assert!(!outside.path().join("escape").exists());
+        for request in [
+            json!({"t":"fs_list", "id":"bad", "path":fs::display(&root)}),
+            json!({"t":"fs_mkdir", "id":"bad", "parent":fs::display(&root)}),
+            json!({"t":"fs_unknown", "id":"bad"}),
+        ] {
+            send(&mut socket, request).await.unwrap();
+            assert_eq!(
+                receive(&mut socket).await,
+                json!({"t":"fs", "id":"bad", "ok":false, "error":"bad_request"})
+            );
+        }
+        connection.bye("replaced");
+        let _ = send(
+            &mut socket,
+            json!({"t":"fs_mkdir", "id":"stale", "parent":fs::display(&root), "name":"stale"}),
+        )
+        .await;
+        assert_eq!(
+            receive(&mut socket).await,
+            json!({"t":"bye", "reason":"replaced"})
+        );
+        assert!(socket.next().await.is_none_or(|frame| frame.is_err()));
+        assert!(!root.join("stale").exists());
+        task.abort();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn revoked_controllers_cannot_start_queued_filesystem_work() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let roots: Arc<[PathBuf]> = vec![root.clone()].into();
+        for reason in ["replaced", "remote_off"] {
+            let (close, controller) = watch::channel(None);
+            close.send(Some(reason)).unwrap();
+            let reply = filesystem(
+                "stale".into(),
+                FsRequest::Mkdir {
+                    parent: fs::display(&root),
+                    name: reason.into(),
+                },
+                roots.clone(),
+                controller,
+            )
+            .await
+            .unwrap();
+            assert!(reply.is_none());
+            assert!(!root.join(reason).exists());
+        }
     }
 
     #[tokio::test]

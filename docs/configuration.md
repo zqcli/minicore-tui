@@ -192,6 +192,9 @@ Use a private network, tunnel or TLS reverse proxy for access across networks.
 Roots must be a non-empty list of existing directories; a leading `~/` expands
 from the user's home, and paths are canonicalized. These roots restrict the
 phone's directory picker and session selection, not the Agent's tools.
+The picker lists only directories under these roots (up to 1000 per listing),
+optionally including hidden names, and can create a single child directory.
+It cannot read file contents, upload, delete or move entries.
 Errors name `config.toml`, the line and the `[remote]` key.
 
 Start with `--remote` or `/remote on`; `/remote` (or `/remote status`) opens the

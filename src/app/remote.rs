@@ -10,6 +10,7 @@ use crate::protocol::{self, Reasoning};
 use crate::remote::{
     Bound, RemoteEvent, RemoteMode,
     auth::Pairing,
+    fs,
     wire::{self, Choice, Intent},
 };
 
@@ -226,12 +227,7 @@ impl App {
                     .iter()
                     .find(|s| s.session_id == session_id)
                     .ok_or("Unknown session")?;
-                if !self
-                    .remote
-                    .roots()
-                    .iter()
-                    .any(|root| std::path::Path::new(&info.workspace).starts_with(root))
-                {
+                if !fs::within(self.remote.roots(), std::path::Path::new(&info.workspace)) {
                     return Err("outside_roots".into());
                 }
                 self.open_session(session_id);
@@ -249,15 +245,8 @@ impl App {
                 let path = workspace
                     .map(PathBuf::from)
                     .unwrap_or_else(|| self.workspace.clone());
-                let path = path.canonicalize().map_err(|error| error.to_string())?;
-                if !self
-                    .remote
-                    .roots()
-                    .iter()
-                    .any(|root| path.starts_with(root))
-                {
-                    return Err("outside_roots".into());
-                }
+                let path = fs::canonical_within(self.remote.roots(), &path)
+                    .map_err(|error| error.code().to_owned())?;
                 if !path.is_dir() {
                     return Err("not_a_directory".into());
                 }

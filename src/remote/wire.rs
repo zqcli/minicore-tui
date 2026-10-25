@@ -58,6 +58,17 @@ pub enum Intent {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(tag = "t")]
+pub enum FsRequest {
+    #[serde(rename = "fs_roots")]
+    Roots,
+    #[serde(rename = "fs_list")]
+    List { path: String, hidden: bool },
+    #[serde(rename = "fs_mkdir")]
+    Mkdir { parent: String, name: String },
+}
+
+#[derive(Debug, Deserialize)]
 #[serde(untagged)]
 pub enum Choice {
     Name(String),

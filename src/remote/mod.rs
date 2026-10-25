@@ -1,6 +1,7 @@
 //! Remote transport and the reducer-owned controller connection.
 
 pub mod auth;
+pub mod fs;
 pub mod server;
 pub mod view;
 pub mod wire;
@@ -139,6 +140,7 @@ impl Remote {
             tx,
             stopped,
             self.generation,
+            self.roots().to_vec().into(),
         ));
         self.stop = Some(stop);
         self.auth = Some(bound.auth);

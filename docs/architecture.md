@@ -27,7 +27,7 @@ src/
                 scaffold (first-run starters)
   remote/       phone protocol, listener, authentication and semantic projection:
                 mod (mode, listener handle, connection, events), auth, server,
-                wire, view; web/ holds embedded client assets
+                wire, view, fs (host directories); web/ holds embedded client assets
   rpc.rs        Agent child process and JSON-RPC Client
   protocol/     serde DTOs and constants only: methods, error codes, required
                 capabilities, read sizes (mod); event; read (history items, chunk
@@ -234,8 +234,12 @@ wait, messages are limited to 1 MiB and each phone's outbound queue to 512
 messages; overflow drops that connection. No remote timer wakes the TUI main loop.
 Pairing codes expire after ten minutes, are single-use and lock after five failures.
 Device tokens are OS-random; only SHA-256 hashes reach `remote-devices.json`,
-atomically written with Unix mode 0600. The directory-picker messages and their
-separate blocking filesystem module are specified in `design-remote.md`.
+atomically written with Unix mode 0600. The authenticated connection task runs directory-picker requests through
+`remote::fs` using `spawn_blocking`. Its reducer-owned close signal revokes queued
+work and suppresses late replies after replacement or shutdown; filesystem calls
+already running may finish. Session checks share `fs::within` and
+`fs::canonical_within`; phone-facing paths use `fs::display` to remove Windows
+verbatim prefixes. The full phone protocol is specified in `design-remote.md`.
 
 ### RPC client
 

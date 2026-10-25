@@ -281,7 +281,12 @@ Assistant `text` is raw Markdown; clients render it.
 
 Only for the phone's directory picker; the model cannot call it. Pure, blocking
 functions in `remote::fs`, run off the main loop by the connection task (they do
-not need `App`):
+not need `App`). Only the accepted controller can request them. Replacing or
+stopping that controller revokes queued filesystem work and suppresses replies
+from work already in progress. A filesystem operation already started while
+authorized may finish; it is not rolled back.
+
+Operations:
 
 - `roots`: the configured roots, with `name` = last path component.
 - `list(path, hidden)`: `path` is canonicalized and must be under a root

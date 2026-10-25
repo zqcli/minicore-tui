@@ -1,6 +1,10 @@
 //! Semantic state and revision-indexed transcript updates for one phone.
 
+use std::path::Path;
+
 use serde_json::{Value, json};
+
+use super::fs;
 
 use crate::app::session::context_percent;
 use crate::app::{App, InteractionKind, QueuedKind};
@@ -60,17 +64,12 @@ pub fn state(app: &App) -> Value {
     let mut sessions: Vec<_> = app
         .sessions
         .iter()
-        .filter(|info| {
-            app.remote
-                .roots()
-                .iter()
-                .any(|root| std::path::Path::new(&info.workspace).starts_with(root))
-        })
+        .filter(|info| fs::within(app.remote.roots(), Path::new(&info.workspace)))
         .collect();
     sessions.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
     let sessions: Vec<_> = sessions.into_iter().take(50).map(|info| json!({
         "id":info.session_id, "title":crate::app::overlay::session_label(info, session),
-        "workspace":info.workspace, "updated_at":info.updated_at, "current":Some(info.session_id.as_str()) == current,
+        "workspace":fs::display(Path::new(&info.workspace)), "updated_at":info.updated_at, "current":Some(info.session_id.as_str()) == current,
     })).collect();
     let interaction = session.and_then(|s| s.interaction.as_ref().map(|interaction| {
         let call = s.transcript.find_tool_by_call_id(&interaction.tool_call_id);
@@ -84,8 +83,8 @@ pub fn state(app: &App) -> Value {
         "kind":match queued.kind { QueuedKind::Steer => "steer", QueuedKind::Follow => "follow" }, "text":queued.text,
     })).collect();
     json!({
-        "session":session.map(|s| json!({"id":s.info.session_id, "title":crate::app::overlay::session_label(&s.info, session), "workspace":s.info.workspace, "profile":s.info.profile, "model":s.info.model, "reasoning":s.info.reasoning})),
-        "draft":{"workspace":app.workspace, "profile":app.launch.profile.as_ref().or(app.default_profile.as_ref()), "model":app.launch.model, "reasoning":app.launch.reasoning},
+        "session":session.map(|s| json!({"id":s.info.session_id, "title":crate::app::overlay::session_label(&s.info, session), "workspace":fs::display(Path::new(&s.info.workspace)), "profile":s.info.profile, "model":s.info.model, "reasoning":s.info.reasoning})),
+        "draft":{"workspace":fs::display(&app.workspace), "profile":app.launch.profile.as_ref().or(app.default_profile.as_ref()), "model":app.launch.model, "reasoning":app.launch.reasoning},
         "status":{"label":app.status_label(), "busy":app.is_busy(), "started_ms":live.map(|live| live.started_ms), "interrupting":live.is_some_and(|live| live.interrupting), "compacting":app.compacting(), "loading":app.loading_session},
         "usage":{"input":session.map_or(0, |s| s.usage.input), "output":session.map_or(0, |s| s.usage.output), "cached":session.map_or(0, |s| s.usage.cached)},
         "context_percent":session.and_then(context_percent), "interaction":interaction, "queue":queue,
@@ -144,6 +143,33 @@ mod tests {
     use super::*;
     use crate::remote::{Connection, auth::Device};
     use tokio::sync::{mpsc, watch};
+
+    #[cfg(windows)]
+    #[tokio::test(start_paused = true)]
+    async fn phone_workspaces_omit_verbatim_prefixes_without_changing_root_checks() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let (_fake, mut app) = crate::testing::FakeAgent::start(tx);
+        app.workspace = std::path::PathBuf::from(r"\\?\C:\work");
+        app.remote.config = Some(crate::config::Remote {
+            bind: "127.0.0.1:0".parse().unwrap(),
+            url: None,
+            roots: vec![app.workspace.clone()],
+            allow_insecure: false,
+        });
+        let mut info = crate::testing::session_info("s1");
+        info["workspace"] = json!(app.workspace);
+        let info: crate::protocol::SessionInfo = serde_json::from_value(info).unwrap();
+        app.sessions.push(info.clone());
+        app.session = Some(crate::app::Session::new(info, 1));
+        let state = state(&app);
+        for workspace in [
+            &state["draft"]["workspace"],
+            &state["session"]["workspace"],
+            &state["sessions"][0]["workspace"],
+        ] {
+            assert_eq!(workspace, r"C:\work");
+        }
+    }
 
     #[tokio::test(start_paused = true)]
     async fn only_changed_indices_are_upserted_and_residency_replaces_the_projection() {
