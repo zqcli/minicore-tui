@@ -1,1 +1,748 @@
-<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Minicore Remote</title><body>Remote client coming soon.</body></html>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="MiniCore">
+<meta name="theme-color" content="#f6f7f9" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0f1115" media="(prefers-color-scheme: dark)">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/icon.svg">
+<title>MiniCore</title>
+<style>
+:root{color-scheme:light dark;--bg:#f6f7f9;--sf:#fff;--sf2:#eceff3;--bd:#dde1e7;--tx:#1c2128;--mu:#667085;--ac:#0969da;--on:#fff;--ok:#1a7f37;--er:#cf222e;--wa:#9a6700;--ub:#dbe9ff;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+@media(prefers-color-scheme:dark){:root{--bg:#0f1115;--sf:#181b21;--sf2:#20242c;--bd:#2a2f38;--tx:#e6e8eb;--mu:#8b94a1;--ac:#5b9dff;--on:#0b0d10;--ok:#3fb950;--er:#f85149;--wa:#d29922;--ub:#1d3557}}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+[hidden]{display:none!important}
+html,body{margin:0;height:100%;overflow:hidden;overscroll-behavior:none;background:var(--bg);color:var(--tx);font:16px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+button{font:inherit;color:inherit;background:var(--sf2);border:1px solid var(--bd);border-radius:10px;min-height:44px;padding:0 14px;cursor:pointer}
+button:disabled{opacity:.45}
+button.primary{background:var(--ac);border-color:var(--ac);color:var(--on);font-weight:600}
+button.danger{color:var(--er);border-color:var(--er)}
+button.ghost{background:none;border-color:transparent}
+pre,code{font-family:var(--mono)}
+#app{display:flex;flex-direction:column;height:var(--h,100dvh);max-width:900px;margin:0 auto;position:relative}
+#bar{padding:env(safe-area-inset-top) 4px 0;background:var(--sf);border-bottom:1px solid var(--bd)}
+#bar .r1{display:flex;align-items:center;gap:4px}
+#title{flex:1;min-width:0;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#dot{width:10px;height:10px;border-radius:50%;background:var(--ok);margin-right:10px}
+#dot.off{background:var(--wa);animation:pulse 1s infinite alternate}
+#bar .r2{display:flex;align-items:center;gap:10px;padding:0 10px 8px;font-size:13px;color:var(--mu);white-space:nowrap}
+#ws{min-width:0;overflow:hidden;text-overflow:ellipsis;flex:0 1 auto}
+#model{position:relative;min-height:0;height:26px;padding:0 10px;font-size:13px;border-radius:13px;max-width:55%;overflow:hidden;text-overflow:ellipsis;flex:0 1 auto}
+#model::after{content:"";position:absolute;inset:-9px -4px}
+#stat{margin-left:auto;overflow:hidden;text-overflow:ellipsis}
+#stat.busy::before{content:"";display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--ac);margin-right:6px;animation:pulse .8s infinite alternate}
+@keyframes pulse{from{opacity:.25}to{opacity:1}}
+#conn{padding:4px 12px;font-size:13px;text-align:center;background:var(--wa);color:var(--on)}
+#mid{flex:1;min-height:0;position:relative}
+#log{height:100%;overflow-y:auto;overflow-x:hidden;padding:12px 12px 16px;-webkit-overflow-scrolling:touch}
+#blocks>*{margin:0 0 12px;min-width:0}
+#older,.earlier{display:block;margin:0 auto 12px;color:var(--ac)}
+#empty{text-align:center;color:var(--mu);padding:48px 16px}
+#empty code{display:block;margin:8px 0;word-break:break-all;color:var(--tx)}
+#pill{position:absolute;left:50%;bottom:10px;transform:translateX(-50%);border-radius:22px;box-shadow:0 2px 10px #0006;background:var(--ac);color:var(--on);border-color:var(--ac)}
+#toasts{position:absolute;top:8px;left:10px;right:10px;display:flex;flex-direction:column;gap:6px;pointer-events:none}
+.toast{pointer-events:auto;display:flex;align-items:center;gap:8px;padding:8px 8px 8px 12px;border-radius:10px;background:var(--sf);border:1px solid var(--bd);box-shadow:0 2px 12px #0005;overflow-wrap:anywhere}
+.toast.error{border-color:var(--er);color:var(--er)}
+.toast span{flex:1}
+.toast button{min-height:36px;min-width:36px;padding:0}
+.user{display:flex;flex-direction:column;align-items:flex-end}
+.user .lbl{font-size:12px;color:var(--mu);margin-bottom:2px}
+.bubble{max-width:88%;background:var(--ub);padding:8px 12px;border-radius:16px 16px 4px 16px;white-space:pre-wrap;overflow-wrap:anywhere}
+.think{color:var(--mu);font-size:14px;margin-bottom:6px}
+.think summary{cursor:pointer;min-height:32px;line-height:32px}
+.think div{white-space:pre-wrap;overflow-wrap:anywhere;border-left:2px solid var(--bd);padding-left:10px}
+.md{overflow-wrap:anywhere}
+.md p{margin:.4em 0;white-space:pre-wrap}
+.md>:first-child{margin-top:0}
+.md h1,.md h2,.md h3,.md h4,.md h5,.md h6{margin:.8em 0 .3em;line-height:1.25}
+.md h1{font-size:1.35em}.md h2{font-size:1.2em}.md h3,.md h4,.md h5,.md h6{font-size:1.05em}
+.md .li{display:flex;gap:.5em;margin:.2em 0}
+.md .mk{flex:none;min-width:1.2em;text-align:right;color:var(--mu)}
+.md .lc{min-width:0;white-space:pre-wrap}
+.md code{background:var(--sf2);padding:.1em .35em;border-radius:5px;font-size:.88em}
+.md pre{background:var(--sf2);padding:10px 12px;border-radius:10px;overflow-x:auto;margin:.5em 0;font-size:13px;line-height:1.4}
+.md pre code{background:none;padding:0;font-size:inherit}
+.md a{color:var(--ac)}
+.md blockquote{margin:.5em 0;padding-left:12px;border-left:3px solid var(--bd);color:var(--mu)}
+.md hr{border:0;border-top:1px solid var(--bd)}
+.caret{display:inline-block;width:.55em;height:1em;vertical-align:text-bottom;margin-left:2px;background:var(--ac);animation:pulse .6s infinite alternate}
+.tool{background:var(--sf);border:1px solid var(--bd);border-radius:10px;overflow:hidden}
+.thead{display:flex;align-items:center;gap:8px;min-height:44px;padding:0 12px;cursor:pointer}
+.thead .det{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--mu);font:13px var(--mono)}
+.thead .meta{flex:none;font-size:12px;color:var(--mu)}
+.tool .ico{width:1.2em;text-align:center;flex:none}
+.tool.succeeded .ico{color:var(--ok)}
+.tool.failed .ico,.tool.denied .ico{color:var(--er)}
+.tool.running .ico{color:var(--ac);display:inline-block;animation:spin 1s linear infinite}
+.tool.pending .ico,.tool.cancelled .ico{color:var(--mu)}
+@keyframes spin{to{transform:rotate(360deg)}}
+.tbody{border-top:1px solid var(--bd);padding:8px 12px 10px;font-size:13px}
+.tbody .lbl{color:var(--mu);font-size:12px;margin:6px 0 2px}
+.tbody pre{margin:0;max-height:260px;overflow:auto;white-space:pre;background:var(--sf2);padding:8px 10px;border-radius:8px;font-size:12px;line-height:1.4}
+.hint{color:var(--wa);font-size:12px;margin:4px 0}
+.turnend{display:flex;align-items:center;gap:10px;font-size:12px;color:var(--mu)}
+.turnend::before,.turnend::after{content:"";flex:1;border-top:1px solid var(--bd)}
+.turnend.bad{color:var(--wa)}
+.turnend span{text-align:center}
+.compact{font-size:13px;color:var(--mu);text-align:center;border:1px dashed var(--bd);border-radius:10px;padding:6px 10px}
+.compact div{white-space:pre-wrap;text-align:left;margin-top:6px}
+#dock{background:var(--sf);border-top:1px solid var(--bd);padding:8px 10px calc(8px + env(safe-area-inset-bottom))}
+#appr{max-height:45vh;overflow:auto;margin-bottom:8px;border:2px solid var(--ac);border-radius:12px;padding:10px;background:var(--bg)}
+#appr .ptitle{font-weight:600;overflow-wrap:anywhere}
+#appr .pdet{font:13px var(--mono);margin:6px 0;overflow-wrap:anywhere;color:var(--mu)}
+#appr pre{margin:6px 0;max-height:9.5em;overflow:auto;background:var(--sf2);padding:8px;border-radius:8px;font-size:12px;white-space:pre-wrap;overflow-wrap:anywhere}
+.pbtns{display:flex;flex-direction:column;gap:8px;margin-top:8px}
+#tray:not(:empty){margin-bottom:8px;display:flex;flex-direction:column;gap:4px;font-size:13px}
+#tray .q{display:flex;gap:8px;color:var(--mu)}
+#tray .q b{flex:none;color:var(--ac)}
+#tray .q span,#tray .it span{overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow-wrap:anywhere}
+#tray .it{display:flex;align-items:center;gap:8px;color:var(--mu);opacity:0;animation:show 0s .3s forwards}
+#tray .it.lost{color:var(--wa);opacity:1;animation:none}
+#tray .it button{min-height:32px;padding:0 10px;margin-left:auto}
+@keyframes show{to{opacity:1}}
+.trow{display:flex;gap:8px;align-items:flex-end}
+#ta{flex:1;min-width:0;resize:none;font-size:16px;line-height:1.4;font-family:inherit;color:var(--tx);background:var(--bg);border:1px solid var(--bd);border-radius:12px;padding:10px 12px;max-height:160px;min-height:44px;display:block}
+#ta:focus{outline:2px solid var(--ac);outline-offset:-1px}
+#arow{display:flex;gap:8px;margin-top:8px}
+#arow button{flex:1}
+#scrim{position:fixed;inset:0;background:#0007;z-index:20;display:flex}
+#panel{background:var(--bg);overflow:auto;display:flex;flex-direction:column;gap:4px;padding:env(safe-area-inset-top) 12px calc(12px + env(safe-area-inset-bottom))}
+#panel.drawer{width:min(88vw,380px);height:100%}
+#panel.sheet{margin-top:auto;width:100%;max-height:80%;border-radius:16px 16px 0 0;padding-top:12px}
+.phead{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:44px;font-size:17px}
+.sec{margin:14px 0 4px;font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--mu)}
+.row{display:flex;flex-direction:column;align-items:flex-start;text-align:left;width:100%;padding:8px 12px;margin-bottom:4px;background:var(--sf)}
+.row.cur{border-color:var(--ac)}
+.row .rm{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row .rs{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:var(--mu)}
+.wide{width:100%}
+.crumbs{display:flex;gap:2px;overflow-x:auto;white-space:nowrap;padding-bottom:4px}
+.crumbs button{min-height:36px;padding:0 8px;flex:none}
+.crumbs button:disabled{opacity:1;color:var(--mu)}
+.tools{display:flex;gap:8px;align-items:center;justify-content:space-between}
+.tools label{display:flex;align-items:center;gap:8px;min-height:44px}
+.mk-row{display:flex;gap:8px}
+.mk-row input,#panel select{flex:1;min-width:0;min-height:44px;font-size:16px;font-family:inherit;color:var(--tx);background:var(--sf);border:1px solid var(--bd);border-radius:10px;padding:0 10px}
+.err{color:var(--er);font-size:14px;overflow-wrap:anywhere}
+.flist{flex:1;min-height:120px}
+.pfoot{display:flex;flex-direction:column;gap:8px;position:sticky;bottom:0;background:var(--bg);padding-top:8px}
+#gate{position:fixed;inset:0;z-index:30;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;text-align:center;padding:24px}
+#gate h1{margin:0;font-size:22px}
+#gate p{margin:0;color:var(--mu);max-width:30em}
+#gate img{width:72px;height:72px}
+</style>
+</head>
+<body>
+<div id="app">
+  <header id="bar">
+    <div class="r1"><button id="menu" class="ghost" aria-label="Sessions and workspaces">&#9776;</button><div id="title">MiniCore</div><span id="dot" class="off"></span></div>
+    <div class="r2"><span id="ws"></span><button id="model" aria-label="Model and reasoning"></button><span id="stat"></span></div>
+  </header>
+  <div id="conn">Connecting…</div>
+  <div id="mid">
+    <main id="log"><button id="older" class="ghost" hidden>Load older messages</button><div id="blocks"></div><div id="empty" hidden></div></main>
+    <button id="pill" hidden>&#8595; new</button>
+    <div id="toasts"></div>
+  </div>
+  <section id="dock">
+    <div id="appr" hidden></div>
+    <div id="tray"></div>
+    <form id="comp">
+      <div class="trow"><textarea id="ta" rows="1" placeholder="Message" aria-label="Message"></textarea><button id="send" class="primary" type="submit">Send</button></div>
+      <div id="arow" hidden><button id="stop" type="button" class="danger">Stop</button><button id="queue" type="button" title="Run after the current turn">Queue</button></div>
+    </form>
+  </section>
+</div>
+<div id="scrim" hidden><aside id="panel"></aside></div>
+<div id="gate" hidden></div>
+
+<script>
+'use strict';
+// ---- pure logic: no DOM, no network ----
+const backoff = n => Math.min(15000, 1000 * 2 ** n);
+const basename = p => (p || '').split(/[\\/]/).filter(Boolean).pop() || p || '';
+const mergeReturned = (cur, text) => cur ? cur + '\n' + text : text;
+const SAFE_URL = /^https?:\/\//i;
+
+function relAge(iso, now = Date.now()) {
+  const m = Math.max(0, Math.floor((now - Date.parse(iso)) / 60000));
+  if (m < 1) return 'now';
+  if (m < 60) return m + 'm';
+  const h = Math.floor(m / 60);
+  if (h < 24) return h + 'h';
+  const d = Math.floor(h / 24);
+  return d < 30 ? d + 'd' : d < 365 ? Math.floor(d / 30) + 'mo' : Math.floor(d / 365) + 'y';
+}
+function fmtElapsed(ms) {
+  const s = Math.max(0, Math.floor(ms / 1000)), m = Math.floor(s / 60);
+  if (m < 1) return s + 's';
+  const pad = n => String(n).padStart(2, '0');
+  return m < 60 ? m + 'm ' + pad(s % 60) + 's' : Math.floor(m / 60) + 'h ' + pad(m % 60) + 'm';
+}
+const fmtDur = ms => ms < 1000 ? ms + 'ms' : ms < 60000 ? (ms / 1000).toFixed(1) + 's' : fmtElapsed(ms);
+const fmtTok = n => n == null ? '?' : n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n);
+
+function deviceName(ua) {
+  const os = /iPhone/.test(ua) ? 'iPhone' : /iPad/.test(ua) ? 'iPad' : /Android/.test(ua) ? 'Android'
+    : /Macintosh/.test(ua) ? 'Mac' : /Windows/.test(ua) ? 'Windows' : /Linux/.test(ua) ? 'Linux' : 'Device';
+  const br = /EdgiOS|Edg\//.test(ua) ? 'Edge' : /OPR\/|OPiOS/.test(ua) ? 'Opera' : /FxiOS|Firefox/.test(ua) ? 'Firefox'
+    : /CriOS|Chrome/.test(ua) ? 'Chrome' : /Safari/.test(ua) ? 'Safari' : 'Browser';
+  return os + ' ' + br;
+}
+
+// Indices (of `neu`) whose block differs from `old`.
+function diffBlocks(old, neu) {
+  const out = [];
+  for (let i = 0; i < neu.length; i++) if (JSON.stringify(old[i]) !== JSON.stringify(neu[i])) out.push(i);
+  return out;
+}
+function applyBlocks(blocks, len, upserts) {
+  blocks.length = len;
+  for (const u of upserts) blocks[u.i] = u.block;
+  return upserts.map(u => u.i);
+}
+
+// Intent bookkeeping. st: pending -> (ack removes it) | unconfirmed (socket dropped first).
+function intentStart(map, id, kind, text) { map.set(id, { id, kind, st: 'pending', text }); }
+function intentAck(map, msg) {
+  const it = map.get(msg.id);
+  map.delete(msg.id);
+  return it && { ...it, ok: msg.ok, error: msg.error };
+}
+function intentsDrop(map) { for (const it of map.values()) if (it.st === 'pending') it.st = 'unconfirmed'; }
+
+// Applies a server message to the model and says what changed.
+function reduce(m, msg) {
+  switch (msg.t) {
+    case 'snapshot': {
+      const dirty = diffBlocks(m.blocks, msg.blocks), sid = msg.state.session && msg.state.session.id;
+      const newSession = sid !== m.sid;
+      m.blocks = msg.blocks; m.state = msg.state; m.sid = sid;
+      return { dirty, state: true, newSession };
+    }
+    case 'blocks': return { dirty: applyBlocks(m.blocks, msg.len, msg.upserts) };
+    case 'state': m.state = msg.state; return { state: true };
+    case 'ack': return { ack: intentAck(m.intents, msg) };
+    case 'returned': return { returned: msg.text };
+    default: return {};
+  }
+}
+
+function splitPath(p) {
+  const sep = p.includes('/') ? '/' : '\\', parts = p.split(sep).filter(Boolean);
+  const out = parts.map((name, k) => {
+    let q = (p.startsWith(sep) ? sep : '') + parts.slice(0, k + 1).join(sep);
+    if (/^[A-Za-z]:$/.test(q)) q += sep;
+    return { name, path: q };
+  });
+  if (p.startsWith('/')) out.unshift({ name: '/', path: '/' });
+  return out;
+}
+function within(p, root) {
+  if (p === root) return true;
+  const s = root.includes('/') ? '/' : '\\';
+  return p.startsWith(root.endsWith(s) ? root : root + s);
+}
+
+// Markdown -> plain token trees. Never HTML; the renderer builds DOM nodes from these.
+function inline(s) {
+  const out = [];
+  let buf = '', i = 0, m;
+  const flush = () => { if (buf) out.push({ t: 'text', s: buf }); buf = ''; };
+  while (i < s.length) {
+    const c = s[i];
+    if (c === '\\' && /^[\\`*_{}\[\]()#+\-.!|<>~]$/.test(s[i + 1] || '')) { buf += s[i + 1]; i += 2; }
+    else if (c === '`') {
+      let n = 1;
+      while (s[i + n] === '`') n++;
+      const e = s.indexOf('`'.repeat(n), i + n);
+      if (e < 0) { buf += '`'.repeat(n); i += n; } else { flush(); out.push({ t: 'code', s: s.slice(i + n, e) }); i = e + n; }
+    } else if (c === '*' || c === '_') {
+      const dbl = s[i + 1] === c, w = dbl ? 2 : 1, e = s.indexOf(c.repeat(w), i + w);
+      const open = s[i + w] && !/\s/.test(s[i + w]) && (c === '*' || !/\w/.test(s[i - 1] || ''));
+      if (open && e > i + w && !/\s/.test(s[e - 1]) && (c === '*' || !/\w/.test(s[e + w] || ''))) {
+        flush(); out.push({ t: dbl ? 'b' : 'i', c: inline(s.slice(i + w, e)) }); i = e + w;
+      } else { buf += c; i++; }
+    } else if (c === '[' && (m = /^\[([^\]]*)\]\(\s*([^)\s]+)(?:\s+"[^"]*")?\s*\)/.exec(s.slice(i)))) {
+      flush();
+      out.push(SAFE_URL.test(m[2]) ? { t: 'a', href: m[2], c: [{ t: 'text', s: m[1] }] } : { t: 'text', s: m[1] });
+      i += m[0].length;
+    } else if (c === 'h' && !/\w/.test(s[i - 1] || '') && (m = /^https?:\/\/[^\s<>]+/i.exec(s.slice(i)))) {
+      const u = m[0].replace(/[.,;:!?)\]'"]+$/, '');
+      flush(); out.push({ t: 'a', href: u, c: [{ t: 'text', s: u }] }); i += u.length;
+    } else { buf += c; i++; }
+  }
+  flush();
+  return out;
+}
+
+function parseMd(src) {
+  const lines = src.replace(/\r\n?/g, '\n').split('\n'), out = [], LI = /^( *)([-*+]|\d{1,9}[.)])\s+(.*)/, TB = /^\s*\|.*\|\s*$/;
+  let para = [], i = 0, m;
+  const flush = () => { if (para.length) out.push({ t: 'p', c: inline(para.join('\n')) }); para = []; };
+  while (i < lines.length) {
+    const l = lines[i];
+    if ((m = /^ {0,3}(`{3,}|~{3,})\s*([^\s`]*)/.exec(l))) {
+      flush();
+      const fence = m[1], body = [];
+      for (i++; i < lines.length; i++) {
+        const t = lines[i].trim();
+        if (t.length >= fence.length && t === fence[0].repeat(t.length)) break;
+        body.push(lines[i]);
+      }
+      out.push({ t: 'code', lang: m[2], text: body.join('\n') });
+      i++;
+    } else if ((m = /^ {0,3}(#{1,6})\s+(.*?)(?:\s+#+)?\s*$/.exec(l))) {
+      flush(); out.push({ t: 'h', n: m[1].length, c: inline(m[2]) }); i++;
+    } else if (/^ {0,3}([-*_])( *\1){2,} *$/.test(l)) {
+      flush(); out.push({ t: 'hr' }); i++;
+    } else if (/^ {0,3}>/.test(l)) {
+      flush();
+      const q = [];
+      for (; i < lines.length && /^ {0,3}>/.test(lines[i]); i++) q.push(lines[i].replace(/^ {0,3}> ?/, ''));
+      out.push({ t: 'quote', c: parseMd(q.join('\n')) });
+    } else if (LI.test(l)) {
+      flush();
+      const items = [];
+      while (i < lines.length) {
+        if ((m = LI.exec(lines[i]))) {
+          items.push({ d: Math.min(3, Math.ceil(m[1].length / 4)), ord: /\d/.test(m[2]) ? parseInt(m[2], 10) : null, text: m[3] });
+          i++;
+        } else if (items.length && /^\s+\S/.test(lines[i])) { items[items.length - 1].text += '\n' + lines[i].trim(); i++; }
+        else if (!lines[i].trim() && LI.test(lines[i + 1] || '')) i++;
+        else break;
+      }
+      out.push({ t: 'list', items: items.map(x => ({ d: x.d, ord: x.ord, c: inline(x.text) })) });
+    } else if (TB.test(l) && TB.test(lines[i + 1] || '')) {
+      flush();
+      const rows = [];
+      for (; i < lines.length && TB.test(lines[i]); i++) rows.push(lines[i]);
+      out.push({ t: 'code', lang: '', text: rows.join('\n') });
+    } else {
+      if (l.trim()) para.push(l); else flush();
+      i++;
+    }
+  }
+  flush();
+  return out;
+}
+</script>
+<script>
+'use strict';
+// ---- UI ----
+const $ = id => document.getElementById(id);
+const kids = k => k.flat().filter(x => x != null && x !== false);
+const el = (tag, cls, ...k) => { const n = document.createElement(tag); if (cls) n.className = cls; n.append(...kids(k)); return n; };
+const fill = (n, ...k) => n.replaceChildren(...kids(k));
+const btn = (cls, label, fn) => { const b = el('button', cls, label); b.type = 'button'; b.onclick = fn; return b; };
+
+const KEY = 'minicore.token';
+const m = { state: null, blocks: [], intents: new Map(), sid: undefined };
+const nodes = [], dirty = new Set(), open = new Set(), fsReq = new Map();
+let ws, ready = false, started = false, halted = false, attempt = 0, retry = 0, pairCode = null, nid = 0;
+let stick = true, raf = 0, tick = 0, hiddenAt = 0, panel = null, view = 'main';
+const pk = { roots: null, listing: null, hidden: false, err: '', busy: false, mk: false, last: '', prof: 0 };
+
+// ---- connection ----
+function online() { return ready && ws && ws.readyState === 1; }
+function setConn() {
+  $('dot').className = online() ? '' : 'off';
+  $('conn').hidden = online() || halted;
+  $('conn').textContent = m.state ? 'Reconnecting…' : 'Connecting…';
+  updateComposer();
+}
+function lose() {
+  ready = false;
+  intentsDrop(m.intents);
+  fsReq.clear();
+  pk.busy = false;
+  if (panel === 'drawer' && view === 'picker') { pk.err = 'Connection lost'; renderPanel(); }
+  renderTray(); renderAppr();
+}
+function connect() {
+  clearTimeout(retry);
+  if (ws) { ws.onclose = ws.onmessage = null; ws.close(); lose(); }
+  const s = ws = new WebSocket((location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + location.host + '/ws');
+  s.onopen = () => s.send(JSON.stringify(pairCode
+    ? { t: 'pair', v: 1, code: pairCode, device: deviceName(navigator.userAgent) }
+    : { t: 'hello', v: 1, token: localStorage.getItem(KEY) }));
+  s.onmessage = e => onMessage(JSON.parse(e.data));
+  s.onclose = () => {
+    if (ws !== s) return;
+    lose(); setConn();
+    if (!halted) retry = setTimeout(connect, backoff(attempt++));
+  };
+  setConn();
+}
+function wake(force) {
+  if (!started || halted) return;
+  if (force || !ws || ws.readyState > 1) { attempt = 0; connect(); }
+}
+function gate(title, text, retryBtn) {
+  halted = true;
+  clearTimeout(retry);
+  if (ws) { ws.onclose = ws.onmessage = null; ws.close(); ws = null; lose(); }
+  const g = $('gate');
+  fill(g, el('img'), el('h1', '', title), text && el('p', '', text),
+    retryBtn && btn('primary', 'Try again', () => { halted = false; g.hidden = true; attempt = 0; connect(); }));
+  g.firstChild.src = '/icon.svg';
+  g.hidden = false;
+  closePanel(); setConn();
+}
+const BYE = {
+  remote_off: 'Remote control was turned off on the computer',
+  tui_exit: 'MiniCore quit on the computer',
+  replaced: 'Opened on another tab',
+};
+function onError(msg) {
+  if (msg.code === 'unauthorized') {
+    localStorage.removeItem(KEY); pairCode = null;
+    gate('Not paired', 'Open the link or scan the QR code shown by /remote in MiniCore on your computer.' + (msg.message ? ' (' + msg.message + ')' : ''));
+  } else if (msg.code === 'busy') gate('Another device is in control', null, true);
+  else gate(msg.code === 'version' ? 'Version mismatch' : 'Connection error', msg.message, true);
+}
+function onMessage(msg) {
+  const fx = reduce(m, msg);
+  switch (msg.t) {
+    case 'welcome': attempt = 0; ready = true; $('gate').hidden = true; setConn(); break;
+    case 'paired': localStorage.setItem(KEY, msg.token); pairCode = null; break;
+    case 'error': onError(msg); return;
+    case 'bye': gate(BYE[msg.reason] || 'Disconnected', null, msg.reason !== 'replaced'); return;
+    case 'notice': toast(msg.text, msg.level); break;
+    case 'fs': { const cb = fsReq.get(msg.id); fsReq.delete(msg.id); if (cb) cb(msg); break; }
+  }
+  if (fx.newSession) { stick = true; open.clear(); }
+  if (fx.dirty) { fx.dirty.forEach(i => dirty.add(i)); schedule(); }
+  if (fx.state) renderState();
+  if (fx.ack) {
+    const it = fx.ack;
+    if (!it.ok) toast(it.error || 'Request failed', 'error');
+    else if (it.kind === 'submit' || it.kind === 'queue') { $('ta').value = ''; grow(); }
+    renderTray(); renderAppr(); updateComposer();
+  }
+  if (fx.returned != null) { const ta = $('ta'); ta.value = mergeReturned(ta.value, fx.returned); grow(); }
+}
+
+// ---- intents ----
+function intent(kind, f = {}) {
+  if (!online()) { toast('Not connected', 'error'); return; }
+  const id = 'c' + ++nid;
+  ws.send(JSON.stringify({ t: 'intent', id, kind, ...f }));
+  intentStart(m.intents, id, kind, f.text);
+  renderTray(); renderAppr(); updateComposer();
+}
+const pending = kind => [...m.intents.values()].some(i => i.st === 'pending' && i.kind === kind);
+const sending = () => pending('submit') || pending('queue');
+function loadOlder() { if (!pending('load_older')) intent('load_older'); }
+function fsCall(msg, cb) {
+  if (!online()) { pk.err = 'Not connected'; renderPanel(); return; }
+  const id = 'c' + ++nid;
+  ws.send(JSON.stringify({ ...msg, id }));
+  fsReq.set(id, cb);
+  pk.busy = true; pk.last = id;
+}
+
+// ---- toasts ----
+function toast(text, level) {
+  const box = $('toasts'), n = el('div', 'toast ' + (level === 'error' ? 'error' : ''), el('span', '', text), btn('ghost', '✕', () => n.remove()));
+  n.querySelector('button').setAttribute('aria-label', 'Dismiss');
+  box.append(n);
+  while (box.children.length > 4) box.firstChild.remove();
+  if (level !== 'error') setTimeout(() => n.remove(), 4000);
+}
+
+// ---- transcript ----
+const LABEL = { steer: 'Steering', follow: 'Follow-up' };
+const ICON = { pending: '…', running: '◐', succeeded: '✓', failed: '✕', denied: '⊘', cancelled: '–' };
+function schedule() { if (!raf) raf = requestAnimationFrame(flush); }
+const atBottom = () => { const l = $('log'); return l.scrollHeight - l.scrollTop - l.clientHeight < 80; };
+
+function inl(tokens, p) {
+  for (const t of tokens) {
+    if (t.t === 'text') p.append(t.s);
+    else if (t.t === 'code') p.append(el('code', '', t.s));
+    else if (t.t === 'a') { const a = el('a'); inl(t.c, a); a.href = t.href; a.target = '_blank'; a.rel = 'noopener noreferrer'; p.append(a); }
+    else { const n = el(t.t === 'b' ? 'strong' : 'em'); inl(t.c, n); p.append(n); }
+  }
+}
+function md(tokens, p) {
+  for (const t of tokens) {
+    if (t.t === 'p') { const n = el('p'); inl(t.c, n); p.append(n); }
+    else if (t.t === 'h') { const n = el('h' + t.n); inl(t.c, n); p.append(n); }
+    else if (t.t === 'list') for (const it of t.items) {
+      const c = el('div', 'lc'), r = el('div', 'li', el('span', 'mk', it.ord != null ? it.ord + '.' : '•'), c);
+      inl(it.c, c); r.style.marginLeft = it.d * 1.2 + 'em'; p.append(r);
+    } else if (t.t === 'code') p.append(el('pre', '', el('code', '', t.text)));
+    else if (t.t === 'quote') { const n = el('blockquote'); md(t.c, n); p.append(n); }
+    else p.append(el('hr'));
+  }
+}
+function toolBody(b) {
+  const out = b.output || [];
+  return el('div', 'tbody',
+    b.input && [el('div', 'lbl', 'Input'), el('pre', '', b.input)],
+    b.input && b.input_lines > b.input.split('\n').length && el('div', 'hint', 'Input shortened (' + b.input_lines + ' lines)'),
+    out.length || b.output_dropped ? [el('div', 'lbl', 'Output'),
+      b.output_dropped > 0 && el('div', 'hint', b.output_dropped + ' earlier lines dropped' + (b.output_lines != null ? ' (' + b.output_lines + ' total)' : '')),
+      out.length > 0 && el('pre', '', out.join('\n'))] : !b.input && el('div', 'hint', 'No output'),
+    b.truncated && el('div', 'hint', 'Output truncated'));
+}
+function renderBlock(b, i) {
+  switch (b.type) {
+    case 'user':
+      return el('div', 'user', b.kind && b.kind !== 'prompt' && el('div', 'lbl', LABEL[b.kind] || b.kind), el('div', 'bubble', b.text));
+    case 'assistant': {
+      const n = el('div', 'asst'), body = el('div', 'md');
+      if (b.reasoning) {
+        const d = el('details', 'think', el('summary', '', 'Thinking'), el('div', '', b.reasoning)), k = 'r' + i;
+        d.open = open.has(k);
+        d.ontoggle = () => d.open ? open.add(k) : open.delete(k);
+        n.append(d);
+      }
+      md(parseMd(b.text || ''), body);
+      if (b.streaming) {
+        const last = body.lastElementChild;
+        (last && last.matches('p,h1,h2,h3,h4,h5,h6') ? last : body).append(el('span', 'caret'));
+      }
+      n.append(body);
+      return n;
+    }
+    case 'tool': {
+      const k = 't' + b.call_id, isOpen = open.has(k);
+      const meta = [b.duration_ms != null && fmtDur(b.duration_ms), b.exit_code != null && 'exit ' + b.exit_code].filter(Boolean).join(' · ');
+      const head = el('div', 'thead', el('span', 'ico', ICON[b.state] || '?'), el('b', '', b.name), el('span', 'det', b.detail), meta && el('span', 'meta', meta));
+      head.onclick = () => { open.has(k) ? open.delete(k) : open.add(k); dirty.add(i); schedule(); };
+      return el('div', 'tool ' + b.state, head, isOpen && toolBody(b));
+    }
+    case 'turn_end': {
+      const c = b.changes, outcome = b.outcome.replace(/_/g, ' ');
+      const parts = [outcome[0].toUpperCase() + outcome.slice(1), b.duration_ms != null && fmtDur(b.duration_ms),
+        b.requests > 0 && b.requests + (b.requests === 1 ? ' request' : ' requests'), b.tools > 0 && b.tools + (b.tools === 1 ? ' tool' : ' tools'),
+        c && c.files + (c.files === 1 ? ' file' : ' files') + (c.added != null ? ' +' + c.added : '') + (c.removed != null ? ' −' + c.removed : '')];
+      return el('div', 'turnend' + (b.outcome === 'completed' ? '' : ' bad'), el('span', '', kids(parts).join(' · ')));
+    }
+    case 'compaction': {
+      const t = 'Context compacted' + (b.before != null || b.after != null ? ' · ' + fmtTok(b.before) + ' → ' + fmtTok(b.after) + ' tokens' : '');
+      if (!b.summary) return el('div', 'compact', t);
+      const k = 'c' + i, d = el('details', '', el('summary', '', t), el('div', '', b.summary));
+      d.open = open.has(k);
+      d.ontoggle = () => d.open ? open.add(k) : open.delete(k);
+      return el('div', 'compact', d);
+    }
+    case 'earlier':
+      return btn('earlier ghost', 'Load older (' + b.hidden_items + ' hidden)', loadOlder);
+    default:
+      return el('div');
+  }
+}
+function flush() {
+  raf = 0;
+  const log = $('log'), box = $('blocks'), bl = m.blocks;
+  const wasStick = stick, fromBottom = log.scrollHeight - log.scrollTop, prev = nodes.length;
+  while (nodes.length > bl.length) nodes.pop().remove();
+  const grew = bl.length > prev || dirty.has(bl.length - 1), prepended = bl.length > prev && dirty.has(0) && prev > 0;
+  for (const i of [...dirty].sort((a, b) => a - b)) {
+    if (i >= bl.length) continue;
+    const n = renderBlock(bl[i], i);
+    if (nodes[i]) nodes[i].replaceWith(n); else box.append(n);
+    nodes[i] = n;
+  }
+  dirty.clear();
+  renderEmpty();
+  if (wasStick) { log.scrollTop = log.scrollHeight; $('pill').hidden = true; }
+  else if (prepended) log.scrollTop = log.scrollHeight - fromBottom;
+  else if (grew) $('pill').hidden = false;
+}
+function renderEmpty() {
+  const s = m.state, e = $('empty');
+  if (!s) return;
+  $('older').hidden = !s.older || (m.blocks[0] && m.blocks[0].type === 'earlier');
+  e.hidden = m.blocks.length > 0;
+  if (e.hidden) return;
+  if (s.session) fill(e, s.status.loading ? 'Loading session…' : 'No messages yet.');
+  else fill(e, 'New session in', el('code', '', s.draft.workspace), 'Send the first message to start.');
+}
+
+// ---- status, approval, composer ----
+const cur = k => { const s = m.state; return (s.session || s.draft)[k]; };
+function tickStatus() {
+  const st = m.state.status, live = st.busy || st.compacting;
+  let t = st.loading ? 'Loading session…' : st.interrupting ? 'Interrupting…' : st.compacting ? 'Compacting…' : st.label || (st.busy ? 'Working' : 'Idle');
+  if (live && st.started_ms) t += ' · ' + fmtElapsed(Date.now() - st.started_ms);
+  if (m.state.context_percent != null) t += ' · ctx ' + Math.round(m.state.context_percent) + '%';
+  $('stat').textContent = t;
+  $('stat').className = live || st.loading ? 'busy' : '';
+}
+function renderState() {
+  const s = m.state, st = s.status;
+  $('title').textContent = (s.session && s.session.title) || 'New session';
+  $('ws').textContent = basename((s.session || s.draft).workspace);
+  $('model').textContent = (cur('model') || 'default model') + (cur('reasoning') ? ' · ' + cur('reasoning') : '');
+  $('model').disabled = !s.models.length;
+  const live = (st.busy || st.compacting) && st.started_ms;
+  if (live && !tick) tick = setInterval(tickStatus, 1000);
+  if (!live && tick) { clearInterval(tick); tick = 0; }
+  tickStatus(); renderEmpty(); renderAppr(); renderTray(); updateComposer();
+  if (panel && !(panel === 'drawer' && view === 'picker')) renderPanel();
+}
+function renderAppr() {
+  const a = m.state && m.state.interaction, box = $('appr');
+  box.hidden = !a;
+  if (!a) return;
+  const ans = c => () => intent('answer', { interaction_id: a.id, choice: c });
+  const bs = a.kind === 'approval'
+    ? [btn('primary', 'Allow once', ans('allow')), btn('', 'Allow ' + a.tool + ' this session', ans('allow_session')), btn('danger', 'Deny', ans('deny'))]
+    : a.options.map((o, i) => btn(i ? '' : 'primary', o, ans(i)));
+  bs.forEach(b => { b.disabled = !online() || pending('answer'); });
+  fill(box, el('div', 'ptitle', a.prompt), (a.tool || a.detail) && el('div', 'pdet', a.tool && el('b', '', a.tool + ' '), a.detail),
+    a.input && el('pre', '', a.input.length > 2000 ? a.input.slice(0, 2000) + '…' : a.input), el('div', 'pbtns', bs));
+}
+const PEND = { submit: 'Sending', queue: 'Queueing', cancel: 'Stopping', answer: 'Answering', load_older: 'Loading', open_session: 'Opening session',
+  new_session: 'Starting session', set_model: 'Setting model', set_reasoning: 'Setting reasoning' };
+function renderTray() {
+  const q = m.state ? m.state.queue : [];
+  fill($('tray'),
+    q.map(x => el('div', 'q', el('b', '', LABEL[x.kind] || x.kind), el('span', '', x.text))),
+    [...m.intents.values()].map(it => {
+      const txt = it.text ? ' “' + it.text.slice(0, 60) + '”' : '';
+      return it.st === 'pending' ? el('div', 'it', el('span', '', PEND[it.kind] + '…' + txt))
+        : el('div', 'it lost', el('span', '', PEND[it.kind] + ' not confirmed' + txt + ': connection dropped, check the transcript before retrying'),
+          btn('', 'Dismiss', () => { m.intents.delete(it.id); renderTray(); }));
+    }));
+}
+function grow() { const t = $('ta'); t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, 160) + 'px'; }
+function updateComposer() {
+  const st = m.state && m.state.status, off = !online(), lock = sending();
+  const busy = st && st.busy, comp = st && st.compacting;
+  $('ta').readOnly = lock;
+  $('send').disabled = off || lock;
+  $('send').textContent = busy ? 'Steer' : 'Send';
+  $('send').title = busy ? 'Send now as steering' : '';
+  $('arow').hidden = !(busy || comp);
+  $('queue').hidden = !busy;
+  $('queue').disabled = off || lock;
+  $('stop').disabled = off;
+}
+function submit(kind) {
+  const text = $('ta').value;
+  if (text.trim() && !sending()) intent(kind, { text });
+}
+$('comp').onsubmit = e => { e.preventDefault(); submit('submit'); };
+$('queue').onclick = () => submit('queue');
+$('stop').onclick = () => intent('cancel');
+$('ta').oninput = grow;
+$('ta').onkeydown = e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); submit('submit'); } };
+$('older').onclick = loadOlder;
+$('pill').onclick = () => { $('log').scrollTop = $('log').scrollHeight; };
+$('log').onscroll = () => { stick = atBottom(); if (stick) $('pill').hidden = true; };
+
+// ---- drawer, model sheet, directory picker ----
+function openPanel(kind) {
+  if (!m.state) return;
+  panel = kind; view = 'main';
+  $('panel').className = kind === 'model' ? 'sheet' : 'drawer';
+  $('scrim').hidden = false;
+  renderPanel();
+}
+function closePanel() { panel = null; $('scrim').hidden = true; }
+function renderPanel() { (panel === 'model' ? renderModel : view === 'picker' ? renderPicker : renderDrawer)(); }
+const phead = title => el('div', 'phead', el('b', '', title), btn('ghost', '✕', closePanel));
+const row = (cls, main, sub, fn) => { const b = el('button', 'row ' + cls, el('span', 'rm', main), sub && el('span', 'rs', sub)); b.type = 'button'; b.onclick = fn; return b; };
+const sec = t => el('div', 'sec', t);
+
+function renderDrawer() {
+  const s = m.state, wss = [...new Set(s.sessions.map(x => x.workspace))];
+  fill($('panel'), phead('MiniCore'), btn('primary wide', '+ New session', openPicker),
+    wss.length > 0 && sec('Recent workspaces'),
+    wss.map(w => row('', basename(w), w, () => { intent('new_session', { workspace: w }); closePanel(); })),
+    sec('Sessions'), !s.sessions.length && el('div', 'rs', 'No sessions yet'),
+    s.sessions.map(x => row(x.current ? 'cur' : '', (x.current ? '● ' : '') + (x.title || x.id.replace(/^ses_/, '').slice(0, 8)),
+      basename(x.workspace) + ' · ' + relAge(x.updated_at), () => { if (!x.current) intent('open_session', { session_id: x.id }); closePanel(); })));
+}
+function renderModel() {
+  const s = m.state, c = s.session || s.draft, mod = s.models.find(x => x.id === c.model);
+  const levels = mod ? mod.reasoning : [...new Set(s.models.flatMap(x => x.reasoning))];
+  fill($('panel'), phead('Model'),
+    s.models.map(x => row(x.id === c.model ? 'cur' : '', x.id, null, () => intent('set_model', { model: x.id }))),
+    levels.length > 0 && sec('Reasoning'),
+    levels.map(l => row(l === c.reasoning ? 'cur' : '', l, null, () => intent('set_reasoning', { level: l }))));
+}
+const fsErr = r => r.message || r.error || 'Failed';
+function pkRoots() {
+  pk.listing = null; pk.mk = false;
+  fsCall({ t: 'fs_roots' }, r => { pk.busy = false; if (r.ok) { pk.roots = r.roots; pk.err = ''; } else pk.err = fsErr(r); renderPanel(); });
+  renderPanel();
+}
+function pkList(path) {
+  fsCall({ t: 'fs_list', path, hidden: pk.hidden }, r => {
+    if (r.id !== pk.last) return;
+    pk.busy = false;
+    if (r.ok) { pk.listing = r.listing; pk.err = ''; pk.mk = false; } else pk.err = fsErr(r);
+    renderPanel();
+  });
+  renderPanel();
+}
+function openPicker() { view = 'picker'; pk.roots = null; pk.err = ''; pk.hidden = false; pk.prof = 0; pkRoots(); }
+function renderPicker() {
+  const L = pk.listing, roots = pk.roots || [], profiles = m.state.profiles;
+  const crumbs = L && splitPath(L.path).map(c => {
+    const b = btn('ghost', c.name, () => pkList(c.path));
+    b.disabled = c.path === L.path || !roots.some(r => within(c.path, r.path));
+    return b;
+  });
+  const mk = el('input'), prof = el('select', '', el('option', '', 'Default profile'), profiles.map(p => el('option', '', p)));
+  prof.selectedIndex = pk.prof; prof.onchange = () => { pk.prof = prof.selectedIndex; };
+  mk.placeholder = 'Folder name'; mk.autocapitalize = 'off'; mk.autocomplete = 'off';
+  const create = () => { const name = mk.value.trim(); if (name) fsCall({ t: 'fs_mkdir', parent: L.path, name }, r => { if (r.ok) pkList(r.created); else { pk.busy = false; pk.err = fsErr(r); renderPanel(); } }); };
+  mk.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); create(); } };
+  const hid = el('input'); hid.type = 'checkbox'; hid.checked = pk.hidden; hid.disabled = !L;
+  hid.onchange = () => { pk.hidden = hid.checked; pkList(L.path); };
+  const go = () => { const f = { workspace: L.path }; if (prof.selectedIndex > 0) f.profile = profiles[prof.selectedIndex - 1]; intent('new_session', f); closePanel(); };
+  fill($('panel'),
+    el('div', 'phead', btn('ghost', '← Back', () => { view = 'main'; renderPanel(); }), el('b', '', 'Choose folder'), btn('ghost', '✕', closePanel)),
+    L ? el('div', 'crumbs', btn('ghost', 'Roots', pkRoots), crumbs) : null,
+    el('div', 'tools', el('label', '', hid, 'Show hidden'), btn('', 'New folder', () => { pk.mk = !pk.mk; renderPanel(); })),
+    L && pk.mk && el('div', 'mk-row', mk, btn('primary', 'Create', create)),
+    pk.err && el('div', 'err', pk.err),
+    el('div', 'flist',
+      L && L.parent != null && row('', '↑ Up', basename(L.parent), () => pkList(L.parent)),
+      (L ? L.entries : roots).map(x => row('', '📁 ' + x.name, null, () => pkList(x.path))),
+      pk.busy && el('div', 'rs', 'Loading…'),
+      L && !L.entries.length && !pk.busy && el('div', 'rs', 'No subfolders'),
+      L && L.truncated && el('div', 'hint', 'Only the first entries are shown')),
+    el('div', 'pfoot', profiles.length > 0 && prof, btn('primary', L ? 'Use this folder' : 'Choose a root folder', go)));
+  $('panel').querySelector('.pfoot .primary').disabled = !L;
+  if (L && pk.mk) mk.focus();
+}
+$('menu').onclick = () => openPanel('drawer');
+$('model').onclick = () => openPanel('model');
+$('scrim').onclick = e => { if (e.target === $('scrim')) closePanel(); };
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && panel) closePanel(); });
+
+// ---- lifecycle ----
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) hiddenAt = Date.now(); else wake(Date.now() - hiddenAt > 10000);
+});
+addEventListener('online', () => wake(false));
+if (window.visualViewport) {
+  const fit = () => { document.documentElement.style.setProperty('--h', visualViewport.height + 'px'); scrollTo(0, 0); if (stick) $('log').scrollTop = $('log').scrollHeight; };
+  visualViewport.addEventListener('resize', fit);
+  visualViewport.addEventListener('scroll', () => scrollTo(0, 0));
+  fit();
+}
+(function start() {
+  const code = new URLSearchParams(location.hash.slice(1)).get('pair');
+  if (code) { history.replaceState(null, '', location.pathname + location.search); pairCode = code; }
+  started = true;
+  if (pairCode || localStorage.getItem(KEY)) connect();
+  else gate('Not paired', 'Open the link or scan the QR code shown by /remote in MiniCore on your computer.');
+})();
+</script>
+</body>
+</html>

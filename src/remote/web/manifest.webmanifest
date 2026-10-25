@@ -1,1 +1,9 @@
-{"name":"Minicore Remote","short_name":"Minicore","start_url":"/","display":"standalone","icons":[{"src":"/icon.svg","sizes":"any","type":"image/svg+xml"}]}
+{
+  "name": "MiniCore",
+  "short_name": "MiniCore",
+  "start_url": "/",
+  "display": "standalone",
+  "theme_color": "#0f1115",
+  "background_color": "#0f1115",
+  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}
