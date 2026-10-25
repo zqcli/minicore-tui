@@ -368,7 +368,9 @@ Assistant `text` is raw Markdown; clients render it.
   of assistant content.
 - `State` is built, serialized and compared with the last one sent; only a
   difference sends `state`. Elapsed time is computed by the client from
-  `started_ms`, so a running turn does not send a `state` every frame.## Host directory interface
+  `started_ms`, so a running turn does not send a `state` every frame.
+
+## Host directory interface
 
 Only for the phone's directory picker; the model cannot call it. Pure, blocking
 functions in `remote::fs`, run off the main loop by the connection task (they do
