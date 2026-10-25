@@ -48,7 +48,8 @@ pub struct App {
     composer, joined by blank lines, when it comes to the foreground.
   - `unseen: bool`: a turn ended (or failed) while it was in the background;
     cleared when it comes to the foreground.
-  - `last_seen_outcome`: not needed; `unseen` suffices.
+  - `waiting_for_compaction`: a send refused while post-turn compaction owned
+    the session (formerly on `App`); it counts as `compacting`.
 - Each `Session` keeps the transcript-view state it needs when it returns:
   `scroll: Scroll` (the foreground's `App::scroll` is saved into it on leave and
   restored on return). The layout cache is cleared on every switch, as today.
@@ -60,16 +61,19 @@ pub struct App {
   session that is not live still only update the catalog (`SessionOpened`).
 - **Task results** (`Msg::Session(epoch, op)`): delivered to the live session
   with that epoch, foreground or background; dropped if none (deleted).
-- **Running reducer code for a background session**: `App::with_background(epoch, f)`
+- **Running reducer code for a background session**: `App::with_background(index, f)`
   swaps that session into `App::session`, sets `App::background_op = true`,
   runs `f` (the existing `on_op`, event handling, `start_turn`, `end_turn`,
   `flush_queue`, `on_approval_requested`, …), then swaps back and clears the
-  flag. The foreground's `scroll` and layout are saved/restored around the swap
-  so they cannot be touched. No turn-lifecycle code is duplicated.
+  flag. `App::scroll` is swapped with the session's own `scroll` around it, so
+  a page prepended in the background keeps that session's anchor and the
+  foreground's is never touched; the layout cache is not used by reducer code.
+  No turn-lifecycle code is duplicated.
 - While `background_op` is set:
   - no scroll, layout, overlay, selection or composer change: `restore_draft`
-    pushes to `Session::returned` instead; scroll/anchor shifts (older pages,
-    `pin_view`, follow on send) are skipped;
+    pushes to `Session::returned` instead; find matches are not moved; results
+    that only answer foreground pickers and views (`/session` item count, `@`
+    files, diff lists and pages) are dropped;
   - `notice` prefixes the text with `"<label>": ` (the session label);
   - the remote projection is not touched (it always projects the foreground).
 - Auto-allow ("allow this tool for the session") answers background approvals
@@ -80,7 +84,10 @@ pub struct App {
 - `Action::OpenSession(id)` (picker, `/resume`, `--session`, phone
   `open_session`): if `id` is the foreground, nothing; if it is in `background`,
   **switch**; otherwise open as today (`loading_session`, `session.open`, adopt).
-  A newly adopted session pushes the previous foreground to `background`.
+  A newly adopted session pushes the previous foreground to `background`; an
+  open answer for a session that is already live (a second open of it) is
+  ignored. Every change of the session on screen closes pickers and views, whose
+  state belongs to the session left.
 - **Switch** = save composer text into the leaving session's `draft` and
   `App::scroll` into its `scroll`; move it to the front of `background`; take
   the target out of `background` into `App::session`; restore its `scroll`;
@@ -105,8 +112,9 @@ pub struct App {
   notifier counts background approvals too), notice
   `"<label>" needs approval · ctrl+r`.
 - **Turn ended** in a background session: set `unseen`; notice
-  `"<label>" finished in 3m 12s` (or `failed` / `interrupted` with the
-  outcome word the turn-end line uses); the long-turn bell rule applies.
+  `"<label>" finished in 3m12s` (the turn-end line's duration format; or the
+  outcome words it uses, such as `interrupted` or `failed · model error`); the
+  long-turn bell rule applies.
 - **Footer**: when any background session is running, waiting for approval or
   compacting, a segment `2 running · 1 needs approval` (only the non-zero
   parts; `needs approval` in the warning style). It gives way on narrow
@@ -136,10 +144,10 @@ pub struct App {
   Not-live entries have `"live": false` and no other new fields.
 - `State` gains `"background": {"running": n, "approval": n}` (counts over
   background sessions only).
-- The catalog cache must be invalidated when any background session's
-  status/unseen changes (bump `catalog_generation` or fold a background-status
-  generation into the cache key), so a `state` goes out; unchanged background
-  state sends nothing.
+- The live fields are applied on every sync next to the `current` marks, outside
+  the cached catalog (a lookup per listed session, no rebuild or sort), so a
+  background status or `unseen` change changes the serialized `State` and a
+  `state` goes out; unchanged background state sends nothing.
 - `open_session` on a live session switches instantly (ack after the switch).
 - A background approval or a background turn end forwards its notice as today
   (`notice`), so the phone shows it.

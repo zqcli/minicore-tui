@@ -168,7 +168,10 @@ without a report. The TUI never estimates it.
   session is reopened.
 - **Sessions.** None exists until the first message: the first `Enter` creates
   it with the profile, model and reasoning picked so far and sends the text.
-  `/new` leaves the open session and returns to that state. Until then the
+  `/new` leaves the open session and returns to that state. A session you leave
+  keeps running in the background and comes back instantly, as you left it,
+  from `Ctrl+R`; the footer counts the ones working or waiting for approval, and
+  a notice says when one finishes or needs you. Until then the
   commands that read a session (`/compact`, `/context`, `/diff`,
   `/rename`, `/export`, `/copy`, `/session`) and the `@` file picker say
   `No session yet: send a message first`.

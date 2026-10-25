@@ -65,7 +65,16 @@ back in the editor with the error. While the session is being created another
 `Enter` leaves its text in the editor. `/model`, `/reasoning`, `Ctrl+L`,
 `Ctrl+P` and `Shift+Tab` choose the settings of that session and confirm with a
 notice, and `/new <profile>` chooses its profile. `Ctrl+R` opens a stored
-session. Commands that need a session (`/compact`, `/context`, `/diff`,
+session.
+
+Leaving a session (`/new`, or opening another) does not stop it: its turn,
+queued follow-ups and approvals carry on in the background, and its draft stays
+with it. Opening it again from the picker or `/resume` is instant and shows what
+it did meanwhile, scrolled where you left it. Keys act on the session on screen
+only: `Esc` stops its turn, and an approval is answered after switching to its
+session. A background turn that ends or asks for approval shows a notice such
+as `"Fix parser" needs approval · ctrl+r` and rings the bell, and the footer
+shows `2 running · 1 needs approval` while any background session works. Commands that need a session (`/compact`, `/context`, `/diff`,
 `/rename`, `/export`, `/copy`, `/session`) answer
 `No session yet: send a message first`. Quitting creates nothing.
 
@@ -156,7 +165,7 @@ the name.
 | Command | Effect |
 |---|---|
 | `/new [profile]` | Leave the open session for an empty conversation; the first message creates the new session, with the Agent's default profile or the named one. |
-| `/sessions`, `/resume` | Open the sessions picker. |
+| `/sessions`, `/resume` | Open the sessions picker. Live sessions come first, each row starting with its state: `running 2m`, `needs approval`, `compacting` or `new` (a turn ended unseen). Opening a live one switches at once; a session that is still working cannot be deleted (`Stop "<title>" first: open it and press Esc`). |
 | `/rename <title>` | Rename the current session (an empty title is an error). |
 | `/model [id]` | Switch to the model (an exact id or a unique fuzzy match), or open the picker. When the model does not support the current reasoning level, the switch also moves to the nearest level it supports (the higher one on a tie) and a notice names it. `Ctrl+P` and `Ctrl+L` do the same, and a draft adjusts the level its session will start with. |
 | `/session` | Show the open session's id, workspace, profile, model, item count and token totals. |

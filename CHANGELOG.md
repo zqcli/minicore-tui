@@ -18,6 +18,14 @@
   takes control back.
 - Opening or creating a session makes its workspace the one the next new
   session uses.
+- Sessions you leave keep running: a turn, its follow-ups and its approvals go
+  on in the background, and switching back (`Ctrl+R`, `/resume`) is instant
+  and shows everything that streamed meanwhile, with the scroll position and
+  draft you left. A background turn that ends or needs approval says so in a
+  notice (and the bell), the footer counts `2 running · 1 needs approval`, and
+  the sessions picker lists live sessions first with `running 2m`,
+  `needs approval`, `compacting` or `new`. Each session, and the empty draft,
+  keeps its own editor text. A session that is still working cannot be deleted.
 
 ## 0.5.5 — 2026-10-24
 

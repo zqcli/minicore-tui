@@ -167,8 +167,22 @@ not the resident one. `adopt` makes an opened or created session resident with
 the same session, orphans what is still in flight for the old one. Remote listeners
 have a separate generation so late handshakes cannot survive an off/on cycle.
 
-Only the active session is resident; opening another drops the old transcript
-and coming back reloads it. A turn keeps running in the Agent meanwhile.
+Every session opened in the process stays live (`docs/design-sessions.md`):
+`App::session` is the foreground and `App::background` holds the others, most
+recently left first. Each keeps its epoch for life, so `Msg::Session` reaches it
+by epoch wherever it is, and Agent events reach it by `session_id`; a result for
+a deleted session is dropped. Background work runs the ordinary reducer code
+through `App::with_background`, which swaps the session into the foreground slot
+with its own `scroll`, sets `background_op` and swaps it back. While that flag is
+set the view is left alone: `restore_draft` keeps text in `Session::returned`,
+find matches and foreground-only answers (item counts, `@` files, diff reads)
+are skipped, and `notice` names the session. A background turn end marks the
+session `unseen` and an approval asks for the bell (`App::ring`). Switching
+(`show_session`) parks the foreground with its composer text and scroll, brings
+the target back with its draft and returned texts, clears the layout cache and
+pickers and reads only the footer's figures; the draft keeps its text in
+`App::draft_text`. Live states reach the picker, the footer, the status screen
+and the phone's session list when drawn or projected, with no timer of their own.
 
 ### The draft
 
@@ -189,8 +203,8 @@ list holds no empty sessions. While `app.session` is `None`:
   prompt block. A failure puts the text back with `restore_draft` and shows the
   error. While `loading_session` is set `Enter` does nothing, so a second
   session cannot start and the text typed meanwhile stays in the editor.
-- `/new` calls `show_session(None)`, which resets the view like `adopt` does and
-  leaves the old session to the Agent, as opening another session does.
+- `/new` calls `show_session(None)`, which parks the open session in the
+  background, where it keeps running, and restores the draft's own text.
 - Actions and panels that read a session (`Action::needs_session`,
   `Panel::needs_session`) answer one info notice; `@` completion needs
   `workspace.files`, which needs a loaded session, so it answers its own notice.
