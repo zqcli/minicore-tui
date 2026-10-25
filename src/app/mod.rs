@@ -1,8 +1,8 @@
 //! Application state and the reducer.
 //!
 //! `App` is mutated only on the main loop. IO runs in spawned tasks that post
-//! a [`Msg`]; a result for a session that is no longer resident is dropped by
-//! its epoch.
+//! a [`Msg`]; a result reaches the live session with its epoch, and is dropped
+//! when that session is gone.
 
 pub mod actions;
 pub mod commands;
@@ -11,6 +11,7 @@ pub mod diff;
 mod draft;
 pub mod find;
 pub mod keys;
+mod live;
 mod mouse;
 mod notify;
 mod ops;
@@ -53,7 +54,7 @@ pub use actions::{Action, Answer};
 pub use diff::DiffQuery;
 pub use overlay::{Overlay, Panel};
 pub use session::{
-    InteractionKind, LiveTurn, PendingInteraction, Phase, Queued, QueuedKind, Session,
+    InteractionKind, LiveStatus, LiveTurn, PendingInteraction, Phase, Queued, QueuedKind, Session,
 };
 pub use tasks::Tx;
 
@@ -68,7 +69,7 @@ pub enum Msg {
     Deleted(String, Result<(), RpcError>),
     /// A `session.rename` from the sessions picker, which may name a closed session.
     Renamed(Result<SessionInfo, RpcError>),
-    /// A result for the session that was resident at epoch `.0`.
+    /// A result for the live session with epoch `.0`.
     Session(u64, Box<SessionOp>),
     Notice(NoticeLevel, String),
     /// The external editor returned a draft.
@@ -179,7 +180,16 @@ pub struct App {
     pub client: Arc<Client>,
     pub tx: Tx,
     pub workspace: PathBuf,
+    /// The session on screen; `None` is the draft.
     pub session: Option<Session>,
+    /// The other live sessions, most recently left first.
+    pub background: Vec<Session>,
+    /// Reducer code is running for a background session swapped into `session`.
+    pub background_op: bool,
+    /// The draft's composer text while a session is on screen.
+    pub draft_text: String,
+    /// A background approval or a long background turn asks for the bell.
+    pub ring: bool,
     pub sessions: Vec<SessionInfo>,
     pub catalog_generation: u64,
     pub models: Vec<ModelInfo>,
@@ -203,7 +213,6 @@ pub struct App {
     pub quit_armed: Option<tokio::time::Instant>,
     pub ready: bool,
     pub fatal: Option<Fatal>,
-    pub waiting_for_compaction: bool,
     pub started: Instant,
     /// Numbers the compaction operations this process starts.
     pub op_seq: u64,
@@ -263,6 +272,10 @@ impl App {
             tx,
             workspace,
             session: None,
+            background: Vec::new(),
+            background_op: false,
+            draft_text: String::new(),
+            ring: false,
             sessions: Vec::new(),
             catalog_generation: 0,
             models: Vec::new(),
@@ -281,7 +294,6 @@ impl App {
             quit_armed: None,
             ready: false,
             fatal: None,
-            waiting_for_compaction: false,
             started: Instant::now(),
             op_seq: 0,
             theme: ThemeKind::Dark,
@@ -339,6 +351,8 @@ impl App {
             Msg::Deleted(id, result) => {
                 if self.ok(result).is_some() {
                     self.sessions.retain(|session| session.session_id != id);
+                    self.background
+                        .retain(|session| session.info.session_id != id);
                     self.catalog_generation += 1;
                     if let Overlay::Sessions {
                         rows,
@@ -362,6 +376,12 @@ impl App {
                     .is_some_and(|session| session.epoch == epoch)
                 {
                     self.on_op(*op);
+                } else if let Some(index) = self
+                    .background
+                    .iter()
+                    .position(|session| session.epoch == epoch)
+                {
+                    self.with_background(index, |app| app.on_op(*op));
                 }
             }
             Msg::Notice(level, text) => self.notice(level, text),
@@ -406,8 +426,18 @@ impl App {
         self.scrollbar_grab.is_some() || self.scrolled_at.is_some_and(|at| at.elapsed() < FLASH_TTL)
     }
 
+    /// Shows `text`; one about a background session names it.
     pub fn notice(&mut self, level: NoticeLevel, text: impl Into<String>) {
         let text = text.into();
+        let text = match self.background_op {
+            true => format!("\"{}\": {text}", self.session_label()),
+            false => text,
+        };
+        self.push_notice(level, text);
+    }
+
+    /// Shows `text` as it is.
+    pub(super) fn push_notice(&mut self, level: NoticeLevel, text: String) {
         self.remote.send(json!({"t":"notice", "level": match level { NoticeLevel::Info => "info", NoticeLevel::Error => "error" }, "text":text}));
         self.notices.push_back(Notice {
             level,
@@ -463,9 +493,11 @@ impl App {
             if let Some(label) = session.phase_label() {
                 return Some(label);
             }
+            if session.waiting_for_compaction {
+                return Some("Waiting for compaction");
+            }
         }
-        self.waiting_for_compaction
-            .then_some("Waiting for compaction")
+        None
     }
 
     /// Elapsed time of the running turn, for the status line.

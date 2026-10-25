@@ -70,7 +70,7 @@ impl App {
             selected,
             armed,
             ..
-        } = &mut self.overlay
+        } = &self.overlay
         else {
             return;
         };
@@ -82,17 +82,18 @@ impl App {
             return;
         };
         let id = info.session_id.clone();
-        if resident.is_some_and(|session| session.info.session_id == id) {
-            self.notice(
-                NoticeLevel::Error,
-                "Open another session before deleting this one",
-            );
-        } else if armed.as_deref() == Some(id.as_str()) {
-            *armed = None;
+        let label = session_label(info, resident);
+        let again = armed.as_deref() == Some(id.as_str());
+        if let Some(refusal) = self.delete_refusal(&id) {
+            self.notice(NoticeLevel::Error, refusal);
+            return;
+        }
+        if let Overlay::Sessions { armed, .. } = &mut self.overlay {
+            *armed = (!again).then(|| id.clone());
+        }
+        if again {
             self.on_action(Action::DeleteSession(id));
         } else {
-            let label = session_label(info, resident);
-            *armed = Some(id);
             self.notice(
                 NoticeLevel::Info,
                 format!("Press Ctrl+D again to delete \"{label}\" permanently"),

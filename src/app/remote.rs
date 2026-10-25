@@ -255,7 +255,9 @@ impl App {
                 self.load_older();
             }
             Intent::OpenSession { session_id } => {
-                if self.loading_session {
+                // A live session switches at once unless a created one is due.
+                let live = self.live(&session_id).is_some();
+                if self.loading_session && (!live || self.first_message.is_some()) {
                     return Err("A session is opening or being created".into());
                 }
                 self.remote_session(&session_id)?;
@@ -270,12 +272,8 @@ impl App {
             }
             Intent::DeleteSession { session_id } => {
                 self.remote_session(&session_id)?;
-                if self
-                    .session
-                    .as_ref()
-                    .is_some_and(|session| session.info.session_id == session_id)
-                {
-                    return Err("Open another session before deleting this one".into());
+                if let Some(refusal) = self.delete_refusal(&session_id) {
+                    return Err(refusal);
                 }
                 // Not `Action::DeleteSession`: local gating denies it in remote mode.
                 let client = self.client.clone();
@@ -343,7 +341,22 @@ impl App {
         Ok(())
     }
 
+    /// Shows session `id`: at once when it is live, else opened in the Agent.
     pub fn open_session(&mut self, id: String) {
+        if self
+            .session
+            .as_ref()
+            .is_some_and(|session| session.info.session_id == id)
+        {
+            return;
+        }
+        if let Some(index) = self.live_index(&id) {
+            // The session being created takes the screen when it arrives.
+            if self.first_message.is_none() {
+                self.switch_to(index);
+            }
+            return;
+        }
         self.loading_session = true;
         let client = self.client.clone();
         self.spawn_msg(async move {

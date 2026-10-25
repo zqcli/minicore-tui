@@ -149,19 +149,22 @@ impl FakeAgent {
                         method: method.clone(),
                         params: request["params"].clone(),
                     });
+                    // A `method@session_id` script answers only that session's calls.
+                    let mut keys: Vec<String> = request["params"]["session_id"]
+                        .as_str()
+                        .map(|id| format!("{method}@{id}"))
+                        .into_iter()
+                        .collect();
+                    keys.push(method.clone());
                     let reply = {
                         let mut sequences = sequences.lock().unwrap();
-                        let from_sequence = sequences
-                            .get_mut(&method)
-                            .and_then(|queue| queue.pop_front());
-                        from_sequence.unwrap_or_else(|| {
-                            script
-                                .lock()
-                                .unwrap()
-                                .get(&method)
-                                .cloned()
-                                .unwrap_or_else(|| Reply::result(json!({})))
-                        })
+                        let script = script.lock().unwrap();
+                        keys.iter()
+                            .find_map(|key| {
+                                let queued = sequences.get_mut(key).and_then(Replies::pop_front);
+                                queued.or_else(|| script.get(key).cloned())
+                            })
+                            .unwrap_or_else(|| Reply::result(json!({})))
                     };
                     let mut frame = json!({"jsonrpc": "2.0", "id": request["id"]});
                     if let Value::Object(fields) = reply.frame {
@@ -202,7 +205,8 @@ impl FakeAgent {
         )
     }
 
-    /// Sets the result one method answers with. Unscripted methods answer `{}`.
+    /// Sets the result one method answers with. Unscripted methods answer `{}`;
+    /// a `method@session_id` key answers only that session's calls.
     pub fn script(&self, method: &str, result: Value) {
         self.script
             .lock()

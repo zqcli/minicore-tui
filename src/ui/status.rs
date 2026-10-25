@@ -159,7 +159,11 @@ fn working_line(app: &App, styles: Styles, width: u16) -> Option<Line<'static>> 
         "Interrupting…"
     } else if live.is_some() {
         "Working (esc to interrupt)"
-    } else if app.waiting_for_compaction {
+    } else if app
+        .session
+        .as_ref()
+        .is_some_and(|session| session.waiting_for_compaction)
+    {
         "Waiting for compaction…"
     } else {
         return None;
@@ -223,7 +227,8 @@ fn notice_line(notice: &Notice, styles: Styles, width: u16) -> Line<'static> {
 /// `▸ dir@branch · model · reasoning · 3m · queued` and,
 /// right-aligned, `↑in ↓out Rcache · ctx N%`. Short of room, the directory and
 /// branch give way first, then the elapsed time and queue mark, then the model;
-/// the reasoning level stays. The remote mark takes only what the rest leaves.
+/// the reasoning level stays. The remote mark and the background sessions take
+/// only what the rest leaves.
 fn footer(app: &App, styles: Styles, width: u16) -> Line<'static> {
     let width = usize::from(width);
     let session = app.session.as_ref();
@@ -282,6 +287,8 @@ fn footer(app: &App, styles: Styles, width: u16) -> Line<'static> {
         }
     };
 
+    let others = others(app, styles);
+
     let right = session.map_or_else(Vec::new, |session| totals(session, styles));
     let right_width = spans_width(&right);
     if right_width >= width {
@@ -292,7 +299,7 @@ fn footer(app: &App, styles: Styles, width: u16) -> Line<'static> {
     } else {
         width - right_width - 1
     };
-    let mut groups = [Vec::new(), model, priority, suffix, Vec::new()];
+    let mut groups = [Vec::new(), model, priority, suffix, Vec::new(), Vec::new()];
     // The identity takes whatever the rest leaves.
     let rest = spans_width(&join(&groups, styles));
     let separator = if rest > 0 { 3 } else { 0 };
@@ -303,7 +310,8 @@ fn footer(app: &App, styles: Styles, width: u16) -> Line<'static> {
         styles,
     );
     groups[4] = remote;
-    for index in [4, 3, 1, 2] {
+    groups[5] = others;
+    for index in [4, 5, 3, 1, 2] {
         let over = spans_width(&join(&groups, styles)).saturating_sub(room);
         if over == 0 {
             break;
@@ -323,6 +331,26 @@ fn footer(app: &App, styles: Styles, width: u16) -> Line<'static> {
         spans.extend(right);
     }
     Line::from(spans)
+}
+
+/// `2 running · 1 needs approval` over the background sessions, only the
+/// parts that are not zero; empty when none needs attention.
+pub fn others(app: &App, styles: Styles) -> Vec<Span<'static>> {
+    let (working, approval) = app.background_counts();
+    let mut spans = Vec::new();
+    if working > 0 {
+        spans.push(Span::styled(format!("{working} running"), styles.text()));
+    }
+    if approval > 0 {
+        if !spans.is_empty() {
+            spans.push(Span::styled(" · ", styles.meta()));
+        }
+        spans.push(Span::styled(
+            format!("{approval} needs approval"),
+            styles.warning(),
+        ));
+    }
+    spans
 }
 
 /// `▸ dir@branch` in at most `room` cells: the directory is cut first (to 6
@@ -405,7 +433,7 @@ fn turn_elapsed(app: &App, session: &Session) -> Option<Duration> {
 }
 
 /// Whole minutes: `0m`, `42m`, `1h5m`.
-fn minutes(elapsed: Duration) -> String {
+pub(super) fn minutes(elapsed: Duration) -> String {
     let minutes = elapsed.as_secs() / 60;
     if minutes >= 60 {
         format!("{}h{}m", minutes / 60, minutes % 60)

@@ -1373,3 +1373,47 @@ fn the_remote_footer_mark_gives_way_before_the_rest() {
         "the reasoning level stays: {narrow}"
     );
 }
+
+#[test]
+fn the_sessions_picker_shows_what_live_sessions_are_doing() {
+    let mut app = app();
+    let catalog = |id: &str, title: &str| SessionInfo {
+        session_id: id.into(),
+        title: Some(title.into()),
+        updated_at: String::new(),
+        ..info()
+    };
+    let turn = |id: &str| TurnRef {
+        session_id: id.into(),
+        loop_id: "loop_1".into(),
+    };
+    let mut running = Session::new(catalog("ses_running", "Port the lexer"), 2);
+    running.live = Some(crate::app::LiveTurn::new(turn("ses_running"), 0));
+    let mut asking = Session::new(catalog("ses_asking", "Clean the build"), 3);
+    asking.live = Some(crate::app::LiveTurn::new(turn("ses_asking"), 0));
+    asking.interaction = Some(crate::app::PendingInteraction {
+        turn: turn("ses_asking"),
+        interaction_id: "i1".into(),
+        tool_call_id: "call_1".into(),
+        tool_name: "bash".into(),
+        prompt: "Allow tool `bash` for this call?".into(),
+        kind: crate::app::InteractionKind::Approval,
+        selected: 0,
+    });
+    let mut done = Session::new(catalog("ses_done", "Write the docs"), 4);
+    done.unseen = true;
+    app.sessions = vec![
+        catalog("ses_old", "An old session"),
+        done.info.clone(),
+        asking.info.clone(),
+        running.info.clone(),
+        info(),
+    ];
+    app.background = vec![running, asking, done];
+    app.open_panel(crate::app::Panel::Sessions);
+    snapshot(
+        "tests/snapshots/sessions-picker-live.txt",
+        include_str!("../../tests/snapshots/sessions-picker-live.txt"),
+        render(&mut app, 80, 20),
+    );
+}

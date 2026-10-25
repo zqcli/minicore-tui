@@ -423,8 +423,9 @@ impl App {
         }
         if let Some(session) = self
             .session
-            .as_mut()
-            .filter(|session| session.info.session_id == info.session_id)
+            .iter_mut()
+            .chain(&mut self.background)
+            .find(|session| session.info.session_id == info.session_id)
         {
             session.info = info.clone();
         }
@@ -455,12 +456,19 @@ impl App {
             .unwrap_or(0)
     }
 
-    /// The known sessions, the resident workspace first, then newest first.
+    /// The known sessions: the live ones first (on screen, then the most
+    /// recently left), then the current workspace's, then newest first.
     fn session_rows(&self) -> Vec<SessionInfo> {
         let workspace = self.workspace.to_string_lossy();
+        let live = |info: &SessionInfo| match &self.session {
+            Some(session) if session.info.session_id == info.session_id => 0,
+            _ => self
+                .live_index(&info.session_id)
+                .map_or(usize::MAX, |at| at + 1),
+        };
         let rank = |info: &SessionInfo| (info.workspace == workspace, info.updated_at.clone());
         let mut rows = self.sessions.clone();
-        rows.sort_by_cached_key(|info| std::cmp::Reverse(rank(info)));
+        rows.sort_by_cached_key(|info| (live(info), std::cmp::Reverse(rank(info))));
         rows
     }
 

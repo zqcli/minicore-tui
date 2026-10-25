@@ -1,4 +1,4 @@
-//! The resident session: transcript, live turn, queue, usage and status.
+//! A live session: transcript, live turn, queue, usage and status.
 
 use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
@@ -14,6 +14,7 @@ use crate::protocol::{
 use crate::transcript::{Block, EXPANDED_ROWS, RequestKey, ToolCall, ToolState, Transcript};
 use crate::transcript::{append_history, append_history_item, merge_live, push_interrupted};
 
+use super::Scroll;
 use super::tasks::History;
 
 /// How soon the footer's figures may be asked for again while a turn runs.
@@ -59,6 +60,26 @@ pub struct Session {
     pub reconcile_from: Vec<(String, usize)>,
     /// Where the next turn's region starts, captured before its prompt block.
     pub next_turn_start: Option<usize>,
+    /// A send was refused while post-turn compaction owned the session; the
+    /// text waits as a follow-up until the session is idle.
+    pub waiting_for_compaction: bool,
+    /// The composer text this session had when it left the foreground.
+    pub draft: Option<String>,
+    /// Texts the Agent refused while this session was in the background.
+    pub returned: Vec<String>,
+    /// A turn ended while this session was in the background.
+    pub unseen: bool,
+    /// The view this session had when it left the foreground.
+    pub scroll: Scroll,
+}
+
+/// What a live session is doing, for the picker, the footer and the phone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LiveStatus {
+    Idle,
+    Running,
+    Approval,
+    Compacting,
 }
 
 pub struct LiveTurn {
@@ -227,11 +248,28 @@ impl Session {
             applied_steers: 0,
             reconcile_from: Vec::new(),
             next_turn_start: None,
+            waiting_for_compaction: false,
+            draft: None,
+            returned: Vec::new(),
+            unseen: false,
+            scroll: Scroll::Follow,
         }
     }
 
     pub fn is_busy(&self) -> bool {
         self.live.is_some()
+    }
+
+    pub fn live_status(&self) -> LiveStatus {
+        if self.interaction.is_some() {
+            LiveStatus::Approval
+        } else if self.compaction.is_some() || self.waiting_for_compaction {
+            LiveStatus::Compacting
+        } else if self.is_busy() {
+            LiveStatus::Running
+        } else {
+            LiveStatus::Idle
+        }
     }
 
     /// The status line while a compaction runs. Inside a turn Esc ends the

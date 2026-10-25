@@ -453,6 +453,9 @@ impl App {
                 SessionOp::ToolHydrated(hydrated, read.ok())
             });
         }
+        if self.background_op {
+            self.background_approval();
+        }
     }
 
     pub(super) fn load_older(&mut self) {
@@ -538,8 +541,13 @@ impl App {
     }
 
     /// Returns submitted text to the composer: appended to a draft typed
-    /// meanwhile rather than replacing it, and one undo step either way.
+    /// meanwhile rather than replacing it, and one undo step either way. A
+    /// background session keeps it until it comes back to the screen.
     pub(super) fn restore_draft(&mut self, text: &str) {
+        if self.background_op {
+            self.session_mut().returned.push(text.to_owned());
+            return;
+        }
         if self.remote.connection.is_some() {
             self.remote.send(json!({"t":"returned", "text":text}));
             return;

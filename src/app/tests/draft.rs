@@ -189,6 +189,9 @@ async fn new_returns_to_the_draft_without_creating_and_records_the_profile() {
     assert_eq!(h.texts(), ["an old question"]);
     let old = h.app.session.as_ref().unwrap().epoch;
     script_first_message(&h);
+    // The session left for the draft stays live, so the new one has its own id.
+    h.fake
+        .script("session.create", json!({"session": session_info("s2")}));
 
     h.type_text("/new ask");
     h.press(KeyCode::Enter);
