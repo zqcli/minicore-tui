@@ -130,7 +130,8 @@ impl App {
                 connection,
                 accepted,
             } => {
-                if !self.remote.active()
+                if connection.generation != self.remote.generation
+                    || !self.remote.active()
                     || self.remote.connection.as_ref().is_some_and(|old| {
                         old.device.token_sha256 != connection.device.token_sha256
                     })

@@ -43,6 +43,7 @@ pub async fn serve(
     auth: Arc<Mutex<Auth>>,
     tx: Tx,
     mut stop: oneshot::Receiver<()>,
+    generation: u64,
 ) {
     let permits = Arc::new(Semaphore::new(8));
     let mut tasks = JoinSet::new();
@@ -55,7 +56,7 @@ pub async fn serve(
                 let auth = auth.clone();
                 let tx = tx.clone();
                 tasks.spawn(async move {
-                    let _ = connection(stream, auth, tx, permit).await;
+                    let _ = connection(stream, auth, tx, permit, generation).await;
                 });
             }
             _ = tasks.join_next(), if !tasks.is_empty() => {}
@@ -119,6 +120,7 @@ async fn connection(
     auth: Arc<Mutex<Auth>>,
     tx: Tx,
     permit: tokio::sync::OwnedSemaphorePermit,
+    generation: u64,
 ) -> Result<(), String> {
     let bytes = timeout(FIRST, head(&stream))
         .await
@@ -235,6 +237,7 @@ async fn connection(
     tx.send(Msg::Remote(RemoteEvent::Connect {
         connection: Connection {
             id,
+            generation,
             device,
             outbound,
             close,
@@ -333,7 +336,7 @@ mod tests {
         let (stop, stopped) = oneshot::channel();
         let task = tokio::spawn(async move {
             let _stop = stop;
-            serve(listener, server_auth, tx, stopped).await;
+            serve(listener, server_auth, tx, stopped, 0).await;
         });
         (dir, address, auth, rx, task)
     }

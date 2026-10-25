@@ -153,6 +153,7 @@ mod tests {
         let (close, _closing) = watch::channel(None);
         app.remote.connection = Some(Connection {
             id: 1,
+            generation: 0,
             device: Device {
                 name: "phone".into(),
                 token_sha256: "hash".into(),

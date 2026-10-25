@@ -24,6 +24,7 @@ pub enum RemoteMode {
 
 pub struct Connection {
     pub id: u64,
+    pub generation: u64,
     pub device: Device,
     pub outbound: mpsc::Sender<Value>,
     pub close: watch::Sender<Option<&'static str>>,
@@ -137,6 +138,7 @@ impl Remote {
             bound.auth.clone(),
             tx,
             stopped,
+            self.generation,
         ));
         self.stop = Some(stop);
         self.auth = Some(bound.auth);

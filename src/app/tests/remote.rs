@@ -23,6 +23,7 @@ fn phone(
     h.app.on_msg(Msg::Remote(RemoteEvent::Connect {
         connection: Connection {
             id,
+            generation: h.app.remote.generation,
             device: Device {
                 name: device.into(),
                 token_sha256: device.into(),
@@ -238,6 +239,33 @@ async fn root_checks_and_stale_answers_refuse_before_dispatch_and_new_drafts_use
     assert_eq!(h.calls("session.create")[0]["workspace"], json!(workspace));
     assert_eq!(h.sends(), ["new work"]);
     assert_eq!(h.app.composer.text(), "keep");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_handshake_from_a_stopped_listener_cannot_take_control_after_restart() {
+    let mut h = Harness::new();
+    h.app.remote.mode = RemoteMode::Waiting;
+    h.app.remote.generation = 2;
+    let (outbound, _output) = mpsc::channel(512);
+    let (close, _closing) = watch::channel(None);
+    let (accepted, admission) = oneshot::channel();
+    h.app.on_msg(Msg::Remote(RemoteEvent::Connect {
+        connection: Connection {
+            id: 9,
+            generation: 1,
+            device: Device {
+                name: "old phone".into(),
+                token_sha256: "old".into(),
+                paired_at: String::new(),
+            },
+            outbound,
+            close,
+        },
+        accepted,
+    }));
+    assert!(!admission.await.unwrap());
+    assert_eq!(h.app.remote.mode(), RemoteMode::Waiting);
+    assert!(h.app.remote.connection.is_none());
 }
 
 #[tokio::test(start_paused = true)]
