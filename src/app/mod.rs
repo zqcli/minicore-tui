@@ -58,6 +58,7 @@ pub use tasks::Tx;
 
 /// Everything the main loop can hand to the reducer.
 pub enum Msg {
+    Remote(crate::remote::RemoteEvent),
     Agent(Box<AgentEvent>),
     AgentClosed(String),
     Ready(Box<Ready>),
@@ -173,6 +174,7 @@ pub struct Press {
 }
 
 pub struct App {
+    pub remote: crate::remote::Remote,
     pub client: Arc<Client>,
     pub tx: Tx,
     pub workspace: PathBuf,
@@ -254,6 +256,7 @@ pub const BUSY_RETRY: Duration = Duration::from_millis(700);
 impl App {
     pub fn new(client: Arc<Client>, tx: Tx, workspace: PathBuf) -> Self {
         Self {
+            remote: crate::remote::Remote::default(),
             client,
             tx,
             workspace,
@@ -302,6 +305,7 @@ impl App {
 
     pub fn on_msg(&mut self, msg: Msg) {
         match msg {
+            Msg::Remote(event) => self.remote.on_event(event),
             Msg::Agent(event) => self.on_agent_event(*event),
             Msg::AgentClosed(reason) => {
                 if self.fatal.is_none() {

@@ -245,7 +245,7 @@ fn agent_binary(home: &Home, flag: Option<&Path>, configured: Option<PathBuf>) -
 
 /// Replaces `path` through a temporary file, so a crash leaves the old content
 /// or the new one.
-fn write_atomic(path: &Path, text: &str, mode: u32) -> std::io::Result<()> {
+pub(crate) fn write_atomic(path: &Path, text: &str, mode: u32) -> std::io::Result<()> {
     use std::io::Write;
     let mut temp = path.as_os_str().to_owned();
     temp.push(format!(".{}.tmp", std::process::id()));
