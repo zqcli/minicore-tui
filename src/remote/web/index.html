@@ -372,6 +372,7 @@ html.kb{--sb:0px}
 .dsec.run{display:flex;align-items:center;gap:6px;color:var(--ac)}
 .dfoot{flex:none;padding:var(--s3) var(--s4) calc(max(var(--sb),var(--s3)));box-shadow:0 -1px 0 var(--bd);font-size:13px;color:var(--tx2)}
 .dfoot .who{display:flex;align-items:center;gap:var(--s2);min-height:28px}
+.dfoot .also{padding-left:calc(8px + var(--s2));overflow-wrap:anywhere}
 .dot{width:8px;height:8px;border-radius:50%;background:var(--ok);flex:none}
 .dot.off{background:var(--wa)}
 .dfoot .appear{display:flex;align-items:center;justify-content:space-between;gap:var(--s3);margin-top:var(--s2)}
@@ -430,6 +431,12 @@ globalThis.MC = (() => {
     return editor;
   }
   const mergeReturned = (cur, text) => cur ? cur + '\n' + text : text;
+  // The other connected devices: the state's list without one entry of this device's name.
+  function otherDevices(devices, me) {
+    const rest = devices.slice(), i = rest.indexOf(me);
+    if (i >= 0) rest.splice(i, 1);
+    return rest;
+  }
 
   function deviceName(ua, touchPoints = 0) {
     const os = /iPhone/.test(ua) ? 'iPhone' : /iPad/.test(ua) || (/Macintosh/.test(ua) && touchPoints > 1) ? 'iPad'
@@ -563,11 +570,10 @@ globalThis.MC = (() => {
       case 'locked': return { view: 'signin', locked: msg.retry_after || 30 };
       case 'unauthorized': return { view: 'signin', forget: true, notice: 'Please sign in to continue.' };
       case 'signed_out': return { view: 'signin', forget: true, notice: 'The password was changed on the computer. Sign in with the new password.' };
-      case 'busy': return { view: 'status', icon: 'phone', title: 'Another device is in control', text: 'Only one device can control MiniCore at a time. Disconnect it on the computer, then try again.', action: 'retry', label: 'Retry' };
       case 'version': return { view: 'status', icon: 'retry', title: 'Update needed', text: "This page and MiniCore on your computer don't speak the same protocol version. Reload to get the current page.", action: 'reload', label: 'Reload' };
       case 'remote_off': return { view: 'status', icon: 'power', title: 'Remote control is off', text: 'Remote control was turned off on the computer. Turn it back on with /remote on, then retry.', action: 'retry', label: 'Retry' };
       case 'tui_exit': return { view: 'status', icon: 'term', title: 'MiniCore quit', text: 'MiniCore quit on the computer. Start it again with remote control on, then retry.', action: 'retry', label: 'Retry' };
-      case 'replaced': return { view: 'status', icon: 'tabs', title: 'Opened in another tab', text: 'MiniCore is open in another tab on this device. Only one can be in control.', action: 'retry', label: 'Use here' };
+      case 'replaced': return { view: 'status', icon: 'tabs', title: 'Opened in another tab', text: 'MiniCore is open in another tab on this device, and one tab per device stays connected.', action: 'retry', label: 'Use here' };
       case 'bad_request': return { view: 'status', icon: 'warn', title: "Couldn't connect", text: msg.message || 'MiniCore did not accept this request.', action: 'retry', label: 'Retry' };
       default: return { view: 'status', icon: 'warn', title: 'Disconnected', text: msg.message || 'The connection to MiniCore was closed.', action: 'retry', label: 'Retry' };
     }
@@ -831,7 +837,7 @@ globalThis.MC = (() => {
   }
 
   return {
-    WINDOW, backoff, basename, plural, retireText, mergeReturned, deviceName, theme, installOffer,
+    WINDOW, backoff, basename, plural, retireText, mergeReturned, otherDevices, deviceName, theme, installOffer,
     login, hello, intents, fs, createStore, intent, request, pending, disconnect, sendAgain, unconfirmed, diffBlocks, applyBlocks, reduce,
     explain, lockText, fmtClock, unreachable, fsError,
     relTime, dayGroup, groupSessions, matchSession, fmtElapsed, fmtDur, fmtTok,
@@ -1216,7 +1222,9 @@ function onAck(a) {
   // Rename and delete answer inside their dialog when it is still waiting for them.
   const inDlg = (k === 'rename_session' || k === 'delete_session') && dl && dl.busy;
   if (inDlg) { dl.busy = false; if (a.ok) closeDlg(); else { dl.err = a.error || 'Request failed'; renderDlg(); } }
-  if (!a.ok && !inDlg && !(k === 'new_session' && ns)) toast(a.error || 'Request failed', 'error');
+  // Another device answered first; the state that follows closes the sheet.
+  if (k === 'answer' && a.error === 'stale') toast('Already answered');
+  else if (!a.ok && !inDlg && !(k === 'new_session' && ns)) toast(a.error || 'Request failed', 'error');
   renderTray(); renderAppr(); updateComposer(); renderModal(); renderTop();
 }
 
@@ -1699,7 +1707,9 @@ function renderDrawerFoot() {
   const f = $('drawer').querySelector('.dfoot');
   if (!f) return;
   const choice = themeChoice();
+  const others = online() ? MC.otherDevices(S.state.devices, S.device) : [];
   fill(f, installRow(), h('div', 'who', h('span', 'dot' + (online() ? '' : ' off')), h('span', '', online() ? 'Connected as ' + (S.device || 'this device') : 'Reconnecting…')),
+    others.length > 0 && h('div', 'also', 'Also connected: ' + others.join(', ')),
     h('div', 'appear', h('span', { id: 'aplbl' }, 'Appearance'), h('div', { class: 'seg sm', role: 'radiogroup', 'aria-labelledby': 'aplbl' },
       [['system', 'System'], ['light', 'Light'], ['dark', 'Dark']].map(([v, l]) => h('button', { type: 'button', role: 'radio', 'aria-checked': String(choice === v), onclick: () => setTheme(v) }, l)))),
     h('button', { class: 'btn', type: 'button', onclick: () => {

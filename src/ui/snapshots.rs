@@ -1180,23 +1180,31 @@ fn listening(app: &mut App) {
     app.remote.url = Some("http://192.168.20.207:8765".into());
 }
 
-/// A phone in control since 14:02.
-fn connected(app: &mut App) {
-    listening(app);
+/// Admits phone `name`, connected since `at` (UTC).
+fn admit(app: &mut App, name: &str, at: &str) {
     let (outbound, _output) = mpsc::channel(1);
     let (close, _closing) = tokio::sync::watch::channel(None);
-    app.remote.connection = Some(crate::remote::Connection {
-        id: 1,
-        generation: 0,
-        device: crate::remote::auth::Device {
-            name: "iPhone Safari".into(),
-            token_sha256: String::new(),
-            paired_at: String::new(),
+    app.remote.phones.push(crate::remote::Phone {
+        connection: crate::remote::Connection {
+            id: app.remote.phones.len() as u64 + 1,
+            generation: 0,
+            device: crate::remote::auth::Device {
+                name: name.into(),
+                token_sha256: name.into(),
+                paired_at: String::new(),
+            },
+            outbound,
+            close,
         },
-        outbound,
-        close,
+        view: Default::default(),
+        connected_at: at.parse().expect("time"),
     });
-    app.remote.connected_at = "2026-10-25T14:02:00Z".parse().expect("time");
+}
+
+/// A phone connected since 14:02.
+fn connected(app: &mut App) {
+    listening(app);
+    admit(app, "iPhone Safari", "2026-10-25T14:02:00Z");
 }
 
 /// A turn running `bash` in the resident session, its spinner on its first frame.
@@ -1266,7 +1274,7 @@ fn a_narrow_remote_status_screen_cuts_values_and_keeps_labels() {
     for label in [
         "Address",
         "Password",
-        "Phone",
+        "Phones",
         "Session",
         "Workspace",
         "Model",
@@ -1281,12 +1289,27 @@ fn a_narrow_remote_status_screen_cuts_values_and_keeps_labels() {
     }
     let phone = screen
         .lines()
-        .find(|line| line.contains("Phone"))
+        .find(|line| line.contains("Phones"))
         .expect("phone row");
     assert!(
         phone.contains("none yet · open the") && phone.ends_with('…'),
         "{screen}"
     );
+}
+
+#[test]
+fn the_remote_status_screen_and_footer_count_several_phones_and_list_each() {
+    let mut app = app();
+    conversation(&mut app);
+    connected(&mut app);
+    admit(&mut app, "Mac Edge", "2026-10-25T14:30:00Z");
+    let screen = render(&mut app, 80, 24);
+    assert!(screen.contains("● 2 phones connected"), "{screen}");
+    assert!(
+        screen.contains("    Phones     iPhone Safari · connected at 14:02\n               Mac Edge · connected at 14:30\n"),
+        "{screen}"
+    );
+    assert!(screen.contains("remote · 2 phones"), "{screen}");
 }
 
 #[test]

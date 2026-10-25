@@ -44,9 +44,13 @@ pub(super) fn phone(
 }
 
 pub(super) fn request(h: &mut Harness, intent: Value) {
+    request_from(h, 1, intent);
+}
+
+fn request_from(h: &mut Harness, connection: u64, intent: Value) {
     let (done, _finished) = oneshot::channel();
     h.app.on_msg(Msg::Remote(RemoteEvent::Request {
-        connection: 1,
+        connection,
         id: "request".into(),
         intent: serde_json::from_value::<Intent>(intent).unwrap(),
         done,
@@ -117,7 +121,7 @@ async fn a_real_phone_signs_in_submits_through_the_agent_and_receives_the_user_b
         }
         socket
     });
-    h.until(|app| app.remote.connection.is_some()).await;
+    h.until(|app| !app.remote.phones.is_empty()).await;
     h.app.sync_remote();
     h.until(|app| app.is_busy()).await;
     h.app.sync_remote();
@@ -248,17 +252,19 @@ async fn model_reasoning_and_absolute_workspace_are_validated_before_dispatch() 
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_full_outbound_queue_drops_control_and_returns_to_waiting() {
+async fn a_full_outbound_queue_drops_the_only_phone_and_returns_to_waiting() {
     let mut h = Harness::new();
     h.app.remote.url = Some("http://localhost:8765".into());
     let (_output, closing, admission) = phone(&mut h, 1, "phone");
     assert!(admission.await.unwrap());
     for _ in 0..=512 {
-        h.app.remote.send(json!({"t":"notice", "text":"bounded"}));
+        h.app
+            .remote
+            .send(None, json!({"t":"notice", "text":"bounded"}));
     }
     assert_eq!(*closing.borrow(), Some("overflow"));
     assert_eq!(h.app.remote.mode(), RemoteMode::Waiting);
-    assert!(h.app.remote.connection.is_none());
+    assert!(h.app.remote.phones.is_empty());
 }
 
 #[tokio::test(start_paused = true)]
@@ -318,27 +324,161 @@ async fn entering_remote_recalls_followups_and_an_agent_refusal_returns_only_to_
 }
 
 #[tokio::test(start_paused = true)]
-async fn controller_admission_replaces_only_the_same_device_and_disconnect_keeps_local_input_frozen()
- {
+async fn a_device_replaces_only_its_own_connection_and_disconnecting_one_keeps_the_others() {
     let mut h = Harness::new();
     h.app.remote.url = Some("http://localhost:8765".into());
     let (_out, old, admission) = phone(&mut h, 1, "first");
     assert!(admission.await.unwrap());
-    let (_out2, _close2, admission) = phone(&mut h, 2, "second");
-    assert!(!admission.await.unwrap());
-    let (_out3, closing, admission) = phone(&mut h, 3, "first");
+    let (_out2, second, admission) = phone(&mut h, 2, "second");
+    assert!(admission.await.unwrap());
+    let (_out3, first, admission) = phone(&mut h, 3, "first");
     assert!(admission.await.unwrap());
     assert_eq!(*old.borrow(), Some("replaced"));
+    assert_eq!(*second.borrow(), None);
+    assert_eq!(devices(&h), ["second", "first"]);
     h.app.on_msg(Msg::Remote(RemoteEvent::Disconnected(1)));
+    h.app.on_msg(Msg::Remote(RemoteEvent::Disconnected(2)));
+    assert_eq!(devices(&h), ["first"]);
     assert_eq!(h.app.remote.mode(), RemoteMode::Connected);
+    let (_out4, other, admission) = phone(&mut h, 4, "other");
+    assert!(admission.await.unwrap());
     h.action(Action::Remote("off".into()));
-    assert_eq!(*closing.borrow(), Some("remote_off"));
+    assert_eq!(*first.borrow(), Some("remote_off"));
+    assert_eq!(*other.borrow(), Some("remote_off"));
     assert_eq!(h.app.remote.mode(), RemoteMode::Off);
     h.app.remote.url = Some("http://localhost:8765".into());
-    let (_out4, _close4, admission) = phone(&mut h, 4, "first");
+    let (_out5, _close5, admission) = phone(&mut h, 5, "first");
     assert!(admission.await.unwrap());
-    h.app.on_msg(Msg::Remote(RemoteEvent::Disconnected(4)));
+    h.app.on_msg(Msg::Remote(RemoteEvent::Disconnected(5)));
     assert_eq!(h.app.remote.mode(), RemoteMode::Waiting);
+}
+
+/// The connected device names, oldest first.
+fn devices(h: &Harness) -> Vec<&str> {
+    let phones = &h.app.remote.phones;
+    phones
+        .iter()
+        .map(|p| p.connection.device.name.as_str())
+        .collect()
+}
+
+/// The message types waiting in `output`.
+fn received(output: &mut mpsc::Receiver<Value>) -> Vec<Value> {
+    std::iter::from_fn(|| output.try_recv().ok())
+        .map(|message| message["t"].clone())
+        .collect()
+}
+
+#[tokio::test(start_paused = true)]
+async fn every_phone_gets_its_snapshot_then_the_changes_and_sees_who_is_connected() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.app.remote.config = Some(config(h.app.workspace.clone()));
+    h.app.remote.url = Some("http://localhost:8765".into());
+    let (mut a, _close, admission) = phone(&mut h, 1, "iPhone Safari");
+    assert!(admission.await.unwrap());
+    let (mut b, _close2, admission) = phone(&mut h, 2, "Mac Edge");
+    assert!(admission.await.unwrap());
+    h.app.sync_remote();
+    for output in [&mut a, &mut b] {
+        let snapshot = output.try_recv().unwrap();
+        assert_eq!(snapshot["t"], "snapshot");
+        assert_eq!(
+            snapshot["state"]["devices"],
+            json!(["iPhone Safari", "Mac Edge"])
+        );
+    }
+    let session = h.app.session.as_mut().unwrap();
+    session.transcript.push(crate::transcript::Block::User {
+        text: "hello".into(),
+        kind: crate::protocol::read::UserKind::Prompt,
+        at: None,
+    });
+    let len = session.transcript.len();
+    h.app.sync_remote();
+    for output in [&mut a, &mut b] {
+        let blocks = output.try_recv().unwrap();
+        assert_eq!(blocks["len"], len);
+        assert_eq!(blocks["upserts"][0]["block"]["text"], "hello");
+        received(output);
+    }
+    let (mut c, _close3, admission) = phone(&mut h, 3, "iPad Safari");
+    assert!(admission.await.unwrap());
+    h.app.sync_remote();
+    assert_eq!(received(&mut c), ["snapshot"]);
+    for output in [&mut a, &mut b] {
+        let state = output.try_recv().unwrap();
+        assert_eq!(state["t"], "state");
+        assert_eq!(
+            state["state"]["devices"],
+            json!(["iPhone Safari", "Mac Edge", "iPad Safari"])
+        );
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_intent_is_acked_only_to_its_sender_and_notices_reach_every_phone() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.app.remote.url = Some("http://localhost:8765".into());
+    let (mut a, _close, admission) = phone(&mut h, 1, "first");
+    assert!(admission.await.unwrap());
+    let (mut b, _close2, admission) = phone(&mut h, 2, "second");
+    assert!(admission.await.unwrap());
+    request_from(&mut h, 2, json!({"kind":"cancel"}));
+    assert_eq!(received(&mut a), Vec::<Value>::new());
+    assert_eq!(received(&mut b), ["ack"]);
+    h.app.notice(crate::app::NoticeLevel::Info, "for everyone");
+    assert_eq!(received(&mut a), ["notice"]);
+    assert_eq!(received(&mut b), ["notice"]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_refused_text_returns_to_its_sender_or_once_it_left_to_every_phone() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.fake.script("turn.send", json!({"turn":turn("l1")}));
+    h.fake.script_held("turn.wait", waited("l1", completed()));
+    h.app.remote.url = Some("http://localhost:8765".into());
+    let (mut a, _close, admission) = phone(&mut h, 1, "first");
+    assert!(admission.await.unwrap());
+    let (mut b, _close2, admission) = phone(&mut h, 2, "second");
+    assert!(admission.await.unwrap());
+    let (mut c, _close3, admission) = phone(&mut h, 3, "third");
+    assert!(admission.await.unwrap());
+    request_from(&mut h, 2, json!({"kind":"submit", "text":"from second"}));
+    h.until(|app| app.is_busy()).await;
+    let refused = || crate::protocol::RpcError::new(-1, "refused", "refused");
+    h.op(SessionOp::Sent("from second".into(), Err(refused())));
+    assert_eq!(received(&mut a), ["notice"]);
+    assert_eq!(received(&mut b), ["ack", "returned", "notice"]);
+    assert_eq!(received(&mut c), ["notice"]);
+    h.app.on_msg(Msg::Remote(RemoteEvent::Disconnected(2)));
+    h.op(SessionOp::Sent("again".into(), Err(refused())));
+    for output in [&mut a, &mut c] {
+        let returned = output.try_recv().unwrap();
+        assert_eq!(returned, json!({"t":"returned", "text":"again"}));
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_phone_whose_queue_overflows_is_dropped_alone() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.app.remote.config = Some(config(h.app.workspace.clone()));
+    h.app.remote.url = Some("http://localhost:8765".into());
+    let (_stalled, closing, admission) = phone(&mut h, 1, "stalled");
+    assert!(admission.await.unwrap());
+    let (mut other, open, admission) = phone(&mut h, 2, "other");
+    assert!(admission.await.unwrap());
+    for _ in 0..=512 {
+        h.app
+            .remote
+            .send(Some(1), json!({"t":"notice", "text":"bounded"}));
+    }
+    assert_eq!(*closing.borrow(), Some("overflow"));
+    assert_eq!(*open.borrow(), None);
+    assert_eq!(devices(&h), ["other"]);
+    assert_eq!(h.app.remote.mode(), RemoteMode::Connected);
+    h.app.sync_remote();
+    let snapshot = other.try_recv().unwrap();
+    assert_eq!(snapshot["state"]["devices"], json!(["other"]));
 }
 
 #[tokio::test(start_paused = true)]
@@ -403,7 +543,7 @@ async fn a_handshake_from_a_stopped_listener_cannot_take_control_after_restart()
     }));
     assert!(!admission.await.unwrap());
     assert_eq!(h.app.remote.mode(), RemoteMode::Waiting);
-    assert!(h.app.remote.connection.is_none());
+    assert!(h.app.remote.phones.is_empty());
 }
 
 #[tokio::test(start_paused = true)]
@@ -472,7 +612,7 @@ fn command(h: &mut Harness, command: &str) {
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_new_password_signs_the_phone_out_and_clears_the_failures() {
+async fn a_new_password_signs_every_phone_out_and_clears_the_failures() {
     let mut h = Harness::new();
     let dir = tempfile::tempdir().unwrap();
     let auth = listening(&mut h, &dir);
@@ -485,10 +625,13 @@ async fn a_new_password_signs_the_phone_out_and_clears_the_failures() {
     auth.lock().unwrap().remember(device).unwrap();
     let (_output, closing, admission) = phone(&mut h, 1, "phone");
     assert!(admission.await.unwrap());
+    let (_output2, other, admission) = phone(&mut h, 2, "other");
+    assert!(admission.await.unwrap());
     h.app
         .on_msg(Msg::Remote(RemoteEvent::LoginRefused { locked: None }));
     command(&mut h, "/remote password correct horse");
     assert_eq!(*closing.borrow(), Some("signed_out"));
+    assert_eq!(*other.borrow(), Some("signed_out"));
     assert_eq!(h.app.remote.mode(), RemoteMode::Waiting);
     assert_eq!(h.app.remote.failed_logins, 0);
     assert_eq!(h.app.remote.password().as_deref(), Some("correct horse"));

@@ -1,4 +1,4 @@
-//! Remote transport and the reducer-owned controller connection.
+//! Remote transport and the reducer-owned phone connections.
 
 pub mod auth;
 pub mod fs;
@@ -96,10 +96,20 @@ impl Bound {
     }
 }
 
+/// An admitted connection with its own projection tracker.
+pub struct Phone {
+    pub connection: Connection,
+    pub view: view::View,
+    pub connected_at: jiff::Timestamp,
+}
+
 #[derive(Default)]
 pub struct Remote {
-    pub view: view::View,
-    pub connection: Option<Connection>,
+    /// Admitted connections, oldest first.
+    pub phones: Vec<Phone>,
+    pub catalog: view::Catalog,
+    /// The connection that sent the latest `submit` or `queue`.
+    pub last_sender: Option<u64>,
     pub config: Option<crate::config::Remote>,
     pub auth: Option<Arc<Mutex<Auth>>>,
     pub url: Option<String>,
@@ -109,8 +119,6 @@ pub struct Remote {
     /// Wrong passwords since remote control started or the password changed.
     pub failed_logins: u32,
     pub paused_until: Option<tokio::time::Instant>,
-    /// When the connected phone was admitted.
-    pub connected_at: jiff::Timestamp,
     stop: Option<oneshot::Sender<()>>,
     server_task: Option<tokio::task::JoinHandle<()>>,
 }
@@ -119,7 +127,7 @@ impl Remote {
     pub fn mode(&self) -> RemoteMode {
         if self.url.is_none() {
             RemoteMode::Off
-        } else if self.connection.is_some() {
+        } else if !self.phones.is_empty() {
             RemoteMode::Connected
         } else {
             RemoteMode::Waiting
@@ -127,11 +135,6 @@ impl Remote {
     }
     pub fn url(&self) -> Option<&str> {
         self.url.as_deref()
-    }
-    pub fn device_name(&self) -> Option<&str> {
-        self.connection
-            .as_ref()
-            .map(|phone| phone.device.name.as_str())
     }
     /// The connection password, shown on the status screen.
     pub fn password(&self) -> Option<String> {
@@ -172,9 +175,7 @@ impl Remote {
         if let Some(starting) = self.starting.take() {
             starting.abort();
         }
-        if let Some(connection) = self.connection.take() {
-            connection.bye(reason);
-        }
+        self.bye(reason);
         if let Some(stop) = self.stop.take() {
             let _ = stop.send(());
         }
@@ -189,14 +190,18 @@ impl Remote {
         }
     }
 
-    pub fn send(&mut self, message: Value) {
-        if self
-            .connection
-            .as_ref()
-            .is_some_and(|phone| !phone.send(message))
-        {
-            self.connection = None;
+    /// Says `bye` to every phone and forgets them.
+    pub fn bye(&mut self, reason: &'static str) {
+        for phone in self.phones.drain(..) {
+            phone.connection.bye(reason);
         }
+    }
+
+    /// Sends `message` to connection `to`, or to every phone for `None`; a full queue drops its phone.
+    pub fn send(&mut self, to: Option<u64>, message: Value) {
+        self.phones.retain(|phone| {
+            to.is_some_and(|id| id != phone.connection.id) || phone.connection.send(message.clone())
+        });
     }
 }
 

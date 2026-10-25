@@ -26,12 +26,19 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App, styles: Styles) {
     let remote = &app.remote;
     let session = app.session.as_ref();
 
-    let (state, state_style) = match remote.device_name() {
-        Some(_) => ("● phone connected", styles.success()),
-        None => ("○ waiting for a phone", styles.warning()),
+    let (state, state_style) = match remote.phones.as_slice() {
+        [] => ("○ waiting for a phone".to_owned(), styles.warning()),
+        [phone] => {
+            let device = wrap::truncate(&wrap::sanitize(&phone.connection.device.name), 24);
+            (format!("● {device} connected"), styles.success())
+        }
+        phones => (
+            format!("● {} phones connected", phones.len()),
+            styles.success(),
+        ),
     };
     let title = " Remote control";
-    let gap = width.saturating_sub(wrap::width(title) + wrap::width(state) + 1);
+    let gap = width.saturating_sub(wrap::width(title) + wrap::width(&state) + 1);
     let mut lines = vec![
         Line::from(vec![
             Span::styled(title, styles.bold()),
@@ -42,18 +49,22 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App, styles: Styles) {
     ];
 
     let text = styles.text();
-    let phone = match remote.device_name() {
-        Some(device) => format!(
-            "{device} · connected at {}",
-            blocks::clock_label(remote.connected_at)
-        ),
-        None => "none yet · open the address on your phone and enter the password".to_owned(),
-    };
-    let connect = vec![
+    let mut connect = vec![
         ("Address", remote.url().unwrap_or_default().to_owned(), text),
         ("Password", remote.password().unwrap_or_default(), text),
-        ("Phone", phone, text),
     ];
+    if remote.phones.is_empty() {
+        let none = "none yet · open the address on your phone and enter the password";
+        connect.push(("Phones", none.to_owned(), text));
+    }
+    for (i, phone) in remote.phones.iter().enumerate() {
+        let device = format!(
+            "{} · connected at {}",
+            phone.connection.device.name,
+            blocks::clock_label(phone.connected_at)
+        );
+        connect.push((if i == 0 { "Phones" } else { "" }, device, text));
+    }
 
     let workspace = session.map_or(app.workspace.as_path(), |session| {
         Path::new(&session.info.workspace)

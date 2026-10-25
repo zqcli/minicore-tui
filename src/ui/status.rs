@@ -278,12 +278,16 @@ fn footer(app: &App, styles: Styles, width: u16) -> Line<'static> {
         suffix.push(Span::styled("queued", styles.amber()));
     }
 
-    let remote = match (app.remote.active(), app.remote.device_name()) {
+    let remote = match (app.remote.active(), app.remote.phones.as_slice()) {
         (false, _) => Vec::new(),
-        (true, None) => vec![Span::styled("remote", styles.warning())],
-        (true, Some(device)) => {
-            let device = wrap::truncate(&wrap::sanitize(device), 16);
+        (true, []) => vec![Span::styled("remote", styles.warning())],
+        (true, [phone]) => {
+            let device = wrap::truncate(&wrap::sanitize(&phone.connection.device.name), 16);
             vec![Span::styled(format!("remote · {device}"), styles.accent())]
+        }
+        (true, phones) => {
+            let count = super::blocks::plural(phones.len() as u64, "phone");
+            vec![Span::styled(format!("remote · {count}"), styles.accent())]
         }
     };
 

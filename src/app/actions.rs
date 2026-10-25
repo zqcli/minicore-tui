@@ -548,8 +548,14 @@ impl App {
             self.session_mut().returned.push(text.to_owned());
             return;
         }
-        if self.remote.connection.is_some() {
-            self.remote.send(json!({"t":"returned", "text":text}));
+        if !self.remote.phones.is_empty() {
+            // The phone that sent the latest text gets it back; once it left, every phone does.
+            let phones = &self.remote.phones;
+            let to = self
+                .remote
+                .last_sender
+                .filter(|id| phones.iter().any(|phone| phone.connection.id == *id));
+            self.remote.send(to, json!({"t":"returned", "text":text}));
             return;
         }
         if self.composer.is_empty() {

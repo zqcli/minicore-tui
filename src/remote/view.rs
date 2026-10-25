@@ -1,4 +1,4 @@
-//! Semantic state and revision-indexed transcript updates for one phone.
+//! Semantic state and revision-indexed transcript updates for each phone.
 
 use std::path::Path;
 
@@ -11,15 +11,44 @@ use crate::app::{App, InteractionKind, LiveStatus, QueuedKind};
 use crate::protocol::read::UserKind;
 use crate::transcript::{Block, RequestKey, ToolState};
 
+/// What one connection was last sent.
 #[derive(Default)]
 pub struct View {
-    connection: Option<u64>,
-    epoch: Option<u64>,
+    /// `None` until the first snapshot, then the resident session's epoch.
+    epoch: Option<Option<u64>>,
     revisions: Vec<u64>,
     state: String,
     streaming: Vec<Option<Streaming>>,
-    catalog_generation: Option<(u64, u64)>,
-    catalog: Value,
+}
+
+/// The catalog part of `State`, rebuilt only when the catalog or the listener changes.
+#[derive(Default)]
+pub struct Catalog {
+    generation: Option<(u64, u64)>,
+    value: Value,
+}
+
+/// This sync's `State`, built once for every connection.
+pub struct Shared {
+    state: Value,
+    serialized: String,
+}
+
+impl Shared {
+    pub fn build(app: &mut App) -> Self {
+        let generation = (app.catalog_generation, app.remote.generation);
+        if app.remote.catalog.generation != Some(generation) {
+            app.remote.catalog = Catalog {
+                generation: Some(generation),
+                value: catalog(app),
+            };
+        }
+        let state = state(app, &app.remote.catalog.value);
+        Self {
+            serialized: state.to_string(),
+            state,
+        }
+    }
 }
 
 struct Streaming {
@@ -75,25 +104,15 @@ impl Streaming {
 }
 
 impl View {
-    pub fn sync(&mut self, app: &App) -> Vec<Value> {
-        let Some(phone) = &app.remote.connection else {
-            return Vec::new();
-        };
+    pub fn sync(&mut self, app: &App, shared: &Shared) -> Vec<Value> {
         let epoch = app.session.as_ref().map(|session| session.epoch);
         let revisions = app
             .session
             .as_ref()
             .map_or(&[][..], |session| session.transcript.revisions());
-        let generation = (app.catalog_generation, app.remote.generation);
-        if self.catalog_generation != Some(generation) {
-            self.catalog = catalog(app);
-            self.catalog_generation = Some(generation);
-        }
-        let state = state(app, &self.catalog);
-        let serialized = state.to_string();
         let mut messages = Vec::new();
-        if self.connection != Some(phone.id) || self.epoch != epoch {
-            messages.push(json!({"t":"snapshot", "state":state, "blocks":app.transcript_blocks().iter().map(block).collect::<Vec<_>>()}));
+        if self.epoch != Some(epoch) {
+            messages.push(json!({"t":"snapshot", "state":shared.state, "blocks":app.transcript_blocks().iter().map(block).collect::<Vec<_>>()}));
             self.streaming = app.transcript_blocks().iter().map(Streaming::of).collect();
         } else {
             self.streaming.resize_with(revisions.len(), || None);
@@ -116,15 +135,14 @@ impl View {
             if !upserts.is_empty() || revisions.len() != self.revisions.len() {
                 messages.push(json!({"t":"blocks", "len":revisions.len(), "upserts":upserts}));
             }
-            if serialized != self.state {
-                messages.push(json!({"t":"state", "state":state}));
+            if shared.serialized != self.state {
+                messages.push(json!({"t":"state", "state":shared.state}));
             }
         }
-        self.connection = Some(phone.id);
-        self.epoch = epoch;
+        self.epoch = Some(epoch);
         self.revisions.clear();
         self.revisions.extend_from_slice(revisions);
-        self.state = serialized;
+        self.state.clone_from(&shared.serialized);
         messages
     }
 }
@@ -201,6 +219,7 @@ fn state(app: &App, catalog: &Value) -> Value {
         "context_percent":session.and_then(context_percent), "interaction":interaction, "queue":queue,
         "older":session.is_some_and(|s| s.loaded_from > 0), "sessions":sessions,
         "background":{"running":running, "approval":approval},
+        "devices":app.remote.phones.iter().map(|phone| &phone.connection.device.name).collect::<Vec<_>>(),
         "models":catalog["models"], "profiles":catalog["profiles"]
     })
 }
@@ -252,8 +271,12 @@ pub fn block(block: &Block) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::remote::{Connection, auth::Device};
-    use tokio::sync::{mpsc, watch};
+    use tokio::sync::mpsc;
+
+    fn sync(view: &mut View, app: &mut App) -> Vec<Value> {
+        let shared = Shared::build(app);
+        view.sync(app, &shared)
+    }
 
     fn connected_app() -> (crate::testing::FakeAgent, App) {
         let (tx, _rx) = mpsc::unbounded_channel();
@@ -263,19 +286,6 @@ mod tests {
             url: None,
             roots: vec![app.workspace.clone()],
             allow_insecure: false,
-        });
-        let (outbound, _output) = mpsc::channel(512);
-        let (close, _closing) = watch::channel(None);
-        app.remote.connection = Some(Connection {
-            id: 1,
-            generation: 0,
-            device: Device {
-                name: "phone".into(),
-                token_sha256: "hash".into(),
-                paired_at: String::new(),
-            },
-            outbound,
-            close,
         });
         app.session = Some(crate::app::Session::new(
             serde_json::from_value(crate::testing::session_info("s1")).unwrap(),
@@ -295,7 +305,7 @@ mod tests {
         .unwrap();
         app.default_profile = Some("coding".into());
         let mut view = View::default();
-        let snapshot = view.sync(&app);
+        let snapshot = sync(&mut view, &mut app);
         let draft = &snapshot[0]["state"]["draft"];
         assert_eq!(draft["profile"], "coding");
         assert_eq!(draft["model"], "main");
@@ -303,10 +313,10 @@ mod tests {
         assert!(snapshot[0]["state"].get("now_ms").is_none());
         assert!(snapshot[0]["state"]["status"].get("now_ms").is_none());
         tokio::time::advance(std::time::Duration::from_secs(96)).await;
-        assert!(view.sync(&app).is_empty());
+        assert!(sync(&mut view, &mut app).is_empty());
 
         app.launch.profile = Some("ask".into());
-        let changed = view.sync(&app);
+        let changed = sync(&mut view, &mut app);
         assert_eq!(changed[0]["t"], "state");
         assert_eq!(changed[0]["state"]["draft"]["profile"], "ask");
         assert_eq!(changed[0]["state"]["draft"]["model"], "quick");
@@ -314,14 +324,14 @@ mod tests {
 
         app.launch.model = Some("chosen".into());
         app.launch.reasoning = Some(crate::protocol::Reasoning::High);
-        let changed = view.sync(&app);
+        let changed = sync(&mut view, &mut app);
         assert_eq!(changed[0]["state"]["draft"]["model"], "chosen");
         assert_eq!(changed[0]["state"]["draft"]["reasoning"], "high");
         assert_eq!(changed[0]["state"]["draft"]["profile"], "ask");
 
         app.launch = crate::app::LaunchSettings::default();
         app.default_profile = None;
-        let changed = view.sync(&app);
+        let changed = sync(&mut view, &mut app);
         for field in ["profile", "model", "reasoning"] {
             assert!(changed[0]["state"]["draft"][field].is_null());
         }
@@ -348,9 +358,9 @@ mod tests {
         });
         let started = session.live.as_ref().unwrap().started_ms;
         let mut view = View::default();
-        assert_eq!(view.sync(&app)[0]["t"], "snapshot");
+        assert_eq!(sync(&mut view, &mut app)[0]["t"], "snapshot");
         tokio::time::advance(std::time::Duration::from_secs(60)).await;
-        assert!(view.sync(&app).is_empty());
+        assert!(sync(&mut view, &mut app).is_empty());
         assert_eq!(
             app.session
                 .as_ref()
@@ -367,7 +377,7 @@ mod tests {
             text.push_str(" world");
         }
         assert_eq!(
-            view.sync(&app),
+            sync(&mut view, &mut app),
             [json!({"t":"blocks", "len":1, "upserts":[{"i":0, "append":{"text":" world"}}]})]
         );
         if let Block::Assistant { reasoning, .. } =
@@ -376,7 +386,7 @@ mod tests {
             reasoning.push('え');
         }
         assert_eq!(
-            view.sync(&app)[0]["upserts"][0]["append"],
+            sync(&mut view, &mut app)[0]["upserts"][0]["append"],
             json!({"reasoning":"え"})
         );
         if let Some(Block::Assistant { streaming, .. }) =
@@ -384,10 +394,10 @@ mod tests {
         {
             *streaming = false;
         }
-        let messages = view.sync(&app);
+        let messages = sync(&mut view, &mut app);
         assert_eq!(messages[0]["upserts"][0]["block"]["text"], "hello world");
         assert_eq!(messages[0]["upserts"][0]["block"]["streaming"], false);
-        assert!(view.sync(&app).is_empty());
+        assert!(sync(&mut view, &mut app).is_empty());
     }
 
     #[tokio::test(start_paused = true)]
@@ -400,19 +410,19 @@ mod tests {
         };
         app.session.as_mut().unwrap().transcript.push(user("new"));
         let mut view = View::default();
-        view.sync(&app);
+        sync(&mut view, &mut app);
         app.session
             .as_mut()
             .unwrap()
             .transcript
             .insert(0, user("old"));
-        let messages = view.sync(&app);
+        let messages = sync(&mut view, &mut app);
         assert_eq!(messages[0]["upserts"].as_array().unwrap().len(), 2);
         assert_eq!(messages[0]["upserts"][0]["block"]["text"], "old");
         assert_eq!(messages[0]["upserts"][1]["block"]["text"], "new");
         app.session.as_mut().unwrap().transcript.remove(1);
         assert_eq!(
-            view.sync(&app),
+            sync(&mut view, &mut app),
             [json!({"t":"blocks", "len":1, "upserts":[]})]
         );
     }
@@ -444,20 +454,35 @@ mod tests {
                     });
                 }
                 let mut view = View::default();
-                assert_eq!(view.sync(&app)[0]["blocks"].as_array().unwrap().len(), 5000);
-                let cached = view.catalog["sessions"].as_array().unwrap().as_ptr();
+                assert_eq!(
+                    sync(&mut view, &mut app)[0]["blocks"]
+                        .as_array()
+                        .unwrap()
+                        .len(),
+                    5000
+                );
+                let cached = app.remote.catalog.value["sessions"]
+                    .as_array()
+                    .unwrap()
+                    .as_ptr();
                 for _ in 0..10 {
-                    assert!(view.sync(&app).is_empty());
+                    assert!(sync(&mut view, &mut app).is_empty());
                 }
                 assert_eq!(
-                    view.catalog["sessions"].as_array().unwrap().as_ptr(),
+                    app.remote.catalog.value["sessions"]
+                        .as_array()
+                        .unwrap()
+                        .as_ptr(),
                     cached
                 );
                 app.sessions[0].title = Some("renamed".into());
                 app.catalog_generation += 1;
-                assert_eq!(view.sync(&app)[0]["t"], "state");
+                assert_eq!(sync(&mut view, &mut app)[0]["t"], "state");
                 assert_ne!(
-                    view.catalog["sessions"].as_array().unwrap().as_ptr(),
+                    app.remote.catalog.value["sessions"]
+                        .as_array()
+                        .unwrap()
+                        .as_ptr(),
                     cached
                 );
             });
@@ -500,22 +525,9 @@ mod tests {
             roots: vec![app.workspace.clone()],
             allow_insecure: false,
         });
-        let (outbound, _output) = mpsc::channel(512);
-        let (close, _closing) = watch::channel(None);
-        app.remote.connection = Some(Connection {
-            id: 1,
-            generation: 0,
-            device: Device {
-                name: "phone".into(),
-                token_sha256: "hash".into(),
-                paired_at: String::new(),
-            },
-            outbound,
-            close,
-        });
         let mut view = View::default();
-        assert_eq!(view.sync(&app)[0]["t"], "snapshot");
-        assert!(view.sync(&app).is_empty());
+        assert_eq!(sync(&mut view, &mut app)[0]["t"], "snapshot");
+        assert!(sync(&mut view, &mut app).is_empty());
         app.session = Some(crate::app::Session::new(
             serde_json::from_value(crate::testing::session_info("s1")).unwrap(),
             1,
@@ -528,22 +540,22 @@ mod tests {
                 at: None,
             });
         }
-        assert_eq!(view.sync(&app)[0]["t"], "snapshot");
+        assert_eq!(sync(&mut view, &mut app)[0]["t"], "snapshot");
         if let Some(Block::User { text, .. }) =
             app.session.as_mut().unwrap().transcript.block_mut(1)
         {
             *text = "changed".into();
         }
-        let messages = view.sync(&app);
+        let messages = sync(&mut view, &mut app);
         assert_eq!(messages.len(), 1);
         assert_eq!(
             messages[0],
             json!({"t":"blocks", "len":2, "upserts":[{"i":1, "block":{"type":"user", "kind":"prompt", "text":"changed", "at":null}}]})
         );
-        assert!(view.sync(&app).is_empty());
+        assert!(sync(&mut view, &mut app).is_empty());
         app.session.as_mut().unwrap().epoch = 2;
-        assert_eq!(view.sync(&app)[0]["t"], "snapshot");
+        assert_eq!(sync(&mut view, &mut app)[0]["t"], "snapshot");
         app.session = None;
-        assert_eq!(view.sync(&app)[0]["t"], "snapshot");
+        assert_eq!(sync(&mut view, &mut app)[0]["t"], "snapshot");
     }
 }

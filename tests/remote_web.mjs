@@ -164,7 +164,6 @@ test('welcome sets the host clock offset and handshake messages map to screens',
   }
   assert.match(gate({ t: 'bye', reason: 'signed_out' }).notice, /password was changed/);
   const status = {
-    busy: [{ t: 'error', code: 'busy' }, /another device/i, 'retry'],
     version: [{ t: 'error', code: 'version' }, /update needed/i, 'reload'],
     bad_request: [{ t: 'error', code: 'bad_request', message: 'bad device name' }, /couldn't connect/i, 'retry'],
     remote_off: [{ t: 'bye', reason: 'remote_off' }, /remote control is off/i, 'retry'],
@@ -225,6 +224,16 @@ test('retireText removes only the acked text and keeps returned or newly typed t
   assert.equal(MC.mergeReturned('next', 'back'), 'next\nback');
   // returned arrives while the send is still pending, then the ack retires only the sent text.
   assert.equal(MC.retireText(MC.mergeReturned('first', 'old'), 'first'), 'old');
+});
+
+test('other devices drop one entry of this device name and nothing is left when it is alone', () => {
+  const { MC, plain } = load();
+  assert.deepEqual(plain(MC.otherDevices(['iPhone Safari', 'Mac Edge', 'iPhone Safari', 'iPad Safari'], 'iPhone Safari')), ['Mac Edge', 'iPhone Safari', 'iPad Safari']);
+  assert.deepEqual(plain(MC.otherDevices(['iPhone Safari'], 'iPhone Safari')), []);
+  assert.deepEqual(plain(MC.otherDevices(['Mac Edge'], 'iPhone Safari')), ['Mac Edge']);
+  const devices = ['iPhone Safari', 'Mac Edge'];
+  MC.otherDevices(devices, 'Mac Edge');
+  assert.deepEqual(devices, ['iPhone Safari', 'Mac Edge']);
 });
 
 test('markdown tokens keep HTML and unsafe links as plain text', () => {

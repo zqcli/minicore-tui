@@ -438,7 +438,7 @@ impl App {
 
     /// Shows `text` as it is.
     pub(super) fn push_notice(&mut self, level: NoticeLevel, text: String) {
-        self.remote.send(json!({"t":"notice", "level": match level { NoticeLevel::Info => "info", NoticeLevel::Error => "error" }, "text":text}));
+        self.remote.send(None, json!({"t":"notice", "level": match level { NoticeLevel::Info => "info", NoticeLevel::Error => "error" }, "text":text}));
         self.notices.push_back(Notice {
             level,
             text,

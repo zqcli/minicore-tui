@@ -2,7 +2,7 @@
 
     Address    http://192.168.20.207:8765
     Password   k7mq-x2pa-n9dt
-    Phone      none yet · open the address on your phone and enter the password
+    Phones     none yet · open the address on your phone and enter the password
 
     Session    New session · starts with the phone's first message
     Workspace  /work/minicore-tui

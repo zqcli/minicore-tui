@@ -8,9 +8,9 @@ use serde_json::json;
 use super::{Action, Answer, App, Msg, NoticeLevel, Overlay, Session, tasks};
 use crate::protocol::{self, Reasoning};
 use crate::remote::{
-    Bound, RemoteEvent,
+    Bound, Phone, RemoteEvent,
     auth::Auth,
-    fs, whole_seconds,
+    fs, view, whole_seconds,
     wire::{self, Choice, Intent},
 };
 
@@ -18,14 +18,18 @@ pub const REMOTE_FLASH: &str = "Remote control is on · /remote off to take back
 
 impl App {
     pub fn sync_remote(&mut self) {
-        if self.remote.connection.is_none() {
+        if self.remote.phones.is_empty() {
             return;
         }
-        let mut view = std::mem::take(&mut self.remote.view);
-        for message in view.sync(self) {
-            self.remote.send(message);
-        }
-        self.remote.view = view;
+        let shared = view::Shared::build(self);
+        let mut phones = std::mem::take(&mut self.remote.phones);
+        phones.retain_mut(|phone| {
+            let messages = phone.view.sync(self, &shared);
+            messages
+                .into_iter()
+                .all(|message| phone.connection.send(message))
+        });
+        self.remote.phones = phones;
     }
 
     pub fn local_allowed(&self, action: &Action) -> bool {
@@ -112,9 +116,7 @@ impl App {
             self.notice(NoticeLevel::Error, format!("Remote: {error}"));
             return;
         }
-        if let Some(phone) = self.remote.connection.take() {
-            phone.bye("signed_out");
-        }
+        self.remote.bye("signed_out");
         self.remote.failed_logins = 0;
         self.remote.paused_until = None;
         self.notice(
@@ -155,22 +157,28 @@ impl App {
                 connection,
                 accepted,
             } => {
-                if connection.generation != self.remote.generation
-                    || !self.remote.active()
-                    || self.remote.connection.as_ref().is_some_and(|old| {
-                        old.device.token_sha256 != connection.device.token_sha256
-                    })
-                {
+                if connection.generation != self.remote.generation || !self.remote.active() {
                     let _ = accepted.send(false);
                     return;
                 }
                 if accepted.send(true).is_err() {
                     return;
                 }
-                self.remote.connected_at = jiff::Timestamp::now();
-                if let Some(old) = self.remote.connection.replace(connection) {
-                    old.bye("replaced");
+                // Another tab or a reconnect of the same device takes its place.
+                let device = &connection.device.token_sha256;
+                if let Some(old) = self
+                    .remote
+                    .phones
+                    .iter()
+                    .position(|phone| phone.connection.device.token_sha256 == *device)
+                {
+                    self.remote.phones.remove(old).connection.bye("replaced");
                 }
+                self.remote.phones.push(Phone {
+                    connection,
+                    view: view::View::default(),
+                    connected_at: jiff::Timestamp::now(),
+                });
             }
             RemoteEvent::LoginRefused { locked } => {
                 self.remote.failed_logins += 1;
@@ -184,14 +192,7 @@ impl App {
                 self.notice(NoticeLevel::Info, text);
             }
             RemoteEvent::Disconnected(id) => {
-                if self
-                    .remote
-                    .connection
-                    .as_ref()
-                    .is_some_and(|phone| phone.id == id)
-                {
-                    self.remote.connection = None;
-                }
+                self.remote.phones.retain(|phone| phone.connection.id != id);
             }
             RemoteEvent::Request {
                 connection,
@@ -201,12 +202,15 @@ impl App {
             } => {
                 if self
                     .remote
-                    .connection
-                    .as_ref()
-                    .is_some_and(|phone| phone.id == connection)
+                    .phones
+                    .iter()
+                    .any(|phone| phone.connection.id == connection)
                 {
+                    if matches!(intent, Intent::Submit { .. } | Intent::Queue { .. }) {
+                        self.remote.last_sender = Some(connection);
+                    }
                     let result = self.remote_intent(intent);
-                    self.remote.send(wire::ack(&id, result));
+                    self.remote.send(Some(connection), wire::ack(&id, result));
                 }
                 let _ = done.send(());
             }

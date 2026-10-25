@@ -313,11 +313,12 @@ async fn connection(
         accepted,
     }))
     .map_err(|_| "TUI closed")?;
+    // Only a listener that is stopping refuses an authenticated device.
     if !admission.await.unwrap_or(false) {
-        return reject(&mut socket, "busy").await;
+        return send(&mut socket, json!({"t":"bye", "reason":"remote_off"})).await;
     }
     drop(permit);
-    let controller = closing.clone();
+    let revoked = closing.clone();
     let result = tokio::select! {
         biased;
         _ = closing.changed() => Ok(()),
@@ -355,7 +356,7 @@ async fn connection(
                                         continue;
                                     }
                                 } else if let Ok(request) = FsRequest::deserialize(&value) {
-                                    let reply = filesystem(request_id.to_owned(), request, roots.clone(), controller.clone()).await?;
+                                    let reply = filesystem(request_id.to_owned(), request, roots.clone(), revoked.clone()).await?;
                                     let Some(reply) = reply else { break };
                                     send(&mut socket, reply).await?;
                                     continue;
@@ -399,11 +400,11 @@ async fn filesystem(
     id: String,
     request: FsRequest,
     roots: Arc<[PathBuf]>,
-    controller: watch::Receiver<Option<&'static str>>,
+    revoked: watch::Receiver<Option<&'static str>>,
 ) -> Result<Option<Value>, String> {
-    let worker = controller.clone();
+    let worker = revoked.clone();
     let reply = tokio::task::spawn_blocking(move || {
-        // A queued blocking task must not begin work after its controller was revoked.
+        // A queued blocking task must not begin work after its connection was revoked.
         if worker.has_changed().is_err() || worker.borrow().is_some() {
             return None;
         }
@@ -428,7 +429,7 @@ async fn filesystem(
     .await
     .map_err(|error| error.to_string())?;
     // Already-running filesystem calls cannot be cancelled; never deliver their late results.
-    if controller.has_changed().is_err() || controller.borrow().is_some() {
+    if revoked.has_changed().is_err() || revoked.borrow().is_some() {
         return Ok(None);
     }
     Ok(reply)
@@ -660,33 +661,48 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_busy_refusal_remembers_no_phone() {
+    async fn a_second_device_is_admitted_beside_the_first_and_a_stopped_listener_remembers_none() {
         let (dir, address, auth, mut rx, task) = start().await;
         let password = auth.lock().unwrap().password().to_owned();
-        let mut socket = login(address, &password, "other phone").await;
-        let candidate = rx.recv().await.unwrap();
         let (tx, _messages) = mpsc::unbounded_channel();
         let (_fake, mut app) = crate::testing::FakeAgent::start(tx);
         app.remote.url = Some(format!("http://{address}"));
         let (outbound, _output) = mpsc::channel(512);
         let (close, _closing) = watch::channel(None);
-        app.remote.connection = Some(Connection {
-            id: 0,
-            generation: 0,
-            device: super::super::auth::Device {
-                name: "existing phone".into(),
-                token_sha256: "existing hash".into(),
-                paired_at: String::new(),
+        app.remote.phones.push(super::super::Phone {
+            connection: Connection {
+                id: 0,
+                generation: 0,
+                device: super::super::auth::Device {
+                    name: "existing phone".into(),
+                    token_sha256: "existing hash".into(),
+                    paired_at: String::new(),
+                },
+                outbound,
+                close,
             },
-            outbound,
-            close,
+            view: Default::default(),
+            connected_at: jiff::Timestamp::UNIX_EPOCH,
         });
-        app.on_msg(candidate);
-        assert_eq!(receive(&mut socket).await["code"], "busy");
-        let stored: Value =
+        let stored = || -> Value {
             serde_json::from_str(&std::fs::read_to_string(dir.path().join("remote.json")).unwrap())
-                .unwrap();
-        assert_eq!(stored["devices"], json!([]));
+                .unwrap()
+        };
+        let mut socket = login(address, &password, "other phone").await;
+        app.on_msg(rx.recv().await.unwrap());
+        for kind in ["authorized", "welcome"] {
+            assert_eq!(receive(&mut socket).await["t"], kind);
+        }
+        assert_eq!(app.remote.phones.len(), 2);
+        assert_eq!(stored()["devices"][0]["name"], "other phone");
+        app.remote.generation += 1;
+        let mut late = login(address, &password, "late phone").await;
+        app.on_msg(rx.recv().await.unwrap());
+        assert_eq!(
+            receive(&mut late).await,
+            json!({"t":"bye", "reason":"remote_off"})
+        );
+        assert_eq!(stored()["devices"].as_array().unwrap().len(), 1);
         task.abort();
     }
 
@@ -728,7 +744,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_authenticated_controller_browses_and_creates_directories_only_inside_roots() {
+    async fn an_admitted_phone_browses_and_creates_directories_only_inside_roots() {
         let (dir, address, auth, mut rx, task) = start().await;
         let root = dir.path().canonicalize().unwrap();
         std::fs::create_dir(root.join("existing")).unwrap();
@@ -807,12 +823,12 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn revoked_controllers_cannot_start_queued_filesystem_work() {
+    async fn revoked_connections_cannot_start_queued_filesystem_work() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().canonicalize().unwrap();
         let roots: Arc<[PathBuf]> = vec![root.clone()].into();
         for reason in ["replaced", "remote_off"] {
-            let (close, controller) = watch::channel(None);
+            let (close, revoked) = watch::channel(None);
             close.send(Some(reason)).unwrap();
             let reply = filesystem(
                 "stale".into(),
@@ -821,7 +837,7 @@ mod tests {
                     name: reason.into(),
                 },
                 roots.clone(),
-                controller,
+                revoked,
             )
             .await
             .unwrap();
