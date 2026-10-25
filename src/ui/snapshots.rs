@@ -1271,6 +1271,20 @@ fn the_remote_status_screen_shows_the_phone_the_work_the_queue_and_refused_sign_
 }
 
 #[test]
+fn the_remote_status_screen_marks_listening_addresses_served_over_tls() {
+    let mut app = app();
+    listening(&mut app);
+    app.remote.tls = true;
+    let screen = render(&mut app, 80, 24);
+    assert!(
+        screen
+            .lines()
+            .any(|line| line == "    Listening  0.0.0.0:8765 · [::]:8765 · TLS"),
+        "{screen}"
+    );
+}
+
+#[test]
 fn a_narrow_remote_status_screen_cuts_values_and_keeps_labels() {
     let mut app = app();
     conversation(&mut app);

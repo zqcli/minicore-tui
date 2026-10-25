@@ -63,6 +63,7 @@ pub(super) fn config(root: std::path::PathBuf) -> crate::config::Remote {
         url: None,
         roots: vec![root],
         allow_insecure: false,
+        tls: None,
     }
 }
 

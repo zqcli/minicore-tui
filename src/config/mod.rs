@@ -17,7 +17,7 @@ use serde::de::DeserializeOwned;
 
 use compose::AgentFile;
 pub use home::Home;
-pub use remote::Remote;
+pub use remote::{Remote, Tls};
 pub use settings::{Settings, ThemeKind, Ui, editor_command, save_theme};
 
 /// A configuration problem with the file, and the line when the parser knew it.
@@ -182,7 +182,7 @@ pub struct Launch {
 pub enum Prepared {
     /// Nothing was configured: starter files were written, and this says where.
     FirstRun(String),
-    Launch(Launch),
+    Launch(Box<Launch>),
 }
 
 /// Everything before the terminal is touched: scaffold, validate, compose.
@@ -209,14 +209,14 @@ pub fn prepare(
             (settings.ui, settings.agent.binary, settings.remote)
         };
         let remote = section.build(&source).map_err(|error| error.to_string())?;
-        return Ok(Prepared::Launch(Launch {
+        return Ok(Prepared::Launch(Box::new(Launch {
             remote,
             ui,
             agent_config: raw.to_owned(),
             agent_binary: agent_binary(home, request.agent, binary),
             composed: false,
             default_profile: None,
-        }));
+        })));
     }
     if home.is_fresh() {
         let created = scaffold::write(home).map_err(|error| error.to_string())?;
@@ -227,14 +227,14 @@ pub fn prepare(
     let loaded = load(home).map_err(|error| error.to_string())?;
     loaded.check_launch(request.profile, request.model, has_env)?;
     let agent_config = loaded.write(home).map_err(|error| error.to_string())?;
-    Ok(Prepared::Launch(Launch {
+    Ok(Prepared::Launch(Box::new(Launch {
         agent_binary: agent_binary(home, request.agent, loaded.binary),
         ui: loaded.ui,
         remote: loaded.remote,
         agent_config,
         composed: true,
         default_profile: Some(loaded.agent.default_profile),
-    }))
+    })))
 }
 
 /// `--agent`, else `[agent] binary`, else none: the built-in Agent.

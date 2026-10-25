@@ -342,6 +342,7 @@ mod tests {
             url: None,
             roots: vec![app.workspace.clone()],
             allow_insecure: false,
+            tls: None,
         });
         app.session = Some(crate::app::Session::new(
             serde_json::from_value(crate::testing::session_info("s1")).unwrap(),
@@ -496,6 +497,7 @@ mod tests {
                     url: None,
                     roots: vec![app.workspace.clone()],
                     allow_insecure: false,
+                    tls: None,
                 });
                 for i in 0..500 {
                     let mut info = crate::testing::session_info(&format!("s{i}"));
@@ -555,6 +557,7 @@ mod tests {
             url: None,
             roots: vec![app.workspace.clone()],
             allow_insecure: false,
+            tls: None,
         });
         let mut info = crate::testing::session_info("s1");
         info["workspace"] = json!(app.workspace);
@@ -580,6 +583,7 @@ mod tests {
             url: None,
             roots: vec![app.workspace.clone()],
             allow_insecure: false,
+            tls: None,
         });
         let mut view = View::default();
         assert_eq!(sync(&mut view, &mut app)[0]["t"], "snapshot");

@@ -182,7 +182,10 @@ instead of being ignored.
 bind = ["127.0.0.1:8765", "[::1]:8765"] # default; one address or a list, numeric IP and port
 # url = "https://host.example:8765" # optional address used by the phone
 roots = ["~"]                    # default: HOME on Unix, USERPROFILE on Windows
-allow_insecure = false            # must be true for a non-loopback bind
+allow_insecure = false            # needed for a non-loopback bind without TLS
+tls = false                       # serve HTTPS and WSS with the certificate below
+# tls_cert = "~/certs/fullchain.pem" # PEM chain, leaf first
+# tls_key = "~/certs/privkey.pem"    # PEM private key (PKCS#8, PKCS#1 or SEC1)
 ```
 
 Remote settings are validated at startup, including with `--agent-config`.
@@ -196,8 +199,10 @@ IPv6 on a machine without it or an IP it no longer has, is skipped with the
 notice `Remote: not listening on [::1]:8765 (…)` as long as another address
 listens; a port that is taken or needs privileges is an error, so the address
 never changes behind your back.
-A non-loopback bind requires explicit consent because the listener has no TLS.
-Use a private network, tunnel or TLS reverse proxy for access across networks.
+A non-loopback bind without TLS requires explicit consent (`allow_insecure`),
+because the password and the session then cross the network unencrypted. Use
+TLS (below), a private network, a tunnel or a TLS reverse proxy for access
+across networks.
 A reverse proxy must preserve the browser-facing `Host` authority, including its
 port when present: the WebSocket Origin check compares that host and port with
 `Origin`. Replacing `Host` with the backend address causes a 403 response.
@@ -213,10 +218,33 @@ Errors name `config.toml`, the line and the `[remote]` key.
 Start with `--remote` or `/remote on`; the transcript area then shows the
 remote status screen with the address and the password to enter on the phone,
 and the addresses it listens on.
-The default URL is `http://<bind>` for the first address that listens; an
+The default URL is `http://<bind>` (`https://` with TLS) for the first address
+that listens; an
 unspecified bind host is replaced by the address the OS selects for LAN routing.
 Set `url` explicitly when using a tunnel, reverse proxy or a machine with
 multiple networks.
+
+### Over TLS
+
+With `tls = true` the TUI serves `https://` and `wss://` itself, with a
+certificate you provide; `tls_cert` and `tls_key` are then required, expand a
+leading `~/`, and may stay in the file while `tls = false`. Both files are read
+when `config.toml` loads, so a wrong path, a file that is not PEM or a key that
+does not belong to the certificate stops the start with
+`config.toml:LINE: [remote] tls_cert: <path>: <reason>` (or `tls_key`). They
+are read again each time remote control starts, so after renewing a
+certificate (for example from Let's Encrypt) `/remote off` and `/remote on`
+pick it up. A non-loopback bind with TLS needs no `allow_insecure`. The status
+screen's `Listening` row ends with `TLS`.
+
+Use it when the phone reaches the computer directly, without a proxy that
+terminates TLS: across a LAN or a forwarded port, with a certificate whose name
+the phone opens (set `url` to that name). Over HTTPS the client also installs
+and opens offline. A self-signed certificate must be trusted on the phone, or
+browsers refuse `wss:` and the offline service worker: on iPhone, install it as
+a profile, then enable full trust in **Settings → General → About → Certificate
+Trust Settings**. Plain `http://` sent to a TLS port gets no answer. There is
+no HTTP-to-HTTPS redirect.
 
 ### Through Cloudflare
 
@@ -232,10 +260,18 @@ Cloudflare serves the hostname over HTTPS, so the phone gets `https://` and
 - WebSockets must stay on (**Network → WebSockets**, on by default).
 - Cloudflare Access in front of the hostname is optional; it adds its own
   sign-in before the password.
-- A proxied DNS record (orange cloud) to a forwarded port also works, but it
-  needs a non-loopback `bind` with `allow_insecure = true` and a port Cloudflare
-  proxies (such as 8080 or 2052), and the hop from Cloudflare to the computer is
-  plain HTTP across the internet.
+- A proxied DNS record (orange cloud) to a forwarded port also works with a
+  non-loopback `bind` and a port Cloudflare proxies (such as 8443 or 2053 for
+  HTTPS). Turn on `tls` with a Cloudflare Origin CA certificate for the
+  hostname and set the zone's SSL/TLS mode to **Full (strict)**, so the hop from
+  Cloudflare to the computer is encrypted and verified. Without TLS it needs
+  `allow_insecure = true` and an HTTP port (such as 8080 or 2052), and that hop
+  is plain HTTP across the internet.
+- Behind a tunnel TLS on the computer is optional, since cloudflared already
+  encrypts the way to Cloudflare. If you enable it, the tunnel's service must be
+  `https://127.0.0.1:8765`, and a certificate not issued for `127.0.0.1` needs
+  the tunnel's **Origin Server Name** (`originServerName`) set to a name in the
+  certificate, or **No TLS Verify** (`noTLSVerify`).
 
 Responses carry `Cache-Control: no-store, no-transform`, so Cloudflare does
 not rewrite the page (email obfuscation, Rocket Loader, injected scripts) and

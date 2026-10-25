@@ -26,8 +26,9 @@ src/
                 (config.toml), models (models.toml), compose (the Agent file),
                 scaffold (first-run starters)
   remote/       phone protocol, listener, authentication and semantic projection:
-                mod (mode, listener handle, connection, events), auth, server,
-                wire, view, fs (host directories); web/ holds embedded client assets
+                mod (mode, listeners, connection, events), auth, server, tls
+                (certificate loading), wire, view, fs (host directories); web/
+                holds embedded client assets
   rpc.rs        Agent child process and JSON-RPC Client
   protocol/     serde DTOs and constants only: methods, error codes, required
                 capabilities, read sizes (mod); event; read (history items, chunk
@@ -217,6 +218,9 @@ list holds no empty sessions. While `app.session` is `None`:
 `Bound::bind` opens one listener per configured address (IPv6 ones v6-only) and
 skips an address the host lacks, while a taken port fails; one accept loop serves
 every listener, and `enter_remote` reports the skipped addresses as notices.
+With `[remote] tls` the certificate is loaded at config validation and again by
+every `Bound::bind`; each connection does its TLS handshake before the shared
+plain/TLS handler reads the request head.
 `RemoteMode` is derived as Off, Waiting or Connected from the listener URL and
 the admitted connections (`Remote::phones`); it is not independently mutable.
 Waiting still freezes local sending: only `/remote off` restores local control.

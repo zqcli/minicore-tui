@@ -2,19 +2,21 @@
 
 use std::io;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::task::Poll;
+use std::task::{Context, Poll};
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
+use tokio::net::TcpListener;
 use tokio::sync::{Semaphore, mpsc, oneshot, watch};
 use tokio::task::JoinSet;
 use tokio::time::{Instant, timeout};
+use tokio_rustls::TlsAcceptor;
 use tokio_tungstenite::tungstenite::{
     Message,
     handshake::server::{Request, Response},
@@ -84,6 +86,7 @@ const FILES: [(&str, &str, &[u8]); 8] = [
 
 pub async fn serve(
     listeners: Vec<TcpListener>,
+    tls: Option<TlsAcceptor>,
     auth: Arc<Mutex<Auth>>,
     tx: Tx,
     mut stop: oneshot::Receiver<()>,
@@ -93,7 +96,7 @@ pub async fn serve(
     let permits = Arc::new(Semaphore::new(8));
     let mut tasks = JoinSet::new();
     // Polling every listener registers a wakeup on each.
-    let accept = |cx: &mut std::task::Context| {
+    let accept = |cx: &mut Context| {
         listeners
             .iter()
             .find_map(|listener| match listener.poll_accept(cx) {
@@ -114,8 +117,16 @@ pub async fn serve(
                 let auth = auth.clone();
                 let tx = tx.clone();
                 let roots = roots.clone();
+                let tls = tls.clone();
                 tasks.spawn(async move {
-                    let _ = connection(stream, auth, tx, permit, generation, roots).await;
+                    let _ = match tls {
+                        None => connection(stream, auth, tx, permit, generation, roots).await,
+                        // A failed handshake, such as plain HTTP to this port, just closes.
+                        Some(tls) => match timeout(FIRST, tls.accept(stream)).await {
+                            Ok(Ok(stream)) => connection(stream, auth, tx, permit, generation, roots).await,
+                            _ => Ok(()),
+                        },
+                    };
                 });
             }
             _ = tasks.join_next(), if !tasks.is_empty() => {}
@@ -125,30 +136,75 @@ pub async fn serve(
     let _ = timeout(FIRST, async { while tasks.join_next().await.is_some() {} }).await;
 }
 
-async fn head(stream: &TcpStream) -> io::Result<Vec<u8>> {
+/// Reads through the end of the request head; the bytes may run past it.
+async fn head(stream: &mut (impl AsyncRead + Unpin)) -> io::Result<Vec<u8>> {
     let mut bytes = vec![0; HEAD_LIMIT];
-    let mut seen = 0;
+    let mut len = 0;
     loop {
-        let n = stream.peek(&mut bytes).await?;
+        let n = stream.read(&mut bytes[len..]).await?;
         if n == 0 {
             return Err(io::Error::from(io::ErrorKind::UnexpectedEof));
         }
-        if let Some(end) = bytes[..n].windows(4).position(|s| s == b"\r\n\r\n") {
-            bytes.truncate(end + 4);
+        len += n;
+        if bytes[..len].windows(4).any(|s| s == b"\r\n\r\n") {
+            bytes.truncate(len);
             return Ok(bytes);
         }
-        if n == HEAD_LIMIT {
+        if len == HEAD_LIMIT {
             return Err(io::Error::other("request head too large"));
         }
-        // Peek leaves existing bytes readable; wait briefly rather than spinning on them.
-        if n == seen {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-        seen = n;
     }
 }
 
-async fn http(stream: &mut TcpStream, status: &str, mime: &str, body: &[u8]) -> io::Result<()> {
+/// A stream that yields the bytes already read from it before reading on.
+struct Replay<S> {
+    read: Vec<u8>,
+    at: usize,
+    inner: S,
+}
+
+impl<S: AsyncRead + Unpin> AsyncRead for Replay<S> {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        let this = self.get_mut();
+        let rest = &this.read[this.at..];
+        if rest.is_empty() {
+            return Pin::new(&mut this.inner).poll_read(cx, buf);
+        }
+        let n = rest.len().min(buf.remaining());
+        buf.put_slice(&rest[..n]);
+        this.at += n;
+        Poll::Ready(Ok(()))
+    }
+}
+
+impl<S: AsyncWrite + Unpin> AsyncWrite for Replay<S> {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.get_mut().inner).poll_write(cx, buf)
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.get_mut().inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.get_mut().inner).poll_shutdown(cx)
+    }
+}
+
+async fn http(
+    stream: &mut (impl AsyncWrite + Unpin),
+    status: &str,
+    mime: &str,
+    body: &[u8],
+) -> io::Result<()> {
     let headers: String = HEADERS
         .iter()
         .map(|(name, value)| format!("{name}: {value}\r\n"))
@@ -157,7 +213,9 @@ async fn http(stream: &mut TcpStream, status: &str, mime: &str, body: &[u8]) -> 
         "HTTP/1.1 {status}\r\n{headers}Content-Type: {mime}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
     );
-    stream.write_all(&[head.as_bytes(), body].concat()).await
+    stream.write_all(&[head.as_bytes(), body].concat()).await?;
+    // Over TLS this sends close_notify, without which the reply looks truncated.
+    stream.shutdown().await
 }
 
 fn same_origin(origin: &[u8], host: Option<&[u8]>) -> bool {
@@ -172,15 +230,15 @@ fn same_origin(origin: &[u8], host: Option<&[u8]>) -> bool {
         && host.is_some_and(|host| authority.as_bytes().eq_ignore_ascii_case(host))
 }
 
-async fn connection(
-    mut stream: TcpStream,
+async fn connection<S: AsyncRead + AsyncWrite + Unpin>(
+    mut stream: S,
     auth: Arc<Mutex<Auth>>,
     tx: Tx,
     permit: tokio::sync::OwnedSemaphorePermit,
     generation: u64,
     roots: Arc<[PathBuf]>,
 ) -> Result<(), String> {
-    let bytes = timeout(FIRST, head(&stream))
+    let bytes = timeout(FIRST, head(&mut stream))
         .await
         .map_err(|e| e.to_string())?
         .map_err(|e| e.to_string())?;
@@ -202,10 +260,6 @@ async fn connection(
         && header("upgrade").is_some_and(|v| v.eq_ignore_ascii_case(b"websocket"));
     if websocket {
         if header("origin").is_some_and(|origin| !same_origin(origin, header("host"))) {
-            stream
-                .read_exact(&mut vec![0; bytes.len()])
-                .await
-                .map_err(|e| e.to_string())?;
             return http(&mut stream, "403 Forbidden", "text/plain", b"Forbidden")
                 .await
                 .map_err(|e| e.to_string());
@@ -218,10 +272,6 @@ async fn connection(
             Some(&(_, mime, body)) => ("200 OK", mime, body),
             None => ("404 Not Found", "text/plain", b"Not found".as_slice()),
         };
-        stream
-            .read_exact(&mut vec![0; bytes.len()])
-            .await
-            .map_err(|e| e.to_string())?;
         return timeout(FIRST, http(&mut stream, status, mime, body))
             .await
             .map_err(|e| e.to_string())?
@@ -230,6 +280,12 @@ async fn connection(
     let config = WebSocketConfig::default()
         .max_message_size(Some(1024 * 1024))
         .max_frame_size(Some(1024 * 1024));
+    // Tungstenite parses the request head itself.
+    let stream = Replay {
+        read: bytes,
+        at: 0,
+        inner: stream,
+    };
     let mut socket = timeout(
         FIRST,
         accept_hdr_async_with_config(
@@ -446,23 +502,41 @@ async fn filesystem(
     Ok(reply)
 }
 
-async fn send(socket: &mut WebSocketStream<TcpStream>, value: Value) -> Result<(), String> {
+async fn send<S: AsyncRead + AsyncWrite + Unpin>(
+    socket: &mut WebSocketStream<S>,
+    value: Value,
+) -> Result<(), String> {
     timeout(IDLE, socket.send(Message::Text(value.to_string().into())))
         .await
         .map_err(|e| e.to_string())?
         .map_err(|e| e.to_string())
 }
 
-async fn reject(socket: &mut WebSocketStream<TcpStream>, code: &str) -> Result<(), String> {
+async fn reject<S: AsyncRead + AsyncWrite + Unpin>(
+    socket: &mut WebSocketStream<S>,
+    code: &str,
+) -> Result<(), String> {
     send(socket, wire::error(code, code)).await
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::io::AsyncReadExt;
+    use tokio::net::TcpStream;
 
     async fn start() -> (
+        tempfile::TempDir,
+        std::net::SocketAddr,
+        Arc<Mutex<Auth>>,
+        mpsc::UnboundedReceiver<Msg>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        serving(None).await
+    }
+
+    async fn serving(
+        tls: Option<Arc<rustls::ServerConfig>>,
+    ) -> (
         tempfile::TempDir,
         std::net::SocketAddr,
         Arc<Mutex<Auth>>,
@@ -481,7 +555,8 @@ mod tests {
         let roots = vec![dir.path().canonicalize().unwrap()].into();
         let task = tokio::spawn(async move {
             let _stop = stop;
-            serve(vec![listener], server_auth, tx, stopped, 0, roots).await;
+            let tls = tls.map(TlsAcceptor::from);
+            serve(vec![listener], tls, server_auth, tx, stopped, 0, roots).await;
         });
         (dir, address, auth, rx, task)
     }
@@ -510,7 +585,7 @@ mod tests {
         socket
     }
 
-    async fn receive(socket: &mut WebSocketStream<TcpStream>) -> Value {
+    async fn receive<S: AsyncRead + AsyncWrite + Unpin>(socket: &mut WebSocketStream<S>) -> Value {
         serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap()).unwrap()
     }
 
@@ -623,6 +698,110 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(receive(&mut socket).await["code"], "unauthorized");
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn a_replayed_stream_reads_the_consumed_bytes_first_and_writes_through() {
+        let (inner, mut peer) = tokio::io::duplex(64);
+        let mut stream = Replay {
+            read: b"GET / ".to_vec(),
+            at: 0,
+            inner,
+        };
+        peer.write_all(b"HTTP/1.1").await.unwrap();
+        peer.shutdown().await.unwrap();
+        let mut start = [0; 4];
+        assert_eq!(stream.read(&mut start).await.unwrap(), 4);
+        assert_eq!(&start, b"GET ");
+        let mut rest = Vec::new();
+        stream.read_to_end(&mut rest).await.unwrap();
+        assert_eq!(rest, b"/ HTTP/1.1");
+        stream.write_all(b"reply").await.unwrap();
+        let mut written = [0; 5];
+        peer.read_exact(&mut written).await.unwrap();
+        assert_eq!(&written, b"reply");
+    }
+
+    /// A TLS connection to `address` that trusts only `cert`.
+    async fn tls_connect(
+        address: std::net::SocketAddr,
+        cert: &std::path::Path,
+    ) -> tokio_rustls::client::TlsStream<TcpStream> {
+        use rustls::pki_types::{CertificateDer, ServerName, pem::PemObject};
+        let mut roots = rustls::RootCertStore::empty();
+        roots
+            .add(CertificateDer::from_pem_file(cert).unwrap())
+            .unwrap();
+        let provider = Arc::new(rustls::crypto::ring::default_provider());
+        let config = rustls::ClientConfig::builder_with_provider(provider)
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+        let stream = TcpStream::connect(address).await.unwrap();
+        tokio_rustls::TlsConnector::from(Arc::new(config))
+            .connect(ServerName::try_from("localhost").unwrap(), stream)
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn over_tls_the_client_and_its_socket_are_served_and_plain_http_gets_no_reply() {
+        use tokio_tungstenite::tungstenite::{self, client::IntoClientRequest};
+        let files = tempfile::tempdir().unwrap();
+        let (cert, key) = super::super::tls::self_signed(files.path(), "server");
+        let config = super::super::tls::load(&cert, &key).unwrap();
+        let (_dir, address, _auth, _rx, task) = serving(Some(config)).await;
+
+        let mut stream = tls_connect(address, &cert).await;
+        stream
+            .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            .await
+            .unwrap();
+        let mut reply = Vec::new();
+        stream.read_to_end(&mut reply).await.unwrap();
+        let reply = String::from_utf8(reply).unwrap();
+        assert!(reply.starts_with("HTTP/1.1 200 OK\r\n"), "{reply}");
+        assert!(reply.contains("Cache-Control: no-store, no-transform\r\n"));
+        assert!(reply.contains(CSP));
+        assert!(reply.ends_with(include_str!("web/index.html")));
+
+        let port = address.port();
+        for origin in [
+            format!("https://localhost:{port}"),
+            "https://foreign.example".into(),
+        ] {
+            let mut request = format!("wss://localhost:{port}/ws")
+                .into_client_request()
+                .unwrap();
+            request
+                .headers_mut()
+                .insert("Origin", origin.parse().unwrap());
+            let stream = tls_connect(address, &cert).await;
+            match tokio_tungstenite::client_async(request, stream).await {
+                Ok((mut socket, _)) if origin.contains("localhost") => {
+                    send(&mut socket, json!({"t":"hello", "v":1, "token":"unknown"}))
+                        .await
+                        .unwrap();
+                    assert_eq!(receive(&mut socket).await["code"], "unauthorized");
+                }
+                Err(tungstenite::Error::Http(response)) if origin.contains("foreign") => {
+                    assert_eq!(response.status(), 403);
+                }
+                other => panic!("{origin}: {:?}", other.map(|(_, response)| response)),
+            }
+        }
+
+        let mut plain = TcpStream::connect(address).await.unwrap();
+        plain
+            .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            .await
+            .unwrap();
+        let mut reply = Vec::new();
+        // The handshake failure may reset the connection as well as end it.
+        let _ = plain.read_to_end(&mut reply).await;
+        assert!(!reply.starts_with(b"HTTP/"), "{reply:?}");
         task.abort();
     }
 

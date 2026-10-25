@@ -152,7 +152,7 @@ async fn run() -> i32 {
     };
     let has_env = |name: &str| std::env::var_os(name).is_some_and(|value| !value.is_empty());
     let launch = match config::prepare(&home, &request, &has_env) {
-        Ok(Prepared::Launch(launch)) => launch,
+        Ok(Prepared::Launch(launch)) => *launch,
         Ok(Prepared::FirstRun(message)) => {
             print!("{message}");
             return 1;

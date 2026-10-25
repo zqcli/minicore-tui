@@ -3,6 +3,7 @@
 pub mod auth;
 pub mod fs;
 pub mod server;
+pub mod tls;
 pub mod view;
 pub mod wire;
 
@@ -59,6 +60,8 @@ pub struct Bound {
     pub listening: Vec<SocketAddr>,
     /// Configured addresses this host cannot listen on, with the reason.
     pub skipped: Vec<(SocketAddr, String)>,
+    /// Read from the configured files at every start, so a renewed certificate is used.
+    pub tls: Option<Arc<rustls::ServerConfig>>,
     pub auth: Arc<Mutex<Auth>>,
     pub url: String,
 }
@@ -109,7 +112,12 @@ impl Bound {
             return Err(format!("{address}: {error}"));
         };
         let configured_url = config.url.clone();
-        let (auth, url) = tokio::task::spawn_blocking(move || {
+        let files = config.tls.clone();
+        let (auth, url, tls) = tokio::task::spawn_blocking(move || {
+            let tls = files
+                .map(|files| tls::load(&files.cert, &files.key))
+                .transpose()
+                .map_err(|(_, error)| error)?;
             let auth = Auth::load(file)?;
             let url = match configured_url {
                 Some(url) => url,
@@ -127,10 +135,11 @@ impl Bound {
                         })?;
                         address.set_ip(route.local_addr().map_err(|e| e.to_string())?.ip());
                     }
-                    format!("http://{address}")
+                    let scheme = if tls.is_some() { "https" } else { "http" };
+                    format!("{scheme}://{address}")
                 }
             };
-            Ok::<_, String>((auth, url))
+            Ok::<_, String>((auth, url, tls))
         })
         .await
         .map_err(|e| e.to_string())??;
@@ -138,6 +147,7 @@ impl Bound {
             listeners,
             listening,
             skipped,
+            tls,
             auth: Arc::new(Mutex::new(auth)),
             url,
         })
@@ -215,6 +225,7 @@ pub struct Remote {
     pub url: Option<String>,
     /// The addresses the running listener accepts on.
     pub listening: Vec<SocketAddr>,
+    pub tls: bool,
     pub generation: u64,
     pub starting: Option<tokio::task::JoinHandle<()>>,
     pub quit_armed: Option<tokio::time::Instant>,
@@ -311,8 +322,10 @@ impl Remote {
 
     pub fn start(&mut self, bound: Bound, tx: crate::app::Tx) {
         let (stop, stopped) = oneshot::channel();
+        self.tls = bound.tls.is_some();
         self.server_task = Some(tokio::spawn(server::serve(
             bound.listeners,
+            bound.tls.map(tokio_rustls::TlsAcceptor::from),
             bound.auth.clone(),
             tx,
             stopped,
@@ -386,15 +399,41 @@ pub enum RemoteEvent {
 mod tests {
     use super::*;
 
-    async fn bind(addresses: &[&str]) -> Result<Bound, String> {
-        let dir = tempfile::tempdir().unwrap();
-        let config = crate::config::Remote {
+    fn config(addresses: &[&str], dir: &std::path::Path) -> crate::config::Remote {
+        crate::config::Remote {
             bind: addresses.iter().map(|a| a.parse().unwrap()).collect(),
             url: None,
-            roots: vec![dir.path().to_path_buf()],
+            roots: vec![dir.to_path_buf()],
             allow_insecure: true,
-        };
+            tls: None,
+        }
+    }
+
+    async fn bind(addresses: &[&str]) -> Result<Bound, String> {
+        let dir = tempfile::tempdir().unwrap();
+        let config = config(addresses, dir.path());
         Bound::bind(&config, dir.path().join("remote.json")).await
+    }
+
+    #[tokio::test]
+    async fn a_tls_listener_derives_an_https_url_and_rereads_its_certificate_at_each_start() {
+        let dir = tempfile::tempdir().unwrap();
+        let (cert, key) = tls::self_signed(dir.path(), "server");
+        let mut config = config(&["127.0.0.1:0"], dir.path());
+        config.tls = Some(crate::config::Tls {
+            cert: cert.clone(),
+            key,
+        });
+        let file = dir.path().join("remote.json");
+        let bound = Bound::bind(&config, file.clone()).await.unwrap();
+        assert!(bound.tls.is_some());
+        assert_eq!(bound.url, format!("https://{}", bound.listening[0]));
+        std::fs::write(&cert, "renewed badly").unwrap();
+        let error = Bound::bind(&config, file).await.err().unwrap();
+        assert_eq!(
+            error,
+            format!("{}: no PEM certificate found", cert.display())
+        );
     }
 
     #[tokio::test]

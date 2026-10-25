@@ -9,6 +9,13 @@
   address the computer cannot listen on (no IPv6, an IP it no longer has) is
   skipped with a notice; a taken port is still an error. The status screen
   shows the addresses in a new `Listening` row.
+- Remote mode can serve HTTPS and WSS itself: `tls = true` with `tls_cert` and
+  `tls_key` naming your own PEM certificate and key (Let's Encrypt, a
+  Cloudflare Origin CA certificate for Full (strict), or a self-signed one the
+  phone trusts). The files are checked at startup like other settings and read
+  again by `/remote on`, so a renewed certificate needs only `/remote off` and
+  `/remote on`. A LAN or public bind with TLS no longer needs
+  `allow_insecure`.
 
 ## 0.6.0 — 2026-10-25
 
