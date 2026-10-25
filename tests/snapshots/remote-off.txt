@@ -1,0 +1,12 @@
+
+  minicore-tui v0.5.5
+
+  esc interrupt · ctrl+c clear · / commands · @ files · ctrl+o expand
+  ctrl+r sessions
+
+ ─────────────────────────────────────────────────────────────────────
+ Remote                                                            off
+ /remote on to start · esc close
+   Remote control is off
+ ─────────────────────────────────────────────────────────────────────
+ ▸ minicore-tui · gpt 6 luna · max

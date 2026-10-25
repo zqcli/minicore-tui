@@ -168,8 +168,28 @@ the name.
 | `/export [path]` | Write the conversation as Markdown; the default is `./minicore-<session>-<date>.md`. |
 | `/theme [dark\|light]` | Switch the palette and save it; without an argument, toggle. |
 | `/reload` | Compose the Agent config again from `config.toml`, `models.toml` and the prompt, reload the Agent and the templates. |
+| `/remote [on\|off\|pair\|status]` | Phone control: open the Remote sheet (status, address, pairing QR code and code), start listening, stop and unfreeze local input, or make a new pairing code. See [Remote mode](#remote-mode). |
 | `/help` | Open the help view. |
 | `/quit` | Quit. |
+
+## Remote mode
+
+While remote control is on (`remote` in the footer, `remote · <device>` with a
+phone connected) the phone sends messages and answers approvals; the keyboard
+cannot. The editor is dimmed and reads `Remote control is on · /remote off to
+take back`, the draft and slash commands still work, and a refused action
+flashes the same text. What stays available:
+
+- `Esc` interrupts a running turn or cancels a compaction.
+- Looking and copying: `/theme`, `/copy` (`Ctrl+X`), `/export`, `F1` help,
+  `/session`, `/context`, `/diff`, the sessions picker (picking is refused) and
+  scrolling.
+- `/remote` opens the Remote sheet (`Esc` closes it); `/remote pair` makes a new
+  code and `/remote off` stops the listener and returns the editor to normal.
+- A pending approval is not drawn as a sheet and takes no keys here; the status
+  line says `Waiting for approval · answer on the phone`.
+- Quitting asks twice: `Ctrl+C` or `/quit` flashes `quit again to end it`, and a
+  second request within 3 seconds quits.
 
 ## Prompt templates
 
