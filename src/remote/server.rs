@@ -38,11 +38,17 @@ const HEADERS: [(&str, &str); 4] = [
     ("Content-Security-Policy", CSP),
 ];
 
-pub async fn serve(listener: TcpListener, auth: Arc<Mutex<Auth>>, tx: Tx) {
+pub async fn serve(
+    listener: TcpListener,
+    auth: Arc<Mutex<Auth>>,
+    tx: Tx,
+    mut stop: oneshot::Receiver<()>,
+) {
     let permits = Arc::new(Semaphore::new(8));
     let mut tasks = JoinSet::new();
     loop {
         tokio::select! {
+            _ = &mut stop => break,
             accepted = listener.accept() => {
                 let Ok((stream, _)) = accepted else { return };
                 let Ok(permit) = permits.clone().try_acquire_owned() else { continue };
@@ -55,6 +61,8 @@ pub async fn serve(listener: TcpListener, auth: Arc<Mutex<Auth>>, tx: Tx) {
             _ = tasks.join_next(), if !tasks.is_empty() => {}
         }
     }
+    drop(listener);
+    let _ = timeout(FIRST, async { while tasks.join_next().await.is_some() {} }).await;
 }
 
 async fn head(stream: &TcpStream) -> io::Result<Vec<u8>> {
@@ -321,7 +329,12 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let (tx, rx) = mpsc::unbounded_channel();
-        let task = tokio::spawn(serve(listener, auth.clone(), tx));
+        let server_auth = auth.clone();
+        let (stop, stopped) = oneshot::channel();
+        let task = tokio::spawn(async move {
+            let _stop = stop;
+            serve(listener, server_auth, tx, stopped).await;
+        });
         (dir, address, auth, rx, task)
     }
 

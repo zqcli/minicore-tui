@@ -13,7 +13,7 @@ impl App {
     /// have changed; plain pointer motion elsewhere does not.
     pub fn on_mouse(&mut self, mouse: MouseEvent) -> bool {
         let cell = (mouse.column, mouse.row);
-        let editor = !self.has_interaction()
+        let editor = (!self.has_interaction() || self.remote.active())
             && self.fatal.is_none()
             && matches!(
                 self.overlay,

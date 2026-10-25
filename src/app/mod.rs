@@ -16,6 +16,7 @@ mod notify;
 mod ops;
 pub mod overlay;
 pub mod picker;
+mod remote;
 pub mod scrollbar;
 pub mod selection;
 pub mod session;
@@ -305,7 +306,7 @@ impl App {
 
     pub fn on_msg(&mut self, msg: Msg) {
         match msg {
-            Msg::Remote(event) => self.remote.on_event(event),
+            Msg::Remote(event) => self.on_remote(event),
             Msg::Agent(event) => self.on_agent_event(*event),
             Msg::AgentClosed(reason) => {
                 if self.fatal.is_none() {
@@ -402,9 +403,11 @@ impl App {
     }
 
     pub fn notice(&mut self, level: NoticeLevel, text: impl Into<String>) {
+        let text = text.into();
+        self.remote.send(json!({"t":"notice", "level": match level { NoticeLevel::Info => "info", NoticeLevel::Error => "error" }, "text":text}));
         self.notices.push_back(Notice {
             level,
-            text: text.into(),
+            text,
             at: tokio::time::Instant::now(),
         });
         while self.notices.len() > 2 {

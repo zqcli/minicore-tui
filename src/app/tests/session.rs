@@ -27,10 +27,11 @@ async fn a_new_session_carries_only_the_launch_flags_given() {
         h.fake.script("turn.send", json!({"turn": turn("l1")}));
         h.app.launch = launch;
         h.boot().await;
+        let workspace = h.app.workspace.clone();
         h.submit("hello");
         h.until(|app| app.session.is_some()).await;
         let create = h.calls("session.create").remove(0);
-        assert_eq!(create["workspace"], json!(h.app.workspace));
+        assert_eq!(create["workspace"], json!(workspace));
         for field in ["profile", "model", "reasoning"] {
             assert_eq!(create.get(field), expected.get(field), "{field}: {create}");
         }
@@ -216,7 +217,7 @@ async fn the_sessions_picker_lists_this_workspace_first_then_newest() {
         info["updated_at"] = json!(updated);
         info
     };
-    let here = std::env::temp_dir().to_string_lossy().into_owned();
+    let here = session_info("s1")["workspace"].as_str().unwrap().to_owned();
     h.fake.script(
         "session.list",
         json!({"sessions": [

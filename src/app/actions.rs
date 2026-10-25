@@ -48,6 +48,7 @@ pub enum Action {
     LoadOlder,
     RecallQueued,
     Quit,
+    Remote(String),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -76,6 +77,10 @@ impl Action {
 
 impl App {
     pub fn on_action(&mut self, action: Action) {
+        if !self.local_allowed(&action) {
+            self.remote_flash();
+            return;
+        }
         if self.session.is_none() && action.needs_session() {
             self.notice(NoticeLevel::Info, NO_SESSION);
             return;
@@ -83,14 +88,7 @@ impl App {
         match action {
             Action::Submit => self.submit(),
             Action::QueueFollowUp => self.submit_follow_up(),
-            Action::OpenSession(id) => {
-                self.loading_session = true;
-                let client = self.client.clone();
-                self.spawn_msg(async move {
-                    let params = json!({ "session_id": id });
-                    Msg::Opened(tasks::session(client, protocol::METHOD_SESSION_OPEN, params).await)
-                });
-            }
+            Action::OpenSession(id) => self.open_session(id),
             Action::NewSession => self.new_draft(None),
             Action::NewSessionWith(profile) if self.profiles.iter().any(|p| p.id == profile) => {
                 self.new_draft(Some(profile));
@@ -152,45 +150,45 @@ impl App {
                     }
                 });
             }
-            Action::Quit => self.quit = true,
+            Action::Quit => self.request_quit(),
+            Action::Remote(command) => self.remote_command(&command),
         }
     }
 
     /// Enter: send when idle, steer when a turn is running. Without a session
     /// the draft's text starts one.
     fn submit(&mut self) {
-        if self.session.is_none() {
-            self.start_session();
-            return;
-        }
-        let text = self.composer.submit().trim_end().to_owned();
-        if text.is_empty() {
-            return;
-        }
-        if self.is_busy() {
-            self.steer(text);
-        } else {
-            self.scroll = Scroll::Follow;
-            self.send(text);
-        }
+        self.submit_composer(false);
     }
 
     /// Alt+Enter: queue a follow-up; when idle it just sends.
     fn submit_follow_up(&mut self) {
-        if self.session.is_none() {
-            self.start_session();
+        self.submit_composer(true);
+    }
+
+    fn submit_composer(&mut self, follow: bool) {
+        if self.session.is_none() && (!self.ready || self.loading_session) {
             return;
         }
         let text = self.composer.submit().trim_end().to_owned();
-        if text.is_empty() {
-            return;
+        if !text.is_empty() {
+            self.submit_text(text, follow);
         }
-        match self.session.as_mut().filter(|session| session.is_busy()) {
-            Some(session) => session.push_follow_up(text),
-            None => {
-                self.scroll = Scroll::Follow;
-                self.send(text);
+    }
+
+    pub(super) fn submit_text(&mut self, text: String, follow: bool) {
+        if self.session.is_none() {
+            self.first_message = Some(text);
+            self.create_session();
+        } else if self.is_busy() {
+            if follow {
+                self.session_mut().push_follow_up(text);
+            } else {
+                self.steer(text);
             }
+        } else {
+            self.scroll = Scroll::Follow;
+            self.send(text);
         }
     }
 
@@ -394,7 +392,7 @@ impl App {
         self.edit_request.take()
     }
 
-    fn answer(&mut self, answer: Answer) {
+    pub(super) fn answer(&mut self, answer: Answer) {
         let Some(interaction) = self
             .session
             .as_mut()
@@ -542,6 +540,10 @@ impl App {
     /// Returns submitted text to the composer: appended to a draft typed
     /// meanwhile rather than replacing it, and one undo step either way.
     pub(super) fn restore_draft(&mut self, text: &str) {
+        if self.remote.connection.is_some() {
+            self.remote.send(json!({"t":"returned", "text":text}));
+            return;
+        }
         if self.composer.is_empty() {
             self.composer.restore_text(text);
         } else {

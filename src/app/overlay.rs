@@ -15,6 +15,7 @@ use crate::ui::sheets;
 #[derive(Debug)]
 pub enum Overlay {
     None,
+    Remote,
     /// The inline command list; its filter is the composer's `/name`.
     Palette {
         selected: usize,
@@ -72,6 +73,7 @@ impl Overlay {
 /// A picker or view a command or key opens.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Panel {
+    Remote,
     Sessions,
     Models,
     Reasoning,
@@ -167,8 +169,26 @@ impl App {
             .unwrap_or_default()
     }
 
+    pub fn local_panel_allowed(&self, panel: &Panel) -> bool {
+        !self.remote.active()
+            || matches!(
+                panel,
+                Panel::Remote
+                    | Panel::Help
+                    | Panel::SessionInfo
+                    | Panel::Context
+                    | Panel::Diff
+                    | Panel::Sessions
+                    | Panel::Find
+            )
+    }
+
     /// Opens a picker or view, seeding it from the current state.
     pub fn open_panel(&mut self, panel: Panel) {
+        if !self.local_panel_allowed(&panel) {
+            self.remote_flash();
+            return;
+        }
         if self.session.is_none() {
             // `workspace.files` needs a loaded session.
             let hint = match panel {
@@ -184,6 +204,7 @@ impl App {
             }
         }
         self.overlay = match panel {
+            Panel::Remote => Overlay::Remote,
             Panel::Sessions => Overlay::Sessions {
                 filter: String::new(),
                 selected: 0,
@@ -246,7 +267,8 @@ impl App {
             return None;
         }
         let (name, rest) = text.strip_prefix('/')?.split_once(char::is_whitespace)?;
-        matches!(name, "model" | "new" | "reasoning" | "theme").then_some((name, rest.trim()))
+        matches!(name, "model" | "new" | "reasoning" | "theme" | "remote")
+            .then_some((name, rest.trim()))
     }
 
     /// The command list's rows as `(name, description)`: the commands for the
@@ -298,6 +320,7 @@ impl App {
                 .map(|level| (level.label().to_owned(), String::new()))
                 .collect(),
             "theme" => plain(&["dark", "light"]),
+            "remote" => plain(&["status", "on", "off", "pair"]),
             _ => unreachable!(),
         };
         rows.retain(|(value, _)| fuzzy_match(value, filter));
@@ -328,6 +351,10 @@ impl App {
 
     /// Ctrl+N in the sessions picker: edits the selected session's title.
     pub(super) fn start_rename(&mut self) {
+        if self.remote.active() {
+            self.remote_flash();
+            return;
+        }
         let Overlay::Sessions {
             rows,
             filter,

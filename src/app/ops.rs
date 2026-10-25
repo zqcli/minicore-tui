@@ -108,6 +108,7 @@ impl App {
             }
             return;
         };
+        self.workspace = std::path::PathBuf::from(&info.workspace);
         self.merge_catalog_info(info.clone());
         self.epoch += 1;
         self.show_session(Some(Session::new(info, self.epoch)));

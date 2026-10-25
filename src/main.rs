@@ -182,6 +182,23 @@ async fn run() -> i32 {
         }
     };
 
+    let remote = if args.remote {
+        match minicore_tui::remote::Bound::bind(
+            &launch.remote,
+            home.dir().join("remote-devices.json"),
+        )
+        .await
+        {
+            Ok(bound) => Some(bound),
+            Err(error) => {
+                eprintln!("Remote: {error}");
+                return 1;
+            }
+        }
+    } else {
+        None
+    };
+
     terminal::install_panic_hook();
     let mut guard = match terminal::Guard::enter() {
         Ok(guard) => guard,
@@ -204,6 +221,10 @@ async fn run() -> i32 {
     app.default_profile = launch.default_profile;
     app.composer = minicore_tui::app::composer::Composer::with_history_file(home.history_file());
     app.home = Some(home);
+    app.remote.config = Some(launch.remote);
+    if let Some(bound) = remote {
+        app.enter_remote(bound);
+    }
     app.styles = Styles::of(Palette::for_kind(theme));
 
     let boot = {
@@ -329,7 +350,7 @@ async fn run() -> i32 {
                 .then(|| pick_recent(&app.sessions, &workspace))
                 .flatten();
             if let Some(id) = session.or_else(|| recent.cloned()) {
-                app.on_action(minicore_tui::app::Action::OpenSession(id));
+                app.open_session(id);
                 frames.mark(Cause::Event);
             }
         }
@@ -349,6 +370,7 @@ async fn run() -> i32 {
         }
     }
 
+    app.remote.stop("tui_exit");
     let _ = client.shutdown().await;
     let _ = guard.restore();
     frames.print(&app);

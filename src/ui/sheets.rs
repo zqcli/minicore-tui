@@ -23,6 +23,7 @@ const COMPLETION_ROWS: usize = 5;
 pub fn sheet(app: &App, styles: Styles) -> Option<Sheet> {
     Some(match &app.overlay {
         Overlay::None => return interaction_sheet(app, styles),
+        Overlay::Remote => remote_sheet(app),
         Overlay::Sessions {
             filter,
             selected,
@@ -53,6 +54,31 @@ pub fn sheet(app: &App, styles: Styles) -> Option<Sheet> {
         | Overlay::Help { .. }
         | Overlay::Diff(_) => return None,
     })
+}
+
+fn remote_sheet(app: &App) -> Sheet {
+    let mut lines = vec![Line::from(format!("Mode: {:?}", app.remote.mode()))];
+    let pairing = app.remote.pairing();
+    if let Some(url) = app.remote.url() {
+        let fragment = pairing
+            .as_ref()
+            .map_or(String::new(), |(code, _)| format!("/#pair={code}"));
+        lines.push(Line::from(format!("URL: {url}{fragment}")));
+    }
+    if let Some((code, expires)) = pairing {
+        lines.push(Line::from(format!(
+            "Code: {}-{} · expires in {} s",
+            &code[..4],
+            &code[4..],
+            expires
+                .saturating_duration_since(tokio::time::Instant::now())
+                .as_secs()
+        )));
+    }
+    if let Some(device) = app.remote.device_name() {
+        lines.push(Line::from(format!("Device: {device}")));
+    }
+    Sheet::new("Remote", "esc close").body(lines)
 }
 
 /// Rows of the inline completion list (commands, `@` files) shown inside the
@@ -279,6 +305,9 @@ fn reasoning_description(level: Reasoning) -> &'static str {
 }
 
 fn interaction_sheet(app: &App, styles: Styles) -> Option<Sheet> {
+    if app.remote.active() {
+        return None;
+    }
     let session = app.session.as_ref()?;
     let interaction = session.interaction.as_ref()?;
     let options = interaction.options();

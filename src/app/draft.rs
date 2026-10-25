@@ -110,20 +110,6 @@ impl App {
             self.launch.profile = profile;
         }
     }
-
-    /// The first Enter of a draft: creates the session, which then sends the
-    /// text. Text entered while a session is being opened stays in the editor.
-    pub(super) fn start_session(&mut self) {
-        if !self.ready || self.loading_session {
-            return;
-        }
-        let text = self.composer.submit().trim_end().to_owned();
-        if text.is_empty() {
-            return;
-        }
-        self.first_message = Some(text);
-        self.create_session();
-    }
 }
 
 /// The supported level closest to `current` on [`SCALE`], the higher one on a

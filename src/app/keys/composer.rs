@@ -89,6 +89,7 @@ impl App {
                 self.copy_draft_selection(false);
                 self.quit_armed = None;
             }
+            KeyCode::Char('c') if ctrl && self.remote.active() => return Some(Action::Quit),
             KeyCode::Char('c') if ctrl => {
                 let now = tokio::time::Instant::now();
                 if self.quit_armed.is_some_and(|at| now - at <= QUIT_WINDOW) {
@@ -214,7 +215,7 @@ impl App {
     /// A terminal paste. The composer decides whether the payload becomes a
     /// single token; a pasted `/name` opens the command list like typing does.
     pub fn on_paste(&mut self, text: &str) {
-        if self.has_interaction()
+        if (self.has_interaction() && !self.remote.active())
             || self.fatal.is_some()
             || !matches!(
                 self.overlay,
@@ -237,10 +238,18 @@ impl App {
             commands::parse(&text).and_then(|(name, argument)| commands::execute(name, argument));
         match executed {
             Some(Executed::Action(action)) => {
+                if !self.local_allowed(&action) {
+                    self.remote_flash();
+                    return None;
+                }
                 self.composer.clear();
                 Some(action)
             }
             Some(Executed::Panel(panel)) => {
+                if !self.local_panel_allowed(&panel) {
+                    self.remote_flash();
+                    return None;
+                }
                 self.composer.clear();
                 self.open_panel(panel);
                 None
@@ -257,6 +266,9 @@ impl App {
     /// A draft no built-in command claims: a template, a typo that Enter warns
     /// about once, or a prompt. `//` escapes a leading slash.
     fn submit_line(&mut self, text: &str) -> Option<Action> {
+        if self.remote.active() {
+            return Some(Action::Submit);
+        }
         if let Some(escaped) = text.strip_prefix('/').filter(|rest| rest.starts_with('/')) {
             self.composer.set_text(escaped);
         } else if let Some(expanded) =

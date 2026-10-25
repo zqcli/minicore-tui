@@ -60,6 +60,10 @@ impl App {
     /// Ctrl+D in the sessions picker: the first press arms the delete, the
     /// second deletes the selected session.
     fn delete_confirm(&mut self) {
+        if self.remote.active() {
+            self.remote_flash();
+            return;
+        }
         let Overlay::Sessions {
             rows,
             filter,
@@ -136,7 +140,7 @@ impl App {
             }
             Overlay::Help { scroll } => *scroll = scroll.saturating_add_signed(delta * 3),
             Overlay::Find { .. } => self.find_step(delta > 0),
-            Overlay::Context | Overlay::SessionInfo { .. } | Overlay::None => {}
+            Overlay::Remote | Overlay::Context | Overlay::SessionInfo { .. } | Overlay::None => {}
         }
     }
 
@@ -185,6 +189,15 @@ impl App {
     }
 
     fn on_overlay_accept(&mut self) -> Option<Action> {
+        if self.remote.active()
+            && matches!(
+                self.overlay,
+                Overlay::Sessions { .. } | Overlay::Models { .. } | Overlay::Reasoning { .. }
+            )
+        {
+            self.remote_flash();
+            return None;
+        }
         match std::mem::replace(&mut self.overlay, Overlay::None) {
             Overlay::Sessions {
                 selected,
@@ -212,6 +225,7 @@ impl App {
             }
             Overlay::Palette { .. }
             | Overlay::Files { .. }
+            | Overlay::Remote
             | Overlay::Context
             | Overlay::Help { .. }
             | Overlay::Diff(_)

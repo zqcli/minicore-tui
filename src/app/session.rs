@@ -64,6 +64,7 @@ pub struct Session {
 pub struct LiveTurn {
     pub turn: TurnRef,
     pub started: Instant,
+    pub started_ms: u64,
     pub requests: u32,
     pub phase: Phase,
     /// Index in the transcript where this turn's blocks start.
@@ -100,6 +101,7 @@ impl LiveTurn {
         Self {
             turn,
             started: Instant::now(),
+            started_ms: crate::protocol::stamp::now_millis(),
             requests: 1,
             phase: Phase::Thinking,
             start,

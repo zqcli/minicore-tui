@@ -90,6 +90,11 @@ pub const COMMANDS: &[Command<'static>] = &[
         description: "Reload the agent configuration",
     },
     Command {
+        name: "remote",
+        args: "[status|on|off|pair]",
+        description: "Manage phone control",
+    },
+    Command {
         name: "quit",
         args: "",
         description: "Quit minicore-tui",
@@ -159,6 +164,7 @@ pub fn execute(name: &str, arg: &str) -> Option<Executed> {
         "reload" => Executed::Action(Action::ReloadAgent),
         "help" => Executed::Panel(super::Panel::Help),
         "quit" => Executed::Action(Action::Quit),
+        "remote" => Executed::Action(Action::Remote(arg.to_owned())),
         _ => return None,
     })
 }

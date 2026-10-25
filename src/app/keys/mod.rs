@@ -18,10 +18,17 @@ impl App {
         if self.fatal.is_some() {
             return matches!(key.code, KeyCode::Char('q') | KeyCode::Esc).then_some(Action::Quit);
         }
+        if self.remote.active()
+            && key.code == KeyCode::Char('c')
+            && key.modifiers.contains(KeyModifiers::CONTROL)
+            && self.composer.selection().is_none()
+        {
+            return Some(Action::Quit);
+        }
         if !self.overlay.is_none() {
             return self.on_overlay_key(key);
         }
-        if self.has_interaction() {
+        if self.has_interaction() && !self.remote.active() {
             return self.on_interaction_key(key);
         }
         self.on_composer_input(key)
