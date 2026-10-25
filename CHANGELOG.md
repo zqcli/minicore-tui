@@ -13,6 +13,12 @@
 - Opening or creating a session makes its workspace the default for the next
   draft. Remote session selection is restricted to configured directory roots.
 
+- The Remote sheet (`/remote`) shows the status, address, pairing code and a
+  scannable QR code, or the link when the terminal is too small for it. While
+  remote control is on, the editor reads `Remote control is on · /remote off to
+  take back`, the footer shows `remote` or `remote · <device>`, and a pending
+  approval says `answer on the phone`.
+
 ## 0.5.5 — 2026-10-24
 
 - `/context` opens as a sheet below the transcript like `/session`, instead of a

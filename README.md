@@ -69,6 +69,7 @@ need `xattr -d com.apple.quarantine bin/*` first.
 | `--model <ID>` | Model for the session; applied to an opened session with `session.update`. |
 | `--reasoning <LEVEL>` | `auto`, `disabled`, `low`, `medium`, `high`, `xhigh`, `max` or `ultra`; applied like `--model`. |
 | `--theme <dark\|light>` | Palette for this run. |
+| `--remote` | Start [remote mode](#remote-mode) at startup. |
 | `-h`, `--help`, `-V`, `--version` | Usage, version. |
 
 Bad arguments print the usage and exit with status 2.
@@ -197,6 +198,27 @@ without a report. The TUI never estimates it.
 - **Composer.** Grapheme-safe editing, undo and redo, prompt history, paste
   tokens for large pastes, external editor on `Ctrl+G`.
 
+## Remote mode
+
+`--remote`, or `/remote on` in a running TUI, lets a phone drive the open session
+from its browser. The TUI shows a sheet with a QR code and a pairing code; scan
+it with the phone's camera (the code is valid for 10 minutes and works once),
+and the phone's page and this screen show the same session. While remote
+control is on, local sending is frozen and the footer shows `remote`;
+`/remote off` takes the keyboard back. Without `--remote` nothing listens.
+
+The server binds to `127.0.0.1:8765` by default, which only the same machine
+can reach. To use a phone on another network, keep the loopback bind and
+publish it through Tailscale, an SSH tunnel or a TLS reverse proxy, then set
+`[remote] url` to the address the phone should open. The TUI has no TLS of its
+own, and a non-loopback bind needs `allow_insecure = true`. The `[remote]`
+settings are in [docs/configuration.md](docs/configuration.md) and the protocol
+in [docs/design-remote.md](docs/design-remote.md).
+
+Whoever controls the session can have the Agent run commands on this machine
+and answers its approvals: pair only your own devices and run `/remote off`
+when done.
+
 ## Keys and commands
 
 The complete map is [docs/keybindings.md](docs/keybindings.md). The essentials:
@@ -209,7 +231,7 @@ The complete map is [docs/keybindings.md](docs/keybindings.md). The essentials:
   wheel navigate; `/` opens the command palette and `@` the file picker;
 - `/new [profile]`, `/sessions` (`/resume`), `/session`, `/rename`, `/model [id]`,
   `/reasoning`, `/compact`, `/diff`, `/context`, `/copy`, `/export`,
-  `/theme`, `/reload`, `/help`, `/quit`, and a command per prompt template in
+  `/theme`, `/reload`, `/remote`, `/help`, `/quit`, and a command per prompt template in
   `<home>/prompt/commands/*.md`; `Ctrl+P` cycles models.
 
 ## Troubleshooting
