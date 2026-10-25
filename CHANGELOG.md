@@ -2,37 +2,21 @@
 
 ## Unreleased
 
-- Remote handshakes report host time so clients can correct elapsed time for
-  host/phone clock skew without periodic state updates. Draft model and reasoning
-  now resolve profile defaults like the TUI footer.
-- Remote streaming updates are frame-paced and send only newly appended text;
-  unchanged catalogs are cached. Pairing QR codes are encoded once, and the open
-  Remote sheet redraws at countdown boundaries and expiry without polling.
-- Rejected pairing does not store a device or spend a valid code. Phone approvals
-  validate the answer kind, and remote shutdown flushes `bye` and a close frame.
-- Directory browsing skips unreadable entries and looping symlinks; new folder
-  names reject Windows device names and trailing dots/spaces on every platform.
-- The phone directory picker can browse configured roots and create folders,
-  with filesystem work off the terminal loop. Replaced or disconnected controllers
-  cannot start queued directory operations or receive their results.
-- Phone breadcrumbs preserve Windows network-share paths, and applied steering
-  messages display the same label as pending steers.
-- Remote-control backend: `--remote`, `/remote [status|on|off|pair]`, validated
-  `[remote]` settings, single-use pairing codes and hashed device credentials.
-  One authenticated phone controls the resident session through versioned
-  WebSocket intents; reconnecting gets a fresh snapshot and subsequent changes
-  arrive as block-revision updates and state changes.
-- Local sending is frozen while remote control is Waiting or Connected, without
-  losing the local draft. Esc can still interrupt; approvals stay on the phone,
-  refused remote sends return to it, and quitting requires confirmation.
-- Opening or creating a session makes its workspace the default for the next
-  draft. Remote session selection is restricted to configured directory roots.
-
-- The Remote sheet (`/remote`) shows the status, address, pairing code and a
-  scannable QR code, or the link when the terminal is too small for it. While
-  remote control is on, the editor reads `Remote control is on · /remote off to
-  take back`, the footer shows `remote` or `remote · <device>`, and a pending
-  approval says `answer on the phone`.
+- Remote mode: a phone can drive the TUI. `--remote` or `/remote on` starts a
+  listener (loopback by default, configured under `[remote]`) that serves a web
+  client; `/remote` shows the address and a QR code with a single-use pairing
+  code. One paired phone controls the open session: it sends messages, steers,
+  queues follow-ups, answers approvals, stops turns, loads older history,
+  switches model and reasoning, opens sessions, and starts new ones in folders it
+  browses (or creates) under the configured roots. Reconnecting shows the current
+  state again; nothing is resent automatically. See `docs/design-remote.md`.
+- While remote control is on, the editor keeps its draft but cannot send
+  (`Remote control is on · /remote off to take back`), the footer shows `remote`
+  or `remote · <device>`, approvals are answered on the phone, Esc still
+  interrupts, queued follow-ups return to the editor, and quitting asks twice.
+  `/remote off` takes control back.
+- Opening or creating a session makes its workspace the one the next new
+  session uses.
 
 ## 0.5.5 — 2026-10-24
 
