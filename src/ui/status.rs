@@ -7,6 +7,7 @@ use std::time::Duration;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
+use super::composer::Editor;
 use super::theme::Styles;
 use super::{composer, sheets};
 use crate::app::{App, Notice, NoticeLevel, QueuedKind, Session};
@@ -49,7 +50,13 @@ pub fn dock(app: &App, styles: Styles, width: u16, height: u16) -> Dock {
         styles,
         width,
         composer::max_rows(height),
-        !app.overlay.is_view(),
+        if app.overlay.is_view() {
+            Editor::View
+        } else if app.remote.active() {
+            Editor::Remote
+        } else {
+            Editor::Live
+        },
     );
     let editor_rows = editor.len() as u16;
     if let Some(rows) = sheets::completion(app, styles, width.saturating_sub(1)) {
@@ -139,6 +146,8 @@ fn working_line(app: &App, styles: Styles, width: u16) -> Option<Line<'static>> 
         .and_then(|session| session.compaction_label());
     let text = if let Some(label) = &compaction {
         label.as_str()
+    } else if app.has_interaction() && app.remote.active() {
+        "Waiting for approval · answer on the phone"
     } else if app.has_interaction() {
         // Esc answers the prompt with a denial; it does not cancel the turn.
         "Waiting for approval (esc to deny)"
@@ -210,7 +219,7 @@ fn notice_line(notice: &Notice, styles: Styles, width: u16) -> Line<'static> {
 /// `▸ dir@branch · model · reasoning · 3m · queued` and,
 /// right-aligned, `↑in ↓out Rcache · ctx N%`. Short of room, the directory and
 /// branch give way first, then the elapsed time and queue mark, then the model;
-/// the reasoning level stays.
+/// the reasoning level stays. The remote mark takes only what the rest leaves.
 fn footer(app: &App, styles: Styles, width: u16) -> Line<'static> {
     let width = usize::from(width);
     let session = app.session.as_ref();
@@ -260,6 +269,15 @@ fn footer(app: &App, styles: Styles, width: u16) -> Line<'static> {
         suffix.push(Span::styled("queued", styles.amber()));
     }
 
+    let remote = match (app.remote.active(), app.remote.device_name()) {
+        (false, _) => Vec::new(),
+        (true, None) => vec![Span::styled("remote", styles.warning())],
+        (true, Some(device)) => {
+            let device = wrap::truncate(&wrap::sanitize(device), 16);
+            vec![Span::styled(format!("remote · {device}"), styles.accent())]
+        }
+    };
+
     let right = session.map_or_else(Vec::new, |session| totals(session, styles));
     let right_width = spans_width(&right);
     if right_width >= width {
@@ -270,7 +288,7 @@ fn footer(app: &App, styles: Styles, width: u16) -> Line<'static> {
     } else {
         width - right_width - 1
     };
-    let mut groups = [Vec::new(), model, priority, suffix];
+    let mut groups = [Vec::new(), model, priority, suffix, Vec::new()];
     // The identity takes whatever the rest leaves.
     let rest = spans_width(&join(&groups, styles));
     let separator = if rest > 0 { 3 } else { 0 };
@@ -280,7 +298,8 @@ fn footer(app: &App, styles: Styles, width: u16) -> Line<'static> {
         room.saturating_sub(rest + separator),
         styles,
     );
-    for index in [3, 1, 2] {
+    groups[4] = remote;
+    for index in [4, 3, 1, 2] {
         let over = spans_width(&join(&groups, styles)).saturating_sub(room);
         if over == 0 {
             break;

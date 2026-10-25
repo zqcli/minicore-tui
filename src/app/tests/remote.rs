@@ -284,7 +284,10 @@ async fn remote_approval_keeps_the_local_keyboard_and_denied_commands_keep_the_d
     h.type_text("y");
     assert_eq!(h.app.composer.text(), "y");
     assert!(h.app.has_interaction());
-    assert!(crate::ui::sheets::sheet(&h.app, h.app.styles).is_none());
+    assert!(
+        crate::ui::sheets::sheet(&h.app, h.app.styles, ratatui::layout::Size::new(80, 24))
+            .is_none()
+    );
     for command in ["/new", "/model", "/compact"] {
         h.app.composer.set_text(command);
         h.app.overlay = Overlay::None;
