@@ -369,3 +369,77 @@ test('the appearance choice overrides the OS scheme and System follows it', () =
     assert.equal(MC.theme(stored, false), 'light');
   }
 });
+
+const live = (id, status, extra = {}) => ({ id, title: id, workspace: '/w', updated_at: '2026-10-25T00:00:00Z', current: false, live: true, status, started_ms: null, unseen: false, ...extra });
+const idle = id => ({ id, title: id, workspace: '/w', updated_at: '2026-10-24T00:00:00Z', current: false, live: false });
+
+test('live sessions with work going on come first: approval, then by turn start', () => {
+  const { MC, plain } = load();
+  const sessions = [
+    idle('old'),
+    live('late', 'running', { started_ms: 3000 }),
+    live('fg', 'idle', { current: true }),
+    live('ask', 'approval', { started_ms: 5000 }),
+    live('early', 'running', { started_ms: 1000 }),
+    live('pack', 'compacting'),
+    live('done', 'idle', { unseen: true }),
+  ];
+  const g = plain(MC.liveGroups(sessions));
+  assert.deepEqual(g.active.map(x => x.id), ['ask', 'early', 'late', 'pack']);
+  // Idle live sessions and catalog-only ones keep their catalog order for the date groups.
+  assert.deepEqual(g.rest.map(x => x.id), ['old', 'fg', 'done']);
+  // Not-live entries carry only the catalog fields plus live:false and never land in the active group.
+  assert.deepEqual(Object.keys(sessions[0]).sort(), ['current', 'id', 'live', 'title', 'updated_at', 'workspace']);
+  assert.deepEqual(plain(MC.liveGroups([idle('a'), idle('b')])).active, []);
+  // Sessions from a server without live fields are treated as not live.
+  assert.deepEqual(plain(MC.liveGroups(state.sessions)).active, []);
+});
+
+test('the background summary names only non-zero parts with the right plural', () => {
+  const { MC, plain } = load();
+  const sum = background => plain(MC.backgroundSummary({ ...state, background }));
+  assert.equal(sum({ running: 0, approval: 0 }).text, '');
+  assert.deepEqual(sum({ running: 0, approval: 0 }).parts, []);
+  assert.equal(sum({ running: 2, approval: 1 }).text, '2 running · 1 needs approval');
+  assert.deepEqual(sum({ running: 2, approval: 1 }).parts, [{ text: '2 running' }, { text: '1 needs approval', warn: true }]);
+  assert.equal(sum({ running: 1, approval: 0 }).text, '1 running');
+  assert.equal(sum({ running: 0, approval: 3 }).text, '3 need approval');
+  assert.equal(sum({ running: 0, approval: 3 }).approval, 3);
+});
+
+test('state transitions report background approvals and unseen finishes once', () => {
+  const { MC, plain } = load();
+  const ev = (a, b) => plain(MC.sessionTransitions(a, b));
+  const before = [live('a', 'running', { started_ms: 1 }), live('b', 'running', { started_ms: 2 }), live('fg', 'running', { current: true }), idle('c')];
+  const after = [live('a', 'approval', { started_ms: 1 }), live('b', 'idle', { unseen: true }), live('fg', 'approval', { current: true }), idle('c')];
+  assert.deepEqual(ev(before, after), [{ kind: 'approval', id: 'a', title: 'a' }, { kind: 'finished', id: 'b', title: 'b' }]);
+  // Nothing changed: nothing to report, so a repeated state does not toast again.
+  assert.deepEqual(ev(after, after), []);
+  // A turn that started and ended between two states still counts as finished.
+  assert.deepEqual(ev([live('d', 'idle')], [live('d', 'idle', { unseen: true })]), [{ kind: 'finished', id: 'd', title: 'd' }]);
+  // The foreground answers its own approval in the sheet; sessions new to the list or not live are ignored.
+  assert.deepEqual(ev([], [live('e', 'approval')]), []);
+  assert.deepEqual(ev([idle('f')], [live('f', 'approval')]), []);
+  // Approval answered and the turn goes on: no event.
+  assert.deepEqual(ev([live('g', 'approval')], [live('g', 'running')]), []);
+});
+
+test('snapshots and states carry session transition events against the previous state', () => {
+  const { MC, plain } = load();
+  const s = MC.createStore();
+  const withSessions = sessions => structuredClone({ ...state, sessions, background: { running: 1, approval: 0 } });
+  assert.deepEqual(plain(MC.reduce(s, { t: 'snapshot', state: withSessions([live('a', 'running')]), blocks: [] }, 0).events), []);
+  const fx = plain(MC.reduce(s, { t: 'state', state: withSessions([live('a', 'approval')]) }, 0));
+  assert.deepEqual(fx.events, [{ kind: 'approval', id: 'a', title: 'a' }]);
+  assert.deepEqual(plain(MC.reduce(s, { t: 'state', state: withSessions([live('a', 'approval')]) }, 0).events), []);
+});
+
+test('forwarded background notices are recognised by their session label', () => {
+  const { MC } = load();
+  assert.equal(MC.noticeLabel('"Fix parser" needs approval · ctrl+r'), 'Fix parser');
+  assert.equal(MC.noticeLabel('"Fix parser" finished in 3m 12s'), 'Fix parser');
+  assert.equal(MC.noticeLabel('"Say "hi"" failed in 4s'), 'Say "hi"');
+  assert.equal(MC.noticeLabel('"Fix parser" interrupted in 9s'), 'Fix parser');
+  assert.equal(MC.noticeLabel('"Fix parser": model error'), null);
+  assert.equal(MC.noticeLabel('Session renamed'), null);
+});

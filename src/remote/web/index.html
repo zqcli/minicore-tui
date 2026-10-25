@@ -105,7 +105,7 @@ input.tf:focus{border-color:var(--ac);box-shadow:0 0 0 3px var(--acs)}
 .screen .spin{width:22px;height:22px;color:var(--tx3);margin-top:var(--s5)}
 
 /* main */
-#main{position:fixed;inset:0;height:var(--h,100dvh);display:flex;flex-direction:column}
+#main{position:fixed;inset:0;overflow:hidden;height:var(--h,100dvh);display:flex;flex-direction:column}
 #bar{position:absolute;top:0;left:0;right:0;z-index:6;display:flex;align-items:center;gap:var(--s1);height:calc(var(--st) + 52px);padding:var(--st) calc(var(--sr) + 6px) 0 calc(var(--sl) + 6px);background:var(--glass);-webkit-backdrop-filter:saturate(180%) blur(20px);backdrop-filter:saturate(180%) blur(20px);box-shadow:0 .5px 0 var(--bd)}
 #ttl{flex:1;min-width:0;display:flex;flex-direction:column;align-items:center}
 #title{max-width:100%;font-size:16px;font-weight:600;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -115,6 +115,13 @@ input.tf:focus{border-color:var(--ac);box-shadow:0 0 0 3px var(--acs)}
 #sub .ic{opacity:.7}
 #banner{position:absolute;left:0;right:0;top:calc(var(--st) + 52px);z-index:5;display:flex;align-items:center;justify-content:center;gap:var(--s2);height:30px;font-size:13px;font-weight:500;color:var(--wa);background:var(--banbg);box-shadow:0 .5px 0 var(--bd);transform:translateY(-100%);opacity:0;visibility:hidden;transition:transform .2s var(--ease),opacity .2s,visibility .2s}
 #banner.on{transform:none;opacity:1;visibility:visible}
+#chip{position:absolute;top:calc(var(--st) + 60px);left:0;right:0;margin:0 auto;width:max-content;z-index:5;display:flex;align-items:center;gap:6px;max-width:calc(100% - 32px);height:32px;padding:0 14px 0 12px;border-radius:16px;background:var(--glass);-webkit-backdrop-filter:saturate(180%) blur(20px);backdrop-filter:saturate(180%) blur(20px);box-shadow:var(--sh),inset 0 0 0 .5px var(--bd2);font-size:13px;font-weight:600;color:var(--tx2);white-space:nowrap;animation:rise .18s var(--ease)}
+#chip span{overflow:hidden;text-overflow:ellipsis}
+#chip .warn{color:var(--wa);display:inline-flex;align-items:center;gap:4px}
+#chip .sep{color:var(--tx3);font-weight:400}
+#main.haschip #log{padding-top:calc(var(--st) + 52px + 56px)}
+.pulse{width:8px;height:8px;flex:none;border-radius:50%;background:var(--ac);box-shadow:0 0 0 0 var(--acs);animation:pulse 1.6s ease-out infinite}
+@keyframes pulse{0%{box-shadow:0 0 0 0 var(--ac)}70%{box-shadow:0 0 0 6px transparent}100%{box-shadow:0 0 0 0 transparent}}
 #banner .spin{width:12px;height:12px;border-width:1.75px}
 #mid{flex:1;min-height:0;position:relative}
 #log{height:100%;overflow-y:auto;overflow-x:hidden;overscroll-behavior-y:contain;-webkit-overflow-scrolling:touch;padding:calc(var(--st) + 52px + var(--s4)) calc(var(--sr) + var(--s4)) calc(var(--pad,0px) + var(--s4)) calc(var(--sl) + var(--s4))}
@@ -133,6 +140,11 @@ input.tf:focus{border-color:var(--ac);box-shadow:0 0 0 3px var(--acs)}
 .toast.error>.ic{color:var(--er)}
 .toast span{flex:1}
 .toast .ib{width:32px;height:32px;color:inherit;opacity:.6}
+.toast.attn{background:var(--sf);color:var(--tx);box-shadow:var(--sh),inset 0 0 0 1.5px var(--wa)}
+.toast.attn>.ic{color:var(--wa)}
+.toast.act{padding-right:var(--s2)}
+.tact{flex:none;min-height:32px;padding:0 14px;border-radius:10px;font-size:14px;font-weight:650;color:inherit;background:rgba(128,128,128,.22)}
+.toast.attn .tact{background:var(--acb);color:#fff}
 
 /* messages */
 .msg{margin:0 0 var(--s5)}
@@ -344,6 +356,15 @@ html.kb{--sb:0px}
 .srow .rs{display:block;font-size:12.5px;color:var(--tx3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .srow .sopen>.ic{color:var(--ac)}
 .srow .more{color:var(--tx3)}
+.srow .rs{display:flex;align-items:center;gap:6px}
+.srow .rs>span:last-child{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.badge{flex:none;display:inline-flex;align-items:center;gap:4px;height:19px;padding:0 7px;border-radius:10px;font-size:11.5px;font-weight:650;background:var(--fill2);color:var(--tx2);font-variant-numeric:tabular-nums}
+.badge.run{background:var(--acs);color:var(--ac)}
+.badge.warn{background:var(--was);color:var(--wa)}
+.badge.new{background:none;color:var(--ac);padding:0}
+.badge .spin{width:10px;height:10px;border-width:1.5px}
+.ndot{width:7px;height:7px;border-radius:50%;background:var(--ac)}
+.dsec.run{display:flex;align-items:center;gap:6px;color:var(--ac)}
 .dfoot{flex:none;padding:var(--s3) var(--s4) calc(max(var(--sb),var(--s3)));box-shadow:0 -1px 0 var(--bd);font-size:13px;color:var(--tx2)}
 .dfoot .who{display:flex;align-items:center;gap:var(--s2);min-height:28px}
 .dot{width:8px;height:8px;border-radius:50%;background:var(--ok);flex:none}
@@ -492,13 +513,18 @@ globalThis.MC = (() => {
         s.device = msg.device;
         return { welcome: true };
       case 'snapshot': {
+        const events = s.state ? sessionTransitions(s.state.sessions, msg.state.sessions) : [];
         const dirty = diffBlocks(s.blocks, msg.blocks), sid = msg.state.session ? msg.state.session.id : null;
         const newSession = sid !== s.sid;
         s.blocks = msg.blocks; s.state = msg.state; s.sid = sid;
-        return { dirty, state: true, newSession, snapshot: true };
+        return { dirty, state: true, newSession, snapshot: true, events };
       }
       case 'blocks': return { dirty: applyBlocks(s.blocks, msg.len, msg.upserts) };
-      case 'state': s.state = msg.state; return { state: true };
+      case 'state': {
+        const events = s.state ? sessionTransitions(s.state.sessions, msg.state.sessions) : [];
+        s.state = msg.state;
+        return { state: true, events };
+      }
       case 'ack': {
         const it = s.intents.get(msg.id);
         if (!it) return {};
@@ -558,12 +584,13 @@ globalThis.MC = (() => {
     const d = localDay(now, tz) - localDay(ms, tz);
     return d <= 0 ? 'Today' : d === 1 ? 'Yesterday' : d <= 7 ? 'Previous 7 days' : 'Older';
   }
+  const matchSession = (x, query) => ((x.title || '') + '\n' + x.workspace).toLowerCase().includes((query || '').trim().toLowerCase());
   function groupSessions(sessions, now, tz, query) {
-    const q = (query || '').trim().toLowerCase(), out = [];
+    const out = [];
     for (const x of sessions) {
-      if (q && !((x.title || '') + '\n' + x.workspace).toLowerCase().includes(q)) continue;
-      const label = dayGroup(Date.parse(x.updated_at), now, tz), last = out[out.length - 1];
-      if (last && last.label === label) last.items.push(x); else out.push({ label, items: [x] });
+      if (!matchSession(x, query)) continue;
+      const label = dayGroup(Date.parse(x.updated_at), now, tz), g = out.find(y => y.label === label);
+      if (g) g.items.push(x); else out.push({ label, items: [x] });
     }
     return out;
   }
@@ -650,6 +677,36 @@ globalThis.MC = (() => {
     const k = all.findIndex(c => c.path === root.path);
     return k < 0 ? all : [{ name: root.name, path: root.path }, ...all.slice(k + 1)];
   }
+  // ---- live sessions ----
+  const busyStatus = st => st === 'running' || st === 'approval' || st === 'compacting';
+  // Live sessions with something going on come first (approval, then by turn start, oldest first); the rest keep catalog order.
+  function liveGroups(sessions) {
+    const active = sessions.filter(x => x.live && busyStatus(x.status)), rest = sessions.filter(x => !active.includes(x));
+    const rank = x => x.status === 'approval' ? 0 : 1, start = x => x.started_ms == null ? Infinity : x.started_ms;
+    active.sort((a, b) => rank(a) - rank(b) || start(a) - start(b));
+    return { active, rest };
+  }
+  // "2 running · 1 needs approval" for the background counts; empty when nothing is going on.
+  function backgroundSummary(state) {
+    const b = state.background || { running: 0, approval: 0 }, parts = [];
+    if (b.running) parts.push({ text: b.running + ' running' });
+    if (b.approval) parts.push({ text: b.approval + (b.approval === 1 ? ' needs' : ' need') + ' approval', warn: true });
+    return { parts, text: parts.map(p => p.text).join(' · '), approval: b.approval, running: b.running };
+  }
+  // Background sessions that started waiting for approval or finished unseen between two session lists.
+  function sessionTransitions(prev, next) {
+    const out = [], before = new Map(prev.map(x => [x.id, x]));
+    for (const x of next) {
+      const p = before.get(x.id);
+      if (!x.live || x.current || !p || !p.live) continue;
+      if (x.status === 'approval' && p.status !== 'approval') out.push({ kind: 'approval', id: x.id, title: x.title });
+      else if (x.status === 'idle' && x.unseen && !(p.status === 'idle' && p.unseen)) out.push({ kind: 'finished', id: x.id, title: x.title });
+    }
+    return out;
+  }
+  // The session label of a forwarded background notice ("Fix parser" needs approval · ctrl+r, "Fix parser" finished in 3m 12s).
+  const noticeLabel = text => { const m = /^"(.+)" (needs approval|finished|failed|interrupted|cancelled|stopped)\b/.exec(text); return m ? m[1] : null; };
+
   function recentWorkspaces(sessions, max = 6) {
     const out = [];
     for (const x of sessions) if (!out.includes(x.workspace) && out.push(x.workspace) >= max) break;
@@ -757,9 +814,9 @@ globalThis.MC = (() => {
     WINDOW, backoff, basename, plural, retireText, mergeReturned, deviceName, theme,
     login, hello, intents, fs, createStore, intent, request, pending, disconnect, sendAgain, unconfirmed, diffBlocks, applyBlocks, reduce,
     explain, lockText, fmtClock, unreachable, fsError,
-    relTime, dayGroup, groupSessions, fmtElapsed, fmtDur, fmtTok,
+    relTime, dayGroup, groupSessions, matchSession, fmtElapsed, fmtDur, fmtTok,
     toolKind, isDiffTool, activitySummary, turnEndText, compactionText, diffClass, statusLine,
-    splitPath, within, crumbs, recentWorkspaces, inline, parseMd, SAFE_URL,
+    splitPath, within, crumbs, recentWorkspaces, liveGroups, backgroundSummary, sessionTransitions, noticeLabel, inline, parseMd, SAFE_URL,
   };
 })();
 </script>
@@ -849,6 +906,7 @@ osDark.addEventListener('change', () => { applyTheme(); if (window.onTheme) onTh
     </div>
     <button id="rename" class="ib" type="button" aria-label="Rename session" aria-haspopup="dialog"><svg class="ic"><use href="#i-edit"/></svg></button>
   </header>
+  <button id="chip" type="button" aria-haspopup="dialog" hidden></button>
   <div id="banner" role="status" aria-live="polite"><span class="spin"></span><span id="bantxt">Reconnecting…</span></div>
   <div id="mid">
     <main id="log" aria-label="Conversation">
@@ -933,13 +991,16 @@ function copyText(text, btn) {
 }
 
 // ---- toasts ----
-function toast(text, level) {
-  const box = $('toasts'), err = level === 'error';
-  const n = h('div', { class: 'toast' + (err ? ' error' : ''), role: err ? 'alert' : 'status' }, err && icon('warn', 'sm'), h('span', '', text),
-    err && h('button', { class: 'ib', type: 'button', 'aria-label': 'Dismiss', onclick: () => n.remove() }, icon('x', 'sm')));
+// Errors and attention toasts stay until dismissed; an action ("Open") removes the toast and runs.
+function toast(text, level, act) {
+  const box = $('toasts'), sticky = level === 'error' || level === 'attn';
+  const n = h('div', { class: 'toast' + (sticky ? ' ' + level : '') + (act ? ' act' : ''), role: sticky ? 'alert' : 'status' }, sticky && icon('warn', 'sm'), h('span', '', text),
+    act && h('button', { class: 'tact', type: 'button', onclick: () => { n.remove(); act.fn(); } }, act.label),
+    sticky && h('button', { class: 'ib', type: 'button', 'aria-label': 'Dismiss', onclick: () => n.remove() }, icon('x', 'sm')));
   box.append(n);
   while (box.children.length > 3) box.firstChild.remove();
-  if (!err) setTimeout(() => n.remove(), 3500);
+  if (!sticky) setTimeout(() => n.remove(), act ? 6000 : 3500);
+  return n;
 }
 
 // ---- screens ----
@@ -1084,6 +1145,7 @@ function renderConn() {
   if (screen !== 'main') return;
   const b = $('banner'), on = !online() && !halted;
   b.classList.toggle('on', on);
+  if (S.state) renderChip();
   $('bantxt').textContent = navigator.onLine === false ? 'Offline · waiting for network' : 'Reconnecting…';
   updateComposer();
   if (modal === $('drawer')) renderDrawerFoot();
@@ -1117,7 +1179,8 @@ function onMessage(msg) {
     grow(); updateComposer();
     toast("Message returned — the agent couldn't take it");
   }
-  if (fx.notice) toast(fx.notice.text, fx.notice.level);
+  if (fx.events) fx.events.forEach(attention);
+  if (fx.notice) onNotice(fx.notice);
   if (fx.fs) { const cb = fsWait.get(msg.id); fsWait.delete(msg.id); if (cb) cb(msg); }
 }
 function onAck(a) {
@@ -1363,16 +1426,62 @@ $('down').addEventListener('click', () => { log.scrollTo({ top: log.scrollHeight
 
 // ---- state: bar, strip, approval, composer ----
 let tick = 0, lastInteraction = null;
+// One 1 s timer, only while the foreground turn runs or the open drawer shows a running session's elapsed time.
+function syncTick() {
+  const s = S.state, st = s && s.status;
+  const want = !!s && (!!(st.started_ms && (st.busy || st.compacting)) || (modal === $('drawer') && s.sessions.some(x => x.live && x.status === 'running' && x.started_ms)));
+  if (want && !tick) tick = setInterval(onTick, 1000);
+  if (!want && tick) { clearInterval(tick); tick = 0; }
+}
+function onTick() {
+  renderStrip();
+  if (modal === $('drawer')) for (const e of $('drawer').querySelectorAll('[data-start]')) e.textContent = MC.fmtElapsed(hostNow() - +e.dataset.start);
+}
+function renderChip() {
+  const b = MC.backgroundSummary(S.state), c = $('chip'), on = !!b.text && online();
+  c.hidden = !on;
+  $('main').classList.toggle('haschip', on);
+  if (!on) return;
+  c.setAttribute('aria-label', 'Other sessions: ' + b.text);
+  fill(c, b.running > 0 && h('i', 'pulse'), b.parts.map((p, k) => [k > 0 && h('span', 'sep', '·'), p.warn ? h('span', 'warn', icon('warn', 'xs'), p.text) : h('span', '', p.text)]));
+}
+let badgeN = -1;
+function renderAttention() {
+  const s = S.state, n = s ? (screen === 'main' && s.interaction ? 1 : 0) + MC.backgroundSummary(s).approval : 0;
+  document.title = n ? '⏸ Approval needed' + (n > 1 ? ' (' + n + ')' : '') + ' — MiniCore' : 'MiniCore';
+  if (n !== badgeN && navigator.setAppBadge) { badgeN = n; (n ? navigator.setAppBadge(n) : navigator.clearAppBadge()).catch(() => {}); }
+}
+// Background approvals and finishes come from state transitions; the server's notice for the same event is then dropped.
+const attnToasts = new Map(), recentAttn = new Map();
+const openLive = id => intent(MC.intents.openSession(id));
+function attention(e) {
+  const label = e.title || 'Untitled session';
+  recentAttn.set(label, Date.now());
+  if (e.kind === 'finished') return toast('“' + label + '” finished', 'info', { label: 'Open', fn: () => openLive(e.id) });
+  if (navigator.vibrate) navigator.vibrate([20, 40, 20]);
+  if (attnToasts.has(e.id)) attnToasts.get(e.id).remove();
+  attnToasts.set(e.id, toast('“' + label + '” needs approval', 'attn', { label: 'Open', fn: () => openLive(e.id) }));
+}
+function onNotice(n) {
+  const label = MC.noticeLabel(n.text), seen = () => Date.now() - (recentAttn.get(label) || 0) < 5000;
+  if (!label) return toast(n.text, n.level);
+  // The state carrying the same event can arrive just after its notice.
+  if (!seen()) setTimeout(() => { if (!seen()) toast(n.text.replace(/ · ctrl\+r$/, ''), n.level); }, 1500);
+}
 function renderState() {
-  const s = S.state, c = cur(), live = (s.status.busy || s.status.compacting) && s.status.started_ms;
+  const s = S.state, c = cur();
   $('title').textContent = s.session ? s.session.title || 'Untitled session' : 'New session';
   $('subtxt').textContent = [MC.basename(c.workspace), c.model, c.reasoning].filter(Boolean).join(' · ');
   $('rename').style.visibility = s.session ? '' : 'hidden';
   $('rename').disabled = !s.session;
   // A dialog about a session that left the list (deleted elsewhere) has nothing left to act on.
   if (dl && !dl.busy && !s.sessions.some(x => x.id === dl.id)) closeDlg();
-  if (live && !tick) tick = setInterval(renderStrip, 1000);
-  if (!live && tick) { clearInterval(tick); tick = 0; }
+  syncTick();
+  renderChip();
+  for (const [id, n] of attnToasts) {
+    const x = s.sessions.find(y => y.id === id);
+    if (!x || x.current || x.status !== 'approval') { n.remove(); attnToasts.delete(id); }
+  }
   if (!!s.status.busy !== wasBusy) { // carets and the Thinking label follow busy
     wasBusy = !!s.status.busy;
     S.blocks.forEach((b, i) => { if (b.type === 'assistant' && b.streaming) dirty.add(i); });
@@ -1392,7 +1501,7 @@ function renderStrip() {
 }
 function renderAppr() {
   const a = screen === 'main' && S.state && S.state.interaction, sh = $('appr');
-  document.title = a ? '⏸ Approval needed — MiniCore' : 'MiniCore';
+  renderAttention();
   sh.classList.toggle('on', !!a);
   $('ascrim').classList.toggle('on', !!a);
   sh.inert = !a;
@@ -1483,6 +1592,7 @@ function closeModal(keepScrim) {
   if (!modal) return;
   modal.classList.remove('on');
   modal.inert = true;
+  if (modal === $('drawer')) { modal = null; syncTick(); }
   modal = null; ns = null; pendingRow = null;
   if (!keepScrim) $('scrim').classList.remove('on');
   if (opener && opener.isConnected && !keepScrim) opener.focus({ preventScroll: true });
@@ -1508,6 +1618,7 @@ function openDrawer() {
   query = '';
   $('drawer').replaceChildren();
   openModal($('drawer'), renderDrawer);
+  syncTick();
 }
 function renderDrawer() {
   const d = $('drawer');
@@ -1524,16 +1635,29 @@ function renderDrawer() {
 function renderDrawerList() {
   const s = S.state, list = $('drawer').querySelector('.dlist');
   if (!list) return;
-  const groups = MC.groupSessions(s.sessions, hostNow(), tz(), query);
-  fill(list, !groups.length && h('div', 'muted', query ? 'No matching sessions' : 'No sessions yet'),
-    groups.map(g => [h('div', 'dsec', g.label), g.items.map(x => h('div', 'srow' + (x.current ? ' cur' : ''), h('button', {
-      class: 'sopen', type: 'button', 'aria-current': x.current ? 'true' : null,
-      onclick: () => { if (x.current) return closeModal(); if (!pendingRow && intent(MC.intents.openSession(x.id))) { pendingRow = x.id; renderDrawerList(); } },
-    }, h('span', 'rt', h('span', 'rm', x.title || 'Untitled session'), h('span', 'rs', sessionSub(x))),
-    pendingRow === x.id ? spin('sm') : x.current && icon('check', 'sm')),
-    h('button', { class: 'ib more', type: 'button', 'aria-label': 'Session actions', 'aria-haspopup': 'dialog', onclick: () => openDlg({ view: 'actions', id: x.id }) }, icon('more'))))]));
+  const { active, rest } = MC.liveGroups(s.sessions), run = active.filter(x => MC.matchSession(x, query));
+  const groups = MC.groupSessions(rest, hostNow(), tz(), query);
+  fill(list, !run.length && !groups.length && h('div', 'muted', query ? 'No matching sessions' : 'No sessions yet'),
+    run.length > 0 && [h('div', 'dsec run', h('i', 'pulse'), 'Running'), run.map(sessionRow)],
+    groups.map(g => [h('div', 'dsec', g.label), g.items.map(sessionRow)]));
 }
-const sessionSub = x => MC.basename(x.workspace) + ' · ' + MC.relTime(Date.parse(x.updated_at), hostNow(), tz());
+// Live sessions say what they are doing in front of the workspace line.
+function liveBadge(x) {
+  if (!x.live) return null;
+  if (x.status === 'approval') return h('span', 'badge warn', 'Needs approval');
+  if (x.status === 'compacting') return h('span', 'badge', spin(), 'Compacting');
+  if (x.status === 'running') return h('span', 'badge run', spin(), x.started_ms ? h('span', { 'data-start': x.started_ms }, MC.fmtElapsed(hostNow() - x.started_ms)) : 'Running');
+  return x.unseen ? h('span', 'badge new', h('i', 'ndot'), 'New') : null;
+}
+function sessionRow(x) {
+  return h('div', 'srow' + (x.current ? ' cur' : ''), h('button', {
+    class: 'sopen', type: 'button', 'aria-current': x.current ? 'true' : null,
+    onclick: () => { if (x.current) return closeModal(); if (!pendingRow && intent(MC.intents.openSession(x.id))) { pendingRow = x.id; renderDrawerList(); } },
+  }, h('span', 'rt', h('span', 'rm', x.title || 'Untitled session'), h('span', 'rs', liveBadge(x), h('span', '', sessionSub(x)))),
+  pendingRow === x.id ? spin('sm') : x.current && icon('check', 'sm')),
+  h('button', { class: 'ib more', type: 'button', 'aria-label': 'Session actions', 'aria-haspopup': 'dialog', onclick: () => openDlg({ view: 'actions', id: x.id }) }, icon('more')));
+}
+const sessionSub = x => MC.basename(x.workspace) + (x.live && x.status !== 'idle' ? '' : ' · ' + MC.relTime(Date.parse(x.updated_at), hostNow(), tz()));
 let signOutArmed = 0;
 function renderDrawerFoot() {
   const f = $('drawer').querySelector('.dfoot');
@@ -1661,6 +1785,7 @@ function renderModel() {
 }
 
 $('menu').addEventListener('click', openDrawer);
+$('chip').addEventListener('click', openDrawer);
 $('sub').addEventListener('click', openModel);
 $('rename').addEventListener('click', () => { if (S.state.session) openDlg({ view: 'rename', id: S.state.session.id }); });
 
