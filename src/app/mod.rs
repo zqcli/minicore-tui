@@ -476,28 +476,12 @@ impl App {
     }
 
     pub fn compacting(&self) -> bool {
-        self.session
-            .as_ref()
-            .is_some_and(|session| session.compaction.is_some())
+        self.session.as_ref().is_some_and(Session::compacting)
     }
 
     /// Status-line text while something is in flight.
     pub fn status_label(&self) -> Option<&'static str> {
-        if let Some(session) = self.session.as_ref() {
-            if session.compaction.is_some() {
-                return Some("Compacting context");
-            }
-            if session.interaction.is_some() {
-                return Some("Waiting for approval");
-            }
-            if let Some(label) = session.phase_label() {
-                return Some(label);
-            }
-            if session.waiting_for_compaction {
-                return Some("Waiting for compaction");
-            }
-        }
-        None
+        self.session.as_ref().and_then(Session::status_label)
     }
 
     /// Elapsed time of the running turn, for the status line.

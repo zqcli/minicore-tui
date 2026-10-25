@@ -26,8 +26,18 @@ impl App {
     /// Background sessions working (running or compacting), and those waiting
     /// for an approval.
     pub fn background_counts(&self) -> (usize, usize) {
-        self.background
+        self.other_counts(
+            self.session
+                .as_ref()
+                .map(|session| session.info.session_id.as_str()),
+        )
+    }
+
+    pub fn other_counts(&self, current: Option<&str>) -> (usize, usize) {
+        self.session
             .iter()
+            .chain(&self.background)
+            .filter(|session| Some(session.info.session_id.as_str()) != current)
             .fold((0, 0), |(working, approval), session| {
                 match session.live_status() {
                     LiveStatus::Idle => (working, approval),

@@ -260,6 +260,23 @@ impl Session {
         self.live.is_some()
     }
 
+    pub fn compacting(&self) -> bool {
+        self.compaction.is_some()
+    }
+
+    pub fn status_label(&self) -> Option<&'static str> {
+        if self.compacting() {
+            Some("Compacting context")
+        } else if self.interaction.is_some() {
+            Some("Waiting for approval")
+        } else {
+            self.phase_label().or_else(|| {
+                self.waiting_for_compaction
+                    .then_some("Waiting for compaction")
+            })
+        }
+    }
+
     pub fn live_status(&self) -> LiveStatus {
         if self.interaction.is_some() {
             LiveStatus::Approval
