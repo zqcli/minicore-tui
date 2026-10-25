@@ -355,13 +355,15 @@ async fn run() -> i32 {
             }
         }
 
-        app.sync_remote();
-        if frames.wanted() && guard.is_active() && tokio::time::Instant::now() >= next_frame {
+        if frames.wanted() && tokio::time::Instant::now() >= next_frame {
             let started = Instant::now();
-            if let Err(error) = guard.draw(|frame| minicore_tui::ui::draw(frame, &mut app)) {
+            if guard.is_active()
+                && let Err(error) = guard.draw(|frame| minicore_tui::ui::draw(frame, &mut app))
+            {
                 eprintln!("draw failed: {error}");
                 break;
             }
+            app.sync_remote();
             frames.drawn(started.elapsed());
             next_frame = tokio::time::Instant::now() + FRAME;
         }

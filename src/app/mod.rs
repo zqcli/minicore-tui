@@ -181,6 +181,7 @@ pub struct App {
     pub workspace: PathBuf,
     pub session: Option<Session>,
     pub sessions: Vec<SessionInfo>,
+    pub catalog_generation: u64,
     pub models: Vec<ModelInfo>,
     pub profiles: Vec<ProfileInfo>,
     /// Settings for the next session: the command-line flags, then what a
@@ -263,6 +264,7 @@ impl App {
             workspace,
             session: None,
             sessions: Vec::new(),
+            catalog_generation: 0,
             models: Vec::new(),
             profiles: Vec::new(),
             launch: LaunchSettings::default(),
@@ -322,6 +324,7 @@ impl App {
                     profiles,
                     sessions,
                 } = *ready;
+                self.catalog_generation += 1;
                 self.models = models;
                 self.profiles = profiles;
                 self.sessions = sessions;
@@ -336,6 +339,7 @@ impl App {
             Msg::Deleted(id, result) => {
                 if self.ok(result).is_some() {
                     self.sessions.retain(|session| session.session_id != id);
+                    self.catalog_generation += 1;
                     if let Overlay::Sessions {
                         rows,
                         filter,

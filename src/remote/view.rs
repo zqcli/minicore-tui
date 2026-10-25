@@ -9,7 +9,7 @@ use super::fs;
 use crate::app::session::context_percent;
 use crate::app::{App, InteractionKind, QueuedKind};
 use crate::protocol::read::UserKind;
-use crate::transcript::{Block, ToolState};
+use crate::transcript::{Block, RequestKey, ToolState};
 
 #[derive(Default)]
 pub struct View {
@@ -17,6 +17,61 @@ pub struct View {
     epoch: Option<u64>,
     revisions: Vec<u64>,
     state: String,
+    streaming: Vec<Option<Streaming>>,
+    catalog_generation: Option<(u64, u64)>,
+    catalog: Value,
+}
+
+struct Streaming {
+    key: RequestKey,
+    text: usize,
+    reasoning: usize,
+}
+
+impl Streaming {
+    fn of(block: &Block) -> Option<Self> {
+        match block {
+            Block::Assistant {
+                key,
+                text,
+                reasoning,
+                streaming: true,
+                ..
+            } => Some(Self {
+                key: key.clone(),
+                text: text.len(),
+                reasoning: reasoning.len(),
+            }),
+            _ => None,
+        }
+    }
+
+    fn append(&self, block: &Block) -> Option<Value> {
+        let Block::Assistant {
+            key,
+            text,
+            reasoning,
+            streaming: true,
+            ..
+        } = block
+        else {
+            return None;
+        };
+        if *key != self.key {
+            return None;
+        }
+        // Live deltas only append; durable replacements always have streaming=false.
+        let text = text.get(self.text..)?;
+        let reasoning = reasoning.get(self.reasoning..)?;
+        let mut append = json!({});
+        if !text.is_empty() {
+            append["text"] = json!(text);
+        }
+        if !reasoning.is_empty() {
+            append["reasoning"] = json!(reasoning);
+        }
+        Some(append)
+    }
 }
 
 impl View {
@@ -29,18 +84,35 @@ impl View {
             .session
             .as_ref()
             .map_or(&[][..], |session| session.transcript.revisions());
-        let state = state(app);
+        let generation = (app.catalog_generation, app.remote.generation);
+        if self.catalog_generation != Some(generation) {
+            self.catalog = catalog(app);
+            self.catalog_generation = Some(generation);
+        }
+        let state = state(app, &self.catalog);
         let serialized = state.to_string();
         let mut messages = Vec::new();
         if self.connection != Some(phone.id) || self.epoch != epoch {
             messages.push(json!({"t":"snapshot", "state":state, "blocks":app.transcript_blocks().iter().map(block).collect::<Vec<_>>()}));
+            self.streaming = app.transcript_blocks().iter().map(Streaming::of).collect();
         } else {
-            let upserts: Vec<_> = revisions
-                .iter()
-                .enumerate()
-                .filter(|(i, rev)| self.revisions.get(*i) != Some(rev))
-                .map(|(i, _)| json!({"i":i, "block":block(&app.transcript_blocks()[i])}))
-                .collect();
+            self.streaming.resize_with(revisions.len(), || None);
+            let mut upserts = Vec::new();
+            for (i, revision) in revisions.iter().enumerate() {
+                if self.revisions.get(i) == Some(revision) {
+                    continue;
+                }
+                let current = &app.transcript_blocks()[i];
+                let append = self.streaming[i]
+                    .as_ref()
+                    .and_then(|sent| sent.append(current));
+                match append {
+                    Some(append) if append.as_object().unwrap().is_empty() => {}
+                    Some(append) => upserts.push(json!({"i":i, "append":append})),
+                    None => upserts.push(json!({"i":i, "block":block(current)})),
+                }
+                self.streaming[i] = Streaming::of(current);
+            }
             if !upserts.is_empty() || revisions.len() != self.revisions.len() {
                 messages.push(json!({"t":"blocks", "len":revisions.len(), "upserts":upserts}));
             }
@@ -57,20 +129,43 @@ impl View {
     }
 }
 
-pub fn state(app: &App) -> Value {
-    let session = app.session.as_ref();
-    let live = session.and_then(|s| s.live.as_ref());
-    let current = session.map(|s| s.info.session_id.as_str());
+fn catalog(app: &App) -> Value {
     let mut sessions: Vec<_> = app
         .sessions
         .iter()
         .filter(|info| fs::within(app.remote.roots(), Path::new(&info.workspace)))
         .collect();
     sessions.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-    let sessions: Vec<_> = sessions.into_iter().take(50).map(|info| json!({
-        "id":info.session_id, "title":crate::app::overlay::session_label(info, session),
-        "workspace":fs::display(Path::new(&info.workspace)), "updated_at":info.updated_at, "current":Some(info.session_id.as_str()) == current,
-    })).collect();
+    let sessions: Vec<_> = sessions
+        .into_iter()
+        .take(50)
+        .map(|info| {
+            json!({
+                "id":info.session_id, "title":crate::app::overlay::session_label(info, None),
+                "workspace":fs::display(Path::new(&info.workspace)), "updated_at":info.updated_at,
+            })
+        })
+        .collect();
+    json!({"sessions":sessions,
+        "models":app.models.iter().map(|model| json!({"id":model.id, "reasoning":model.supported_reasoning})).collect::<Vec<_>>(),
+        "profiles":app.profiles.iter().map(|profile| &profile.id).collect::<Vec<_>>()})
+}
+
+fn state(app: &App, catalog: &Value) -> Value {
+    let session = app.session.as_ref();
+    let live = session.and_then(|s| s.live.as_ref());
+    let current = session.map(|s| s.info.session_id.as_str());
+    let mut sessions = catalog["sessions"].clone();
+    for info in sessions.as_array_mut().unwrap() {
+        let resident = info["id"].as_str() == current;
+        info["current"] = json!(resident);
+        if let Some(session) = session.filter(|_| resident) {
+            info["title"] = json!(crate::app::overlay::session_label(
+                &session.info,
+                Some(session)
+            ));
+        }
+    }
     let interaction = session.and_then(|s| s.interaction.as_ref().map(|interaction| {
         let call = s.transcript.find_tool_by_call_id(&interaction.tool_call_id);
         json!({"id":interaction.interaction_id,
@@ -89,8 +184,7 @@ pub fn state(app: &App) -> Value {
         "usage":{"input":session.map_or(0, |s| s.usage.input), "output":session.map_or(0, |s| s.usage.output), "cached":session.map_or(0, |s| s.usage.cached)},
         "context_percent":session.and_then(context_percent), "interaction":interaction, "queue":queue,
         "older":session.is_some_and(|s| s.loaded_from > 0), "sessions":sessions,
-        "models":app.models.iter().map(|model| json!({"id":model.id, "reasoning":model.supported_reasoning})).collect::<Vec<_>>(),
-        "profiles":app.profiles.iter().map(|profile| &profile.id).collect::<Vec<_>>()
+        "models":catalog["models"], "profiles":catalog["profiles"]
     })
 }
 
@@ -144,6 +238,165 @@ mod tests {
     use crate::remote::{Connection, auth::Device};
     use tokio::sync::{mpsc, watch};
 
+    fn connected_app() -> (crate::testing::FakeAgent, App) {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let (fake, mut app) = crate::testing::FakeAgent::start(tx);
+        let (outbound, _output) = mpsc::channel(512);
+        let (close, _closing) = watch::channel(None);
+        app.remote.connection = Some(Connection {
+            id: 1,
+            generation: 0,
+            device: Device {
+                name: "phone".into(),
+                token_sha256: "hash".into(),
+                paired_at: String::new(),
+            },
+            outbound,
+            close,
+        });
+        app.session = Some(crate::app::Session::new(
+            serde_json::from_value(crate::testing::session_info("s1")).unwrap(),
+            1,
+        ));
+        (fake, app)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn streaming_sends_only_suffixes_then_one_full_finished_block() {
+        let (_fake, mut app) = connected_app();
+        let key = RequestKey {
+            loop_id: "loop".into(),
+            request_index: 0,
+        };
+        let session = app.session.as_mut().unwrap();
+        session.live = Some(crate::app::LiveTurn::new(
+            crate::protocol::TurnRef::new("s1", "loop"),
+            0,
+        ));
+        session.transcript.push(Block::Assistant {
+            key: key.clone(),
+            text: "hello".into(),
+            reasoning: "考".into(),
+            streaming: true,
+            expanded: None,
+        });
+        let started = session.live.as_ref().unwrap().started_ms;
+        let mut view = View::default();
+        assert_eq!(view.sync(&app)[0]["t"], "snapshot");
+        tokio::time::advance(std::time::Duration::from_secs(60)).await;
+        assert!(view.sync(&app).is_empty());
+        assert_eq!(
+            app.session
+                .as_ref()
+                .unwrap()
+                .live
+                .as_ref()
+                .unwrap()
+                .started_ms,
+            started
+        );
+        if let Block::Assistant { text, .. } =
+            app.session.as_mut().unwrap().transcript.assistant_mut(&key)
+        {
+            text.push_str(" world");
+        }
+        assert_eq!(
+            view.sync(&app),
+            [json!({"t":"blocks", "len":1, "upserts":[{"i":0, "append":{"text":" world"}}]})]
+        );
+        if let Block::Assistant { reasoning, .. } =
+            app.session.as_mut().unwrap().transcript.assistant_mut(&key)
+        {
+            reasoning.push('え');
+        }
+        assert_eq!(
+            view.sync(&app)[0]["upserts"][0]["append"],
+            json!({"reasoning":"え"})
+        );
+        if let Some(Block::Assistant { streaming, .. }) =
+            app.session.as_mut().unwrap().transcript.block_mut(0)
+        {
+            *streaming = false;
+        }
+        let messages = view.sync(&app);
+        assert_eq!(messages[0]["upserts"][0]["block"]["text"], "hello world");
+        assert_eq!(messages[0]["upserts"][0]["block"]["streaming"], false);
+        assert!(view.sync(&app).is_empty());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn prepending_and_truncating_preserve_index_semantics() {
+        let (_fake, mut app) = connected_app();
+        let user = |text: &str| Block::User {
+            text: text.into(),
+            kind: UserKind::Prompt,
+            at: None,
+        };
+        app.session.as_mut().unwrap().transcript.push(user("new"));
+        let mut view = View::default();
+        view.sync(&app);
+        app.session
+            .as_mut()
+            .unwrap()
+            .transcript
+            .insert(0, user("old"));
+        let messages = view.sync(&app);
+        assert_eq!(messages[0]["upserts"].as_array().unwrap().len(), 2);
+        assert_eq!(messages[0]["upserts"][0]["block"]["text"], "old");
+        assert_eq!(messages[0]["upserts"][1]["block"]["text"], "new");
+        app.session.as_mut().unwrap().transcript.remove(1);
+        assert_eq!(
+            view.sync(&app),
+            [json!({"t":"blocks", "len":1, "upserts":[]})]
+        );
+    }
+
+    #[test]
+    fn unchanged_large_sessions_emit_nothing_and_reuse_the_catalog() {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let (_fake, mut app) = connected_app();
+                app.remote.config = Some(crate::config::Remote {
+                    bind: "127.0.0.1:0".parse().unwrap(),
+                    url: None,
+                    roots: vec![app.workspace.clone()],
+                    allow_insecure: false,
+                });
+                for i in 0..500 {
+                    let mut info = crate::testing::session_info(&format!("s{i}"));
+                    info["workspace"] = json!(app.workspace);
+                    app.sessions.push(serde_json::from_value(info).unwrap());
+                }
+                for i in 0..5000 {
+                    app.session.as_mut().unwrap().transcript.push(Block::User {
+                        text: format!("message {i}"),
+                        kind: UserKind::Prompt,
+                        at: None,
+                    });
+                }
+                let mut view = View::default();
+                assert_eq!(view.sync(&app)[0]["blocks"].as_array().unwrap().len(), 5000);
+                let cached = view.catalog["sessions"].as_array().unwrap().as_ptr();
+                for _ in 0..10 {
+                    assert!(view.sync(&app).is_empty());
+                }
+                assert_eq!(
+                    view.catalog["sessions"].as_array().unwrap().as_ptr(),
+                    cached
+                );
+                app.sessions[0].title = Some("renamed".into());
+                app.catalog_generation += 1;
+                assert_eq!(view.sync(&app)[0]["t"], "state");
+                assert_ne!(
+                    view.catalog["sessions"].as_array().unwrap().as_ptr(),
+                    cached
+                );
+            });
+    }
+
     #[cfg(windows)]
     #[tokio::test(start_paused = true)]
     async fn phone_workspaces_omit_verbatim_prefixes_without_changing_root_checks() {
@@ -161,7 +414,7 @@ mod tests {
         let info: crate::protocol::SessionInfo = serde_json::from_value(info).unwrap();
         app.sessions.push(info.clone());
         app.session = Some(crate::app::Session::new(info, 1));
-        let state = state(&app);
+        let state = state(&app, &catalog(&app));
         for workspace in [
             &state["draft"]["workspace"],
             &state["session"]["workspace"],

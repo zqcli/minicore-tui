@@ -446,6 +446,7 @@ impl App {
 
     /// Updates the known sessions with `info`, adding it when new.
     pub(super) fn merge_catalog_info(&mut self, info: SessionInfo) {
+        self.catalog_generation += 1;
         match self
             .sessions
             .iter_mut()

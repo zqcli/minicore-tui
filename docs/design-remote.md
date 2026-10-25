@@ -222,8 +222,22 @@ phone is connected, the text goes back to the phone as `returned`.
 ```
 
 `blocks`: the transcript now has `len` blocks; the client truncates its list to
-`len`, then sets each `upserts[k].block` at index `upserts[k].i`. `snapshot`
-replaces everything. Every `app.notice` is forwarded as `notice`.
+`len`, then applies each upsert at index `i`. An upsert is exactly one of:
+
+```json
+{"i":40,"block":Block}
+{"i":41,"append":{"text":"new suffix","reasoning":"new thinking suffix"}}
+```
+
+`block` replaces the whole block. `append` concatenates each supplied string to
+the existing assistant block's corresponding field; `text` and `reasoning` are
+independently optional. The server sends `append` only when the last block sent
+at that index on this connection and the current block are both streaming
+assistants with the same `loop_id` and `request`, and neither text length has
+shrunk. Live assistant content is append-only. New, moved, replaced, or finished
+blocks use the full `block` form; when streaming ends the full block is sent once.
+Snapshots always contain full blocks and replace everything. Every `app.notice`
+is forwarded as `notice`.
 
 `State` (sent whole whenever any field changed):
 
@@ -275,14 +289,21 @@ Assistant `text` is raw Markdown; clients render it.
 
 ### Projection rules
 
-- After every main-loop iteration that handled input, an Agent event or a
-  message, `App::sync_remote()` runs. With no connected phone it returns at once.
+- `App::sync_remote()` runs after each paced frame (at most once per FRAME),
+  and once before exit. When the terminal guard is inactive the same frame-pacing
+  branch still synchronizes the phone and clears the pending frame. No extra
+  timer is introduced; with no connected phone sync returns at once.
 - A residency change (`Session::epoch` differs from the last one sent, or a
   session appeared or went away) or a new connection sends `snapshot`.
 - Otherwise the transcript's revisions are compared index by index with the
   revisions last sent: every index whose revision differs, or that is new, is an
   upsert; `len` is the current length. Prepending older pages therefore resends
   the window, which is correct and rare.
+- The catalog portions of `State` are cached by the catalog generation, which
+  changes on catalog assignment, merge or deletion (and listener generation for
+  configured roots). Current-session marks are applied without rebuilding or
+  sorting catalogs. The tracker keeps streaming keys and byte lengths, not copies
+  of assistant content.
 - `State` is built, serialized and compared with the last one sent; only a
   difference sends `state`. Elapsed time is computed by the client from
   `started_ms`, so a running turn does not send a `state` every frame.
