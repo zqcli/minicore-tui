@@ -5,6 +5,8 @@
 - The phone directory picker can browse configured roots and create folders,
   with filesystem work off the terminal loop. Replaced or disconnected controllers
   cannot start queued directory operations or receive their results.
+- Phone breadcrumbs preserve Windows network-share paths, and applied steering
+  messages display the same label as pending steers.
 - Remote-control backend: `--remote`, `/remote [status|on|off|pair]`, validated
   `[remote]` settings, single-use pairing codes and hashed device credentials.
   One authenticated phone controls the resident session through versioned

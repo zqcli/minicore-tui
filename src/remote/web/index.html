@@ -237,7 +237,7 @@ function reduce(m, msg) {
 function splitPath(p) {
   const sep = p.includes('/') ? '/' : '\\', parts = p.split(sep).filter(Boolean);
   const out = parts.map((name, k) => {
-    let q = (p.startsWith(sep) ? sep : '') + parts.slice(0, k + 1).join(sep);
+    let q = (p.startsWith('\\\\') ? '\\\\' : p.startsWith(sep) ? sep : '') + parts.slice(0, k + 1).join(sep);
     if (/^[A-Za-z]:$/.test(q)) q += sep;
     return { name, path: q };
   });
@@ -458,7 +458,7 @@ function toast(text, level) {
 }
 
 // ---- transcript ----
-const LABEL = { steer: 'Steering', follow: 'Follow-up' };
+const LABEL = { steer: 'Steering', steering: 'Steering', follow: 'Follow-up' };
 const ICON = { pending: '…', running: '◐', succeeded: '✓', failed: '✕', denied: '⊘', cancelled: '–' };
 function schedule() { if (!raf) raf = requestAnimationFrame(flush); }
 const atBottom = () => { const l = $('log'); return l.scrollHeight - l.scrollTop - l.clientHeight < 80; };

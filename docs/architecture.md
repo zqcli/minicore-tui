@@ -234,8 +234,8 @@ wait, messages are limited to 1 MiB and each phone's outbound queue to 512
 messages; overflow drops that connection. No remote timer wakes the TUI main loop.
 Pairing codes expire after ten minutes, are single-use and lock after five failures.
 Device tokens are OS-random; only SHA-256 hashes reach `remote-devices.json`,
-atomically written with Unix mode 0600. The authenticated connection task runs directory-picker requests through
-`remote::fs` using `spawn_blocking`. Its reducer-owned close signal revokes queued
+atomically written with Unix mode 0600. The authenticated connection task runs
+directory-picker requests through `remote::fs` using `spawn_blocking`. Its reducer-owned close signal revokes queued
 work and suppresses late replies after replacement or shutdown; filesystem calls
 already running may finish. Session checks share `fs::within` and
 `fs::canonical_within`; phone-facing paths use `fs::display` to remove Windows
@@ -507,4 +507,7 @@ layout cache, config, CLI). `src/app/tests` drives a real `App` through
 `testing::FakeAgent` over an in-memory pipe with paused time. `ui/snapshots.rs`
 compares `TestBackend` frames with `tests/snapshots/*.txt` (`UPDATE_SNAPSHOTS=1`
 rewrites them); `tests/fixtures/agent-events.jsonl` feeds the event decoder test.
+`node --test tests/remote_web.mjs` exercises the embedded client's protocol handlers
+and path helpers without browser rendering or a network. Socket tests exercise
+the actual listener and embedded HTML with in-process clients on loopback port 0.
 Real-model runs are manual.

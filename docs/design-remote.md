@@ -248,7 +248,7 @@ replaces everything. Every `app.notice` is forwarded as `notice`.
 `Block` (one per transcript block, same order and indices):
 
 ```json
-{"type":"user","kind":"prompt"|"steer"|...,"text":"...","at":1761300000000|null}
+{"type":"user","kind":"prompt"|"steering"|...,"text":"...","at":1761300000000|null}
 {"type":"assistant","loop_id":"...","request":1,"reasoning":"...","text":"...","streaming":true}
 {"type":"tool","call_id":"...","name":"bash","detail":"cargo test","input":"..."|null,"input_lines":3|null,
  "state":"pending"|"running"|"succeeded"|"failed"|"denied"|"cancelled","exit_code":0|null,
@@ -260,6 +260,7 @@ replaces everything. Every `app.notice` is forwarded as `notice`.
 ```
 
 Enum values (`kind`, `outcome`) use the names the Agent protocol already uses.
+A user block uses `kind:"steering"`; the pending queue uses `kind:"steer"`.
 Assistant `text` is raw Markdown; clients render it.
 
 ### Projection rules
