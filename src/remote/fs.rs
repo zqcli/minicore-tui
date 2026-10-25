@@ -132,6 +132,10 @@ pub fn mkdir(roots: &[PathBuf], parent: &str, name: &str) -> Result<String, FsEr
         return Err(FsError::InvalidName);
     }
     let parent = canonical_within(roots, Path::new(parent))?;
+    // Windows reports a file parent as a missing path, so check it here.
+    if !fs::metadata(&parent)?.is_dir() {
+        return Err(FsError::NotADirectory);
+    }
     let path = parent.join(name);
     fs::create_dir(&path)?;
     Ok(display(&canonical_within(roots, &path)?))
