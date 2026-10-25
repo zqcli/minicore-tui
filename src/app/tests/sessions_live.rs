@@ -5,6 +5,7 @@ use crossterm::event::KeyCode;
 use serde_json::{Value, json};
 
 use super::harness::*;
+use super::remote::{config, phone, request, synced_state};
 use crate::app::{Action, LiveStatus, Msg, Overlay, Scroll, Session, SessionOp};
 use crate::transcript::Block;
 
@@ -347,4 +348,91 @@ async fn the_picker_lists_live_sessions_first() {
     assert_eq!(order, ["s2", "s1", "s3"]);
     let screen = h.screen(100, 24);
     assert!(screen.contains("running 0m"), "{screen}");
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_phone_sees_live_sessions_and_switches_to_one_at_once() {
+    let mut h = running_first().await;
+    show(&mut h, "s2").await;
+    h.app.remote.config = Some(config(std::path::PathBuf::from("/tmp/ws")));
+    h.app.remote.url = Some("http://localhost:8765".into());
+    let (mut output, _closing, admission) = phone(&mut h, 1, "phone");
+    assert!(admission.await.unwrap());
+    let state = synced_state(&mut h, &mut output).expect("a snapshot");
+    let listed = |state: &Value, id: &str| {
+        state["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|session| session["id"] == id)
+            .cloned()
+            .unwrap()
+    };
+    let one = listed(&state, "s1");
+    assert_eq!(
+        (&one["live"], &one["status"], &one["unseen"]),
+        (&json!(true), &json!("running"), &json!(false))
+    );
+    assert!(one["started_ms"].as_u64().is_some());
+    assert_eq!(listed(&state, "s2")["status"], "idle");
+    assert_eq!(state["background"], json!({"running": 1, "approval": 0}));
+
+    tokio::time::advance(std::time::Duration::from_secs(30)).await;
+    assert!(
+        synced_state(&mut h, &mut output).is_none(),
+        "time alone sends nothing"
+    );
+
+    h.emit("interaction_requested", approval_for("s1", "i1"))
+        .await;
+    h.settle().await;
+    let state = synced_state(&mut h, &mut output).expect("a new state");
+    assert_eq!(listed(&state, "s1")["status"], "approval");
+    assert_eq!(state["background"], json!({"running": 0, "approval": 1}));
+
+    let opens = h.calls("session.open").len();
+    request(&mut h, json!({"kind":"open_session", "session_id":"s1"}));
+    while let Ok(message) = output.try_recv() {
+        if message["t"] == "ack" {
+            assert_eq!(message["ok"], true);
+        }
+    }
+    assert_eq!(h.app.session.as_ref().unwrap().info.session_id, "s1");
+    assert_eq!(h.calls("session.open").len(), opens);
+}
+
+#[tokio::test(start_paused = true)]
+async fn many_large_background_sessions_add_no_work_to_a_frame() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    for n in 0..20 {
+        let id = format!("b{n}");
+        let info: crate::protocol::SessionInfo = serde_json::from_value(session_info(&id)).unwrap();
+        let mut session = Session::new(info.clone(), 100 + n);
+        for i in 0..500 {
+            session.transcript.push(Block::User {
+                text: format!("message {i}"),
+                kind: crate::protocol::read::UserKind::Prompt,
+                at: None,
+            });
+        }
+        h.app.background.push(session);
+        h.app.sessions.push(info);
+    }
+    h.app.catalog_generation += 1;
+    h.app.remote.config = Some(config(std::path::PathBuf::from("/tmp/ws")));
+    h.app.remote.url = Some("http://localhost:8765".into());
+    let (mut output, _closing, admission) = phone(&mut h, 1, "phone");
+    assert!(admission.await.unwrap());
+    let snapshot = synced_state(&mut h, &mut output).expect("a snapshot");
+    assert_eq!(snapshot["background"], json!({"running": 0, "approval": 0}));
+    h.screen(80, 24);
+    assert!(
+        h.app.layout.total_rows() < 50,
+        "only the foreground is laid out"
+    );
+    h.app.sync_remote();
+    assert!(
+        output.try_recv().is_err(),
+        "an unchanged frame sends nothing"
+    );
 }

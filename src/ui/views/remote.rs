@@ -90,6 +90,13 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App, styles: Styles) {
         let queue = format!("{} waiting", blocks::plural(waiting, "message"));
         work.push(("Queue", queue, text));
     }
+    let others: String = status::others(app, styles)
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect();
+    if !others.is_empty() {
+        work.push(("Others", others, text));
+    }
     if remote.failed_logins > 0 {
         let mut sign_in = blocks::plural(u64::from(remote.failed_logins), "wrong password");
         let now = tokio::time::Instant::now();

@@ -14,7 +14,7 @@ use crate::remote::{
     wire::Intent,
 };
 
-fn phone(
+pub(super) fn phone(
     h: &mut Harness,
     id: u64,
     device: &str,
@@ -43,7 +43,7 @@ fn phone(
     (output, closing, admission)
 }
 
-fn request(h: &mut Harness, intent: Value) {
+pub(super) fn request(h: &mut Harness, intent: Value) {
     let (done, _finished) = oneshot::channel();
     h.app.on_msg(Msg::Remote(RemoteEvent::Request {
         connection: 1,
@@ -53,7 +53,7 @@ fn request(h: &mut Harness, intent: Value) {
     }));
 }
 
-fn config(root: std::path::PathBuf) -> crate::config::Remote {
+pub(super) fn config(root: std::path::PathBuf) -> crate::config::Remote {
     crate::config::Remote {
         bind: "127.0.0.1:0".parse().unwrap(),
         url: None,
@@ -607,16 +607,22 @@ async fn catalog() -> (Harness, mpsc::Receiver<Value>) {
     (h, output)
 }
 
-/// The session list of the last state the next sync sends, if it sends one.
-fn synced_sessions(h: &mut Harness, output: &mut mpsc::Receiver<Value>) -> Option<Vec<Value>> {
+/// The last state the next sync sends, if it sends one.
+pub(super) fn synced_state(h: &mut Harness, output: &mut mpsc::Receiver<Value>) -> Option<Value> {
     h.app.sync_remote();
-    let mut sessions = None;
+    let mut state = None;
     while let Ok(message) = output.try_recv() {
-        if let Some(list) = message["state"]["sessions"].as_array() {
-            sessions = Some(list.clone());
+        if message.get("state").is_some() {
+            state = Some(message["state"].clone());
         }
     }
-    sessions
+    state
+}
+
+/// The session list of the last state the next sync sends, if it sends one.
+fn synced_sessions(h: &mut Harness, output: &mut mpsc::Receiver<Value>) -> Option<Vec<Value>> {
+    let state = synced_state(h, output)?;
+    Some(state["sessions"].as_array().unwrap().clone())
 }
 
 fn listed<'a>(sessions: &'a [Value], id: &str) -> Option<&'a Value> {

@@ -109,6 +109,7 @@ line is never written to the prompt history.
                  (⠋ Thinking · 4s / ⠋ Waiting for approval on the phone · bash · rm -rf build /
                   ⠋ Compacting context / Idle · last turn completed in 7.8s / Idle)
      Queue       2 messages waiting                       (only when the queue is not empty)
+     Others      2 running · 1 needs approval             (only when background sessions work)
      Sign-in     3 wrong passwords · paused for 30 s      (only after a failure; amber)
 
      /remote off take back control · esc stop the turn · /remote password new password
@@ -257,7 +258,7 @@ dispatched it, or refused it):
 | `cancel` | Interrupt the running turn, else cancel a running compaction, else nothing. | — |
 | `answer` | Approvals accept only `"allow"`, `"allow_session"`, or `"deny"`; choice prompts accept only an in-range row index. Goes through the local answer path, so session allowance is remembered. | no pending interaction or id differs (`"stale"`); wrong answer kind or index (`"bad_request"`), leaving the interaction untouched |
 | `load_older` | Load an older history page into the shared transcript. | no session |
-| `open_session` | Open that session (it becomes resident in the TUI too). | unknown id; its workspace is outside `roots` |
+| `open_session` | Show that session in the TUI too: a live one switches at once (no `session.open`), another is opened. | unknown id; its workspace is outside `roots`; a session is opening or being created and the target is not live, or a created session's first message is pending |
 | `new_session` | Leave the session for a draft in `workspace` (default: the current draft workspace) with optional `profile`; the next `submit` creates it. No empty session is created. | workspace relative, outside `roots`, missing or not a directory; unknown profile |
 | `set_model` / `set_reasoning` | As `/model` and `/reasoning` (session or draft). | unknown model or level |
 | `rename_session` | Rename any listed session through the sessions picker's rename path (`session.rename` with its id); the title is trimmed, and an empty title clears it so the label falls back to the first prompt or short id. The catalog, the resident session and the phone's state follow; the notice `Session renamed` is forwarded. | unknown id; workspace outside `roots`; title over 200 characters or containing control characters |
@@ -318,7 +319,10 @@ is forwarded as `notice`.
                          "input":"..."|null,"prompt":"...","options":["Allow once","Deny","Allow bash this session"]},
   "queue": [{"kind":"steer"|"follow","text":"..."}],
   "older": true,
-  "sessions": [{"id":"ses_...","title":"...","workspace":"/abs","updated_at":"<RFC 3339>","current":true}],
+  "sessions": [{"id":"ses_...","title":"...","workspace":"/abs","updated_at":"<RFC 3339>","current":true,
+                "live":true,"status":"running"|"approval"|"compacting"|"idle","started_ms":1761300000000|null,
+                "unseen":false}],
+  "background": {"running":1,"approval":0},
   "models": [{"id":"gpt-6-luna","reasoning":["low","medium","high"]}],
   "profiles": ["coding","ask"]
 }

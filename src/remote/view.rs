@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use super::fs;
 
 use crate::app::session::context_percent;
-use crate::app::{App, InteractionKind, QueuedKind};
+use crate::app::{App, InteractionKind, LiveStatus, QueuedKind};
 use crate::protocol::read::UserKind;
 use crate::transcript::{Block, RequestKey, ToolState};
 
@@ -159,6 +159,21 @@ fn state(app: &App, catalog: &Value) -> Value {
     for info in sessions.as_array_mut().unwrap() {
         let resident = info["id"].as_str() == current;
         info["current"] = json!(resident);
+        // Live marks change with every turn, so they stay out of the cached catalog.
+        match info["id"].as_str().and_then(|id| app.live(id)) {
+            Some(live) => {
+                info["live"] = json!(true);
+                info["status"] = json!(match live.live_status() {
+                    LiveStatus::Idle => "idle",
+                    LiveStatus::Running => "running",
+                    LiveStatus::Approval => "approval",
+                    LiveStatus::Compacting => "compacting",
+                });
+                info["started_ms"] = json!(live.live.as_ref().map(|turn| turn.started_ms));
+                info["unseen"] = json!(live.unseen);
+            }
+            None => info["live"] = json!(false),
+        }
         if let Some(session) = session.filter(|_| resident) {
             info["title"] = json!(crate::app::overlay::session_label(
                 &session.info,
@@ -177,6 +192,7 @@ fn state(app: &App, catalog: &Value) -> Value {
     let queue: Vec<_> = session.into_iter().flat_map(|s| &s.queue).map(|queued| json!({
         "kind":match queued.kind { QueuedKind::Steer => "steer", QueuedKind::Follow => "follow" }, "text":queued.text,
     })).collect();
+    let (running, approval) = app.background_counts();
     json!({
         "session":session.map(|s| json!({"id":s.info.session_id, "title":crate::app::overlay::session_label(&s.info, session), "workspace":fs::display(Path::new(&s.info.workspace)), "profile":s.info.profile, "model":s.info.model, "reasoning":s.info.reasoning})),
         "draft":{"workspace":fs::display(&app.workspace), "profile":app.launch.profile.as_ref().or(app.default_profile.as_ref()), "model":app.model_id(), "reasoning":app.reasoning()},
@@ -184,6 +200,7 @@ fn state(app: &App, catalog: &Value) -> Value {
         "usage":{"input":session.map_or(0, |s| s.usage.input), "output":session.map_or(0, |s| s.usage.output), "cached":session.map_or(0, |s| s.usage.cached)},
         "context_percent":session.and_then(context_percent), "interaction":interaction, "queue":queue,
         "older":session.is_some_and(|s| s.loaded_from > 0), "sessions":sessions,
+        "background":{"running":running, "approval":approval},
         "models":catalog["models"], "profiles":catalog["profiles"]
     })
 }

@@ -1333,6 +1333,27 @@ fn an_idle_remote_status_screen_reports_the_last_turn() {
 }
 
 #[test]
+fn the_remote_status_screen_counts_busy_background_sessions() {
+    let mut app = app();
+    listening(&mut app);
+    let other = SessionInfo {
+        session_id: "ses_other".into(),
+        ..info()
+    };
+    let mut session = Session::new(other, 2);
+    session.live = Some(crate::app::LiveTurn::new(
+        TurnRef {
+            session_id: "ses_other".into(),
+            loop_id: "loop_1".into(),
+        },
+        0,
+    ));
+    app.background.push(session);
+    let screen = render(&mut app, 80, 24);
+    assert!(screen.contains("    Others     1 running"), "{screen}");
+}
+
+#[test]
 fn a_full_screen_view_draws_over_the_remote_status_screen() {
     let mut app = app();
     listening(&mut app);
