@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- Remote-control backend: `--remote`, `/remote [status|on|off|pair]`, validated
+  `[remote]` settings, single-use pairing codes and hashed device credentials.
+  One authenticated phone controls the resident session through versioned
+  WebSocket intents; reconnecting gets a fresh snapshot and subsequent changes
+  arrive as block-revision updates and state changes.
+- Local sending is frozen while remote control is Waiting or Connected, without
+  losing the local draft. Esc can still interrupt; approvals stay on the phone,
+  refused remote sends return to it, and quitting requires confirmation.
+- Opening or creating a session makes its workspace the default for the next
+  draft. Remote session selection is restricted to configured directory roots.
+
 ## 0.5.5 — 2026-10-24
 
 - `/context` opens as a sheet below the transcript like `/session`, instead of a

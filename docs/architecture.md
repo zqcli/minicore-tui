@@ -11,8 +11,9 @@ document and the code win.
 executable's `agent` subcommand: `main` hands those arguments to
 `minicore_agent::cli::run` before anything else. The TUI talks to that child over
 stdio NDJSON JSON-RPC (Protocol v1) and calls no other Agent API. It never reads the Agent store or
-the workspace, runs a tool, calls a provider or keeps credentials; its two
-settings files name environment variables, never keys.
+workspace file contents, runs a tool, calls a provider or keeps provider credentials;
+its two settings files name environment variables, never keys. Remote mode
+validates host directory paths and stores only hashes of paired-device tokens.
 
 ## Modules
 
@@ -24,6 +25,9 @@ src/
                 mod (Source, ConfigError, prepare, Loaded), home, settings
                 (config.toml), models (models.toml), compose (the Agent file),
                 scaffold (first-run starters)
+  remote/       phone protocol, listener, authentication and semantic projection:
+                mod (mode, listener handle, connection, events), auth, server,
+                wire, view; web/ holds embedded client assets
   rpc.rs        Agent child process and JSON-RPC Client
   protocol/     serde DTOs and constants only: methods, error codes, required
                 capabilities, read sizes (mod); event; read (history items, chunk
@@ -36,6 +40,7 @@ src/
     session.rs    Session: transcript, live turn, queue, usage, history window
     actions.rs    Action (keys and commands land here) and the IO each starts
     ops.rs        applies SessionOp results and Agent events
+    remote.rs     remote commands, local authorization, intents, projection sync
     tasks.rs      async operations: bootstrap, waits, history reads, changes, export
     keys/         on_key and the per-surface key handlers: mod (approval prompt),
                   composer, completion (the / and @ lists), overlay (pickers, views)
@@ -148,6 +153,7 @@ enum Msg {
     Notice(NoticeLevel, String),
     DraftEdited(Option<String>),
     Flash(String),                          // `Copied!` over the transcript
+    Remote(RemoteEvent),                    // listener admission, intents, disconnects
 }
 ```
 
@@ -157,8 +163,8 @@ enum Msg {
 the resident session's `epoch`; `on_msg` drops a `Session` message whose epoch is
 not the resident one. `adopt` makes an opened or created session resident with
 `App::epoch + 1`, a counter that never resets, so every open or create, even of
-the same session, orphans what is still in flight for the old one. There are no
-other generation counters.
+the same session, orphans what is still in flight for the old one. Remote listeners
+have a separate generation so late handshakes cannot survive an off/on cycle.
 
 Only the active session is resident; opening another drops the old transcript
 and coming back reloads it. A turn keeps running in the Agent meanwhile.
@@ -189,6 +195,47 @@ list holds no empty sessions. While `app.session` is `None`:
   `workspace.files`, which needs a loaded session, so it answers its own notice.
   The transcript area shows a dim line only while the Agent connects, a session
   opens or one is created.
+
+### Remote control
+
+`--remote` binds before entering the terminal; `/remote on` binds asynchronously.
+`RemoteMode` is Off, Waiting or Connected. Waiting still freezes local sending:
+only `/remote off` restores local control. The reducer alone admits connections:
+a different device gets `busy`, the same token replaces the old socket with
+`bye replaced`. Connection ids keep old requests and disconnects from affecting
+the replacement. Off and quit send `bye` before closing the listener.
+
+`on_action` denies local actions by default while remote is active, with an
+explicit allowlist for viewing, copying/exporting, draft editing, theme changes,
+queue recall, quit and remote commands. Command completion checks before clearing
+the draft. Approval sheets neither render nor take the local keyboard; Esc can
+still interrupt. Entering remote recalls queued follow-ups into the composer.
+Remote text is passed directly to the same submit/send paths without changing
+the local composer or its history. Agent-refused text returns as `returned` while
+a phone is connected. Every notice is also forwarded to that phone.
+
+`App::workspace` follows the workspace of each adopted session and is the default
+for the next draft; a remote `new_session` can choose another existing directory
+under the canonical configured roots. It creates no empty session. `--continue`
+still selects against the original launch workspace. Session selection and the
+phone catalog use canonical path-prefix checks, not file-content reads.
+
+After each main-loop iteration `sync_remote` returns immediately without a phone.
+Otherwise `remote::view` sends a snapshot on connection or residency change,
+index-wise revision upserts (plus the new length), and state only when its
+serialized value changes. The tracker keeps only the resident revisions and last
+state; it is not an event log. `LiveTurn::started_ms` is captured once so elapsed
+time belongs to the client. The footer and projection share the pure
+`app::session::context_percent` calculation. The projection never imports UI code.
+
+Only connection tasks own network timers: a 10 s HTTP head/first-message limit,
+20 s pings and a 60 s idle cutoff. At most eight unauthenticated connections can
+wait, messages are limited to 1 MiB and each phone's outbound queue to 512
+messages; overflow drops that connection. No remote timer wakes the TUI main loop.
+Pairing codes expire after ten minutes, are single-use and lock after five failures.
+Device tokens are OS-random; only SHA-256 hashes reach `remote-devices.json`,
+atomically written with Unix mode 0600. The directory-picker messages and their
+separate blocking filesystem module are specified in `design-remote.md`.
 
 ### RPC client
 

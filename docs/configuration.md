@@ -194,6 +194,21 @@ from the user's home, and paths are canonicalized. These roots restrict the
 phone's directory picker and session selection, not the Agent's tools.
 Errors name `config.toml`, the line and the `[remote]` key.
 
+Start with `--remote` or `/remote on`; `/remote` (or `/remote status`) opens the
+Remote sheet. The displayed URL carries the pairing code only in its fragment.
+A code lasts ten minutes, works once and is invalidated after five failed attempts.
+`/remote pair` replaces it while listening; when Off, start with `/remote on` first.
+The default URL is `http://<bind>`; an unspecified bind host is replaced by the
+address the OS selects for LAN routing. Set `url` explicitly when using a tunnel,
+reverse proxy or a machine with multiple networks.
+
+Paired-device names, pairing timestamps and SHA-256 token hashes are stored in
+`<TUI dir>/remote-devices.json`, atomically and with mode 0600 on Unix. Plain tokens
+are never stored there. Delete the file and restart remote mode to forget devices.
+`/remote off` disconnects the phone, stops listening and restores local input;
+a phone disconnect alone leaves remote mode Waiting. A second device is refused,
+while reconnecting with the same token replaces its previous connection.
+
 ## Command line
 
 | Option | Meaning |

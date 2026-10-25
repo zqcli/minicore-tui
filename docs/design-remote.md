@@ -67,7 +67,10 @@ Slash commands (always allowed, also in remote mode):
 | `/remote` or `/remote status` | Open the Remote sheet: mode, URL, pairing QR and code, connected device |
 | `/remote on` | Bind and enter `Waiting`; a fresh pairing code is made; opens the sheet |
 | `/remote off` | Say `bye` to the phone, close it, stop listening, unfreeze local input |
-| `/remote pair` | Make a new pairing code (the old one stops working); opens the sheet |
+| `/remote pair` | While listening, make a new pairing code (the old one stops working); opens the sheet |
+
+When Off, `/remote pair` asks the user to run `/remote on` first; it never
+starts a listener or freezes local input as an implicit side effect.
 
 ## Local behaviour in remote mode (`Waiting` or `Connected`)
 
@@ -238,7 +241,9 @@ replaces everything. Every `app.notice` is forwarded as `notice`.
   so the state does not change by itself). `loading` is `App::loading_session`.
 - `older`: an older page can be loaded. `sessions`: the catalog filtered to
   workspaces under `roots`, newest first, at most 50. `context_percent` is the
-  footer's figure (`ui::views::context::percent`), never an estimate.
+  footer's figure, never an estimate. The pure calculation lives in
+  `app::session::context_percent` and `ui::views::context` re-exports it as
+  `percent`, so the projection does not depend on `ui`.
 
 `Block` (one per transcript block, same order and indices):
 
