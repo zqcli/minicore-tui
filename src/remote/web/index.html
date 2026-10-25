@@ -305,6 +305,8 @@ function inline(s) {
 function parseMd(src) {
   const lines = src.replace(/\r\n?/g, '\n').split('\n'), out = [], LI = /^( *)([-*+]|\d{1,9}[.)])\s+(.*)/, TB = /^\s*\|.*\|\s*$/;
   let para = [], i = 0, m;
+  // A last line that is only a marker ("- ") stays text until the item's first characters arrive.
+  const li = k => { const x = LI.exec(lines[k] || ''); return x && (k < lines.length - 1 || x[3].trim()) ? x : null; };
   const flush = () => { if (para.length) out.push({ t: 'p', c: inline(para.join('\n')) }); para = []; };
   while (i < lines.length) {
     const l = lines[i];
@@ -327,15 +329,15 @@ function parseMd(src) {
       const q = [];
       for (; i < lines.length && /^ {0,3}>/.test(lines[i]); i++) q.push(lines[i].replace(/^ {0,3}> ?/, ''));
       out.push({ t: 'quote', c: parseMd(q.join('\n')) });
-    } else if (LI.test(l)) {
+    } else if (li(i)) {
       flush();
       const items = [];
       while (i < lines.length) {
-        if ((m = LI.exec(lines[i]))) {
+        if ((m = li(i))) {
           items.push({ d: Math.min(3, Math.ceil(m[1].length / 4)), ord: /\d/.test(m[2]) ? parseInt(m[2], 10) : null, text: m[3] });
           i++;
         } else if (items.length && /^\s+\S/.test(lines[i])) { items[items.length - 1].text += '\n' + lines[i].trim(); i++; }
-        else if (!lines[i].trim() && LI.test(lines[i + 1] || '')) i++;
+        else if (!lines[i].trim() && li(i + 1)) i++;
         else break;
       }
       out.push({ t: 'list', items: items.map(x => ({ d: x.d, ord: x.ord, c: inline(x.text) })) });
@@ -365,6 +367,7 @@ const btn = (cls, label, fn) => { const b = el('button', cls, label); b.type = '
 const KEY = 'minicore.token';
 const m = { state: null, blocks: [], intents: new Map(), sid: undefined };
 const nodes = [], dirty = new Set(), open = new Set(), fsReq = new Map();
+let skew = 0, wasBusy = false;
 let ws, ready = false, started = false, halted = false, attempt = 0, retry = 0, pairCode = null, nid = 0;
 const WINDOW = 300;
 let stick = true, raf = 0, tick = 0, hiddenAt = 0, panel = null, view = 'main', opener = null;
@@ -432,7 +435,7 @@ function onError(msg) {
 function onMessage(msg) {
   const fx = reduce(m, msg);
   switch (msg.t) {
-    case 'welcome': attempt = 0; ready = true; $('gate').hidden = true; setConn(); break;
+    case 'welcome': skew = msg.now_ms == null ? 0 : msg.now_ms - Date.now(); attempt = 0; ready = true; $('gate').hidden = true; setConn(); break;
     case 'paired': localStorage.setItem(KEY, msg.token); pairCode = null; break;
     case 'error': onError(msg); return;
     case 'bye': gate(BYE[msg.reason] || 'Disconnected', null, msg.reason !== 'replaced'); return;
@@ -521,18 +524,21 @@ function renderBlock(b, i) {
       return el('div', 'user', b.kind && b.kind !== 'prompt' && el('div', 'lbl', LABEL[b.kind] || b.kind), el('div', 'bubble', b.text));
     case 'assistant': {
       const n = el('div', 'asst'), body = el('div', 'md');
+      n.hidden = !b.reasoning && !b.text;
       if (b.reasoning) {
         const d = el('details', 'think', el('summary', '', 'Thinking'), el('div', '', b.reasoning)), k = 'r' + b.loop_id + ':' + b.request;
         d.open = open.has(k);
         d.ontoggle = () => d.open ? open.add(k) : open.delete(k);
         n.append(d);
       }
-      md(parseMd(b.text || ''), body);
-      if (b.streaming) {
-        const last = body.lastElementChild;
-        (last && last.matches('p,h1,h2,h3,h4,h5,h6') ? last : body).append(el('span', 'caret'));
+      if (b.text) {
+        md(parseMd(b.text), body);
+        if (b.streaming && m.state.status.busy) {
+          const last = body.lastElementChild;
+          (last && last.matches('p,h1,h2,h3,h4,h5,h6') ? last : body).append(el('span', 'caret'));
+        }
+        n.append(body);
       }
-      n.append(body);
       return n;
     }
     case 'tool': {
@@ -614,7 +620,7 @@ const cur = k => { const s = m.state; return (s.session || s.draft)[k]; };
 function tickStatus() {
   const st = m.state.status, live = st.busy || st.compacting;
   let t = st.loading ? 'Loading session…' : st.interrupting ? 'Interrupting…' : st.compacting ? 'Compacting…' : st.label || (st.busy ? 'Working' : 'Idle');
-  if (live && st.started_ms) t += ' · ' + fmtElapsed(Date.now() - st.started_ms);
+  if (live && st.started_ms) t += ' · ' + fmtElapsed(Date.now() + skew - st.started_ms);
   if (m.state.context_percent != null) t += ' · ctx ' + Math.round(m.state.context_percent) + '%';
   $('stat').textContent = t;
   $('stat').className = live || st.loading ? 'busy' : '';
@@ -628,6 +634,11 @@ function renderState() {
   const live = (st.busy || st.compacting) && st.started_ms;
   if (live && !tick) tick = setInterval(tickStatus, 1000);
   if (!live && tick) { clearInterval(tick); tick = 0; }
+  if (!!st.busy !== wasBusy) { // the caret shows only while busy
+    wasBusy = !!st.busy;
+    m.blocks.forEach((b, i) => { if (b.type === 'assistant' && b.streaming) dirty.add(i); });
+    schedule();
+  }
   tickStatus(); renderEmpty(); renderAppr(); renderTray(); updateComposer();
   if (panel && !(panel === 'drawer' && view === 'picker')) renderPanel();
 }
@@ -709,7 +720,7 @@ function renderDrawer() {
     wss.map(w => row('', basename(w), w, () => { intent('new_session', { workspace: w }); closePanel(); })),
     sec('Sessions'), !s.sessions.length && el('div', 'rs', 'No sessions yet'),
     s.sessions.map(x => row(x.current ? 'cur' : '', (x.current ? '● ' : '') + (x.title || x.id.replace(/^ses_/, '').slice(0, 8)),
-      basename(x.workspace) + ' · ' + relAge(x.updated_at), () => { if (!x.current) intent('open_session', { session_id: x.id }); closePanel(); })));
+      basename(x.workspace) + ' · ' + relAge(x.updated_at, Date.now() + skew), () => { if (!x.current) intent('open_session', { session_id: x.id }); closePanel(); })));
 }
 function renderModel() {
   const s = m.state, c = s.session || s.draft, mod = s.models.find(x => x.id === c.model);
