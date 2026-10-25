@@ -1,4 +1,4 @@
-//! The resident session: transcript, live turn, queue, usage and status.
+//! A live session: transcript, live turn, queue, usage and status.
 
 use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
@@ -14,6 +14,7 @@ use crate::protocol::{
 use crate::transcript::{Block, EXPANDED_ROWS, RequestKey, ToolCall, ToolState, Transcript};
 use crate::transcript::{append_history, append_history_item, merge_live, push_interrupted};
 
+use super::Scroll;
 use super::tasks::History;
 
 /// How soon the footer's figures may be asked for again while a turn runs.
@@ -59,11 +60,34 @@ pub struct Session {
     pub reconcile_from: Vec<(String, usize)>,
     /// Where the next turn's region starts, captured before its prompt block.
     pub next_turn_start: Option<usize>,
+    /// A send was refused while post-turn compaction owned the session; the
+    /// text waits as a follow-up until the session is idle.
+    pub waiting_for_compaction: bool,
+    /// The composer text this session had when it left the foreground.
+    pub draft: Option<String>,
+    /// Refused texts awaiting local control because no remote recipient received them.
+    pub returned: Vec<String>,
+    /// The connection that last submitted text to this session.
+    pub last_sender: Option<u64>,
+    /// A turn ended while this session was in the background.
+    pub unseen: bool,
+    /// The view this session had when it left the foreground.
+    pub scroll: Scroll,
+}
+
+/// What a live session is doing, for the picker, the footer and the phone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LiveStatus {
+    Idle,
+    Running,
+    Approval,
+    Compacting,
 }
 
 pub struct LiveTurn {
     pub turn: TurnRef,
     pub started: Instant,
+    pub started_ms: u64,
     pub requests: u32,
     pub phase: Phase,
     /// Index in the transcript where this turn's blocks start.
@@ -100,6 +124,7 @@ impl LiveTurn {
         Self {
             turn,
             started: Instant::now(),
+            started_ms: crate::protocol::stamp::now_millis(),
             requests: 1,
             phase: Phase::Thinking,
             start,
@@ -225,11 +250,46 @@ impl Session {
             applied_steers: 0,
             reconcile_from: Vec::new(),
             next_turn_start: None,
+            waiting_for_compaction: false,
+            draft: None,
+            returned: Vec::new(),
+            last_sender: None,
+            unseen: false,
+            scroll: Scroll::Follow,
         }
     }
 
     pub fn is_busy(&self) -> bool {
         self.live.is_some()
+    }
+
+    pub fn compacting(&self) -> bool {
+        self.compaction.is_some()
+    }
+
+    pub fn status_label(&self) -> Option<&'static str> {
+        if self.compacting() {
+            Some("Compacting context")
+        } else if self.interaction.is_some() {
+            Some("Waiting for approval")
+        } else {
+            self.phase_label().or_else(|| {
+                self.waiting_for_compaction
+                    .then_some("Waiting for compaction")
+            })
+        }
+    }
+
+    pub fn live_status(&self) -> LiveStatus {
+        if self.interaction.is_some() {
+            LiveStatus::Approval
+        } else if self.compaction.is_some() || self.waiting_for_compaction {
+            LiveStatus::Compacting
+        } else if self.is_busy() {
+            LiveStatus::Running
+        } else {
+            LiveStatus::Idle
+        }
     }
 
     /// The status line while a compaction runs. Inside a turn Esc ends the
@@ -977,6 +1037,29 @@ pub fn auto_title(prompt: &str) -> Option<String> {
     } else {
         format!("{title}…")
     })
+}
+
+pub(crate) fn input_budget(context: Option<&SessionContext>) -> Option<u64> {
+    context?
+        .budget
+        .as_ref()?
+        .input_budget_tokens
+        .filter(|budget| *budget > 0)
+}
+
+/// The last reported context usage as a percentage of its input budget or model window.
+pub fn context_percent(session: &Session) -> Option<f64> {
+    let usage = session.presentation.as_ref()?.context.as_ref()?;
+    let tokens = usage.tokens?;
+    match input_budget(session.context.as_ref()) {
+        Some(budget) => Some(tokens as f64 / budget as f64 * 100.0),
+        None => usage.percent.or_else(|| {
+            usage
+                .window
+                .filter(|window| *window > 0)
+                .map(|window| tokens as f64 / window as f64 * 100.0)
+        }),
+    }
 }
 
 #[cfg(test)]

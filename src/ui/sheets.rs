@@ -9,7 +9,7 @@ use crate::app::overlay::{
 };
 use crate::app::picker;
 use crate::app::session::InteractionKind;
-use crate::app::{App, Overlay};
+use crate::app::{App, LiveStatus, Overlay, Session};
 use crate::protocol::{ModelInfo, Reasoning, SessionInfo};
 
 use super::panel::{Kind, Row, Sheet, Tone, body_lines, truncate};
@@ -53,6 +53,14 @@ pub fn sheet(app: &App, styles: Styles) -> Option<Sheet> {
         | Overlay::Help { .. }
         | Overlay::Diff(_) => return None,
     })
+}
+
+/// A dim `name` padded to a column, then its `value` cut to `cells`.
+fn fact(name: &str, value: &str, cells: usize, styles: Styles) -> Vec<Span<'static>> {
+    vec![
+        Span::styled(format!("{name:<10}"), styles.dim()),
+        Span::styled(truncate(value, cells), styles.text()),
+    ]
 }
 
 /// Rows of the inline completion list (commands, `@` files) shown inside the
@@ -148,7 +156,7 @@ fn sessions_sheet(app: &App, rows: &[SessionInfo], state: &SessionsState, styles
     }
     let labels: Vec<String> = shown
         .iter()
-        .map(|info| session_label(info, app.session.as_ref()))
+        .map(|info| session_label(info, app.live(&info.session_id)))
         .collect();
     let workspace = app.workspace.to_string_lossy();
     let status = if shown.len() == rows.len() {
@@ -162,6 +170,7 @@ fn sessions_sheet(app: &App, rows: &[SessionInfo], state: &SessionsState, styles
         .map(|(info, label)| {
             let current = resident == Some(info.session_id.as_str());
             let context = RowContext {
+                state: app.live(&info.session_id).and_then(live_state),
                 current,
                 other_workspace: info.workspace != workspace,
                 duplicate: labels.iter().filter(|other| *other == label).count() > 1,
@@ -279,6 +288,9 @@ fn reasoning_description(level: Reasoning) -> &'static str {
 }
 
 fn interaction_sheet(app: &App, styles: Styles) -> Option<Sheet> {
+    if app.remote.active() {
+        return None;
+    }
     let session = app.session.as_ref()?;
     let interaction = session.interaction.as_ref()?;
     let options = interaction.options();
@@ -424,8 +436,24 @@ fn find_sheet(query: &str, total: usize, current: usize) -> Sheet {
     Sheet::new(title, "enter next · shift+enter previous · esc close").status(status)
 }
 
+/// A live session's state, first on its picker row.
+fn live_state(session: &Session) -> Option<String> {
+    Some(match session.live_status() {
+        LiveStatus::Running => {
+            let started = session.live.as_ref()?.started;
+            format!("running {}", super::status::minutes(started.elapsed()))
+        }
+        LiveStatus::Approval => "needs approval".to_owned(),
+        LiveStatus::Compacting => "compacting".to_owned(),
+        LiveStatus::Idle if session.unseen => "new".to_owned(),
+        LiveStatus::Idle => return None,
+    })
+}
+
 /// What sets one sessions-picker row apart from the others.
 struct RowContext {
+    /// What a live session is doing.
+    state: Option<String>,
     current: bool,
     other_workspace: bool,
     /// Another listed session has the same label.
@@ -437,7 +465,7 @@ struct RowContext {
 /// session says so, one in another workspace names it, and a label shared
 /// with another session gets its short id.
 fn session_row(info: &SessionInfo, label: String, context: &RowContext, now_seconds: u64) -> Row {
-    let mut parts = Vec::new();
+    let mut parts: Vec<String> = context.state.iter().cloned().collect();
     if context.current {
         parts.push("current".to_owned());
     }
@@ -508,12 +536,7 @@ fn session_info_sheet(app: &App, items: Option<usize>, styles: Styles) -> Sheet 
     ];
     let body = facts
         .into_iter()
-        .map(|(name, value)| {
-            Line::from(vec![
-                Span::styled(format!("{name:<10}"), styles.dim()),
-                Span::styled(truncate(&value, 120), styles.text()),
-            ])
-        })
+        .map(|(name, value)| Line::from(fact(name, &value, 120, styles)))
         .collect();
     sheet.body(body)
 }
@@ -733,6 +756,7 @@ mod tests {
 
     fn context(current: bool, other_workspace: bool, duplicate: bool) -> RowContext {
         RowContext {
+            state: None,
             current,
             other_workspace,
             duplicate,

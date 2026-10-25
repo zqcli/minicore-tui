@@ -11,8 +11,9 @@ document and the code win.
 executable's `agent` subcommand: `main` hands those arguments to
 `minicore_agent::cli::run` before anything else. The TUI talks to that child over
 stdio NDJSON JSON-RPC (Protocol v1) and calls no other Agent API. It never reads the Agent store or
-the workspace, runs a tool, calls a provider or keeps credentials; its two
-settings files name environment variables, never keys.
+workspace file contents, runs a tool, calls a provider or keeps provider credentials;
+its two settings files name environment variables, never keys. Remote mode
+validates host directory paths and stores only hashes of phone tokens.
 
 ## Modules
 
@@ -24,6 +25,9 @@ src/
                 mod (Source, ConfigError, prepare, Loaded), home, settings
                 (config.toml), models (models.toml), compose (the Agent file),
                 scaffold (first-run starters)
+  remote/       phone protocol, listener, authentication and semantic projection:
+                mod (mode, listener handle, connection, events), auth, server,
+                wire, view, fs (host directories); web/ holds embedded client assets
   rpc.rs        Agent child process and JSON-RPC Client
   protocol/     serde DTOs and constants only: methods, error codes, required
                 capabilities, read sizes (mod); event; read (history items, chunk
@@ -36,6 +40,7 @@ src/
     session.rs    Session: transcript, live turn, queue, usage, history window
     actions.rs    Action (keys and commands land here) and the IO each starts
     ops.rs        applies SessionOp results and Agent events
+    remote.rs     remote commands, local authorization, intents, projection sync
     tasks.rs      async operations: bootstrap, waits, history reads, changes, export
     keys/         on_key and the per-surface key handlers: mod (approval prompt),
                   composer, completion (the / and @ lists), overlay (pickers, views)
@@ -60,7 +65,8 @@ src/
                 markdown + markdown/stream (incremental renderer), composer (render),
                 status (status line, queue, notice, footer), panel + sheets (the one
                 bottom-sheet style), theme (Palette, Styles),
-                views/{diff, help} (full-screen), views/context (sheet report),
+                views/{diff, help} (full-screen), views/remote (the remote status
+                screen), views/context (sheet report),
                 snapshots and perf_tests (test only)
   terminal.rs   alternate screen, raw mode, paste, mouse, kitty keys, panic hook
   clipboard.rs  pbcopy / xclip / clip with an OSC 52 fallback
@@ -148,20 +154,35 @@ enum Msg {
     Notice(NoticeLevel, String),
     DraftEdited(Option<String>),
     Flash(String),                          // `Copied!` over the transcript
+    Remote(RemoteEvent),                    // listener admission, intents, disconnects
 }
 ```
 
-`SessionOp` holds the results of everything done for the resident session
+`SessionOp` holds the results of everything done for a live session
 (`Tail`, `Page`, `Waited`, `Sent`, `Context`, `Presentation`, `Changes`,
 `ToolHydrated`, `DiffFile`, …). `App::spawn` and `App::call` stamp each task with
-the resident session's `epoch`; `on_msg` drops a `Session` message whose epoch is
-not the resident one. `adopt` makes an opened or created session resident with
-`App::epoch + 1`, a counter that never resets, so every open or create, even of
-the same session, orphans what is still in flight for the old one. There are no
-other generation counters.
+the foreground session's `epoch`; `on_msg` finds that epoch in the foreground or
+background and drops a result only when its session is gone. `adopt` assigns
+`App::epoch + 1` to a newly opened or created session; a live switch reuses its
+epoch. Remote listeners have a separate generation so late handshakes cannot
+survive an off/on cycle.
 
-Only the active session is resident; opening another drops the old transcript
-and coming back reloads it. A turn keeps running in the Agent meanwhile.
+Every session opened in the process stays live (`docs/design-sessions.md`):
+`App::session` is the foreground and `App::background` holds the others, most
+recently left first. Each keeps its epoch for life, so `Msg::Session` reaches it
+by epoch wherever it is, and Agent events reach it by `session_id`; a result for
+a deleted session is dropped. Background work runs the ordinary reducer code
+through `App::with_background`, which swaps the session into the foreground slot
+with its own `scroll`, sets `background_op` and swaps it back. While that flag is
+set the view is left alone: `restore_draft` routes remote text or keeps it in `Session::returned`,
+find matches and foreground-only answers (item counts, `@` files, diff reads)
+are skipped, and `notice` names the session locally. A background turn end marks the
+session `unseen` unless a phone views it, and an approval asks for the bell (`App::ring`). Switching
+(`show_session`) parks the foreground with its composer text and scroll, brings
+the target back with its draft and returned texts, clears the layout cache and
+pickers and reads only the footer's figures; the draft keeps its text in
+`App::draft_text`. Live states reach the picker, the footer, the status screen
+and the phone's session list when drawn or projected, with no timer of their own.
 
 ### The draft
 
@@ -182,13 +203,110 @@ list holds no empty sessions. While `app.session` is `None`:
   prompt block. A failure puts the text back with `restore_draft` and shows the
   error. While `loading_session` is set `Enter` does nothing, so a second
   session cannot start and the text typed meanwhile stays in the editor.
-- `/new` calls `show_session(None)`, which resets the view like `adopt` does and
-  leaves the old session to the Agent, as opening another session does.
+- `/new` calls `show_session(None)`, which parks the open session in the
+  background, where it keeps running, and restores the draft's own text.
 - Actions and panels that read a session (`Action::needs_session`,
   `Panel::needs_session`) answer one info notice; `@` completion needs
   `workspace.files`, which needs a loaded session, so it answers its own notice.
   The transcript area shows a dim line only while the Agent connects, a session
   opens or one is created.
+
+### Remote control
+
+`--remote` binds before entering the terminal; `/remote on` binds asynchronously.
+`RemoteMode` is derived as Off, Waiting or Connected from the listener URL and
+the admitted connections (`Remote::phones`); it is not independently mutable.
+Waiting still freezes local sending: only `/remote off` restores local control.
+The reducer alone admits connections: every signed-in device is admitted, and a
+new connection with the same token replaces that device's older one with
+`bye replaced`. The 20 remembered devices bound the connections. Connection ids
+keep old requests and disconnects from affecting the replacement, and any
+admitted connection may send intents. Off and quit send `bye` to every phone
+before closing the listener.
+
+While remote mode is on, `ui::draw` draws `views::remote` (the status screen) in
+the transcript's place unless a full-screen view is open; the transcript layout
+is left untouched and the mouse neither scrolls nor selects there. The dock drops
+the Working line and the queue rows, which the status screen shows. The screen
+arms no timer: its spinner and elapsed time move only while `App::animating`,
+and the sign-in pause countdown refreshes with the next frame.
+
+`on_action` denies local actions by default while remote is active, with an
+explicit allowlist for viewing, copying/exporting, draft editing, theme changes,
+queue recall, quit and remote commands. Command completion checks before clearing
+the draft. Approval sheets neither render nor take the local keyboard; Esc can
+still interrupt. Entering remote recalls queued follow-ups into the composer.
+Each `Phone` owns a `PhoneView`: a live session id or draft workspace and launch
+settings, copied from the foreground on admission. Before an intent one helper
+focuses that view through the ordinary live switch or draft path; the phones
+never follow one another. The foreground therefore belongs to the last device
+that acted (or whose open/create completed), and `/remote off` returns to it.
+Draft settings are saved back after each intent and `App::launch` is cleared;
+`Remote::draft` keeps the foreground draft's settings for the status screen and
+local return without leaking overrides into `adopt` on a later session open.
+`Remote::opening` records the pending open/create's connection; only it changes
+view on adoption and shows `status.loading`. A pending open allows live-session
+work. While a create's first message is pending, all intents are refused so the
+global first text and composer cannot be stolen; another device receives
+`Another device is opening a session`.
+
+Remote text uses the same submit/send paths without changing local composer
+text or history. Each session keeps its last text-sending connection;
+`restore_draft` sends `returned` there if connected, else to its viewers, else
+keeps it in `Session::returned` until local control returns. A scoped
+`Remote::notice_target` routes synchronous notices to the requester and async
+session notices to its viewers plain and to other devices with the session
+label. Foreground results/events and `with_background` set that scope;
+open/rename/delete results retain their session id too. Labels are resolved only
+when a notice is emitted, not on every event. App-wide notices go to all,
+background attention only to non-viewers, and acks only to the requester.
+Deleting any viewed session is refused. A successful in-flight deletion also
+resets views that opened its target meanwhile to default drafts, so every
+session view still names a live session; a remote open reply for a target
+removed from the catalog meanwhile is discarded rather than adopted.
+
+`App::workspace` follows the workspace of each adopted session and is the default
+for the next draft; a remote `new_session` can choose another existing directory
+under the canonical configured roots. It creates no empty session. `--continue`
+still selects against the original launch workspace. Session selection and the
+phone catalog use canonical path-prefix checks, not file-content reads.
+
+After each paced frame (or its inactive-terminal equivalent), and before exit,
+`sync_remote` returns immediately without a phone. Otherwise it groups devices
+by viewed session or equal draft settings (and loading ownership), builds and serializes `State` once per distinct view
+(`view::Shared`), and each phone's own tracker (`view::View`) diffs that session
+through `App::live`, foreground or background. Admission, a view change or a
+viewed session epoch change sends a snapshot; otherwise it sends
+revision-indexed block upserts and state only when the serialized value differs
+from what that phone was last sent. Current-session marks, interaction, usage,
+queue and background counts are per-view; catalogs and device locations are
+shared. A phone whose queue overflows is dropped alone. Streaming assistants use
+append-only suffix updates until they finish, when one full block is sent.
+The tracker keeps viewed revisions, streaming keys and byte lengths, and the
+last serialized state; it is not an event log. Catalogs are cached by generation,
+so unchanged frames never rebuild or sort the full session catalog. `LiveTurn::started_ms` is captured once so elapsed
+time belongs to the client. The footer and projection share the pure
+`app::session::context_percent` calculation. The projection never imports UI code.
+
+Only connection tasks own network timers: a 10 s HTTP head/first-message limit,
+20 s pings and a 60 s idle cutoff. At most eight unauthenticated connections can
+wait, messages are limited to 1 MiB and each phone's outbound queue to 512
+messages; overflow drops that connection. No remote polling timer wakes the main
+loop. Shutdown allows at most 500 ms for `bye` and WebSocket close.
+Phones sign in with the password in `remote.json` (generated on first use,
+atomically written with Unix mode 0600); a right password makes an OS-random
+token that is stored as a SHA-256 hash only after the reducer admits the phone,
+so a handshake reaching a stopping listener (answered `bye remote_off`) stores nothing. Five wrong passwords pause sign-in for 30 s,
+doubling per further five up to 15 min; `hello` tokens are never paused. Each
+refusal reaches the reducer as `RemoteEvent::LoginRefused` for the status screen.
+`/remote password` replaces the password, forgets every phone and signs out the
+connected ones with `bye signed_out`; the command line never enters the prompt
+history. The authenticated connection task runs
+directory-picker requests through `remote::fs` using `spawn_blocking`. Each connection's reducer-owned close signal revokes its queued
+work and suppresses late replies after replacement or shutdown; filesystem calls
+already running may finish. Session checks share `fs::within` and
+`fs::canonical_within`; phone-facing paths use `fs::display` to remove Windows
+verbatim prefixes. The full phone protocol is specified in `design-remote.md`.
 
 ### RPC client
 
@@ -456,4 +574,7 @@ layout cache, config, CLI). `src/app/tests` drives a real `App` through
 `testing::FakeAgent` over an in-memory pipe with paused time. `ui/snapshots.rs`
 compares `TestBackend` frames with `tests/snapshots/*.txt` (`UPDATE_SNAPSHOTS=1`
 rewrites them); `tests/fixtures/agent-events.jsonl` feeds the event decoder test.
+`node --test tests/remote_web.mjs` exercises the embedded client's protocol handlers
+and path helpers without browser rendering or a network. Socket tests exercise
+the actual listener and embedded HTML with in-process clients on loopback port 0.
 Real-model runs are manual.

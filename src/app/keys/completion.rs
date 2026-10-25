@@ -128,11 +128,19 @@ impl App {
         };
         match commands::execute(&name, &arg) {
             Some(Executed::Action(action)) => {
+                if !self.local_allowed(&action) {
+                    self.remote_flash();
+                    return None;
+                }
                 self.overlay = Overlay::None;
                 self.composer.clear();
                 Some(action)
             }
             Some(Executed::Panel(panel)) => {
+                if !self.local_panel_allowed(&panel) {
+                    self.remote_flash();
+                    return None;
+                }
                 self.composer.clear();
                 self.open_panel(panel);
                 None
@@ -140,6 +148,10 @@ impl App {
             // The completed name stays in the draft for the argument it needs.
             _ => {
                 if let Some(text) = self.expand_template(&name, &arg) {
+                    if self.remote.active() {
+                        self.remote_flash();
+                        return None;
+                    }
                     self.overlay = Overlay::None;
                     self.composer.set_text(&text);
                     return Some(Action::Submit);

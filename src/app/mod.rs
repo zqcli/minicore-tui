@@ -1,8 +1,8 @@
 //! Application state and the reducer.
 //!
 //! `App` is mutated only on the main loop. IO runs in spawned tasks that post
-//! a [`Msg`]; a result for a session that is no longer resident is dropped by
-//! its epoch.
+//! a [`Msg`]; a result reaches the live session with its epoch, and is dropped
+//! when that session is gone.
 
 pub mod actions;
 pub mod commands;
@@ -11,11 +11,13 @@ pub mod diff;
 mod draft;
 pub mod find;
 pub mod keys;
+mod live;
 mod mouse;
 mod notify;
 mod ops;
 pub mod overlay;
 pub mod picker;
+mod remote;
 pub mod scrollbar;
 pub mod selection;
 pub mod session;
@@ -52,21 +54,22 @@ pub use actions::{Action, Answer};
 pub use diff::DiffQuery;
 pub use overlay::{Overlay, Panel};
 pub use session::{
-    InteractionKind, LiveTurn, PendingInteraction, Phase, Queued, QueuedKind, Session,
+    InteractionKind, LiveStatus, LiveTurn, PendingInteraction, Phase, Queued, QueuedKind, Session,
 };
 pub use tasks::Tx;
 
 /// Everything the main loop can hand to the reducer.
 pub enum Msg {
+    Remote(crate::remote::RemoteEvent),
     Agent(Box<AgentEvent>),
     AgentClosed(String),
     Ready(Box<Ready>),
-    Opened(Result<SessionInfo, RpcError>),
+    Opened(String, Result<SessionInfo, RpcError>),
     Created(Result<SessionInfo, RpcError>),
     Deleted(String, Result<(), RpcError>),
     /// A `session.rename` from the sessions picker, which may name a closed session.
-    Renamed(Result<SessionInfo, RpcError>),
-    /// A result for the session that was resident at epoch `.0`.
+    Renamed(String, Result<SessionInfo, RpcError>),
+    /// A result for the live session with epoch `.0`.
     Session(u64, Box<SessionOp>),
     Notice(NoticeLevel, String),
     /// The external editor returned a draft.
@@ -173,11 +176,22 @@ pub struct Press {
 }
 
 pub struct App {
+    pub remote: crate::remote::Remote,
     pub client: Arc<Client>,
     pub tx: Tx,
     pub workspace: PathBuf,
+    /// The session on screen; `None` is the draft.
     pub session: Option<Session>,
+    /// The other live sessions, most recently left first.
+    pub background: Vec<Session>,
+    /// Reducer code is running for a background session swapped into `session`.
+    pub background_op: bool,
+    /// The draft's composer text while a session is on screen.
+    pub draft_text: String,
+    /// A background approval or a long background turn asks for the bell.
+    pub ring: bool,
     pub sessions: Vec<SessionInfo>,
+    pub catalog_generation: u64,
     pub models: Vec<ModelInfo>,
     pub profiles: Vec<ProfileInfo>,
     /// Settings for the next session: the command-line flags, then what a
@@ -199,7 +213,6 @@ pub struct App {
     pub quit_armed: Option<tokio::time::Instant>,
     pub ready: bool,
     pub fatal: Option<Fatal>,
-    pub waiting_for_compaction: bool,
     pub started: Instant,
     /// Numbers the compaction operations this process starts.
     pub op_seq: u64,
@@ -254,11 +267,17 @@ pub const BUSY_RETRY: Duration = Duration::from_millis(700);
 impl App {
     pub fn new(client: Arc<Client>, tx: Tx, workspace: PathBuf) -> Self {
         Self {
+            remote: crate::remote::Remote::default(),
             client,
             tx,
             workspace,
             session: None,
+            background: Vec::new(),
+            background_op: false,
+            draft_text: String::new(),
+            ring: false,
             sessions: Vec::new(),
+            catalog_generation: 0,
             models: Vec::new(),
             profiles: Vec::new(),
             launch: LaunchSettings::default(),
@@ -275,7 +294,6 @@ impl App {
             quit_armed: None,
             ready: false,
             fatal: None,
-            waiting_for_compaction: false,
             started: Instant::now(),
             op_seq: 0,
             theme: ThemeKind::Dark,
@@ -302,6 +320,7 @@ impl App {
 
     pub fn on_msg(&mut self, msg: Msg) {
         match msg {
+            Msg::Remote(event) => self.on_remote(event),
             Msg::Agent(event) => self.on_agent_event(*event),
             Msg::AgentClosed(reason) => {
                 if self.fatal.is_none() {
@@ -317,42 +336,65 @@ impl App {
                     profiles,
                     sessions,
                 } = *ready;
+                self.catalog_generation += 1;
                 self.models = models;
                 self.profiles = profiles;
                 self.sessions = sessions;
                 self.templates = templates::load(self.home.as_ref());
                 self.ready = true;
             }
-            Msg::Opened(result) => self.adopt(result, None),
+            Msg::Opened(id, result) => self.with_notice_for(&id, |app| {
+                // Remote opens start from the catalog; deletion can finish before the open reply.
+                if app.remote.opening.is_some()
+                    && !app.sessions.iter().any(|info| info.session_id == id)
+                {
+                    app.loading_session = false;
+                    app.remote.opening = None;
+                    app.notice(NoticeLevel::Error, "Session deleted while opening");
+                } else {
+                    app.adopt(result, None);
+                }
+            }),
             Msg::Created(result) => {
                 let first = self.first_message.take();
                 self.adopt(result, first);
             }
-            Msg::Deleted(id, result) => {
-                if self.ok(result).is_some() {
-                    self.sessions.retain(|session| session.session_id != id);
+            Msg::Deleted(id, result) => self.with_notice_for(&id, |app| {
+                if app.ok(result).is_some() {
+                    app.notice(NoticeLevel::Info, "Session deleted");
+                    app.forget_phone_session(&id);
+                    app.sessions.retain(|session| session.session_id != id);
+                    app.background
+                        .retain(|session| session.info.session_id != id);
+                    app.catalog_generation += 1;
                     if let Overlay::Sessions {
                         rows,
                         filter,
                         selected,
                         ..
-                    } = &mut self.overlay
+                    } = &mut app.overlay
                     {
                         rows.retain(|session| session.session_id != id);
-                        let shown = overlay::filtered_sessions(rows, filter, self.session.as_ref());
+                        let shown = overlay::filtered_sessions(rows, filter, app.session.as_ref());
                         *selected = (*selected).min(shown.len().saturating_sub(1));
                     }
-                    self.notice(NoticeLevel::Info, "Session deleted");
                 }
-            }
-            Msg::Renamed(result) => self.on_renamed(result),
+            }),
+            Msg::Renamed(id, result) => self.with_notice_for(&id, |app| app.on_renamed(result)),
             Msg::Session(epoch, op) => {
                 if self
                     .session
                     .as_ref()
                     .is_some_and(|session| session.epoch == epoch)
                 {
-                    self.on_op(*op);
+                    let id = self.session.as_ref().unwrap().info.session_id.clone();
+                    self.with_notice_for(&id, |app| app.on_op(*op));
+                } else if let Some(index) = self
+                    .background
+                    .iter()
+                    .position(|session| session.epoch == epoch)
+                {
+                    self.with_background(index, |app| app.on_op(*op));
                 }
             }
             Msg::Notice(level, text) => self.notice(level, text),
@@ -397,10 +439,44 @@ impl App {
         self.scrollbar_grab.is_some() || self.scrolled_at.is_some_and(|at| at.elapsed() < FLASH_TTL)
     }
 
+    /// Shows `text`; one about a background session names it.
     pub fn notice(&mut self, level: NoticeLevel, text: impl Into<String>) {
+        let text = text.into();
+        let label = match &self.remote.notice_target {
+            crate::remote::NoticeTarget::Session(id) => {
+                let session = self.live(id);
+                let info = session
+                    .map(|session| &session.info)
+                    .or_else(|| self.sessions.iter().find(|info| &info.session_id == id));
+                Some(info.map_or_else(
+                    || overlay::short_session_id(id).to_owned(),
+                    |info| overlay::session_label(info, session),
+                ))
+            }
+            _ => None,
+        };
+        self.remote.notice(level, &text, label.as_deref());
+        let text = match self.background_op {
+            true => format!("\"{}\": {text}", self.session_label()),
+            false => text,
+        };
+        self.push_notice(level, text);
+    }
+
+    pub(super) fn with_notice_for(&mut self, id: &str, op: impl FnOnce(&mut Self)) {
+        let previous = std::mem::replace(
+            &mut self.remote.notice_target,
+            crate::remote::NoticeTarget::Session(id.to_owned()),
+        );
+        op(self);
+        self.remote.notice_target = previous;
+    }
+
+    /// Shows `text` locally as it is.
+    pub(super) fn push_notice(&mut self, level: NoticeLevel, text: String) {
         self.notices.push_back(Notice {
             level,
-            text: text.into(),
+            text,
             at: tokio::time::Instant::now(),
         });
         while self.notices.len() > 2 {
@@ -435,26 +511,12 @@ impl App {
     }
 
     pub fn compacting(&self) -> bool {
-        self.session
-            .as_ref()
-            .is_some_and(|session| session.compaction.is_some())
+        self.session.as_ref().is_some_and(Session::compacting)
     }
 
     /// Status-line text while something is in flight.
     pub fn status_label(&self) -> Option<&'static str> {
-        if let Some(session) = self.session.as_ref() {
-            if session.compaction.is_some() {
-                return Some("Compacting context");
-            }
-            if session.interaction.is_some() {
-                return Some("Waiting for approval");
-            }
-            if let Some(label) = session.phase_label() {
-                return Some(label);
-            }
-        }
-        self.waiting_for_compaction
-            .then_some("Waiting for compaction")
+        self.session.as_ref().and_then(Session::status_label)
     }
 
     /// Elapsed time of the running turn, for the status line.

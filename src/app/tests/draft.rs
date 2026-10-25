@@ -44,6 +44,7 @@ async fn the_first_submit_creates_the_session_with_the_draft_settings_then_sends
     );
     assert!(h.app.session.is_none());
 
+    let workspace = h.app.workspace.clone();
     h.submit("fix the greeting");
     assert_eq!(h.app.composer.text(), "", "the editor gave the text up");
     h.until(|app| app.is_busy()).await;
@@ -54,7 +55,8 @@ async fn the_first_submit_creates_the_session_with_the_draft_settings_then_sends
     assert_eq!(create[0]["profile"], "coding");
     assert_eq!(create[0]["model"], "mock");
     assert_eq!(create[0]["reasoning"], "high");
-    assert_eq!(create[0]["workspace"], json!(h.app.workspace));
+    assert_eq!(create[0]["workspace"], json!(workspace));
+    assert_eq!(h.app.workspace, std::path::PathBuf::from("/tmp/ws"));
     assert_eq!(h.sends(), ["fix the greeting"]);
     assert_eq!(h.texts(), ["fix the greeting"]);
     assert!(h.sent_at("fix the greeting").is_some());
@@ -187,6 +189,9 @@ async fn new_returns_to_the_draft_without_creating_and_records_the_profile() {
     assert_eq!(h.texts(), ["an old question"]);
     let old = h.app.session.as_ref().unwrap().epoch;
     script_first_message(&h);
+    // The session left for the draft stays live, so the new one has its own id.
+    h.fake
+        .script("session.create", json!({"session": session_info("s2")}));
 
     h.type_text("/new ask");
     h.press(KeyCode::Enter);

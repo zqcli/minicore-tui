@@ -172,6 +172,13 @@ fn stamp_label(millis: u64, zone: &TimeZone) -> Option<String> {
     Some(local.strftime("%H:%M · %m/%d/%Y").to_string())
 }
 
+/// `HH:MM` of `at` in the local zone.
+pub fn clock_label(at: Timestamp) -> String {
+    at.to_zoned(local_zone().clone())
+        .strftime("%H:%M")
+        .to_string()
+}
+
 fn local_zone() -> &'static TimeZone {
     // Windows reports an IANA name but supplies no zoneinfo database. Keep
     // jiff's tzdb-bundle-platform feature enabled: without it system() can

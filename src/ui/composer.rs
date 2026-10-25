@@ -21,8 +21,26 @@ pub fn max_rows(height: u16) -> usize {
     (usize::from(height) * 32 / 100).clamp(MIN_ROWS, MAX_ROWS)
 }
 
-/// Shown instead while a full-screen view owns the keys.
-const VIEW_PLACEHOLDER: &str = "view open · esc to return";
+/// What the editor is doing with the keys, which decides how it is drawn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Editor {
+    Live,
+    /// It takes input but cannot send: a phone has the session.
+    Remote,
+    /// A full-screen view owns the keys.
+    View,
+}
+
+impl Editor {
+    /// Shown dim in place of an empty draft.
+    fn placeholder(self) -> Option<&'static str> {
+        match self {
+            Self::Live => None,
+            Self::Remote => Some("Remote control is on · /remote off to take back"),
+            Self::View => Some("view open · esc to return"),
+        }
+    }
+}
 
 /// The sanitized draft and its editing stops, of which a paste chip has only two.
 struct Shown {
@@ -200,7 +218,7 @@ pub fn render(
     styles: Styles,
     width: u16,
     max_rows: usize,
-    active: bool,
+    editor: Editor,
 ) -> (Vec<Line<'static>>, (u16, u16)) {
     let g = geometry(composer, width, max_rows);
     composer.view_top.set(g.top);
@@ -256,9 +274,11 @@ pub fn render(
             spans
         })
         .collect();
-    if composer.is_empty() && !active {
+    if composer.is_empty()
+        && let Some(placeholder) = editor.placeholder()
+    {
         body = vec![vec![Span::styled(
-            wrap::truncate(VIEW_PLACEHOLDER, g.limit),
+            wrap::truncate(placeholder, g.limit),
             styles.faint(),
         )]];
     }
@@ -273,7 +293,7 @@ pub fn render(
             .map(|spans| row(spans, width, styles)),
     );
     lines.resize_with(g.target, || row(Vec::new(), width, styles));
-    if !active {
+    if editor == Editor::View {
         for span in lines.iter_mut().flat_map(|line| &mut line.spans) {
             span.style = span.style.patch(styles.faint());
         }
@@ -329,7 +349,7 @@ mod tests {
     }
 
     fn drawn(c: &Composer, width: u16) -> (Vec<String>, (u16, u16)) {
-        let (lines, caret) = render(c, styles(), width, 12, true);
+        let (lines, caret) = render(c, styles(), width, 12, Editor::Live);
         let rows = lines
             .iter()
             .map(|line| line.to_string().trim_end().to_owned())
@@ -350,7 +370,7 @@ mod tests {
             for width in [8, 16, 50] {
                 let mut c = composer(text);
                 loop {
-                    let (_, caret) = render(&c, styles(), width, 4, true);
+                    let (_, caret) = render(&c, styles(), width, 4, Editor::Live);
                     let at = hit_test_row(&c, width, 4, caret.0 as isize, caret.1);
                     assert_eq!(at, c.cursor(), "{text:?} width={width} caret={caret:?}");
                     if c.cursor() == 0 {
@@ -367,7 +387,7 @@ mod tests {
         let mut c = composer("see ");
         let payload = big_paste(12);
         c.insert(&payload);
-        let (_, caret) = render(&c, styles(), 60, 12, true);
+        let (_, caret) = render(&c, styles(), 60, 12, Editor::Live);
         assert_eq!(hit_test_row(&c, 60, 12, caret.0 as isize, 6), 4);
         assert_eq!(
             hit_test_row(&c, 60, 12, caret.0 as isize, caret.1 - 1),
@@ -386,7 +406,7 @@ mod tests {
             crate::ui::theme::Palette::plain(),
         ] {
             let styles = Styles::of(palette);
-            let (rows, _) = render(&c, styles, 40, 12, true);
+            let (rows, _) = render(&c, styles, 40, 12, Editor::Live);
             let selected: String = rows
                 .iter()
                 .flat_map(|r| &r.spans)
@@ -448,7 +468,7 @@ mod tests {
         let (rows, cursor) = drawn(&c, 60);
         assert_eq!(rows[1], "▎see [paste #1 +12 lines]", "{rows:?}");
         assert_eq!(cursor, (1, 1 + "see [paste #1 +12 lines]".len() as u16));
-        let (lines, _) = render(&c, styles(), 60, 12, true);
+        let (lines, _) = render(&c, styles(), 60, 12, Editor::Live);
         let chip = lines[1]
             .spans
             .iter()
@@ -472,7 +492,7 @@ mod tests {
         assert_eq!(rows.len(), MIN_ROWS);
         assert!(rows.iter().all(|row| row == "▎"), "no empty-draft hint");
         assert_eq!(cursor, (1, 1), "the cursor sits on the second row");
-        let (lines, _) = render(&Composer::new(), styles(), 50, 12, true);
+        let (lines, _) = render(&Composer::new(), styles(), 50, 12, Editor::Live);
         assert!(lines.iter().all(|line| line.width() == 50), "full rows");
     }
 

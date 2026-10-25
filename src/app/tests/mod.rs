@@ -9,5 +9,7 @@ mod harness;
 mod history;
 mod input;
 mod menus;
+mod remote;
 mod session;
+mod sessions_live;
 mod turn;

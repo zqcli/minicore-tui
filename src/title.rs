@@ -6,7 +6,7 @@ use std::time::Duration;
 use crate::wrap;
 
 /// A turn must have run this long before its end or an approval rings the bell.
-const LONG_TURN: Duration = Duration::from_secs(10);
+pub const LONG_TURN: Duration = Duration::from_secs(10);
 
 /// Pushes the terminal's title, so the exit can pop it back.
 const PUSH_TITLE: &str = "\x1b[22;0t";
@@ -19,6 +19,8 @@ pub struct Snapshot<'a> {
     pub approval: bool,
     /// How long the running turn has run; `None` when idle.
     pub busy_for: Option<Duration>,
+    /// A background session asks for the bell.
+    pub ring: bool,
 }
 
 pub struct Notifier {
@@ -62,7 +64,7 @@ impl Notifier {
         let asked = snapshot.approval
             && !self.approval_rung
             && snapshot.busy_for.is_some_and(|busy| busy >= LONG_TURN);
-        if self.bell && (ended || asked) {
+        if self.bell && (ended || asked || snapshot.ring) {
             out.push('\x07');
         }
         self.last_busy = snapshot.busy_for;
@@ -107,6 +109,7 @@ mod tests {
             title: Some("Fix parser"),
             approval,
             busy_for: busy.map(Duration::from_secs),
+            ring: false,
         }
     }
 
@@ -135,6 +138,7 @@ mod tests {
             title: None,
             approval: false,
             busy_for: None,
+            ring: false,
         });
         assert!(out.ends_with("\x1b]0;pro␇j x · idle\x07"), "{out:?}");
         assert_eq!(out.matches('\x07').count(), 1);

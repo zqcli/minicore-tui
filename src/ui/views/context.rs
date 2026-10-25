@@ -28,32 +28,8 @@ pub fn text(session: Option<&Session>, styles: Styles) -> String {
         .join("\n")
 }
 
-/// The input budget the Agent reports, which automatic compaction works against.
-fn input_budget(context: Option<&SessionContext>) -> Option<u64> {
-    context?
-        .budget
-        .as_ref()?
-        .input_budget_tokens
-        .filter(|budget| *budget > 0)
-}
-
-/// How full the context is, in percent of the input budget (of the model
-/// window when the Agent reports no budget), as reported for the last request.
-/// A compaction invalidates the report; history estimates exclude the summary,
-/// so they would understate it.
-pub fn percent(session: &Session) -> Option<f64> {
-    let usage = session.presentation.as_ref()?.context.as_ref()?;
-    let tokens = usage.tokens?;
-    match input_budget(session.context.as_ref()) {
-        Some(budget) => Some(tokens as f64 / budget as f64 * 100.0),
-        None => usage.percent.or_else(|| {
-            usage
-                .window
-                .filter(|window| *window > 0)
-                .map(|window| tokens as f64 / window as f64 * 100.0)
-        }),
-    }
-}
+pub use crate::app::session::context_percent as percent;
+use crate::app::session::input_budget;
 
 /// Labels estimates as estimates and never prints an unknown number as zero.
 fn summary_lines(

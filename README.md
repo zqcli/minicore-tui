@@ -69,6 +69,7 @@ need `xattr -d com.apple.quarantine bin/*` first.
 | `--model <ID>` | Model for the session; applied to an opened session with `session.update`. |
 | `--reasoning <LEVEL>` | `auto`, `disabled`, `low`, `medium`, `high`, `xhigh`, `max` or `ultra`; applied like `--model`. |
 | `--theme <dark\|light>` | Palette for this run. |
+| `--remote` | Start [remote mode](#remote-mode) at startup. |
 | `-h`, `--help`, `-V`, `--version` | Usage, version. |
 
 Bad arguments print the usage and exit with status 2.
@@ -167,7 +168,10 @@ without a report. The TUI never estimates it.
   session is reopened.
 - **Sessions.** None exists until the first message: the first `Enter` creates
   it with the profile, model and reasoning picked so far and sends the text.
-  `/new` leaves the open session and returns to that state. Until then the
+  `/new` leaves the open session and returns to that state. A session you leave
+  keeps running in the background and comes back instantly, as you left it,
+  from `Ctrl+R`; the footer counts the ones working or waiting for approval, and
+  a notice says when one finishes or needs you. Until then the
   commands that read a session (`/compact`, `/context`, `/diff`,
   `/rename`, `/export`, `/copy`, `/session`) and the `@` file picker say
   `No session yet: send a message first`.
@@ -197,6 +201,36 @@ without a report. The TUI never estimates it.
 - **Composer.** Grapheme-safe editing, undo and redo, prompt history, paste
   tokens for large pastes, external editor on `Ctrl+G`.
 
+## Remote mode
+
+`--remote`, or `/remote on` in a running TUI, lets a phone drive the open session
+from its browser. The transcript area turns into a status screen with an address
+and a password: open the address on the phone and enter the password once; the
+phone remembers the sign-in. Each connected device views and drives its own
+session or new-session draft; switching on one never switches the others.
+Devices viewing the same session see the same conversation. The status screen
+names each phone's session and shows what the last active device's Agent is
+doing. Local sending is frozen and the footer shows `remote`; `/remote off`
+takes the keyboard back and shows that foreground transcript again. `/remote password` makes a new password and
+signs phones out. Without `--remote` nothing listens.
+
+The server binds to `127.0.0.1:8765` by default, which only the same machine
+can reach. A phone on the same LAN needs a non-loopback `bind` and
+`allow_insecure = true`, because the TUI has no TLS of its own and the password
+then crosses the network unencrypted. Across networks, keep the loopback bind and
+publish it through Tailscale, an SSH tunnel or a TLS reverse proxy, then set
+`[remote] url` to the address the phone should open; a Cloudflare Tunnel to
+`http://127.0.0.1:8765` works as is. On iPhone, Safari's **Share → Add to Home
+Screen** installs the client as an app (it asks for the password once more);
+over HTTPS it opens even while the computer is asleep and reconnects when it
+wakes. The `[remote]` settings, Cloudflare notes and install steps are
+in [docs/configuration.md](docs/configuration.md) and the protocol in
+[docs/design-remote.md](docs/design-remote.md).
+
+Whoever signs in controls the session, can have the Agent run commands on this
+machine and answers its approvals: keep the password to yourself, change it with
+`/remote password` if it leaks, and run `/remote off` when done.
+
 ## Keys and commands
 
 The complete map is [docs/keybindings.md](docs/keybindings.md). The essentials:
@@ -209,7 +243,7 @@ The complete map is [docs/keybindings.md](docs/keybindings.md). The essentials:
   wheel navigate; `/` opens the command palette and `@` the file picker;
 - `/new [profile]`, `/sessions` (`/resume`), `/session`, `/rename`, `/model [id]`,
   `/reasoning`, `/compact`, `/diff`, `/context`, `/copy`, `/export`,
-  `/theme`, `/reload`, `/help`, `/quit`, and a command per prompt template in
+  `/theme`, `/reload`, `/remote`, `/help`, `/quit`, and a command per prompt template in
   `<home>/prompt/commands/*.md`; `Ctrl+P` cycles models.
 
 ## Troubleshooting

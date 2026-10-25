@@ -17,6 +17,12 @@ const BACKFILL_PAGES: u8 = 4;
 impl App {
     pub(super) fn on_op(&mut self, op: SessionOp) {
         match op {
+            // These answer pickers and views of the foreground only.
+            SessionOp::ItemCount(_)
+            | SessionOp::Files(_)
+            | SessionOp::ChangeFiles(_)
+            | SessionOp::DiffFile(..)
+                if self.background_op => {}
             SessionOp::Tail(result) => self.on_tail(result),
             SessionOp::Page(result) => self.on_page(result),
             SessionOp::TurnItems(loop_id, result) => {
@@ -89,18 +95,33 @@ impl App {
         }
     }
 
-    /// Makes `session` the resident one, or none for a draft, and drops the
-    /// view state of the old one.
-    pub(super) fn show_session(&mut self, session: Option<Session>) {
-        self.session = session;
-        self.layout.clear();
-        self.scroll = Scroll::Follow;
-        self.waiting_for_compaction = false;
+    /// Adopts a session and assigns its remote creator or opener's view without moving other devices.
+    pub(super) fn adopt(&mut self, result: Result<SessionInfo, RpcError>, first: Option<String>) {
+        let opening = self.remote.opening.take();
+        let created = first.is_some();
+        let id = result.as_ref().ok().map(|info| info.session_id.clone());
+        let previous = opening.filter(|_| created).map(|connection| {
+            std::mem::replace(
+                &mut self.remote.notice_target,
+                crate::remote::NoticeTarget::Phone(connection),
+            )
+        });
+        self.adopt_session(result, first);
+        if let Some(id) = id {
+            self.remote.draft = None;
+            if let Some(connection) = opening {
+                self.set_phone_view(connection, crate::remote::PhoneView::Session(id));
+                if created {
+                    self.session_mut().last_sender = Some(connection);
+                }
+            }
+        }
+        if let Some(previous) = previous {
+            self.remote.notice_target = previous;
+        }
     }
 
-    /// Makes the opened or created session resident. A created one comes with
-    /// the draft's `first` message, which it sends; an opened one loads its tail.
-    pub(super) fn adopt(&mut self, result: Result<SessionInfo, RpcError>, first: Option<String>) {
+    fn adopt_session(&mut self, result: Result<SessionInfo, RpcError>, first: Option<String>) {
         self.loading_session = false;
         let Some(info) = self.ok(result) else {
             if let Some(text) = first {
@@ -109,8 +130,18 @@ impl App {
             return;
         };
         self.merge_catalog_info(info.clone());
+        // A second open of the same session: it is live already.
+        if self.live(&info.session_id).is_some() {
+            return;
+        }
         self.epoch += 1;
+        // What was typed while the draft's session was created belongs to it.
+        let typed = first.is_some().then(|| self.composer.text().to_owned());
         self.show_session(Some(Session::new(info, self.epoch)));
+        if let Some(typed) = typed {
+            self.draft_text.clear();
+            self.composer.set_text(&typed);
+        }
         // A new session has no history to read, and the tail would clear the
         // prompt block of the first send.
         if first.is_none() {
@@ -198,6 +229,9 @@ impl App {
                 offset,
             };
         }
+        if self.background_op {
+            return;
+        }
         if let Overlay::Find {
             query,
             matches,
@@ -230,9 +264,9 @@ impl App {
             self.refresh_context();
         }
         if idle {
-            self.waiting_for_compaction = false;
+            self.session_mut().waiting_for_compaction = false;
             self.flush_queue();
-        } else if self.waiting_for_compaction {
+        } else if self.session_mut().waiting_for_compaction {
             // Post-turn compaction still owns the session: keep asking until
             // it settles, or the queue never flushes.
             self.retry_when_idle();
@@ -275,8 +309,8 @@ impl App {
             // Post-turn compaction owns the session: the turn was refused, not
             // sent, so the text waits as a follow-up until the Agent is idle.
             Err(error) if error.is_busy() => {
-                self.waiting_for_compaction = true;
                 let session = self.session_mut();
+                session.waiting_for_compaction = true;
                 session.unsend_prompt(&text);
                 session.push_follow_up(text);
                 self.retry_when_idle();
@@ -321,6 +355,9 @@ impl App {
         let Some(reconcile) = self.session_mut().end_turn(&wait) else {
             return;
         };
+        if self.background_op {
+            self.background_turn_ended();
+        }
         let TurnWaitResult { turn, .. } = wait;
         let client = self.client.clone();
         if reconcile {
@@ -406,45 +443,53 @@ impl App {
         }
     }
 
-    /// Applies an Agent event: to the resident session, or to the catalog for
-    /// another one.
+    /// Applies an Agent event: to the live session it is for, or to the
+    /// catalog for another one.
     pub(super) fn on_agent_event(&mut self, event: AgentEvent) {
         let Some(meta) = event.meta() else {
             return;
         };
-        let resident = self
+        let foreground = self
             .session
             .as_ref()
             .is_some_and(|session| session.info.session_id == meta.session_id);
-        if resident {
-            let session = self.session_mut();
-            let was_compacting = session.compaction.is_some();
-            let usage = matches!(event, AgentEvent::RequestUsage { .. });
-            let requested = matches!(event, AgentEvent::InteractionRequested { .. });
-            let started = session.apply_event(event);
-            let compaction_ended = was_compacting && session.compaction.is_none();
-            if let Some(turn) = started {
-                self.start_turn(turn);
-            }
-            if requested {
-                self.on_approval_requested();
-            }
-            // The footer's context figure moves with each request and each
-            // compaction, not only at the turn's end.
-            if compaction_ended || (usage && self.session_mut().presentation_due()) {
-                self.refresh_presentation();
-            }
-            // The context report holds the finished compaction's marker.
-            if compaction_ended {
-                self.refresh_context();
-            }
+        if !foreground && let Some(index) = self.live_index(&meta.session_id) {
+            self.with_background(index, |app| app.on_agent_event(event));
+        } else if foreground {
+            let id = meta.session_id.clone();
+            self.with_notice_for(&id, |app| app.apply_agent_event(event));
         } else if let AgentEvent::SessionOpened { session, .. } = event {
             self.merge_catalog_info(*session);
         }
     }
 
+    fn apply_agent_event(&mut self, event: AgentEvent) {
+        let session = self.session_mut();
+        let was_compacting = session.compaction.is_some();
+        let usage = matches!(event, AgentEvent::RequestUsage { .. });
+        let requested = matches!(event, AgentEvent::InteractionRequested { .. });
+        let started = session.apply_event(event);
+        let compaction_ended = was_compacting && session.compaction.is_none();
+        if let Some(turn) = started {
+            self.start_turn(turn);
+        }
+        if requested {
+            self.on_approval_requested();
+        }
+        // The footer's context figure moves with each request and each
+        // compaction, not only at the turn's end.
+        if compaction_ended || (usage && self.session_mut().presentation_due()) {
+            self.refresh_presentation();
+        }
+        // The context report holds the finished compaction's marker.
+        if compaction_ended {
+            self.refresh_context();
+        }
+    }
+
     /// Updates the known sessions with `info`, adding it when new.
     pub(super) fn merge_catalog_info(&mut self, info: SessionInfo) {
+        self.catalog_generation += 1;
         match self
             .sessions
             .iter_mut()

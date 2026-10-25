@@ -7,6 +7,7 @@ use std::time::Duration;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
+use super::composer::Editor;
 use super::theme::Styles;
 use super::{composer, sheets};
 use crate::app::{App, Notice, NoticeLevel, QueuedKind, Session};
@@ -30,11 +31,17 @@ pub struct Dock {
 /// The dock for a band `width` cells wide on a terminal `height` rows tall.
 pub fn dock(app: &App, styles: Styles, width: u16, height: u16) -> Dock {
     let mut above = Vec::new();
-    if let Some(session) = app.session.as_ref().filter(|s| !s.queue.is_empty()) {
+    // The remote status screen shows the work and the queue instead.
+    let local = !app.remote.active();
+    if let Some(session) = app
+        .session
+        .as_ref()
+        .filter(|s| local && !s.queue.is_empty())
+    {
         above.push(Line::default());
         above.extend(queued_rows(session, styles, width));
     }
-    if let Some(line) = working_line(app, styles, width) {
+    if local && let Some(line) = working_line(app, styles, width) {
         above.push(Line::default());
         above.push(line);
     }
@@ -49,7 +56,13 @@ pub fn dock(app: &App, styles: Styles, width: u16, height: u16) -> Dock {
         styles,
         width,
         composer::max_rows(height),
-        !app.overlay.is_view(),
+        if app.overlay.is_view() {
+            Editor::View
+        } else if app.remote.active() {
+            Editor::Remote
+        } else {
+            Editor::Live
+        },
     );
     let editor_rows = editor.len() as u16;
     if let Some(rows) = sheets::completion(app, styles, width.saturating_sub(1)) {
@@ -146,7 +159,11 @@ fn working_line(app: &App, styles: Styles, width: u16) -> Option<Line<'static>> 
         "Interrupting…"
     } else if live.is_some() {
         "Working (esc to interrupt)"
-    } else if app.waiting_for_compaction {
+    } else if app
+        .session
+        .as_ref()
+        .is_some_and(|session| session.waiting_for_compaction)
+    {
         "Waiting for compaction…"
     } else {
         return None;
@@ -210,7 +227,8 @@ fn notice_line(notice: &Notice, styles: Styles, width: u16) -> Line<'static> {
 /// `▸ dir@branch · model · reasoning · 3m · queued` and,
 /// right-aligned, `↑in ↓out Rcache · ctx N%`. Short of room, the directory and
 /// branch give way first, then the elapsed time and queue mark, then the model;
-/// the reasoning level stays.
+/// the reasoning level stays. The remote mark and the background sessions take
+/// only what the rest leaves.
 fn footer(app: &App, styles: Styles, width: u16) -> Line<'static> {
     let width = usize::from(width);
     let session = app.session.as_ref();
@@ -260,6 +278,21 @@ fn footer(app: &App, styles: Styles, width: u16) -> Line<'static> {
         suffix.push(Span::styled("queued", styles.amber()));
     }
 
+    let remote = match (app.remote.active(), app.remote.phones.as_slice()) {
+        (false, _) => Vec::new(),
+        (true, []) => vec![Span::styled("remote", styles.warning())],
+        (true, [phone]) => {
+            let device = wrap::truncate(&wrap::sanitize(&phone.connection.device.name), 16);
+            vec![Span::styled(format!("remote · {device}"), styles.accent())]
+        }
+        (true, phones) => {
+            let count = super::blocks::plural(phones.len() as u64, "phone");
+            vec![Span::styled(format!("remote · {count}"), styles.accent())]
+        }
+    };
+
+    let others = others(app, styles);
+
     let right = session.map_or_else(Vec::new, |session| totals(session, styles));
     let right_width = spans_width(&right);
     if right_width >= width {
@@ -270,7 +303,7 @@ fn footer(app: &App, styles: Styles, width: u16) -> Line<'static> {
     } else {
         width - right_width - 1
     };
-    let mut groups = [Vec::new(), model, priority, suffix];
+    let mut groups = [Vec::new(), model, priority, suffix, Vec::new(), Vec::new()];
     // The identity takes whatever the rest leaves.
     let rest = spans_width(&join(&groups, styles));
     let separator = if rest > 0 { 3 } else { 0 };
@@ -280,7 +313,9 @@ fn footer(app: &App, styles: Styles, width: u16) -> Line<'static> {
         room.saturating_sub(rest + separator),
         styles,
     );
-    for index in [3, 1, 2] {
+    groups[4] = remote;
+    groups[5] = others;
+    for index in [4, 5, 3, 1, 2] {
         let over = spans_width(&join(&groups, styles)).saturating_sub(room);
         if over == 0 {
             break;
@@ -300,6 +335,26 @@ fn footer(app: &App, styles: Styles, width: u16) -> Line<'static> {
         spans.extend(right);
     }
     Line::from(spans)
+}
+
+/// `2 running · 1 needs approval` over the background sessions, only the
+/// parts that are not zero; empty when none needs attention.
+pub fn others(app: &App, styles: Styles) -> Vec<Span<'static>> {
+    let (working, approval) = app.background_counts();
+    let mut spans = Vec::new();
+    if working > 0 {
+        spans.push(Span::styled(format!("{working} running"), styles.text()));
+    }
+    if approval > 0 {
+        if !spans.is_empty() {
+            spans.push(Span::styled(" · ", styles.meta()));
+        }
+        spans.push(Span::styled(
+            format!("{approval} needs approval"),
+            styles.warning(),
+        ));
+    }
+    spans
 }
 
 /// `▸ dir@branch` in at most `room` cells: the directory is cut first (to 6
@@ -382,7 +437,7 @@ fn turn_elapsed(app: &App, session: &Session) -> Option<Duration> {
 }
 
 /// Whole minutes: `0m`, `42m`, `1h5m`.
-fn minutes(elapsed: Duration) -> String {
+pub(super) fn minutes(elapsed: Duration) -> String {
     let minutes = elapsed.as_secs() / 60;
     if minutes >= 60 {
         format!("{}h{}m", minutes / 60, minutes % 60)

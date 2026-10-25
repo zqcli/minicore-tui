@@ -167,8 +167,20 @@ impl App {
             .unwrap_or_default()
     }
 
+    pub fn local_panel_allowed(&self, panel: &Panel) -> bool {
+        !self.remote.active()
+            || matches!(
+                panel,
+                Panel::Help | Panel::SessionInfo | Panel::Context | Panel::Diff | Panel::Sessions
+            )
+    }
+
     /// Opens a picker or view, seeding it from the current state.
     pub fn open_panel(&mut self, panel: Panel) {
+        if !self.local_panel_allowed(&panel) {
+            self.remote_flash();
+            return;
+        }
         if self.session.is_none() {
             // `workspace.files` needs a loaded session.
             let hint = match panel {
@@ -246,7 +258,8 @@ impl App {
             return None;
         }
         let (name, rest) = text.strip_prefix('/')?.split_once(char::is_whitespace)?;
-        matches!(name, "model" | "new" | "reasoning" | "theme").then_some((name, rest.trim()))
+        matches!(name, "model" | "new" | "reasoning" | "theme" | "remote")
+            .then_some((name, rest.trim()))
     }
 
     /// The command list's rows as `(name, description)`: the commands for the
@@ -298,6 +311,7 @@ impl App {
                 .map(|level| (level.label().to_owned(), String::new()))
                 .collect(),
             "theme" => plain(&["dark", "light"]),
+            "remote" => plain(&["on", "off", "status", "password"]),
             _ => unreachable!(),
         };
         rows.retain(|(value, _)| fuzzy_match(value, filter));
@@ -328,6 +342,10 @@ impl App {
 
     /// Ctrl+N in the sessions picker: edits the selected session's title.
     pub(super) fn start_rename(&mut self) {
+        if self.remote.active() {
+            self.remote_flash();
+            return;
+        }
         let Overlay::Sessions {
             rows,
             filter,
@@ -383,11 +401,14 @@ impl App {
         }
     }
 
-    fn rename_session(&self, session_id: String, title: String) {
+    pub(super) fn rename_session(&self, session_id: String, title: String) {
         let client = self.client.clone();
         self.spawn_msg(async move {
             let params = json!({ "session_id": session_id, "title": title.trim() });
-            Msg::Renamed(tasks::session(client, protocol::METHOD_SESSION_RENAME, params).await)
+            Msg::Renamed(
+                session_id,
+                tasks::session(client, protocol::METHOD_SESSION_RENAME, params).await,
+            )
         });
     }
 
@@ -405,8 +426,9 @@ impl App {
         }
         if let Some(session) = self
             .session
-            .as_mut()
-            .filter(|session| session.info.session_id == info.session_id)
+            .iter_mut()
+            .chain(&mut self.background)
+            .find(|session| session.info.session_id == info.session_id)
         {
             session.info = info.clone();
         }
@@ -437,12 +459,19 @@ impl App {
             .unwrap_or(0)
     }
 
-    /// The known sessions, the resident workspace first, then newest first.
+    /// The known sessions: the live ones first (on screen, then the most
+    /// recently left), then the current workspace's, then newest first.
     fn session_rows(&self) -> Vec<SessionInfo> {
         let workspace = self.workspace.to_string_lossy();
+        let live = |info: &SessionInfo| match &self.session {
+            Some(session) if session.info.session_id == info.session_id => 0,
+            _ => self
+                .live_index(&info.session_id)
+                .map_or(usize::MAX, |at| at + 1),
+        };
         let rank = |info: &SessionInfo| (info.workspace == workspace, info.updated_at.clone());
         let mut rows = self.sessions.clone();
-        rows.sort_by_cached_key(|info| std::cmp::Reverse(rank(info)));
+        rows.sort_by_cached_key(|info| (live(info), std::cmp::Reverse(rank(info))));
         rows
     }
 

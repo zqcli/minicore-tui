@@ -26,6 +26,7 @@ Options:
   --profile <ID>         profile for a new session
   --model <ID>           model for a new session
   --reasoning <LEVEL>    auto|disabled|low|medium|high|xhigh|max|ultra
+  --remote              start remote control before opening the terminal
   --theme <THEME>        dark|light
   -h, --help             print this help
   -V, --version          print the version
@@ -39,6 +40,7 @@ pub struct Args {
     pub workspace: Option<PathBuf>,
     pub session: Option<String>,
     pub continue_recent: bool,
+    pub remote: bool,
     pub profile: Option<String>,
     pub model: Option<String>,
     pub reasoning: Option<Reasoning>,
@@ -91,6 +93,7 @@ impl Args {
                 "--workspace" => args.workspace = Some(PathBuf::from(value("--workspace")?)),
                 "--session" => args.session = Some(value("--session")?),
                 "--continue" => args.continue_recent = true,
+                "--remote" => args.remote = true,
                 "--profile" => args.profile = Some(value("--profile")?),
                 "--model" => args.model = Some(value("--model")?),
                 "--reasoning" => {
@@ -142,6 +145,7 @@ mod tests {
             "xhigh",
             "--theme",
             "light",
+            "--remote",
         ])
         .unwrap();
         assert_eq!(
@@ -156,6 +160,7 @@ mod tests {
         assert_eq!(args.session.as_deref(), Some("ses_1"));
         assert_eq!(args.reasoning, Some(Reasoning::XHigh));
         assert_eq!(args.theme, Some(ThemeKind::Light));
+        assert!(args.remote);
     }
 
     #[test]

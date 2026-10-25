@@ -492,6 +492,32 @@ fn the_documented_example_is_valid() {
 }
 
 #[test]
+fn remote_validation_applies_to_composed_and_raw_launches() {
+    let config = format!("{CONFIG}\n[remote]\nbind = '0.0.0.0:8765'\n");
+    let (_dir, home) = temp_home(&config, MODELS);
+    for raw in [None, Some(Path::new("agent.toml"))] {
+        let request = Request {
+            agent_config: raw,
+            ..Request::default()
+        };
+        let error = prepare(&home, &request, &|_| true).err().unwrap();
+        assert!(
+            error.contains(&format!(
+                "config.toml:{}: [remote] bind:",
+                line_of(&config, "bind =")
+            )),
+            "{error}"
+        );
+    }
+    std::fs::write(home.config_file(), CONFIG).unwrap();
+    let Prepared::Launch(launch) = prepare(&home, &Request::default(), &|_| true).unwrap() else {
+        panic!("launch")
+    };
+    assert_eq!(launch.remote.bind.to_string(), "127.0.0.1:8765");
+    assert!(launch.remote.roots[0].is_absolute());
+}
+
+#[test]
 fn an_explicit_editor_wins_over_the_environment() {
     let configured = vec!["ed".to_owned(), "-s".to_owned()];
     assert_eq!(editor_command(&configured), Some(configured));

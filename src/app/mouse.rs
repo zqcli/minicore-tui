@@ -13,7 +13,7 @@ impl App {
     /// have changed; plain pointer motion elsewhere does not.
     pub fn on_mouse(&mut self, mouse: MouseEvent) -> bool {
         let cell = (mouse.column, mouse.row);
-        let editor = !self.has_interaction()
+        let editor = (!self.has_interaction() || self.remote.active())
             && self.fatal.is_none()
             && matches!(
                 self.overlay,
@@ -57,6 +57,15 @@ impl App {
         }
         // A full-screen view hides the transcript the press would land on.
         let view = self.overlay.is_view();
+        let wheel = matches!(
+            mouse.kind,
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+        );
+        // The remote status screen neither scrolls nor selects; an open list
+        // still takes the wheel.
+        if self.remote.active() && !view && !(wheel && !self.overlay.is_none()) {
+            return false;
+        }
         match mouse.kind {
             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
                 let step = if mouse.modifiers.contains(KeyModifiers::ALT) {

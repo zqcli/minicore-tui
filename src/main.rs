@@ -182,6 +182,20 @@ async fn run() -> i32 {
         }
     };
 
+    let remote = if args.remote {
+        match minicore_tui::remote::Bound::bind(&launch.remote, home.dir().join("remote.json"))
+            .await
+        {
+            Ok(bound) => Some(bound),
+            Err(error) => {
+                eprintln!("Remote: {error}");
+                return 1;
+            }
+        }
+    } else {
+        None
+    };
+
     terminal::install_panic_hook();
     let mut guard = match terminal::Guard::enter() {
         Ok(guard) => guard,
@@ -204,6 +218,10 @@ async fn run() -> i32 {
     app.default_profile = launch.default_profile;
     app.composer = minicore_tui::app::composer::Composer::with_history_file(home.history_file());
     app.home = Some(home);
+    app.remote.config = Some(launch.remote);
+    if let Some(bound) = remote {
+        app.enter_remote(bound);
+    }
     app.styles = Styles::of(Palette::for_kind(theme));
 
     let boot = {
@@ -329,17 +347,20 @@ async fn run() -> i32 {
                 .then(|| pick_recent(&app.sessions, &workspace))
                 .flatten();
             if let Some(id) = session.or_else(|| recent.cloned()) {
-                app.on_action(minicore_tui::app::Action::OpenSession(id));
+                app.open_session(id);
                 frames.mark(Cause::Event);
             }
         }
 
-        if frames.wanted() && guard.is_active() && tokio::time::Instant::now() >= next_frame {
+        if frames.wanted() && tokio::time::Instant::now() >= next_frame {
             let started = Instant::now();
-            if let Err(error) = guard.draw(|frame| minicore_tui::ui::draw(frame, &mut app)) {
+            if guard.is_active()
+                && let Err(error) = guard.draw(|frame| minicore_tui::ui::draw(frame, &mut app))
+            {
                 eprintln!("draw failed: {error}");
                 break;
             }
+            app.sync_remote();
             frames.drawn(started.elapsed());
             next_frame = tokio::time::Instant::now() + FRAME;
         }
@@ -349,6 +370,8 @@ async fn run() -> i32 {
         }
     }
 
+    app.sync_remote();
+    app.remote.shutdown().await;
     let _ = client.shutdown().await;
     let _ = guard.restore();
     frames.print(&app);

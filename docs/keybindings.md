@@ -65,7 +65,16 @@ back in the editor with the error. While the session is being created another
 `Enter` leaves its text in the editor. `/model`, `/reasoning`, `Ctrl+L`,
 `Ctrl+P` and `Shift+Tab` choose the settings of that session and confirm with a
 notice, and `/new <profile>` chooses its profile. `Ctrl+R` opens a stored
-session. Commands that need a session (`/compact`, `/context`, `/diff`,
+session.
+
+Leaving a session (`/new`, or opening another) does not stop it: its turn,
+queued follow-ups and approvals carry on in the background, and its draft stays
+with it. Opening it again from the picker or `/resume` is instant and shows what
+it did meanwhile, scrolled where you left it. Keys act on the session on screen
+only: `Esc` stops its turn, and an approval is answered after switching to its
+session. A background turn that ends or asks for approval shows a notice such
+as `"Fix parser" needs approval · ctrl+r` and rings the bell, and the footer
+shows `2 running · 1 needs approval` while any background session works. Commands that need a session (`/compact`, `/context`, `/diff`,
 `/rename`, `/export`, `/copy`, `/session`) answer
 `No session yet: send a message first`. Quitting creates nothing.
 
@@ -156,7 +165,7 @@ the name.
 | Command | Effect |
 |---|---|
 | `/new [profile]` | Leave the open session for an empty conversation; the first message creates the new session, with the Agent's default profile or the named one. |
-| `/sessions`, `/resume` | Open the sessions picker. |
+| `/sessions`, `/resume` | Open the sessions picker. Live sessions come first, each row starting with its state: `running 2m`, `needs approval`, `compacting` or `new` (a turn ended unseen). Opening a live one switches at once; a session that is still working cannot be deleted (`Stop "<title>" first: open it and press Esc`). |
 | `/rename <title>` | Rename the current session (an empty title is an error). |
 | `/model [id]` | Switch to the model (an exact id or a unique fuzzy match), or open the picker. When the model does not support the current reasoning level, the switch also moves to the nearest level it supports (the higher one on a tie) and a notice names it. `Ctrl+P` and `Ctrl+L` do the same, and a draft adjusts the level its session will start with. |
 | `/session` | Show the open session's id, workspace, profile, model, item count and token totals. |
@@ -168,8 +177,33 @@ the name.
 | `/export [path]` | Write the conversation as Markdown; the default is `./minicore-<session>-<date>.md`. |
 | `/theme [dark\|light]` | Switch the palette and save it; without an argument, toggle. |
 | `/reload` | Compose the Agent config again from `config.toml`, `models.toml` and the prompt, reload the Agent and the templates. |
+| `/remote [on\|off\|status\|password [text]]` | Phone control: start listening and show the status screen, stop and unfreeze local input, or set a new password (generated, or `<text>` of at least 8 characters), which signs phones out. `/remote` with remote control off says how to start it. See [Remote mode](#remote-mode). |
 | `/help` | Open the help view. |
 | `/quit` | Quit. |
+
+## Remote mode
+
+While remote control is on, the transcript area is a status screen: the address
+to open on the phone, the password to enter there, each connected phone and when
+it connected, the session, workspace and model, what the Agent is doing now
+(running a tool, waiting for an approval on the phone, compacting, or idle with
+the last turn's outcome), queued messages and refused sign-ins. It is read-only:
+the wheel and clicks over it do nothing. The footer shows `remote`,
+`remote · <device>` with one phone connected, or `remote · 2 phones`.
+
+The phones send messages and answer approvals; the keyboard cannot. The editor
+keeps its draft and slash commands, an empty one reads `Remote control is on ·
+/remote off to take back`, and a refused action flashes the same text. What
+stays available:
+
+- `Esc` interrupts a running turn or cancels a compaction.
+- Looking and copying: `/theme`, `/copy` (`Ctrl+X`), `/export`, `F1` help and
+  `/diff` (which draw over the status screen), `/session`, `/context` and the
+  sessions picker (picking is refused).
+- `/remote password [text]` sets a new password; `/remote off` stops the
+  listener, shows the transcript again and returns the editor to normal.
+- Quitting asks twice: `Ctrl+C` or `/quit` flashes `quit again to end it`, and a
+  second request within 3 seconds quits.
 
 ## Prompt templates
 

@@ -1,5 +1,46 @@
 # Changelog
 
+## Unreleased
+
+- Each connected device can work in its own session or new-session draft without
+  switching the others; the computer shows which session each device is on.
+- Remote mode: a phone can drive the TUI. `--remote` or `/remote on` starts a
+  listener (loopback by default, configured under `[remote]`) that serves a web
+  client. The phone signs in once with the password shown in the TUI and then
+  controls the open session: it sends messages, steers, queues follow-ups,
+  answers approvals, stops turns, loads older history, switches model and
+  reasoning, opens, renames and deletes sessions, and starts new ones in folders
+  it browses (or creates) under the configured roots. See
+  `docs/design-remote.md`.
+- While remote control is on, the TUI shows a status screen instead of the
+  transcript: the address, the password, the connected phones, the session,
+  workspace and model, what the Agent is doing and refused sign-ins. The editor
+  keeps its draft but cannot send, Esc still interrupts, and quitting asks twice.
+  `/remote password` sets a new password and signs phones out; `/remote off`
+  takes control back.
+- Several devices can use remote control at the same time, a phone and a
+  tablet for example: each signs in once, any of them can send, answer
+  approvals and switch sessions, and each sees who else is connected. Opening
+  the client in a second tab of the same browser takes over that device's
+  connection.
+- The phone client installs as an app (Safari's Share → Add to Home Screen on
+  iPhone, Install app on Android and desktop Chromium) and, over HTTPS, opens
+  while the computer is unreachable and reconnects when it is back. The browser
+  and status bar colour follow the chosen light or dark appearance, and it works
+  behind a Cloudflare Tunnel without changing zone settings. See `docs/configuration.md`.
+- On the phone, only the answer being written shows the typing caret; earlier
+  answers of a running turn can already be copied.
+- Opening or creating a session makes its workspace the one the next new
+  session uses.
+- Sessions you leave keep running: a turn, its follow-ups and its approvals go
+  on in the background, and switching back (`Ctrl+R`, `/resume`) is instant
+  and shows everything that streamed meanwhile, with the scroll position and
+  draft you left. A background turn that ends or needs approval says so in a
+  notice (and the bell), the footer counts `2 running · 1 needs approval`, and
+  the sessions picker lists live sessions first with `running 2m`,
+  `needs approval`, `compacting` or `new`. Each session, and the empty draft,
+  keeps its own editor text. A session that is still working cannot be deleted.
+
 ## 0.5.5 — 2026-10-24
 
 - `/context` opens as a sheet below the transcript like `/session`, instead of a

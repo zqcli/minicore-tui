@@ -175,15 +175,108 @@ ranges when it starts.
 Unknown keys are errors in both files, so a typo is reported with its line
 instead of being ignored.
 
+## Remote settings
+
+```toml
+[remote]
+bind = "127.0.0.1:8765"           # default; a numeric IP and port
+# url = "https://host.example:8765" # optional address used by the phone
+roots = ["~"]                    # default: HOME on Unix, USERPROFILE on Windows
+allow_insecure = false            # must be true for a non-loopback bind
+```
+
+Remote settings are validated at startup, including with `--agent-config`.
+A non-loopback bind requires explicit consent because the listener has no TLS.
+Use a private network, tunnel or TLS reverse proxy for access across networks.
+A reverse proxy must preserve the browser-facing `Host` authority, including its
+port when present: the WebSocket Origin check compares that host and port with
+`Origin`. Replacing `Host` with the backend address causes a 403 response.
+`url` must start with `http://` or `https://` and have no trailing slash.
+Roots must be a non-empty list of existing directories; a leading `~/` expands
+from the user's home, and paths are canonicalized. These roots restrict the
+phone's directory picker and session selection, not the Agent's tools.
+The picker lists only directories under these roots (up to 1000 per listing),
+optionally including hidden names, and can create a single child directory.
+It cannot read file contents, upload, delete or move entries.
+Errors name `config.toml`, the line and the `[remote]` key.
+
+Start with `--remote` or `/remote on`; the transcript area then shows the
+remote status screen with the address and the password to enter on the phone.
+The default URL is `http://<bind>`; an unspecified bind host is replaced by the
+address the OS selects for LAN routing. Set `url` explicitly when using a tunnel,
+reverse proxy or a machine with multiple networks.
+
+### Through Cloudflare
+
+The recommended public route is a Cloudflare Tunnel: keep the default loopback
+`bind` (no `allow_insecure`), add a public hostname to the tunnel whose service
+is `http://127.0.0.1:8765`, and set `url = "https://minicore.example.com"`.
+Cloudflare serves the hostname over HTTPS, so the phone gets `https://` and
+`wss://` and the client can install and open offline.
+
+- Leave the tunnel's **HTTP Host Header** empty. cloudflared then forwards the
+  public `Host`, which must match the browser's `Origin`; overriding it makes
+  the WebSocket fail with 403.
+- WebSockets must stay on (**Network → WebSockets**, on by default).
+- Cloudflare Access in front of the hostname is optional; it adds its own
+  sign-in before the password.
+- A proxied DNS record (orange cloud) to a forwarded port also works, but it
+  needs a non-loopback `bind` with `allow_insecure = true` and a port Cloudflare
+  proxies (such as 8080 or 2052), and the hop from Cloudflare to the computer is
+  plain HTTP across the internet.
+
+Responses carry `Cache-Control: no-store, no-transform`, so Cloudflare does
+not rewrite the page (email obfuscation, Rocket Loader, injected scripts) and
+no zone setting needs changing. The server pings the phone every 20 seconds,
+which keeps an idle connection open through Cloudflare.
+
+### On the phone's home screen
+
+On iPhone, open the address in Safari, then **Share → Add to Home Screen**; on
+Android Chrome or a desktop Chromium browser, use **Install app** in the
+drawer or the browser menu. The installed app has its own storage on iPhone, so
+it asks for the password once more. Over `https://` the app opens even while the
+computer is unreachable and reconnects when it is back; over plain `http://` on
+a LAN it still works but needs the network to open, since browsers keep offline
+copies only for secure origins.
+
+The password and the remembered phones are stored in `<TUI dir>/remote.json`,
+atomically and with mode 0600 on Unix. Windows inherits the directory's
+permissions; the TUI does not harden Windows ACLs, so restrict access to the TUI
+directory yourself. The first start of remote mode creates the file with a
+generated password such as `k7mq-x2pa-n9dt`; spaces and dashes do not count when
+it is typed, letter case does. A phone that signs in gets a token and reconnects
+with it later; only SHA-256 token hashes are stored, and at most 20 phones are
+remembered (the oldest is forgotten first). Five wrong passwords in a row pause
+sign-in for 30 seconds, each further five double the pause up to 15 minutes, and
+remembered phones are never paused.
+
+`/remote password` makes a new password and `/remote password <text>` sets one
+(at least 8 characters, spaces and dashes not counted), also while remote mode is
+off. Either forgets every phone and signs out every connected one. Deleting
+`remote.json` forgets every phone and makes a new password at the next start.
+
+Several devices can be connected at once, each viewing and driving its own
+session or new-session draft. Switching sessions or picking draft settings on
+one device does not move the others; devices on the same session see the same
+data. The status screen names each device's session and each client shows who
+else is connected. The computer follows the device that acted last, and
+`/remote off` shows that foreground transcript. A device connects once: opening
+the client in a second tab, or reconnecting with the same token, replaces its
+previous connection.
+`/remote off` disconnects every phone, stops listening and restores local input;
+phones disconnecting alone leave remote mode Waiting.
+
 ## Command line
 
 | Option | Meaning |
 | --- | --- |
 | `--home DIR` | the TUI directory (see above) |
 | `--agent BIN` | an external Agent executable instead of the built-in one; beats `[agent] binary` |
-| `--agent-config FILE` | use this Agent config as is: no composition, no first-run files, no `models.toml`. `config.toml` is still read for `[ui]` if it exists. For tests and advanced use. |
+| `--agent-config FILE` | use this Agent config as is: no composition, no first-run files, no `models.toml`. `config.toml` is still read for `[ui]`, `[agent]` and `[remote]` if it exists. For tests and advanced use. |
 | `--profile ID`, `--model ID`, `--reasoning LEVEL` | settings of the next new session, which the first message creates |
 | `--theme dark\|light` | theme for this run |
+| `--remote` | start remote control; bind before taking the terminal (bind failure exits with status 1) |
 | `--workspace DIR`, `--session ID`, `--continue` | which workspace and session; with neither of the last two the TUI creates no session until the first message |
 
 `--config` was removed; the parser says so instead of reporting an unknown option.

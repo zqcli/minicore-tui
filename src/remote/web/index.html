@@ -1,0 +1,1945 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<!-- `default` keeps the page below the iOS status bar; `black-translucent` would draw white status text over the light theme. -->
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="MiniCore">
+<meta name="format-detection" content="telephone=no">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" id="tc" content="#ffffff" media="(prefers-color-scheme: light)">
+<meta name="theme-color" id="tcd" content="#0e0f12" media="(prefers-color-scheme: dark)">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<title>MiniCore</title>
+<style>
+:root{
+  --bg:#fff;--bg2:#f6f7f9;--sf:#fff;--fill:#f2f3f5;--fill2:#e7e9ed;--bd:rgba(17,19,23,.08);--bd2:rgba(17,19,23,.14);
+  --tx:#14161a;--tx2:#5d636e;--tx3:#8d929b;--ac:#2f6bff;--ac2:#2557d9;--acs:rgba(47,107,255,.1);--on:#fff;
+  --ok:#139d4f;--oks:rgba(19,157,79,.12);--wa:#a86400;--was:rgba(214,138,0,.13);--er:#d9353a;--ers:rgba(217,53,58,.1);
+  --ub:#edf2ff;--glass:rgba(255,255,255,.84);--acb:#2f6bff;--banbg:#fbf0dc;--scrim:rgba(10,12,16,.38);--sh:0 8px 28px rgba(17,19,23,.12),0 1px 3px rgba(17,19,23,.06);
+  --add:rgba(19,157,79,.12);--del:rgba(217,53,58,.1);--addt:#0d7a3c;--delt:#b8262b;
+  --font:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,sans-serif;
+  --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+  --s1:4px;--s2:8px;--s3:12px;--s4:16px;--s5:24px;--s6:32px;--r:14px;--ease:cubic-bezier(.2,.8,.2,1);
+  --st:env(safe-area-inset-top);--sb:env(safe-area-inset-bottom);--sl:env(safe-area-inset-left);--sr:env(safe-area-inset-right);
+  color-scheme:light
+}
+[data-theme=dark]{color-scheme:dark;
+  --bg:#0e0f12;--bg2:#141519;--sf:#17191d;--fill:#1d1f24;--fill2:#272a30;--bd:rgba(255,255,255,.08);--bd2:rgba(255,255,255,.14);
+  --tx:#ececef;--tx2:#a3a7b0;--tx3:#6f747d;--ac:#5b8cff;--ac2:#7aa2ff;--acs:rgba(91,140,255,.16);--on:#fff;
+  --ok:#3ccf83;--oks:rgba(60,207,131,.14);--wa:#f0b44c;--was:rgba(240,180,76,.14);--er:#ff6b6b;--ers:rgba(255,107,107,.13);
+  --ub:#1f2940;--glass:rgba(14,15,18,.8);--acb:#3a6cf0;--banbg:#2b2416;--scrim:rgba(0,0,0,.55);--sh:0 10px 32px rgba(0,0,0,.5),0 1px 3px rgba(0,0,0,.4);
+  --add:rgba(60,207,131,.13);--del:rgba(255,107,107,.13);--addt:#5fe0a0;--delt:#ff8f8f
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+/* Controls and bars do not select or open the iOS callout on a long press; message text still does. */
+button,#bar,#banner,#chip,.dhead,.dfoot,.dsec,.shead{-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}
+[hidden]{display:none!important}
+html,body{margin:0;height:100%;overflow:hidden;overscroll-behavior:none;background:var(--bg);color:var(--tx);font:16px/1.5 var(--font);-webkit-font-smoothing:antialiased;-webkit-text-size-adjust:100%;text-size-adjust:100%}
+button,input,textarea,select{font:inherit;color:inherit}
+button{cursor:pointer;background:none;border:0;padding:0;border-radius:0;touch-action:manipulation}
+button:disabled{cursor:default}
+:focus{outline:none}
+:focus-visible{outline:2px solid var(--ac);outline-offset:2px;border-radius:8px}
+input:focus-visible,textarea:focus-visible,[tabindex="-1"]:focus-visible{outline:none}
+input::-ms-reveal,input::-ms-clear{display:none}
+.mono,code,pre{font-family:var(--mono)}
+.ic{width:20px;height:20px;flex:none;display:block}
+.ic.sm{width:16px;height:16px}.ic.xs{width:14px;height:14px}.ic.lg{width:28px;height:28px}
+.spin{width:16px;height:16px;flex:none;border-radius:50%;border:2px solid currentColor;border-right-color:transparent;animation:spin .7s linear infinite;opacity:.85}
+.spin.sm{width:12px;height:12px;border-width:1.75px}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes blink{50%{opacity:0}}
+@keyframes shake{20%,60%{transform:translateX(-7px)}40%,80%{transform:translateX(7px)}}
+@keyframes rise{from{opacity:0;transform:translateY(8px)}}
+@keyframes shimmer{from{background-position:100% 0}to{background-position:-100% 0}}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:var(--s2);min-height:44px;padding:0 var(--s4);border-radius:12px;font-size:16px;font-weight:600;background:var(--fill);color:var(--tx);transition:background .15s,opacity .15s,transform .1s}
+.btn:active:not(:disabled){transform:scale(.98)}
+.btn:disabled{opacity:.45}
+.btn.primary{background:var(--acb);color:var(--on)}
+.btn.primary:active:not(:disabled){background:var(--ac2)}
+.btn.danger{background:none;color:var(--er);box-shadow:inset 0 0 0 1.5px var(--er)}
+.btn.ghost{background:none;color:var(--ac);font-weight:500}
+.btn.block{width:100%;min-height:50px;border-radius:14px}
+.btn.sm{min-height:34px;padding:0 var(--s3);font-size:14px;border-radius:10px}
+.ib{width:44px;height:44px;display:grid;place-items:center;border-radius:12px;color:var(--tx);flex:none;transition:background .15s}
+.ib:active{background:var(--fill)}
+.pill{display:inline-flex;align-items:center;gap:6px;min-height:36px;padding:0 var(--s4);border-radius:18px;background:var(--fill);color:var(--tx2);font-size:14px;font-weight:500}
+.seg{display:flex;gap:2px;padding:2px;border-radius:11px;background:var(--fill);overflow-x:auto;scrollbar-width:none}
+.seg::-webkit-scrollbar{display:none}
+.seg button{flex:1 0 auto;min-height:36px;padding:0 var(--s3);border-radius:9px;font-size:14px;font-weight:500;color:var(--tx2);white-space:nowrap;display:inline-flex;align-items:center;justify-content:center;gap:6px;transition:background .15s,color .15s}
+.seg button[aria-checked=true]{background:var(--sf);color:var(--tx);box-shadow:0 1px 3px rgba(0,0,0,.12)}
+[data-theme=dark] .seg button[aria-checked=true]{background:var(--fill2)}
+.seg.sm button{min-height:30px;font-size:13px;padding:0 10px}
+input.tf{width:100%;min-height:44px;padding:0 var(--s3);border-radius:12px;border:1px solid var(--bd2);background:var(--sf);font-size:16px;color:var(--tx)}
+input.tf:focus{border-color:var(--ac);box-shadow:0 0 0 3px var(--acs)}
+
+/* screens */
+.screen{position:fixed;inset:0;z-index:30;display:flex;flex-direction:column;align-items:center;overflow-y:auto;padding:calc(var(--st) + 24px) calc(var(--sr) + 24px) calc(var(--sb) + 24px) calc(var(--sl) + 24px);background:var(--bg)}
+.screen>.col{width:100%;max-width:360px;margin:auto 0;display:flex;flex-direction:column;align-items:center;text-align:center;animation:rise .22s var(--ease)}
+.appicon{width:72px;height:72px;border-radius:18px;box-shadow:0 0 0 .5px var(--bd2),0 8px 24px rgba(47,107,255,.22);margin-bottom:var(--s5)}
+.screen h1{margin:0 0 6px;font-size:24px;line-height:1.25;font-weight:700;letter-spacing:-.01em}
+.screen .sub{margin:0;color:var(--tx2);font-size:15px;overflow-wrap:anywhere}
+.screen .sub b{color:var(--tx);font-weight:600}
+.note{display:flex;gap:var(--s2);align-items:flex-start;text-align:left;width:100%;margin-top:var(--s5);padding:var(--s3) 14px;border-radius:12px;background:var(--acs);color:var(--tx);font-size:14px;line-height:1.4}
+.note .ic{color:var(--ac);margin-top:1px}
+#sf{width:100%;margin-top:var(--s6);text-align:left}
+#sf label{display:block;font-size:13px;font-weight:600;color:var(--tx2);margin:0 0 6px 4px}
+.field{display:flex;align-items:center;height:54px;border-radius:14px;border:1px solid var(--bd2);background:var(--sf);transition:border-color .15s,box-shadow .15s}
+.field:focus-within{border-color:var(--ac);box-shadow:0 0 0 4px var(--acs)}
+.field.bad{border-color:var(--er);box-shadow:0 0 0 4px var(--ers)}
+.field.shake{animation:shake .32s ease}
+.field input{flex:1;min-width:0;height:100%;border:0;background:none;padding:0 0 0 var(--s4);font-size:17px;letter-spacing:.02em}
+.field input::placeholder{color:var(--tx3);letter-spacing:0}
+.field .ib{color:var(--tx3);margin-right:5px}
+.ferr{display:flex;gap:6px;align-items:flex-start;margin:var(--s2) 4px 0;font-size:14px;line-height:1.4;color:var(--er)}
+.ferr.warn{color:var(--wa)}
+.ferr .ic{margin-top:1px}
+.ferr button{color:var(--ac);font-weight:600;margin-left:auto;min-height:24px;padding-left:var(--s2)}
+#sgo{margin-top:var(--s5)}
+.help{margin:var(--s4) 4px 0;font-size:13px;line-height:1.45;color:var(--tx3);text-align:center}
+.eicon{width:64px;height:64px;border-radius:20px;display:grid;place-items:center;background:var(--fill);color:var(--tx2);margin-bottom:var(--s5)}
+.eicon.warn{background:var(--was);color:var(--wa)}
+.eicon.ac{background:var(--acs);color:var(--ac)}
+.gate-acts{display:flex;flex-direction:column;gap:var(--s2);width:100%;margin-top:var(--s6)}
+.screen .spin{width:22px;height:22px;color:var(--tx3);margin-top:var(--s5)}
+
+/* main */
+#main{position:fixed;inset:0;overflow:hidden;height:var(--h,100dvh);display:flex;flex-direction:column}
+#bar{position:absolute;top:0;left:0;right:0;z-index:6;display:flex;align-items:center;gap:var(--s1);height:calc(var(--st) + 52px);padding:var(--st) calc(var(--sr) + 6px) 0 calc(var(--sl) + 6px);background:var(--glass);-webkit-backdrop-filter:saturate(180%) blur(20px);backdrop-filter:saturate(180%) blur(20px);box-shadow:0 .5px 0 var(--bd)}
+#ttl{flex:1;min-width:0;display:flex;flex-direction:column;align-items:center}
+#title{max-width:100%;font-size:16px;font-weight:600;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#sub{display:flex;align-items:center;gap:3px;max-width:100%;min-height:22px;padding:0 6px;margin-top:1px;border-radius:8px;color:var(--tx2);font-size:12.5px;line-height:1.3}
+#sub span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#sub:active{background:var(--fill)}
+#sub .ic{opacity:.7}
+#banner{position:absolute;left:0;right:0;top:calc(var(--st) + 52px);z-index:5;display:flex;align-items:center;justify-content:center;gap:var(--s2);height:30px;font-size:13px;font-weight:500;color:var(--wa);background:var(--banbg);box-shadow:0 .5px 0 var(--bd);transform:translateY(-100%);opacity:0;visibility:hidden;transition:transform .2s var(--ease),opacity .2s,visibility .2s}
+#banner.on{transform:none;opacity:1;visibility:visible}
+#chip{position:absolute;top:calc(var(--st) + 60px);left:0;right:0;margin:0 auto;width:max-content;z-index:5;display:flex;align-items:center;gap:6px;max-width:calc(100% - 32px);height:32px;padding:0 14px 0 12px;border-radius:16px;background:var(--glass);-webkit-backdrop-filter:saturate(180%) blur(20px);backdrop-filter:saturate(180%) blur(20px);box-shadow:var(--sh),inset 0 0 0 .5px var(--bd2);font-size:13px;font-weight:600;color:var(--tx2);white-space:nowrap;animation:rise .18s var(--ease)}
+#chip span{overflow:hidden;text-overflow:ellipsis}
+#chip .warn{color:var(--wa);display:inline-flex;align-items:center;gap:4px}
+#chip .sep{color:var(--tx3);font-weight:400}
+#main.haschip #log{padding-top:calc(var(--st) + 52px + 56px)}
+.pulse{width:8px;height:8px;flex:none;border-radius:50%;background:var(--ac);box-shadow:0 0 0 0 var(--acs);animation:pulse 1.6s ease-out infinite}
+@keyframes pulse{0%{box-shadow:0 0 0 0 var(--ac)}70%{box-shadow:0 0 0 6px transparent}100%{box-shadow:0 0 0 0 transparent}}
+#banner .spin{width:12px;height:12px;border-width:1.75px}
+#mid{flex:1;min-height:0;position:relative}
+#log{height:100%;overflow-y:auto;overflow-x:hidden;overscroll-behavior-y:contain;-webkit-overflow-scrolling:touch;padding:calc(var(--st) + 52px + var(--s4)) calc(var(--sr) + var(--s4)) calc(var(--pad,0px) + var(--s4)) calc(var(--sl) + var(--s4))}
+#col{max-width:760px;margin:0 auto;min-height:100%;display:flex;flex-direction:column}
+#top{display:flex;flex-direction:column;align-items:center;gap:var(--s2)}
+#top:not(:empty){margin-bottom:var(--s4)}
+#blocks{display:flex;flex-direction:column}
+#blocks>*{min-width:0}
+#down{position:absolute;right:calc(var(--sr) + var(--s4));bottom:var(--s3);z-index:4;width:40px;height:40px;border-radius:50%;display:grid;place-items:center;background:var(--sf);color:var(--tx);box-shadow:var(--sh);border:.5px solid var(--bd);animation:rise .18s var(--ease)}
+#down .dot{position:absolute;top:2px;right:2px;width:10px;height:10px;border-radius:50%;background:var(--ac);border:2px solid var(--sf);display:none}
+#down.new .dot{display:block}
+#toasts{position:absolute;left:var(--s4);right:var(--s4);bottom:var(--s3);z-index:8;display:flex;flex-direction:column;align-items:center;gap:var(--s2);pointer-events:none}
+.toast{pointer-events:auto;display:flex;align-items:center;gap:var(--s2);max-width:min(100%,480px);min-height:44px;padding:var(--s2) var(--s2) var(--s2) 14px;border-radius:14px;background:var(--tx);color:var(--bg);font-size:14px;line-height:1.4;box-shadow:var(--sh);animation:rise .18s var(--ease);overflow-wrap:anywhere}
+.toast:not(.error){padding-right:14px}
+.toast.error{background:var(--sf);color:var(--tx);box-shadow:var(--sh),inset 0 0 0 1px var(--bd)}
+.toast.error>.ic{color:var(--er)}
+.toast span{flex:1}
+.toast .ib{width:32px;height:32px;color:inherit;opacity:.6}
+.toast.attn{background:var(--sf);color:var(--tx);box-shadow:var(--sh),inset 0 0 0 1.5px var(--wa)}
+.toast.attn>.ic{color:var(--wa)}
+.toast.act{padding-right:var(--s2)}
+.tact{flex:none;min-height:32px;padding:0 14px;border-radius:10px;font-size:14px;font-weight:650;color:inherit;background:rgba(128,128,128,.22)}
+.toast.attn .tact{background:var(--acb);color:#fff}
+
+/* messages */
+.msg{margin:0 0 var(--s5)}
+.user{display:flex;flex-direction:column;align-items:flex-end}
+.ulbl{display:flex;align-items:center;gap:4px;font-size:12px;font-weight:600;color:var(--ac);margin:0 6px 4px}
+.bubble{max-width:85%;padding:10px 14px;border-radius:20px;background:var(--ub);white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.45}
+.user.steer .bubble{background:var(--acs);box-shadow:inset 0 0 0 1px var(--acs)}
+.asst{display:flex;flex-direction:column;align-items:flex-start}
+.think{margin:0 0 var(--s2);max-width:100%}
+.asst.bare{margin-bottom:var(--s3)}
+.chip{display:inline-flex;align-items:center;gap:6px;min-height:32px;padding:0 10px 0 8px;margin-left:-8px;border-radius:10px;font-size:14px;font-weight:500;color:var(--tx2)}
+.chip:active{background:var(--fill)}
+.chip .ic.sp{color:var(--ac);opacity:.8}
+.chip .ic.cv{transition:transform .18s var(--ease);opacity:.6}
+.chip[aria-expanded=true] .ic.cv{transform:rotate(90deg)}
+.chip.live span{background:linear-gradient(90deg,var(--tx2) 0,var(--tx2) 40%,var(--tx) 50%,var(--tx2) 60%,var(--tx2) 100%);background-size:200% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:shimmer 1.6s linear infinite}
+.reason{margin:2px 0 var(--s2);padding:2px 0 2px var(--s3);border-left:2px solid var(--bd2);color:var(--tx2);font-size:14px;line-height:1.55;white-space:pre-wrap;overflow-wrap:anywhere}
+.acts{display:flex;gap:2px;margin:2px 0 0 -10px}
+.acts .ib{width:36px;height:36px;color:var(--tx3);border-radius:10px}
+.acts .ib.done{color:var(--ok)}
+.md{width:100%;overflow-wrap:anywhere;line-height:1.6}
+.md>:first-child{margin-top:0}.md>:last-child{margin-bottom:0}
+.md p{margin:0 0 .75em}
+.md h1,.md h2,.md h3,.md h4,.md h5,.md h6{margin:1.1em 0 .45em;line-height:1.3;font-weight:650;letter-spacing:-.005em}
+.md h1{font-size:1.3em}.md h2{font-size:1.18em}.md h3{font-size:1.06em}.md h4,.md h5,.md h6{font-size:1em}
+.md ul,.md ol{margin:0 0 .75em;padding-left:1.5em}
+.md li{margin:.2em 0}.md li::marker{color:var(--tx3)}
+.md li>ul,.md li>ol{margin:.2em 0 0}
+.md code{font-size:.86em;padding:.12em .38em;border-radius:6px;background:var(--fill);overflow-wrap:anywhere}
+.md a{color:var(--ac);text-decoration:underline;text-decoration-color:var(--acs);text-underline-offset:2px}
+.md blockquote{margin:0 0 .75em;padding:0 0 0 var(--s3);border-left:3px solid var(--bd2);color:var(--tx2)}
+.md hr{border:0;height:1px;background:var(--bd2);margin:1.25em 0}
+.md del{color:var(--tx3)}
+.cb{margin:0 0 .85em;border-radius:12px;background:var(--bg2);box-shadow:inset 0 0 0 1px var(--bd);overflow:hidden;max-width:100%}
+.cbh{display:flex;align-items:center;justify-content:space-between;height:34px;padding:0 4px 0 var(--s3);font:12px var(--mono);color:var(--tx3);box-shadow:0 1px 0 var(--bd)}
+.cbh button{display:inline-flex;align-items:center;gap:5px;height:30px;padding:0 var(--s2);border-radius:8px;font:500 12px var(--font);color:var(--tx2)}
+.cbh button:active{background:var(--fill)}
+.cbh button.done{color:var(--ok)}
+.cb pre{margin:0;padding:var(--s3);overflow-x:auto;font-size:13px;line-height:1.55;white-space:pre;-webkit-overflow-scrolling:touch}
+.cb code{background:none;padding:0;font-size:inherit;border-radius:0;overflow-wrap:normal}
+.tw{margin:0 0 .85em;overflow-x:auto;border-radius:12px;box-shadow:inset 0 0 0 1px var(--bd);max-width:100%}
+.tw table{border-collapse:collapse;font-size:14px;line-height:1.45;min-width:100%}
+.tw th,.tw td{padding:8px 12px;text-align:left;vertical-align:top;border-bottom:1px solid var(--bd);white-space:nowrap}
+.tw th{background:var(--bg2);font-weight:600;font-size:13px;color:var(--tx2)}
+.tw tr:last-child td{border-bottom:0}
+.caret{display:inline-block;width:.5em;height:1.05em;margin-left:2px;vertical-align:-.15em;border-radius:2px;background:var(--tx);opacity:.75;animation:blink 1s steps(1) infinite}
+
+/* tool activity */
+.tl{margin:0;background:var(--sf);box-shadow:inset 1px 0 0 var(--bd),inset -1px 0 0 var(--bd)}
+.tl.first{border-radius:var(--r) var(--r) 0 0;box-shadow:inset 0 1px 0 var(--bd),inset 1px 0 0 var(--bd),inset -1px 0 0 var(--bd)}
+.tl.last{border-radius:0 0 var(--r) var(--r);box-shadow:inset 0 -1px 0 var(--bd),inset 1px 0 0 var(--bd),inset -1px 0 0 var(--bd);margin-bottom:var(--s5);padding-bottom:4px}
+.tl.first.last{border-radius:var(--r);box-shadow:inset 0 0 0 1px var(--bd);padding-bottom:0}
+[data-theme=dark] .tl{background:var(--bg2)}
+.ghead{display:flex;align-items:center;gap:10px;width:100%;min-height:52px;padding:var(--s2) var(--s3) var(--s2) 14px;text-align:left}
+.gic{width:28px;height:28px;flex:none;border-radius:9px;display:grid;place-items:center;background:var(--fill);color:var(--tx2)}
+.gic.ok{background:var(--oks);color:var(--ok)}.gic.er{background:var(--ers);color:var(--er)}.gic.run{background:var(--acs);color:var(--ac)}
+.gtx{flex:1;min-width:0;display:flex;flex-direction:column}
+.gsum{font-size:14.5px;font-weight:600;line-height:1.35;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.gdet .er{color:var(--er);font-family:var(--font);font-weight:500}
+.gdet{font-size:12.5px;line-height:1.4;color:var(--tx2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.gmeta{font-size:12.5px;color:var(--tx3);flex:none;font-variant-numeric:tabular-nums}
+.gmeta.er{color:var(--er)}
+.ghead .cv,.trow .cv{color:var(--tx3);transition:transform .18s var(--ease)}
+.ghead[aria-expanded=true] .cv,.trow[aria-expanded=true] .cv{transform:rotate(90deg)}
+.tl.first.open .ghead{box-shadow:0 1px 0 var(--bd)}
+.trow{display:flex;align-items:center;gap:var(--s2);width:100%;min-height:44px;padding:0 var(--s3) 0 14px;text-align:left;font-size:14px}
+.trow:active,.ghead:active{background:var(--fill)}
+.tst{width:18px;height:18px;flex:none;display:grid;place-items:center;color:var(--tx3)}
+.tst.succeeded{color:var(--ok)}.tst.failed{color:var(--er)}.tst.running{color:var(--ac)}.tst.denied,.tst.cancelled{color:var(--tx3)}
+.tname{flex:none;font-weight:600;font-size:13.5px}
+.tdet{flex:1;min-width:0;font-size:12.5px;color:var(--tx2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tmeta{flex:none;font-size:12px;color:var(--tx3);font-variant-numeric:tabular-nums}
+.tmeta.er{color:var(--er)}
+.tbody{padding:0 var(--s3) var(--s3) 40px;font-size:13px}
+.tlbl{display:flex;justify-content:space-between;gap:var(--s2);margin:var(--s2) 0 4px;font-size:11.5px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--tx3)}
+.code{margin:0;max-height:320px;overflow:auto;padding:var(--s2) 10px;border-radius:10px;background:var(--fill);font-size:12px;line-height:1.5;white-space:pre;-webkit-overflow-scrolling:touch;overscroll-behavior:contain}
+.code>span{display:block;min-width:max-content;padding:0 4px;margin:0 -4px;border-radius:3px}
+.code .add{background:var(--add);color:var(--addt)}.code .del{background:var(--del);color:var(--delt)}.code .hunk{color:var(--ac)}.code .meta{color:var(--tx3)}
+.hint{margin:6px 0 0;font-size:12px;color:var(--tx3)}
+.hint.warn{color:var(--wa)}
+.meta-line{display:flex;align-items:center;gap:var(--s3);margin:0 0 var(--s5);font-size:12.5px;color:var(--tx3);font-variant-numeric:tabular-nums}
+.meta-line::before,.meta-line::after{content:"";flex:1 1 16px;min-width:16px;height:1px;background:var(--bd)}
+.meta-line>span{text-align:center;text-wrap:balance}
+.nw{white-space:nowrap}
+.meta-line.bad{color:var(--wa)}
+.compact{margin:0 0 var(--s5);border-radius:var(--r);background:var(--bg2);box-shadow:inset 0 0 0 1px var(--bd)}
+.compact>button{display:flex;align-items:center;gap:10px;width:100%;min-height:44px;padding:0 var(--s3) 0 14px;font-size:13.5px;color:var(--tx2);text-align:left}
+.compact>button span{flex:1}
+.compact[data-x] .reason{margin:0 14px 12px}
+.earlier{align-self:center;margin:0 0 var(--s5)}
+.loadrow{display:flex;justify-content:center;align-items:center;gap:var(--s2);padding:var(--s6) 0;color:var(--tx3);font-size:14px}
+
+/* empty draft */
+#empty{flex:1;display:flex;flex-direction:column;align-items:center;text-align:center;padding:var(--s3) 0;animation:rise .22s var(--ease)}
+#empty::before,#empty::after{content:"";flex:1 1 0}
+#empty .appicon{width:56px;height:56px;border-radius:15px;margin-bottom:var(--s4)}
+#empty h2{margin:0;font-size:20px;font-weight:650}
+#empty .where{display:inline-flex;align-items:center;gap:6px;max-width:100%;margin-top:var(--s3);min-height:36px;padding:0 var(--s3);border-radius:18px;background:var(--fill);font-size:14px;font-weight:600;color:var(--tx)}
+#empty .where span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#empty .where .ic{color:var(--tx3)}
+#empty .wpath{margin-top:6px;max-width:100%;font-size:12px;color:var(--tx3);overflow-wrap:anywhere}
+.sugg{display:grid;grid-template-columns:1fr 1fr;gap:var(--s2);width:100%;max-width:440px;margin-top:var(--s6)}
+.sugg button{min-height:64px;padding:var(--s3);border-radius:14px;background:var(--sf);box-shadow:inset 0 0 0 1px var(--bd2);text-align:left;font-size:14px;line-height:1.35;font-weight:500;color:var(--tx)}
+.sugg button:active{background:var(--fill)}
+.sugg small{display:block;font-weight:400;color:var(--tx3);font-size:12.5px;margin-top:2px}
+
+/* dock */
+#dock{flex:none;position:relative;z-index:3;padding:var(--s2) calc(var(--sr) + var(--s3)) calc(max(var(--sb),var(--s2)) + var(--s1)) calc(var(--sl) + var(--s3));background:var(--bg)}
+#dock::before{content:"";position:absolute;left:0;right:0;bottom:100%;height:20px;background:linear-gradient(to top,var(--bg),transparent);pointer-events:none}
+#dock>*{max-width:760px;margin-left:auto;margin-right:auto}
+#strip{display:flex;align-items:center;gap:var(--s2);min-height:30px;padding:0 6px var(--s2);font-size:13px;color:var(--tx2);animation:rise .18s var(--ease)}
+#strip .spin{color:var(--ac)}
+#strip .sl{font-weight:600;color:var(--tx);flex:none}
+#strip .sd{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:12px}
+#strip .sx{margin-left:auto;flex:none;display:flex;gap:var(--s2);font-variant-numeric:tabular-nums;color:var(--tx3)}
+#tray{display:flex;flex-direction:column;gap:6px;max-height:calc(var(--h,100dvh)*.25);overflow-y:auto;overscroll-behavior:contain}
+#tray:not(:empty){margin-bottom:var(--s2)}
+.qchip{display:flex;align-items:center;gap:var(--s2);min-height:34px;padding:6px var(--s3);border-radius:12px;background:var(--fill);font-size:13.5px;flex:none}
+.qchip b{flex:none;font-size:11.5px;font-weight:650;letter-spacing:.03em;text-transform:uppercase;color:var(--ac)}
+.qchip span{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--tx2)}
+.lost{display:grid;grid-template-columns:auto 1fr auto;align-items:start;column-gap:10px;padding:10px 6px 10px var(--s3);border-radius:14px;background:var(--was);font-size:13.5px;line-height:1.35;flex:none}
+.lost>.ic{color:var(--wa);margin-top:2px}
+.lost .lx{flex:1;min-width:0}
+.lost .lh{font-weight:600;color:var(--wa)}
+.lost .lt{color:var(--tx2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lost .btn{background:var(--sf);grid-column:2;grid-row:2;justify-self:start;margin-top:var(--s2)}
+.lost .ib{width:34px;height:34px;margin-top:-6px;color:var(--tx2);grid-column:3;grid-row:1}
+#modes{margin-bottom:var(--s2);width:max-content;max-width:100%;margin-left:0}
+#comp{display:flex;align-items:flex-end;gap:var(--s1);padding:5px 5px 5px 0;border-radius:24px;background:var(--sf);box-shadow:inset 0 0 0 1px var(--bd2),0 2px 10px rgba(0,0,0,.05);transition:box-shadow .15s}
+#comp:focus-within{box-shadow:inset 0 0 0 1px var(--ac),0 0 0 3px var(--acs)}
+[data-theme=dark] #comp{background:var(--fill)}
+#ta{flex:1;min-width:0;display:block;resize:none;border:0;background:none;padding:9px 4px 9px 16px;margin:0;font-size:16px;line-height:1.4;max-height:calc(var(--h,100dvh)*.4);min-height:40px;overflow-y:auto;color:var(--tx)}
+#ta::placeholder{color:var(--tx3)}
+#ta[readonly]{color:var(--tx2)}
+#act{width:40px;height:40px;flex:none;border-radius:50%;display:grid;place-items:center;background:var(--acb);color:var(--on);transition:background .15s,transform .1s,opacity .15s;position:relative}
+#act::after{content:"";position:absolute;inset:-4px}
+#act:active:not(:disabled){transform:scale(.92)}
+#act:disabled{background:var(--fill2);color:var(--tx3)}
+#act.stop{background:var(--tx);color:var(--bg)}
+#act.stop:disabled{opacity:.5}
+#act .spin{width:16px;height:16px}
+
+/* modal surfaces */
+#scrim,#ascrim,#scrim2{position:fixed;inset:0;background:var(--scrim);opacity:0;visibility:hidden;transition:opacity .2s,visibility .2s}
+#scrim{z-index:20}#scrim2{z-index:22}#dlg{z-index:23}#ascrim{z-index:10;pointer-events:none}
+#scrim.on,#ascrim.on,#scrim2.on{opacity:1;visibility:visible;transition:opacity .2s,visibility 0s}
+#drawer{position:fixed;z-index:21;top:0;bottom:0;left:0;width:86%;max-width:360px;height:var(--h,100dvh);display:flex;flex-direction:column;background:var(--bg);padding:var(--st) 0 0 var(--sl);box-shadow:var(--sh);transform:translateX(-100%);visibility:hidden;transition:transform .22s var(--ease),visibility .22s}
+/* The keyboard covers the home indicator, so its inset is not needed above it. */
+html.kb{--sb:0px}
+#drawer.on,.sheet.on{transform:none;visibility:visible;transition:transform .22s var(--ease),visibility 0s}
+[data-theme=dark] #drawer{background:var(--bg2)}
+.sheet{position:fixed;z-index:21;left:0;right:0;bottom:var(--kb,0px);margin:0 auto;max-width:640px;max-height:calc(var(--h,100dvh) - var(--st) - 24px);display:flex;flex-direction:column;background:var(--bg);border-radius:20px 20px 0 0;box-shadow:var(--sh);transform:translateY(100%);visibility:hidden;transition:transform .22s var(--ease),visibility .22s}
+.sheet.full{height:calc(var(--h,100dvh) - var(--st) - 12px)}
+[data-theme=dark] .sheet{background:var(--bg2)}
+.grab{width:36px;height:5px;border-radius:3px;background:var(--fill2);margin:6px auto 0;flex:none}
+.shead{display:flex;align-items:center;gap:var(--s2);min-height:52px;padding:0 var(--s2) 0 calc(var(--s5) - 4px);flex:none}
+.shead h2{flex:1;margin:0;font-size:18px;font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sbody{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:0 var(--s4) var(--s4)}
+.sfoot{flex:none;padding:var(--s3) var(--s4) calc(max(var(--sb),var(--s3)));box-shadow:0 -1px 0 var(--bd)}
+.sec{display:flex;align-items:center;justify-content:space-between;gap:var(--s2);margin:var(--s5) 4px var(--s2);font-size:13px;font-weight:600;color:var(--tx2)}
+.sec:first-child{margin-top:var(--s2)}
+.list{border-radius:var(--r);background:var(--sf);box-shadow:inset 0 0 0 1px var(--bd);overflow:hidden}
+[data-theme=dark] .list{background:var(--fill)}
+.row{display:flex;align-items:center;gap:var(--s3);width:100%;min-height:52px;padding:var(--s2) var(--s3) var(--s2) 14px;text-align:left;position:relative}
+.row+.row::before{content:"";position:absolute;top:0;left:48px;right:0;height:1px;background:var(--bd)}
+.row.flat+.row.flat::before{left:14px}
+.row:active{background:var(--fill)}
+.row .ri{color:var(--tx3)}
+.row .rt{flex:1;min-width:0;display:flex;flex-direction:column}
+.row .rm{font-size:15.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .rs{font-size:12.5px;color:var(--tx3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .ck{color:var(--ac)}
+.row.sel{background:var(--acs)}
+.row.sel .ri{color:var(--ac)}
+.row:disabled{opacity:.5}
+.crumbs{display:flex;align-items:center;gap:2px;overflow-x:auto;scrollbar-width:none;padding:2px 0 var(--s2);margin:0 0 var(--s1)}
+.crumbs::-webkit-scrollbar{display:none}
+.crumbs button{flex:none;min-height:34px;padding:0 10px;border-radius:9px;font-size:14px;font-weight:500;color:var(--ac);background:var(--acs)}
+.crumbs button[aria-current]{color:var(--tx);background:var(--fill)}
+.crumbs .ic{color:var(--tx3);flex:none}
+.tools{display:flex;align-items:center;justify-content:space-between;gap:var(--s2);margin-bottom:var(--s2)}
+.sw{display:flex;align-items:center;gap:10px;min-height:44px;font-size:14px;color:var(--tx2);cursor:pointer}
+.sw input{appearance:none;-webkit-appearance:none;width:42px;height:26px;margin:0;border-radius:13px;background:var(--fill2);position:relative;transition:background .18s;flex:none;cursor:pointer}
+.sw input::after{content:"";position:absolute;top:2px;left:2px;width:22px;height:22px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.25);transition:transform .18s var(--ease)}
+.sw input:checked{background:var(--ok)}
+.sw input:checked::after{transform:translateX(16px)}
+.mkrow{display:flex;gap:var(--s2);margin-bottom:var(--s2)}
+.serr{display:flex;gap:6px;align-items:flex-start;margin:0 4px var(--s2);font-size:14px;color:var(--er);overflow-wrap:anywhere}
+.serr .ic{margin-top:2px}
+.muted{padding:var(--s4);text-align:center;color:var(--tx3);font-size:14px}
+.dhead{display:flex;align-items:center;gap:var(--s3);padding:var(--s3) var(--s2) var(--s2) var(--s4)}
+.dhead img{width:36px;height:36px;border-radius:10px}
+.dhead div{flex:1;min-width:0}
+.dhead b{display:block;font-size:17px;line-height:1.25}
+.dhead small{display:block;color:var(--tx3);font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dnew{margin:var(--s2) var(--s4) var(--s3);width:auto}
+.search{display:flex;align-items:center;gap:var(--s2);margin:0 var(--s4) var(--s2);height:40px;padding:0 var(--s3);border-radius:12px;background:var(--fill);color:var(--tx3)}
+.search input{flex:1;min-width:0;border:0;background:none;font-size:16px;color:var(--tx);height:100%}
+.search input::-webkit-search-cancel-button{display:none}
+.dlist{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:0 var(--s2) var(--s3)}
+.dsec{margin:var(--s4) var(--s3) 4px;font-size:12.5px;font-weight:600;color:var(--tx3)}
+.srow{display:flex;align-items:center;border-radius:12px}
+.srow.cur{background:var(--acs)}
+.sopen{flex:1;min-width:0;display:flex;align-items:center;gap:var(--s2);min-height:52px;padding:6px 4px 6px var(--s3);border-radius:12px;text-align:left}
+.sopen:active{background:var(--fill)}
+.srow .rt{flex:1;min-width:0}
+.srow .rm{display:block;font-size:15px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.srow.cur .rm{font-weight:650}
+.srow .rs{display:block;font-size:12.5px;color:var(--tx3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.srow .sopen>.ic{color:var(--ac)}
+.srow .more{color:var(--tx3)}
+.srow .rs{display:flex;align-items:center;gap:6px}
+.srow .rs>span:last-child{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.badge{flex:none;display:inline-flex;align-items:center;gap:4px;height:19px;padding:0 7px;border-radius:10px;font-size:11.5px;font-weight:650;background:var(--fill2);color:var(--tx2);font-variant-numeric:tabular-nums}
+.badge.run{background:var(--acs);color:var(--ac)}
+.badge.warn{background:var(--was);color:var(--wa)}
+.badge.new{background:none;color:var(--ac);padding:0}
+.badge .spin{width:10px;height:10px;border-width:1.5px}
+.ndot{width:7px;height:7px;border-radius:50%;background:var(--ac)}
+.dsec.run{display:flex;align-items:center;gap:6px;color:var(--ac)}
+.dfoot{flex:none;padding:var(--s3) var(--s4) calc(max(var(--sb),var(--s3)));box-shadow:0 -1px 0 var(--bd);font-size:13px;color:var(--tx2)}
+.dfoot .who{display:flex;align-items:center;gap:var(--s2);min-height:28px}
+.dfoot .also{padding-left:calc(8px + var(--s2));overflow-wrap:anywhere}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--ok);flex:none}
+.dot.off{background:var(--wa)}
+.dfoot .appear{display:flex;align-items:center;justify-content:space-between;gap:var(--s3);margin-top:var(--s2)}
+.dfoot .appear .seg{flex:0 1 auto}
+.dhead .ib{color:var(--tx2)}
+.dfoot>.btn{width:100%;margin-top:var(--s2);color:var(--er);justify-content:flex-start;padding:0 var(--s2);font-weight:500;background:none}
+.inst{display:flex;align-items:center;gap:var(--s2);min-height:40px;margin-bottom:var(--s2);padding:2px 2px 2px var(--s3);border-radius:12px;background:var(--acs);color:var(--tx)}
+.inst>span{flex:1;min-width:0}
+.inst .ib{width:36px;height:36px;color:var(--tx2)}
+.inst .btn{margin:2px}
+.mlist .row{min-height:56px}
+.row.bad .rm,.row.bad .ri{color:var(--er)}
+.dtitle{padding:var(--s4) var(--s5) var(--s2);text-align:center}
+.dtitle h2{margin:0;font-size:15px;font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dtitle p{margin:2px 0 0;font-size:13px;color:var(--tx3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dform{display:flex;flex-direction:column;flex:1;min-height:0}
+.dbtns{display:flex;gap:var(--s2)}
+.dbtns .btn{flex:1;min-height:50px;border-radius:14px}
+.btn.dangerfill{background:#d9353a;color:#fff}
+#dlg .hint{margin:var(--s2) 4px 0}
+#dlg .serr{margin:var(--s3) 4px 0}
+#dlg .abtn{padding-top:var(--s4)}
+.mfoot{margin:var(--s4) 4px 0;font-size:12.5px;color:var(--tx3);font-variant-numeric:tabular-nums}
+/* approval */
+#appr{z-index:11;max-height:min(78%,calc(var(--h,100dvh) - var(--st) - 72px))}
+.ahead{display:flex;gap:var(--s3);padding:var(--s4) var(--s5) var(--s2)}
+.ahead .eicon{width:40px;height:40px;border-radius:12px;margin:0}
+.ahead h2{margin:0;font-size:17px;font-weight:650;line-height:1.3}
+.ahead p{margin:2px 0 0;font-size:14.5px;color:var(--tx2);line-height:1.4;overflow-wrap:anywhere;white-space:pre-wrap}
+.asub{display:flex;align-items:baseline;gap:var(--s2);margin:var(--s2) 0;padding:10px var(--s3);border-radius:12px;background:var(--fill);font-size:13px;min-width:0}
+.asub b{flex:none;font-size:13.5px}
+.asub code{flex:1;min-width:0;overflow-wrap:anywhere;color:var(--tx2)}
+.abody{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:0 var(--s5)}
+.abody .code{max-height:none}
+.abtn{display:flex;flex-direction:column;gap:var(--s2);padding:var(--s3) var(--s5) calc(max(var(--sb),var(--s3)) + 4px);flex:none}
+.abtn .btn{min-height:50px;border-radius:14px}
+@media(prefers-reduced-motion:reduce){*,::before,::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}.spin{animation-duration:1.4s!important;animation-iteration-count:infinite!important}}
+@media(max-height:700px){#empty .appicon{display:none}}
+@media(max-width:360px){.sugg{grid-template-columns:1fr}.sugg button{min-height:48px}.bubble{max-width:90%}}
+</style>
+<script id="core">
+'use strict';
+// Pure client logic: no DOM, no network. Everything the UI needs to decide, format or send.
+globalThis.MC = (() => {
+  const WINDOW = 300;
+  const backoff = n => Math.min(15000, 1000 * 2 ** n);
+  const basename = p => (p || '').split(/[\\/]/).filter(Boolean).pop() || p || '';
+  const plural = (n, one, many) => n + ' ' + (n === 1 ? one : many || one + 's');
+  const cap = s => s ? s[0].toUpperCase() + s.slice(1) : s;
+
+  // What is left in the editor once an acked submission is retired; text the user or `returned` added stays.
+  function retireText(editor, sent) {
+    if (editor === sent) return '';
+    if (editor.startsWith(sent + '\n')) return editor.slice(sent.length + 1);
+    if (editor.endsWith('\n' + sent)) return editor.slice(0, -sent.length - 1);
+    return editor;
+  }
+  const mergeReturned = (cur, text) => cur ? cur + '\n' + text : text;
+  // The other connected devices: the state's list without one entry of this device's name.
+  function otherDevices(devices, me) {
+    const rest = devices.map(device => device.name), i = rest.indexOf(me);
+    if (i >= 0) rest.splice(i, 1);
+    return rest;
+  }
+
+  function deviceName(ua, touchPoints = 0) {
+    const os = /iPhone/.test(ua) ? 'iPhone' : /iPad/.test(ua) || (/Macintosh/.test(ua) && touchPoints > 1) ? 'iPad'
+      : /Android/.test(ua) ? 'Android' : /Macintosh/.test(ua) ? 'Mac' : /Windows/.test(ua) ? 'Windows'
+      : /CrOS/.test(ua) ? 'Chromebook' : /Linux/.test(ua) ? 'Linux' : 'Device';
+    const br = /EdgiOS|EdgA|Edg\//.test(ua) ? 'Edge' : /OPR\/|OPiOS/.test(ua) ? 'Opera' : /SamsungBrowser/.test(ua) ? 'Samsung Internet'
+      : /FxiOS|Firefox/.test(ua) ? 'Firefox' : /CriOS|Chrome/.test(ua) ? 'Chrome' : /Safari/.test(ua) ? 'Safari' : 'Browser';
+    return Array.from(os + ' ' + br).slice(0, 64).join('');
+  }
+
+  // ---- messages ----
+  const login = (password, device) => ({ t: 'login', v: 1, password, device });
+  const hello = token => ({ t: 'hello', v: 1, token });
+  const intents = {
+    submit: text => ({ kind: 'submit', text }),
+    queue: text => ({ kind: 'queue', text }),
+    cancel: () => ({ kind: 'cancel' }),
+    answer: (interaction_id, choice) => ({ kind: 'answer', interaction_id, choice }),
+    loadOlder: () => ({ kind: 'load_older' }),
+    openSession: session_id => ({ kind: 'open_session', session_id }),
+    newSession: (workspace, profile) => Object.assign({ kind: 'new_session' }, workspace && { workspace }, profile && { profile }),
+    setModel: model => ({ kind: 'set_model', model }),
+    setReasoning: level => ({ kind: 'set_reasoning', level }),
+    renameSession: (session_id, title) => ({ kind: 'rename_session', session_id, title }),
+    deleteSession: session_id => ({ kind: 'delete_session', session_id }),
+  };
+  // The stored appearance choice ('light', 'dark', anything else = System) and the OS preference give the effective theme.
+  const theme = (choice, osDark) => choice === 'light' || choice === 'dark' ? choice : osDark ? 'dark' : 'light';
+  // The install help to offer: none once installed, the browser's own prompt when it gave one, else on iPhone and iPad
+  // the Share-sheet hint until it is dismissed.
+  const installOffer = (standalone, prompt, device, dismissed) =>
+    standalone ? null : prompt ? 'prompt' : /^(iPhone|iPad) /.test(device) && !dismissed ? 'ios' : null;
+  const fs = {
+    roots: () => ({ t: 'fs_roots' }),
+    list: (path, hidden) => ({ t: 'fs_list', path, hidden: !!hidden }),
+    mkdir: (parent, name) => ({ t: 'fs_mkdir', parent, name }),
+  };
+
+  // ---- store and reducer ----
+  const createStore = () => ({ state: null, blocks: [], intents: new Map(), fs: new Set(), sid: undefined, nid: 0, skew: 0, device: null });
+  const nextId = s => 'c' + ++s.nid;
+  // Records the intent as pending and returns the message to send; it is never sent again by itself.
+  function intent(s, spec) {
+    const id = nextId(s);
+    s.intents.set(id, { id, spec, kind: spec.kind, text: spec.text, st: 'pending' });
+    return { t: 'intent', id, ...spec };
+  }
+  function request(s, body) { const id = nextId(s); s.fs.add(id); return { ...body, id }; }
+  const pending = (s, kind) => { for (const it of s.intents.values()) if (it.st === 'pending' && (!kind || it.kind === kind)) return it; return null; };
+  // A dropped socket leaves pending sends unconfirmed (the user decides); other intents show their outcome in the next snapshot.
+  function disconnect(s) {
+    s.fs.clear();
+    for (const it of [...s.intents.values()]) {
+      if (it.st !== 'pending') continue;
+      if (it.text != null) it.st = 'unconfirmed'; else s.intents.delete(it.id);
+    }
+  }
+  // An explicit user action: a new intent with a new id.
+  function sendAgain(s, id) {
+    const it = s.intents.get(id);
+    s.intents.delete(id);
+    return intent(s, it.spec);
+  }
+  const unconfirmed = s => [...s.intents.values()].filter(it => it.st === 'unconfirmed');
+
+  function diffBlocks(old, neu) {
+    const out = [];
+    for (let i = 0; i < neu.length; i++) if (JSON.stringify(old[i]) !== JSON.stringify(neu[i])) out.push(i);
+    return out;
+  }
+  // An upsert is {i, block} or {i, append:{text?, reasoning?}} for the assistant block already at i.
+  function applyBlocks(blocks, len, upserts) {
+    blocks.length = len;
+    const out = [];
+    for (const u of upserts) {
+      if (!u.append) blocks[u.i] = u.block;
+      else {
+        const b = blocks[u.i];
+        if (!b || b.type !== 'assistant') continue;
+        if (u.append.text) b.text = (b.text || '') + u.append.text;
+        if (u.append.reasoning) b.reasoning = (b.reasoning || '') + u.append.reasoning;
+      }
+      out.push(u.i);
+    }
+    return out;
+  }
+
+  // Applies one server message; returns what changed for the UI.
+  function reduce(s, msg, nowMs) {
+    switch (msg.t) {
+      case 'authorized': return { token: msg.token };
+      case 'welcome':
+        s.skew = msg.now_ms == null ? 0 : msg.now_ms - nowMs;
+        s.device = msg.device;
+        return { welcome: true };
+      case 'snapshot': {
+        const events = s.state ? sessionTransitions(s.state.sessions, msg.state.sessions) : [];
+        const dirty = diffBlocks(s.blocks, msg.blocks), sid = msg.state.session ? msg.state.session.id : null;
+        const newSession = sid !== s.sid;
+        s.blocks = msg.blocks; s.state = msg.state; s.sid = sid;
+        return { dirty, state: true, newSession, snapshot: true, events };
+      }
+      case 'blocks': return { dirty: applyBlocks(s.blocks, msg.len, msg.upserts) };
+      case 'state': {
+        const events = s.state ? sessionTransitions(s.state.sessions, msg.state.sessions) : [];
+        s.state = msg.state;
+        return { state: true, events };
+      }
+      case 'ack': {
+        const it = s.intents.get(msg.id);
+        if (!it) return {};
+        s.intents.delete(msg.id);
+        return { ack: { ...it, ok: msg.ok, error: msg.error } };
+      }
+      case 'returned': return { returned: msg.text };
+      case 'notice': return { notice: { level: msg.level === 'error' ? 'error' : 'info', text: msg.text } };
+      case 'fs': return s.fs.delete(msg.id) ? { fs: msg } : {};
+      case 'error': case 'bye': return { gate: explain(msg) };
+      default: return {};
+    }
+  }
+
+  // ---- handshake outcomes ----
+  const fmtClock = sec => Math.floor(sec / 60) + ':' + String(sec % 60).padStart(2, '0');
+  const lockText = sec => 'Too many attempts · try again in ' + fmtClock(Math.max(0, Math.ceil(sec)));
+  const unreachable = host => "Can't reach MiniCore at " + host;
+  function explain(msg) {
+    const key = msg.t === 'bye' ? msg.reason : msg.code;
+    switch (key) {
+      case 'wrong_password': return { view: 'signin', error: 'Wrong password. Check the password on your computer and try again.', shake: true };
+      case 'locked': return { view: 'signin', locked: msg.retry_after || 30 };
+      case 'unauthorized': return { view: 'signin', forget: true, notice: 'Please sign in to continue.' };
+      case 'signed_out': return { view: 'signin', forget: true, notice: 'The password was changed on the computer. Sign in with the new password.' };
+      case 'version': return { view: 'status', icon: 'retry', title: 'Update needed', text: "This page and MiniCore on your computer don't speak the same protocol version. Reload to get the current page.", action: 'reload', label: 'Reload' };
+      case 'remote_off': return { view: 'status', icon: 'power', title: 'Remote control is off', text: 'Remote control was turned off on the computer. Turn it back on with /remote on, then retry.', action: 'retry', label: 'Retry' };
+      case 'tui_exit': return { view: 'status', icon: 'term', title: 'MiniCore quit', text: 'MiniCore quit on the computer. Start it again with remote control on, then retry.', action: 'retry', label: 'Retry' };
+      case 'replaced': return { view: 'status', icon: 'tabs', title: 'Opened in another tab', text: 'MiniCore is open in another tab on this device, and one tab per device stays connected.', action: 'retry', label: 'Use here' };
+      case 'bad_request': return { view: 'status', icon: 'warn', title: "Couldn't connect", text: msg.message || 'MiniCore did not accept this request.', action: 'retry', label: 'Retry' };
+      default: return { view: 'status', icon: 'warn', title: 'Disconnected', text: msg.message || 'The connection to MiniCore was closed.', action: 'retry', label: 'Retry' };
+    }
+  }
+  const FS_ERR = {
+    outside_roots: 'This folder is outside the folders MiniCore allows.', not_found: 'That folder no longer exists.',
+    not_a_directory: 'That is not a folder.', invalid_name: "That name can't be used for a folder.",
+    exists: 'A folder with that name already exists.', bad_request: 'MiniCore did not accept this request.',
+  };
+  const fsError = r => r.error === 'io' ? r.message || 'The folder could not be read.' : FS_ERR[r.error] || r.message || r.error || 'Something went wrong.';
+
+  // ---- time ----
+  const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  // tz is Date#getTimezoneOffset() in minutes; days are counted on the phone's local calendar.
+  const localDay = (ms, tz) => Math.floor((ms - tz * 60000) / 86400000);
+  function relTime(ms, now, tz) {
+    const m = Math.floor((now - ms) / 60000);
+    if (m < 1) return 'now';
+    if (m < 60) return m + 'm';
+    if (m < 1440) return Math.floor(m / 60) + 'h';
+    const days = localDay(now, tz) - localDay(ms, tz);
+    if (days < 7) return days + 'd';
+    const d = new Date(ms - tz * 60000), same = new Date(now - tz * 60000).getUTCFullYear() === d.getUTCFullYear();
+    return MON[d.getUTCMonth()] + ' ' + d.getUTCDate() + (same ? '' : ', ' + d.getUTCFullYear());
+  }
+  function dayGroup(ms, now, tz) {
+    const d = localDay(now, tz) - localDay(ms, tz);
+    return d <= 0 ? 'Today' : d === 1 ? 'Yesterday' : d <= 7 ? 'Previous 7 days' : 'Older';
+  }
+  const matchSession = (x, query) => ((x.title || '') + '\n' + x.workspace).toLowerCase().includes((query || '').trim().toLowerCase());
+  function groupSessions(sessions, now, tz, query) {
+    const out = [];
+    for (const x of sessions) {
+      if (!matchSession(x, query)) continue;
+      const label = dayGroup(Date.parse(x.updated_at), now, tz), g = out.find(y => y.label === label);
+      if (g) g.items.push(x); else out.push({ label, items: [x] });
+    }
+    return out;
+  }
+  function fmtElapsed(ms) {
+    const s = Math.max(0, Math.floor(ms / 1000)), m = Math.floor(s / 60), pad = n => String(n).padStart(2, '0');
+    if (m < 1) return s + 's';
+    return m < 60 ? m + 'm ' + pad(s % 60) + 's' : Math.floor(m / 60) + 'h ' + pad(m % 60) + 'm';
+  }
+  const fmtDur = ms => ms < 1000 ? ms + ' ms' : ms < 60000 ? (ms / 1000).toFixed(1) + ' s' : fmtElapsed(ms);
+  const fmtTok = n => n == null ? '?' : n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n);
+
+  // ---- transcript text ----
+  function toolKind(name) {
+    if (/^(bash|shell|sh|exec|run|terminal|command)$/.test(name)) return 'cmd';
+    if (/^(edit|multi_edit|apply_patch|patch|write|create|str_replace)/.test(name)) return 'edit';
+    if (/^(read|view|cat|open)/.test(name)) return 'read';
+    if (/^(grep|glob|find|search|ls|list)/.test(name)) return 'search';
+    if (/^(web|fetch|http|browse)/.test(name)) return 'web';
+    return 'other';
+  }
+  const isDiffTool = name => /^(edit|multi_edit|apply_patch|patch)$/.test(name);
+  // "Ran 3 commands · edited 2 files" for one run of tool blocks.
+  function activitySummary(tools) {
+    const n = { cmd: 0, read: new Set(), edit: new Set(), search: 0, web: 0, other: 0 };
+    for (const b of tools) {
+      const k = toolKind(b.name);
+      if (k === 'edit' || k === 'read') n[k].add(b.detail || b.call_id); else n[k]++;
+    }
+    const parts = [
+      n.cmd && (tools.some(b => b.state === 'running' || b.state === 'pending') ? 'running ' : 'ran ') + plural(n.cmd, 'command'), n.edit.size && 'edited ' + plural(n.edit.size, 'file'),
+      n.read.size && 'read ' + plural(n.read.size, 'file'), n.search && 'ran ' + plural(n.search, 'search', 'searches'),
+      n.web && 'fetched ' + plural(n.web, 'page'), n.other && 'used ' + plural(n.other, 'tool'),
+    ].filter(Boolean);
+    return cap(parts.join(' · '));
+  }
+  const OUTCOME = { completed: 'Completed', cancelled: 'Stopped', failed: 'Failed' };
+  function turnEndText(b) {
+    const c = b.changes;
+    return [OUTCOME[b.outcome] || cap(String(b.outcome).replace(/_/g, ' ')), b.duration_ms != null && fmtDur(b.duration_ms),
+      b.requests > 0 && plural(b.requests, 'request'), b.tools > 0 && plural(b.tools, 'tool'),
+      c && c.files > 0 && plural(c.files, 'file') + (c.added != null ? ' +' + c.added : '') + (c.removed != null ? ' −' + c.removed : ''),
+    ].filter(Boolean).join(' · ');
+  }
+  const compactionText = b => 'Context compacted' + (b.before != null || b.after != null ? ' · ' + fmtTok(b.before) + ' → ' + fmtTok(b.after) + ' tokens' : '');
+  function diffClass(line) {
+    if (/^(\+\+\+ |--- |\*\*\* |diff |index )/.test(line)) return 'meta';
+    if (line.startsWith('@@')) return 'hunk';
+    if (line[0] === '+') return 'add';
+    if (line[0] === '-') return 'del';
+    return '';
+  }
+  // The live line above the composer; nowHost is phone time plus the host offset.
+  function statusLine(state, blocks, nowHost) {
+    const st = state.status, last = blocks[blocks.length - 1];
+    const label = st.loading ? 'Opening session…' : st.interrupting ? 'Stopping…' : st.compacting ? 'Compacting context' : st.label || 'Working';
+    const tool = !st.interrupting && last && last.type === 'tool' && last.state === 'running' ? last : null;
+    return {
+      label, detail: !tool ? '' : label.includes(tool.name) ? tool.detail || '' : [tool.name, tool.detail].filter(Boolean).join(' · '),
+      elapsed: (st.busy || st.compacting) && st.started_ms ? fmtElapsed(nowHost - st.started_ms) : '',
+      ctx: state.context_percent != null ? Math.round(state.context_percent) + '% context' : '',
+    };
+  }
+
+  // The block being written: the transcript's last block when it is a streaming assistant in a busy session.
+  // The TUI keeps every assistant block of a running turn streaming until the turn ends, so earlier ones are done.
+  const liveBlock = (blocks, busy) => {
+    const i = blocks.length - 1, b = blocks[i];
+    return busy && b && b.type === 'assistant' && b.streaming ? i : -1;
+  };
+
+  // ---- paths ----
+  function splitPath(p) {
+    const sep = p.includes('/') ? '/' : '\\', parts = p.split(sep).filter(Boolean);
+    const out = parts.map((name, k) => {
+      let q = (p.startsWith('\\\\') ? '\\\\' : p.startsWith(sep) ? sep : '') + parts.slice(0, k + 1).join(sep);
+      if (/^[A-Za-z]:$/.test(q)) q += sep;
+      return { name, path: q };
+    });
+    if (p.startsWith('/')) out.unshift({ name: '/', path: '/' });
+    return out;
+  }
+  function within(p, root) {
+    if (p === root) return true;
+    const s = root.includes('/') ? '/' : '\\';
+    return p.startsWith(root.endsWith(s) ? root : root + s);
+  }
+  // Breadcrumbs from the innermost root that holds `path`, named like the root.
+  function crumbs(path, roots) {
+    const all = splitPath(path), root = roots.filter(r => within(path, r.path)).sort((a, b) => b.path.length - a.path.length)[0];
+    if (!root) return all;
+    const k = all.findIndex(c => c.path === root.path);
+    return k < 0 ? all : [{ name: root.name, path: root.path }, ...all.slice(k + 1)];
+  }
+  // ---- live sessions ----
+  const busyStatus = st => st === 'running' || st === 'approval' || st === 'compacting';
+  // Live sessions with something going on come first (approval, then by turn start, oldest first); the rest keep catalog order.
+  function liveGroups(sessions) {
+    const active = sessions.filter(x => x.live && busyStatus(x.status)), rest = sessions.filter(x => !active.includes(x));
+    const rank = x => x.status === 'approval' ? 0 : 1, start = x => x.started_ms == null ? Infinity : x.started_ms;
+    active.sort((a, b) => rank(a) - rank(b) || start(a) - start(b));
+    return { active, rest };
+  }
+  // "2 running · 1 needs approval" for the background counts; empty when nothing is going on.
+  function backgroundSummary(state) {
+    const b = state.background || { running: 0, approval: 0 }, parts = [];
+    if (b.running) parts.push({ text: b.running + ' running' });
+    if (b.approval) parts.push({ text: b.approval + (b.approval === 1 ? ' needs' : ' need') + ' approval', warn: true });
+    return { parts, text: parts.map(p => p.text).join(' · '), approval: b.approval, running: b.running };
+  }
+  // Background sessions that started waiting for approval or finished unseen between two session lists.
+  function sessionTransitions(prev, next) {
+    const out = [], before = new Map(prev.map(x => [x.id, x]));
+    for (const x of next) {
+      const p = before.get(x.id);
+      if (!x.live || x.current || !p || !p.live) continue;
+      if (x.status === 'approval' && p.status !== 'approval') out.push({ kind: 'approval', id: x.id, title: x.title });
+      else if (x.status === 'idle' && x.unseen && !(p.status === 'idle' && p.unseen)) out.push({ kind: 'finished', id: x.id, title: x.title });
+    }
+    return out;
+  }
+  // The session label of a forwarded background notice ("Fix parser" needs approval · ctrl+r, "Fix parser" finished in 3m 12s).
+  const noticeLabel = text => { const m = /^"(.+)" (needs approval|finished|failed|interrupted|cancelled|stopped)\b/.exec(text); return m ? m[1] : null; };
+
+  function recentWorkspaces(sessions, max = 6) {
+    const out = [];
+    for (const x of sessions) if (!out.includes(x.workspace) && out.push(x.workspace) >= max) break;
+    return out;
+  }
+
+  // ---- markdown: plain token trees, never HTML; the UI builds DOM nodes from them ----
+  const SAFE_URL = /^https?:\/\//i;
+  function inline(s) {
+    const out = [];
+    let buf = '', i = 0, m;
+    const flush = () => { if (buf) out.push({ t: 'text', s: buf }); buf = ''; };
+    while (i < s.length) {
+      const c = s[i];
+      if (c === '\\' && /^[\\`*_{}[\]()#+\-.!|<>~]$/.test(s[i + 1] || '')) { buf += s[i + 1]; i += 2; }
+      else if (c === '`') {
+        let n = 1;
+        while (s[i + n] === '`') n++;
+        const e = s.indexOf('`'.repeat(n), i + n);
+        if (e < 0) { buf += '`'.repeat(n); i += n; } else { flush(); out.push({ t: 'code', s: s.slice(i + n, e) }); i = e + n; }
+      } else if (c === '*' || c === '_' || (c === '~' && s[i + 1] === '~')) {
+        const dbl = s[i + 1] === c, w = dbl ? 2 : 1, e = s.indexOf(c.repeat(w), i + w);
+        const open = s[i + w] && !/\s/.test(s[i + w]) && (c !== '_' || !/\w/.test(s[i - 1] || ''));
+        if (open && e > i + w && !/\s/.test(s[e - 1]) && (c !== '_' || !/\w/.test(s[e + w] || ''))) {
+          flush(); out.push({ t: c === '~' ? 's' : dbl ? 'b' : 'i', c: inline(s.slice(i + w, e)) }); i = e + w;
+        } else { buf += c; i++; }
+      } else if (c === '[' && (m = /^\[([^\]]*)\]\(\s*([^)\s]+)(?:\s+"[^"]*")?\s*\)/.exec(s.slice(i)))) {
+        flush();
+        out.push(SAFE_URL.test(m[2]) ? { t: 'a', href: m[2], c: inline(m[1]) } : { t: 'text', s: m[1] });
+        i += m[0].length;
+      } else if (c === 'h' && !/\w/.test(s[i - 1] || '') && (m = /^https?:\/\/[^\s<>]+/i.exec(s.slice(i)))) {
+        const u = m[0].replace(/[.,;:!?)\]'"]+$/, '');
+        flush(); out.push({ t: 'a', href: u, c: [{ t: 'text', s: u }] }); i += u.length;
+      } else { buf += c; i++; }
+    }
+    flush();
+    return out;
+  }
+  const cells = l => l.trim().replace(/^\|/, '').replace(/\|$/, '').replace(/\\\|/g, '\0').split('|').map(x => x.trim().replace(/\0/g, '|'));
+  const TSEP = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
+  // Flat items with indentation become nested lists.
+  function nest(items, k, ind) {
+    const list = { t: 'list', ord: items[k].ord != null, start: items[k].ord || 1, items: [] };
+    while (k < items.length && items[k].ind >= ind) {
+      const it = items[k];
+      if (it.ind > ind && list.items.length) { const r = nest(items, k, it.ind); list.items[list.items.length - 1].sub.push(r.list); k = r.k; }
+      else if ((it.ord != null) !== list.ord) break;
+      else { list.items.push({ c: inline(it.text), sub: [] }); k++; }
+    }
+    return { list, k };
+  }
+  function parseMd(src) {
+    const lines = src.replace(/\r\n?/g, '\n').split('\n'), out = [], LI = /^(\s*)([-*+]|\d{1,9}[.)])\s+(.*)/;
+    let para = [], i = 0, m;
+    // A last line that is only a marker ("- ") stays text until the item's first characters arrive.
+    const li = k => { const x = LI.exec(lines[k] || ''); return x && (k < lines.length - 1 || x[3].trim()) ? x : null; };
+    const flush = () => { if (para.length) out.push({ t: 'p', c: inline(para.join('\n')) }); para = []; };
+    while (i < lines.length) {
+      const l = lines[i];
+      if ((m = /^ {0,3}(`{3,}|~{3,})\s*([^\s`]*)/.exec(l))) {
+        flush();
+        const fence = m[1], body = [];
+        for (i++; i < lines.length; i++) {
+          const t = lines[i].trim();
+          if (t.length >= fence.length && t === fence[0].repeat(t.length)) break;
+          body.push(lines[i]);
+        }
+        out.push({ t: 'code', lang: m[2], text: body.join('\n') });
+        i++;
+      } else if ((m = /^ {0,3}(#{1,6})\s+(.*?)(?:\s+#+)?\s*$/.exec(l))) {
+        flush(); out.push({ t: 'h', n: m[1].length, c: inline(m[2]) }); i++;
+      } else if (/^ {0,3}([-*_])( *\1){2,} *$/.test(l)) {
+        flush(); out.push({ t: 'hr' }); i++;
+      } else if (/^ {0,3}>/.test(l)) {
+        flush();
+        const q = [];
+        for (; i < lines.length && /^ {0,3}>/.test(lines[i]); i++) q.push(lines[i].replace(/^ {0,3}> ?/, ''));
+        out.push({ t: 'quote', c: parseMd(q.join('\n')) });
+      } else if (li(i)) {
+        flush();
+        const items = [];
+        while (i < lines.length) {
+          if ((m = li(i))) { items.push({ ind: m[1].replace(/\t/g, '    ').length, ord: /\d/.test(m[2]) ? parseInt(m[2], 10) : null, text: m[3] }); i++; }
+          else if (items.length && /^\s+\S/.test(lines[i])) { items[items.length - 1].text += '\n' + lines[i].trim(); i++; }
+          else if (!lines[i].trim() && li(i + 1)) i++;
+          else break;
+        }
+        for (let k = 0; k < items.length;) { const r = nest(items, k, items[k].ind); out.push(r.list); k = r.k; }
+      } else if (l.includes('|') && TSEP.test(lines[i + 1] || '') && (lines[i + 1] || '').includes('-')) {
+        flush();
+        const align = cells(lines[i + 1]).map(x => /^:-+:$/.test(x) ? 'center' : /-:$/.test(x) ? 'right' : '');
+        const head = cells(l).map(inline), rows = [];
+        for (i += 2; i < lines.length && lines[i].includes('|') && lines[i].trim(); i++) rows.push(cells(lines[i]).map(inline));
+        out.push({ t: 'table', align, head, rows });
+      } else {
+        if (l.trim()) para.push(l); else flush();
+        i++;
+      }
+    }
+    flush();
+    return out;
+  }
+
+  return {
+    WINDOW, backoff, basename, plural, retireText, mergeReturned, otherDevices, deviceName, theme, installOffer,
+    login, hello, intents, fs, createStore, intent, request, pending, disconnect, sendAgain, unconfirmed, diffBlocks, applyBlocks, reduce,
+    explain, lockText, fmtClock, unreachable, fsError,
+    relTime, dayGroup, groupSessions, matchSession, fmtElapsed, fmtDur, fmtTok,
+    toolKind, isDiffTool, liveBlock, activitySummary, turnEndText, compactionText, diffClass, statusLine,
+    splitPath, within, crumbs, recentWorkspaces, liveGroups, backgroundSummary, sessionTransitions, noticeLabel, inline, parseMd, SAFE_URL,
+  };
+})();
+</script>
+<script>
+'use strict';
+// Before first paint: the stored appearance (or the OS) decides data-theme, and System keeps following the OS.
+const osDark = matchMedia('(prefers-color-scheme: dark)');
+function applyTheme() {
+  const c = localStorage.getItem('minicore.theme'), t = MC.theme(c, osDark.matches);
+  document.documentElement.dataset.theme = t;
+  // Each theme-color variant shows the colour its OS scheme would get, so an explicit choice sets both.
+  const bar = { light: '#ffffff', dark: '#0e0f12' };
+  document.getElementById('tc').content = bar[MC.theme(c, false)];
+  document.getElementById('tcd').content = bar[MC.theme(c, true)];
+}
+applyTheme();
+osDark.addEventListener('change', () => { applyTheme(); if (window.onTheme) onTheme(); });
+</script>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+<defs>
+<symbol id="i-menu" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h10"/></symbol>
+<symbol id="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M4.6 4.6 6 6M18 18l1.4 1.4M2.5 12h2M19.5 12h2M4.6 19.4 6 18M18 6l1.4-1.4"/></symbol>
+<symbol id="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"><path d="M19.5 14.6A8 8 0 1 1 9.4 4.5a6.4 6.4 0 0 0 10.1 10.1z"/></symbol>
+<symbol id="i-trash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 7h15M9.5 7V5.2c0-.9.7-1.7 1.7-1.7h1.6c1 0 1.7.8 1.7 1.7V7M6.5 7l.8 11.6a2 2 0 0 0 2 1.9h5.4a2 2 0 0 0 2-1.9L17.5 7M10 11v5.5M14 11v5.5"/></symbol>
+<symbol id="i-more" viewBox="0 0 24 24" fill="currentColor"><circle cx="5.5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="18.5" cy="12" r="1.7"/></symbol>
+<symbol id="i-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></symbol>
+<symbol id="i-up" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5.5 11.5 12 5l6.5 6.5"/></symbol>
+<symbol id="i-down" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5.5 12.5 12 19l6.5-6.5"/></symbol>
+<symbol id="i-stop" viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor"/></symbol>
+<symbol id="i-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9.5 6 6 6-6 6"/></symbol>
+<symbol id="i-chevd" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 10 5 5 5-5"/></symbol>
+<symbol id="i-folder" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M3.5 7.5A2 2 0 0 1 5.5 5.5h3.6l2 2h7.4a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/></symbol>
+<symbol id="i-folderplus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 7.5A2 2 0 0 1 5.5 5.5h3.6l2 2h7.4a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2zM12 10.5v5M9.5 13h5"/></symbol>
+<symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7.5"/></symbol>
+<symbol id="i-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/></symbol>
+<symbol id="i-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="8.5" y="8.5" width="11" height="11" rx="2.5"/><path d="M15.5 8.5V6a1.5 1.5 0 0 0-1.5-1.5H6A1.5 1.5 0 0 0 4.5 6v8A1.5 1.5 0 0 0 6 15.5h2.5"/></symbol>
+<symbol id="i-retry" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12a8 8 0 1 0 2.4-5.7L4 8.6"/><path d="M4 4v4.6h4.6"/></symbol>
+<symbol id="i-term" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 7.5 4.5 4.5L5 16.5M12.5 17H19"/></symbol>
+<symbol id="i-edit" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 5.5 18.5 9.5M4.5 19.5l1-4.5L16 4.5a2 2 0 0 1 2.9 0l.6.6a2 2 0 0 1 0 2.9L9 18.5z"/></symbol>
+<symbol id="i-file" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M13.5 3.5H7A2 2 0 0 0 5 5.5v13a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9z"/><path d="M13.5 3.5V9H19"/></symbol>
+<symbol id="i-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></symbol>
+<symbol id="i-tool" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 6.5a4 4 0 0 0 5 5L12 19a2.1 2.1 0 0 1-3-3l7.5-7.5a4 4 0 0 1-2-2z"/></symbol>
+<symbol id="i-sliders" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></symbol>
+<symbol id="i-sparkle" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2.5c.5 4.6 2.9 7 7.5 7.5v.1c-4.6.5-7 2.9-7.5 7.5h-.1c-.5-4.6-2.9-7-7.4-7.5V10c4.5-.5 6.9-2.9 7.4-7.5zM19 15.5c.2 1.9 1.1 2.8 3 3-1.9.2-2.8 1.1-3 3-.2-1.9-1.1-2.8-3-3 1.9-.2 2.8-1.1 3-3z"/></symbol>
+<symbol id="i-warn" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 4.3 2.9 17.5A2 2 0 0 0 4.6 20.5h14.8a2 2 0 0 0 1.7-3L13.7 4.3a2 2 0 0 0-3.4 0z"/><path d="M12 9.5v4M12 17h.01"/></symbol>
+<symbol id="i-info" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5M12 8h.01"/></symbol>
+<symbol id="i-slash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="7.5"/><path d="m6.8 17.2 10.4-10.4"/></symbol>
+<symbol id="i-eye" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3"/></symbol>
+<symbol id="i-eyeoff" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M10 5.8A9.6 9.6 0 0 1 12 5.5c6 0 9.5 6.5 9.5 6.5a16 16 0 0 1-2.6 3.4M6.3 7.3C3.9 8.9 2.5 12 2.5 12s3.5 6.5 9.5 6.5a9 9 0 0 0 4.7-1.3M9.9 9.9a3 3 0 0 0 4.2 4.2M3.5 3.5l17 17"/></symbol>
+<symbol id="i-logout" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 4.5h3a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2h-3M10 16.5 14.5 12 10 7.5M14.5 12H4"/></symbol>
+<symbol id="i-phone" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="6.5" y="2.5" width="11" height="19" rx="2.5"/><path d="M10.5 18.5h3"/></symbol>
+<symbol id="i-power" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3.5v8M7 6.5a7.5 7.5 0 1 0 10 0"/></symbol>
+<symbol id="i-tabs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="14" rx="2.5"/><path d="M3.5 9.5h17M6.5 7.2h.01M9 7.2h.01"/></symbol>
+<symbol id="i-shield" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"><path d="M12 3 19.5 6v5.5c0 4.6-3.2 8.2-7.5 9.5-4.3-1.3-7.5-4.9-7.5-9.5V6z"/><path d="m9 12 2.2 2.2L15.5 10" stroke-linecap="round"/></symbol>
+<symbol id="i-layers" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="m12 4 8.5 4.5L12 13 3.5 8.5z"/><path d="m3.5 12.5 8.5 4.5 8.5-4.5" stroke-linecap="round"/></symbol>
+<symbol id="i-steer" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 19 19 5M10 5h9v9"/></symbol>
+<symbol id="i-cloudoff" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 6.6A6 6 0 0 1 17.6 10a4 4 0 0 1 2.9 5.8M17 18.5H7a4.5 4.5 0 0 1-1.4-8.8M3.5 3.5l17 17"/></symbol>
+</defs>
+</svg>
+
+<section id="signin" class="screen" hidden>
+  <div class="col">
+    <img class="appicon" src="/icon.svg" alt="" width="72" height="72">
+    <h1>Connect to MiniCore</h1>
+    <p class="sub">on <b id="shost"></b></p>
+    <div id="snote" class="note" role="status" hidden><svg class="ic sm"><use href="#i-info"/></svg><span></span></div>
+    <form id="sf" novalidate>
+      <label for="pw">Password</label>
+      <div class="field" id="pwf">
+        <input id="pw" name="password" type="password" autocomplete="current-password" autocapitalize="none" autocorrect="off" spellcheck="false" enterkeyhint="go" placeholder="xxxx-xxxx-xxxx" aria-describedby="serr shelp">
+        <button type="button" id="pweye" class="ib" aria-label="Show password" aria-pressed="false"><svg class="ic"><use href="#i-eye"/></svg></button>
+      </div>
+      <div id="serr" class="ferr" role="alert" hidden></div>
+      <button id="sgo" class="btn primary block" type="submit"><span class="spin" hidden></span><span>Connect</span></button>
+      <p class="help" id="shelp">The password is shown on your computer's MiniCore screen.</p>
+    </form>
+  </div>
+</section>
+
+<section id="gate" class="screen" hidden></section>
+
+<div id="main" hidden>
+  <header id="bar">
+    <button id="menu" class="ib" type="button" aria-label="Sessions" aria-haspopup="dialog"><svg class="ic"><use href="#i-menu"/></svg></button>
+    <div id="ttl">
+      <div id="title">MiniCore</div>
+      <button id="sub" type="button" aria-label="Model and reasoning" aria-haspopup="dialog"><span id="subtxt"></span><svg class="ic xs"><use href="#i-chevd"/></svg></button>
+    </div>
+    <button id="rename" class="ib" type="button" aria-label="Rename session" aria-haspopup="dialog"><svg class="ic"><use href="#i-edit"/></svg></button>
+  </header>
+  <button id="chip" type="button" aria-haspopup="dialog" hidden></button>
+  <div id="banner" role="status" aria-live="polite"><span class="spin"></span><span id="bantxt">Reconnecting…</span></div>
+  <div id="mid">
+    <main id="log" aria-label="Conversation">
+      <div id="col">
+        <div id="top"></div>
+        <div id="blocks"></div>
+        <div id="empty" hidden></div>
+      </div>
+    </main>
+    <button id="down" type="button" aria-label="Scroll to bottom" hidden><svg class="ic"><use href="#i-down"/></svg><span class="dot"></span></button>
+    <div id="toasts" aria-live="polite"></div>
+  </div>
+  <footer id="dock">
+    <div id="strip" hidden></div>
+    <div id="tray"></div>
+    <div id="modes" class="seg sm" role="radiogroup" aria-label="When to send" hidden>
+      <button type="button" role="radio" data-mode="submit" aria-checked="true"><svg class="ic xs"><use href="#i-steer"/></svg>Steer now</button>
+      <button type="button" role="radio" data-mode="queue" aria-checked="false">Queue next</button>
+    </div>
+    <form id="comp">
+      <textarea id="ta" rows="1" placeholder="Message MiniCore" aria-label="Message"></textarea>
+      <button id="act" type="submit" aria-label="Send"></button>
+    </form>
+  </footer>
+</div>
+<div id="ascrim"></div>
+<section id="appr" class="sheet" role="dialog" aria-labelledby="atitle" inert></section>
+<div id="scrim"></div>
+<aside id="drawer" role="dialog" aria-modal="true" aria-label="Sessions" tabindex="-1" inert></aside>
+<section id="sheet" class="sheet" role="dialog" aria-modal="true" tabindex="-1" inert></section>
+<div id="scrim2"></div>
+<section id="dlg" class="sheet" role="dialog" aria-modal="true" aria-labelledby="dtitle" tabindex="-1" inert></section>
+
+<script>
+'use strict';
+// ---- UI: DOM only; decisions come from MC ----
+const S = MC.createStore(), HOST = location.host, KEY = 'minicore.token', NS = 'http://www.w3.org/2000/svg';
+const $ = id => document.getElementById(id);
+const flat = k => k.flat(Infinity).filter(x => x != null && x !== false && x !== '');
+function h(tag, p, ...kids) {
+  const n = document.createElement(tag);
+  if (typeof p === 'string') n.className = p;
+  else if (p) for (const k in p) {
+    const v = p[k];
+    if (v == null || v === false) continue;
+    if (k === 'class') n.className = v;
+    else if (k.startsWith('on')) n.addEventListener(k.slice(2), v);
+    else if (k in n && !k.includes('-') && k !== 'spellcheck') n[k] = v;
+    else n.setAttribute(k, v === true ? '' : v);
+  }
+  n.append(...flat(kids));
+  return n;
+}
+function icon(name, cls) {
+  const s = document.createElementNS(NS, 'svg'), u = document.createElementNS(NS, 'use');
+  s.setAttribute('class', 'ic' + (cls ? ' ' + cls : ''));
+  s.setAttribute('aria-hidden', 'true');
+  u.setAttribute('href', '#i-' + name);
+  s.append(u);
+  return s;
+}
+const fill = (n, ...k) => n.replaceChildren(...flat(k));
+const spin = cls => h('span', 'spin' + (cls ? ' ' + cls : ''));
+const tz = () => new Date().getTimezoneOffset();
+const hostNow = () => Date.now() + S.skew;
+const st = () => S.state.status;
+const cur = () => S.state.session || S.state.draft;
+
+// ---- copy (navigator.clipboard is missing on plain-http LAN pages) ----
+function copyText(text, btn) {
+  const done = () => { if (btn) { btn.classList.add('done'); setTimeout(() => btn.classList.remove('done'), 1500); } toast('Copied'); };
+  const legacy = () => {
+    const t = h('textarea', { value: text, readOnly: true, style: 'position:fixed;top:0;left:0;opacity:0;font-size:16px' });
+    document.body.append(t);
+    t.select(); t.setSelectionRange(0, text.length);
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch { ok = false; }
+    t.remove();
+    ok ? done() : toast("Couldn't copy on this page", 'error');
+  };
+  if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).then(done, legacy); else legacy();
+}
+
+// ---- toasts ----
+// Errors and attention toasts stay until dismissed; an action ("Open") removes the toast and runs.
+function toast(text, level, act) {
+  const box = $('toasts'), sticky = level === 'error' || level === 'attn';
+  const n = h('div', { class: 'toast' + (sticky ? ' ' + level : '') + (act ? ' act' : ''), role: sticky ? 'alert' : 'status' }, sticky && icon('warn', 'sm'), h('span', '', text),
+    act && h('button', { class: 'tact', type: 'button', onclick: () => { n.remove(); act.fn(); } }, act.label),
+    sticky && h('button', { class: 'ib', type: 'button', 'aria-label': 'Dismiss', onclick: () => n.remove() }, icon('x', 'sm')));
+  box.append(n);
+  while (box.children.length > 3) box.firstChild.remove();
+  if (!sticky) setTimeout(() => n.remove(), act ? 6000 : 3500);
+  return n;
+}
+
+// ---- screens ----
+let screen = '';
+function show(name) {
+  screen = name;
+  $('signin').hidden = name !== 'signin';
+  $('gate').hidden = name !== 'gate';
+  $('main').hidden = name !== 'main';
+  if (name !== 'main') { closeDlg(); closeModal(); renderAppr(); }
+}
+function gateScreen(g) {
+  const eicon = h('div', 'eicon' + (g.icon === 'warn' ? ' warn' : ''), icon(g.icon, 'lg'));
+  fill($('gate'), h('div', 'col', g.spinner ? h('img', { class: 'appicon', src: '/icon.svg', alt: '' }) : eicon, h('h1', '', g.title), g.text && h('p', 'sub', g.text),
+    g.spinner && spin(), g.action && h('div', 'gate-acts', h('button', { class: 'btn primary block', type: 'button', onclick: g.onAction || (() => gateAction(g.action)) }, g.label),
+      g.signin && h('button', { class: 'btn ghost', type: 'button', onclick: signOut }, 'Sign in with a password'))));
+  show('gate');
+}
+function gateAction(a) {
+  if (a === 'reload') location.reload();
+  else { halted = false; attempt = 0; connecting(); connect(); }
+}
+function connecting() {
+  if (S.state) return show('main');
+  gateScreen(attempt < 2
+    ? { spinner: true, title: 'Connecting…', text: HOST }
+    : { icon: 'cloudoff', title: MC.unreachable(HOST), text: 'Check that MiniCore is running with remote control on and that this device can reach your computer. Retrying…', action: 'retry', label: 'Retry now', signin: true });
+}
+
+// ---- sign-in ----
+let lockUntil = 0, lockT = 0;
+function signinScreen(o = {}) {
+  show('signin');
+  $('shost').textContent = HOST;
+  const note = $('snote');
+  note.hidden = !o.notice;
+  if (o.notice) note.lastChild.textContent = o.notice;
+  signinBusy(false);
+  if (o.locked) lock(o.locked);
+  else if (o.error) signinError(o.error, o);
+  else if (!lockT) signinError('');
+  const pw = $('pw');
+  if (o.shake) { const f = $('pwf'); f.classList.remove('shake'); void f.offsetWidth; f.classList.add('shake'); }
+  if (o.error || o.shake) { pw.focus(); pw.select(); } else if (!o.notice) pw.focus({ preventScroll: true });
+}
+function signinError(text, o = {}) {
+  const e = $('serr');
+  $('pwf').classList.toggle('bad', !!text && !o.warn && !o.retry);
+  e.hidden = !text;
+  e.className = 'ferr' + (o.warn ? ' warn' : '');
+  fill(e, text && icon(o.warn ? 'info' : 'warn', 'sm'), h('span', '', text), o.retry && h('button', { type: 'button', onclick: doLogin }, 'Retry'));
+}
+function signinBusy(on) {
+  const b = $('sgo');
+  b.firstChild.hidden = !on;
+  b.lastChild.textContent = on ? 'Connecting…' : 'Connect';
+  b.disabled = on || Date.now() < lockUntil;
+  $('pw').readOnly = on;
+}
+function lock(sec) {
+  lockUntil = Date.now() + sec * 1000;
+  clearInterval(lockT);
+  const step = () => {
+    const left = Math.ceil((lockUntil - Date.now()) / 1000);
+    if (left <= 0) { clearInterval(lockT); lockT = 0; lockUntil = 0; signinError('You can try again now.', { warn: true }); signinBusy(false); return; }
+    signinError(MC.lockText(left), { warn: true });
+    $('sgo').disabled = true;
+  };
+  lockT = setInterval(step, 1000);
+  step();
+}
+function doLogin() {
+  const pw = $('pw').value;
+  if (!pw.trim()) { signinError('Enter the password shown on your computer.'); $('pw').focus(); return; }
+  if (Date.now() < lockUntil) return;
+  signinError('');
+  signinBusy(true);
+  halted = false;
+  open(() => MC.login(pw, MC.deviceName(navigator.userAgent, navigator.maxTouchPoints)), 'login');
+}
+$('sf').addEventListener('submit', e => { e.preventDefault(); doLogin(); });
+$('pw').addEventListener('input', () => { if (!lockT) signinError(''); });
+$('pweye').addEventListener('click', () => {
+  const pw = $('pw'), b = $('pweye'), vis = pw.type === 'password';
+  pw.type = vis ? 'text' : 'password';
+  b.setAttribute('aria-pressed', vis);
+  b.setAttribute('aria-label', vis ? 'Hide password' : 'Show password');
+  b.firstChild.firstChild.setAttribute('href', vis ? '#i-eyeoff' : '#i-eye');
+});
+function signOut() {
+  localStorage.removeItem(KEY);
+  halted = true;
+  drop();
+  resetSession();
+  signinScreen({ notice: 'Signed out of this device. Enter the password to connect again.' });
+}
+
+// ---- connection ----
+let ws = null, ready = false, halted = false, attempt = 0, retryT = 0, how = 'hello', hiddenAt = 0;
+const online = () => ready && ws && ws.readyState === 1;
+function send(msg) { ws.send(JSON.stringify(msg)); }
+function drop() {
+  clearTimeout(retryT);
+  if (ws) { const s = ws; ws = null; s.onclose = s.onmessage = null; s.close(); lost(); }
+}
+function open(first, kind) {
+  drop();
+  how = kind;
+  const s = ws = new WebSocket((location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + HOST + '/ws');
+  s.onopen = () => s.send(JSON.stringify(first()));
+  s.onmessage = e => onMessage(JSON.parse(e.data));
+  s.onclose = () => { if (ws === s) { ws = null; lost(); closed(); } };
+}
+function connect() {
+  const token = localStorage.getItem(KEY);
+  if (!token) return signinScreen();
+  open(() => MC.hello(token), 'hello');
+  renderConn();
+}
+function lost() {
+  ready = false;
+  MC.disconnect(S);
+  fsWait.clear();
+  if (ns) { ns.busy = false; ns.starting = false; }
+  pendingRow = null; mp.model = mp.level = null;
+  if (dl && dl.busy) { dl.busy = false; dl.err = 'Connection lost. Check the session list before trying again.'; renderDlg(); }
+  if (S.state) { renderTray(); renderAppr(); updateComposer(); renderModal(); }
+}
+function closed() {
+  if (halted) return;
+  if (how === 'login') { signinBusy(false); signinError(MC.unreachable(HOST), { retry: true }); return; }
+  attempt++;
+  if (!S.state) connecting();
+  renderConn();
+  retryT = setTimeout(connect, MC.backoff(attempt - 1));
+}
+function wake(force) {
+  if (halted || screen === 'signin' || !localStorage.getItem(KEY)) return;
+  if (force || !ws || ws.readyState > 1) { attempt = 0; connect(); }
+}
+function renderConn() {
+  if (screen !== 'main') return;
+  const b = $('banner'), on = !online() && !halted;
+  b.classList.toggle('on', on);
+  if (S.state) renderChip();
+  $('bantxt').textContent = navigator.onLine === false ? 'Offline · waiting for network' : 'Reconnecting…';
+  updateComposer();
+  if (modal === $('drawer')) renderDrawerFoot();
+}
+function onGate(g) {
+  halted = true;
+  drop();
+  if (g.forget) { localStorage.removeItem(KEY); resetSession(); }
+  if (g.view === 'signin') signinScreen(g);
+  else gateScreen(g);
+}
+function resetSession() {
+  Object.assign(S, MC.createStore(), { nid: S.nid });
+  nodes.forEach(n => n.remove()); nodes.length = 0; lo = 0; win = MC.WINDOW; open_.clear(); dirty.clear();
+}
+
+function onMessage(msg) {
+  const fx = MC.reduce(S, msg, Date.now());
+  if (fx.token) { localStorage.setItem(KEY, fx.token); how = 'hello'; }
+  if (fx.welcome) { ready = true; attempt = 0; signinBusy(false); }
+  if (fx.gate) return onGate(fx.gate);
+  if (fx.snapshot && screen !== 'main') { show('main'); $('pw').value = ''; }
+  if (fx.newSession) { stick = true; win = MC.WINDOW; open_.clear(); }
+  if (fx.dirty) { fx.dirty.forEach(i => dirty.add(i)); schedule(); }
+  if (fx.state) renderState();
+  if (fx.snapshot || fx.welcome) renderConn();
+  if (fx.ack) onAck(fx.ack);
+  if (fx.returned != null) {
+    const ta = $('ta');
+    ta.value = MC.mergeReturned(ta.value, fx.returned);
+    grow(); updateComposer();
+    toast("Message returned — the agent couldn't take it");
+  }
+  if (fx.events) fx.events.forEach(attention);
+  if (fx.notice) onNotice(fx.notice);
+  if (fx.fs) { const cb = fsWait.get(msg.id); fsWait.delete(msg.id); if (cb) cb(msg); }
+}
+function onAck(a) {
+  const k = a.kind;
+  if (k === 'submit' || k === 'queue') { if (a.ok) { $('ta').value = MC.retireText($('ta').value, a.text); grow(); } }
+  if (k === 'set_model') mp.model = null;
+  if (k === 'set_reasoning') mp.level = null;
+  if (k === 'open_session' && pendingRow === a.spec.session_id) { pendingRow = null; if (a.ok && modal === $('drawer')) closeModal(); }
+  if (k === 'new_session' && ns && ns.starting) { ns.starting = false; if (a.ok) closeModal(); else ns.err = a.error || 'Could not start the session.'; }
+  // Rename and delete answer inside their dialog when it is still waiting for them.
+  const inDlg = (k === 'rename_session' || k === 'delete_session') && dl && dl.busy;
+  if (inDlg) { dl.busy = false; if (a.ok) closeDlg(); else { dl.err = a.error || 'Request failed'; renderDlg(); } }
+  // Another device answered first; the state that follows closes the sheet.
+  if (k === 'answer' && a.error === 'stale') toast('Already answered');
+  else if (!a.ok && !inDlg && !(k === 'new_session' && ns)) toast(a.error || 'Request failed', 'error');
+  renderTray(); renderAppr(); updateComposer(); renderModal(); renderTop();
+}
+
+// ---- intents ----
+function intent(spec) {
+  if (!online()) { toast('Not connected', 'error'); return false; }
+  send(MC.intent(S, spec));
+  renderTray(); updateComposer();
+  return true;
+}
+const pendingKind = k => !!MC.pending(S, k);
+const sending = () => pendingKind('submit') || pendingKind('queue');
+const fsWait = new Map();
+function fsCall(body, cb) {
+  if (!online()) { cb({ ok: false, error: 'io', message: 'Not connected' }); return; }
+  const msg = MC.request(S, body);
+  fsWait.set(msg.id, cb);
+  send(msg);
+}
+
+// ---- transcript ----
+const log = $('log'), box = $('blocks'), nodes = [], dirty = new Set(), open_ = new Set();
+let lo = 0, win = MC.WINDOW, stick = true, anchor = false, raf = 0, wasBusy = false, liveIdx = -1;
+const schedule = () => { if (!raf) raf = requestAnimationFrame(flush); };
+const atBottom = () => log.scrollHeight - log.scrollTop - log.clientHeight < 80;
+const quiet = b => b.type === 'assistant' && !b.text && !b.reasoning;
+function toggle(key, i) { open_.has(key) ? open_.delete(key) : open_.add(key); dirtyRun(i); dirty.add(i); anchor = true; schedule(); }
+// A run is consecutive tool blocks, ignoring empty assistant blocks between them, within the mounted window.
+function runOf(i) {
+  const bl = S.blocks;
+  let s = i, e = i;
+  for (let j = i - 1; j >= lo; j--) { if (bl[j].type === 'tool') s = j; else if (!quiet(bl[j])) break; }
+  for (let j = i + 1; j < bl.length; j++) { if (bl[j].type === 'tool') e = j; else if (!quiet(bl[j])) break; }
+  return [s, e];
+}
+function dirtyRun(i) {
+  const b = S.blocks[i];
+  if (i < lo || !b || b.type !== 'tool') return;
+  const [s, e] = runOf(i);
+  for (let j = s; j <= e; j++) dirty.add(j);
+}
+
+function inl(tokens, p) {
+  for (const t of tokens) {
+    if (t.t === 'text') p.append(t.s);
+    else if (t.t === 'code') p.append(h('code', '', t.s));
+    else if (t.t === 'a') { const a = h('a', { href: t.href, target: '_blank', rel: 'noopener noreferrer' }); inl(t.c, a); p.append(a); }
+    else { const n = h(t.t === 'b' ? 'strong' : t.t === 's' ? 'del' : 'em'); inl(t.c, n); p.append(n); }
+  }
+}
+function md(tokens, p) {
+  for (const t of tokens) {
+    if (t.t === 'p') { const n = h('p'); inl(t.c, n); p.append(n); }
+    else if (t.t === 'h') { const n = h('h' + t.n); inl(t.c, n); p.append(n); }
+    else if (t.t === 'list') {
+      const n = h(t.ord ? 'ol' : 'ul', t.ord && t.start !== 1 ? { start: t.start } : null);
+      for (const it of t.items) { const li = h('li'); inl(it.c, li); md(it.sub, li); n.append(li); }
+      p.append(n);
+    } else if (t.t === 'code') {
+      const b = h('button', { type: 'button', 'aria-label': 'Copy code', onclick: () => copyText(t.text, b) }, icon('copy', 'xs'), 'Copy');
+      p.append(h('div', 'cb', h('div', 'cbh', h('span', '', t.lang || 'code'), b), h('pre', '', h('code', '', t.text))));
+    } else if (t.t === 'table') {
+      const cell = (tag, c, k) => { const n = h(tag, t.align[k] ? { style: 'text-align:' + t.align[k] } : null); inl(c, n); return n; };
+      p.append(h('div', 'tw', h('table', '', h('thead', '', h('tr', '', t.head.map((c, k) => cell('th', c, k)))),
+        h('tbody', '', t.rows.map(r => h('tr', '', t.head.map((_, k) => cell('td', r[k] || [], k))))))));
+    } else if (t.t === 'quote') { const n = h('blockquote'); md(t.c, n); p.append(n); }
+    else p.append(h('hr'));
+  }
+}
+function caretInto(body) {
+  let t = body;
+  while (t.lastElementChild && t.lastElementChild.matches('ul,ol,li,blockquote')) t = t.lastElementChild;
+  const last = t.lastElementChild;
+  (last && last.matches('p,h1,h2,h3,h4,h5,h6') ? last : t).append(h('span', { class: 'caret', 'aria-hidden': 'true' }));
+}
+function codeLines(lines, diff, cls) {
+  return h('pre', 'code' + (cls ? ' ' + cls : ''), lines.map(l => h('span', diff ? MC.diffClass(l) : '', l || ' ')));
+}
+const TOOL_ICON = { pending: 'spin', running: 'spin', succeeded: 'check', failed: 'x', denied: 'slash', cancelled: 'slash' };
+const stIcon = s => TOOL_ICON[s] === 'spin' ? spin('sm') : icon(TOOL_ICON[s] || 'tool', 'sm');
+const KIND_ICON = { cmd: 'term', edit: 'edit', read: 'file', search: 'search', web: 'search', other: 'tool' };
+const MAX_LINES = 400;
+function toolMeta(b) {
+  return [b.state === 'failed' && b.exit_code != null ? 'exit ' + b.exit_code : '', b.duration_ms >= 100 ? MC.fmtDur(b.duration_ms) : '',
+    b.state === 'denied' ? 'denied' : b.state === 'cancelled' ? 'cancelled' : ''].filter(Boolean).join(' · ');
+}
+function toolBody(b) {
+  const out = b.output || [], input = b.input ? b.input.split('\n') : [], diff = MC.isDiffTool(b.name);
+  const shownIn = input.slice(0, MAX_LINES), tail = out.slice(-MAX_LINES);
+  const earlier = (b.output_dropped || 0) + out.length - tail.length, moreIn = Math.max(b.input_lines || 0, input.length) - shownIn.length;
+  return h('div', 'tbody',
+    input.length > 0 && [h('div', 'tlbl', h('span', '', b.name === 'bash' ? 'Command' : diff ? 'Changes' : 'Input')),
+      codeLines(b.name === 'bash' ? shownIn.map((l, k) => (k ? '  ' : '$ ') + l) : shownIn, diff),
+      moreIn > 0 && h('div', 'hint', '+' + MC.plural(moreIn, 'more line'))],
+    (out.length > 0 || earlier > 0) && [h('div', 'tlbl', h('span', '', 'Output'), b.exit_code != null && h('span', '', 'exit ' + b.exit_code)),
+      earlier > 0 && h('div', 'hint', '+' + MC.plural(earlier, 'earlier line')),
+      tail.length > 0 && codeLines(tail, false)],
+    !input.length && !out.length && !earlier && h('div', 'hint', b.state === 'running' ? 'Running…' : 'No output'),
+    b.truncated && h('div', 'hint warn', 'Output truncated'));
+}
+function toolRow(b, i) {
+  const k = 't' + b.call_id, isOpen = open_.has(k), meta = toolMeta(b);
+  return [h('button', { class: 'trow', type: 'button', 'aria-expanded': String(isOpen), onclick: () => toggle(k, i) },
+    h('span', 'tst ' + b.state, stIcon(b.state)), h('span', 'tname', b.name), h('span', 'tdet mono', b.detail),
+    meta && h('span', 'tmeta' + (b.state === 'failed' ? ' er' : ''), meta), icon('chev', 'xs cv')),
+    isOpen && toolBody(b)];
+}
+function toolNode(b, i) {
+  const bl = S.blocks, [s, e] = runOf(i), head = bl[s], gk = 'g' + head.call_id, gopen = open_.has(gk);
+  const n = h('div', 'tl' + (i === s ? ' first' : '') + (i === e || !gopen ? ' last' : '') + (gopen ? ' open' : ''));
+  n.hidden = !gopen && i !== s;
+  if (i === s) {
+    const tools = bl.slice(s, e + 1).filter(x => x.type === 'tool');
+    const run = tools.find(x => x.state === 'running' || x.state === 'pending'), failed = tools.filter(x => x.state === 'failed').length;
+    const lastT = run || tools[tools.length - 1], ms = tools.reduce((a, x) => a + (x.duration_ms || 0), 0);
+    const ic = run ? h('span', 'gic run', spin('sm')) : failed ? h('span', 'gic er', icon('x', 'sm'))
+      : tools.every(x => x.state === 'succeeded') ? h('span', 'gic ok', icon('check', 'sm')) : h('span', 'gic', icon(KIND_ICON[MC.toolKind(lastT.name)], 'sm'));
+    n.append(h('button', { class: 'ghead', type: 'button', 'aria-expanded': String(gopen), onclick: () => toggle(gk, i) }, ic,
+      h('span', 'gtx', h('span', 'gsum', MC.activitySummary(tools)), (!gopen || run || failed) && h('span', 'gdet mono', failed > 0 && h('span', 'er', failed + ' failed'), failed > 0 && (!gopen || run) && ' · ',
+        (!gopen || run) && (run ? lastT.name + ' · ' : '') + (lastT.detail || lastT.name))),
+      ms >= 1000 && !run && h('span', 'gmeta', MC.fmtDur(ms)), icon('chev', 'sm cv')));
+  }
+  if (gopen) n.append(...flat(toolRow(b, i)));
+  return n;
+}
+function renderBlock(b, i) {
+  switch (b.type) {
+    case 'user':
+      return h('div', 'msg user' + (b.kind === 'steering' ? ' steer' : ''), b.kind === 'steering' && h('div', 'ulbl', icon('steer', 'xs'), 'Steer'), h('div', 'bubble', b.text));
+    case 'assistant': {
+      const n = h('div', 'msg asst' + (b.text ? '' : ' bare'));
+      if (quiet(b)) { n.hidden = true; return n; }
+      const live = i === liveIdx;
+      if (b.reasoning) {
+        const k = 'r' + b.loop_id + ':' + b.request, o = open_.has(k), thinking = live && !b.text;
+        n.append(h('div', 'think', h('button', { class: 'chip' + (thinking ? ' live' : ''), type: 'button', 'aria-expanded': String(o), onclick: () => toggle(k, i) },
+          icon('sparkle', 'sm sp'), h('span', '', thinking ? 'Thinking' : 'Thought'), icon('chev', 'xs cv')), o && h('div', 'reason', b.reasoning)));
+      }
+      if (b.text) {
+        const body = h('div', 'md');
+        md(MC.parseMd(b.text), body);
+        if (live) caretInto(body);
+        n.append(body);
+        if (!live) {
+          const c = h('button', { class: 'ib', type: 'button', 'aria-label': 'Copy message', onclick: () => copyText(b.text, c) }, icon('copy', 'sm'));
+          n.append(h('div', 'acts', c));
+        }
+      }
+      return n;
+    }
+    case 'tool': return toolNode(b, i);
+    case 'turn_end': {
+      // Parts wrap as units so a line never starts with a separator.
+      const parts = MC.turnEndText(b).split(' · ');
+      return h('div', 'meta-line' + (b.outcome === 'completed' ? '' : ' bad'), h('span', '', parts.map((x, k) => [h('span', 'nw', x + (k < parts.length - 1 ? ' ·' : '')), ' '])));
+    }
+    case 'compaction': {
+      const k = 'c' + i, o = open_.has(k), t = MC.compactionText(b);
+      return h('div', { class: 'compact', 'data-x': o ? '1' : null },
+        h('button', { type: 'button', 'aria-expanded': b.summary ? String(o) : null, disabled: !b.summary, onclick: () => toggle(k, i) }, icon('layers', 'sm'), h('span', '', t), b.summary && icon('chev', 'xs cv')),
+        o && h('div', 'reason', b.summary));
+    }
+    case 'earlier':
+      return h('button', { class: 'pill earlier', type: 'button', onclick: loadOlder }, pendingKind('load_older') ? spin('sm') : icon('layers', 'sm'), MC.plural(b.hidden_items, 'earlier item') + ' · Load');
+    default: return h('div');
+  }
+}
+function flush() {
+  raf = 0;
+  if (!S.state) return;
+  // Only the block being written shows the caret, "Thinking" and no Copy; the one it hands over to re-renders.
+  const live = MC.liveBlock(S.blocks, S.state.status.busy);
+  if (live !== liveIdx) {
+    for (const i of [liveIdx, live]) if (i >= 0) dirty.add(i);
+    liveIdx = live;
+  }
+  const bl = S.blocks, lo0 = lo, prevLen = lo + nodes.length;
+  const wasStick = stick, fromBottom = log.scrollHeight - log.scrollTop, h0 = log.scrollHeight;
+  const grew = bl.length > prevLen || dirty.has(bl.length - 1);
+  const serverPrepend = bl.length > prevLen && dirty.has(0) && prevLen > 0;
+  while (nodes.length > Math.max(0, bl.length - lo)) nodes.pop().remove();
+  const want = Math.max(0, bl.length - win);
+  while (lo < want && nodes.length) { nodes.shift().remove(); lo++; }
+  if (!nodes.length) lo = want;
+  if (lo > want) {
+    const old = lo, fr = document.createDocumentFragment(), add = [];
+    lo = want;
+    for (let k = lo; k < old; k++) { const n = renderBlock(bl[k], k); add.push(n); fr.append(n); dirty.delete(k); }
+    nodes.unshift(...add); box.prepend(fr); dirtyRun(old);
+  }
+  if (lo !== lo0) dirtyRun(lo);
+  for (const i of [...dirty]) for (let j = i - 1; j <= i + 1; j++) dirtyRun(j);
+  const topDelta = lo === lo0 ? 0 : log.scrollHeight - h0;
+  for (let i = lo; i < bl.length; i++) {
+    if (!dirty.has(i) && nodes[i - lo]) continue;
+    const n = renderBlock(bl[i], i), old = nodes[i - lo];
+    if (old) {
+      const f = old.contains(document.activeElement) && document.activeElement.className;
+      old.replaceWith(n);
+      const again = f && n.querySelector('.' + f.split(' ')[0]);
+      if (again) again.focus({ preventScroll: true });
+    } else box.append(n);
+    nodes[i - lo] = n;
+  }
+  dirty.clear();
+  renderTop(); renderEmpty();
+  const down = $('down');
+  if (serverPrepend && !wasStick) log.scrollTop = log.scrollHeight - fromBottom;
+  else if (wasStick && !anchor) { log.scrollTop = log.scrollHeight; down.hidden = true; }
+  else { log.scrollTop += topDelta; if (grew && !anchor && !wasStick) { down.hidden = false; down.classList.add('new'); } }
+  anchor = false;
+}
+function renderTop() {
+  if (!S.state) return;
+  const older = S.state.older && lo === 0 && !(S.blocks[0] && S.blocks[0].type === 'earlier'), busy = pendingKind('load_older');
+  fill($('top'),
+    lo > 0 && h('button', { class: 'pill', type: 'button', onclick: () => { win += MC.WINDOW; anchor = true; schedule(); } }, icon('layers', 'sm'), 'Show earlier · ' + lo),
+    older && h('button', { class: 'pill', type: 'button', disabled: busy, onclick: loadOlder }, busy ? spin('sm') : icon('layers', 'sm'), busy ? 'Loading…' : 'Load earlier messages'));
+}
+function loadOlder() { if (!pendingKind('load_older') && intent(MC.intents.loadOlder())) { renderTop(); } }
+const SUGG = [['Explain this project', 'Structure, entry points and how it fits together'], ['Run the tests and fix failures', 'Find what breaks and repair it'],
+  ['Review my uncommitted changes', 'Spot bugs and risky edits'], ['Find TODOs', 'List open TODO and FIXME notes']];
+function renderEmpty() {
+  const s = S.state, e = $('empty');
+  e.hidden = S.blocks.length > 0;
+  if (e.hidden) return;
+  if (s.status.loading) return fill(e, h('div', 'loadrow', spin(), 'Opening session…'));
+  if (s.session) return fill(e, h('div', 'muted', 'No messages yet.'));
+  fill(e, h('img', { class: 'appicon', src: '/icon.svg', alt: '' }), h('h2', '', 'What should we work on?'),
+    h('button', { class: 'where', type: 'button', 'aria-label': 'Change folder', onclick: openNew }, icon('folder', 'sm'), h('span', '', MC.basename(s.draft.workspace)), icon('chevd', 'xs')),
+    h('div', 'wpath mono', s.draft.workspace),
+    h('div', 'sugg', SUGG.map(([t, d]) => h('button', { type: 'button', onclick: () => { const ta = $('ta'); ta.value = t; grow(); updateComposer(); ta.focus(); } }, t, h('small', '', d)))));
+}
+log.addEventListener('scroll', () => { stick = atBottom(); if (stick) { $('down').hidden = true; $('down').classList.remove('new'); } }, { passive: true });
+$('down').addEventListener('click', () => { log.scrollTo({ top: log.scrollHeight, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' }); });
+
+// ---- state: bar, strip, approval, composer ----
+let tick = 0, lastInteraction = null;
+// One 1 s timer, only while the foreground turn runs or the open drawer shows a running session's elapsed time.
+function syncTick() {
+  const s = S.state, st = s && s.status;
+  const want = !!s && (!!(st.started_ms && (st.busy || st.compacting)) || (modal === $('drawer') && s.sessions.some(x => x.live && x.status === 'running' && x.started_ms)));
+  if (want && !tick) tick = setInterval(onTick, 1000);
+  if (!want && tick) { clearInterval(tick); tick = 0; }
+}
+function onTick() {
+  renderStrip();
+  if (modal === $('drawer')) for (const e of $('drawer').querySelectorAll('[data-start]')) e.textContent = MC.fmtElapsed(hostNow() - +e.dataset.start);
+}
+function renderChip() {
+  const b = MC.backgroundSummary(S.state), c = $('chip'), on = !!b.text && online();
+  c.hidden = !on;
+  $('main').classList.toggle('haschip', on);
+  if (!on) return;
+  c.setAttribute('aria-label', 'Other sessions: ' + b.text);
+  fill(c, b.running > 0 && h('i', 'pulse'), b.parts.map((p, k) => [k > 0 && h('span', 'sep', '·'), p.warn ? h('span', 'warn', icon('warn', 'xs'), p.text) : h('span', '', p.text)]));
+}
+let badgeN = -1;
+function renderAttention() {
+  const s = S.state, n = s ? (screen === 'main' && s.interaction ? 1 : 0) + MC.backgroundSummary(s).approval : 0;
+  document.title = n ? '⏸ Approval needed' + (n > 1 ? ' (' + n + ')' : '') + ' — MiniCore' : 'MiniCore';
+  if (n !== badgeN && navigator.setAppBadge) { badgeN = n; (n ? navigator.setAppBadge(n) : navigator.clearAppBadge()).catch(() => {}); }
+}
+// Background approvals and finishes come from state transitions; the server's notice for the same event is then dropped.
+const attnToasts = new Map(), recentAttn = new Map();
+const openLive = id => intent(MC.intents.openSession(id));
+function attention(e) {
+  const label = e.title || 'Untitled session';
+  recentAttn.set(label, Date.now());
+  if (e.kind === 'finished') return toast('“' + label + '” finished', 'info', { label: 'Open', fn: () => openLive(e.id) });
+  if (navigator.vibrate) navigator.vibrate([20, 40, 20]);
+  if (attnToasts.has(e.id)) attnToasts.get(e.id).remove();
+  attnToasts.set(e.id, toast('“' + label + '” needs approval', 'attn', { label: 'Open', fn: () => openLive(e.id) }));
+}
+function onNotice(n) {
+  const label = MC.noticeLabel(n.text), seen = () => Date.now() - (recentAttn.get(label) || 0) < 5000;
+  if (!label) return toast(n.text, n.level);
+  // The state carrying the same event can arrive just after its notice.
+  if (!seen()) setTimeout(() => { if (!seen()) toast(n.text.replace(/ · ctrl\+r$/, ''), n.level); }, 1500);
+}
+function renderState() {
+  const s = S.state, c = cur();
+  $('title').textContent = s.session ? s.session.title || 'Untitled session' : 'New session';
+  $('subtxt').textContent = [MC.basename(c.workspace), c.model, c.reasoning].filter(Boolean).join(' · ');
+  $('rename').style.visibility = s.session ? '' : 'hidden';
+  $('rename').disabled = !s.session;
+  // A dialog about a session that left the list (deleted elsewhere) has nothing left to act on.
+  if (dl && !dl.busy && !s.sessions.some(x => x.id === dl.id)) closeDlg();
+  syncTick();
+  renderChip();
+  for (const [id, n] of attnToasts) {
+    const x = s.sessions.find(y => y.id === id);
+    if (!x || x.current || x.status !== 'approval') { n.remove(); attnToasts.delete(id); }
+  }
+  if (!!s.status.busy !== wasBusy) { // the live block follows busy
+    wasBusy = !!s.status.busy;
+    schedule();
+  }
+  renderStrip(); renderAppr(); renderTray(); updateComposer(); renderTop();
+  if (S.blocks.length === 0) renderEmpty();
+  renderModal();
+}
+function renderStrip() {
+  const s = S.state.status, on = s.busy || s.compacting || s.loading, strip = $('strip');
+  strip.hidden = !on;
+  if (!on) return;
+  const x = MC.statusLine(S.state, S.blocks, hostNow());
+  fill(strip, spin(), h('span', { class: 'sl', role: 'status' }, x.label), h('span', 'sd mono', x.detail),
+    h('span', { class: 'sx', 'aria-hidden': 'true' }, x.elapsed && h('span', '', x.elapsed), x.ctx && h('span', '', x.ctx)));
+}
+function renderAppr() {
+  const a = screen === 'main' && S.state && S.state.interaction, sh = $('appr');
+  renderAttention();
+  sh.classList.toggle('on', !!a);
+  $('ascrim').classList.toggle('on', !!a);
+  sh.inert = !a;
+  if (!a) { lastInteraction = null; sh.style.removeProperty('--x'); padLog(); return; }
+  const fresh = a.id !== lastInteraction;
+  if (fresh) { lastInteraction = a.id; if (navigator.vibrate) navigator.vibrate(30); }
+  const p = MC.pending(S, 'answer'), dis = !online() || !!p;
+  const ans = (choice, label, cls) => h('button', { class: 'btn ' + cls, type: 'button', disabled: dis, onclick: () => { if (intent(MC.intents.answer(a.id, choice))) renderAppr(); } },
+    p && p.spec.choice === choice && spin(), label);
+  // A one-line command already reads in the detail; repeating it says nothing.
+  const input = a.input && a.input.trim() !== (a.detail || '').replace(/^\$ /, '').trim() ? a.input : '';
+  const lines = input ? input.split('\n') : [], old = sh.querySelector('.abody'), sc = old ? old.scrollTop : 0;
+  fill(sh,
+    h('div', 'ahead', h('div', 'eicon ac', icon(a.kind === 'approval' ? 'shield' : 'info')),
+      h('div', '', h('h2', { id: 'atitle' }, a.kind === 'approval' ? 'Approval needed' : 'Choose an option'), a.prompt && h('p', '', a.prompt))),
+    h('div', 'abody', (a.tool || a.detail) && h('div', 'asub', a.tool && h('b', '', a.tool), a.detail && h('code', '', a.detail)),
+      lines.length > 0 && codeLines(lines.slice(0, MAX_LINES), MC.isDiffTool(a.tool || ''))),
+    h('div', 'abtn', a.kind === 'approval'
+      ? [ans('allow', 'Allow once', 'primary'), ans('allow_session', 'Allow ' + (a.tool || 'this tool') + ' for this session', ''), ans('deny', 'Deny', 'danger')]
+      : a.options.map((o, k) => ans(k, o, k ? '' : 'primary'))));
+  sh.querySelector('.abody').scrollTop = sc;
+  if (fresh && !modal) { const f = sh.querySelector('.btn'); if (f && matchMedia('(hover: hover)').matches) f.focus({ preventScroll: true }); }
+  padLog();
+}
+// The approval sheet covers the composer; pad the log so its last lines stay readable.
+function padLog() {
+  const a = $('appr'), extra = a.classList.contains('on') ? Math.max(0, a.offsetHeight - $('dock').offsetHeight) : 0;
+  log.style.setProperty('--pad', extra + 'px');
+  if (stick) log.scrollTop = log.scrollHeight;
+}
+function renderTray() {
+  if (!S.state) return;
+  fill($('tray'),
+    MC.unconfirmed(S).map(it => h('div', { class: 'lost', role: 'alert' }, icon('warn', 'sm'),
+      h('div', 'lx', h('div', 'lh', 'Not confirmed — it may or may not have been sent'), h('div', 'lt', it.text)),
+      h('button', { class: 'btn sm', type: 'button', disabled: !online(), onclick: () => { send(MC.sendAgain(S, it.id)); renderTray(); updateComposer(); } }, icon('retry', 'xs'), 'Send again'),
+      h('button', { class: 'ib', type: 'button', 'aria-label': 'Dismiss', onclick: () => { S.intents.delete(it.id); renderTray(); } }, icon('x', 'sm')))),
+    S.state.queue.map(q => h('div', 'qchip', h('b', '', q.kind === 'steer' ? 'Steering' : 'Queued'), h('span', '', q.text))));
+}
+let sendMode = 'submit';
+function grow() {
+  const t = $('ta');
+  t.style.height = 'auto';
+  t.style.height = t.scrollHeight + 'px';
+}
+function updateComposer() {
+  if (!S.state) return;
+  const s = st(), ta = $('ta'), act = $('act'), text = ta.value.trim() !== '', lock = sending(), live = s.busy || s.compacting;
+  ta.readOnly = lock;
+  ta.placeholder = s.busy ? 'Steer or queue a message…' : S.state.session ? 'Message MiniCore' : 'Describe a task to start';
+  if (!s.busy) sendMode = 'submit';
+  $('modes').hidden = !(s.busy && text) || lock;
+  for (const b of $('modes').children) b.setAttribute('aria-checked', String(b.dataset.mode === sendMode));
+  const stop = !lock && !text && live;
+  act.className = stop ? 'stop' : '';
+  act.disabled = lock || !online() || (stop ? s.interrupting || pendingKind('cancel') : !text);
+  act.setAttribute('aria-label', lock ? 'Sending' : stop ? 'Stop' : s.busy && sendMode === 'queue' ? 'Queue message' : 'Send');
+  const want = lock ? 'spin' : stop ? 'stop' : 'up';
+  if (act.dataset.ic !== want) { act.dataset.ic = want; fill(act, lock ? spin() : icon(want)); }
+}
+function submit() {
+  const s = st(), act = $('act'), text = $('ta').value;
+  if (act.disabled) return;
+  if (act.classList.contains('stop')) { intent(MC.intents.cancel()); return; }
+  if (!text.trim() || sending()) return;
+  intent(s.busy && sendMode === 'queue' ? MC.intents.queue(text) : MC.intents.submit(text));
+}
+$('comp').addEventListener('submit', e => { e.preventDefault(); submit(); });
+$('ta').addEventListener('input', () => { grow(); updateComposer(); });
+$('ta').addEventListener('keydown', e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); if ($('ta').value.trim()) submit(); } });
+$('modes').addEventListener('click', e => { const b = e.target.closest('button'); if (b) { sendMode = b.dataset.mode; updateComposer(); } });
+
+// ---- modal surfaces: drawer and sheets ----
+let modal = null, opener = null, ns = null, pendingRow = null, query = '';
+const mp = { model: null, level: null };
+function openModal(el, render) {
+  if (modal) closeModal(true);
+  ns = null; pendingRow = null;
+  opener = document.activeElement;
+  modal = el; modal.render = render;
+  render();
+  el.inert = false;
+  el.classList.add('on');
+  $('scrim').classList.add('on');
+  requestAnimationFrame(() => { const f = el.querySelector('[data-focus]') || el; if (matchMedia('(hover: hover)').matches || f === el) f.focus({ preventScroll: true }); });
+}
+function closeModal(keepScrim) {
+  if (!modal) return;
+  modal.classList.remove('on');
+  modal.inert = true;
+  if (modal === $('drawer')) { modal = null; syncTick(); }
+  modal = null; ns = null; pendingRow = null;
+  if (!keepScrim) $('scrim').classList.remove('on');
+  if (opener && opener.isConnected && !keepScrim) opener.focus({ preventScroll: true });
+  opener = null;
+}
+function renderModal() { if (modal && S.state) modal.render(); }
+$('scrim').addEventListener('click', () => closeModal());
+document.addEventListener('keydown', e => {
+  const top = dl ? $('dlg') : modal;
+  if (!top) return;
+  if (e.key === 'Escape') { e.preventDefault(); dl ? closeDlg() : closeModal(); return; }
+  if (e.key !== 'Tab') return;
+  const f = [...top.querySelectorAll('button,input,select,textarea,a[href]')].filter(x => !x.disabled && x.offsetParent);
+  if (!f.length) return;
+  const first = f[0], last = f[f.length - 1];
+  if (e.shiftKey && (document.activeElement === first || document.activeElement === top)) { e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+});
+const shead = (title, extra, id = 'stitle', close = () => closeModal()) => h('div', 'shead', h('h2', { id }, title), extra, h('button', { class: 'ib', type: 'button', 'aria-label': 'Close', onclick: close }, icon('x')));
+
+// Sessions drawer: the skeleton is built once per opening so the search field keeps focus.
+function openDrawer() {
+  query = '';
+  $('drawer').replaceChildren();
+  openModal($('drawer'), renderDrawer);
+  syncTick();
+}
+function renderDrawer() {
+  const d = $('drawer');
+  if (!d.querySelector('.dlist')) {
+    const q = h('input', { type: 'search', placeholder: 'Search sessions', 'aria-label': 'Search sessions', autocomplete: 'off', enterKeyHint: 'search', oninput: () => { query = q.value; renderDrawerList(); } });
+    fill(d, h('div', 'dhead', h('img', { src: '/icon.svg', alt: '' }), h('div', '', h('b', '', 'MiniCore'), h('small', '', HOST)),
+      h('button', { id: 'themebtn', class: 'ib', type: 'button', onclick: () => setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark') }),
+      h('button', { class: 'ib', type: 'button', 'aria-label': 'Close', onclick: () => closeModal() }, icon('x'))),
+      h('button', { class: 'btn primary dnew', type: 'button', 'data-focus': true, onclick: openNew }, icon('plus', 'sm'), 'New session'),
+      h('label', 'search', icon('search', 'sm'), q), h('div', 'dlist'), h('div', 'dfoot'));
+  }
+  renderDrawerList(); renderDrawerFoot(); renderThemeBtn();
+}
+function renderDrawerList() {
+  const s = S.state, list = $('drawer').querySelector('.dlist');
+  if (!list) return;
+  const { active, rest } = MC.liveGroups(s.sessions), run = active.filter(x => MC.matchSession(x, query));
+  const groups = MC.groupSessions(rest, hostNow(), tz(), query);
+  fill(list, !run.length && !groups.length && h('div', 'muted', query ? 'No matching sessions' : 'No sessions yet'),
+    run.length > 0 && [h('div', 'dsec run', h('i', 'pulse'), 'Running'), run.map(sessionRow)],
+    groups.map(g => [h('div', 'dsec', g.label), g.items.map(sessionRow)]));
+}
+// Live sessions say what they are doing in front of the workspace line.
+function liveBadge(x) {
+  if (!x.live) return null;
+  if (x.status === 'approval') return h('span', 'badge warn', 'Needs approval');
+  if (x.status === 'compacting') return h('span', 'badge', spin(), 'Compacting');
+  if (x.status === 'running') return h('span', 'badge run', spin(), x.started_ms ? h('span', { 'data-start': x.started_ms }, MC.fmtElapsed(hostNow() - x.started_ms)) : 'Running');
+  return x.unseen ? h('span', 'badge new', h('i', 'ndot'), 'New') : null;
+}
+function sessionRow(x) {
+  return h('div', 'srow' + (x.current ? ' cur' : ''), h('button', {
+    class: 'sopen', type: 'button', 'aria-current': x.current ? 'true' : null,
+    onclick: () => { if (x.current) return closeModal(); if (!pendingRow && intent(MC.intents.openSession(x.id))) { pendingRow = x.id; renderDrawerList(); } },
+  }, h('span', 'rt', h('span', 'rm', x.title || 'Untitled session'), h('span', 'rs', liveBadge(x), h('span', '', sessionSub(x)))),
+  pendingRow === x.id ? spin('sm') : x.current && icon('check', 'sm')),
+  h('button', { class: 'ib more', type: 'button', 'aria-label': 'Session actions', 'aria-haspopup': 'dialog', onclick: () => openDlg({ view: 'actions', id: x.id }) }, icon('more')));
+}
+const sessionSub = x => MC.basename(x.workspace) + (x.live && x.status !== 'idle' ? '' : ' · ' + MC.relTime(Date.parse(x.updated_at), hostNow(), tz()));
+let signOutArmed = 0, installPrompt = null;
+const standalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+function installRow() {
+  const offer = MC.installOffer(standalone(), !!installPrompt, MC.deviceName(navigator.userAgent, navigator.maxTouchPoints), localStorage.getItem('minicore.installHint'));
+  if (offer === 'prompt') return h('div', 'inst', h('span', '', 'Use MiniCore as an app'),
+    h('button', { class: 'btn sm primary', type: 'button', onclick: () => { installPrompt.prompt(); installPrompt = null; renderDrawerFoot(); } }, 'Install app'));
+  return offer === 'ios' && h('div', 'inst', h('span', '', 'Install: Share → Add to Home Screen'),
+    h('button', { class: 'ib', type: 'button', 'aria-label': 'Dismiss', onclick: () => { localStorage.setItem('minicore.installHint', '1'); renderDrawerFoot(); } }, icon('x', 'sm')));
+}
+function renderDrawerFoot() {
+  const f = $('drawer').querySelector('.dfoot');
+  if (!f) return;
+  const choice = themeChoice();
+  const others = online() ? MC.otherDevices(S.state.devices, S.device) : [];
+  fill(f, installRow(), h('div', 'who', h('span', 'dot' + (online() ? '' : ' off')), h('span', '', online() ? 'Connected as ' + (S.device || 'this device') : 'Reconnecting…')),
+    others.length > 0 && h('div', 'also', 'Also connected: ' + others.join(', ')),
+    h('div', 'appear', h('span', { id: 'aplbl' }, 'Appearance'), h('div', { class: 'seg sm', role: 'radiogroup', 'aria-labelledby': 'aplbl' },
+      [['system', 'System'], ['light', 'Light'], ['dark', 'Dark']].map(([v, l]) => h('button', { type: 'button', role: 'radio', 'aria-checked': String(choice === v), onclick: () => setTheme(v) }, l)))),
+    h('button', { class: 'btn', type: 'button', onclick: () => {
+      if (signOutArmed) { clearTimeout(signOutArmed); signOutArmed = 0; signOut(); return; }
+      signOutArmed = setTimeout(() => { signOutArmed = 0; renderDrawerFoot(); }, 3000); renderDrawerFoot();
+    } }, icon('logout', 'sm'), signOutArmed ? 'Tap again to sign out' : 'Sign out of this device'));
+}
+// Swipe left closes the drawer.
+(() => {
+  let x0 = null;
+  const d = $('drawer');
+  d.addEventListener('touchstart', e => { x0 = e.touches[0].clientX; }, { passive: true });
+  d.addEventListener('touchmove', e => { if (x0 != null && x0 - e.touches[0].clientX > 70) { x0 = null; closeModal(); } }, { passive: true });
+})();
+
+// New session sheet.
+function openNew() {
+  const s = S.state, el = $('sheet');
+  el.className = 'sheet full';
+  el.setAttribute('aria-labelledby', 'stitle');
+  openModal(el, renderNew);
+  ns = { roots: null, listing: null, sel: s.draft.workspace, hidden: false, err: '', busy: true, mk: false, mkName: '', profile: s.draft.profile, starting: false, last: '' };
+  renderNew();
+  const me = ns;
+  fsCall(MC.fs.roots(), r => {
+    if (ns !== me) return;
+    ns.busy = false;
+    if (!r.ok) { ns.err = MC.fsError(r); return renderNew(); }
+    ns.roots = r.roots;
+    const w = s.draft.workspace;
+    if (w && r.roots.some(x => MC.within(w, x.path))) list(w); else renderNew();
+  });
+}
+function list(path) {
+  const me = ns;
+  ns.busy = true; ns.err = '';
+  const id = ns.last = path + '|' + ns.hidden;
+  fsCall(MC.fs.list(path, ns.hidden), r => {
+    if (ns !== me || ns.last !== id) return;
+    ns.busy = false;
+    if (r.ok) { ns.listing = r.listing; ns.sel = r.listing.path; ns.mk = false; } else ns.err = MC.fsError(r);
+    renderNew();
+  });
+  renderNew();
+}
+function mkdir() {
+  const name = ns.mkName.trim(), me = ns;
+  if (!name || !ns.listing) return;
+  ns.busy = true; ns.err = '';
+  fsCall(MC.fs.mkdir(ns.listing.path, name), r => {
+    if (ns !== me) return;
+    ns.busy = false;
+    if (r.ok) { ns.mkName = ''; list(r.created); } else { ns.err = MC.fsError(r); renderNew(); }
+  });
+  renderNew();
+}
+function renderNew() {
+  if (!ns) return;
+  const s = S.state, L = ns.listing, roots = ns.roots || [], recent = MC.recentWorkspaces(s.sessions);
+  const el = $('sheet'), keep = el.querySelector('.sbody'), scroll = keep ? keep.scrollTop : 0, focusMk = document.activeElement && document.activeElement.id === 'mkname';
+  const folderRow = (name, sub, path, nav, ic) => h('button', { class: 'row' + (ns.sel === path && !nav ? ' sel' : ''), type: 'button', disabled: ns.starting,
+    onclick: () => nav ? list(path) : (ns.sel = path, renderNew()) }, icon(ic || 'folder', 'ri'), h('span', 'rt', h('span', 'rm', name), sub && h('span', 'rs', sub)),
+    nav ? icon('chev', 'sm ri') : ns.sel === path && icon('check', 'ck'));
+  const crumbs = L && MC.crumbs(L.path, roots);
+  const mk = ns.mk && L && h('div', 'mkrow',
+    h('input', { id: 'mkname', class: 'tf', value: ns.mkName, placeholder: 'Folder name', 'aria-label': 'New folder name', autocapitalize: 'none', autocomplete: 'off', spellcheck: 'false', enterKeyHint: 'done',
+      oninput: e => { ns.mkName = e.target.value; }, onkeydown: e => { if (e.key === 'Enter') { e.preventDefault(); mkdir(); } } }),
+    h('button', { class: 'btn primary', type: 'button', disabled: ns.busy, onclick: mkdir }, 'Create'));
+  const profiles = s.profiles, prof = profiles.length > 1 && h('div', { class: 'seg', role: 'radiogroup', 'aria-label': 'Profile' },
+    profiles.map(p => h('button', { type: 'button', role: 'radio', 'aria-checked': String(ns.profile === p), onclick: () => { ns.profile = p; renderNew(); } }, p)));
+  const selName = ns.sel ? MC.basename(ns.sel) : '';
+  fill(el, h('div', 'grab'), shead('New session'),
+    h('div', 'sbody',
+      recent.length > 0 && [h('div', 'sec', 'Recent workspaces'), h('div', 'list', recent.map(w => folderRow(MC.basename(w), w, w, false)))],
+      h('div', 'sec', h('span', '', 'Browse'), ns.busy && spin('sm')),
+      L && h('nav', { class: 'crumbs', 'aria-label': 'Folder path' }, h('button', { type: 'button', onclick: () => { ns.listing = null; ns.mk = false; renderNew(); } }, 'Roots'),
+        crumbs.map((c, k) => [icon('chev', 'xs'), h('button', { type: 'button', 'aria-current': k === crumbs.length - 1 ? 'location' : null, onclick: () => list(c.path) }, c.name)])),
+      L && h('div', 'tools', h('label', 'sw', h('input', { type: 'checkbox', role: 'switch', checked: ns.hidden, onchange: e => { ns.hidden = e.target.checked; list(L.path); } }), 'Show hidden'),
+        h('button', { class: 'btn ghost sm', type: 'button', 'aria-expanded': String(ns.mk), onclick: () => { ns.mk = !ns.mk; renderNew(); if (ns.mk) $('mkname').focus(); } }, icon('folderplus', 'sm'), 'New folder')),
+      mk,
+      ns.err && h('div', { class: 'serr', role: 'alert' }, icon('warn', 'sm'), h('span', '', ns.err)),
+      L ? h('div', 'list', L.parent != null && folderRow(MC.basename(L.parent), 'Parent folder', L.parent, true, 'up'), L.entries.map(x => folderRow(x.name, null, x.path, true)),
+        !L.entries.length && !ns.busy && h('div', 'muted', 'No folders here'))
+        : roots.length > 0 && h('div', 'list', roots.map(r => folderRow(r.name, r.path, r.path, true))),
+      L && L.truncated && h('div', 'hint', 'Only the first 1000 folders are shown.'),
+      prof && [h('div', 'sec', 'Profile'), prof]),
+    h('div', 'sfoot', h('button', { class: 'btn primary block', type: 'button', disabled: !ns.sel || ns.starting || !online(), onclick: () => {
+      if (intent(MC.intents.newSession(ns.sel, ns.profile))) { ns.starting = true; renderNew(); }
+    } }, ns.starting && spin(), ns.sel ? 'Start in ' + selName : 'Choose a folder')));
+  const body = el.querySelector('.sbody');
+  body.scrollTop = scroll;
+  const mi = focusMk && $('mkname');
+  if (mi) { mi.focus(); mi.setSelectionRange(mi.value.length, mi.value.length); }
+}
+
+// Model sheet.
+function openModel() {
+  if (!S.state.models.length) return toast('No models are configured');
+  const el = $('sheet');
+  el.className = 'sheet';
+  el.setAttribute('aria-labelledby', 'stitle');
+  openModal(el, renderModel);
+}
+function renderModel() {
+  const s = S.state, c = cur(), model = mp.model || c.model, m = s.models.find(x => x.id === model), level = mp.level || c.reasoning, u = s.usage;
+  fill($('sheet'), h('div', 'grab'), shead('Model'),
+    h('div', 'sbody',
+      h('div', { class: 'list mlist', role: 'radiogroup', 'aria-label': 'Model' }, s.models.map(x => h('button', {
+        class: 'row flat', type: 'button', role: 'radio', 'aria-checked': String(x.id === model), disabled: !online(),
+        onclick: () => { if (x.id !== model && intent(MC.intents.setModel(x.id))) { mp.model = x.id; renderModel(); } },
+      }, h('span', 'rt', h('span', 'rm', x.id), h('span', 'rs', x.reasoning.length ? x.reasoning.join(' · ') : 'No reasoning levels')),
+      x.id === model && (mp.model ? spin('sm') : icon('check', 'ck'))))),
+      m && m.reasoning.length > 0 && [h('div', 'sec', 'Reasoning'), h('div', { class: 'seg', role: 'radiogroup', 'aria-label': 'Reasoning' }, m.reasoning.map(l => h('button', {
+        type: 'button', role: 'radio', 'aria-checked': String(l === level), disabled: !online(),
+        onclick: () => { if (l !== level && intent(MC.intents.setReasoning(l))) { mp.level = l; renderModel(); } },
+      }, mp.level === l && spin('sm'), l)))],
+      h('div', 'mfoot', [s.context_percent != null && Math.round(s.context_percent) + '% of context used',
+        (u.input || u.output) && MC.fmtTok(u.input) + ' in · ' + MC.fmtTok(u.output) + ' out' + (u.cached ? ' · ' + MC.fmtTok(u.cached) + ' cached' : '')].filter(Boolean).join(' · '))));
+}
+
+$('menu').addEventListener('click', openDrawer);
+$('chip').addEventListener('click', openDrawer);
+$('sub').addEventListener('click', openModel);
+$('rename').addEventListener('click', () => { if (S.state.session) openDlg({ view: 'rename', id: S.state.session.id }); });
+
+// ---- appearance ----
+const themeChoice = () => { const c = localStorage.getItem('minicore.theme'); return c === 'light' || c === 'dark' ? c : 'system'; };
+function setTheme(c) {
+  if (c === 'system') localStorage.removeItem('minicore.theme'); else localStorage.setItem('minicore.theme', c);
+  applyTheme(); onTheme();
+}
+function onTheme() { if (modal === $('drawer')) { renderThemeBtn(); renderDrawerFoot(); } }
+function renderThemeBtn() {
+  const b = $('themebtn'), dark = document.documentElement.dataset.theme === 'dark';
+  b.setAttribute('aria-label', dark ? 'Switch to light appearance' : 'Switch to dark appearance');
+  fill(b, icon(dark ? 'sun' : 'moon'));
+}
+
+// ---- session dialogs: actions, rename, delete; they stack above the drawer ----
+let dl = null, opener2 = null;
+function openDlg(d) {
+  const s = S.state.sessions.find(x => x.id === d.id) || S.state.session;
+  if (!dl) opener2 = document.activeElement;
+  dl = Object.assign({ title: s.title || '', value: s.title || '', current: s.id === S.sid, sub: s.updated_at ? sessionSub(s) : '', busy: false, err: '' }, d);
+  const el = $('dlg');
+  renderDlg();
+  el.inert = false;
+  el.classList.add('on');
+  $('scrim2').classList.add('on');
+  // Synchronous focus inside the tap so iOS opens the keyboard for the rename field.
+  const f = el.querySelector('[data-focus]');
+  if (f && (f.tagName === 'INPUT' || matchMedia('(hover: hover)').matches)) { f.focus({ preventScroll: true }); if (f.select) f.select(); }
+  else el.focus({ preventScroll: true });
+}
+function closeDlg() {
+  if (!dl) return;
+  dl = null;
+  const el = $('dlg');
+  el.classList.remove('on');
+  el.inert = true;
+  $('scrim2').classList.remove('on');
+  if (opener2 && opener2.isConnected) opener2.focus({ preventScroll: true });
+  opener2 = null;
+}
+$('scrim2').addEventListener('click', closeDlg);
+const label = d => '“' + (d.title || 'Untitled session') + '”';
+function renderDlg() {
+  const d = dl, el = $('dlg'), err = d.err && h('div', { class: 'serr', role: 'alert' }, icon('warn', 'sm'), h('span', '', d.err));
+  if (d.view === 'actions') {
+    return fill(el, h('div', 'grab'), h('div', 'dtitle', h('h2', { id: 'dtitle' }, d.title || 'Untitled session'), d.sub && h('p', '', d.sub)),
+      h('div', 'sbody', h('div', 'list',
+        h('button', { class: 'row flat', type: 'button', 'data-focus': true, onclick: () => openDlg({ view: 'rename', id: d.id }) }, icon('edit', 'ri'), h('span', 'rt', h('span', 'rm', 'Rename'))),
+        h('button', { class: 'row flat bad', type: 'button', disabled: d.current, onclick: () => openDlg({ view: 'confirm', id: d.id }) }, icon('trash', 'ri'),
+          h('span', 'rt', h('span', 'rm', 'Delete session'), d.current && h('span', 'rs', 'Open another session first'))))),
+      h('div', 'sfoot', h('button', { class: 'btn block', type: 'button', onclick: closeDlg }, 'Cancel')));
+  }
+  if (d.view === 'confirm') {
+    return fill(el, h('div', 'ahead', h('div', 'eicon warn', icon('trash')), h('div', '', h('h2', { id: 'dtitle' }, 'Delete ' + label(d) + '?'), h('p', '', "This can't be undone."))),
+      err && h('div', 'abody', err),
+      h('div', 'abtn', h('button', { class: 'btn dangerfill', type: 'button', 'data-focus': true, disabled: d.busy || !online(), onclick: () => {
+        d.err = '';
+        if (intent(MC.intents.deleteSession(d.id))) d.busy = true;
+        renderDlg();
+      } }, d.busy && spin(), d.busy ? 'Deleting…' : 'Delete'), h('button', { class: 'btn', type: 'button', onclick: closeDlg }, 'Cancel')));
+  }
+  const had = document.activeElement && document.activeElement.id === 'renin';
+  fill(el, h('div', 'grab'), shead('Rename session', null, 'dtitle', closeDlg),
+    h('form', { class: 'dform', novalidate: true, onsubmit: e => {
+      e.preventDefault();
+      if (d.busy) return;
+      d.err = '';
+      if (intent(MC.intents.renameSession(d.id, d.value.trim()))) d.busy = true;
+      renderDlg();
+    } },
+    h('div', 'sbody', h('input', { id: 'renin', class: 'tf', type: 'text', value: d.value, maxLength: 200, readOnly: d.busy, 'data-focus': true, 'aria-label': 'Session title',
+      placeholder: 'Session title', autocomplete: 'off', enterKeyHint: 'done', 'aria-describedby': 'renhint', oninput: e => { d.value = e.target.value; } }),
+      h('div', { id: 'renhint', class: 'hint' }, 'Leave empty to use the first message'), err),
+    h('div', 'sfoot dbtns', h('button', { class: 'btn', type: 'button', onclick: closeDlg }, 'Cancel'),
+      h('button', { class: 'btn primary', type: 'submit', disabled: d.busy || !online() }, d.busy && spin(), d.busy ? 'Saving…' : 'Save'))));
+  // Keep the caret when a re-render (pending, error) replaces the field the user is typing in.
+  if (had) { const i = $('renin'); i.focus({ preventScroll: true }); i.setSelectionRange(i.value.length, i.value.length); }
+}
+
+// ---- lifecycle ----
+document.addEventListener('visibilitychange', () => { if (document.hidden) hiddenAt = Date.now(); else wake(Date.now() - hiddenAt > 10000); });
+// A page restored from the back/forward cache lost its socket; focus catches resumes that fire no visibility change.
+addEventListener('pageshow', e => { if (e.persisted) wake(true); });
+addEventListener('focus', () => wake(false));
+addEventListener('online', () => { renderConn(); wake(false); });
+addEventListener('offline', renderConn);
+// Chromium's install prompt waits for the drawer's button.
+addEventListener('beforeinstallprompt', e => { e.preventDefault(); installPrompt = e; renderDrawerFoot(); });
+addEventListener('appinstalled', () => { installPrompt = null; renderDrawerFoot(); });
+if ('serviceWorker' in navigator && isSecureContext) navigator.serviceWorker.register('/sw.js');
+new ResizeObserver(padLog).observe($('appr'));
+if (window.visualViewport) {
+  // iOS keeps the layout viewport under the keyboard; fixed bottom sheets are lifted by the part it covers.
+  const fit = () => {
+    if (window.scrollY) scrollTo(0, 0);
+    const root = document.documentElement, kb = Math.max(0, Math.round(innerHeight - visualViewport.height - visualViewport.offsetTop));
+    root.style.setProperty('--h', visualViewport.height + 'px');
+    root.style.setProperty('--kb', kb + 'px');
+    root.classList.toggle('kb', kb > 80);
+    if (stick) log.scrollTop = log.scrollHeight;
+  };
+  visualViewport.addEventListener('resize', fit);
+  visualViewport.addEventListener('scroll', fit);
+  fit();
+}
+if (localStorage.getItem(KEY)) { connecting(); connect(); } else signinScreen();
+</script>
+</body>
+</html>

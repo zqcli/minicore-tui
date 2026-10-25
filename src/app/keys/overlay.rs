@@ -60,13 +60,17 @@ impl App {
     /// Ctrl+D in the sessions picker: the first press arms the delete, the
     /// second deletes the selected session.
     fn delete_confirm(&mut self) {
+        if self.remote.active() {
+            self.remote_flash();
+            return;
+        }
         let Overlay::Sessions {
             rows,
             filter,
             selected,
             armed,
             ..
-        } = &mut self.overlay
+        } = &self.overlay
         else {
             return;
         };
@@ -78,17 +82,18 @@ impl App {
             return;
         };
         let id = info.session_id.clone();
-        if resident.is_some_and(|session| session.info.session_id == id) {
-            self.notice(
-                NoticeLevel::Error,
-                "Open another session before deleting this one",
-            );
-        } else if armed.as_deref() == Some(id.as_str()) {
-            *armed = None;
+        let label = session_label(info, resident);
+        let again = armed.as_deref() == Some(id.as_str());
+        if let Some(refusal) = self.delete_refusal(&id) {
+            self.notice(NoticeLevel::Error, refusal);
+            return;
+        }
+        if let Overlay::Sessions { armed, .. } = &mut self.overlay {
+            *armed = (!again).then(|| id.clone());
+        }
+        if again {
             self.on_action(Action::DeleteSession(id));
         } else {
-            let label = session_label(info, resident);
-            *armed = Some(id);
             self.notice(
                 NoticeLevel::Info,
                 format!("Press Ctrl+D again to delete \"{label}\" permanently"),
@@ -185,6 +190,15 @@ impl App {
     }
 
     fn on_overlay_accept(&mut self) -> Option<Action> {
+        if self.remote.active()
+            && matches!(
+                self.overlay,
+                Overlay::Sessions { .. } | Overlay::Models { .. } | Overlay::Reasoning { .. }
+            )
+        {
+            self.remote_flash();
+            return None;
+        }
         match std::mem::replace(&mut self.overlay, Overlay::None) {
             Overlay::Sessions {
                 selected,

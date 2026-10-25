@@ -38,8 +38,13 @@ impl App {
         let snapshot = Snapshot {
             workspace: &workspace,
             title,
-            approval: self.has_interaction(),
+            approval: self.has_interaction()
+                || self
+                    .background
+                    .iter()
+                    .any(|session| session.interaction.is_some()),
             busy_for: self.busy_elapsed(),
+            ring: std::mem::take(&mut self.ring),
         };
         self.notifier.update(&snapshot)
     }

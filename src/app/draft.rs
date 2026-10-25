@@ -3,7 +3,7 @@
 
 use serde_json::json;
 
-use super::{App, NoticeLevel};
+use super::{App, LaunchSettings, NoticeLevel};
 use crate::protocol::{ProfileInfo, Reasoning};
 
 /// The levels that rank against each other, lowest first.
@@ -18,16 +18,47 @@ const SCALE: [Reasoning; 6] = [
 
 pub(super) const NO_SESSION: &str = "No session yet: send a message first";
 
+impl LaunchSettings {
+    pub fn profile<'a>(
+        &self,
+        profiles: &'a [ProfileInfo],
+        default: Option<&str>,
+    ) -> Option<&'a ProfileInfo> {
+        let id = self.profile.as_deref().or(default)?;
+        profiles.iter().find(|profile| profile.id == id)
+    }
+
+    pub fn model_id<'a>(
+        &'a self,
+        profiles: &'a [ProfileInfo],
+        default: Option<&str>,
+    ) -> Option<&'a str> {
+        self.model
+            .as_deref()
+            .or_else(|| Some(self.profile(profiles, default)?.model.as_str()))
+    }
+
+    pub fn reasoning(&self, profiles: &[ProfileInfo], default: Option<&str>) -> Option<Reasoning> {
+        self.reasoning
+            .or_else(|| Some(self.profile(profiles, default)?.reasoning))
+    }
+}
+
 impl App {
+    pub fn draft_launch(&self) -> &LaunchSettings {
+        self.remote
+            .draft
+            .as_ref()
+            .map_or(&self.launch, |draft| &draft.launch)
+    }
+
     /// The model the next message runs on: the session's, else the one a new session would get.
     pub fn model_id(&self) -> Option<&str> {
         match &self.session {
             Some(session) => Some(&session.info.model),
             None => self
-                .launch
-                .model
-                .as_deref()
-                .or_else(|| Some(self.draft_profile()?.model.as_str())),
+                .draft_launch()
+                .model_id(&self.profiles, self.default_profile.as_deref()),
         }
     }
 
@@ -36,20 +67,9 @@ impl App {
         match &self.session {
             Some(session) => Some(session.info.reasoning),
             None => self
-                .launch
-                .reasoning
-                .or_else(|| Some(self.draft_profile()?.reasoning)),
+                .draft_launch()
+                .reasoning(&self.profiles, self.default_profile.as_deref()),
         }
-    }
-
-    /// The profile a new session would use: the one asked for, else the Agent's default.
-    fn draft_profile(&self) -> Option<&ProfileInfo> {
-        let id = self
-            .launch
-            .profile
-            .as_ref()
-            .or(self.default_profile.as_ref())?;
-        self.profiles.iter().find(|profile| profile.id == *id)
     }
 
     /// Switches the session's model, or the draft's; a reasoning level the
@@ -109,20 +129,6 @@ impl App {
         if profile.is_some() {
             self.launch.profile = profile;
         }
-    }
-
-    /// The first Enter of a draft: creates the session, which then sends the
-    /// text. Text entered while a session is being opened stays in the editor.
-    pub(super) fn start_session(&mut self) {
-        if !self.ready || self.loading_session {
-            return;
-        }
-        let text = self.composer.submit().trim_end().to_owned();
-        if text.is_empty() {
-            return;
-        }
-        self.first_message = Some(text);
-        self.create_session();
     }
 }
 

@@ -5,7 +5,7 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -103,6 +103,18 @@ impl RenderState {
             rows.push(chunk.clone());
         }
         rows
+    }
+}
+
+/// `path` with the home directory written `~`.
+pub fn home_relative(path: &Path) -> PathBuf {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    match home
+        .as_deref()
+        .and_then(|home| path.strip_prefix(home).ok())
+    {
+        Some(rest) => Path::new("~").join(rest),
+        None => path.to_path_buf(),
     }
 }
 
@@ -302,16 +314,8 @@ fn header(styles: Styles, width: u16, workspace: &Path) -> Vec<Line<'static>> {
     }
     lines.push(hint_line(&row, styles));
     lines.push(Line::default());
-    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
-    let shown = match home
-        .as_deref()
-        .and_then(|home| workspace.strip_prefix(home).ok())
-    {
-        Some(rest) => Path::new("~").join(rest),
-        None => workspace.to_path_buf(),
-    };
     lines.push(Line::styled(
-        format!(" {}", shown.display()),
+        format!(" {}", home_relative(workspace).display()),
         styles.faint(),
     ));
     lines.push(Line::default());
