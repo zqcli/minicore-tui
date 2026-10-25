@@ -89,7 +89,6 @@ impl App {
                 self.copy_draft_selection(false);
                 self.quit_armed = None;
             }
-            KeyCode::Char('c') if ctrl && self.remote.active() => return Some(Action::Quit),
             KeyCode::Char('c') if ctrl => {
                 let now = tokio::time::Instant::now();
                 if self.quit_armed.is_some_and(|at| now - at <= QUIT_WINDOW) {
@@ -267,7 +266,8 @@ impl App {
     /// about once, or a prompt. `//` escapes a leading slash.
     fn submit_line(&mut self, text: &str) -> Option<Action> {
         if self.remote.active() {
-            return Some(Action::Submit);
+            self.remote_flash();
+            return None;
         }
         if let Some(escaped) = text.strip_prefix('/').filter(|rest| rest.starts_with('/')) {
             self.composer.set_text(escaped);

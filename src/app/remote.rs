@@ -66,10 +66,15 @@ impl App {
             "on" if self.remote.active() => self.open_panel(Panel::Remote),
             "on" if self.remote.starting.is_some() => {}
             "on" => {
-                let Some(config) = self.remote.config.clone() else {
-                    return;
-                };
-                let Some(home) = &self.home else { return };
+                let config = self
+                    .remote
+                    .config
+                    .clone()
+                    .expect("remote settings initialized at startup");
+                let home = self
+                    .home
+                    .as_ref()
+                    .expect("TUI directory initialized at startup");
                 let file = home.dir().join("remote-devices.json");
                 let tx = self.tx.clone();
                 self.remote.generation += 1;
@@ -110,7 +115,6 @@ impl App {
                 self.flash = Some(("Remote control is on · quit again to end it".into(), now));
                 return;
             }
-            self.remote.stop("tui_exit");
         }
         self.quit = true;
     }
@@ -198,14 +202,16 @@ impl App {
                     .and_then(|s| s.interaction.as_ref())
                     .filter(|i| i.interaction_id == interaction_id)
                     .ok_or("stale")?;
-                let answer = match choice {
-                    Choice::Name(name) => match name.as_str() {
+                let answer = match (choice, &interaction.kind) {
+                    (Choice::Name(name), super::InteractionKind::Approval) => match name.as_str() {
                         "allow" => Answer::Allow,
                         "allow_session" => Answer::AllowTool,
                         "deny" => Answer::Deny,
                         _ => return Err("bad_request".into()),
                     },
-                    Choice::Index(index) if index < interaction.options().len() => {
+                    (Choice::Index(index), super::InteractionKind::Choice(options))
+                        if index < options.len() =>
+                    {
                         Answer::Choice(index)
                     }
                     _ => return Err("bad_request".into()),
@@ -245,6 +251,9 @@ impl App {
                 let path = workspace
                     .map(PathBuf::from)
                     .unwrap_or_else(|| self.workspace.clone());
+                if !path.is_absolute() {
+                    return Err("Workspace must be absolute".into());
+                }
                 let path = fs::canonical_within(self.remote.roots(), &path)
                     .map_err(|error| error.code().to_owned())?;
                 if !path.is_dir() {
@@ -274,7 +283,7 @@ impl App {
         if !self.ready || self.loading_session {
             return Err("A session is opening or being created".into());
         }
-        self.submit_text(text, follow);
+        self.submit_text(text.trim_end().to_owned(), follow);
         Ok(())
     }
 

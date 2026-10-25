@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
+use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -54,7 +55,10 @@ pub async fn serve(
         tokio::select! {
             _ = &mut stop => break,
             accepted = listener.accept() => {
-                let Ok((stream, _)) = accepted else { return };
+                let Ok((stream, _)) = accepted else {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    continue;
+                };
                 let Ok(permit) = permits.clone().try_acquire_owned() else { continue };
                 let auth = auth.clone();
                 let tx = tx.clone();
@@ -109,13 +113,11 @@ fn same_origin(origin: &[u8], host: Option<&[u8]>) -> bool {
     let Ok(origin) = std::str::from_utf8(origin) else {
         return false;
     };
-    let Some(authority) = origin
-        .strip_prefix("http://")
-        .or_else(|| origin.strip_prefix("https://"))
-    else {
+    let Some((scheme, authority)) = origin.split_once("://") else {
         return false;
     };
-    !authority.contains(['/', '?', '#', '@'])
+    (scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https"))
+        && !authority.contains(['/', '?', '#', '@'])
         && host.is_some_and(|host| authority.as_bytes().eq_ignore_ascii_case(host))
 }
 
@@ -216,12 +218,20 @@ async fn connection(
     if handshake.version() != wire::VERSION {
         return reject(&mut socket, "version").await;
     }
+    if let Handshake::Pair { device, .. } = &handshake
+        && (device.is_empty()
+            || device.chars().count() > 64
+            || device.chars().any(char::is_control))
+    {
+        return reject(&mut socket, "bad_request").await;
+    }
+    let credentials = auth.clone();
     let authenticated = tokio::task::spawn_blocking(move || {
-        let mut auth = auth.lock().unwrap();
+        let mut auth = credentials.lock().unwrap();
         match handshake {
             Handshake::Pair { code, device, .. } => auth
-                .pair(&code, device)
-                .map(|(device, token)| (device, Some(token))),
+                .prepare_pair(&code, device)
+                .map(|(device, token)| (device, Some((code, token)))),
             Handshake::Hello { token, .. } => auth
                 .verify(&token)
                 .map(|device| (device, None))
@@ -243,7 +253,7 @@ async fn connection(
         connection: Connection {
             id,
             generation,
-            device,
+            device: device.clone(),
             outbound,
             close,
         },
@@ -259,7 +269,12 @@ async fn connection(
         biased;
         _ = closing.changed() => Ok(()),
         result = async {
-        if let Some(token) = token { send(&mut socket, json!({"t":"paired", "token": token})).await?; }
+        if let Some((code, token)) = token {
+            let committed = tokio::task::spawn_blocking(move || auth.lock().unwrap().commit_pair(&code, device))
+                .await.map_err(|error| error.to_string())?;
+            if committed.is_err() { return reject(&mut socket, "unauthorized").await; }
+            send(&mut socket, json!({"t":"paired", "token": token})).await?;
+        }
         send(&mut socket, json!({"t":"welcome", "v":wire::VERSION, "version":env!("CARGO_PKG_VERSION"), "device":name})).await?;
         let mut ping = tokio::time::interval_at(Instant::now() + PING, PING);
         let mut last = Instant::now();
@@ -280,13 +295,13 @@ async fn connection(
                             let request_id = value.get("id").and_then(Value::as_str).filter(|id| id.len() <= 64);
                             if let Some(request_id) = request_id {
                                 if value["t"] == "intent" {
-                                    if let Ok(intent) = serde_json::from_value::<wire::Intent>(value.clone()) {
+                                    if let Ok(intent) = serde::Deserialize::deserialize(&value) {
                                         let (done, finished) = oneshot::channel();
                                         tx.send(Msg::Remote(RemoteEvent::Request { connection: id, id: request_id.to_owned(), intent, done })).map_err(|_| "TUI closed")?;
                                         finished.await.map_err(|_| "TUI closed")?;
                                         continue;
                                     }
-                                } else if let Ok(request) = serde_json::from_value::<FsRequest>(value.clone()) {
+                                } else if let Ok(request) = FsRequest::deserialize(&value) {
                                     let reply = filesystem(request_id.to_owned(), request, roots.clone(), controller.clone()).await?;
                                     let Some(reply) = reply else { break };
                                     send(&mut socket, reply).await?;
@@ -308,11 +323,21 @@ async fn connection(
     let reason = *closing.borrow();
     if let Some(reason) = reason.filter(|reason| *reason != "overflow") {
         let _ = timeout(
-            FIRST,
+            Duration::from_millis(250),
             send(&mut socket, json!({"t":"bye", "reason":reason})),
         )
         .await;
     }
+    let _ = timeout(Duration::from_millis(250), async {
+        socket.close(None).await?;
+        while let Some(frame) = socket.next().await {
+            if matches!(frame?, Message::Close(_)) {
+                break;
+            }
+        }
+        Ok::<_, tokio_tungstenite::tungstenite::Error>(())
+    })
+    .await;
     let _ = tx.send(Msg::Remote(RemoteEvent::Disconnected(id)));
     result
 }
@@ -420,6 +445,72 @@ mod tests {
         task.abort();
     }
 
+    #[test]
+    fn origins_match_host_port_ipv6_and_case_without_accepting_foreign_authorities() {
+        for (origin, host, allowed) in [
+            ("https://host:8765", "host:8765", true),
+            ("HTTP://HOST:8765", "host:8765", true),
+            ("http://[::1]:8765", "[::1]:8765", true),
+            ("http://[::1]:8765", "[::1]:80", false),
+            ("https://host:8765", "host", false),
+            ("https://evil@host:8765", "host:8765", false),
+            ("null", "host", false),
+        ] {
+            assert_eq!(
+                same_origin(origin.as_bytes(), Some(host.as_bytes())),
+                allowed,
+                "{origin}"
+            );
+        }
+        assert!(!same_origin(b"https://host", None));
+    }
+
+    #[tokio::test]
+    async fn rejected_pairing_writes_no_device_and_leaves_the_code_available() {
+        let (dir, address, auth, mut rx, task) = start().await;
+        let stream = TcpStream::connect(address).await.unwrap();
+        let (mut socket, _) = tokio_tungstenite::client_async(format!("ws://{address}/ws"), stream)
+            .await
+            .unwrap();
+        let code = auth.lock().unwrap().pairing.code.clone();
+        send(
+            &mut socket,
+            json!({"t":"pair", "v":1, "code":code, "device":"other phone"}),
+        )
+        .await
+        .unwrap();
+        let Msg::Remote(RemoteEvent::Connect { accepted, .. }) = rx.recv().await.unwrap() else {
+            panic!("admission")
+        };
+        accepted.send(false).unwrap();
+        assert_eq!(receive(&mut socket).await["code"], "busy");
+        assert!(!dir.path().join("remote-devices.json").exists());
+        assert!(auth.lock().unwrap().pairing.active());
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn invalid_device_names_and_pre_auth_filesystem_requests_are_refused() {
+        let (_dir, address, auth, mut rx, task) = start().await;
+        let code = auth.lock().unwrap().pairing.code.clone();
+        let mut requests = vec![json!({"t":"fs_roots", "id":"early"})];
+        for device in ["".to_owned(), "bad\nname".into(), "x".repeat(65)] {
+            requests.push(json!({"t":"pair", "v":1, "code":code, "device":device}));
+        }
+        for request in requests {
+            let stream = TcpStream::connect(address).await.unwrap();
+            let (mut socket, _) =
+                tokio_tungstenite::client_async(format!("ws://{address}/ws"), stream)
+                    .await
+                    .unwrap();
+            send(&mut socket, request).await.unwrap();
+            assert_eq!(receive(&mut socket).await["code"], "bad_request");
+        }
+        assert!(rx.try_recv().is_err());
+        assert!(auth.lock().unwrap().pairing.active());
+        task.abort();
+    }
+
     async fn receive(socket: &mut WebSocketStream<TcpStream>) -> Value {
         serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap()).unwrap()
     }
@@ -517,7 +608,7 @@ mod tests {
             receive(&mut socket).await,
             json!({"t":"bye", "reason":"replaced"})
         );
-        assert!(socket.next().await.is_none_or(|frame| frame.is_err()));
+        assert!(matches!(socket.next().await, Some(Ok(Message::Close(_)))));
         assert!(!root.join("stale").exists());
         task.abort();
     }

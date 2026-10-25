@@ -15,6 +15,7 @@ pub struct Pairing {
     pub code: String,
     pub expires: Instant,
     failures: u8,
+    used: bool,
 }
 
 impl Pairing {
@@ -32,23 +33,35 @@ impl Pairing {
             code,
             expires: Instant::now() + PAIR_TTL,
             failures: 0,
+            used: false,
         })
     }
 
-    pub fn consume(&mut self, code: &str) -> bool {
-        if Instant::now() >= self.expires || self.failures >= 5 {
+    fn check(&mut self, code: &str) -> bool {
+        if !self.active() {
             return false;
         }
         if self.code != code {
             self.failures += 1;
             return false;
         }
-        self.failures = 5;
         true
     }
 
+    pub fn consume(&mut self, code: &str) -> bool {
+        if !self.check(code) {
+            return false;
+        }
+        self.used = true;
+        true
+    }
+
+    pub fn invalidate(&mut self) {
+        self.used = true;
+    }
+
     pub fn active(&self) -> bool {
-        self.failures < 5 && Instant::now() < self.expires
+        !self.used && self.failures < 5 && Instant::now() < self.expires
     }
 }
 
@@ -84,8 +97,8 @@ impl Auth {
         })
     }
 
-    pub fn pair(&mut self, code: &str, name: String) -> Result<(Device, String), String> {
-        if !self.pairing.consume(code) {
+    pub fn prepare_pair(&mut self, code: &str, name: String) -> Result<(Device, String), String> {
+        if !self.pairing.check(code) {
             return Err("unauthorized".into());
         }
         let mut bytes = [0; 32];
@@ -96,13 +109,20 @@ impl Auth {
             token_sha256: hash(&token),
             paired_at: jiff::Timestamp::now().to_string(),
         };
-        self.devices.devices.push(device.clone());
+        Ok((device, token))
+    }
+
+    pub fn commit_pair(&mut self, code: &str, device: Device) -> Result<(), String> {
+        if !self.pairing.consume(code) {
+            return Err("unauthorized".into());
+        }
+        self.devices.devices.push(device);
         let text = serde_json::to_string(&self.devices).expect("device serialization");
         if let Err(error) = crate::config::write_atomic(&self.file, &text, 0o600) {
             self.devices.devices.pop();
             return Err(error.to_string());
         }
-        Ok((device, token))
+        Ok(())
     }
 
     pub fn verify(&self, token: &str) -> Option<Device> {
@@ -145,7 +165,11 @@ mod tests {
         let file = dir.path().join("remote-devices.json");
         let mut auth = Auth::load(file.clone()).unwrap();
         let (device, token) = auth
-            .pair(&auth.pairing.code.clone(), "phone".into())
+            .prepare_pair(&auth.pairing.code.clone(), "phone".into())
+            .unwrap();
+        assert!(auth.verify(&token).is_none());
+        assert!(!file.exists());
+        auth.commit_pair(&auth.pairing.code.clone(), device.clone())
             .unwrap();
         assert_eq!(URL_SAFE_NO_PAD.decode(&token).unwrap().len(), 32);
         assert!(auth.verify("wrong").is_none());

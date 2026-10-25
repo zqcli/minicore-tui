@@ -117,12 +117,17 @@ unauthenticated connections at once; the server sends a WebSocket ping every
 20 s and closes a connection that has sent nothing (pong included) for 60 s.
 Each authenticated connection has an outbound queue of 512 messages; when it is
 full the TUI drops the connection (the phone reconnects and gets a snapshot).
+After `bye`, the server sends a WebSocket close frame with a bounded handshake.
+Process exit allows at most 500 ms for the connection task to flush and close.
 
 ## Pairing and authentication
 
 - `/remote on` and `/remote pair` make a pairing code: 8 characters from
   `ABCDEFGHJKLMNPQRSTUVWXYZ23456789`, shown as `ABCD-EFGH`, valid 10 minutes,
-  single use. Five failed pair attempts invalidate it.
+  single use. Five failed pair attempts invalidate it; stopping the listener
+  invalidates its code too. Token generation precedes reducer admission, but
+  consumption and persistence follow acceptance. A `busy` rejection leaves the
+  code valid and writes no device.
 - The QR code and the shown link are `<base>/#pair=ABCDEFGH`. The fragment never
   reaches the server or its logs. `<base>` is `url` when set, else
   `http://<bind>`, with an unspecified bind host (`0.0.0.0`, `::`) replaced by the
@@ -136,6 +141,9 @@ full the TUI drops the connection (the phone reconnects and gets a snapshot).
 ## Protocol v1
 
 ### Handshake
+
+Device names contain 1–64 Unicode characters and no control characters; invalid
+names are `bad_request` and do not spend a pairing attempt.
 
 Client's first message, one of:
 
@@ -174,7 +182,8 @@ or one error and closes: `{"t":"error","code":"unauthorized"|"busy"|"version"|"b
 
 `id` is a client string of at most 64 bytes, echoed in the answer. Unknown `t`
 or `kind`, or missing fields, answer `ack`/`fs` with `ok:false` and
-`error:"bad_request"`; the connection stays open.
+`error:"bad_request"`; the connection stays open. An invalid or oversized `id`
+is returned as the empty string, never echoed without its 64-byte bound.
 
 Intent semantics (each is acknowledged once the reducer has accepted and
 dispatched it, or refused it):
@@ -184,12 +193,13 @@ dispatched it, or refused it):
 | `submit` | No session: create one in the draft workspace with this text as the first message (like the first Enter). Idle: send. Running: steer. | empty text; a session is opening or being created |
 | `queue` | Running: queue a follow-up. Otherwise as `submit`. | as `submit` |
 | `cancel` | Interrupt the running turn, else cancel a running compaction, else nothing. | — |
-| `answer` | `choice`: `"allow"`, `"allow_session"`, `"deny"` or a row index (choice prompts). Goes through the same path as local answers, so "allow for this session" is remembered. | no pending interaction or `interaction_id` differs (`"stale"`) |
+| `answer` | Approvals accept only `"allow"`, `"allow_session"`, or `"deny"`; choice prompts accept only an in-range row index. Goes through the local answer path, so session allowance is remembered. | no pending interaction or id differs (`"stale"`); wrong answer kind or index (`"bad_request"`), leaving the interaction untouched |
 | `load_older` | Load an older history page into the shared transcript. | no session |
 | `open_session` | Open that session (it becomes resident in the TUI too). | unknown id; its workspace is outside `roots` |
-| `new_session` | Leave the session for a draft in `workspace` (default: the current draft workspace) with optional `profile`; the next `submit` creates it. No empty session is created. | workspace outside `roots`, missing or not a directory; unknown profile |
+| `new_session` | Leave the session for a draft in `workspace` (default: the current draft workspace) with optional `profile`; the next `submit` creates it. No empty session is created. | workspace relative, outside `roots`, missing or not a directory; unknown profile |
 | `set_model` / `set_reasoning` | As `/model` and `/reasoning` (session or draft). | unknown model or level |
 
+`submit` and `queue` trim trailing whitespace like local sends.
 A refused `submit` or `queue` text is never put into the local composer. When the
 Agent later refuses a send (the path that calls `restore_draft` today) while a
 phone is connected, the text goes back to the phone as `returned`.

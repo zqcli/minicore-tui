@@ -109,18 +109,150 @@ async fn a_real_phone_pairs_submits_through_the_agent_and_receives_the_user_bloc
                 break;
             }
         }
+        socket
     });
     h.until(|app| app.remote.connection.is_some()).await;
     h.app.sync_remote();
     h.until(|app| app.is_busy()).await;
     h.app.sync_remote();
-    tokio::time::timeout(std::time::Duration::from_secs(5), client)
+    let mut socket = tokio::time::timeout(std::time::Duration::from_secs(5), client)
         .await
         .unwrap()
         .unwrap();
     assert_eq!(h.sends(), ["real phone text"]);
     assert_eq!(h.app.composer.text(), "untouched");
     h.action(Action::Remote("off".into()));
+    loop {
+        let reply: Value =
+            serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap()).unwrap();
+        if reply["t"] == "bye" {
+            assert_eq!(reply["reason"], "remote_off");
+            break;
+        }
+    }
+    assert!(matches!(socket.next().await, Some(Ok(Message::Close(_)))));
+}
+
+#[tokio::test(start_paused = true)]
+async fn answers_validate_prompt_kind_and_index_before_consuming_the_interaction() {
+    for approval in [true, false] {
+        for choice in [
+            json!("allow"),
+            json!("allow_session"),
+            json!("deny"),
+            json!(0),
+            json!(1),
+            json!(2),
+            json!(99),
+            json!("unknown"),
+        ] {
+            let mut h = Harness::opened(display_read(0, 0)).await;
+            h.app.remote.mode = RemoteMode::Waiting;
+            let (mut output, _closing, admission) = phone(&mut h, 1, "phone");
+            assert!(admission.await.unwrap());
+            h.app.session.as_mut().unwrap().interaction = Some(crate::app::PendingInteraction {
+                turn: crate::protocol::TurnRef::new("s1", "l1"),
+                interaction_id: "interaction".into(),
+                tool_call_id: "call".into(),
+                tool_name: "bash".into(),
+                prompt: "choose".into(),
+                kind: if approval {
+                    crate::app::InteractionKind::Approval
+                } else {
+                    crate::app::InteractionKind::Choice(vec!["one".into(), "two".into()])
+                },
+                selected: 0,
+            });
+            let valid = if approval {
+                matches!(choice.as_str(), Some("allow" | "allow_session" | "deny"))
+            } else {
+                choice.as_u64().is_some_and(|index| index < 2)
+            };
+            request(
+                &mut h,
+                json!({"kind":"answer", "interaction_id":"interaction", "choice":choice}),
+            );
+            let ack = output.recv().await.unwrap();
+            assert_eq!(ack["ok"], valid, "approval={approval} choice={choice}");
+            assert_eq!(h.app.has_interaction(), !valid);
+            h.settle().await;
+            assert_eq!(h.calls("interaction.answer").len(), usize::from(valid));
+            if !valid {
+                assert_eq!(ack["error"], "bad_request");
+                assert!(h.app.session.as_ref().unwrap().allowed_tools.is_empty());
+            }
+        }
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn queue_cancel_and_history_intents_use_the_existing_reducer_operations() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.app.remote.mode = RemoteMode::Waiting;
+    let (mut output, _closing, admission) = phone(&mut h, 1, "phone");
+    assert!(admission.await.unwrap());
+    h.app.session.as_mut().unwrap().live = Some(crate::app::LiveTurn::new(
+        crate::protocol::TurnRef::new("s1", "l1"),
+        0,
+    ));
+    request(&mut h, json!({"kind":"queue", "text":"follow up  \n"}));
+    assert_eq!(output.recv().await.unwrap()["ok"], true);
+    assert_eq!(h.queue(), ["follow up"]);
+    assert!(h.sends().is_empty());
+    let session = h.app.session.as_mut().unwrap();
+    session.live = None;
+    session.compaction = Some(serde_json::from_value(json!({"operation_id":"compact", "phase":"summarizing", "covered_item_count":0, "retained_item_count":0})).unwrap());
+    request(&mut h, json!({"kind":"cancel"}));
+    assert_eq!(output.recv().await.unwrap()["ok"], true);
+    h.settle().await;
+    assert_eq!(
+        h.calls("session.compact.cancel")[0]["operation_id"],
+        "compact"
+    );
+    let before = h.calls("session.read").len();
+    h.app.session.as_mut().unwrap().loaded_from = 20;
+    request(&mut h, json!({"kind":"load_older"}));
+    assert_eq!(output.recv().await.unwrap()["ok"], true);
+    h.settle().await;
+    assert!(h.calls("session.read").len() > before);
+}
+
+#[tokio::test(start_paused = true)]
+async fn model_reasoning_and_absolute_workspace_are_validated_before_dispatch() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.fake
+        .script("session.update", json!({"session": session_info("s1")}));
+    h.app.remote.mode = RemoteMode::Waiting;
+    let (mut output, _closing, admission) = phone(&mut h, 1, "phone");
+    assert!(admission.await.unwrap());
+    for (intent, valid) in [
+        (json!({"kind":"set_model", "model":"mock"}), true),
+        (json!({"kind":"set_reasoning", "level":"high"}), true),
+        (json!({"kind":"set_model", "model":"missing"}), false),
+        (json!({"kind":"set_reasoning", "level":"missing"}), false),
+        (json!({"kind":"new_session", "workspace":"relative"}), false),
+    ] {
+        request(&mut h, intent);
+        assert_eq!(output.recv().await.unwrap()["ok"], valid);
+        h.settle().await;
+    }
+    assert_eq!(h.calls("session.update").len(), 2);
+    assert_eq!(h.calls("session.update")[0]["model"], "mock");
+    assert_eq!(h.calls("session.update")[1]["reasoning"], "high");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_full_outbound_queue_drops_control_and_returns_to_waiting() {
+    let mut h = Harness::new();
+    h.app.remote.mode = RemoteMode::Waiting;
+    let (_output, closing, admission) = phone(&mut h, 1, "phone");
+    assert!(admission.await.unwrap());
+    for _ in 0..=512 {
+        h.app.remote.send(json!({"t":"notice", "text":"bounded"}));
+    }
+    assert_eq!(*closing.borrow(), Some("overflow"));
+    assert_eq!(h.app.remote.mode(), RemoteMode::Waiting);
+    assert!(h.app.remote.connection.is_none());
 }
 
 #[tokio::test(start_paused = true)]

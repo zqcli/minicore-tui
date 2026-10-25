@@ -103,6 +103,7 @@ pub struct Remote {
     pub starting: Option<tokio::task::JoinHandle<()>>,
     pub quit_armed: Option<tokio::time::Instant>,
     stop: Option<oneshot::Sender<()>>,
+    server_task: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl Remote {
@@ -134,14 +135,14 @@ impl Remote {
 
     pub fn start(&mut self, bound: Bound, tx: crate::app::Tx) {
         let (stop, stopped) = oneshot::channel();
-        tokio::spawn(server::serve(
+        self.server_task = Some(tokio::spawn(server::serve(
             bound.listener,
             bound.auth.clone(),
             tx,
             stopped,
             self.generation,
             self.roots().to_vec().into(),
-        ));
+        )));
         self.stop = Some(stop);
         self.auth = Some(bound.auth);
         self.url = Some(bound.url);
@@ -161,8 +162,17 @@ impl Remote {
             let _ = stop.send(());
         }
         self.mode = RemoteMode::Off;
-        self.auth = None;
+        if let Some(auth) = self.auth.take() {
+            auth.lock().unwrap().pairing.invalidate();
+        }
         self.url = None;
+    }
+
+    pub async fn shutdown(&mut self) {
+        self.stop("tui_exit");
+        if let Some(task) = self.server_task.take() {
+            let _ = tokio::time::timeout(std::time::Duration::from_millis(500), task).await;
+        }
     }
 
     pub fn send(&mut self, message: Value) {

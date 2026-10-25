@@ -371,7 +371,8 @@ async fn run() -> i32 {
         }
     }
 
-    app.remote.stop("tui_exit");
+    app.sync_remote();
+    app.remote.shutdown().await;
     let _ = client.shutdown().await;
     let _ = guard.restore();
     frames.print(&app);

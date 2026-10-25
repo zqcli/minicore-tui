@@ -87,7 +87,11 @@ pub fn ack(id: &str, result: Result<(), String>) -> Value {
 }
 
 pub fn bad_request(value: &Value) -> Value {
-    let id = value.get("id").and_then(Value::as_str).unwrap_or("");
+    let id = value
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|id| id.len() <= 64)
+        .unwrap_or("");
     let mut reply = ack(id, Err("bad_request".into()));
     if value
         .get("t")
