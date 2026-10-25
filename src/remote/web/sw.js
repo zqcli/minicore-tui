@@ -1,0 +1,28 @@
+'use strict';
+// Network first, so the next online load always uses what the host serves now; the cache only opens the app while
+// the host is unreachable. The WebSocket and other origins are never touched.
+const CACHE = 'minicore-1';
+const SHELL = ['/', '/manifest.webmanifest', '/icon.svg', '/icon-192.png', '/icon-512.png', '/icon-maskable.png', '/apple-touch-icon.png'];
+
+addEventListener('install', e => {
+  skipWaiting();
+  e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)));
+});
+addEventListener('activate', e => e.waitUntil(caches.keys()
+  .then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k))))
+  .then(() => clients.claim())));
+addEventListener('fetch', e => {
+  const url = new URL(e.request.url);
+  if (e.request.method !== 'GET' || url.origin !== location.origin || url.pathname === '/ws') return;
+  // Keyed by path: the server ignores the query string too.
+  const key = url.pathname, cached = () => caches.match(key);
+  e.respondWith(fetch(e.request).then(r => {
+    if (r.ok) {
+      const copy = r.clone();
+      e.waitUntil(caches.open(CACHE).then(c => c.put(key, copy)));
+      return r;
+    }
+    // A tunnel or proxy error page while the host sleeps must not replace the app.
+    return cached().then(c => c || r);
+  }, () => cached().then(c => c || Response.error())));
+});

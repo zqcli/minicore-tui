@@ -5,13 +5,16 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
+<!-- `default` keeps the page below the iOS status bar; `black-translucent` would draw white status text over the light theme. -->
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="MiniCore">
 <meta name="format-detection" content="telephone=no">
-<meta name="theme-color" id="tc" content="#ffffff">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" id="tc" content="#ffffff" media="(prefers-color-scheme: light)">
+<meta name="theme-color" id="tcd" content="#0e0f12" media="(prefers-color-scheme: dark)">
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" href="/icon.svg" type="image/svg+xml">
-<link rel="apple-touch-icon" href="/icon.png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <title>MiniCore</title>
 <style>
 :root{
@@ -34,6 +37,8 @@
   --add:rgba(60,207,131,.13);--del:rgba(255,107,107,.13);--addt:#5fe0a0;--delt:#ff8f8f
 }
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+/* Controls and bars do not select or open the iOS callout on a long press; message text still does. */
+button,#bar,#banner,#chip,.dhead,.dfoot,.dsec,.shead{-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}
 [hidden]{display:none!important}
 html,body{margin:0;height:100%;overflow:hidden;overscroll-behavior:none;background:var(--bg);color:var(--tx);font:16px/1.5 var(--font);-webkit-font-smoothing:antialiased;-webkit-text-size-adjust:100%;text-size-adjust:100%}
 button,input,textarea,select{font:inherit;color:inherit}
@@ -372,7 +377,11 @@ html.kb{--sb:0px}
 .dfoot .appear{display:flex;align-items:center;justify-content:space-between;gap:var(--s3);margin-top:var(--s2)}
 .dfoot .appear .seg{flex:0 1 auto}
 .dhead .ib{color:var(--tx2)}
-.dfoot .btn{width:100%;margin-top:var(--s2);color:var(--er);justify-content:flex-start;padding:0 var(--s2);font-weight:500;background:none}
+.dfoot>.btn{width:100%;margin-top:var(--s2);color:var(--er);justify-content:flex-start;padding:0 var(--s2);font-weight:500;background:none}
+.inst{display:flex;align-items:center;gap:var(--s2);min-height:40px;margin-bottom:var(--s2);padding:2px 2px 2px var(--s3);border-radius:12px;background:var(--acs);color:var(--tx)}
+.inst>span{flex:1;min-width:0}
+.inst .ib{width:36px;height:36px;color:var(--tx2)}
+.inst .btn{margin:2px}
 .mlist .row{min-height:56px}
 .row.bad .rm,.row.bad .ri{color:var(--er)}
 .dtitle{padding:var(--s4) var(--s5) var(--s2);text-align:center}
@@ -449,6 +458,10 @@ globalThis.MC = (() => {
   };
   // The stored appearance choice ('light', 'dark', anything else = System) and the OS preference give the effective theme.
   const theme = (choice, osDark) => choice === 'light' || choice === 'dark' ? choice : osDark ? 'dark' : 'light';
+  // The install help to offer: none once installed, the browser's own prompt when it gave one, else on iPhone and iPad
+  // the Share-sheet hint until it is dismissed.
+  const installOffer = (standalone, prompt, device, dismissed) =>
+    standalone ? null : prompt ? 'prompt' : /^(iPhone|iPad) /.test(device) && !dismissed ? 'ios' : null;
   const fs = {
     roots: () => ({ t: 'fs_roots' }),
     list: (path, hidden) => ({ t: 'fs_list', path, hidden: !!hidden }),
@@ -818,7 +831,7 @@ globalThis.MC = (() => {
   }
 
   return {
-    WINDOW, backoff, basename, plural, retireText, mergeReturned, deviceName, theme,
+    WINDOW, backoff, basename, plural, retireText, mergeReturned, deviceName, theme, installOffer,
     login, hello, intents, fs, createStore, intent, request, pending, disconnect, sendAgain, unconfirmed, diffBlocks, applyBlocks, reduce,
     explain, lockText, fmtClock, unreachable, fsError,
     relTime, dayGroup, groupSessions, matchSession, fmtElapsed, fmtDur, fmtTok,
@@ -832,9 +845,12 @@ globalThis.MC = (() => {
 // Before first paint: the stored appearance (or the OS) decides data-theme, and System keeps following the OS.
 const osDark = matchMedia('(prefers-color-scheme: dark)');
 function applyTheme() {
-  const t = MC.theme(localStorage.getItem('minicore.theme'), osDark.matches);
+  const c = localStorage.getItem('minicore.theme'), t = MC.theme(c, osDark.matches);
   document.documentElement.dataset.theme = t;
-  document.getElementById('tc').content = t === 'dark' ? '#0e0f12' : '#ffffff';
+  // Each theme-color variant shows the colour its OS scheme would get, so an explicit choice sets both.
+  const bar = { light: '#ffffff', dark: '#0e0f12' };
+  document.getElementById('tc').content = bar[MC.theme(c, false)];
+  document.getElementById('tcd').content = bar[MC.theme(c, true)];
 }
 applyTheme();
 osDark.addEventListener('change', () => { applyTheme(); if (window.onTheme) onTheme(); });
@@ -1670,12 +1686,20 @@ function sessionRow(x) {
   h('button', { class: 'ib more', type: 'button', 'aria-label': 'Session actions', 'aria-haspopup': 'dialog', onclick: () => openDlg({ view: 'actions', id: x.id }) }, icon('more')));
 }
 const sessionSub = x => MC.basename(x.workspace) + (x.live && x.status !== 'idle' ? '' : ' · ' + MC.relTime(Date.parse(x.updated_at), hostNow(), tz()));
-let signOutArmed = 0;
+let signOutArmed = 0, installPrompt = null;
+const standalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+function installRow() {
+  const offer = MC.installOffer(standalone(), !!installPrompt, MC.deviceName(navigator.userAgent, navigator.maxTouchPoints), localStorage.getItem('minicore.installHint'));
+  if (offer === 'prompt') return h('div', 'inst', h('span', '', 'Use MiniCore as an app'),
+    h('button', { class: 'btn sm primary', type: 'button', onclick: () => { installPrompt.prompt(); installPrompt = null; renderDrawerFoot(); } }, 'Install app'));
+  return offer === 'ios' && h('div', 'inst', h('span', '', 'Install: Share → Add to Home Screen'),
+    h('button', { class: 'ib', type: 'button', 'aria-label': 'Dismiss', onclick: () => { localStorage.setItem('minicore.installHint', '1'); renderDrawerFoot(); } }, icon('x', 'sm')));
+}
 function renderDrawerFoot() {
   const f = $('drawer').querySelector('.dfoot');
   if (!f) return;
   const choice = themeChoice();
-  fill(f, h('div', 'who', h('span', 'dot' + (online() ? '' : ' off')), h('span', '', online() ? 'Connected as ' + (S.device || 'this device') : 'Reconnecting…')),
+  fill(f, installRow(), h('div', 'who', h('span', 'dot' + (online() ? '' : ' off')), h('span', '', online() ? 'Connected as ' + (S.device || 'this device') : 'Reconnecting…')),
     h('div', 'appear', h('span', { id: 'aplbl' }, 'Appearance'), h('div', { class: 'seg sm', role: 'radiogroup', 'aria-labelledby': 'aplbl' },
       [['system', 'System'], ['light', 'Light'], ['dark', 'Dark']].map(([v, l]) => h('button', { type: 'button', role: 'radio', 'aria-checked': String(choice === v), onclick: () => setTheme(v) }, l)))),
     h('button', { class: 'btn', type: 'button', onclick: () => {
@@ -1881,8 +1905,15 @@ function renderDlg() {
 
 // ---- lifecycle ----
 document.addEventListener('visibilitychange', () => { if (document.hidden) hiddenAt = Date.now(); else wake(Date.now() - hiddenAt > 10000); });
+// A page restored from the back/forward cache lost its socket; focus catches resumes that fire no visibility change.
+addEventListener('pageshow', e => { if (e.persisted) wake(true); });
+addEventListener('focus', () => wake(false));
 addEventListener('online', () => { renderConn(); wake(false); });
 addEventListener('offline', renderConn);
+// Chromium's install prompt waits for the drawer's button.
+addEventListener('beforeinstallprompt', e => { e.preventDefault(); installPrompt = e; renderDrawerFoot(); });
+addEventListener('appinstalled', () => { installPrompt = null; renderDrawerFoot(); });
+if ('serviceWorker' in navigator && isSecureContext) navigator.serviceWorker.register('/sw.js');
 new ResizeObserver(padLog).observe($('appr'));
 if (window.visualViewport) {
   // iOS keeps the layout viewport under the keyboard; fixed bottom sheets are lifted by the part it covers.

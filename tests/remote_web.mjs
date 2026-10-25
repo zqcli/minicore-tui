@@ -370,6 +370,19 @@ test('the appearance choice overrides the OS scheme and System follows it', () =
   }
 });
 
+test('install help is the browser prompt when offered, the Share hint on iOS until dismissed, and nothing once installed', () => {
+  const { MC } = load();
+  const iphone = MC.deviceName('Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) Version/18.0 Mobile/15E148 Safari/604.1');
+  const ipad = MC.deviceName('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Version/18.0 Safari/605.1.15', 5);
+  const android = MC.deviceName('Mozilla/5.0 (Linux; Android 15) Chrome/140.0 Mobile Safari/537.36');
+  assert.equal(MC.installOffer(false, false, iphone, null), 'ios');
+  assert.equal(MC.installOffer(false, false, ipad, null), 'ios');
+  assert.equal(MC.installOffer(false, false, iphone, '1'), null);
+  assert.equal(MC.installOffer(false, true, android, null), 'prompt');
+  assert.equal(MC.installOffer(false, false, android, null), null);
+  assert.equal(MC.installOffer(true, true, iphone, null), null);
+});
+
 const live = (id, status, extra = {}) => ({ id, title: id, workspace: '/w', updated_at: '2026-10-25T00:00:00Z', current: false, live: true, status, started_ms: null, unseen: false, ...extra });
 const idle = id => ({ id, title: id, workspace: '/w', updated_at: '2026-10-24T00:00:00Z', current: false, live: false });
 

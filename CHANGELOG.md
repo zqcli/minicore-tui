@@ -16,6 +16,13 @@
   keeps its draft but cannot send, Esc still interrupts, and quitting asks twice.
   `/remote password` sets a new password and signs phones out; `/remote off`
   takes control back.
+- The phone client installs as an app (Safari's Share → Add to Home Screen on
+  iPhone, Install app on Android and desktop Chromium) and, over HTTPS, opens
+  while the computer is unreachable and reconnects when it is back. The browser
+  and status bar colour follow the chosen light or dark appearance, and it works
+  behind a Cloudflare Tunnel without changing zone settings. See `docs/configuration.md`.
+- On the phone, only the answer being written shows the typing caret; earlier
+  answers of a running turn can already be copied.
 - Opening or creating a session makes its workspace the one the next new
   session uses.
 - Sessions you leave keep running: a turn, its follow-ups and its approvals go

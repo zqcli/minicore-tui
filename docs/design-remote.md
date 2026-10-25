@@ -32,7 +32,8 @@ document disagree after the feature lands, the code wins and this file is fixed.
   that it reconnects with a remembered token.
 - **Best effort.** No event log, no replay, no automatic resend. Reconnecting
   gives a fresh snapshot.
-- **Web client first.** The TUI serves a single-file web client (PWA-capable).
+- **Web client first.** The TUI serves a single-file web client that installs
+  as a home-screen app and opens offline from a service worker cache.
   The protocol below is versioned (`v: 1`) and is the interface a future native
   or Flutter client uses too, so it carries semantic data, never rendered rows.
 - **No built-in TLS.** Default bind is loopback. Across networks use Tailscale,
@@ -149,17 +150,45 @@ One TCP listener on `bind`. Each connection's request head (max 8 KiB, 10 s) is
 peeked:
 
 - `GET /` → the web client (`text/html; charset=utf-8`).
-- `GET /manifest.webmanifest`, `GET /icon.svg`, `GET /icon.png` → the PWA
-  manifest and icons (`icon.png` is 180×180 for the iOS home screen; served
-  with `image/png` from `include_bytes!`).
+- `GET /sw.js` → the service worker (`text/javascript`).
+- `GET /manifest.webmanifest` → the app manifest (`application/manifest+json`).
+- `GET /icon.svg`, `/icon-192.png`, `/icon-512.png`, `/icon-maskable.png`
+  (full-bleed for Android masks) and `/apple-touch-icon.png` (180×180, opaque,
+  for the iOS home screen) → the icons, embedded with `include_bytes!`.
 - `GET /ws` with `Upgrade: websocket` → the WebSocket. If an `Origin` header is
   present its host:port must equal the `Host` header, else `403`. No `Origin`
   (a non-browser client) is allowed; authentication still applies.
-- Anything else → `404`. Only `GET`.
+- Anything else → `404`. Only `GET`. Paths are matched without their query
+  string, so `/?source=pwa` is the page and `/ws?x` the socket.
 
-Every HTTP response carries `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`,
+Every HTTP response carries `Cache-Control: no-store, no-transform`, `X-Content-Type-Options: nosniff`,
 `Referrer-Policy: no-referrer` and
 `Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:`.
+`no-transform` stops proxies such as Cloudflare from rewriting the page (email
+obfuscation, Rocket Loader, injected beacons) or recompressing it. `'self'`
+covers the service worker and the manifest through `default-src`, and the
+same-host `ws:` and `wss:` socket in current browsers (WebKit since 2022).
+
+The service worker (`sw.js`, secure contexts only: `https://` or `localhost`)
+precaches the page, manifest and icons, and answers same-origin `GET`s network
+first: a successful response refreshes the cache, while a network failure or an
+error status (a tunnel's error page while the computer sleeps) serves the cached
+copy. The next online load therefore always runs what the TUI serves; a client
+older than the server still meets the `v` check in the handshake. It never
+handles `/ws` or other origins, activates at once and deletes older caches.
+
+### Through Cloudflare
+
+A Cloudflare Tunnel is the simplest public route: `cloudflared` sends the
+public hostname to `http://127.0.0.1:8765`, so the default loopback bind stays
+and `allow_insecure` is not needed; set `url` to the `https://` hostname. The
+browser's `Origin` is `https://<hostname>` and cloudflared forwards
+`Host: <hostname>`, so the Origin check passes. Overriding the tunnel's HTTP
+Host Header breaks it (`403`); `X-Forwarded-*` headers are never trusted.
+A proxied DNS record to a forwarded port needs a non-loopback bind,
+`allow_insecure = true` and a port Cloudflare proxies, and Cloudflare reaches the
+computer over plain HTTP. The 20 s ping keeps idle sockets well inside
+Cloudflare's WebSocket idle timeout.
 
 WebSocket rules: text frames of JSON objects with a `"t"` type field; max
 message 1 MiB; the first message must arrive within 10 s; at most 8
@@ -437,7 +466,7 @@ launch workspace.
 | `src/remote/wire.rs` | Serde types of every message above |
 | `src/remote/view.rs` | `State`/`Block` projection from `&App` and the diff tracker |
 | `src/remote/fs.rs` | Host directory functions |
-| `src/remote/web/` | `index.html` (the whole client: HTML, CSS, JS), `manifest.webmanifest`, `icon.svg`, `icon.png`, embedded with `include_str!` / `include_bytes!` |
+| `src/remote/web/` | `index.html` (the whole client: HTML, CSS, JS), `sw.js`, `manifest.webmanifest` and the icons, embedded with `include_bytes!` |
 | `src/app/remote.rs` | `App` side: `/remote` commands, mode changes, local gating, intents, `sync_remote` |
 | `src/ui/views/remote.rs` | The remote status screen; composer placeholder and footer mark live with the composer and footer |
 

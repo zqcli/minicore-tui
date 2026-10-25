@@ -34,11 +34,51 @@ const FIRST: Duration = Duration::from_secs(10);
 const PING: Duration = Duration::from_secs(20);
 const IDLE: Duration = Duration::from_secs(60);
 pub const CSP: &str = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:";
+// `no-transform` keeps proxies such as Cloudflare from rewriting the page and its inline scripts.
 const HEADERS: [(&str, &str); 4] = [
-    ("Cache-Control", "no-store"),
+    ("Cache-Control", "no-store, no-transform"),
     ("X-Content-Type-Options", "nosniff"),
     ("Referrer-Policy", "no-referrer"),
     ("Content-Security-Policy", CSP),
+];
+/// The web client's files: path, MIME type and body.
+const FILES: [(&str, &str, &[u8]); 8] = [
+    (
+        "/",
+        "text/html; charset=utf-8",
+        include_bytes!("web/index.html"),
+    ),
+    (
+        "/sw.js",
+        "text/javascript; charset=utf-8",
+        include_bytes!("web/sw.js"),
+    ),
+    (
+        "/manifest.webmanifest",
+        "application/manifest+json",
+        include_bytes!("web/manifest.webmanifest"),
+    ),
+    ("/icon.svg", "image/svg+xml", include_bytes!("web/icon.svg")),
+    (
+        "/icon-192.png",
+        "image/png",
+        include_bytes!("web/icon-192.png"),
+    ),
+    (
+        "/icon-512.png",
+        "image/png",
+        include_bytes!("web/icon-512.png"),
+    ),
+    (
+        "/icon-maskable.png",
+        "image/png",
+        include_bytes!("web/icon-maskable.png"),
+    ),
+    (
+        "/apple-touch-icon.png",
+        "image/png",
+        include_bytes!("web/apple-touch-icon.png"),
+    ),
 ];
 
 pub async fn serve(
@@ -143,8 +183,11 @@ async fn connection(
             .find(|header| header.name.eq_ignore_ascii_case(name))
             .map(|header| header.value)
     };
+    let path = request
+        .path
+        .map(|path| path.split_once('?').map_or(path, |(path, _)| path));
     let websocket = request.method == Some("GET")
-        && request.path == Some("/ws")
+        && path == Some("/ws")
         && header("upgrade").is_some_and(|v| v.eq_ignore_ascii_case(b"websocket"));
     if websocket {
         if header("origin").is_some_and(|origin| !same_origin(origin, header("host"))) {
@@ -157,28 +200,12 @@ async fn connection(
                 .map_err(|e| e.to_string());
         }
     } else {
-        let (status, mime, body) = match (request.method, request.path) {
-            (Some("GET"), Some("/")) => (
-                "200 OK",
-                "text/html; charset=utf-8",
-                include_str!("web/index.html").as_bytes(),
-            ),
-            (Some("GET"), Some("/manifest.webmanifest")) => (
-                "200 OK",
-                "application/manifest+json",
-                include_str!("web/manifest.webmanifest").as_bytes(),
-            ),
-            (Some("GET"), Some("/icon.svg")) => (
-                "200 OK",
-                "image/svg+xml",
-                include_str!("web/icon.svg").as_bytes(),
-            ),
-            (Some("GET"), Some("/icon.png")) => (
-                "200 OK",
-                "image/png",
-                include_bytes!("web/icon.png").as_slice(),
-            ),
-            _ => ("404 Not Found", "text/plain", b"Not found".as_slice()),
+        let file = FILES
+            .iter()
+            .find(|file| request.method == Some("GET") && path == Some(file.0));
+        let (status, mime, body) = match file {
+            Some(&(_, mime, body)) => ("200 OK", mime, body),
+            None => ("404 Not Found", "text/plain", b"Not found".as_slice()),
         };
         stream
             .read_exact(&mut vec![0; bytes.len()])
@@ -492,6 +519,10 @@ mod tests {
                 "GET /ws HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nOrigin: https://foreign.example\r\n\r\n",
                 "403 Forbidden",
             ),
+            (
+                "GET /ws?v=1 HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nOrigin: https://foreign.example\r\n\r\n",
+                "403 Forbidden",
+            ),
         ] {
             let reply = String::from_utf8(get(address, request).await).unwrap();
             assert!(reply.contains(status), "{reply}");
@@ -505,14 +536,81 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_home_screen_icon_is_a_png() {
+    async fn every_client_file_is_served_with_its_type_and_bytes_even_with_a_query_string() {
         let (_dir, address, _auth, _rx, task) = start().await;
-        let reply = get(address, "GET /icon.png HTTP/1.1\r\nHost: localhost\r\n\r\n").await;
-        let end = reply.windows(4).position(|s| s == b"\r\n\r\n").unwrap();
-        let head = String::from_utf8_lossy(&reply[..end]);
-        assert!(head.starts_with("HTTP/1.1 200 OK"), "{head}");
-        assert!(head.contains("Content-Type: image/png"), "{head}");
-        assert!(reply[end + 4..].starts_with(b"\x89PNG\r\n\x1a\n"));
+        let files: [(&str, &str, &[u8]); 8] = [
+            (
+                "/?source=pwa",
+                "text/html; charset=utf-8",
+                include_bytes!("web/index.html"),
+            ),
+            (
+                "/sw.js",
+                "text/javascript; charset=utf-8",
+                include_bytes!("web/sw.js"),
+            ),
+            (
+                "/manifest.webmanifest?v=2",
+                "application/manifest+json",
+                include_bytes!("web/manifest.webmanifest"),
+            ),
+            ("/icon.svg", "image/svg+xml", include_bytes!("web/icon.svg")),
+            (
+                "/icon-192.png",
+                "image/png",
+                include_bytes!("web/icon-192.png"),
+            ),
+            (
+                "/icon-512.png",
+                "image/png",
+                include_bytes!("web/icon-512.png"),
+            ),
+            (
+                "/icon-maskable.png",
+                "image/png",
+                include_bytes!("web/icon-maskable.png"),
+            ),
+            (
+                "/apple-touch-icon.png",
+                "image/png",
+                include_bytes!("web/apple-touch-icon.png"),
+            ),
+        ];
+        for (path, mime, body) in files {
+            let request = format!("GET {path} HTTP/1.1\r\nHost: localhost\r\n\r\n");
+            let reply = get(address, &request).await;
+            let end = reply.windows(4).position(|s| s == b"\r\n\r\n").unwrap();
+            let head = String::from_utf8_lossy(&reply[..end]);
+            assert!(head.starts_with("HTTP/1.1 200 OK"), "{path}: {head}");
+            assert!(
+                head.contains(&format!("Content-Type: {mime}\r\n")),
+                "{head}"
+            );
+            assert!(head.contains("Cache-Control: no-store, no-transform\r\n"));
+            assert_eq!(&reply[end + 4..], body, "{path}");
+        }
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn a_tunnelled_browser_whose_origin_matches_the_forwarded_host_reaches_sign_in() {
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+        let (_dir, address, _auth, _rx, task) = start().await;
+        // cloudflared forwards the public Host; the browser sends the public https Origin.
+        let mut request = "ws://minicore.example.com/ws"
+            .into_client_request()
+            .unwrap();
+        let origin = "https://minicore.example.com".parse().unwrap();
+        request.headers_mut().insert("Origin", origin);
+        let stream = TcpStream::connect(address).await.unwrap();
+        let mut socket = tokio_tungstenite::client_async(request, stream)
+            .await
+            .unwrap()
+            .0;
+        send(&mut socket, json!({"t":"hello", "v":1, "token":"unknown"}))
+            .await
+            .unwrap();
+        assert_eq!(receive(&mut socket).await["code"], "unauthorized");
         task.abort();
     }
 
