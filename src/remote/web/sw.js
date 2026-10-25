@@ -20,9 +20,10 @@ addEventListener('fetch', e => {
     if (r.ok) {
       const copy = r.clone();
       e.waitUntil(caches.open(CACHE).then(c => c.put(key, copy)));
-      return r;
     }
-    // A tunnel or proxy error page while the host sleeps must not replace the app.
+    // A tunnel error page (5xx) while the host sleeps must not replace the app; redirects such as an
+    // access-proxy sign-in pass through.
+    if (r.status < 500) return r;
     return cached().then(c => c || r);
   }, () => cached().then(c => c || Response.error())));
 });
