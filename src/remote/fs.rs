@@ -83,23 +83,21 @@ pub fn list(roots: &[PathBuf], path: &str, hidden: bool) -> Result<Listing, FsEr
     let mut entries = BinaryHeap::new();
     let mut truncated = false;
     for entry in fs::read_dir(&path)? {
-        let entry = entry?;
+        let Ok(entry) = entry else { continue };
         let name = entry.file_name().to_string_lossy().into_owned();
         if !hidden && name.starts_with('.') {
             continue;
         }
-        let file_type = entry.file_type()?;
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
         if !file_type.is_dir() && !file_type.is_symlink() {
             continue;
         }
-        let target = match canonical_within(roots, &entry.path()) {
-            Ok(target) => target,
-            Err(FsError::OutsideRoots | FsError::NotFound) if file_type.is_symlink() => {
-                continue;
-            }
-            Err(error) => return Err(error),
+        let Ok(target) = canonical_within(roots, &entry.path()) else {
+            continue;
         };
-        if !fs::metadata(&target)?.is_dir() {
+        if !fs::metadata(&target).is_ok_and(|metadata| metadata.is_dir()) {
             continue;
         }
         // Retain the first page in sorted order without storing an unbounded directory.
@@ -126,18 +124,25 @@ pub fn mkdir(roots: &[PathBuf], parent: &str, name: &str) -> Result<String, FsEr
         || name.len() > 255
         || matches!(name, "." | "..")
         || name.contains(['/', '\\', '\0'])
+        || name.ends_with(['.', ' '])
+        || reserved_name(name)
         || (name.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
             && name.as_bytes().get(1) == Some(&b':'))
     {
         return Err(FsError::InvalidName);
     }
     let parent = canonical_within(roots, Path::new(parent))?;
-    if !fs::metadata(&parent)?.is_dir() {
-        return Err(FsError::NotADirectory);
-    }
     let path = parent.join(name);
     fs::create_dir(&path)?;
     Ok(display(&canonical_within(roots, &path)?))
+}
+
+fn reserved_name(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap().to_ascii_lowercase();
+    matches!(stem.as_str(), "con" | "nul" | "aux" | "prn")
+        || (stem.len() == 4
+            && (stem.starts_with("com") || stem.starts_with("lpt"))
+            && matches!(stem.as_bytes()[3], b'1'..=b'9'))
 }
 
 pub fn canonical_within(roots: &[PathBuf], path: &Path) -> Result<PathBuf, FsError> {
@@ -355,6 +360,50 @@ mod tests {
             display(&root.join(name))
         );
         assert_eq!(fs::read_dir(&root).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn mkdir_refuses_portable_reserved_names_without_creating_entries() {
+        let temp = tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let mut names = vec![
+            "con".to_owned(),
+            "NUL.txt".into(),
+            "aux".into(),
+            "PrN.log".into(),
+            "trailing.".into(),
+            "trailing ".into(),
+        ];
+        for prefix in ["COM", "lpt"] {
+            for number in 1..=9 {
+                names.push(format!("{prefix}{number}"));
+                names.push(format!("{prefix}{number}.txt"));
+            }
+        }
+        for name in names {
+            assert_eq!(
+                mkdir(std::slice::from_ref(&root), &display(&root), &name),
+                Err(FsError::InvalidName)
+            );
+        }
+        assert_eq!(fs::read_dir(root).unwrap().count(), 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn looping_symlinks_do_not_hide_readable_directories() {
+        let temp = tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        fs::create_dir(root.join("visible")).unwrap();
+        std::os::unix::fs::symlink("loop", root.join("loop")).unwrap();
+        let listing = list(std::slice::from_ref(&root), &display(&root), false).unwrap();
+        assert_eq!(
+            listing.entries,
+            [Entry {
+                name: "visible".into(),
+                path: display(&root.join("visible"))
+            }]
+        );
     }
 
     #[test]

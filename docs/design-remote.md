@@ -294,11 +294,16 @@ Operations:
   (`Path::starts_with` on canonical paths). Returns only directories (symlinks
   whose canonical target is a directory under a root; the entry `path` is that
   target), names starting with `.` only when `hidden`, sorted case-insensitively,
-  at most 1000 (`truncated`). `parent` is the canonical parent when it is still
+  at most 1000 (`truncated`). Unreadable entries and broken, looping or protected
+  symlinks are skipped; failure to open the requested directory is still an error.
+  `parent` is the canonical parent when it is still
   under a root, else `null`.
   `Listing = {"path":"/abs","parent":"/abs"|null,"entries":[{"name":"src","path":"/abs/src"}],"truncated":false}`
 - `mkdir(parent, name)`: `name` is one non-empty component of at most 255 bytes,
-  not `.` or `..`, without `/`, `\`, NUL or a drive prefix; the canonical
+  not `.` or `..`, without `/`, `\`, NUL or a drive prefix. On every platform,
+  trailing dots/spaces and Windows device names (`con`, `nul`, `aux`, `prn`,
+  `com1`–`com9`, `lpt1`–`lpt9`, case-insensitive, with or without an extension)
+  are rejected. The canonical
   `parent` must be under a root; `create_dir` (never `create_dir_all`) and an
   existing entry is `exists`. Returns the canonical new path.
 - Errors: `outside_roots`, `not_found`, `not_a_directory`, `invalid_name`,
