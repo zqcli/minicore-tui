@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Each connected device can work in its own session or new-session draft without
+  switching the others; the computer shows which session each device is on.
 - Remote mode: a phone can drive the TUI. `--remote` or `/remote on` starts a
   listener (loopback by default, configured under `[remote]`) that serves a web
   client. The phone signs in once with the password shown in the TUI and then

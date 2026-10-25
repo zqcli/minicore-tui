@@ -45,12 +45,19 @@ impl LaunchSettings {
 }
 
 impl App {
+    pub fn draft_launch(&self) -> &LaunchSettings {
+        self.remote
+            .draft
+            .as_ref()
+            .map_or(&self.launch, |draft| &draft.launch)
+    }
+
     /// The model the next message runs on: the session's, else the one a new session would get.
     pub fn model_id(&self) -> Option<&str> {
         match &self.session {
             Some(session) => Some(&session.info.model),
             None => self
-                .launch
+                .draft_launch()
                 .model_id(&self.profiles, self.default_profile.as_deref()),
         }
     }
@@ -60,7 +67,7 @@ impl App {
         match &self.session {
             Some(session) => Some(session.info.reasoning),
             None => self
-                .launch
+                .draft_launch()
                 .reasoning(&self.profiles, self.default_profile.as_deref()),
         }
     }

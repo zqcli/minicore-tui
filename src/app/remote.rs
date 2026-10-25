@@ -5,10 +5,10 @@ use std::time::Duration;
 
 use serde_json::json;
 
-use super::{Action, Answer, App, Msg, NoticeLevel, Overlay, Session, tasks};
+use super::{Action, Answer, App, LaunchSettings, Msg, NoticeLevel, Overlay, Session, tasks};
 use crate::protocol::{self, Reasoning};
 use crate::remote::{
-    Bound, Phone, RemoteEvent,
+    Bound, DraftSettings, NoticeTarget, Phone, PhoneView, RemoteEvent,
     auth::Auth,
     fs, view, whole_seconds,
     wire::{self, Choice, Intent},
@@ -24,7 +24,15 @@ impl App {
         let shared = view::Shared::build(self);
         let mut phones = std::mem::take(&mut self.remote.phones);
         phones.retain_mut(|phone| {
-            let messages = phone.view.sync(self, &shared);
+            let shared = shared
+                .iter()
+                .find(|shared| shared.connections.contains(&phone.connection.id))
+                .unwrap();
+            let session = phone
+                .view
+                .session_id()
+                .map(|id| self.live(id).expect("a phone views a live session"));
+            let messages = phone.projection.sync(session, shared);
             messages
                 .into_iter()
                 .all(|message| phone.connection.send(message))
@@ -71,7 +79,18 @@ impl App {
                 NoticeLevel::Info,
                 "Remote control is off · /remote on starts it",
             ),
-            ("off", "") => self.remote.stop("remote_off"),
+            ("off", "") => {
+                if let Some(draft) = self.remote.draft.take() {
+                    self.launch = draft.launch;
+                }
+                self.remote.stop("remote_off");
+                if let Some(session) = &mut self.session {
+                    let returned = std::mem::take(&mut session.returned);
+                    for text in returned {
+                        self.restore_draft(&text);
+                    }
+                }
+            }
             ("on", "") if self.remote.starting.is_some() => {}
             ("on", "") => {
                 let config = self
@@ -174,9 +193,11 @@ impl App {
                 {
                     self.remote.phones.remove(old).connection.bye("replaced");
                 }
+                let view = PhoneView::foreground(self);
                 self.remote.phones.push(Phone {
                     connection,
-                    view: view::View::default(),
+                    view,
+                    projection: view::View::default(),
                     connected_at: jiff::Timestamp::now(),
                 });
             }
@@ -206,10 +227,9 @@ impl App {
                     .iter()
                     .any(|phone| phone.connection.id == connection)
                 {
-                    if matches!(intent, Intent::Submit { .. } | Intent::Queue { .. }) {
-                        self.remote.last_sender = Some(connection);
-                    }
-                    let result = self.remote_intent(intent);
+                    self.remote.notice_target = NoticeTarget::Phone(connection);
+                    let result = self.phone_intent(connection, intent);
+                    self.remote.notice_target = NoticeTarget::All;
                     self.remote.send(Some(connection), wire::ack(&id, result));
                 }
                 let _ = done.send(());
@@ -217,10 +237,126 @@ impl App {
         }
     }
 
-    fn remote_intent(&mut self, intent: Intent) -> Result<(), String> {
+    fn phone_intent(&mut self, connection: u64, intent: Intent) -> Result<(), String> {
+        let phone = self
+            .remote
+            .phones
+            .iter()
+            .find(|phone| phone.connection.id == connection)
+            .unwrap();
+        let blocked = self.loading_session
+            && (self.first_message.is_some()
+                || match &intent {
+                    Intent::OpenSession { session_id } => self.live(session_id).is_none(),
+                    Intent::NewSession { .. } => true,
+                    Intent::Submit { .. } | Intent::Queue { .. } => {
+                        phone.view.session_id().is_none()
+                    }
+                    _ => false,
+                });
+        if blocked {
+            return Err(if self
+                .remote
+                .opening
+                .as_ref()
+                .is_some_and(|opening| *opening != connection)
+            {
+                "Another device is opening a session"
+            } else {
+                "A session is opening or being created"
+            }
+            .into());
+        }
+        let focus = !matches!(intent, Intent::OpenSession { .. });
+        if focus {
+            self.focus_phone(connection);
+        }
+        let result = self.remote_intent(connection, intent);
+        if focus && self.session.is_none() {
+            let draft = DraftSettings {
+                workspace: self.workspace.clone(),
+                launch: std::mem::take(&mut self.launch),
+            };
+            self.remote.draft = Some(draft.clone());
+            self.set_phone_view(connection, PhoneView::Draft(draft));
+        }
+        result
+    }
+
+    fn focus_phone(&mut self, connection: u64) {
+        let view = self
+            .remote
+            .phones
+            .iter()
+            .find(|phone| phone.connection.id == connection)
+            .unwrap()
+            .view
+            .clone();
+        self.remote.draft = None;
+        self.launch = LaunchSettings::default();
+        match view {
+            PhoneView::Session(id) => {
+                if let Some(index) = self.live_index(&id) {
+                    self.switch_to(index);
+                }
+            }
+            PhoneView::Draft(draft) => {
+                if self.session.is_some() {
+                    self.show_session(None);
+                }
+                self.workspace = draft.workspace;
+                self.launch = draft.launch;
+            }
+        }
+    }
+
+    pub(super) fn set_phone_view(&mut self, connection: u64, view: PhoneView) {
+        let Some(phone) = self
+            .remote
+            .phones
+            .iter_mut()
+            .find(|phone| phone.connection.id == connection)
+        else {
+            return;
+        };
+        if let Some(id) = view.session_id() {
+            self.session
+                .iter_mut()
+                .chain(&mut self.background)
+                .find(|session| session.info.session_id == id)
+                .expect("a phone views a live session")
+                .unseen = false;
+        }
+        phone.set_view(view);
+    }
+
+    pub(super) fn forget_phone_session(&mut self, id: &str) {
+        let foreground = self
+            .session
+            .as_ref()
+            .is_some_and(|session| session.info.session_id == id);
+        if foreground {
+            self.show_session(None);
+        }
+        let draft = DraftSettings {
+            workspace: self.workspace.clone(),
+            launch: LaunchSettings::default(),
+        };
+        for phone in &mut self.remote.phones {
+            if phone.view.session_id() == Some(id) {
+                phone.set_view(PhoneView::Draft(draft.clone()));
+            }
+        }
+        if foreground {
+            self.launch = LaunchSettings::default();
+            self.remote.draft = self.remote.active().then_some(draft);
+        }
+    }
+
+    fn remote_intent(&mut self, connection: u64, intent: Intent) -> Result<(), String> {
         match intent {
-            Intent::Submit { text } => self.remote_text(text, false)?,
-            Intent::Queue { text } => self.remote_text(text, true)?,
+            Intent::Submit { text } => self.remote_text(connection, text, false)?,
+            Intent::Queue { text } => self.remote_text(connection, text, true)?,
             Intent::Cancel => {
                 if self.is_busy() || self.compacting() {
                     self.escape();
@@ -259,13 +395,21 @@ impl App {
                 self.load_older();
             }
             Intent::OpenSession { session_id } => {
-                // A live session switches at once unless a created one is due.
-                let live = self.live(&session_id).is_some();
-                if self.loading_session && (!live || self.first_message.is_some()) {
-                    return Err("A session is opening or being created".into());
-                }
                 self.remote_session(&session_id)?;
-                self.open_session(session_id);
+                if self.live(&session_id).is_some() {
+                    self.set_phone_view(connection, PhoneView::Session(session_id));
+                    self.focus_phone(connection);
+                } else {
+                    if self.session.is_none() {
+                        self.remote.draft = Some(DraftSettings {
+                            workspace: self.workspace.clone(),
+                            launch: self.draft_launch().clone(),
+                        });
+                    }
+                    self.launch = LaunchSettings::default();
+                    self.remote.opening = Some(connection);
+                    self.open_session(session_id);
+                }
             }
             Intent::RenameSession { session_id, title } => {
                 self.remote_session(&session_id)?;
@@ -276,6 +420,23 @@ impl App {
             }
             Intent::DeleteSession { session_id } => {
                 self.remote_session(&session_id)?;
+                let own = self
+                    .remote
+                    .phones
+                    .iter()
+                    .find(|phone| phone.connection.id == connection)
+                    .unwrap();
+                if own.view.session_id() == Some(&session_id) {
+                    return Err("Open another session before deleting this one".into());
+                }
+                if let Some(phone) = self
+                    .remote
+                    .phones
+                    .iter()
+                    .find(|phone| phone.view.session_id() == Some(&session_id))
+                {
+                    return Err(format!("Open on \"{}\"", phone.connection.device.name));
+                }
                 if let Some(refusal) = self.delete_refusal(&session_id) {
                     return Err(refusal);
                 }
@@ -284,9 +445,6 @@ impl App {
                 self.spawn_msg(tasks::delete_session(client, session_id));
             }
             Intent::NewSession { workspace, profile } => {
-                if self.loading_session {
-                    return Err("A session is opening or being created".into());
-                }
                 if profile
                     .as_ref()
                     .is_some_and(|id| !self.profiles.iter().any(|p| &p.id == id))
@@ -304,6 +462,7 @@ impl App {
                 if !path.is_dir() {
                     return Err("not_a_directory".into());
                 }
+                self.launch = LaunchSettings::default();
                 self.new_draft(profile);
                 self.workspace = path;
             }
@@ -334,12 +493,17 @@ impl App {
         Ok(())
     }
 
-    fn remote_text(&mut self, text: String, follow: bool) -> Result<(), String> {
+    fn remote_text(&mut self, connection: u64, text: String, follow: bool) -> Result<(), String> {
         if text.trim().is_empty() {
             return Err("Remote text is empty".into());
         }
-        if !self.ready || self.loading_session {
+        if !self.ready {
             return Err("A session is opening or being created".into());
+        }
+        if let Some(session) = &mut self.session {
+            session.last_sender = Some(connection);
+        } else {
+            self.remote.opening = Some(connection);
         }
         self.submit_text(text.trim_end().to_owned(), follow);
         Ok(())
@@ -365,7 +529,10 @@ impl App {
         let client = self.client.clone();
         self.spawn_msg(async move {
             let params = json!({ "session_id": id });
-            Msg::Opened(tasks::session(client, protocol::METHOD_SESSION_OPEN, params).await)
+            Msg::Opened(
+                id,
+                tasks::session(client, protocol::METHOD_SESSION_OPEN, params).await,
+            )
         });
     }
 }

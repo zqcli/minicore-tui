@@ -433,7 +433,7 @@ globalThis.MC = (() => {
   const mergeReturned = (cur, text) => cur ? cur + '\n' + text : text;
   // The other connected devices: the state's list without one entry of this device's name.
   function otherDevices(devices, me) {
-    const rest = devices.slice(), i = rest.indexOf(me);
+    const rest = devices.map(device => device.name), i = rest.indexOf(me);
     if (i >= 0) rest.splice(i, 1);
     return rest;
   }

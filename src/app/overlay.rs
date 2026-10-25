@@ -405,7 +405,10 @@ impl App {
         let client = self.client.clone();
         self.spawn_msg(async move {
             let params = json!({ "session_id": session_id, "title": title.trim() });
-            Msg::Renamed(tasks::session(client, protocol::METHOD_SESSION_RENAME, params).await)
+            Msg::Renamed(
+                session_id,
+                tasks::session(client, protocol::METHOD_SESSION_RENAME, params).await,
+            )
         });
     }
 

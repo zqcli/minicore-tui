@@ -1196,7 +1196,8 @@ fn admit(app: &mut App, name: &str, at: &str) {
             outbound,
             close,
         },
-        view: Default::default(),
+        view: crate::remote::PhoneView::foreground(app),
+        projection: Default::default(),
         connected_at: at.parse().expect("time"),
     });
 }
@@ -1303,10 +1304,15 @@ fn the_remote_status_screen_and_footer_count_several_phones_and_list_each() {
     conversation(&mut app);
     connected(&mut app);
     admit(&mut app, "Mac Edge", "2026-10-25T14:30:00Z");
-    let screen = render(&mut app, 80, 24);
+    let draft = crate::remote::PhoneView::Draft(crate::remote::DraftSettings {
+        workspace: app.workspace.clone(),
+        launch: Default::default(),
+    });
+    app.remote.phones[1].set_view(draft);
+    let screen = render(&mut app, 100, 24);
     assert!(screen.contains("● 2 phones connected"), "{screen}");
     assert!(
-        screen.contains("    Phones     iPhone Safari · connected at 14:02\n               Mac Edge · connected at 14:30\n"),
+        screen.contains("iPhone Safari · Cache the parser · connected at 14:02\n               Mac Edge · new session · connected at 14:30\n"),
         "{screen}"
     );
     assert!(screen.contains("remote · 2 phones"), "{screen}");

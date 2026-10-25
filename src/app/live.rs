@@ -61,7 +61,8 @@ impl App {
         std::mem::swap(&mut self.scroll, &mut session.scroll);
         let foreground = self.session.replace(session);
         self.background_op = true;
-        op(self);
+        let id = self.session.as_ref().unwrap().info.session_id.clone();
+        self.with_notice_for(&id, op);
         self.background_op = false;
         let mut session = std::mem::replace(&mut self.session, foreground)
             .expect("reducer code keeps its session");
@@ -96,7 +97,11 @@ impl App {
                 session.unseen = false;
                 self.scroll = session.scroll;
                 self.workspace = PathBuf::from(&session.info.workspace);
-                let returned = std::mem::take(&mut session.returned);
+                let returned = if self.remote.active() {
+                    Vec::new()
+                } else {
+                    std::mem::take(&mut session.returned)
+                };
                 let parts: Vec<String> = session.draft.take().into_iter().chain(returned).collect();
                 parts.join("\n\n")
             }
@@ -112,11 +117,13 @@ impl App {
         self.selection = None;
     }
 
-    /// A background turn ended: the session is marked unseen and says how.
+    /// Announces a background turn end and marks it unseen unless a phone views it.
     pub(super) fn background_turn_ended(&mut self) {
         let label = self.session_label();
+        let id = self.session.as_ref().unwrap().info.session_id.clone();
+        let viewed = self.remote.viewing(&id);
         let session = self.session_mut();
-        session.unseen = true;
+        session.unseen = !viewed;
         let Some(Block::TurnEnd {
             outcome, duration, ..
         }) = session.transcript.blocks().last()
@@ -135,13 +142,23 @@ impl App {
         };
         let long = duration.is_some_and(|duration| duration >= crate::title::LONG_TURN);
         self.ring |= long;
-        self.push_notice(NoticeLevel::Info, format!("\"{label}\" {text}"));
+        self.attention_notice(&id, format!("\"{label}\" {text}"));
     }
 
     /// A background approval rings and names the session to switch to.
     pub(super) fn background_approval(&mut self) {
         self.ring = true;
+        let id = self.session.as_ref().unwrap().info.session_id.clone();
         let text = format!("\"{}\" needs approval · ctrl+r", self.session_label());
+        self.attention_notice(&id, text);
+    }
+
+    fn attention_notice(&mut self, id: &str, text: String) {
+        self.remote.send_viewers(
+            id,
+            false,
+            serde_json::json!({"t":"notice", "level":"info", "text":text}),
+        );
         self.push_notice(NoticeLevel::Info, text);
     }
 

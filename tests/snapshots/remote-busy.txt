@@ -2,7 +2,7 @@
 
     Address    http://192.168.20.207:8765
     Password   k7mq-x2pa-n9dt
-    Phones     iPhone Safari · connected at 14:02
+    Phones     iPhone Safari · Cache the parser · connected at 14:02
 
     Session    Cache the parser
     Workspace  /work/minicore-tui

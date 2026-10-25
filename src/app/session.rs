@@ -65,8 +65,10 @@ pub struct Session {
     pub waiting_for_compaction: bool,
     /// The composer text this session had when it left the foreground.
     pub draft: Option<String>,
-    /// Texts the Agent refused while this session was in the background.
+    /// Refused texts awaiting local control because no remote recipient received them.
     pub returned: Vec<String>,
+    /// The connection that last submitted text to this session.
+    pub last_sender: Option<u64>,
     /// A turn ended while this session was in the background.
     pub unseen: bool,
     /// The view this session had when it left the foreground.
@@ -251,6 +253,7 @@ impl Session {
             waiting_for_compaction: false,
             draft: None,
             returned: Vec::new(),
+            last_sender: None,
             unseen: false,
             scroll: Scroll::Follow,
         }

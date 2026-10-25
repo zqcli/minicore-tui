@@ -681,7 +681,8 @@ mod tests {
                 outbound,
                 close,
             },
-            view: Default::default(),
+            view: super::super::PhoneView::foreground(&app),
+            projection: Default::default(),
             connected_at: jiff::Timestamp::UNIX_EPOCH,
         });
         let stored = || -> Value {

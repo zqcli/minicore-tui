@@ -95,10 +95,33 @@ impl App {
         }
     }
 
-    /// Makes the opened or created session the foreground; the old one stays
-    /// live in the background. A created one comes with the draft's `first`
-    /// message, which it sends; an opened one loads its tail.
+    /// Adopts a session and assigns its remote creator or opener's view without moving other devices.
     pub(super) fn adopt(&mut self, result: Result<SessionInfo, RpcError>, first: Option<String>) {
+        let opening = self.remote.opening.take();
+        let created = first.is_some();
+        let id = result.as_ref().ok().map(|info| info.session_id.clone());
+        let previous = opening.filter(|_| created).map(|connection| {
+            std::mem::replace(
+                &mut self.remote.notice_target,
+                crate::remote::NoticeTarget::Phone(connection),
+            )
+        });
+        self.adopt_session(result, first);
+        if let Some(id) = id {
+            self.remote.draft = None;
+            if let Some(connection) = opening {
+                self.set_phone_view(connection, crate::remote::PhoneView::Session(id));
+                if created {
+                    self.session_mut().last_sender = Some(connection);
+                }
+            }
+        }
+        if let Some(previous) = previous {
+            self.remote.notice_target = previous;
+        }
+    }
+
+    fn adopt_session(&mut self, result: Result<SessionInfo, RpcError>, first: Option<String>) {
         self.loading_session = false;
         let Some(info) = self.ok(result) else {
             if let Some(text) = first {
@@ -433,29 +456,34 @@ impl App {
         if !foreground && let Some(index) = self.live_index(&meta.session_id) {
             self.with_background(index, |app| app.on_agent_event(event));
         } else if foreground {
-            let session = self.session_mut();
-            let was_compacting = session.compaction.is_some();
-            let usage = matches!(event, AgentEvent::RequestUsage { .. });
-            let requested = matches!(event, AgentEvent::InteractionRequested { .. });
-            let started = session.apply_event(event);
-            let compaction_ended = was_compacting && session.compaction.is_none();
-            if let Some(turn) = started {
-                self.start_turn(turn);
-            }
-            if requested {
-                self.on_approval_requested();
-            }
-            // The footer's context figure moves with each request and each
-            // compaction, not only at the turn's end.
-            if compaction_ended || (usage && self.session_mut().presentation_due()) {
-                self.refresh_presentation();
-            }
-            // The context report holds the finished compaction's marker.
-            if compaction_ended {
-                self.refresh_context();
-            }
+            let id = meta.session_id.clone();
+            self.with_notice_for(&id, |app| app.apply_agent_event(event));
         } else if let AgentEvent::SessionOpened { session, .. } = event {
             self.merge_catalog_info(*session);
+        }
+    }
+
+    fn apply_agent_event(&mut self, event: AgentEvent) {
+        let session = self.session_mut();
+        let was_compacting = session.compaction.is_some();
+        let usage = matches!(event, AgentEvent::RequestUsage { .. });
+        let requested = matches!(event, AgentEvent::InteractionRequested { .. });
+        let started = session.apply_event(event);
+        let compaction_ended = was_compacting && session.compaction.is_none();
+        if let Some(turn) = started {
+            self.start_turn(turn);
+        }
+        if requested {
+            self.on_approval_requested();
+        }
+        // The footer's context figure moves with each request and each
+        // compaction, not only at the turn's end.
+        if compaction_ended || (usage && self.session_mut().presentation_due()) {
+            self.refresh_presentation();
+        }
+        // The context report holds the finished compaction's marker.
+        if compaction_ended {
+            self.refresh_context();
         }
     }
 

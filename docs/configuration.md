@@ -256,10 +256,14 @@ remembered phones are never paused.
 off. Either forgets every phone and signs out every connected one. Deleting
 `remote.json` forgets every phone and makes a new password at the next start.
 
-Several devices can be connected at once, a phone and a tablet for example, and
-each can drive the session; the status screen lists them and each client shows
-who else is connected. A device connects once: opening the client in a second
-tab, or reconnecting with the same token, replaces its previous connection.
+Several devices can be connected at once, each viewing and driving its own
+session or new-session draft. Switching sessions or picking draft settings on
+one device does not move the others; devices on the same session see the same
+data. The status screen names each device's session and each client shows who
+else is connected. The computer follows the device that acted last, and
+`/remote off` shows that foreground transcript. A device connects once: opening
+the client in a second tab, or reconnecting with the same token, replaces its
+previous connection.
 `/remote off` disconnects every phone, stops listening and restores local input;
 phones disconnecting alone leave remote mode Waiting.
 

@@ -4,17 +4,17 @@ use std::path::Path;
 
 use serde_json::{Value, json};
 
-use super::fs;
+use super::{PhoneView, fs};
 
 use crate::app::session::context_percent;
-use crate::app::{App, InteractionKind, LiveStatus, QueuedKind};
+use crate::app::{App, InteractionKind, LiveStatus, QueuedKind, Session};
 use crate::protocol::read::UserKind;
 use crate::transcript::{Block, RequestKey, ToolState};
 
 /// What one connection was last sent.
 #[derive(Default)]
 pub struct View {
-    /// `None` until the first snapshot, then the resident session's epoch.
+    /// `None` until the first snapshot, then the viewed session's epoch.
     epoch: Option<Option<u64>>,
     revisions: Vec<u64>,
     state: String,
@@ -28,23 +28,59 @@ pub struct Catalog {
     value: Value,
 }
 
-/// This sync's `State`, built once for every connection.
+impl Catalog {
+    fn refresh(app: &mut App) {
+        let generation = (app.catalog_generation, app.remote.generation);
+        if app.remote.catalog.generation != Some(generation) {
+            app.remote.catalog = Self {
+                generation: Some(generation),
+                value: catalog(app),
+            };
+        }
+    }
+}
+
+/// This sync's `State`, shared by connections viewing the same session or draft settings.
 pub struct Shared {
+    pub connections: Vec<u64>,
+    view: PhoneView,
+    loading: bool,
     state: Value,
     serialized: String,
 }
 
 impl Shared {
-    pub fn build(app: &mut App) -> Self {
-        let generation = (app.catalog_generation, app.remote.generation);
-        if app.remote.catalog.generation != Some(generation) {
-            app.remote.catalog = Catalog {
-                generation: Some(generation),
-                value: catalog(app),
+    pub fn build(app: &mut App) -> Vec<Self> {
+        Catalog::refresh(app);
+        let mut groups: Vec<Self> = Vec::new();
+        for phone in &app.remote.phones {
+            let loading = app.loading_session
+                && app
+                    .remote
+                    .opening
+                    .as_ref()
+                    .is_some_and(|opening| *opening == phone.connection.id);
+            let group = match groups
+                .iter_mut()
+                .find(|group| group.view == phone.view && group.loading == loading)
+            {
+                Some(group) => group,
+                None => {
+                    groups.push(Self::new(app, phone.view.clone(), loading));
+                    groups.last_mut().unwrap()
+                }
             };
+            group.connections.push(phone.connection.id);
         }
-        let state = state(app, &app.remote.catalog.value);
+        groups
+    }
+
+    fn new(app: &App, view: PhoneView, loading: bool) -> Self {
+        let state = state(app, &app.remote.catalog.value, &view, loading);
         Self {
+            connections: Vec::new(),
+            view,
+            loading,
             serialized: state.to_string(),
             state,
         }
@@ -104,16 +140,14 @@ impl Streaming {
 }
 
 impl View {
-    pub fn sync(&mut self, app: &App, shared: &Shared) -> Vec<Value> {
-        let epoch = app.session.as_ref().map(|session| session.epoch);
-        let revisions = app
-            .session
-            .as_ref()
-            .map_or(&[][..], |session| session.transcript.revisions());
+    pub fn sync(&mut self, session: Option<&Session>, shared: &Shared) -> Vec<Value> {
+        let epoch = session.map(|session| session.epoch);
+        let revisions = session.map_or(&[][..], |session| session.transcript.revisions());
+        let blocks = session.map_or(&[][..], |session| session.transcript.blocks());
         let mut messages = Vec::new();
         if self.epoch != Some(epoch) {
-            messages.push(json!({"t":"snapshot", "state":shared.state, "blocks":app.transcript_blocks().iter().map(block).collect::<Vec<_>>()}));
-            self.streaming = app.transcript_blocks().iter().map(Streaming::of).collect();
+            messages.push(json!({"t":"snapshot", "state":shared.state, "blocks":blocks.iter().map(block).collect::<Vec<_>>()}));
+            self.streaming = blocks.iter().map(Streaming::of).collect();
         } else {
             self.streaming.resize_with(revisions.len(), || None);
             let mut upserts = Vec::new();
@@ -121,7 +155,7 @@ impl View {
                 if self.revisions.get(i) == Some(revision) {
                     continue;
                 }
-                let current = &app.transcript_blocks()[i];
+                let current = &blocks[i];
                 let append = self.streaming[i]
                     .as_ref()
                     .and_then(|sent| sent.append(current));
@@ -169,8 +203,35 @@ fn catalog(app: &App) -> Value {
         "profiles":app.profiles.iter().map(|profile| &profile.id).collect::<Vec<_>>()})
 }
 
-fn state(app: &App, catalog: &Value) -> Value {
-    let session = app.session.as_ref();
+fn state(app: &App, catalog: &Value, view: &PhoneView, loading: bool) -> Value {
+    let session = view
+        .session_id()
+        .map(|id| app.live(id).expect("a phone views a live session"));
+    let (workspace, profile, model, reasoning) = match view {
+        PhoneView::Session(_) => {
+            let session = session.unwrap();
+            (
+                Path::new(&session.info.workspace),
+                Some(session.info.profile.as_str()),
+                Some(session.info.model.as_str()),
+                Some(session.info.reasoning),
+            )
+        }
+        PhoneView::Draft(draft) => (
+            draft.workspace.as_path(),
+            draft
+                .launch
+                .profile
+                .as_deref()
+                .or(app.default_profile.as_deref()),
+            draft
+                .launch
+                .model_id(&app.profiles, app.default_profile.as_deref()),
+            draft
+                .launch
+                .reasoning(&app.profiles, app.default_profile.as_deref()),
+        ),
+    };
     let live = session.and_then(|s| s.live.as_ref());
     let current = session.map(|s| s.info.session_id.as_str());
     let mut sessions = catalog["sessions"].clone();
@@ -192,12 +253,6 @@ fn state(app: &App, catalog: &Value) -> Value {
             }
             None => info["live"] = json!(false),
         }
-        if let Some(session) = session.filter(|_| resident) {
-            info["title"] = json!(crate::app::overlay::session_label(
-                &session.info,
-                Some(session)
-            ));
-        }
     }
     let interaction = session.and_then(|s| s.interaction.as_ref().map(|interaction| {
         let call = s.transcript.find_tool_by_call_id(&interaction.tool_call_id);
@@ -210,16 +265,16 @@ fn state(app: &App, catalog: &Value) -> Value {
     let queue: Vec<_> = session.into_iter().flat_map(|s| &s.queue).map(|queued| json!({
         "kind":match queued.kind { QueuedKind::Steer => "steer", QueuedKind::Follow => "follow" }, "text":queued.text,
     })).collect();
-    let (running, approval) = app.background_counts();
+    let (running, approval) = app.other_counts(current);
     json!({
         "session":session.map(|s| json!({"id":s.info.session_id, "title":crate::app::overlay::session_label(&s.info, session), "workspace":fs::display(Path::new(&s.info.workspace)), "profile":s.info.profile, "model":s.info.model, "reasoning":s.info.reasoning})),
-        "draft":{"workspace":fs::display(&app.workspace), "profile":app.launch.profile.as_ref().or(app.default_profile.as_ref()), "model":app.model_id(), "reasoning":app.reasoning()},
-        "status":{"label":app.status_label(), "busy":app.is_busy(), "started_ms":live.map(|live| live.started_ms), "interrupting":live.is_some_and(|live| live.interrupting), "compacting":app.compacting(), "loading":app.loading_session},
+        "draft":{"workspace":fs::display(workspace), "profile":profile, "model":model, "reasoning":reasoning},
+        "status":{"label":session.and_then(Session::status_label), "busy":session.is_some_and(Session::is_busy), "started_ms":live.map(|live| live.started_ms), "interrupting":live.is_some_and(|live| live.interrupting), "compacting":session.is_some_and(Session::compacting), "loading":loading},
         "usage":{"input":session.map_or(0, |s| s.usage.input), "output":session.map_or(0, |s| s.usage.output), "cached":session.map_or(0, |s| s.usage.cached)},
         "context_percent":session.and_then(context_percent), "interaction":interaction, "queue":queue,
         "older":session.is_some_and(|s| s.loaded_from > 0), "sessions":sessions,
         "background":{"running":running, "approval":approval},
-        "devices":app.remote.phones.iter().map(|phone| &phone.connection.device.name).collect::<Vec<_>>(),
+        "devices":app.remote.phones.iter().map(|phone| json!({"name":phone.connection.device.name, "session":phone.view.session_id()})).collect::<Vec<_>>(),
         "models":catalog["models"], "profiles":catalog["profiles"]
     })
 }
@@ -274,8 +329,9 @@ mod tests {
     use tokio::sync::mpsc;
 
     fn sync(view: &mut View, app: &mut App) -> Vec<Value> {
-        let shared = Shared::build(app);
-        view.sync(app, &shared)
+        Catalog::refresh(app);
+        let shared = Shared::new(app, PhoneView::foreground(app), false);
+        view.sync(app.session.as_ref(), &shared)
     }
 
     fn connected_app() -> (crate::testing::FakeAgent, App) {
@@ -505,7 +561,7 @@ mod tests {
         let info: crate::protocol::SessionInfo = serde_json::from_value(info).unwrap();
         app.sessions.push(info.clone());
         app.session = Some(crate::app::Session::new(info, 1));
-        let state = state(&app, &catalog(&app));
+        let state = state(&app, &catalog(&app), &PhoneView::foreground(&app), false);
         for workspace in [
             &state["draft"]["workspace"],
             &state["session"]["workspace"],

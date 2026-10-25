@@ -158,14 +158,14 @@ enum Msg {
 }
 ```
 
-`SessionOp` holds the results of everything done for the resident session
+`SessionOp` holds the results of everything done for a live session
 (`Tail`, `Page`, `Waited`, `Sent`, `Context`, `Presentation`, `Changes`,
 `ToolHydrated`, `DiffFile`, …). `App::spawn` and `App::call` stamp each task with
-the resident session's `epoch`; `on_msg` drops a `Session` message whose epoch is
-not the resident one. `adopt` makes an opened or created session resident with
-`App::epoch + 1`, a counter that never resets, so every open or create, even of
-the same session, orphans what is still in flight for the old one. Remote listeners
-have a separate generation so late handshakes cannot survive an off/on cycle.
+the foreground session's `epoch`; `on_msg` finds that epoch in the foreground or
+background and drops a result only when its session is gone. `adopt` assigns
+`App::epoch + 1` to a newly opened or created session; a live switch reuses its
+epoch. Remote listeners have a separate generation so late handshakes cannot
+survive an off/on cycle.
 
 Every session opened in the process stays live (`docs/design-sessions.md`):
 `App::session` is the foreground and `App::background` holds the others, most
@@ -174,10 +174,10 @@ by epoch wherever it is, and Agent events reach it by `session_id`; a result for
 a deleted session is dropped. Background work runs the ordinary reducer code
 through `App::with_background`, which swaps the session into the foreground slot
 with its own `scroll`, sets `background_op` and swaps it back. While that flag is
-set the view is left alone: `restore_draft` keeps text in `Session::returned`,
+set the view is left alone: `restore_draft` routes remote text or keeps it in `Session::returned`,
 find matches and foreground-only answers (item counts, `@` files, diff reads)
-are skipped, and `notice` names the session. A background turn end marks the
-session `unseen` and an approval asks for the bell (`App::ring`). Switching
+are skipped, and `notice` names the session locally. A background turn end marks the
+session `unseen` unless a phone views it, and an approval asks for the bell (`App::ring`). Switching
 (`show_session`) parks the foreground with its composer text and scroll, brings
 the target back with its draft and returned texts, clears the layout cache and
 pickers and reads only the footer's figures; the draft keeps its text in
@@ -236,11 +236,34 @@ explicit allowlist for viewing, copying/exporting, draft editing, theme changes,
 queue recall, quit and remote commands. Command completion checks before clearing
 the draft. Approval sheets neither render nor take the local keyboard; Esc can
 still interrupt. Entering remote recalls queued follow-ups into the composer.
-Remote text is passed directly to the same submit/send paths without changing
-the local composer or its history. Agent-refused text returns as `returned` to
-the connection that sent the latest text intent (`Remote::last_sender`) while it
-is connected, else to every phone. Acks answer only the requesting connection;
-every notice is forwarded to every phone.
+Each `Phone` owns a `PhoneView`: a live session id or draft workspace and launch
+settings, copied from the foreground on admission. Before an intent one helper
+focuses that view through the ordinary live switch or draft path; the phones
+never follow one another. The foreground therefore belongs to the last device
+that acted (or whose open/create completed), and `/remote off` returns to it.
+Draft settings are saved back after each intent and `App::launch` is cleared;
+`Remote::draft` keeps the foreground draft's settings for the status screen and
+local return without leaking overrides into `adopt` on a later session open.
+`Remote::opening` records the pending open/create's connection; only it changes
+view on adoption and shows `status.loading`. A pending open allows live-session
+work. While a create's first message is pending, all intents are refused so the
+global first text and composer cannot be stolen; another device receives
+`Another device is opening a session`.
+
+Remote text uses the same submit/send paths without changing local composer
+text or history. Each session keeps its last text-sending connection;
+`restore_draft` sends `returned` there if connected, else to its viewers, else
+keeps it in `Session::returned` until local control returns. A scoped
+`Remote::notice_target` routes synchronous notices to the requester and async
+session notices to its viewers plain and to other devices with the session
+label. Foreground results/events and `with_background` set that scope;
+open/rename/delete results retain their session id too. Labels are resolved only
+when a notice is emitted, not on every event. App-wide notices go to all,
+background attention only to non-viewers, and acks only to the requester.
+Deleting any viewed session is refused. A successful in-flight deletion also
+resets views that opened its target meanwhile to default drafts, so every
+session view still names a live session; a remote open reply for a target
+removed from the catalog meanwhile is discarded rather than adopted.
 
 `App::workspace` follows the workspace of each adopted session and is the default
 for the next draft; a remote `new_session` can choose another existing directory
@@ -249,13 +272,17 @@ still selects against the original launch workspace. Session selection and the
 phone catalog use canonical path-prefix checks, not file-content reads.
 
 After each paced frame (or its inactive-terminal equivalent), and before exit,
-`sync_remote` returns immediately without a phone. Otherwise it builds `State`
-and its serialization once (`view::Shared`) and each phone's own tracker
-(`view::View`) sends a snapshot on admission or residency change,
-revision-indexed block upserts, and state only when the serialized value differs
-from what that phone was last sent. A phone whose queue overflows is dropped alone. Streaming assistants use
+`sync_remote` returns immediately without a phone. Otherwise it groups devices
+by viewed session or equal draft settings (and loading ownership), builds and serializes `State` once per distinct view
+(`view::Shared`), and each phone's own tracker (`view::View`) diffs that session
+through `App::live`, foreground or background. Admission, a view change or a
+viewed session epoch change sends a snapshot; otherwise it sends
+revision-indexed block upserts and state only when the serialized value differs
+from what that phone was last sent. Current-session marks, interaction, usage,
+queue and background counts are per-view; catalogs and device locations are
+shared. A phone whose queue overflows is dropped alone. Streaming assistants use
 append-only suffix updates until they finish, when one full block is sent.
-The tracker keeps resident revisions, streaming keys and byte lengths, and the
+The tracker keeps viewed revisions, streaming keys and byte lengths, and the
 last serialized state; it is not an event log. Catalogs are cached by generation,
 so unchanged frames never rebuild or sort the full session catalog. `LiveTurn::started_ms` is captured once so elapsed
 time belongs to the client. The footer and projection share the pure

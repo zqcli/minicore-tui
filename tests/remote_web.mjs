@@ -226,14 +226,20 @@ test('retireText removes only the acked text and keeps returned or newly typed t
   assert.equal(MC.retireText(MC.mergeReturned('first', 'old'), 'first'), 'old');
 });
 
-test('other devices drop one entry of this device name and nothing is left when it is alone', () => {
+test('other devices read per-device views and drop just one entry of this device name', () => {
   const { MC, plain } = load();
-  assert.deepEqual(plain(MC.otherDevices(['iPhone Safari', 'Mac Edge', 'iPhone Safari', 'iPad Safari'], 'iPhone Safari')), ['Mac Edge', 'iPhone Safari', 'iPad Safari']);
-  assert.deepEqual(plain(MC.otherDevices(['iPhone Safari'], 'iPhone Safari')), []);
-  assert.deepEqual(plain(MC.otherDevices(['Mac Edge'], 'iPhone Safari')), ['Mac Edge']);
-  const devices = ['iPhone Safari', 'Mac Edge'];
-  MC.otherDevices(devices, 'Mac Edge');
-  assert.deepEqual(devices, ['iPhone Safari', 'Mac Edge']);
+  const devices = [
+    { name: 'iPhone Safari', session: 'x' },
+    { name: 'Mac Edge', session: 'y' },
+    { name: 'iPhone Safari', session: null },
+    { name: 'iPad Safari', session: 'x' },
+  ];
+  const before = structuredClone(devices);
+  assert.deepEqual(plain(MC.otherDevices(devices, 'iPhone Safari')), ['Mac Edge', 'iPhone Safari', 'iPad Safari']);
+  assert.deepEqual(plain(MC.otherDevices(devices.slice(0, 1), 'iPhone Safari')), []);
+  assert.deepEqual(plain(MC.otherDevices(devices.slice(1, 2), 'iPhone Safari')), ['Mac Edge']);
+  assert.deepEqual(plain(MC.otherDevices([], 'iPhone Safari')), []);
+  assert.deepEqual(devices, before);
 });
 
 test('markdown tokens keep HTML and unsafe links as plain text', () => {
@@ -454,6 +460,22 @@ test('snapshots and states carry session transition events against the previous 
   const fx = plain(MC.reduce(s, { t: 'state', state: withSessions([live('a', 'approval')]) }, 0));
   assert.deepEqual(fx.events, [{ kind: 'approval', id: 'a', title: 'a' }]);
   assert.deepEqual(plain(MC.reduce(s, { t: 'state', state: withSessions([live('a', 'approval')]) }, 0).events), []);
+});
+
+test('device locations do not switch this client and attention excludes its own current session', () => {
+  const { MC, plain } = load();
+  const s = MC.createStore();
+  const view = (other, status) => structuredClone({
+    ...state, session: { ...state.session, id: 'mine' },
+    devices: [{ name: 'iPhone Safari', session: 'mine' }, { name: 'Mac Edge', session: other }],
+    sessions: [live('mine', status, { current: true }), live('other', status)],
+  });
+  MC.reduce(s, { t: 'snapshot', state: view('other', 'running'), blocks: [] }, 0);
+  const fx = plain(MC.reduce(s, { t: 'state', state: view(null, 'approval') }, 0));
+  assert.equal(s.sid, 'mine');
+  assert.equal(s.state.session.id, 'mine');
+  assert.deepEqual(fx.events, [{ kind: 'approval', id: 'other', title: 'other' }]);
+  assert.deepEqual(plain(MC.otherDevices(s.state.devices, 'iPhone Safari')), ['Mac Edge']);
 });
 
 test('forwarded background notices are recognised by their session label', () => {

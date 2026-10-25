@@ -12,21 +12,35 @@ document disagree after the feature lands, the code wins and this file is fixed.
 
 - **Intents in, projection out.** The phone never sends Agent RPC. It sends a
   closed set of intents that the reducer executes like local actions, and it
-  receives a projection of the resident session built from `App` state:
-  a snapshot on connect, then changed blocks (by block revision) and state
+  receives a projection of its own session or draft built from `App` state:
+  a snapshot on connect or view change, then changed blocks (by block revision) and state
   changes. Turn lifecycle, reconciliation, approvals, follow-ups and titles stay
   in the Rust reducer only.
 - **Several devices.** Remote mode is `Off`, `Waiting` (listening, local input
   frozen) or `Connected` (at least one phone connected). Every signed-in device
-  is admitted and every connected device controls the session; they share it as
-  the phone and the TUI do. A new connection from the *same* device (the same
+  is admitted and every connected device has its own view. A new connection from
+  the *same* device (the same
   token) replaces that device's older one with `bye replaced`, so a phone that
   lost its network reconnects before the old socket times out and a second tab
   does not count twice. There is no separate cap: at most 20 devices are
   remembered, which bounds the distinct devices that can be connected.
-- **Same session.** The phones and the TUI always share the resident session.
-  Opening or creating a session from a phone changes it for the TUI and every
-  other phone too.
+- **Independent views.** Admission copies the current foreground: its session
+  id, or its draft workspace and launch settings (profile, model and reasoning).
+  Opening or creating a session and starting a draft change only that device's
+  view. Devices never follow each other; two devices viewing the same session
+  see the same data and may both act on it.
+- **Focus before acting.** One helper brings the acting device's view to the
+  foreground, then runs the existing reducer paths. A live background session
+  switches instantly; a draft parks the foreground and loads that device's
+  workspace and launch settings. After a draft intent those settings are saved
+  back to the device and `App::launch` is cleared, so an opened session can never
+  adopt another device's draft overrides. The foreground draft keeps a copy for
+  the status screen and for returning to local control. Non-live opens remember
+  the requesting connection; adoption changes only its view. Creation does the
+  same and sends the first message to the newly adopted session.
+  The TUI foreground is the view of the device that acted last; an asynchronous
+  open or create takes the foreground when it completes. `/remote off` shows
+  that foreground, not a separate local session.
 - **The TUI only reports.** While remote mode is on, the TUI does not show the
   conversation: its transcript area becomes a status screen saying that remote
   control is on, how to connect, which phones are connected, which session and
@@ -106,8 +120,8 @@ line is never written to the prompt history.
 
      Address     http://192.168.20.207:8765
      Password    k7mq-x2pa-n9dt
-     Phones      iPhone Safari · connected at 14:02
-                 Mac Edge · connected at 14:30
+     Phones      iPhone Safari · Fix the parser · connected at 14:02
+                 Mac Edge · new session · connected at 14:30
                  (none yet · open the address on your phone and enter the password)
 
      Session     Fix the parser          (New session · starts with the phone's first message)
@@ -123,15 +137,17 @@ line is never written to the prompt history.
      /remote off take back control · esc stop the turn · /remote password new password
   ```
 
-  `Phones` has one row per connected device, in admission order, with the
-  local time it was admitted (a clock time, not a running duration, so the
+  `Phones` has one row per connected device, in admission order, with its
+  session label (or `new session`) and the local time it was admitted
+  (a clock time, not a running duration, so the
   idle screen stays still); the header names the one device or counts them.
   The home directory reads `~`. Values are cut to the width (never wrapped);
   the label column is the widest label plus two cells. Hints that do not fit
   give way whole, from the end. `Now` uses the Working line's spinner and the
   turn's elapsed whole seconds (`4s`, `3m07s`), and animates only while the TUI
   already animates (`App::animating`); an idle screen does not tick, so the
-  sign-in pause countdown refreshes with the next frame.
+  sign-in pause countdown refreshes with the next frame. `Session`, `Workspace`,
+  `Model` and `Now` still describe the foreground, the last device that acted.
 - The dock in remote mode shows notices, the editor and the footer only: no
   Working line, no queue rows and no approval sheet (the status screen says it).
   The editor keeps its draft and slash input but cannot send; an empty editor
@@ -296,16 +312,36 @@ dispatched it, or refused it):
 
 | kind | Behaviour | Refused when |
 |---|---|---|
-| `submit` | No session: create one in the draft workspace with this text as the first message (like the first Enter). Idle: send. Running: steer. | empty text; a session is opening or being created |
-| `queue` | Running: queue a follow-up. Otherwise as `submit`. | as `submit` |
-| `cancel` | Interrupt the running turn, else cancel a running compaction, else nothing. | — |
-| `answer` | Approvals accept only `"allow"`, `"allow_session"`, or `"deny"`; choice prompts accept only an in-range row index. Goes through the local answer path, so session allowance is remembered. | no pending interaction or id differs (`"stale"`); wrong answer kind or index (`"bad_request"`), leaving the interaction untouched |
-| `load_older` | Load an older history page into the shared transcript. | no session |
-| `open_session` | Show that session in the TUI too: a live one switches at once (no `session.open`), another is opened. | unknown id; its workspace is outside `roots`; a session is opening or being created and the target is not live, or a created session's first message is pending |
-| `new_session` | Leave the session for a draft in `workspace` (default: the current draft workspace) with optional `profile`; the next `submit` creates it. No empty session is created. | workspace relative, outside `roots`, missing or not a directory; unknown profile |
-| `set_model` / `set_reasoning` | As `/model` and `/reasoning` (session or draft). | unknown model or level |
-| `rename_session` | Rename any listed session through the sessions picker's rename path (`session.rename` with its id); the title is trimmed, and an empty title clears it so the label falls back to the first prompt or short id. The catalog, the resident session and the phone's state follow; the notice `Session renamed` is forwarded. | unknown id; workspace outside `roots`; title over 200 characters or containing control characters |
-| `delete_session` | Delete a session permanently through the local delete path (`session.close` when loaded, then `session.delete`); it leaves the catalog and the phone's list; the notice `Session deleted` is forwarded. The phone confirms before sending. | unknown id; workspace outside `roots`; it is the resident session (`"Open another session before deleting this one"`) |
+| `submit` | In this device's draft: create one in its workspace with its launch settings and this first message. Idle session: send. Running: steer. Only the creating device changes view on adoption. | empty text; pending-open/create rules below |
+| `queue` | In this device's running session: queue a follow-up. Otherwise as `submit`. | as `submit` |
+| `cancel` | Interrupt the running turn, else cancel a running compaction, else nothing. | pending-create rule below |
+| `answer` | Approvals accept only `"allow"`, `"allow_session"`, or `"deny"`; choice prompts accept only an in-range row index. Goes through the local answer path, so session allowance is remembered. | no pending interaction or id differs (`"stale"`); wrong answer kind or index (`"bad_request"`), leaving the interaction untouched; pending-create rule below |
+| `load_older` | Load an older history page into this device's session transcript. | no session; pending-create rule below |
+| `open_session` | Change only this device's view: a live session switches at once (no `session.open`), another is opened and assigned on adoption. | unknown id; workspace outside `roots`; pending-open/create rules below |
+| `new_session` | Change only this device's view to a draft in `workspace` (default: its viewed workspace), with optional `profile` and that profile's/default settings; the next `submit` creates it. No empty session is created. | workspace relative, outside `roots`, missing or not a directory; unknown profile; pending-open/create rules below |
+| `set_model` / `set_reasoning` | As `/model` and `/reasoning`: a session update persists for that session; a draft changes only this device's launch settings. Draft notices go only to this device. | unknown model or level; pending-create rule below |
+| `rename_session` | Rename any listed session through the sessions picker's rename path (`session.rename` with its id); the title is trimmed, and an empty title clears it so the label falls back to the first prompt or short id. The catalog, the live session and the phones' states follow; the notice `Session renamed` is forwarded. | unknown id; workspace outside `roots`; title over 200 characters or containing control characters; pending-create rule below |
+| `delete_session` | Delete permanently through the local path (`session.close` when loaded, then `session.delete`); it leaves the catalog and the lists. The phone confirms before sending. | unknown id; workspace outside `roots`; viewed by the requester (`"Open another session before deleting this one"`) or another device (`Open on "<device name>"`); the existing foreground or working-live-session refusal; pending-create rule below |
+
+`loading_session` remains global. While an open is pending, another non-live
+open, `new_session`, or draft `submit`/`queue` is refused; live-session intents
+and live opens still work. While a create's `first_message` is pending, **all
+intents** are refused, including live-session intents: the first text and the
+local composer are global until adoption, so focusing another view would steal
+the creating draft. Filesystem requests are unaffected. The owner receives
+`"A session is opening or being created"`; other devices receive
+`"Another device is opening a session"`. Only the owner's `status.loading` is
+true. A failed create returns its text only to its connected creator and keeps
+that device's draft settings.
+
+Deletion cannot normally invalidate a view: viewed sessions cannot be deleted,
+and `/remote off` disconnects every phone before local deletion is possible.
+There is one in-flight race: a device can open a session after its deletion
+starts. Successful deletion resets any such views to drafts with the app's
+workspace and default launch settings, resets their trackers, and removes the
+live session even if it became the foreground meanwhile. If a non-live open
+reply arrives after its target was deleted, it is discarded with the notice
+`Session deleted while opening`; the device keeps its previous view.
 
 `submit` and `queue` trim trailing whitespace like local sends.
 A refused `submit` or `queue` text is never put into the local composer. When the
@@ -339,15 +375,20 @@ Routing, with several devices connected:
 
 | Message | Goes to |
 |---|---|
-| `snapshot`, `blocks`, `state` | Every connection, each from its own tracker |
-| `notice` | Every connection |
+| `snapshot`, `blocks`, `state` | Each connection's own viewed session or draft, through its tracker |
+| Synchronous intent `notice` | Only the requesting connection |
+| Asynchronous session `notice` | Plain text to devices viewing that session; `"<label>": text` to other devices |
+| Background-attention `notice` (approval or turn end) | Only devices not viewing that session, with its session label |
+| App-wide `notice` (remote, password, config) | Every connection |
 | `ack`, `fs` | Only the connection that sent the request |
-| `returned` | The connection that sent the latest `submit` or `queue` if it is still connected, otherwise every connection |
+| `returned` | The connection that last sent `submit`/`queue` **to that session**, if connected; otherwise devices viewing it; otherwise kept in `Session::returned` for local control |
 | `bye` | `replaced`: only the older connection of that device; `remote_off`, `tui_exit`, `signed_out`: every connection |
 
-`returned` follows the latest text intent, not the refused text itself: when
-two devices send in quick succession and the first send is refused, the text
-goes to the second. This keeps the rule simple and the text is never lost.
+`returned` follows the latest text intent for that session, not the refused
+text itself: when two devices send to the same session in quick succession and
+the first send is refused, the text goes to the second. A later text intent to
+another session cannot take it. Session-retained text stays out of the hidden
+local composer during remote focus changes and is restored on local return.
 
 `blocks`: the transcript now has `len` blocks; the client truncates its list to
 `len`, then applies each upsert at index `i`. An upsert is exactly one of:
@@ -364,8 +405,8 @@ at that index on this connection and the current block are both streaming
 assistants with the same `loop_id` and `request`, and neither text length has
 shrunk. Live assistant content is append-only. New, moved, replaced, or finished
 blocks use the full `block` form; when streaming ends the full block is sent once.
-Snapshots always contain full blocks and replace everything. Every `app.notice`
-is forwarded as `notice`.
+Snapshots always contain full blocks and replace everything. `app.notice`
+uses the routing above; local background notices keep their label prefix.
 
 `State` (sent whole whenever any field changed):
 
@@ -386,23 +427,29 @@ is forwarded as `notice`.
                 "live":true,"status":"running"|"approval"|"compacting"|"idle","started_ms":1761300000000|null,
                 "unseen":false}],
   "background": {"running":1,"approval":0},
-  "devices": ["iPhone Safari","Mac Edge"],
+  "devices": [{"name":"iPhone Safari","session":"ses_..."},{"name":"Mac Edge","session":null}],
   "models": [{"id":"gpt-6-luna","reasoning":["low","medium","high"]}],
   "profiles": ["coding","ask"]
 }
 ```
 
-- `draft.model` and `draft.reasoning` use the footer's resolved values
-  (`App::model_id()` and `App::reasoning()`), including profile defaults when no
-  explicit override is set. `draft.profile` is the launch profile or default
-  profile. Unresolved values remain `null`.
-- `label` is `App::status_label()`. `started_ms` is the Unix time the live turn
-  started (stored on `LiveTurn` when it is created, not derived from `Instant`,
-  so the state does not change by itself). `loading` is `App::loading_session`.
-- `devices`: the names of the connected devices in admission order, the
-  receiving one included, so a client can show who else is connected (the web
-  client's drawer reads `Also connected: Mac Edge`, dropping one entry of its
+- `session`, `draft`, `status`, `usage`, `context_percent`, `interaction`, `queue`
+  and `older` describe this device's view, never the foreground by accident.
+  `draft.model` and `draft.reasoning` use the same resolved settings as the
+  footer, including profile defaults; `draft.profile` is the launch/default
+  profile, or the viewed session's profile. Unresolved values remain `null`.
+- `label` uses the viewed `Session::status_label()`. `started_ms` is the Unix
+  time stored once on its live turn, not derived from `Instant`, so the state
+  does not change by itself. `loading` is true only for the opening/creating
+  device. `background` counts live sessions other than this device's session,
+  including the TUI foreground when it differs: running/compacting and approval.
+- `devices`: connected device names and viewed session ids (`null` for a draft)
+  in admission order, the receiving one included (the web client's drawer reads `Also connected: Mac Edge`, dropping one entry of its
   own name). Two devices may carry the same name.
+- `sessions[].current` marks this device's session. Live marks and catalogs are
+  shared. `unseen` clears when any device opens the session, and a turn ending
+  in a session any device views does not mark it unseen; the foreground also
+  stays seen as before.
 - `older`: an older page can be loaded. `sessions`: the catalog filtered to
   workspaces under `roots`, newest first, at most 50. `context_percent` is the
   footer's figure, never an estimate. The pure calculation lives in
@@ -434,12 +481,14 @@ Assistant `text` is raw Markdown; clients render it.
   branch still synchronizes the phones and clears the pending frame. No extra
   timer is introduced; with no connected phone sync returns at once.
 - Each connection has its own tracker (`view::View`): the revisions, streaming
-  offsets and serialized `State` last sent to it. One sync builds the catalog
-  cache and `State` with its serialization once, then lets every tracker diff
-  its blocks and compare the shared serialization; `State` is never rebuilt
-  per connection.
-- A residency change (`Session::epoch` differs from the last one sent, or a
-  session appeared or went away) or a newly admitted connection sends `snapshot`.
+  offsets and serialized `State` last sent to it. One sync refreshes the shared
+  catalog cache, groups devices by session id or equal draft settings (and
+  loading ownership), then builds and serializes `State` once per distinct
+  view. Each tracker diffs the viewed session found through `App::live`, whether
+  foreground or background; draft views have no blocks.
+- A device view change resets its tracker. A viewed session epoch change or a
+  newly admitted connection also sends a fresh `snapshot`. Another device's
+  switch never resets this tracker.
 - Otherwise the transcript's revisions are compared index by index with the
   revisions last sent: every index whose revision differs, or that is new, is an
   upsert; `len` is the current length. Prepending older pages therefore resends
@@ -496,10 +545,12 @@ tools.
 
 ## Workspace follows the session
 
-`App::workspace` is the draft workspace: where the next new session is created.
-Opening or creating a session sets it to that session's workspace; `new_session`
-from the phone sets it to the chosen directory. `--continue` still uses the
-launch workspace.
+Each phone's draft owns its workspace and launch settings. Focusing that view
+loads them into `App`; focusing or adopting a session sets `App::workspace` to
+its workspace. `new_session` defaults to the requesting device's viewed
+workspace, never another device's. `App::workspace` still supplies the local
+draft workspace when remote mode ends. `--continue` uses the original launch
+workspace.
 
 ## Code layout
 

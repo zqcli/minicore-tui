@@ -9,7 +9,9 @@ pub mod wire;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use serde_json::Value;
+use serde_json::{Value, json};
+
+use crate::app::{App, LaunchSettings, NoticeLevel};
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot, watch};
 
@@ -96,11 +98,60 @@ impl Bound {
     }
 }
 
-/// An admitted connection with its own projection tracker.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DraftSettings {
+    pub workspace: PathBuf,
+    pub launch: LaunchSettings,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PhoneView {
+    Session(String),
+    Draft(DraftSettings),
+}
+
+impl PhoneView {
+    pub fn foreground(app: &App) -> Self {
+        match &app.session {
+            Some(session) => Self::Session(session.info.session_id.clone()),
+            None => Self::Draft(DraftSettings {
+                workspace: app.workspace.clone(),
+                launch: app.draft_launch().clone(),
+            }),
+        }
+    }
+
+    pub fn session_id(&self) -> Option<&str> {
+        match self {
+            Self::Session(id) => Some(id),
+            Self::Draft(_) => None,
+        }
+    }
+}
+
+/// An admitted connection with its own view and projection tracker.
 pub struct Phone {
     pub connection: Connection,
-    pub view: view::View,
+    pub view: PhoneView,
+    pub projection: view::View,
     pub connected_at: jiff::Timestamp,
+}
+
+impl Phone {
+    pub fn set_view(&mut self, view: PhoneView) {
+        if self.view != view {
+            self.view = view;
+            self.projection = view::View::default();
+        }
+    }
+}
+
+#[derive(Default)]
+pub enum NoticeTarget {
+    #[default]
+    All,
+    Phone(u64),
+    Session(String),
 }
 
 #[derive(Default)]
@@ -108,8 +159,11 @@ pub struct Remote {
     /// Admitted connections, oldest first.
     pub phones: Vec<Phone>,
     pub catalog: view::Catalog,
-    /// The connection that sent the latest `submit` or `queue`.
-    pub last_sender: Option<u64>,
+    /// The connection whose session open or create is pending.
+    pub opening: Option<u64>,
+    pub notice_target: NoticeTarget,
+    /// The foreground draft's settings while `App::launch` stays neutral.
+    pub draft: Option<DraftSettings>,
     pub config: Option<crate::config::Remote>,
     pub auth: Option<Arc<Mutex<Auth>>>,
     pub url: Option<String>,
@@ -124,6 +178,61 @@ pub struct Remote {
 }
 
 impl Remote {
+    pub fn viewing(&self, id: &str) -> bool {
+        self.phones
+            .iter()
+            .any(|phone| phone.view.session_id() == Some(id))
+    }
+
+    pub fn notice(&mut self, level: NoticeLevel, text: &str, label: Option<&str>) {
+        self.phones.retain(|phone| {
+            let text = match &self.notice_target {
+                NoticeTarget::Phone(id) if phone.connection.id != *id => return true,
+                NoticeTarget::Session(id) if phone.view.session_id() != Some(id) => {
+                    format!(
+                        "\"{}\": {text}",
+                        label.expect("a session notice has a label")
+                    )
+                }
+                _ => text.to_owned(),
+            };
+            phone
+                .connection
+                .send(json!({"t":"notice", "level":match level {
+                NoticeLevel::Info => "info", NoticeLevel::Error => "error",
+            }, "text":text}))
+        });
+    }
+
+    pub fn send_viewers(&mut self, id: &str, viewing: bool, message: Value) -> bool {
+        let mut sent = false;
+        self.phones.retain(|phone| {
+            if (phone.view.session_id() == Some(id)) != viewing {
+                return true;
+            }
+            let delivered = phone.connection.send(message.clone());
+            sent |= delivered;
+            delivered
+        });
+        sent
+    }
+
+    pub fn returned(&mut self, id: &str, sender: Option<u64>, text: &str) -> bool {
+        let message = json!({"t":"returned", "text":text});
+        if let Some(phone) = self
+            .phones
+            .iter()
+            .find(|phone| Some(phone.connection.id) == sender)
+        {
+            if phone.connection.send(message.clone()) {
+                return true;
+            }
+            self.phones
+                .retain(|phone| Some(phone.connection.id) != sender);
+        }
+        self.send_viewers(id, true, message)
+    }
+
     pub fn mode(&self) -> RemoteMode {
         if self.url.is_none() {
             RemoteMode::Off

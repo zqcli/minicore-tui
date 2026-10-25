@@ -58,9 +58,17 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App, styles: Styles) {
         connect.push(("Phones", none.to_owned(), text));
     }
     for (i, phone) in remote.phones.iter().enumerate() {
+        let viewing = phone.view.session_id().map_or_else(
+            || "new session".to_owned(),
+            |id| {
+                let session = app.live(id).expect("a phone views a live session");
+                session_label(&session.info, Some(session))
+            },
+        );
         let device = format!(
-            "{} · connected at {}",
+            "{} · {} · connected at {}",
             phone.connection.device.name,
+            viewing,
             blocks::clock_label(phone.connected_at)
         );
         connect.push((if i == 0 { "Phones" } else { "" }, device, text));

@@ -384,7 +384,7 @@ async fn every_phone_gets_its_snapshot_then_the_changes_and_sees_who_is_connecte
         assert_eq!(snapshot["t"], "snapshot");
         assert_eq!(
             snapshot["state"]["devices"],
-            json!(["iPhone Safari", "Mac Edge"])
+            json!([{"name":"iPhone Safari", "session":"s1"}, {"name":"Mac Edge", "session":"s1"}])
         );
     }
     let session = h.app.session.as_mut().unwrap();
@@ -410,7 +410,7 @@ async fn every_phone_gets_its_snapshot_then_the_changes_and_sees_who_is_connecte
         assert_eq!(state["t"], "state");
         assert_eq!(
             state["state"]["devices"],
-            json!(["iPhone Safari", "Mac Edge", "iPad Safari"])
+            json!([{"name":"iPhone Safari", "session":"s1"}, {"name":"Mac Edge", "session":"s1"}, {"name":"iPad Safari", "session":"s1"}])
         );
     }
 }
@@ -432,7 +432,7 @@ async fn an_intent_is_acked_only_to_its_sender_and_notices_reach_every_phone() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_refused_text_returns_to_its_sender_or_once_it_left_to_every_phone() {
+async fn a_refused_text_returns_to_its_session_sender_or_once_it_left_to_viewers() {
     let mut h = Harness::opened(display_read(0, 0)).await;
     h.fake.script("turn.send", json!({"turn":turn("l1")}));
     h.fake.script_held("turn.wait", waited("l1", completed()));
@@ -478,7 +478,10 @@ async fn a_phone_whose_queue_overflows_is_dropped_alone() {
     assert_eq!(h.app.remote.mode(), RemoteMode::Connected);
     h.app.sync_remote();
     let snapshot = other.try_recv().unwrap();
-    assert_eq!(snapshot["state"]["devices"], json!(["other"]));
+    assert_eq!(
+        snapshot["state"]["devices"],
+        json!([{"name":"other", "session":"s1"}])
+    );
 }
 
 #[tokio::test(start_paused = true)]
@@ -862,4 +865,833 @@ async fn the_resident_unknown_and_outside_sessions_are_neither_renamed_nor_delet
     assert!(h.calls("session.close").is_empty());
     assert!(h.calls("session.delete").is_empty());
     assert_eq!(h.calls("session.rename").len(), renames);
+}
+
+fn messages(output: &mut mpsc::Receiver<Value>) -> Vec<Value> {
+    std::iter::from_fn(|| output.try_recv().ok()).collect()
+}
+
+fn ack(output: &mut mpsc::Receiver<Value>) -> Value {
+    messages(output)
+        .into_iter()
+        .find(|message| message["t"] == "ack")
+        .expect("an ack")
+}
+
+fn projected(output: &mut mpsc::Receiver<Value>) -> Value {
+    messages(output)
+        .into_iter()
+        .rev()
+        .find_map(|message| message.get("state").cloned())
+        .expect("a projection")
+}
+
+async fn separate_views() -> (Harness, mpsc::Receiver<Value>, mpsc::Receiver<Value>) {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.app.remote.config = Some(config(h.app.workspace.clone()));
+    h.app.remote.url = Some("http://localhost:8765".into());
+    h.app.default_profile = Some("coding".into());
+    h.app.session.as_mut().unwrap().info.title = Some("First".into());
+    h.app.sessions[0].title = Some("First".into());
+    for (id, title) in [("s1", "First"), ("s2", "Second"), ("s3", "Third")] {
+        let mut info = session_info(id);
+        info["workspace"] = json!(h.app.workspace);
+        info["title"] = json!(title);
+        if id != "s1" {
+            h.app
+                .sessions
+                .push(serde_json::from_value(info.clone()).unwrap());
+        }
+        h.fake
+            .script(&format!("session.open@{id}"), json!({"session":info}));
+        let turn = json!({"session_id":id, "loop_id":format!("loop-{id}")});
+        h.fake
+            .script(&format!("turn.send@{id}"), json!({"turn":turn}));
+        h.fake.script_held(
+            &format!("turn.wait@{id}"),
+            json!({"turn":turn, "outcome":completed()}),
+        );
+    }
+    h.app.catalog_generation += 1;
+    let (a, _close_a, admission) = phone(&mut h, 1, "first phone");
+    assert!(admission.await.unwrap());
+    let (mut b, _close_b, admission) = phone(&mut h, 2, "second phone");
+    assert!(admission.await.unwrap());
+    request_from(&mut h, 2, json!({"kind":"open_session", "session_id":"s2"}));
+    assert_eq!(ack(&mut b)["ok"], true);
+    h.until(|app| app.live("s2").is_some()).await;
+    h.settle().await;
+    (h, a, b)
+}
+
+#[tokio::test(start_paused = true)]
+async fn phones_open_their_own_sessions_without_replacing_each_others_projection() {
+    let (mut h, mut a, mut b) = separate_views().await;
+    request(&mut h, json!({"kind":"open_session", "session_id":"s1"}));
+    assert_eq!(ack(&mut a)["ok"], true);
+    h.app.sync_remote();
+    for (output, id) in [(&mut a, "s1"), (&mut b, "s2")] {
+        let snapshot = output.try_recv().unwrap();
+        assert_eq!(snapshot["t"], "snapshot");
+        assert_eq!(snapshot["state"]["session"]["id"], id);
+        let sessions = snapshot["state"]["sessions"].as_array().unwrap();
+        for listed in sessions {
+            assert_eq!(listed["current"], listed["id"] == id);
+        }
+    }
+    request(&mut h, json!({"kind":"open_session", "session_id":"s3"}));
+    h.until(|app| app.live("s3").is_some()).await;
+    h.settle().await;
+    h.app.sync_remote();
+    let changed = messages(&mut a);
+    assert!(
+        changed
+            .iter()
+            .any(|message| message["t"] == "snapshot" && message["state"]["session"]["id"] == "s3")
+    );
+    let unchanged = messages(&mut b);
+    assert!(!unchanged.iter().any(|message| message["t"] == "snapshot"));
+    assert_eq!(unchanged.last().unwrap()["state"]["session"]["id"], "s2");
+    assert_eq!(h.app.session.as_ref().unwrap().info.session_id, "s3");
+    h.action(Action::Remote("off".into()));
+    assert_eq!(h.app.session.as_ref().unwrap().info.session_id, "s3");
+}
+
+#[tokio::test(start_paused = true)]
+async fn phones_send_and_stream_concurrently_only_to_their_sessions_viewers() {
+    let (mut h, mut a, mut b) = separate_views().await;
+    h.app.composer.set_text("local in two");
+    let anchored = crate::app::Scroll::Anchor {
+        block: 0,
+        offset: 0,
+    };
+    h.app.scroll = anchored;
+    request(&mut h, json!({"kind":"submit", "text":"work in one"}));
+    assert_eq!(h.app.live("s2").unwrap().scroll, anchored);
+    let (mut c, _close_c, admission) = phone(&mut h, 3, "also first");
+    assert!(admission.await.unwrap());
+    h.app.composer.set_text("local in one");
+    request_from(&mut h, 2, json!({"kind":"submit", "text":"work in two"}));
+    h.until(|app| app.live("s1").unwrap().is_busy() && app.live("s2").unwrap().is_busy())
+        .await;
+    h.settle().await;
+    assert_eq!(
+        h.calls("turn.send")
+            .iter()
+            .map(|call| (call["session_id"].clone(), call["text"].clone()))
+            .collect::<Vec<_>>(),
+        [
+            (json!("s1"), json!("work in one")),
+            (json!("s2"), json!("work in two"))
+        ]
+    );
+    assert_eq!(h.app.composer.text(), "local in two");
+    assert_eq!(
+        h.app.live("s1").unwrap().draft.as_deref(),
+        Some("local in one")
+    );
+    h.app.sync_remote();
+    for output in [&mut a, &mut b, &mut c] {
+        messages(output);
+    }
+    for (id, text) in [("s1", "one"), ("s1", " plus"), ("s2", "two")] {
+        h.emit("output_delta", json!({"meta":{"session_id":id, "dropped_before":0}, "turn":{"session_id":id, "loop_id":format!("loop-{id}")}, "request_index":0, "channel":"text", "delta":text})).await;
+        h.settle().await;
+        h.app.sync_remote();
+        for (output, viewing) in [(&mut a, "s1"), (&mut b, "s2"), (&mut c, "s1")] {
+            let changes = messages(output);
+            let blocks: Vec<_> = changes
+                .iter()
+                .filter(|message| message["t"] == "blocks")
+                .collect();
+            assert_eq!(
+                blocks.len(),
+                usize::from(viewing == id),
+                "{viewing}: {changes:?}"
+            );
+            if text == " plus" && viewing == id {
+                assert_eq!(blocks[0]["upserts"][0]["append"]["text"], " plus");
+            }
+        }
+    }
+    request(&mut h, json!({"kind":"cancel"}));
+    assert_eq!(h.app.composer.text(), "local in one");
+    assert_eq!(h.app.live("s2").unwrap().scroll, crate::app::Scroll::Follow);
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_approval_is_shown_and_answered_only_in_the_viewed_session() {
+    let (mut h, mut a, mut b) = separate_views().await;
+    request(&mut h, json!({"kind":"cancel"}));
+    h.emit("interaction_requested", json!({"meta":{"session_id":"s2", "dropped_before":0}, "turn":{"session_id":"s2", "loop_id":"loop-s2"}, "interaction":{"interaction_id":"approve-two", "tool_call_id":"call-two", "tool_name":"bash", "kind":{"type":"approval", "data":{"prompt":"Allow?"}}}})).await;
+    h.settle().await;
+    h.app.sync_remote();
+    let first = projected(&mut a);
+    let second = projected(&mut b);
+    assert!(first["interaction"].is_null());
+    assert_eq!(first["background"]["approval"], 1);
+    assert_eq!(second["interaction"]["id"], "approve-two");
+    assert_eq!(second["background"]["approval"], 0);
+    request(
+        &mut h,
+        json!({"kind":"answer", "interaction_id":"approve-two", "choice":"allow"}),
+    );
+    assert_eq!(ack(&mut a)["error"], "stale");
+    request_from(
+        &mut h,
+        2,
+        json!({"kind":"answer", "interaction_id":"approve-two", "choice":"allow"}),
+    );
+    assert_eq!(ack(&mut b)["ok"], true);
+    h.settle().await;
+    let answers = h.calls("interaction.answer");
+    assert_eq!(answers.len(), 1);
+    assert_eq!(answers[0]["session_id"], "s2");
+    assert_eq!(answers[0]["loop_id"], "loop-s2");
+    assert_eq!(answers[0]["interaction_id"], "approve-two");
+}
+
+#[tokio::test(start_paused = true)]
+async fn each_draft_keeps_its_workspace_model_and_reasoning_through_creation() {
+    let (mut h, mut a, mut b) = separate_views().await;
+    let root = tempfile::tempdir().unwrap();
+    let root = root.path().canonicalize().unwrap();
+    let one = root.join("one");
+    let two = root.join("two");
+    std::fs::create_dir(&one).unwrap();
+    std::fs::create_dir(&two).unwrap();
+    h.app
+        .remote
+        .config
+        .as_mut()
+        .unwrap()
+        .roots
+        .push(root.clone());
+    h.app.models.push(
+        serde_json::from_value(
+            json!({"id":"chosen", "supported_reasoning":["low", "medium", "high"]}),
+        )
+        .unwrap(),
+    );
+    request(
+        &mut h,
+        json!({"kind":"new_session", "workspace":one, "profile":"coding"}),
+    );
+    request(&mut h, json!({"kind":"set_model", "model":"chosen"}));
+    request(&mut h, json!({"kind":"set_reasoning", "level":"high"}));
+    h.app.sync_remote();
+    let draft = projected(&mut a);
+    let session = projected(&mut b);
+    assert_eq!(draft["draft"]["model"], "chosen");
+    assert_eq!(draft["draft"]["reasoning"], "high");
+    assert_eq!(session["session"]["id"], "s2");
+    assert_eq!(session["session"]["model"], "mock");
+    assert_eq!(
+        h.app.model_id(),
+        Some("chosen"),
+        "the computer describes the last acting draft"
+    );
+    assert_eq!(h.app.launch, crate::app::LaunchSettings::default());
+    let (mut c, _close_c, admission) = phone(&mut h, 3, "new arrival");
+    assert!(admission.await.unwrap());
+    h.app.sync_remote();
+    assert_eq!(projected(&mut c)["draft"], draft["draft"]);
+    request_from(
+        &mut h,
+        2,
+        json!({"kind":"new_session", "workspace":two, "profile":"coding"}),
+    );
+    h.app.sync_remote();
+    let other = projected(&mut b);
+    assert_eq!(
+        other["draft"]["workspace"],
+        crate::remote::fs::display(&two)
+    );
+    assert_eq!(other["draft"]["model"], "mock");
+    assert_eq!(other["draft"]["reasoning"], "medium");
+    let mut info = session_info("created");
+    info["title"] = json!("Created");
+    info["workspace"] = json!(one);
+    info["model"] = json!("chosen");
+    info["reasoning"] = json!("high");
+    h.fake.script("session.create", json!({"session":info}));
+    h.fake.script(
+        "turn.send@created",
+        json!({"turn":{"session_id":"created", "loop_id":"first"}}),
+    );
+    h.fake.script_held(
+        "turn.wait@created",
+        json!({"turn":{"session_id":"created", "loop_id":"first"}, "outcome":completed()}),
+    );
+    request(
+        &mut h,
+        json!({"kind":"submit", "text":"first in my workspace"}),
+    );
+    h.until(|app| app.live("created").is_some_and(|session| session.is_busy()))
+        .await;
+    h.settle().await;
+    let create = &h.calls("session.create")[0];
+    assert_eq!(create["workspace"], json!(one));
+    assert_eq!(create["profile"], "coding");
+    assert_eq!(create["model"], "chosen");
+    assert_eq!(create["reasoning"], "high");
+    assert_eq!(h.calls("turn.send")[0]["session_id"], "created");
+    h.app.sync_remote();
+    assert_eq!(projected(&mut a)["session"]["id"], "created");
+    let other = projected(&mut b);
+    assert!(other["session"].is_null());
+    assert_eq!(
+        other["draft"]["workspace"],
+        crate::remote::fs::display(&two)
+    );
+    assert_eq!(other["draft"]["model"], "mock");
+    let shared_draft = projected(&mut c);
+    assert!(
+        shared_draft["session"].is_null(),
+        "even an identical draft stays independent"
+    );
+    assert_eq!(shared_draft["draft"]["model"], "chosen");
+    request_from(&mut h, 2, json!({"kind":"set_reasoning", "level":"low"}));
+    h.action(Action::Remote("off".into()));
+    assert!(h.app.session.is_none());
+    assert_eq!(h.app.workspace, two);
+    assert_eq!(h.app.reasoning(), Some(crate::protocol::Reasoning::Low));
+}
+
+#[tokio::test(start_paused = true)]
+async fn opening_a_session_never_adopts_another_devices_draft_model() {
+    let (mut h, mut a, mut b) = separate_views().await;
+    let root = tempfile::tempdir().unwrap();
+    let root = root.path().canonicalize().unwrap();
+    h.app
+        .remote
+        .config
+        .as_mut()
+        .unwrap()
+        .roots
+        .push(root.clone());
+    h.app.models.push(
+        serde_json::from_value(json!({"id":"draft-model", "supported_reasoning":["high"]}))
+            .unwrap(),
+    );
+    request(&mut h, json!({"kind":"new_session", "workspace":root}));
+    request(&mut h, json!({"kind":"set_model", "model":"draft-model"}));
+    request(&mut h, json!({"kind":"set_reasoning", "level":"high"}));
+    request_from(&mut h, 2, json!({"kind":"open_session", "session_id":"s3"}));
+    assert_eq!(ack(&mut b)["ok"], true);
+    h.until(|app| app.live("s3").is_some()).await;
+    h.settle().await;
+    assert!(
+        h.calls("session.update").is_empty(),
+        "draft overrides must never reach session.update"
+    );
+    assert_eq!(h.app.launch, crate::app::LaunchSettings::default());
+    assert_eq!(
+        h.app.live("s3").unwrap().info.reasoning,
+        crate::protocol::Reasoning::Medium
+    );
+    h.app.sync_remote();
+    let draft = projected(&mut a);
+    assert_eq!(draft["draft"]["model"], "draft-model");
+    assert_eq!(draft["draft"]["reasoning"], "high");
+    let opened = projected(&mut b);
+    assert_eq!(opened["session"]["model"], "mock");
+    assert_eq!(opened["session"]["reasoning"], "medium");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_pending_create_blocks_other_intents_without_losing_its_first_message_or_draft() {
+    let (mut h, mut a, mut b) = separate_views().await;
+    let root = tempfile::tempdir().unwrap();
+    let root = root.path().canonicalize().unwrap();
+    h.app
+        .remote
+        .config
+        .as_mut()
+        .unwrap()
+        .roots
+        .push(root.clone());
+    request(
+        &mut h,
+        json!({"kind":"new_session", "workspace":root, "profile":"coding"}),
+    );
+    request(&mut h, json!({"kind":"set_reasoning", "level":"high"}));
+    let (mut c, _close_c, admission) = phone(&mut h, 3, "another draft");
+    assert!(admission.await.unwrap());
+    let mut created = session_info("created");
+    created["title"] = json!("Created");
+    created["workspace"] = json!(root);
+    created["reasoning"] = json!("high");
+    h.fake
+        .script_held("session.create", json!({"session":created}));
+    h.fake.script(
+        "turn.send@created",
+        json!({"turn":{"session_id":"created", "loop_id":"first"}}),
+    );
+    h.fake.script_held(
+        "turn.wait@created",
+        json!({"turn":{"session_id":"created", "loop_id":"first"}, "outcome":completed()}),
+    );
+    request(&mut h, json!({"kind":"submit", "text":"my first message"}));
+    h.app.composer.set_text("typed while creating");
+    h.settle().await;
+    h.app.sync_remote();
+    assert_eq!(projected(&mut a)["status"]["loading"], true);
+    assert_eq!(projected(&mut b)["status"]["loading"], false);
+    assert_eq!(projected(&mut c)["status"]["loading"], false);
+    for intent in [
+        json!({"kind":"open_session", "session_id":"s3"}),
+        json!({"kind":"new_session", "workspace":root}),
+        json!({"kind":"submit", "text":"live work"}),
+        json!({"kind":"cancel"}),
+        json!({"kind":"open_session", "session_id":"s1"}),
+    ] {
+        request_from(&mut h, 2, intent);
+        assert_eq!(ack(&mut b)["error"], "Another device is opening a session");
+    }
+    request_from(&mut h, 3, json!({"kind":"submit", "text":"another draft"}));
+    assert_eq!(ack(&mut c)["error"], "Another device is opening a session");
+    request(&mut h, json!({"kind":"submit", "text":"again"}));
+    assert_eq!(
+        ack(&mut a)["error"],
+        "A session is opening or being created"
+    );
+    assert_eq!(h.app.first_message.as_deref(), Some("my first message"));
+    assert!(h.sends().is_empty());
+    h.fake.release("session.create");
+    h.until(|app| app.live("created").is_some_and(|session| session.is_busy()))
+        .await;
+    h.settle().await;
+    assert_eq!(h.sends(), ["my first message"]);
+    assert_eq!(h.calls("turn.send")[0]["session_id"], "created");
+    assert_eq!(h.app.composer.text(), "typed while creating");
+    assert_eq!(h.calls("session.create").len(), 1);
+    assert_eq!(h.calls("session.open").len(), 2);
+    h.app.sync_remote();
+    assert_eq!(projected(&mut a)["session"]["id"], "created");
+    assert_eq!(projected(&mut b)["session"]["id"], "s2");
+    assert_eq!(projected(&mut c)["draft"]["reasoning"], "high");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_pending_open_allows_live_work_but_only_its_owner_changes_view_on_adoption() {
+    let (mut h, mut a, mut b) = separate_views().await;
+    let mut third = session_info("s3");
+    third["title"] = json!("Third");
+    h.fake
+        .script_held("session.open@s3", json!({"session":third}));
+    request(&mut h, json!({"kind":"open_session", "session_id":"s3"}));
+    assert_eq!(ack(&mut a)["ok"], true);
+    request_from(
+        &mut h,
+        2,
+        json!({"kind":"submit", "text":"work while opening"}),
+    );
+    assert_eq!(ack(&mut b)["ok"], true);
+    h.until(|app| app.live("s2").unwrap().is_busy()).await;
+    h.app.sync_remote();
+    assert_eq!(projected(&mut a)["status"]["loading"], true);
+    assert_eq!(projected(&mut b)["status"]["loading"], false);
+    request_from(&mut h, 2, json!({"kind":"open_session", "session_id":"s1"}));
+    assert_eq!(ack(&mut b)["ok"], true);
+    assert_eq!(h.app.session.as_ref().unwrap().info.session_id, "s1");
+    h.fake.release("session.open@s3");
+    h.until(|app| app.live("s3").is_some()).await;
+    h.settle().await;
+    h.app.sync_remote();
+    assert_eq!(projected(&mut a)["session"]["id"], "s3");
+    assert_eq!(projected(&mut b)["session"]["id"], "s1");
+    assert_eq!(h.calls("turn.send")[0]["session_id"], "s2");
+}
+
+#[tokio::test(start_paused = true)]
+async fn deletion_refuses_any_viewer_but_removes_an_unviewed_idle_live_session() {
+    let (mut h, mut a, mut b) = separate_views().await;
+    request(&mut h, json!({"kind":"delete_session", "session_id":"s2"}));
+    assert_eq!(ack(&mut a)["error"], "Open on \"second phone\"");
+    request_from(
+        &mut h,
+        2,
+        json!({"kind":"delete_session", "session_id":"s2"}),
+    );
+    assert_eq!(
+        ack(&mut b)["error"],
+        "Open another session before deleting this one"
+    );
+    h.settle().await;
+    assert!(h.calls("session.delete").is_empty());
+    request_from(&mut h, 2, json!({"kind":"open_session", "session_id":"s1"}));
+    assert_eq!(ack(&mut b)["ok"], true);
+    request(&mut h, json!({"kind":"delete_session", "session_id":"s2"}));
+    assert_eq!(ack(&mut a)["ok"], true);
+    h.settle().await;
+    assert!(h.app.live("s2").is_none());
+    assert_eq!(h.calls("session.close")[0]["session_id"], "s2");
+    assert_eq!(h.calls("session.delete")[0]["session_id"], "s2");
+    assert!(
+        h.app
+            .remote
+            .phones
+            .iter()
+            .all(|phone| phone.view.session_id() == Some("s1"))
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn opening_a_session_while_its_deletion_is_pending_falls_back_to_a_default_draft() {
+    let (mut h, mut a, mut b) = separate_views().await;
+    request_from(&mut h, 2, json!({"kind":"open_session", "session_id":"s1"}));
+    h.fake.script_held("session.delete@s2", json!({}));
+    request(&mut h, json!({"kind":"delete_session", "session_id":"s2"}));
+    assert_eq!(ack(&mut a)["ok"], true);
+    h.settle().await;
+    assert!(h.app.live("s2").is_some());
+    request_from(&mut h, 2, json!({"kind":"open_session", "session_id":"s2"}));
+    assert_eq!(ack(&mut b)["ok"], true);
+    h.fake.release("session.delete@s2");
+    h.until(|app| app.live("s2").is_none()).await;
+    h.app.sync_remote();
+    assert_eq!(projected(&mut a)["session"]["id"], "s1");
+    let fallback = projected(&mut b);
+    assert!(fallback["session"].is_null());
+    assert_eq!(fallback["draft"]["model"], "mock");
+    assert_eq!(fallback["draft"]["reasoning"], "medium");
+    request_from(&mut h, 2, json!({"kind":"set_reasoning", "level":"high"}));
+    assert_eq!(ack(&mut b)["ok"], true);
+    assert!(h.calls("session.update").is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn notices_follow_the_intent_or_session_and_attention_excludes_its_viewers() {
+    let (mut h, mut a, mut b) = separate_views().await;
+    h.app.models.push(
+        serde_json::from_value(json!({"id":"strict", "supported_reasoning":["high"]})).unwrap(),
+    );
+    let mut second = session_info("s2");
+    second["title"] = json!("Second");
+    second["model"] = json!("strict");
+    second["reasoning"] = json!("high");
+    h.fake
+        .script("session.update@s2", json!({"session":second}));
+    request_from(&mut h, 2, json!({"kind":"set_model", "model":"strict"}));
+    assert!(messages(&mut a).is_empty());
+    let own = messages(&mut b);
+    assert_eq!(own[0]["t"], "notice");
+    assert_eq!(
+        own[0]["text"],
+        "strict does not support reasoning medium; using high"
+    );
+    assert_eq!(own[1]["t"], "ack");
+    h.settle().await;
+    let epoch = h.app.live("s1").unwrap().epoch;
+    h.app.on_msg(Msg::Session(
+        epoch,
+        Box::new(SessionOp::Done(Err(crate::protocol::RpcError::new(
+            -1,
+            "test",
+            "async problem",
+        )))),
+    ));
+    assert_eq!(a.try_recv().unwrap()["text"], "async problem");
+    assert_eq!(b.try_recv().unwrap()["text"], "\"First\": async problem");
+    assert_eq!(h.notices().last().unwrap(), "\"First\": async problem");
+    request(&mut h, json!({"kind":"cancel"}));
+    messages(&mut a);
+    h.app.on_msg(Msg::Session(
+        epoch,
+        Box::new(SessionOp::Done(Err(crate::protocol::RpcError::new(
+            -1,
+            "test",
+            "foreground problem",
+        )))),
+    ));
+    assert_eq!(a.try_recv().unwrap()["text"], "foreground problem");
+    assert_eq!(
+        b.try_recv().unwrap()["text"],
+        "\"First\": foreground problem"
+    );
+    request_from(&mut h, 2, json!({"kind":"cancel"}));
+    messages(&mut b);
+    h.emit("interaction_requested", json!({"turn":{"session_id":"s1", "loop_id":"loop-s1"}, "interaction":{"interaction_id":"approval-one", "tool_call_id":"call-one", "tool_name":"bash", "kind":{"type":"approval", "data":{}}}})).await;
+    h.settle().await;
+    assert!(
+        messages(&mut a).is_empty(),
+        "a viewer does not get attention to its own session"
+    );
+    assert_eq!(
+        b.try_recv().unwrap()["text"],
+        "\"First\" needs approval · ctrl+r"
+    );
+    h.app.on_msg(Msg::Notice(
+        crate::app::NoticeLevel::Info,
+        "app wide".into(),
+    ));
+    assert_eq!(a.try_recv().unwrap()["text"], "app wide");
+    assert_eq!(b.try_recv().unwrap()["text"], "app wide");
+}
+
+#[tokio::test(start_paused = true)]
+async fn refused_text_uses_its_session_sender_then_viewers_then_stays_with_the_session() {
+    let (mut h, mut a, mut b) = separate_views().await;
+    request(&mut h, json!({"kind":"submit", "text":"one"}));
+    let (mut c, _close_c, admission) = phone(&mut h, 3, "another viewer");
+    assert!(admission.await.unwrap());
+    request_from(&mut h, 2, json!({"kind":"submit", "text":"two"}));
+    h.until(|app| app.live("s1").unwrap().is_busy() && app.live("s2").unwrap().is_busy())
+        .await;
+    h.settle().await;
+    messages(&mut a);
+    messages(&mut b);
+    let epoch = h.app.live("s1").unwrap().epoch;
+    let refused = |text: &str| {
+        Msg::Session(
+            epoch,
+            Box::new(SessionOp::Sent(
+                text.into(),
+                Err(crate::protocol::RpcError::new(-1, "refused", "test")),
+            )),
+        )
+    };
+    h.app.on_msg(refused("one"));
+    assert_eq!(a.try_recv().unwrap(), json!({"t":"returned", "text":"one"}));
+    for output in [&mut b, &mut c] {
+        assert!(
+            messages(output)
+                .iter()
+                .all(|message| message["t"] != "returned")
+        );
+    }
+    messages(&mut a);
+    request(&mut h, json!({"kind":"open_session", "session_id":"s2"}));
+    messages(&mut a);
+    h.app.on_msg(refused("still to its sender"));
+    assert_eq!(a.try_recv().unwrap()["t"], "returned");
+    messages(&mut c);
+    h.app.on_msg(Msg::Remote(RemoteEvent::Disconnected(1)));
+    h.app.on_msg(refused("to its viewer"));
+    assert_eq!(
+        c.try_recv().unwrap(),
+        json!({"t":"returned", "text":"to its viewer"})
+    );
+    assert!(
+        messages(&mut b)
+            .iter()
+            .all(|message| message["t"] != "returned")
+    );
+    request_from(&mut h, 3, json!({"kind":"open_session", "session_id":"s2"}));
+    messages(&mut c);
+    h.app.on_msg(refused("kept for local control"));
+    assert_eq!(
+        h.app.live("s1").unwrap().returned,
+        ["kept for local control"]
+    );
+    assert!(h.app.composer.is_empty());
+    request_from(&mut h, 2, json!({"kind":"open_session", "session_id":"s1"}));
+    assert_eq!(
+        h.app.live("s1").unwrap().returned,
+        ["kept for local control"]
+    );
+    assert!(h.app.composer.is_empty());
+    h.action(Action::Remote("off".into()));
+    assert_eq!(h.app.composer.text(), "kept for local control");
+}
+
+#[tokio::test(start_paused = true)]
+async fn viewed_turn_ends_stay_seen_and_opening_a_session_clears_unseen() {
+    let (mut h, mut a, mut b) = separate_views().await;
+    for viewed in [true, false] {
+        h.fake.script_held(
+            "turn.wait@s1",
+            json!({"turn":{"session_id":"s1", "loop_id":"loop-s1"}, "outcome":completed()}),
+        );
+        request(&mut h, json!({"kind":"open_session", "session_id":"s1"}));
+        request(&mut h, json!({"kind":"submit", "text":"work"}));
+        h.until(|app| app.live("s1").unwrap().is_busy()).await;
+        request_from(&mut h, 2, json!({"kind":"cancel"}));
+        if !viewed {
+            request(&mut h, json!({"kind":"open_session", "session_id":"s2"}));
+        }
+        messages(&mut a);
+        messages(&mut b);
+        h.fake.release("turn.wait@s1");
+        h.until(|app| !app.live("s1").unwrap().is_busy()).await;
+        h.settle().await;
+        assert_eq!(h.app.live("s1").unwrap().unseen, !viewed);
+        if viewed {
+            assert!(
+                !messages(&mut a)
+                    .iter()
+                    .any(|message| message["t"] == "notice")
+            );
+            assert!(messages(&mut b).iter().any(|message| {
+                message["text"]
+                    .as_str()
+                    .is_some_and(|text| text.starts_with("\"First\" finished in"))
+            }));
+        }
+    }
+    request(&mut h, json!({"kind":"open_session", "session_id":"s1"}));
+    assert!(!h.app.live("s1").unwrap().unseen);
+}
+
+#[tokio::test(start_paused = true)]
+async fn identical_views_share_one_state_build_and_all_unchanged_views_send_nothing() {
+    let (mut h, mut a, mut b) = separate_views().await;
+    assert_eq!(crate::remote::view::Shared::build(&mut h.app).len(), 2);
+    h.app.sync_remote();
+    messages(&mut a);
+    messages(&mut b);
+    tokio::time::advance(std::time::Duration::from_secs(60)).await;
+    h.app.sync_remote();
+    assert!(messages(&mut a).is_empty() && messages(&mut b).is_empty());
+    request_from(&mut h, 2, json!({"kind":"open_session", "session_id":"s1"}));
+    let groups = crate::remote::view::Shared::build(&mut h.app);
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0].connections, [1, 2]);
+    h.app.sync_remote();
+    assert_eq!(projected(&mut a)["session"]["id"], "s1");
+    assert_eq!(projected(&mut b)["session"]["id"], "s1");
+    tokio::time::advance(std::time::Duration::from_secs(60)).await;
+    h.app.sync_remote();
+    assert!(messages(&mut a).is_empty() && messages(&mut b).is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_failed_create_returns_only_to_its_creator_and_preserves_the_draft_settings() {
+    let (mut h, mut a, mut b) = separate_views().await;
+    let root = tempfile::tempdir().unwrap();
+    let root = root.path().canonicalize().unwrap();
+    h.app
+        .remote
+        .config
+        .as_mut()
+        .unwrap()
+        .roots
+        .push(root.clone());
+    request(
+        &mut h,
+        json!({"kind":"new_session", "workspace":root, "profile":"coding"}),
+    );
+    request(&mut h, json!({"kind":"set_reasoning", "level":"high"}));
+    messages(&mut a);
+    h.fake
+        .script_error("session.create", -1, "cannot create", "test");
+    request(&mut h, json!({"kind":"submit", "text":"keep this text"}));
+    h.until(|app| !app.loading_session).await;
+    let returned = messages(&mut a);
+    assert!(
+        returned
+            .iter()
+            .any(|message| message == &json!({"t":"returned", "text":"keep this text"}))
+    );
+    assert!(
+        returned
+            .iter()
+            .any(|message| message["t"] == "notice" && message["text"] == "cannot create")
+    );
+    assert!(messages(&mut b).is_empty());
+    assert!(h.app.composer.is_empty());
+    h.app.sync_remote();
+    let draft = projected(&mut a);
+    assert!(draft["session"].is_null());
+    assert_eq!(
+        draft["draft"]["workspace"],
+        crate::remote::fs::display(&root)
+    );
+    assert_eq!(draft["draft"]["reasoning"], "high");
+    assert_eq!(draft["status"]["loading"], false);
+    assert_eq!(projected(&mut b)["session"]["id"], "s2");
+}
+
+#[tokio::test(start_paused = true)]
+async fn model_and_reasoning_updates_persist_only_in_the_acting_devices_session() {
+    let (mut h, mut a, mut b) = separate_views().await;
+    h.app.models.push(
+        serde_json::from_value(
+            json!({"id":"chosen", "supported_reasoning":["low", "medium", "high"]}),
+        )
+        .unwrap(),
+    );
+    let mut changed = session_info("s1");
+    changed["title"] = json!("First");
+    changed["model"] = json!("chosen");
+    changed["reasoning"] = json!("high");
+    h.fake
+        .script("session.update@s1", json!({"session":changed}));
+    request(&mut h, json!({"kind":"set_model", "model":"chosen"}));
+    assert_eq!(ack(&mut a)["ok"], true);
+    h.settle().await;
+    request(&mut h, json!({"kind":"set_reasoning", "level":"high"}));
+    assert_eq!(ack(&mut a)["ok"], true);
+    request_from(&mut h, 2, json!({"kind":"cancel"}));
+    h.settle().await;
+    let updates = h.calls("session.update");
+    assert_eq!(updates.len(), 2);
+    assert!(updates.iter().all(|update| update["session_id"] == "s1"));
+    assert_eq!(updates[0]["model"], "chosen");
+    assert_eq!(updates[1]["reasoning"], "high");
+    h.app.sync_remote();
+    assert_eq!(projected(&mut a)["session"]["model"], "chosen");
+    let other = projected(&mut b);
+    assert_eq!(other["session"]["model"], "mock");
+    assert_eq!(other["session"]["reasoning"], "medium");
+}
+
+#[tokio::test(start_paused = true)]
+async fn failed_opens_keep_device_views_and_route_the_error_with_the_requested_session() {
+    let (mut h, mut a, mut b) = separate_views().await;
+    h.fake
+        .script_error("session.open@s3", -1, "cannot open", "test");
+    request(&mut h, json!({"kind":"open_session", "session_id":"s3"}));
+    assert_eq!(ack(&mut a)["ok"], true);
+    h.until(|app| !app.loading_session).await;
+    assert_eq!(a.try_recv().unwrap()["text"], "\"Third\": cannot open");
+    assert_eq!(b.try_recv().unwrap()["text"], "\"Third\": cannot open");
+    h.app.sync_remote();
+    assert_eq!(projected(&mut a)["session"]["id"], "s1");
+    assert_eq!(projected(&mut b)["session"]["id"], "s2");
+    assert!(h.app.remote.opening.is_none());
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_deletion_finishing_after_remote_off_keeps_the_local_draft_editable() {
+    let (mut h, mut a, mut b) = separate_views().await;
+    request_from(&mut h, 2, json!({"kind":"open_session", "session_id":"s1"}));
+    h.fake.script_held("session.delete@s2", json!({}));
+    request(&mut h, json!({"kind":"delete_session", "session_id":"s2"}));
+    assert_eq!(ack(&mut a)["ok"], true);
+    h.settle().await;
+    request_from(&mut h, 2, json!({"kind":"open_session", "session_id":"s2"}));
+    assert_eq!(ack(&mut b)["ok"], true);
+    h.action(Action::Remote("off".into()));
+    h.fake.release("session.delete@s2");
+    h.until(|app| app.live("s2").is_none()).await;
+    h.app.set_reasoning(crate::protocol::Reasoning::High);
+    assert!(h.app.session.is_none());
+    assert_eq!(h.app.reasoning(), Some(crate::protocol::Reasoning::High));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_late_open_result_cannot_bring_back_a_session_deleted_by_another_device() {
+    let (mut h, mut a, mut b) = separate_views().await;
+    let mut third = session_info("s3");
+    third["title"] = json!("Third");
+    h.fake
+        .script_held("session.open@s3", json!({"session":third}));
+    request(&mut h, json!({"kind":"open_session", "session_id":"s3"}));
+    assert_eq!(ack(&mut a)["ok"], true);
+    request_from(
+        &mut h,
+        2,
+        json!({"kind":"delete_session", "session_id":"s3"}),
+    );
+    assert_eq!(ack(&mut b)["ok"], true);
+    h.until(|app| !app.sessions.iter().any(|info| info.session_id == "s3"))
+        .await;
+    h.fake.release("session.open@s3");
+    h.until(|app| !app.loading_session).await;
+    assert!(h.app.live("s3").is_none());
+    h.app.sync_remote();
+    assert_eq!(projected(&mut a)["session"]["id"], "s1");
+    assert_eq!(projected(&mut b)["session"]["id"], "s2");
 }

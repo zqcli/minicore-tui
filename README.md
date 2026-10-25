@@ -206,11 +206,12 @@ without a report. The TUI never estimates it.
 `--remote`, or `/remote on` in a running TUI, lets a phone drive the open session
 from its browser. The transcript area turns into a status screen with an address
 and a password: open the address on the phone and enter the password once; the
-phone remembers the sign-in. Several devices can be connected and drive the
-session at the same time. The status screen then names the connected phones and
-shows what the Agent is doing, while the phones show the conversation. Local sending
-is frozen and the footer shows `remote`; `/remote off` takes the keyboard back
-and shows the transcript again. `/remote password` makes a new password and
+phone remembers the sign-in. Each connected device views and drives its own
+session or new-session draft; switching on one never switches the others.
+Devices viewing the same session see the same conversation. The status screen
+names each phone's session and shows what the last active device's Agent is
+doing. Local sending is frozen and the footer shows `remote`; `/remote off`
+takes the keyboard back and shows that foreground transcript again. `/remote password` makes a new password and
 signs phones out. Without `--remote` nothing listens.
 
 The server binds to `127.0.0.1:8765` by default, which only the same machine

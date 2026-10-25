@@ -540,22 +540,28 @@ impl App {
         }
     }
 
-    /// Returns submitted text to the composer: appended to a draft typed
-    /// meanwhile rather than replacing it, and one undo step either way. A
-    /// background session keeps it until it comes back to the screen.
+    /// Returns refused text to its remote sender or session, otherwise appending it to the local composer.
     pub(super) fn restore_draft(&mut self, text: &str) {
-        if self.background_op {
-            self.session_mut().returned.push(text.to_owned());
-            return;
-        }
-        if !self.remote.phones.is_empty() {
-            // The phone that sent the latest text gets it back; once it left, every phone does.
-            let phones = &self.remote.phones;
-            let to = self
+        if let Some(session) = &mut self.session {
+            if self
                 .remote
-                .last_sender
-                .filter(|id| phones.iter().any(|phone| phone.connection.id == *id));
-            self.remote.send(to, json!({"t":"returned", "text":text}));
+                .returned(&session.info.session_id, session.last_sender, text)
+            {
+                return;
+            }
+            if self.background_op || self.remote.active() {
+                session.returned.push(text.to_owned());
+                return;
+            }
+        } else if let crate::remote::NoticeTarget::Phone(connection) = self.remote.notice_target
+            && self
+                .remote
+                .phones
+                .iter()
+                .any(|phone| phone.connection.id == connection)
+        {
+            self.remote
+                .send(Some(connection), json!({"t":"returned", "text":text}));
             return;
         }
         if self.composer.is_empty() {

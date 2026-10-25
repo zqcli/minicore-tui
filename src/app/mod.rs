@@ -64,11 +64,11 @@ pub enum Msg {
     Agent(Box<AgentEvent>),
     AgentClosed(String),
     Ready(Box<Ready>),
-    Opened(Result<SessionInfo, RpcError>),
+    Opened(String, Result<SessionInfo, RpcError>),
     Created(Result<SessionInfo, RpcError>),
     Deleted(String, Result<(), RpcError>),
     /// A `session.rename` from the sessions picker, which may name a closed session.
-    Renamed(Result<SessionInfo, RpcError>),
+    Renamed(String, Result<SessionInfo, RpcError>),
     /// A result for the live session with epoch `.0`.
     Session(u64, Box<SessionOp>),
     Notice(NoticeLevel, String),
@@ -343,39 +343,52 @@ impl App {
                 self.templates = templates::load(self.home.as_ref());
                 self.ready = true;
             }
-            Msg::Opened(result) => self.adopt(result, None),
+            Msg::Opened(id, result) => self.with_notice_for(&id, |app| {
+                // Remote opens start from the catalog; deletion can finish before the open reply.
+                if app.remote.opening.is_some()
+                    && !app.sessions.iter().any(|info| info.session_id == id)
+                {
+                    app.loading_session = false;
+                    app.remote.opening = None;
+                    app.notice(NoticeLevel::Error, "Session deleted while opening");
+                } else {
+                    app.adopt(result, None);
+                }
+            }),
             Msg::Created(result) => {
                 let first = self.first_message.take();
                 self.adopt(result, first);
             }
-            Msg::Deleted(id, result) => {
-                if self.ok(result).is_some() {
-                    self.sessions.retain(|session| session.session_id != id);
-                    self.background
+            Msg::Deleted(id, result) => self.with_notice_for(&id, |app| {
+                if app.ok(result).is_some() {
+                    app.notice(NoticeLevel::Info, "Session deleted");
+                    app.forget_phone_session(&id);
+                    app.sessions.retain(|session| session.session_id != id);
+                    app.background
                         .retain(|session| session.info.session_id != id);
-                    self.catalog_generation += 1;
+                    app.catalog_generation += 1;
                     if let Overlay::Sessions {
                         rows,
                         filter,
                         selected,
                         ..
-                    } = &mut self.overlay
+                    } = &mut app.overlay
                     {
                         rows.retain(|session| session.session_id != id);
-                        let shown = overlay::filtered_sessions(rows, filter, self.session.as_ref());
+                        let shown = overlay::filtered_sessions(rows, filter, app.session.as_ref());
                         *selected = (*selected).min(shown.len().saturating_sub(1));
                     }
-                    self.notice(NoticeLevel::Info, "Session deleted");
                 }
-            }
-            Msg::Renamed(result) => self.on_renamed(result),
+            }),
+            Msg::Renamed(id, result) => self.with_notice_for(&id, |app| app.on_renamed(result)),
             Msg::Session(epoch, op) => {
                 if self
                     .session
                     .as_ref()
                     .is_some_and(|session| session.epoch == epoch)
                 {
-                    self.on_op(*op);
+                    let id = self.session.as_ref().unwrap().info.session_id.clone();
+                    self.with_notice_for(&id, |app| app.on_op(*op));
                 } else if let Some(index) = self
                     .background
                     .iter()
@@ -429,6 +442,20 @@ impl App {
     /// Shows `text`; one about a background session names it.
     pub fn notice(&mut self, level: NoticeLevel, text: impl Into<String>) {
         let text = text.into();
+        let label = match &self.remote.notice_target {
+            crate::remote::NoticeTarget::Session(id) => {
+                let session = self.live(id);
+                let info = session
+                    .map(|session| &session.info)
+                    .or_else(|| self.sessions.iter().find(|info| &info.session_id == id));
+                Some(info.map_or_else(
+                    || overlay::short_session_id(id).to_owned(),
+                    |info| overlay::session_label(info, session),
+                ))
+            }
+            _ => None,
+        };
+        self.remote.notice(level, &text, label.as_deref());
         let text = match self.background_op {
             true => format!("\"{}\": {text}", self.session_label()),
             false => text,
@@ -436,9 +463,17 @@ impl App {
         self.push_notice(level, text);
     }
 
-    /// Shows `text` as it is.
+    pub(super) fn with_notice_for(&mut self, id: &str, op: impl FnOnce(&mut Self)) {
+        let previous = std::mem::replace(
+            &mut self.remote.notice_target,
+            crate::remote::NoticeTarget::Session(id.to_owned()),
+        );
+        op(self);
+        self.remote.notice_target = previous;
+    }
+
+    /// Shows `text` locally as it is.
     pub(super) fn push_notice(&mut self, level: NoticeLevel, text: String) {
-        self.remote.send(None, json!({"t":"notice", "level": match level { NoticeLevel::Info => "info", NoticeLevel::Error => "error" }, "text":text}));
         self.notices.push_back(Notice {
             level,
             text,
