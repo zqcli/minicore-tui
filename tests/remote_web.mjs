@@ -8,8 +8,14 @@ const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(match =>
 
 function client() {
   const sent = [], effects = [], elements = new Map(), storage = new Map();
+  const makeElement = () => ({
+    value: '', style: {}, children: [],
+    append(...children) { this.children.push(...children); },
+    replaceChildren(...children) { this.children = children; },
+    get firstChild() { return this.children[0]; },
+  });
   const element = id => {
-    if (!elements.has(id)) elements.set(id, { value: '', style: {} });
+    if (!elements.has(id)) elements.set(id, makeElement());
     return elements.get(id);
   };
   class Socket {
@@ -18,8 +24,9 @@ function client() {
     close() { this.readyState = 3; }
   }
   const context = vm.createContext({
-    document: { getElementById: element, addEventListener() {} },
-    location: { protocol: 'https:', host: 'host.example' },
+    document: { getElementById: element, createElement: makeElement, addEventListener() {} },
+    location: { protocol: 'https:', host: 'host.example', hash: '', pathname: '/', search: '' },
+    window: {}, addEventListener() {}, URLSearchParams,
     navigator: { userAgent: 'iPhone Safari' },
     localStorage: {
       getItem: key => storage.get(key) ?? null,
@@ -30,8 +37,8 @@ function client() {
     setTimeout() { return 1; }, clearTimeout() {}, effects,
   });
   const run = source => vm.runInContext(source, context);
-  // Exercise wire handlers without painting or starting the browser lifecycle.
-  run(scripts[0] + scripts[1].split('// ---- lifecycle ----')[0]);
+  // Load every inline script; browser events and rendering are stubbed, not removed by markers.
+  run(scripts.join('\n'));
   run(`
     renderTray = renderAppr = updateComposer = renderState = schedule = grow = setConn = () => {};
     toast = (...args) => effects.push(['notice', ...args]);

@@ -7,7 +7,7 @@ on:
 
 jobs:
   quality:
-    name: quality (fmt, clippy, docs, deps)
+    name: quality (fmt, clippy, docs, deps, web)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -15,6 +15,11 @@ jobs:
         with:
           toolchain: stable
           components: rustfmt, clippy
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Phone protocol tests
+        run: node --test tests/remote_web.mjs
       - name: Fetch locked dependencies
         run: cargo fetch --locked
       - name: Check formatting
