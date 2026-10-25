@@ -42,7 +42,7 @@ pre,code{font-family:var(--mono)}
 #mid{flex:1;min-height:0;position:relative}
 #log{height:100%;overflow-y:auto;overflow-x:hidden;padding:12px 12px 16px;-webkit-overflow-scrolling:touch}
 #blocks>*{margin:0 0 12px;min-width:0}
-#older,.earlier{display:block;margin:0 auto 12px;color:var(--ac)}
+#older,#more,.earlier{display:block;margin:0 auto 12px;color:var(--ac)}
 #empty{text-align:center;color:var(--mu);padding:48px 16px}
 #empty code{display:block;margin:8px 0;word-break:break-all;color:var(--tx)}
 #pill{position:absolute;left:50%;bottom:10px;transform:translateX(-50%);border-radius:22px;box-shadow:0 2px 10px #0006;background:var(--ac);color:var(--on);border-color:var(--ac)}
@@ -73,7 +73,7 @@ pre,code{font-family:var(--mono)}
 .md hr{border:0;border-top:1px solid var(--bd)}
 .caret{display:inline-block;width:.55em;height:1em;vertical-align:text-bottom;margin-left:2px;background:var(--ac);animation:pulse .6s infinite alternate}
 .tool{background:var(--sf);border:1px solid var(--bd);border-radius:10px;overflow:hidden}
-.thead{display:flex;align-items:center;gap:8px;min-height:44px;padding:0 12px;cursor:pointer}
+.thead{display:flex;align-items:center;gap:8px;width:100%;min-height:44px;padding:0 12px;background:none;border:0;border-radius:0;text-align:left}
 .thead .det{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--mu);font:13px var(--mono)}
 .thead .meta{flex:none;font-size:12px;color:var(--mu)}
 .tool .ico{width:1.2em;text-align:center;flex:none}
@@ -92,13 +92,15 @@ pre,code{font-family:var(--mono)}
 .turnend span{text-align:center}
 .compact{font-size:13px;color:var(--mu);text-align:center;border:1px dashed var(--bd);border-radius:10px;padding:6px 10px}
 .compact div{white-space:pre-wrap;text-align:left;margin-top:6px}
-#dock{background:var(--sf);border-top:1px solid var(--bd);padding:8px 10px calc(8px + env(safe-area-inset-bottom))}
-#appr{max-height:45vh;overflow:auto;margin-bottom:8px;border:2px solid var(--ac);border-radius:12px;padding:10px;background:var(--bg)}
+#dock{display:flex;flex-direction:column;max-height:calc(var(--h,100dvh)*.6);background:var(--sf);border-top:1px solid var(--bd);padding:8px 10px calc(8px + env(safe-area-inset-bottom))}
+#comp{flex:none}
+#appr{flex:0 1 auto;min-height:0;max-height:calc(var(--h,100dvh)*.45);overflow:auto;margin-bottom:8px;border:2px solid var(--ac);border-radius:12px;padding:10px;background:var(--bg)}
 #appr .ptitle{font-weight:600;overflow-wrap:anywhere}
 #appr .pdet{font:13px var(--mono);margin:6px 0;overflow-wrap:anywhere;color:var(--mu)}
 #appr pre{margin:6px 0;max-height:9.5em;overflow:auto;background:var(--sf2);padding:8px;border-radius:8px;font-size:12px;white-space:pre-wrap;overflow-wrap:anywhere}
 .pbtns{display:flex;flex-direction:column;gap:8px;margin-top:8px}
-#tray:not(:empty){margin-bottom:8px;display:flex;flex-direction:column;gap:4px;font-size:13px}
+#tray:not(:empty){flex:0 1 auto;min-height:0;max-height:calc(var(--h,100dvh)*.3);overflow-y:auto;margin-bottom:8px;display:flex;flex-direction:column;gap:4px;font-size:13px}
+#tray>*{flex:none}
 #tray .q{display:flex;gap:8px;color:var(--mu)}
 #tray .q b{flex:none;color:var(--ac)}
 #tray .q span,#tray .it span{overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow-wrap:anywhere}
@@ -107,7 +109,7 @@ pre,code{font-family:var(--mono)}
 #tray .it button{min-height:32px;padding:0 10px;margin-left:auto}
 @keyframes show{to{opacity:1}}
 .trow{display:flex;gap:8px;align-items:flex-end}
-#ta{flex:1;min-width:0;resize:none;font-size:16px;line-height:1.4;font-family:inherit;color:var(--tx);background:var(--bg);border:1px solid var(--bd);border-radius:12px;padding:10px 12px;max-height:160px;min-height:44px;display:block}
+#ta{flex:1;min-width:0;resize:none;font-size:16px;line-height:1.4;font-family:inherit;color:var(--tx);background:var(--bg);border:1px solid var(--bd);border-radius:12px;padding:10px 12px;max-height:min(160px,calc(var(--h,100dvh)*.25));min-height:44px;display:block}
 #ta:focus{outline:2px solid var(--ac);outline-offset:-1px}
 #arow{display:flex;gap:8px;margin-top:8px}
 #arow button{flex:1}
@@ -144,11 +146,11 @@ pre,code{font-family:var(--mono)}
     <div class="r1"><button id="menu" class="ghost" aria-label="Sessions and workspaces">&#9776;</button><div id="title">MiniCore</div><span id="dot" class="off"></span></div>
     <div class="r2"><span id="ws"></span><button id="model" aria-label="Model and reasoning"></button><span id="stat"></span></div>
   </header>
-  <div id="conn">Connecting…</div>
+  <div id="conn" role="status">Connecting…</div>
   <div id="mid">
-    <main id="log"><button id="older" class="ghost" hidden>Load older messages</button><div id="blocks"></div><div id="empty" hidden></div></main>
+    <main id="log"><button id="more" class="ghost" hidden></button><button id="older" class="ghost" hidden>Load older messages</button><div id="blocks"></div><div id="empty" hidden></div></main>
     <button id="pill" hidden>&#8595; new</button>
-    <div id="toasts"></div>
+    <div id="toasts" role="status"></div>
   </div>
   <section id="dock">
     <div id="appr" hidden></div>
@@ -159,7 +161,7 @@ pre,code{font-family:var(--mono)}
     </form>
   </section>
 </div>
-<div id="scrim" hidden><aside id="panel"></aside></div>
+<div id="scrim" hidden><aside id="panel" role="dialog" aria-modal="true" tabindex="-1"></aside></div>
 <div id="gate" hidden></div>
 
 <script>
@@ -168,6 +170,13 @@ pre,code{font-family:var(--mono)}
 const backoff = n => Math.min(15000, 1000 * 2 ** n);
 const basename = p => (p || '').split(/[\\/]/).filter(Boolean).pop() || p || '';
 const mergeReturned = (cur, text) => cur ? cur + '\n' + text : text;
+// What is left in the editor once an acked submission is retired; text the user or `returned` added stays.
+function retireText(editor, sent) {
+  if (editor === sent) return '';
+  if (editor.startsWith(sent + '\n')) return editor.slice(sent.length + 1);
+  if (editor.endsWith('\n' + sent)) return editor.slice(0, -sent.length - 1);
+  return editor;
+}
 const SAFE_URL = /^https?:\/\//i;
 
 function relAge(iso, now = Date.now()) {
@@ -202,10 +211,21 @@ function diffBlocks(old, neu) {
   for (let i = 0; i < neu.length; i++) if (JSON.stringify(old[i]) !== JSON.stringify(neu[i])) out.push(i);
   return out;
 }
+// An upsert is {i, block} or {i, append:{text?, reasoning?}} for the assistant block already at i.
 function applyBlocks(blocks, len, upserts) {
   blocks.length = len;
-  for (const u of upserts) blocks[u.i] = u.block;
-  return upserts.map(u => u.i);
+  const out = [];
+  for (const u of upserts) {
+    if (!u.append) blocks[u.i] = u.block;
+    else {
+      const b = blocks[u.i];
+      if (!b || b.type !== 'assistant') continue;
+      if (u.append.text) b.text = (b.text || '') + u.append.text;
+      if (u.append.reasoning) b.reasoning = (b.reasoning || '') + u.append.reasoning;
+    }
+    out.push(u.i);
+  }
+  return out;
 }
 
 // Intent bookkeeping. st: pending -> (ack removes it) | unconfirmed (socket dropped first).
@@ -346,7 +366,9 @@ const KEY = 'minicore.token';
 const m = { state: null, blocks: [], intents: new Map(), sid: undefined };
 const nodes = [], dirty = new Set(), open = new Set(), fsReq = new Map();
 let ws, ready = false, started = false, halted = false, attempt = 0, retry = 0, pairCode = null, nid = 0;
-let stick = true, raf = 0, tick = 0, hiddenAt = 0, panel = null, view = 'main';
+const WINDOW = 300;
+let stick = true, raf = 0, tick = 0, hiddenAt = 0, panel = null, view = 'main', opener = null;
+let lo = 0, win = WINDOW, anchor = false; // nodes[k] is block lo + k; the newest `win` blocks are mounted
 const pk = { roots: null, listing: null, hidden: false, err: '', busy: false, mk: false, last: '', prof: 0 };
 
 // ---- connection ----
@@ -417,13 +439,13 @@ function onMessage(msg) {
     case 'notice': toast(msg.text, msg.level); break;
     case 'fs': { const cb = fsReq.get(msg.id); fsReq.delete(msg.id); if (cb) cb(msg); break; }
   }
-  if (fx.newSession) { stick = true; open.clear(); }
+  if (fx.newSession) { stick = true; win = WINDOW; open.clear(); }
   if (fx.dirty) { fx.dirty.forEach(i => dirty.add(i)); schedule(); }
   if (fx.state) renderState();
   if (fx.ack) {
     const it = fx.ack;
     if (!it.ok) toast(it.error || 'Request failed', 'error');
-    else if (it.kind === 'submit' || it.kind === 'queue') { $('ta').value = ''; grow(); }
+    else if (it.kind === 'submit' || it.kind === 'queue') { $('ta').value = retireText($('ta').value, it.text); grow(); }
     renderTray(); renderAppr(); updateComposer();
   }
   if (fx.returned != null) { const ta = $('ta'); ta.value = mergeReturned(ta.value, fx.returned); grow(); }
@@ -500,7 +522,7 @@ function renderBlock(b, i) {
     case 'assistant': {
       const n = el('div', 'asst'), body = el('div', 'md');
       if (b.reasoning) {
-        const d = el('details', 'think', el('summary', '', 'Thinking'), el('div', '', b.reasoning)), k = 'r' + i;
+        const d = el('details', 'think', el('summary', '', 'Thinking'), el('div', '', b.reasoning)), k = 'r' + b.loop_id + ':' + b.request;
         d.open = open.has(k);
         d.ontoggle = () => d.open ? open.add(k) : open.delete(k);
         n.append(d);
@@ -516,9 +538,13 @@ function renderBlock(b, i) {
     case 'tool': {
       const k = 't' + b.call_id, isOpen = open.has(k);
       const meta = [b.duration_ms != null && fmtDur(b.duration_ms), b.exit_code != null && 'exit ' + b.exit_code].filter(Boolean).join(' · ');
-      const head = el('div', 'thead', el('span', 'ico', ICON[b.state] || '?'), el('b', '', b.name), el('span', 'det', b.detail), meta && el('span', 'meta', meta));
+      const head = el('button', 'thead', el('span', 'ico', ICON[b.state] || '?'), el('b', '', b.name), el('span', 'det', b.detail), meta && el('span', 'meta', meta));
+      head.type = 'button';
+      head.setAttribute('aria-expanded', isOpen);
       head.onclick = () => { open.has(k) ? open.delete(k) : open.add(k); dirty.add(i); schedule(); };
-      return el('div', 'tool ' + b.state, head, isOpen && toolBody(b));
+      const body = isOpen && toolBody(b);
+      if (body) { body.id = 'tb' + i; head.setAttribute('aria-controls', body.id); }
+      return el('div', 'tool ' + b.state, head, body);
     }
     case 'turn_end': {
       const c = b.changes, outcome = b.outcome.replace(/_/g, ' ');
@@ -543,26 +569,40 @@ function renderBlock(b, i) {
 }
 function flush() {
   raf = 0;
-  const log = $('log'), box = $('blocks'), bl = m.blocks;
-  const wasStick = stick, fromBottom = log.scrollHeight - log.scrollTop, prev = nodes.length;
-  while (nodes.length > bl.length) nodes.pop().remove();
-  const grew = bl.length > prev || dirty.has(bl.length - 1), prepended = bl.length > prev && dirty.has(0) && prev > 0;
-  for (const i of [...dirty].sort((a, b) => a - b)) {
-    if (i >= bl.length) continue;
-    const n = renderBlock(bl[i], i);
-    if (nodes[i]) nodes[i].replaceWith(n); else box.append(n);
-    nodes[i] = n;
+  const log = $('log'), box = $('blocks'), bl = m.blocks, lo0 = lo, prevLen = lo + nodes.length;
+  const wasStick = stick, fromBottom = log.scrollHeight - log.scrollTop, h0 = log.scrollHeight;
+  const grew = bl.length > prevLen || dirty.has(bl.length - 1);
+  const serverPrepend = bl.length > prevLen && dirty.has(0) && prevLen > 0;
+  while (nodes.length > Math.max(0, bl.length - lo)) nodes.pop().remove();
+  const want = Math.max(0, bl.length - win);
+  while (lo < want && nodes.length) { nodes.shift().remove(); lo++; }
+  if (!nodes.length) lo = want;
+  while (lo > want) { lo--; const n = renderBlock(bl[lo], lo); nodes.unshift(n); box.prepend(n); dirty.delete(lo); }
+  const topDelta = lo === lo0 ? 0 : log.scrollHeight - h0;
+  for (let i = lo; i < bl.length; i++) {
+    if (!dirty.has(i) && nodes[i - lo]) continue;
+    const n = renderBlock(bl[i], i), old = nodes[i - lo];
+    if (old) {
+      const focused = old.contains(document.activeElement);
+      old.replaceWith(n);
+      const head = focused && n.querySelector('.thead');
+      if (head) head.focus({ preventScroll: true });
+    } else box.append(n);
+    nodes[i - lo] = n;
   }
   dirty.clear();
+  $('more').hidden = lo === 0;
+  $('more').textContent = 'Show earlier (' + lo + ' more)';
   renderEmpty();
-  if (wasStick) { log.scrollTop = log.scrollHeight; $('pill').hidden = true; }
-  else if (prepended) log.scrollTop = log.scrollHeight - fromBottom;
-  else if (grew) $('pill').hidden = false;
+  if (serverPrepend && !wasStick) log.scrollTop = log.scrollHeight - fromBottom;
+  else if (wasStick && !anchor) { log.scrollTop = log.scrollHeight; $('pill').hidden = true; }
+  else { log.scrollTop += topDelta; if (grew && !anchor) $('pill').hidden = false; }
+  anchor = false;
 }
 function renderEmpty() {
   const s = m.state, e = $('empty');
   if (!s) return;
-  $('older').hidden = !s.older || (m.blocks[0] && m.blocks[0].type === 'earlier');
+  $('older').hidden = !s.older || lo > 0 || (m.blocks[0] && m.blocks[0].type === 'earlier');
   e.hidden = m.blocks.length > 0;
   if (e.hidden) return;
   if (s.session) fill(e, s.status.loading ? 'Loading session…' : 'No messages yet.');
@@ -639,6 +679,7 @@ $('stop').onclick = () => intent('cancel');
 $('ta').oninput = grow;
 $('ta').onkeydown = e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); submit('submit'); } };
 $('older').onclick = loadOlder;
+$('more').onclick = () => { win += WINDOW; anchor = true; schedule(); };
 $('pill').onclick = () => { $('log').scrollTop = $('log').scrollHeight; };
 $('log').onscroll = () => { stick = atBottom(); if (stick) $('pill').hidden = true; };
 
@@ -648,9 +689,14 @@ function openPanel(kind) {
   panel = kind; view = 'main';
   $('panel').className = kind === 'model' ? 'sheet' : 'drawer';
   $('scrim').hidden = false;
+  opener = document.activeElement;
   renderPanel();
+  $('panel').focus();
 }
-function closePanel() { panel = null; $('scrim').hidden = true; }
+function closePanel() {
+  panel = null; $('scrim').hidden = true;
+  if (opener) { opener.focus(); opener = null; }
+}
 function renderPanel() { (panel === 'model' ? renderModel : view === 'picker' ? renderPicker : renderDrawer)(); }
 const phead = title => el('div', 'phead', el('b', '', title), btn('ghost', '✕', closePanel));
 const row = (cls, main, sub, fn) => { const b = el('button', 'row ' + cls, el('span', 'rm', main), sub && el('span', 'rs', sub)); b.type = 'button'; b.onclick = fn; return b; };
