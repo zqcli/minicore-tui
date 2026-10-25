@@ -1,9 +1,15 @@
 {
   "name": "MiniCore",
   "short_name": "MiniCore",
+  "description": "Drive MiniCore on your computer from your phone",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
-  "theme_color": "#0f1115",
-  "background_color": "#0f1115",
-  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+  "orientation": "any",
+  "theme_color": "#ffffff",
+  "background_color": "#ffffff",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/icon.png", "sizes": "180x180", "type": "image/png", "purpose": "any" }
+  ]
 }
