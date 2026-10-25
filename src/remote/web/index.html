@@ -280,9 +280,11 @@ input.tf:focus{border-color:var(--ac);box-shadow:0 0 0 3px var(--acs)}
 #scrim{z-index:20}#scrim2{z-index:22}#dlg{z-index:23}#ascrim{z-index:10;pointer-events:none}
 #scrim.on,#ascrim.on,#scrim2.on{opacity:1;visibility:visible;transition:opacity .2s,visibility 0s}
 #drawer{position:fixed;z-index:21;top:0;bottom:0;left:0;width:86%;max-width:360px;height:var(--h,100dvh);display:flex;flex-direction:column;background:var(--bg);padding:var(--st) 0 0 var(--sl);box-shadow:var(--sh);transform:translateX(-100%);visibility:hidden;transition:transform .22s var(--ease),visibility .22s}
+/* The keyboard covers the home indicator, so its inset is not needed above it. */
+html.kb{--sb:0px}
 #drawer.on,.sheet.on{transform:none;visibility:visible;transition:transform .22s var(--ease),visibility 0s}
 [data-theme=dark] #drawer{background:var(--bg2)}
-.sheet{position:fixed;z-index:21;left:0;right:0;bottom:0;margin:0 auto;max-width:640px;max-height:calc(var(--h,100dvh) - var(--st) - 24px);display:flex;flex-direction:column;background:var(--bg);border-radius:20px 20px 0 0;box-shadow:var(--sh);transform:translateY(100%);visibility:hidden;transition:transform .22s var(--ease),visibility .22s}
+.sheet{position:fixed;z-index:21;left:0;right:0;bottom:var(--kb,0px);margin:0 auto;max-width:640px;max-height:calc(var(--h,100dvh) - var(--st) - 24px);display:flex;flex-direction:column;background:var(--bg);border-radius:20px 20px 0 0;box-shadow:var(--sh);transform:translateY(100%);visibility:hidden;transition:transform .22s var(--ease),visibility .22s}
 .sheet.full{height:calc(var(--h,100dvh) - var(--st) - 12px)}
 [data-theme=dark] .sheet{background:var(--bg2)}
 .grab{width:36px;height:5px;border-radius:3px;background:var(--fill2);margin:6px auto 0;flex:none}
@@ -1746,13 +1748,17 @@ addEventListener('online', () => { renderConn(); wake(false); });
 addEventListener('offline', renderConn);
 new ResizeObserver(padLog).observe($('appr'));
 if (window.visualViewport) {
+  // iOS keeps the layout viewport under the keyboard; fixed bottom sheets are lifted by the part it covers.
   const fit = () => {
-    document.documentElement.style.setProperty('--h', visualViewport.height + 'px');
     if (window.scrollY) scrollTo(0, 0);
+    const root = document.documentElement, kb = Math.max(0, Math.round(innerHeight - visualViewport.height - visualViewport.offsetTop));
+    root.style.setProperty('--h', visualViewport.height + 'px');
+    root.style.setProperty('--kb', kb + 'px');
+    root.classList.toggle('kb', kb > 80);
     if (stick) log.scrollTop = log.scrollHeight;
   };
   visualViewport.addEventListener('resize', fit);
-  visualViewport.addEventListener('scroll', () => { if (window.scrollY) scrollTo(0, 0); });
+  visualViewport.addEventListener('scroll', fit);
   fit();
 }
 if (localStorage.getItem(KEY)) { connecting(); connect(); } else signinScreen();
