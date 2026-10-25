@@ -20,8 +20,16 @@ document disagree after the feature lands, the code wins and this file is fixed.
   frozen) or `Connected` (one phone in control). A second device is refused; a
   new connection from the *same* device replaces the old one (a phone that lost
   its network reconnects before the old socket times out).
-- **Same session.** The phone and the TUI always show the same resident
-  session. Opening or creating a session from the phone changes the TUI too.
+- **Same session.** The phone and the TUI always share the resident session.
+  Opening or creating a session from the phone changes it for the TUI too.
+- **The TUI only reports.** While remote mode is on, the TUI does not show the
+  conversation: its transcript area becomes a status screen saying that remote
+  control is on, how to connect, which phone is in control, which session and
+  workspace are open and what the Agent is doing now. The reducer keeps the full
+  session state for the phone; turning remote mode off shows the transcript again.
+- **Password sign-in.** Turning remote mode on needs nothing. A phone signs in
+  with the connection password the status screen shows, once per device; after
+  that it reconnects with a remembered token.
 - **Best effort.** No event log, no replay, no automatic resend. Reconnecting
   gives a fresh snapshot.
 - **Web client first.** The TUI serves a single-file web client (PWA-capable).
@@ -30,7 +38,7 @@ document disagree after the feature lands, the code wins and this file is fixed.
 - **No built-in TLS.** Default bind is loopback. Across networks use Tailscale,
   WireGuard, an SSH tunnel or a TLS reverse proxy; `url` names the address the
   phone uses.
-- **Not in scope:** TLS, sleep prevention, device revocation UI, push
+- **Not in scope:** TLS, sleep prevention, per-device revocation, push
   notifications, delete/move/upload in the directory browser, Git clone,
   `agent.reload`, `agent.shutdown`, `session.delete` from the phone.
 
@@ -41,7 +49,7 @@ document disagree after the feature lands, the code wins and this file is fixed.
 ```toml
 [remote]
 bind = "127.0.0.1:8765"        # default; host:port
-url = "https://mac.tail1234.ts.net:8765"   # optional; the address put in the QR code
+url = "https://mac.tail1234.ts.net:8765"   # optional; the address the status screen shows
 roots = ["~/Develops", "/srv/work"]        # default: the user's home directory
 allow_insecure = false         # required (true) for a non-loopback bind
 ```
@@ -55,27 +63,66 @@ allow_insecure = false         # required (true) for a non-loopback bind
   - `url` must start with `http://` or `https://`; no trailing `/`.
 - `--remote` starts remote mode at startup. The listener is bound before the
   terminal is taken over; a bind failure prints the error and exits with status 1.
-- Paired devices live in `<TUI dir>/remote-devices.json`:
-  `{"devices":[{"name":"iPhone Safari","token_sha256":"<hex>","paired_at":"<RFC 3339>"}]}`,
-  written atomically, mode `0600` on Unix. Only token hashes are stored. Deleting
-  the file forgets every device.
+- The password and the remembered phones live in `<TUI dir>/remote.json`,
+  written atomically, mode `0600` on Unix:
+  `{"password":"k7mq-x2pa-n9dt","devices":[{"name":"iPhone Safari","token_sha256":"<hex>","paired_at":"<RFC 3339>"}]}`.
+  The first start of remote mode creates the file with a generated password.
+  Only token hashes are stored; at most 20 phones are remembered (the oldest
+  goes first). Deleting the file forgets every phone and makes a new password.
 
 Slash commands (always allowed, also in remote mode):
 
 | Command | Effect |
 |---|---|
-| `/remote` or `/remote status` | Open the Remote sheet: mode, URL, pairing QR and code, connected device |
-| `/remote on` | Bind and enter `Waiting`; a fresh pairing code is made; opens the sheet |
-| `/remote off` | Say `bye` to the phone, close it, stop listening, unfreeze local input |
-| `/remote pair` | While listening, make a new pairing code (the old one stops working); opens the sheet |
+| `/remote on` | Bind and enter `Waiting`; the status screen replaces the transcript |
+| `/remote off` | Say `bye` to the phone, close it, stop listening, show the transcript and unfreeze local input |
+| `/remote` or `/remote status` | When on: nothing to open, the status screen already shows everything (close any open picker or view). When off: the info notice `Remote control is off · /remote on starts it` |
+| `/remote password` | Generate a new password |
+| `/remote password <text>` | Use `<text>` (at least 8 characters, spaces and dashes not counted) |
 
-When Off, `/remote pair` asks the user to run `/remote on` first; it never
-starts a listener or freezes local input as an implicit side effect.
+Changing the password signs every phone out: the remembered devices are
+forgotten, a connected phone gets `bye signed_out`, and the notice
+`New remote password · phones must sign in again` is shown. While remote mode is
+off the password still changes (it is in the file). A `/remote password …`
+line is never written to the prompt history.
 
 ## Local behaviour in remote mode (`Waiting` or `Connected`)
 
-- The transcript, tool output and status keep updating. The composer keeps its
-  draft and slash input, but cannot send.
+- **The status screen** replaces the transcript area (a full-screen view such as
+  help or diff, opened from the allowed commands, still draws over it). It is
+  read-only, not selectable, and the wheel and clicks over it do nothing. Rows,
+  label column dim, values in text colour:
+
+  ```text
+   Remote control                                         ● phone connected
+                                                          (○ waiting for a phone, amber)
+
+     Address     http://192.168.20.207:8765
+     Password    k7mq-x2pa-n9dt
+     Phone       iPhone Safari · connected at 14:02
+                 (none yet · open the address on your phone and enter the password)
+
+     Session     Fix the parser          (New session · starts with the phone's first message)
+     Workspace   ~/Develops/app
+     Model       gpt-6-luna · max
+     Now         ⠋ Running bash · cargo test · 12s
+                 (⠋ Thinking · 4s / ⠋ Waiting for approval on the phone · bash · rm -rf build /
+                  ⠋ Compacting context / Idle · last turn completed in 7.8s / Idle)
+     Queue       2 messages waiting                       (only when the queue is not empty)
+     Sign-in     3 wrong passwords · paused for 30 s      (only after a failure; amber)
+
+     /remote off take back control · esc stop the turn · /remote password new password
+  ```
+
+  The home directory reads `~`. Values are cut to the width (never wrapped);
+  on a narrow terminal the label column shrinks to the widest label. `Now` uses
+  the same spinner and elapsed format as the Working line and animates only
+  while the TUI already animates (`App::animating`); an idle screen does not tick.
+- The dock in remote mode shows notices, the editor and the footer only: no
+  Working line, no queue rows and no approval sheet (the status screen says it).
+  The editor keeps its draft and slash input but cannot send; an empty editor
+  shows the faint placeholder `Remote control is on · /remote off to take back`.
+  The footer shows `remote` (waiting) or `remote · <device>` (connected).
 - Local `on_action` is **deny by default**. Allowed: `SetTheme`, `ToggleTheme`,
   `CopyLastAnswer`, `Export`, `EditDraft`, `LoadOlder`, `RecallQueued`, `Quit`,
   every `/remote` command and panels that only show (help, session, context,
@@ -83,10 +130,8 @@ starts a listener or freezes local input as an implicit side effect.
   A denied action shows the flash `Remote control is on · /remote off to take back`
   and changes nothing.
 - `Esc` still interrupts a running turn or cancels a compaction: a safety valve
-  for the person at the computer. (It is not routed through `on_action` today and
-  stays allowed.)
-- A pending approval does not take the local keyboard and is not drawn as a
-  sheet; the status line says `Waiting for approval` and the phone answers it.
+  for the person at the computer.
+- A pending approval does not take the local keyboard; the phone answers it.
 - Entering remote mode moves queued follow-ups back into the composer
   (`restore_draft` of the joined text), so no local message waits to be sent.
 - Quitting asks twice: the first request (Ctrl+C, `/quit`) flashes
@@ -101,7 +146,9 @@ One TCP listener on `bind`. Each connection's request head (max 8 KiB, 10 s) is
 peeked:
 
 - `GET /` → the web client (`text/html; charset=utf-8`).
-- `GET /manifest.webmanifest`, `GET /icon.svg` → the PWA manifest and icon.
+- `GET /manifest.webmanifest`, `GET /icon.svg`, `GET /icon.png` → the PWA
+  manifest and icons (`icon.png` is 180×180 for the iOS home screen; served
+  with `image/png` from `include_bytes!`).
 - `GET /ws` with `Upgrade: websocket` → the WebSocket. If an `Origin` header is
   present its host:port must equal the `Host` header, else `403`. No `Origin`
   (a non-browser client) is allowed; authentication still applies.
@@ -120,42 +167,43 @@ full the TUI drops the connection (the phone reconnects and gets a snapshot).
 After `bye`, the server sends a WebSocket close frame with a bounded handshake.
 Process exit allows at most 500 ms for the connection task to flush and close.
 
-## Pairing and authentication
+## Password sign-in
 
-- `/remote on` and `/remote pair` make a pairing code: 8 characters from
-  `ABCDEFGHJKLMNPQRSTUVWXYZ23456789`, shown as `ABCD-EFGH`, valid 10 minutes,
-  single use. Five failed pair attempts invalidate it; stopping the listener
-  invalidates its code too. Token generation precedes reducer admission, but
-  consumption and persistence follow acceptance. A `busy` rejection leaves the
-  code valid and writes no device.
-- The QR code and the shown link are `<base>/#pair=ABCDEFGH`. The fragment never
-  reaches the server or its logs. `<base>` is `url` when set, else
-  `http://<bind>`, with an unspecified bind host (`0.0.0.0`, `::`) replaced by the
-  machine's primary LAN address.
-- The web client reads the code from the fragment, removes the fragment with
-  `history.replaceState`, pairs, and keeps the returned token in `localStorage`
-  (`minicore.token`). Later visits authenticate with the token.
-- Tokens are 32 random bytes (OS CSPRNG), base64url without padding. The server
-  compares SHA-256 hashes.
+- A generated password is 12 characters from `abcdefghjkmnpqrstuvwxyz23456789`
+  (OS CSPRNG, rejection sampling), stored and shown in groups of four:
+  `k7mq-x2pa-n9dt`. Comparison ignores whitespace and `-` on both sides and is
+  case-sensitive, so `k7mq x2pa n9dt` and `k7mqx2pan9dt` also work.
+- Five wrong passwords in a row pause sign-in for 30 s; every further five
+  double the pause, up to 15 min. A right password resets the count. While
+  paused even the right password is refused with `locked`. Remembered phones
+  (`hello` with a token) are never paused.
+- Each refusal is reported to the reducer (`RemoteEvent::LoginRefused`), which
+  counts it for the status screen's `Sign-in` row (reset by `/remote on` and by a
+  password change) and shows the info notice `Remote: wrong password` or
+  `Remote: sign-in paused for 30 s`.
+- A right password makes a token (32 random bytes, base64url without padding).
+  The phone is stored only after the reducer admits it (a `busy` refusal stores
+  nothing). The web client keeps the token in `localStorage` (`minicore.token`)
+  and later signs in with `hello`. The server compares SHA-256 hashes.
 
 ## Protocol v1
 
 ### Handshake
 
 Device names contain 1–64 Unicode characters and no control characters; invalid
-names are `bad_request` and do not spend a pairing attempt.
+names are `bad_request` and do not count as a wrong password.
 
 Client's first message, one of:
 
 ```json
-{"t":"pair","v":1,"code":"ABCDEFGH","device":"iPhone Safari"}
+{"t":"login","v":1,"password":"k7mq-x2pa-n9dt","device":"iPhone Safari"}
 {"t":"hello","v":1,"token":"<base64url>"}
 ```
 
 Server answers, in order:
 
 ```json
-{"t":"paired","token":"<base64url>"}                      // only after a pair
+{"t":"authorized","token":"<base64url>"}                  // only after a login
 {"t":"welcome","v":1,"version":"0.5.5","device":"iPhone Safari","now_ms":1761300003000}
 {"t":"snapshot","state":{...},"blocks":[...]}
 ```
@@ -166,8 +214,12 @@ offset, refreshing that offset on each handshake, and uses host-adjusted time
 with `status.started_ms` for elapsed time. `now_ms` appears only in `welcome`,
 never in snapshots or `State`, so clock passage alone causes no state updates.
 
-On failure, the server sends one error and closes: `{"t":"error","code":"unauthorized"|"busy"|"version"|"bad_request","message":"..."}`.
-`busy`: another device is in control. `version`: `v` is not 1.
+On failure, the server sends one error and closes:
+`{"t":"error","code":"wrong_password"|"locked"|"unauthorized"|"busy"|"version"|"bad_request","message":"..."}`.
+`wrong_password`: the login password is wrong. `locked`: sign-in is paused; the
+error carries `"retry_after":<whole seconds, rounded up>`. `unauthorized`: the
+`hello` token is unknown (signed out); the client forgets it and asks for the
+password. `busy`: another device is in control. `version`: `v` is not 1.
 
 ### Client → server (after the handshake)
 
@@ -224,7 +276,7 @@ phone is connected, the text goes back to the phone as `returned`.
 {"t":"fs","id":"c27","ok":true,"listing":Listing}
 {"t":"fs","id":"c28","ok":true,"created":"/Users/me/Develops/new-app"}
 {"t":"fs","id":"c27","ok":false,"error":"outside_roots","message":"..."}
-{"t":"bye","reason":"remote_off"|"tui_exit"|"replaced"}
+{"t":"bye","reason":"remote_off"|"tui_exit"|"replaced"|"signed_out"}
 ```
 
 `blocks`: the transcript now has `len` blocks; the client truncates its list to
@@ -316,16 +368,7 @@ Assistant `text` is raw Markdown; clients render it.
   of assistant content.
 - `State` is built, serialized and compared with the last one sent; only a
   difference sends `state`. Elapsed time is computed by the client from
-  `started_ms`, so a running turn does not send a `state` every frame.
-- An idle TUI with a connected phone does nothing unless the Remote sheet is
-  open with a valid pairing code. That sheet contributes its next whole-minute
-  countdown boundary and final expiry to the existing `next_expiry` deadline;
-  closing the sheet removes this wakeup. It does not add a polling timer.
-- Pairing-code creation encodes the QR matrix once in `Remote`. The UI reads
-  `pairing_qr()` and only converts cached modules to terminal rows; it holds no
-  encoding state and never encodes during a draw.
-
-## Host directory interface
+  `started_ms`, so a running turn does not send a `state` every frame.## Host directory interface
 
 Only for the phone's directory picker; the model cannot call it. Pure, blocking
 functions in `remote::fs`, run off the main loop by the connection task (they do
@@ -376,15 +419,15 @@ launch workspace.
 
 | Path | Contents |
 |---|---|
-| `src/remote/mod.rs` | `RemoteMode`, the handle `App` keeps (start/stop, outbound sender, pairing code, URL), `RemoteEvent` posted to the main loop as `Msg::Remote` |
+| `src/remote/mod.rs` | `RemoteMode`, the handle `App` keeps (start/stop, outbound sender, password access, URL, sign-in refusals), `RemoteEvent` posted to the main loop as `Msg::Remote` |
 | `src/remote/server.rs` | Listener, HTTP, WebSocket upgrade, handshake, pings, per-connection tasks |
-| `src/remote/auth.rs` | Pairing codes, token generation and hashing, the device file |
+| `src/remote/auth.rs` | The password, sign-in pauses, token generation and hashing, `remote.json` |
 | `src/remote/wire.rs` | Serde types of every message above |
 | `src/remote/view.rs` | `State`/`Block` projection from `&App` and the diff tracker |
 | `src/remote/fs.rs` | Host directory functions |
-| `src/remote/web/` | `index.html` (the whole client: HTML, CSS, JS), `manifest.webmanifest`, `icon.svg`, embedded with `include_str!` |
+| `src/remote/web/` | `index.html` (the whole client: HTML, CSS, JS), `manifest.webmanifest`, `icon.svg`, `icon.png`, embedded with `include_str!` / `include_bytes!` |
 | `src/app/remote.rs` | `App` side: `/remote` commands, mode changes, local gating, intents, `sync_remote` |
-| `src/ui/…` | Remote sheet (status, URL, QR code, pairing code), composer and footer indicators |
+| `src/ui/views/remote.rs` | The remote status screen; composer placeholder and footer mark live with the composer and footer |
 
 `remote` depends on `app` and `protocol`, never on `ui`. Remote messages reach
 the reducer through the existing `Msg` channel (`Msg::Remote`), so the main loop
@@ -402,4 +445,5 @@ gains no new branch beyond calling `sync_remote` once per iteration.
 | Ping / idle close | 20 s / 60 s |
 | Directory entries per listing | 1000 |
 | Sessions in `State` | 50 |
-| Pairing code | 10 min, single use, 5 failures |
+| Wrong passwords | 5 in a row → 30 s pause, doubling per further 5, at most 15 min |
+| Remembered phones | 20 |

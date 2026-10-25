@@ -1,4 +1,5 @@
-//! Pairing credentials; only token hashes reach disk.
+//! The connection password and remembered phones; phones keep a token and only
+//! its hash reaches disk.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -8,62 +9,15 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::time::Instant;
 
-const ALPHABET: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-pub const PAIR_TTL: Duration = Duration::from_secs(600);
-
-pub struct Pairing {
-    pub code: String,
-    pub expires: Instant,
-    failures: u8,
-    used: bool,
-}
-
-impl Pairing {
-    pub fn new() -> Result<Self, String> {
-        let mut code = String::with_capacity(8);
-        while code.len() < 8 {
-            let mut byte = [0];
-            getrandom::getrandom(&mut byte).map_err(|error| error.to_string())?;
-            // Rejection sampling keeps every alphabet character equally likely.
-            if usize::from(byte[0]) < 256 / ALPHABET.len() * ALPHABET.len() {
-                code.push(char::from(ALPHABET[usize::from(byte[0]) % ALPHABET.len()]));
-            }
-        }
-        Ok(Self {
-            code,
-            expires: Instant::now() + PAIR_TTL,
-            failures: 0,
-            used: false,
-        })
-    }
-
-    fn check(&mut self, code: &str) -> bool {
-        if !self.active() {
-            return false;
-        }
-        if self.code != code {
-            self.failures += 1;
-            return false;
-        }
-        true
-    }
-
-    pub fn consume(&mut self, code: &str) -> bool {
-        if !self.check(code) {
-            return false;
-        }
-        self.used = true;
-        true
-    }
-
-    pub fn invalidate(&mut self) {
-        self.used = true;
-    }
-
-    pub fn active(&self) -> bool {
-        !self.used && self.failures < 5 && Instant::now() < self.expires
-    }
-}
+const ALPHABET: &[u8] = b"abcdefghjkmnpqrstuvwxyz23456789";
+/// Wrong passwords in a row before sign-in pauses; each further run doubles the pause.
+const ATTEMPTS: u32 = 5;
+const FIRST_LOCK: Duration = Duration::from_secs(30);
+const MAX_LOCK: Duration = Duration::from_secs(15 * 60);
+/// A password set by hand must be at least this long, spaces and dashes aside.
+pub const MIN_PASSWORD: usize = 8;
+/// Remembered phones; signing in another drops the oldest.
+const MAX_DEVICES: usize = 20;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Device {
@@ -73,36 +27,100 @@ pub struct Device {
 }
 
 #[derive(Default, Serialize, Deserialize)]
-struct Devices {
+struct Stored {
+    #[serde(default)]
+    password: String,
+    #[serde(default)]
     devices: Vec<Device>,
+}
+
+/// Why a password sign-in was refused.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Refusal {
+    Wrong,
+    /// Sign-in is paused for this long.
+    Locked(Duration),
 }
 
 pub struct Auth {
     file: PathBuf,
-    devices: Devices,
-    pub pairing: Pairing,
+    stored: Stored,
+    failures: u32,
+    locked_until: Option<Instant>,
 }
 
 impl Auth {
+    /// Reads `remote.json`, creating a password the first time.
     pub fn load(file: PathBuf) -> Result<Self, String> {
-        let devices = match std::fs::read_to_string(&file) {
+        let stored = match std::fs::read_to_string(&file) {
             Ok(text) => serde_json::from_str(&text).map_err(|error| error.to_string())?,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Devices::default(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Stored::default(),
             Err(error) => return Err(error.to_string()),
         };
-        Ok(Self {
+        let mut auth = Self {
             file,
-            devices,
-            pairing: Pairing::new()?,
-        })
+            stored,
+            failures: 0,
+            locked_until: None,
+        };
+        if normalize(&auth.stored.password).is_empty() {
+            auth.stored.password = generate()?;
+            auth.save()?;
+        }
+        Ok(auth)
     }
 
-    pub fn prepare_pair(&mut self, code: &str, name: String) -> Result<(Device, String), String> {
-        if !self.pairing.check(code) {
-            return Err("unauthorized".into());
+    pub fn password(&self) -> &str {
+        &self.stored.password
+    }
+
+    /// Replaces the password, a generated one for `None`, and forgets every phone.
+    pub fn set_password(&mut self, password: Option<&str>) -> Result<(), String> {
+        let password = match password {
+            Some(password) if normalize(password).chars().count() < MIN_PASSWORD => {
+                return Err(format!(
+                    "A remote password needs at least {MIN_PASSWORD} characters"
+                ));
+            }
+            Some(password) => password.trim().to_owned(),
+            None => generate()?,
+        };
+        let old = std::mem::replace(
+            &mut self.stored,
+            Stored {
+                password,
+                devices: Vec::new(),
+            },
+        );
+        if let Err(error) = self.save() {
+            self.stored = old;
+            return Err(error);
         }
+        self.failures = 0;
+        self.locked_until = None;
+        Ok(())
+    }
+
+    /// Checks `password` and makes a token for the phone; nothing is stored
+    /// until [`Auth::remember`].
+    pub fn prepare_login(&mut self, password: &str, name: String) -> Result<(Device, String), Refusal> {
+        let now = Instant::now();
+        if let Some(until) = self.locked_until.filter(|until| now < *until) {
+            return Err(Refusal::Locked(until - now));
+        }
+        if hash(&normalize(password)) != hash(&normalize(&self.stored.password)) {
+            self.failures += 1;
+            if self.failures % ATTEMPTS == 0 {
+                let runs = (self.failures / ATTEMPTS - 1).min(5);
+                let lock = (FIRST_LOCK * 2u32.pow(runs)).min(MAX_LOCK);
+                self.locked_until = Some(now + lock);
+                return Err(Refusal::Locked(lock));
+            }
+            return Err(Refusal::Wrong);
+        }
+        self.failures = 0;
         let mut bytes = [0; 32];
-        getrandom::getrandom(&mut bytes).map_err(|error| error.to_string())?;
+        getrandom::getrandom(&mut bytes).expect("the OS random source");
         let token = URL_SAFE_NO_PAD.encode(bytes);
         let device = Device {
             name,
@@ -112,81 +130,78 @@ impl Auth {
         Ok((device, token))
     }
 
-    pub fn commit_pair(&mut self, code: &str, device: Device) -> Result<(), String> {
-        if !self.pairing.consume(code) {
-            return Err("unauthorized".into());
-        }
-        self.devices.devices.push(device);
-        let text = serde_json::to_string(&self.devices).expect("device serialization");
-        if let Err(error) = crate::config::write_atomic(&self.file, &text, 0o600) {
-            self.devices.devices.pop();
-            return Err(error.to_string());
+    /// Stores a phone the TUI admitted.
+    pub fn remember(&mut self, device: Device) -> Result<(), String> {
+        let before = self.stored.devices.clone();
+        self.stored.devices.push(device);
+        let excess = self.stored.devices.len().saturating_sub(MAX_DEVICES);
+        self.stored.devices.drain(..excess);
+        if let Err(error) = self.save() {
+            self.stored.devices = before;
+            return Err(error);
         }
         Ok(())
     }
 
     pub fn verify(&self, token: &str) -> Option<Device> {
         let hash = hash(token);
-        self.devices
+        self.stored
             .devices
             .iter()
             .find(|device| device.token_sha256 == hash)
             .cloned()
     }
+
+    fn save(&self) -> Result<(), String> {
+        let text = serde_json::to_string_pretty(&self.stored).expect("remote file serialization");
+        crate::config::write_atomic(&self.file, &text, 0o600).map_err(|error| error.to_string())
+    }
 }
 
-fn hash(token: &str) -> String {
-    format!("{:x}", Sha256::digest(token.as_bytes()))
+/// Spaces and dashes only group a password for reading; they never count.
+fn normalize(password: &str) -> String {
+    password
+        .chars()
+        .filter(|c| !c.is_whitespace() && *c != '-')
+        .collect()
+}
+
+/// Twelve unambiguous lowercase characters in groups of four, easy to type on a phone.
+fn generate() -> Result<String, String> {
+    let mut password = String::with_capacity(14);
+    let mut chosen = 0;
+    while chosen < 12 {
+        let mut byte = [0];
+        getrandom::getrandom(&mut byte).map_err(|error| error.to_string())?;
+        // Rejection sampling keeps every alphabet character equally likely.
+        if usize::from(byte[0]) < 256 / ALPHABET.len() * ALPHABET.len() {
+            if chosen > 0 && chosen % 4 == 0 {
+                password.push('-');
+            }
+            password.push(char::from(ALPHABET[usize::from(byte[0]) % ALPHABET.len()]));
+            chosen += 1;
+        }
+    }
+    Ok(password)
+}
+
+fn hash(text: &str) -> String {
+    format!("{:x}", Sha256::digest(text.as_bytes()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[tokio::test(start_paused = true)]
-    async fn pairing_is_single_use_expires_and_locks_after_five_failures() {
-        let mut pair = Pairing::new().unwrap();
-        let code = pair.code.clone();
-        assert!(pair.consume(&code));
-        assert!(!pair.consume(&code));
-        let mut pair = Pairing::new().unwrap();
-        tokio::time::advance(PAIR_TTL).await;
-        assert!(!pair.consume(&pair.code.clone()));
-        let mut pair = Pairing::new().unwrap();
-        for _ in 0..5 {
-            assert!(!pair.consume("wrong"));
-        }
-        assert!(!pair.consume(&pair.code.clone()));
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn persisted_hashes_authenticate_without_storing_tokens() {
+    #[test]
+    fn a_first_load_creates_and_keeps_a_grouped_password() {
         let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("remote-devices.json");
-        let mut auth = Auth::load(file.clone()).unwrap();
-        let (device, token) = auth
-            .prepare_pair(&auth.pairing.code.clone(), "phone".into())
-            .unwrap();
-        assert!(auth.verify(&token).is_none());
-        assert!(!file.exists());
-        auth.commit_pair(&auth.pairing.code.clone(), device.clone())
-            .unwrap();
-        assert_eq!(URL_SAFE_NO_PAD.decode(&token).unwrap().len(), 32);
-        assert!(auth.verify("wrong").is_none());
-        assert_eq!(
-            auth.verify(&token).unwrap().token_sha256,
-            device.token_sha256
-        );
-        let text = std::fs::read_to_string(&file).unwrap();
-        assert!(!text.contains(&token));
-        assert_eq!(
-            Auth::load(file.clone())
-                .unwrap()
-                .verify(&token)
-                .unwrap()
-                .name,
-            "phone"
-        );
+        let file = dir.path().join("remote.json");
+        let password = Auth::load(file.clone()).unwrap().password().to_owned();
+        assert_eq!(password.len(), 14, "{password}");
+        assert_eq!(password.matches('-').count(), 2, "{password}");
+        assert!(password.bytes().all(|b| b == b'-' || ALPHABET.contains(&b)));
+        assert_eq!(Auth::load(file.clone()).unwrap().password(), password);
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -195,5 +210,88 @@ mod tests {
                 0o600
             );
         }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_password_ignores_grouping_and_tokens_persist_only_as_hashes() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("remote.json");
+        let mut auth = Auth::load(file.clone()).unwrap();
+        let typed = auth.password().replace('-', " ");
+        let (device, token) = auth.prepare_login(&typed, "phone".into()).unwrap();
+        assert!(auth.verify(&token).is_none(), "not remembered before admission");
+        auth.remember(device).unwrap();
+        assert_eq!(URL_SAFE_NO_PAD.decode(&token).unwrap().len(), 32);
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert!(!text.contains(&token));
+        assert_eq!(
+            Auth::load(file).unwrap().verify(&token).unwrap().name,
+            "phone"
+        );
+        assert_eq!(
+            auth.prepare_login(&auth.password().to_uppercase(), "x".into())
+                .unwrap_err(),
+            Refusal::Wrong,
+            "case counts"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn wrong_passwords_pause_sign_in_for_longer_each_time() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut auth = Auth::load(dir.path().join("remote.json")).unwrap();
+        let right = auth.password().to_owned();
+        for _ in 0..4 {
+            assert_eq!(auth.prepare_login("wrong", "x".into()).unwrap_err(), Refusal::Wrong);
+        }
+        assert_eq!(
+            auth.prepare_login("wrong", "x".into()).unwrap_err(),
+            Refusal::Locked(FIRST_LOCK)
+        );
+        assert!(matches!(
+            auth.prepare_login(&right, "x".into()),
+            Err(Refusal::Locked(_))
+        ));
+        tokio::time::advance(FIRST_LOCK).await;
+        for _ in 0..4 {
+            auth.prepare_login("wrong", "x".into()).unwrap_err();
+        }
+        assert_eq!(
+            auth.prepare_login("wrong", "x".into()).unwrap_err(),
+            Refusal::Locked(FIRST_LOCK * 2)
+        );
+        tokio::time::advance(FIRST_LOCK * 2).await;
+        assert!(auth.prepare_login(&right, "x".into()).is_ok());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_new_password_signs_out_every_phone_and_short_ones_are_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut auth = Auth::load(dir.path().join("remote.json")).unwrap();
+        let (device, token) = auth.prepare_login(&auth.password().to_owned(), "p".into()).unwrap();
+        auth.remember(device).unwrap();
+        assert!(auth.set_password(Some("short-1")).is_err());
+        assert!(auth.verify(&token).is_some(), "a refused change keeps phones");
+        auth.set_password(Some("  correct horse  ")).unwrap();
+        assert_eq!(auth.password(), "correct horse");
+        assert!(auth.verify(&token).is_none());
+        assert!(auth.prepare_login("correcthorse", "p".into()).is_ok());
+        auth.set_password(None).unwrap();
+        assert_ne!(auth.password(), "correct horse");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn only_the_newest_phones_are_remembered() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut auth = Auth::load(dir.path().join("remote.json")).unwrap();
+        let password = auth.password().to_owned();
+        let mut tokens = Vec::new();
+        for n in 0..=MAX_DEVICES {
+            let (device, token) = auth.prepare_login(&password, format!("p{n}")).unwrap();
+            auth.remember(device).unwrap();
+            tokens.push(token);
+        }
+        assert!(auth.verify(&tokens[0]).is_none());
+        assert!(auth.verify(&tokens[MAX_DEVICES]).is_some());
     }
 }
