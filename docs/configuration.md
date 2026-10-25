@@ -206,6 +206,40 @@ The default URL is `http://<bind>`; an unspecified bind host is replaced by the
 address the OS selects for LAN routing. Set `url` explicitly when using a tunnel,
 reverse proxy or a machine with multiple networks.
 
+### Through Cloudflare
+
+The recommended public route is a Cloudflare Tunnel: keep the default loopback
+`bind` (no `allow_insecure`), add a public hostname to the tunnel whose service
+is `http://127.0.0.1:8765`, and set `url = "https://minicore.example.com"`.
+Cloudflare serves the hostname over HTTPS, so the phone gets `https://` and
+`wss://` and the client can install and open offline.
+
+- Leave the tunnel's **HTTP Host Header** empty. cloudflared then forwards the
+  public `Host`, which must match the browser's `Origin`; overriding it makes
+  the WebSocket fail with 403.
+- WebSockets must stay on (**Network → WebSockets**, on by default).
+- Cloudflare Access in front of the hostname is optional; it adds its own
+  sign-in before the password.
+- A proxied DNS record (orange cloud) to a forwarded port also works, but it
+  needs a non-loopback `bind` with `allow_insecure = true` and a port Cloudflare
+  proxies (such as 8080 or 2052), and the hop from Cloudflare to the computer is
+  plain HTTP across the internet.
+
+Responses carry `Cache-Control: no-store, no-transform`, so Cloudflare does
+not rewrite the page (email obfuscation, Rocket Loader, injected scripts) and
+no zone setting needs changing. The server pings the phone every 20 seconds,
+which keeps an idle connection open through Cloudflare.
+
+### On the phone's home screen
+
+On iPhone, open the address in Safari, then **Share → Add to Home Screen**; on
+Android Chrome or a desktop Chromium browser, use **Install app** in the
+drawer or the browser menu. The installed app has its own storage on iPhone, so
+it asks for the password once more. Over `https://` the app opens even while the
+computer is unreachable and reconnects when it is back; over plain `http://` on
+a LAN it still works but needs the network to open, since browsers keep offline
+copies only for secure origins.
+
 The password and the remembered phones are stored in `<TUI dir>/remote.json`,
 atomically and with mode 0600 on Unix. Windows inherits the directory's
 permissions; the TUI does not harden Windows ACLs, so restrict access to the TUI

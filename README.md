@@ -217,7 +217,11 @@ can reach. A phone on the same LAN needs a non-loopback `bind` and
 `allow_insecure = true`, because the TUI has no TLS of its own and the password
 then crosses the network unencrypted. Across networks, keep the loopback bind and
 publish it through Tailscale, an SSH tunnel or a TLS reverse proxy, then set
-`[remote] url` to the address the phone should open. The `[remote]` settings are
+`[remote] url` to the address the phone should open; a Cloudflare Tunnel to
+`http://127.0.0.1:8765` works as is. On iPhone, Safari's **Share → Add to Home
+Screen** installs the client as an app (it asks for the password once more);
+over HTTPS it opens even while the computer is asleep and reconnects when it
+wakes. The `[remote]` settings, Cloudflare notes and install steps are
 in [docs/configuration.md](docs/configuration.md) and the protocol in
 [docs/design-remote.md](docs/design-remote.md).
 
