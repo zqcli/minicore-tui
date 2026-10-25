@@ -275,7 +275,7 @@ async fn connection(
             if committed.is_err() { return reject(&mut socket, "unauthorized").await; }
             send(&mut socket, json!({"t":"paired", "token": token})).await?;
         }
-        send(&mut socket, json!({"t":"welcome", "v":wire::VERSION, "version":env!("CARGO_PKG_VERSION"), "device":name})).await?;
+        send(&mut socket, json!({"t":"welcome", "v":wire::VERSION, "version":env!("CARGO_PKG_VERSION"), "device":name, "now_ms":crate::protocol::stamp::now_millis()})).await?;
         let mut ping = tokio::time::interval_at(Instant::now() + PING, PING);
         let mut last = Instant::now();
         loop {
@@ -690,6 +690,14 @@ mod tests {
                 serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap())
                     .unwrap();
             assert_eq!(reply["t"], kind);
+            if kind == "welcome" {
+                assert_eq!(reply["v"], wire::VERSION);
+                assert_eq!(reply["version"], env!("CARGO_PKG_VERSION"));
+                assert_eq!(reply["device"], "phone");
+                assert!(reply["now_ms"].as_u64().expect("host Unix milliseconds") > 0);
+            } else {
+                assert!(reply.get("now_ms").is_none());
+            }
         }
         task.abort();
     }

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Remote handshakes report host time so clients can correct elapsed time for
+  host/phone clock skew without periodic state updates. Draft model and reasoning
+  now resolve profile defaults like the TUI footer.
 - Remote streaming updates are frame-paced and send only newly appended text;
   unchanged catalogs are cached. Pairing QR codes are encoded once, and the open
   Remote sheet redraws at countdown boundaries and expiry without polling.

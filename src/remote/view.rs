@@ -179,7 +179,7 @@ fn state(app: &App, catalog: &Value) -> Value {
     })).collect();
     json!({
         "session":session.map(|s| json!({"id":s.info.session_id, "title":crate::app::overlay::session_label(&s.info, session), "workspace":fs::display(Path::new(&s.info.workspace)), "profile":s.info.profile, "model":s.info.model, "reasoning":s.info.reasoning})),
-        "draft":{"workspace":fs::display(&app.workspace), "profile":app.launch.profile.as_ref().or(app.default_profile.as_ref()), "model":app.launch.model, "reasoning":app.launch.reasoning},
+        "draft":{"workspace":fs::display(&app.workspace), "profile":app.launch.profile.as_ref().or(app.default_profile.as_ref()), "model":app.model_id(), "reasoning":app.reasoning()},
         "status":{"label":app.status_label(), "busy":app.is_busy(), "started_ms":live.map(|live| live.started_ms), "interrupting":live.is_some_and(|live| live.interrupting), "compacting":app.compacting(), "loading":app.loading_session},
         "usage":{"input":session.map_or(0, |s| s.usage.input), "output":session.map_or(0, |s| s.usage.output), "cached":session.map_or(0, |s| s.usage.cached)},
         "context_percent":session.and_then(context_percent), "interaction":interaction, "queue":queue,
@@ -265,6 +265,49 @@ mod tests {
             1,
         ));
         (fake, app)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn draft_settings_resolve_profile_defaults_and_explicit_overrides_without_clock_churn() {
+        let (_fake, mut app) = connected_app();
+        app.session = None;
+        app.profiles = serde_json::from_value(json!([
+            {"id":"coding", "model":"main", "reasoning":"medium"},
+            {"id":"ask", "model":"quick", "reasoning":"low"}
+        ]))
+        .unwrap();
+        app.default_profile = Some("coding".into());
+        let mut view = View::default();
+        let snapshot = view.sync(&app);
+        let draft = &snapshot[0]["state"]["draft"];
+        assert_eq!(draft["profile"], "coding");
+        assert_eq!(draft["model"], "main");
+        assert_eq!(draft["reasoning"], "medium");
+        assert!(snapshot[0]["state"].get("now_ms").is_none());
+        assert!(snapshot[0]["state"]["status"].get("now_ms").is_none());
+        tokio::time::advance(std::time::Duration::from_secs(96)).await;
+        assert!(view.sync(&app).is_empty());
+
+        app.launch.profile = Some("ask".into());
+        let changed = view.sync(&app);
+        assert_eq!(changed[0]["t"], "state");
+        assert_eq!(changed[0]["state"]["draft"]["profile"], "ask");
+        assert_eq!(changed[0]["state"]["draft"]["model"], "quick");
+        assert_eq!(changed[0]["state"]["draft"]["reasoning"], "low");
+
+        app.launch.model = Some("chosen".into());
+        app.launch.reasoning = Some(crate::protocol::Reasoning::High);
+        let changed = view.sync(&app);
+        assert_eq!(changed[0]["state"]["draft"]["model"], "chosen");
+        assert_eq!(changed[0]["state"]["draft"]["reasoning"], "high");
+        assert_eq!(changed[0]["state"]["draft"]["profile"], "ask");
+
+        app.launch = crate::app::LaunchSettings::default();
+        app.default_profile = None;
+        let changed = view.sync(&app);
+        for field in ["profile", "model", "reasoning"] {
+            assert!(changed[0]["state"]["draft"][field].is_null());
+        }
     }
 
     #[tokio::test(start_paused = true)]

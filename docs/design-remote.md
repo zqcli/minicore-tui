@@ -156,11 +156,17 @@ Server answers, in order:
 
 ```json
 {"t":"paired","token":"<base64url>"}                      // only after a pair
-{"t":"welcome","v":1,"version":"0.5.5","device":"iPhone Safari"}
+{"t":"welcome","v":1,"version":"0.5.5","device":"iPhone Safari","now_ms":1761300003000}
 {"t":"snapshot","state":{...},"blocks":[...]}
 ```
 
-or one error and closes: `{"t":"error","code":"unauthorized"|"busy"|"version"|"bad_request","message":"..."}`.
+`welcome.now_ms` is the host's Unix time in milliseconds when that message is
+built. The client samples its own clock on receipt to estimate the host/phone
+offset, refreshing that offset on each handshake, and uses host-adjusted time
+with `status.started_ms` for elapsed time. `now_ms` appears only in `welcome`,
+never in snapshots or `State`, so clock passage alone causes no state updates.
+
+On failure, the server sends one error and closes: `{"t":"error","code":"unauthorized"|"busy"|"version"|"bad_request","message":"..."}`.
 `busy`: another device is in control. `version`: `v` is not 1.
 
 ### Client → server (after the handshake)
@@ -260,6 +266,10 @@ is forwarded as `notice`.
 }
 ```
 
+- `draft.model` and `draft.reasoning` use the footer's resolved values
+  (`App::model_id()` and `App::reasoning()`), including profile defaults when no
+  explicit override is set. `draft.profile` is the launch profile or default
+  profile. Unresolved values remain `null`.
 - `label` is `App::status_label()`. `started_ms` is the Unix time the live turn
   started (stored on `LiveTurn` when it is created, not derived from `Instant`,
   so the state does not change by itself). `loading` is `App::loading_session`.
