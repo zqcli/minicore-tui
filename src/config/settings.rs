@@ -107,6 +107,8 @@ struct Profile {
 pub struct Settings {
     default_profile: Spanned<String>,
     #[serde(default)]
+    pub(super) remote: super::remote::RemoteSection,
+    #[serde(default)]
     profiles: BTreeMap<String, Profile>,
     #[serde(default)]
     pub ui: Ui,

@@ -6,6 +6,7 @@
 mod compose;
 mod home;
 mod models;
+mod remote;
 mod scaffold;
 mod settings;
 
@@ -16,6 +17,7 @@ use serde::de::DeserializeOwned;
 
 use compose::AgentFile;
 pub use home::Home;
+pub use remote::Remote;
 pub use settings::{Settings, ThemeKind, Ui, editor_command, save_theme};
 
 /// A configuration problem with the file, and the line when the parser knew it.
@@ -82,6 +84,7 @@ impl Source {
 /// Both files read, checked against each other and turned into Agent terms.
 pub struct Loaded {
     pub ui: Ui,
+    pub remote: Remote,
     binary: Option<PathBuf>,
     agent: AgentFile,
 }
@@ -94,7 +97,9 @@ pub fn load(home: &Home) -> Result<Loaded, ConfigError> {
     let settings_source = Source::read(home.config_file())?;
     let settings = settings_source.parse::<Settings>()?;
     let agent = settings.build(&settings_source, models, home)?;
+    let remote = settings.remote.build(&settings_source)?;
     Ok(Loaded {
+        remote,
         ui: settings.ui,
         binary: settings.agent.binary,
         agent,
@@ -164,6 +169,7 @@ pub struct Request<'a> {
 
 pub struct Launch {
     pub ui: Ui,
+    pub remote: Remote,
     pub agent_config: PathBuf,
     /// An external Agent; `None` runs the one built into this executable.
     pub agent_binary: Option<PathBuf>,
@@ -186,11 +192,25 @@ pub fn prepare(
     has_env: &dyn Fn(&str) -> bool,
 ) -> Result<Prepared, String> {
     if let Some(raw) = request.agent_config {
-        let (ui, binary) = match read_optional(home).map_err(|error| error.to_string())? {
-            Some(settings) => (settings.ui, settings.agent.binary),
-            None => Default::default(),
+        let source = if home.config_file().exists() {
+            Source::read(home.config_file()).map_err(|error| error.to_string())?
+        } else {
+            Source {
+                file: home.config_file(),
+                text: String::new(),
+            }
         };
+        let (ui, binary, section) = if source.text.is_empty() {
+            (Ui::default(), None, remote::RemoteSection::default())
+        } else {
+            let settings = source
+                .parse::<Settings>()
+                .map_err(|error| error.to_string())?;
+            (settings.ui, settings.agent.binary, settings.remote)
+        };
+        let remote = section.build(&source).map_err(|error| error.to_string())?;
         return Ok(Prepared::Launch(Launch {
+            remote,
             ui,
             agent_config: raw.to_owned(),
             agent_binary: agent_binary(home, request.agent, binary),
@@ -210,17 +230,11 @@ pub fn prepare(
     Ok(Prepared::Launch(Launch {
         agent_binary: agent_binary(home, request.agent, loaded.binary),
         ui: loaded.ui,
+        remote: loaded.remote,
         agent_config,
         composed: true,
         default_profile: Some(loaded.agent.default_profile),
     }))
-}
-
-fn read_optional(home: &Home) -> Result<Option<Settings>, ConfigError> {
-    if !home.config_file().exists() {
-        return Ok(None);
-    }
-    Source::read(home.config_file())?.parse().map(Some)
 }
 
 /// `--agent`, else `[agent] binary`, else none: the built-in Agent.

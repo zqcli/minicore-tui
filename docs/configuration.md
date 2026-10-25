@@ -175,15 +175,35 @@ ranges when it starts.
 Unknown keys are errors in both files, so a typo is reported with its line
 instead of being ignored.
 
+## Remote settings
+
+```toml
+[remote]
+bind = "127.0.0.1:8765"           # default; a numeric IP and port
+# url = "https://host.example:8765" # optional address used by the phone
+roots = ["~"]                    # default: HOME on Unix, USERPROFILE on Windows
+allow_insecure = false            # must be true for a non-loopback bind
+```
+
+Remote settings are validated at startup, including with `--agent-config`.
+A non-loopback bind requires explicit consent because the listener has no TLS.
+Use a private network, tunnel or TLS reverse proxy for access across networks.
+`url` must start with `http://` or `https://` and have no trailing slash.
+Roots must be a non-empty list of existing directories; a leading `~/` expands
+from the user's home, and paths are canonicalized. These roots restrict the
+phone's directory picker and session selection, not the Agent's tools.
+Errors name `config.toml`, the line and the `[remote]` key.
+
 ## Command line
 
 | Option | Meaning |
 | --- | --- |
 | `--home DIR` | the TUI directory (see above) |
 | `--agent BIN` | an external Agent executable instead of the built-in one; beats `[agent] binary` |
-| `--agent-config FILE` | use this Agent config as is: no composition, no first-run files, no `models.toml`. `config.toml` is still read for `[ui]` if it exists. For tests and advanced use. |
+| `--agent-config FILE` | use this Agent config as is: no composition, no first-run files, no `models.toml`. `config.toml` is still read for `[ui]`, `[agent]` and `[remote]` if it exists. For tests and advanced use. |
 | `--profile ID`, `--model ID`, `--reasoning LEVEL` | settings of the next new session, which the first message creates |
 | `--theme dark\|light` | theme for this run |
+| `--remote` | start remote control; bind before taking the terminal (bind failure exits with status 1) |
 | `--workspace DIR`, `--session ID`, `--continue` | which workspace and session; with neither of the last two the TUI creates no session until the first message |
 
 `--config` was removed; the parser says so instead of reporting an unknown option.
