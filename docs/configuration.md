@@ -179,13 +179,23 @@ instead of being ignored.
 
 ```toml
 [remote]
-bind = "127.0.0.1:8765"           # default; a numeric IP and port
+bind = ["127.0.0.1:8765", "[::1]:8765"] # default; one address or a list, numeric IP and port
 # url = "https://host.example:8765" # optional address used by the phone
 roots = ["~"]                    # default: HOME on Unix, USERPROFILE on Windows
 allow_insecure = false            # must be true for a non-loopback bind
 ```
 
 Remote settings are validated at startup, including with `--agent-config`.
+`bind` is one address or a list; IPv6 addresses are written in brackets
+(`"[::]:8765"`), and an entry may not repeat. By default the TUI listens on the
+IPv4 and the IPv6 loopback with the same port, so `http://localhost:8765` works
+whichever address `localhost` resolves to first. IPv6 sockets accept only IPv6,
+so `"0.0.0.0:8765"` and `"[::]:8765"` can be listed together to reach every
+interface on both families. An address the computer cannot listen on, such as
+IPv6 on a machine without it or an IP it no longer has, is skipped with the
+notice `Remote: not listening on [::1]:8765 (…)` as long as another address
+listens; a port that is taken or needs privileges is an error, so the address
+never changes behind your back.
 A non-loopback bind requires explicit consent because the listener has no TLS.
 Use a private network, tunnel or TLS reverse proxy for access across networks.
 A reverse proxy must preserve the browser-facing `Host` authority, including its
@@ -201,10 +211,12 @@ It cannot read file contents, upload, delete or move entries.
 Errors name `config.toml`, the line and the `[remote]` key.
 
 Start with `--remote` or `/remote on`; the transcript area then shows the
-remote status screen with the address and the password to enter on the phone.
-The default URL is `http://<bind>`; an unspecified bind host is replaced by the
-address the OS selects for LAN routing. Set `url` explicitly when using a tunnel,
-reverse proxy or a machine with multiple networks.
+remote status screen with the address and the password to enter on the phone,
+and the addresses it listens on.
+The default URL is `http://<bind>` for the first address that listens; an
+unspecified bind host is replaced by the address the OS selects for LAN routing.
+Set `url` explicitly when using a tunnel, reverse proxy or a machine with
+multiple networks.
 
 ### Through Cloudflare
 

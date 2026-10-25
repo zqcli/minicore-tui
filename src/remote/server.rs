@@ -4,6 +4,7 @@ use std::io;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::task::Poll;
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
@@ -82,7 +83,7 @@ const FILES: [(&str, &str, &[u8]); 8] = [
 ];
 
 pub async fn serve(
-    listener: TcpListener,
+    listeners: Vec<TcpListener>,
     auth: Arc<Mutex<Auth>>,
     tx: Tx,
     mut stop: oneshot::Receiver<()>,
@@ -91,10 +92,20 @@ pub async fn serve(
 ) {
     let permits = Arc::new(Semaphore::new(8));
     let mut tasks = JoinSet::new();
+    // Polling every listener registers a wakeup on each.
+    let accept = |cx: &mut std::task::Context| {
+        listeners
+            .iter()
+            .find_map(|listener| match listener.poll_accept(cx) {
+                Poll::Ready(accepted) => Some(accepted),
+                Poll::Pending => None,
+            })
+            .map_or(Poll::Pending, Poll::Ready)
+    };
     loop {
         tokio::select! {
             _ = &mut stop => break,
-            accepted = listener.accept() => {
+            accepted = std::future::poll_fn(accept) => {
                 let Ok((stream, _)) = accepted else {
                     tokio::time::sleep(Duration::from_millis(100)).await;
                     continue;
@@ -110,7 +121,7 @@ pub async fn serve(
             _ = tasks.join_next(), if !tasks.is_empty() => {}
         }
     }
-    drop(listener);
+    drop(listeners);
     let _ = timeout(FIRST, async { while tasks.join_next().await.is_some() {} }).await;
 }
 
@@ -470,7 +481,7 @@ mod tests {
         let roots = vec![dir.path().canonicalize().unwrap()].into();
         let task = tokio::spawn(async move {
             let _stop = stop;
-            serve(listener, server_auth, tx, stopped, 0, roots).await;
+            serve(vec![listener], server_auth, tx, stopped, 0, roots).await;
         });
         (dir, address, auth, rx, task)
     }

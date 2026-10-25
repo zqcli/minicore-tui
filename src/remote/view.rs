@@ -338,7 +338,7 @@ mod tests {
         let (tx, _rx) = mpsc::unbounded_channel();
         let (fake, mut app) = crate::testing::FakeAgent::start(tx);
         app.remote.config = Some(crate::config::Remote {
-            bind: "127.0.0.1:0".parse().unwrap(),
+            bind: vec!["127.0.0.1:0".parse().unwrap()],
             url: None,
             roots: vec![app.workspace.clone()],
             allow_insecure: false,
@@ -492,7 +492,7 @@ mod tests {
             .block_on(async {
                 let (_fake, mut app) = connected_app();
                 app.remote.config = Some(crate::config::Remote {
-                    bind: "127.0.0.1:0".parse().unwrap(),
+                    bind: vec!["127.0.0.1:0".parse().unwrap()],
                     url: None,
                     roots: vec![app.workspace.clone()],
                     allow_insecure: false,
@@ -551,7 +551,7 @@ mod tests {
         let (_fake, mut app) = crate::testing::FakeAgent::start(tx);
         app.workspace = std::path::PathBuf::from(r"\\?\C:\work");
         app.remote.config = Some(crate::config::Remote {
-            bind: "127.0.0.1:0".parse().unwrap(),
+            bind: vec!["127.0.0.1:0".parse().unwrap()],
             url: None,
             roots: vec![app.workspace.clone()],
             allow_insecure: false,
@@ -576,7 +576,7 @@ mod tests {
         let (tx, _rx) = mpsc::unbounded_channel();
         let (_fake, mut app) = crate::testing::FakeAgent::start(tx);
         app.remote.config = Some(crate::config::Remote {
-            bind: "127.0.0.1:0".parse().unwrap(),
+            bind: vec!["127.0.0.1:0".parse().unwrap()],
             url: None,
             roots: vec![app.workspace.clone()],
             allow_insecure: false,

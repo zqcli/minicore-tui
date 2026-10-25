@@ -214,8 +214,8 @@ doing. Local sending is frozen and the footer shows `remote`; `/remote off`
 takes the keyboard back and shows that foreground transcript again. `/remote password` makes a new password and
 signs phones out. Without `--remote` nothing listens.
 
-The server binds to `127.0.0.1:8765` by default, which only the same machine
-can reach. A phone on the same LAN needs a non-loopback `bind` and
+The server listens on `127.0.0.1:8765` and `[::1]:8765` by default, which only
+the same machine can reach. A phone on the same LAN needs a non-loopback `bind` and
 `allow_insecure = true`, because the TUI has no TLS of its own and the password
 then crosses the network unencrypted. Across networks, keep the loopback bind and
 publish it through Tailscale, an SSH tunnel or a TLS reverse proxy, then set

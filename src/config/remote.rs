@@ -1,7 +1,7 @@
 //! Validated listener settings and directory-picker roots.
 
-use std::net::{Ipv4Addr, SocketAddr};
-use std::path::PathBuf;
+use std::net::SocketAddr;
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 use toml::Spanned;
@@ -10,19 +10,41 @@ use super::{ConfigError, Source};
 
 #[derive(Clone, Debug)]
 pub struct Remote {
-    pub bind: SocketAddr,
+    /// Addresses to listen on, in configured order.
+    pub bind: Vec<SocketAddr>,
     pub url: Option<String>,
     pub roots: Vec<PathBuf>,
     pub allow_insecure: bool,
 }
 
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum Bind {
+    One(String),
+    Many(Vec<String>),
+}
+
 #[derive(Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub(super) struct RemoteSection {
-    bind: Option<Spanned<String>>,
+    bind: Option<Spanned<Bind>>,
     url: Option<Spanned<String>>,
     roots: Option<Spanned<Vec<String>>>,
     allow_insecure: bool,
+}
+
+/// `value` with a leading `~` replaced by `home`; `None` when that needs an unset home.
+fn expand(value: &str, home: Option<&Path>) -> Option<PathBuf> {
+    if value == "~" {
+        return home.map(Path::to_path_buf);
+    }
+    match value
+        .strip_prefix("~/")
+        .or_else(|| value.strip_prefix("~\\"))
+    {
+        Some(rest) => home.map(|home| home.join(rest)),
+        None => Some(PathBuf::from(value)),
+    }
 }
 
 impl RemoteSection {
@@ -45,19 +67,37 @@ impl RemoteSection {
             )
         };
         let bind_span = self.bind.as_ref().map(Spanned::span);
-        let bind = match &self.bind {
-            Some(value) => value
-                .get_ref()
-                .parse::<SocketAddr>()
-                .map_err(|cause| error("bind", bind_span.clone(), cause.to_string()))?,
-            None => SocketAddr::from((Ipv4Addr::LOCALHOST, 8765)),
+        let defaults = ["127.0.0.1:8765".to_owned(), "[::1]:8765".to_owned()];
+        let entries = match self.bind.as_ref().map(Spanned::get_ref) {
+            Some(Bind::One(value)) => std::slice::from_ref(value),
+            Some(Bind::Many(values)) => values.as_slice(),
+            None => &defaults,
         };
-        if !bind.ip().is_loopback() && !self.allow_insecure {
-            return Err(error(
-                "bind",
-                bind_span,
-                "a non-loopback bind sends traffic unencrypted; set allow_insecure = true".into(),
-            ));
+        if entries.is_empty() {
+            return Err(error("bind", bind_span, "must not be empty".into()));
+        }
+        let mut bind = Vec::new();
+        for value in entries {
+            let address = value
+                .parse::<SocketAddr>()
+                .map_err(|cause| error("bind", bind_span.clone(), format!("{value:?}: {cause}")))?;
+            if bind.contains(&address) {
+                return Err(error(
+                    "bind",
+                    bind_span.clone(),
+                    format!("{value:?} is listed twice"),
+                ));
+            }
+            if !address.ip().is_loopback() && !self.allow_insecure {
+                return Err(error(
+                    "bind",
+                    bind_span.clone(),
+                    format!(
+                        "{address}: a non-loopback bind sends traffic unencrypted; set allow_insecure = true"
+                    ),
+                ));
+            }
+            bind.push(address);
         }
         let url = self.url.as_ref().map(|value| value.get_ref().clone());
         if let Some(value) = &self.url {
@@ -71,39 +111,22 @@ impl RemoteSection {
             }
         }
         let roots_span = self.roots.as_ref().map(Spanned::span);
-        let home = || {
-            home.clone().ok_or_else(|| {
-                error(
-                    "roots",
-                    roots_span.clone(),
-                    "user home directory is not set".into(),
-                )
-            })
+        let home = home.as_deref();
+        let expanded = |key: &str, span: Option<std::ops::Range<usize>>, value: &str| {
+            expand(value, home)
+                .ok_or_else(|| error(key, span, "user home directory is not set".into()))
         };
-        let paths = match &self.roots {
-            Some(values) => {
-                if values.get_ref().is_empty() {
-                    return Err(error("roots", roots_span, "must not be empty".into()));
-                }
-                values
-                    .get_ref()
-                    .iter()
-                    .map(|value| {
-                        if value == "~" {
-                            home()
-                        } else if let Some(rest) = value
-                            .strip_prefix("~/")
-                            .or_else(|| value.strip_prefix("~\\"))
-                        {
-                            Ok(home()?.join(rest))
-                        } else {
-                            Ok(PathBuf::from(value))
-                        }
-                    })
-                    .collect::<Result<Vec<_>, ConfigError>>()?
-            }
-            None => vec![home()?],
+        let roots = match &self.roots {
+            Some(values) => values.get_ref().as_slice(),
+            None => &["~".to_owned()],
         };
+        if roots.is_empty() {
+            return Err(error("roots", roots_span, "must not be empty".into()));
+        }
+        let paths = roots
+            .iter()
+            .map(|value| expanded("roots", roots_span.clone(), value))
+            .collect::<Result<Vec<_>, ConfigError>>()?;
         let roots = paths
             .into_iter()
             .map(|path| {
@@ -153,26 +176,64 @@ mod tests {
     }
 
     #[test]
-    fn omitted_settings_restrict_the_listener_and_roots_to_local_defaults() {
+    fn omitted_settings_listen_on_both_loopbacks_and_root_at_home() {
         let home = tempfile::tempdir().unwrap();
         let config = build("", home.path()).unwrap();
-        assert_eq!(config.bind.to_string(), "127.0.0.1:8765");
+        let bind: Vec<_> = config.bind.iter().map(ToString::to_string).collect();
+        assert_eq!(bind, ["127.0.0.1:8765", "[::1]:8765"]);
         assert_eq!(config.roots, [home.path().canonicalize().unwrap()]);
         assert!(config.url.is_none());
         assert!(!config.allow_insecure);
     }
 
     #[test]
+    fn bind_takes_one_address_or_a_list_in_order() {
+        let home = tempfile::tempdir().unwrap();
+        for (text, expected) in [
+            ("bind = '[::1]:9000'", vec!["[::1]:9000"]),
+            (
+                "bind = ['[::1]:9000', '127.0.0.1:9000']",
+                vec!["[::1]:9000", "127.0.0.1:9000"],
+            ),
+        ] {
+            let bind = build(text, home.path()).unwrap().bind;
+            let bind: Vec<_> = bind.iter().map(ToString::to_string).collect();
+            assert_eq!(bind, expected, "{text}");
+        }
+    }
+
+    #[test]
+    fn empty_unparsable_and_duplicate_bind_lists_are_errors_at_the_bind_line() {
+        let home = tempfile::tempdir().unwrap();
+        for (text, reason) in [
+            ("bind = []", "must not be empty"),
+            (
+                "bind = ['127.0.0.1:1', 'x']",
+                "\"x\": invalid socket address syntax",
+            ),
+            (
+                "bind = ['127.0.0.1:1', '127.0.0.1:1']",
+                "\"127.0.0.1:1\" is listed twice",
+            ),
+        ] {
+            assert_eq!(
+                build(text, home.path()).unwrap_err().to_string(),
+                format!("config.toml:2: [remote] bind: {reason}")
+            );
+        }
+    }
+
+    #[test]
     fn public_listeners_require_explicit_consent_at_the_bind_line() {
         let home = tempfile::tempdir().unwrap();
-        let error = build("bind = '0.0.0.0:8765'", home.path())
+        let error = build("bind = ['127.0.0.1:8765', '[::]:8765']", home.path())
             .unwrap_err()
             .to_string();
         assert_eq!(
             error,
-            "config.toml:2: [remote] bind: a non-loopback bind sends traffic unencrypted; set allow_insecure = true"
+            "config.toml:2: [remote] bind: [::]:8765: a non-loopback bind sends traffic unencrypted; set allow_insecure = true"
         );
-        assert!(build("bind = '[::]:8765'\nallow_insecure = true", home.path()).is_ok());
+        assert!(build("bind = '0.0.0.0:8765'\nallow_insecure = true", home.path()).is_ok());
         assert!(build("bind = '[::1]:8765'", home.path()).is_ok());
     }
 

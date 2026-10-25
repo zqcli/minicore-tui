@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Remote mode listens on the IPv6 loopback too: the default `bind` is
+  `127.0.0.1:8765` and `[::1]:8765`, so `http://localhost:8765` works however
+  `localhost` resolves. `[remote] bind` takes one address or a list, such as
+  `["0.0.0.0:8765", "[::]:8765"]` for every interface on both families. An
+  address the computer cannot listen on (no IPv6, an IP it no longer has) is
+  skipped with a notice; a taken port is still an error. The status screen
+  shows the addresses in a new `Listening` row.
+
 ## 0.6.0 — 2026-10-25
 
 - Remote mode: phones and other browsers can drive the TUI. `--remote` or

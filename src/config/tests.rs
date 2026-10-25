@@ -513,7 +513,7 @@ fn remote_validation_applies_to_composed_and_raw_launches() {
     let Prepared::Launch(launch) = prepare(&home, &Request::default(), &|_| true).unwrap() else {
         panic!("launch")
     };
-    assert_eq!(launch.remote.bind.to_string(), "127.0.0.1:8765");
+    assert_eq!(launch.remote.bind[0].to_string(), "127.0.0.1:8765");
     assert!(launch.remote.roots[0].is_absolute());
 }
 

@@ -14,6 +14,7 @@ futures-util = { version = "0.3", default-features = false, features = ["std", "
 getrandom = "0.2"
 httparse = "1"
 sha2 = "0.10"
+socket2 = "0.6"
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
 # The Agent is built in and runs as this executable's `agent` subcommand.
 minicore-agent = { git = "https://github.com/zqcli/minicore-agent", tag = "v0.8.0", version = "0.8.0" }

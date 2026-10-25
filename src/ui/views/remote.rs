@@ -49,8 +49,15 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App, styles: Styles) {
     ];
 
     let text = styles.text();
+    let listening = remote
+        .listening
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(" · ");
     let mut connect = vec![
         ("Address", remote.url().unwrap_or_default().to_owned(), text),
+        ("Listening", listening, text),
         ("Password", remote.password().unwrap_or_default(), text),
     ];
     if remote.phones.is_empty() {

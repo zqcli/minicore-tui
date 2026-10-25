@@ -214,6 +214,9 @@ list holds no empty sessions. While `app.session` is `None`:
 ### Remote control
 
 `--remote` binds before entering the terminal; `/remote on` binds asynchronously.
+`Bound::bind` opens one listener per configured address (IPv6 ones v6-only) and
+skips an address the host lacks, while a taken port fails; one accept loop serves
+every listener, and `enter_remote` reports the skipped addresses as notices.
 `RemoteMode` is derived as Off, Waiting or Connected from the listener URL and
 the admitted connections (`Remote::phones`); it is not independently mutable.
 Waiting still freezes local sending: only `/remote off` restores local control.

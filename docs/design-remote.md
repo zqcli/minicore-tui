@@ -68,7 +68,7 @@ document disagree after the feature lands, the code wins and this file is fixed.
 
 ```toml
 [remote]
-bind = "127.0.0.1:8765"        # default; host:port
+bind = ["127.0.0.1:8765", "[::1]:8765"]   # default; one host:port or a list
 url = "https://mac.tail1234.ts.net:8765"   # optional; the address the status screen shows
 roots = ["~/Develops", "/srv/work"]        # default: the user's home directory
 allow_insecure = false         # required (true) for a non-loopback bind
@@ -76,13 +76,15 @@ allow_insecure = false         # required (true) for a non-loopback bind
 
 - Validated when `config.toml` loads, reported as `file:line: [remote] key: reason`
   with exit status 2 before the screen changes:
-  - `bind` parses as a socket address; a non-loopback IP needs `allow_insecure = true`
-    ("a non-loopback bind sends traffic unencrypted; set allow_insecure = true").
+  - `bind` is a string or a non-empty list of strings without repeats; each
+    parses as a socket address. A non-loopback IP needs `allow_insecure = true`
+    ("<address>: a non-loopback bind sends traffic unencrypted; set allow_insecure = true").
   - `roots` entries expand a leading `~`, must exist, must be directories, and are
     stored canonicalized. An empty list is an error.
   - `url` must start with `http://` or `https://`; no trailing `/`.
 - `--remote` starts remote mode at startup. The listener is bound before the
   terminal is taken over; a bind failure prints the error and exits with status 1.
+  Skipped addresses (below) are shown as notices once the screen is up.
 - The password and the remembered phones live in `<TUI dir>/remote.json`,
   written atomically, mode `0600` on Unix:
   `{"password":"k7mq-x2pa-n9dt","devices":[{"name":"iPhone Safari","token_sha256":"<hex>","paired_at":"<RFC 3339>"}]}`.
@@ -119,6 +121,7 @@ line is never written to the prompt history.
                                                    ○ waiting for a phone, amber)
 
      Address     http://192.168.20.207:8765
+     Listening   0.0.0.0:8765 · [::]:8765
      Password    k7mq-x2pa-n9dt
      Phones      iPhone Safari · Fix the parser · connected at 14:02
                  Mac Edge · new session · connected at 14:30
@@ -173,8 +176,18 @@ line is never written to the prompt history.
 
 ## Transport
 
-One TCP listener on `bind`. Each connection's request head (max 8 KiB, 10 s) is
-peeked:
+One TCP listener per `bind` address, all served by one accept loop with the
+limits below. IPv6 sockets are v6-only (`IPV6_V6ONLY`), so `0.0.0.0:P` and
+`[::]:P` coexist; Unix sockets set `SO_REUSEADDR` as std does, Windows ones do
+not (there it would let another process take the port). A bind failing with
+`AddrInUse` or `PermissionDenied` aborts the start: the port must stay the one
+configured. Any other failure (no IPv6, an address the host no longer has)
+skips that address with the info notice
+`Remote: not listening on <address> (<reason>)`, as long as one address listens;
+otherwise the first error, naming its address, fails the start. The default URL
+uses the first address that listens.
+
+Each connection's request head (max 8 KiB, 10 s) is peeked:
 
 - `GET /` → the web client (`text/html; charset=utf-8`).
 - `GET /sw.js` → the service worker (`text/javascript`).

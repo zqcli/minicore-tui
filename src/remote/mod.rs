@@ -6,6 +6,7 @@ pub mod server;
 pub mod view;
 pub mod wire;
 
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -53,17 +54,60 @@ impl Connection {
 }
 
 pub struct Bound {
-    pub listener: TcpListener,
+    pub listeners: Vec<TcpListener>,
+    /// The local addresses of `listeners`.
+    pub listening: Vec<SocketAddr>,
+    /// Configured addresses this host cannot listen on, with the reason.
+    pub skipped: Vec<(SocketAddr, String)>,
     pub auth: Arc<Mutex<Auth>>,
     pub url: String,
 }
 
+fn listen(address: SocketAddr) -> std::io::Result<TcpListener> {
+    let socket = socket2::Socket::new(
+        socket2::Domain::for_address(address),
+        socket2::Type::STREAM,
+        None,
+    )?;
+    if address.is_ipv6() {
+        // Linux sockets are dual-stack by default, so `[::]` would take the IPv4 port too.
+        socket.set_only_v6(true)?;
+    }
+    // As std does; on Windows the option would let another process take the port.
+    #[cfg(not(windows))]
+    socket.set_reuse_address(true)?;
+    socket.set_nonblocking(true)?;
+    socket.bind(&address.into())?;
+    socket.listen(1024)?;
+    TcpListener::from_std(socket.into())
+}
+
 impl Bound {
     pub async fn bind(config: &crate::config::Remote, file: PathBuf) -> Result<Self, String> {
-        let listener = TcpListener::bind(config.bind)
-            .await
-            .map_err(|error| error.to_string())?;
-        let address = listener.local_addr().map_err(|error| error.to_string())?;
+        let (mut listeners, mut listening, mut skipped) = (Vec::new(), Vec::new(), Vec::new());
+        for &address in &config.bind {
+            match listen(address) {
+                Ok(listener) => {
+                    listening.push(listener.local_addr().map_err(|e| e.to_string())?);
+                    listeners.push(listener);
+                }
+                // A taken or privileged port must not pass silently; anything else means
+                // this host lacks the address or its family (no IPv6), so it is skipped.
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::AddrInUse | std::io::ErrorKind::PermissionDenied
+                    ) =>
+                {
+                    return Err(format!("{address}: {error}"));
+                }
+                Err(error) => skipped.push((address, error.to_string())),
+            }
+        }
+        let Some(&address) = listening.first() else {
+            let (address, error) = &skipped[0];
+            return Err(format!("{address}: {error}"));
+        };
         let configured_url = config.url.clone();
         let (auth, url) = tokio::task::spawn_blocking(move || {
             let auth = Auth::load(file)?;
@@ -91,7 +135,9 @@ impl Bound {
         .await
         .map_err(|e| e.to_string())??;
         Ok(Self {
-            listener,
+            listeners,
+            listening,
+            skipped,
             auth: Arc::new(Mutex::new(auth)),
             url,
         })
@@ -167,6 +213,8 @@ pub struct Remote {
     pub config: Option<crate::config::Remote>,
     pub auth: Option<Arc<Mutex<Auth>>>,
     pub url: Option<String>,
+    /// The addresses the running listener accepts on.
+    pub listening: Vec<SocketAddr>,
     pub generation: u64,
     pub starting: Option<tokio::task::JoinHandle<()>>,
     pub quit_armed: Option<tokio::time::Instant>,
@@ -264,7 +312,7 @@ impl Remote {
     pub fn start(&mut self, bound: Bound, tx: crate::app::Tx) {
         let (stop, stopped) = oneshot::channel();
         self.server_task = Some(tokio::spawn(server::serve(
-            bound.listener,
+            bound.listeners,
             bound.auth.clone(),
             tx,
             stopped,
@@ -274,6 +322,7 @@ impl Remote {
         self.stop = Some(stop);
         self.auth = Some(bound.auth);
         self.url = Some(bound.url);
+        self.listening = bound.listening;
         self.starting = None;
         self.failed_logins = 0;
         self.paused_until = None;
@@ -331,4 +380,77 @@ pub enum RemoteEvent {
     LoginRefused {
         locked: Option<std::time::Duration>,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn bind(addresses: &[&str]) -> Result<Bound, String> {
+        let dir = tempfile::tempdir().unwrap();
+        let config = crate::config::Remote {
+            bind: addresses.iter().map(|a| a.parse().unwrap()).collect(),
+            url: None,
+            roots: vec![dir.path().to_path_buf()],
+            allow_insecure: true,
+        };
+        Bound::bind(&config, dir.path().join("remote.json")).await
+    }
+
+    #[tokio::test]
+    async fn an_address_this_host_lacks_is_skipped_with_its_reason() {
+        // 192.0.2.1 is TEST-NET-1, assigned to no host.
+        let bound = bind(&["127.0.0.1:0", "192.0.2.1:0"]).await.unwrap();
+        assert_eq!(bound.listening.len(), 1);
+        assert!(bound.listening[0].ip().is_loopback());
+        assert_eq!(bound.url, format!("http://{}", bound.listening[0]));
+        let [(address, reason)] = bound.skipped.as_slice() else {
+            panic!("one skipped address: {:?}", bound.skipped)
+        };
+        assert_eq!(address.to_string(), "192.0.2.1:0");
+        let expected = std::net::TcpListener::bind("192.0.2.1:0").unwrap_err();
+        assert_eq!(*reason, expected.to_string());
+    }
+
+    #[tokio::test]
+    async fn no_listening_address_fails_with_the_first_error_naming_its_address() {
+        let error = bind(&["192.0.2.1:0", "192.0.2.2:0"]).await.err().unwrap();
+        let cause = std::net::TcpListener::bind("192.0.2.1:0").unwrap_err();
+        assert_eq!(error, format!("192.0.2.1:0: {cause}"));
+    }
+
+    #[tokio::test]
+    async fn a_taken_port_aborts_even_when_another_address_listens() {
+        let taken = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = taken.local_addr().unwrap();
+        let error = bind(&["127.0.0.1:0", &address.to_string()])
+            .await
+            .err()
+            .unwrap();
+        let cause = std::net::TcpListener::bind(address).unwrap_err();
+        assert_eq!(cause.kind(), std::io::ErrorKind::AddrInUse);
+        assert_eq!(error, format!("{address}: {cause}"));
+    }
+
+    #[tokio::test]
+    async fn ipv6_shares_the_ipv4_port_or_is_skipped_on_a_host_without_ipv6() {
+        let v4 = bind(&["0.0.0.0:0"]).await.unwrap();
+        let port = v4.listening[0].port();
+        // A dual-stack `[::]` socket would collide with `0.0.0.0` and abort with AddrInUse.
+        for v6 in [format!("[::]:{port}"), format!("[::1]:{port}")] {
+            let bound = bind(&["127.0.0.1:0", &v6]).await.unwrap();
+            let address: SocketAddr = v6.parse().unwrap();
+            if let [(skipped, reason)] = bound.skipped.as_slice() {
+                assert_eq!(*skipped, address);
+                eprintln!("no IPv6 on this host: {v6}: {reason}");
+                continue;
+            }
+            assert_eq!(bound.listening[1], address);
+            if address.ip().is_loopback() {
+                let client = tokio::net::TcpStream::connect(address).await.unwrap();
+                let (_, peer) = bound.listeners[1].accept().await.unwrap();
+                assert_eq!(peer, client.local_addr().unwrap());
+            }
+        }
+    }
 }
