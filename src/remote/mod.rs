@@ -15,6 +15,11 @@ use tokio::sync::{mpsc, oneshot, watch};
 
 use auth::{Auth, Device};
 
+/// A duration in seconds, rounded up, as sign-in pauses are reported.
+pub fn whole_seconds(duration: std::time::Duration) -> u64 {
+    duration.as_millis().div_ceil(1000) as u64
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum RemoteMode {
     #[default]
@@ -101,9 +106,13 @@ pub struct Remote {
     pub generation: u64,
     pub starting: Option<tokio::task::JoinHandle<()>>,
     pub quit_armed: Option<tokio::time::Instant>,
+    /// Wrong passwords since remote control started or the password changed.
+    pub failed_logins: u32,
+    pub paused_until: Option<tokio::time::Instant>,
+    /// Unix milliseconds when the connected phone was admitted.
+    pub connected_at: u64,
     stop: Option<oneshot::Sender<()>>,
     server_task: Option<tokio::task::JoinHandle<()>>,
-    pairing_qr: Option<(Vec<bool>, usize)>,
 }
 
 impl Remote {
@@ -124,36 +133,9 @@ impl Remote {
             .as_ref()
             .map(|phone| phone.device.name.as_str())
     }
-    pub fn pairing(&self) -> Option<(String, tokio::time::Instant)> {
-        let auth = self.auth.as_ref()?.lock().unwrap();
-        auth.pairing
-            .active()
-            .then(|| (auth.pairing.code.clone(), auth.pairing.expires))
-    }
-    pub fn refresh_pairing_qr(&mut self) {
-        self.pairing_qr = self.pairing().and_then(|(code, _)| {
-            let link = format!("{}/#pair={code}", self.url.as_deref()?);
-            let qr = qrcode::QrCode::with_error_correction_level(link, qrcode::EcLevel::L).ok()?;
-            let width = qr.width();
-            let modules = (0..width * width)
-                .map(|i| qr[(i % width, i / width)] == qrcode::Color::Dark)
-                .collect();
-            Some((modules, width))
-        });
-    }
-
-    pub fn pairing_qr(&self) -> Option<(&[bool], usize)> {
-        self.pairing()?;
-        self.pairing_qr
-            .as_ref()
-            .map(|(modules, width)| (modules.as_slice(), *width))
-    }
-
-    pub fn next_pairing_expiry(&self) -> Option<tokio::time::Instant> {
-        let now = tokio::time::Instant::now();
-        let (_, expires) = self.pairing()?;
-        let minutes = (expires - now).as_nanos().div_ceil(60_000_000_000) as u64;
-        Some(expires - std::time::Duration::from_secs((minutes - 1) * 60))
+    /// The connection password, shown on the status screen.
+    pub fn password(&self) -> Option<String> {
+        Some(self.auth.as_ref()?.lock().unwrap().password().to_owned())
     }
 
     pub fn active(&self) -> bool {
@@ -180,8 +162,9 @@ impl Remote {
         self.stop = Some(stop);
         self.auth = Some(bound.auth);
         self.url = Some(bound.url);
-        self.refresh_pairing_qr();
         self.starting = None;
+        self.failed_logins = 0;
+        self.paused_until = None;
     }
 
     pub fn stop(&mut self, reason: &'static str) {
@@ -195,10 +178,7 @@ impl Remote {
         if let Some(stop) = self.stop.take() {
             let _ = stop.send(());
         }
-        self.pairing_qr = None;
-        if let Some(auth) = self.auth.take() {
-            auth.lock().unwrap().pairing.invalidate();
-        }
+        self.auth = None;
         self.url = None;
     }
 
@@ -233,4 +213,8 @@ pub enum RemoteEvent {
         done: oneshot::Sender<()>,
     },
     Disconnected(u64),
+    /// A wrong password; `locked` is the pause it started or ran into.
+    LoginRefused {
+        locked: Option<std::time::Duration>,
+    },
 }

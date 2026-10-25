@@ -8,7 +8,6 @@ pub mod markdown;
 pub mod panel;
 #[cfg(test)]
 mod perf_tests;
-mod qr;
 pub mod rails;
 pub mod sheets;
 #[cfg(test)]
@@ -20,7 +19,7 @@ pub mod views;
 
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
-use ratatui::layout::{Position, Rect, Size};
+use ratatui::layout::{Position, Rect};
 use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::widgets::Widget;
@@ -44,7 +43,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Option<Position> {
     // The transcript keeps a row and the footer its own; the rows above the
     // slot give way first.
     let room = area.height.saturating_sub(2);
-    let sheet = sheets::sheet(app, styles, Size::new(area.width.saturating_sub(1), room));
+    let sheet = sheets::sheet(app, styles);
     let dock = status::dock(app, styles, area.width.saturating_sub(1), area.height);
     let slot = sheet
         .as_ref()

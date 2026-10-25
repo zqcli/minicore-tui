@@ -91,8 +91,8 @@ pub const COMMANDS: &[Command<'static>] = &[
     },
     Command {
         name: "remote",
-        args: "[status|on|off|pair]",
-        description: "Manage phone control",
+        args: "[on|off|status|password [text]]",
+        description: "Let a phone drive this TUI, or set its password",
     },
     Command {
         name: "quit",

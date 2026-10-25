@@ -15,7 +15,6 @@ use crate::ui::sheets;
 #[derive(Debug)]
 pub enum Overlay {
     None,
-    Remote,
     /// The inline command list; its filter is the composer's `/name`.
     Palette {
         selected: usize,
@@ -73,7 +72,6 @@ impl Overlay {
 /// A picker or view a command or key opens.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Panel {
-    Remote,
     Sessions,
     Models,
     Reasoning,
@@ -173,13 +171,7 @@ impl App {
         !self.remote.active()
             || matches!(
                 panel,
-                Panel::Remote
-                    | Panel::Help
-                    | Panel::SessionInfo
-                    | Panel::Context
-                    | Panel::Diff
-                    | Panel::Sessions
-                    | Panel::Find
+                Panel::Help | Panel::SessionInfo | Panel::Context | Panel::Diff | Panel::Sessions
             )
     }
 
@@ -204,7 +196,6 @@ impl App {
             }
         }
         self.overlay = match panel {
-            Panel::Remote => Overlay::Remote,
             Panel::Sessions => Overlay::Sessions {
                 filter: String::new(),
                 selected: 0,
@@ -320,7 +311,7 @@ impl App {
                 .map(|level| (level.label().to_owned(), String::new()))
                 .collect(),
             "theme" => plain(&["dark", "light"]),
-            "remote" => plain(&["status", "on", "off", "pair"]),
+            "remote" => plain(&["on", "off", "status", "password"]),
             _ => unreachable!(),
         };
         rows.retain(|(value, _)| fuzzy_match(value, filter));

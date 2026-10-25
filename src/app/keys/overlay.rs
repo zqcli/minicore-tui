@@ -140,7 +140,7 @@ impl App {
             }
             Overlay::Help { scroll } => *scroll = scroll.saturating_add_signed(delta * 3),
             Overlay::Find { .. } => self.find_step(delta > 0),
-            Overlay::Remote | Overlay::Context | Overlay::SessionInfo { .. } | Overlay::None => {}
+            Overlay::Context | Overlay::SessionInfo { .. } | Overlay::None => {}
         }
     }
 
@@ -225,7 +225,6 @@ impl App {
             }
             Overlay::Palette { .. }
             | Overlay::Files { .. }
-            | Overlay::Remote
             | Overlay::Context
             | Overlay::Help { .. }
             | Overlay::Diff(_)

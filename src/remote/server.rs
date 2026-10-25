@@ -23,7 +23,7 @@ use tokio_tungstenite::{WebSocketStream, accept_hdr_async_with_config};
 
 use super::{
     Connection, RemoteEvent,
-    auth::Auth,
+    auth::{Auth, Refusal},
     fs,
     wire::{self, FsRequest, Handshake},
 };
@@ -97,16 +97,16 @@ async fn head(stream: &TcpStream) -> io::Result<Vec<u8>> {
     }
 }
 
-async fn http(stream: &mut TcpStream, status: &str, mime: &str, body: &str) -> io::Result<()> {
+async fn http(stream: &mut TcpStream, status: &str, mime: &str, body: &[u8]) -> io::Result<()> {
     let headers: String = HEADERS
         .iter()
         .map(|(name, value)| format!("{name}: {value}\r\n"))
         .collect();
-    let reply = format!(
-        "HTTP/1.1 {status}\r\n{headers}Content-Type: {mime}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+    let head = format!(
+        "HTTP/1.1 {status}\r\n{headers}Content-Type: {mime}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
     );
-    stream.write_all(reply.as_bytes()).await
+    stream.write_all(&[head.as_bytes(), body].concat()).await
 }
 
 fn same_origin(origin: &[u8], host: Option<&[u8]>) -> bool {
@@ -152,7 +152,7 @@ async fn connection(
                 .read_exact(&mut vec![0; bytes.len()])
                 .await
                 .map_err(|e| e.to_string())?;
-            return http(&mut stream, "403 Forbidden", "text/plain", "Forbidden")
+            return http(&mut stream, "403 Forbidden", "text/plain", b"Forbidden")
                 .await
                 .map_err(|e| e.to_string());
         }
@@ -161,17 +161,24 @@ async fn connection(
             (Some("GET"), Some("/")) => (
                 "200 OK",
                 "text/html; charset=utf-8",
-                include_str!("web/index.html"),
+                include_str!("web/index.html").as_bytes(),
             ),
             (Some("GET"), Some("/manifest.webmanifest")) => (
                 "200 OK",
                 "application/manifest+json",
-                include_str!("web/manifest.webmanifest"),
+                include_str!("web/manifest.webmanifest").as_bytes(),
             ),
-            (Some("GET"), Some("/icon.svg")) => {
-                ("200 OK", "image/svg+xml", include_str!("web/icon.svg"))
-            }
-            _ => ("404 Not Found", "text/plain", "Not found"),
+            (Some("GET"), Some("/icon.svg")) => (
+                "200 OK",
+                "image/svg+xml",
+                include_str!("web/icon.svg").as_bytes(),
+            ),
+            (Some("GET"), Some("/icon.png")) => (
+                "200 OK",
+                "image/png",
+                include_bytes!("web/icon.png").as_slice(),
+            ),
+            _ => ("404 Not Found", "text/plain", b"Not found".as_slice()),
         };
         stream
             .read_exact(&mut vec![0; bytes.len()])
@@ -218,7 +225,7 @@ async fn connection(
     if handshake.version() != wire::VERSION {
         return reject(&mut socket, "version").await;
     }
-    if let Handshake::Pair { device, .. } = &handshake
+    if let Handshake::Login { device, .. } = &handshake
         && (device.is_empty()
             || device.chars().count() > 64
             || device.chars().any(char::is_control))
@@ -229,19 +236,38 @@ async fn connection(
     let authenticated = tokio::task::spawn_blocking(move || {
         let mut auth = credentials.lock().unwrap();
         match handshake {
-            Handshake::Pair { code, device, .. } => auth
-                .prepare_pair(&code, device)
-                .map(|(device, token)| (device, Some((code, token)))),
-            Handshake::Hello { token, .. } => auth
-                .verify(&token)
-                .map(|device| (device, None))
-                .ok_or_else(|| "unauthorized".to_owned()),
+            Handshake::Login {
+                password, device, ..
+            } => auth
+                .prepare_login(&password, device)
+                .map(|(device, token)| (device, Some(token)))
+                .map_err(Some),
+            Handshake::Hello { token, .. } => {
+                auth.verify(&token).map(|device| (device, None)).ok_or(None)
+            }
         }
     })
     .await
     .map_err(|e| e.to_string())?;
-    let Ok((device, token)) = authenticated else {
-        return reject(&mut socket, "unauthorized").await;
+    let (device, token) = match authenticated {
+        Ok(authenticated) => authenticated,
+        Err(None) => return reject(&mut socket, "unauthorized").await,
+        Err(Some(refusal)) => {
+            let locked = match refusal {
+                Refusal::Wrong => None,
+                Refusal::Locked(pause) => Some(pause),
+            };
+            let _ = tx.send(Msg::Remote(RemoteEvent::LoginRefused { locked }));
+            let reply = match locked {
+                None => wire::error("wrong_password", "Wrong password"),
+                Some(pause) => {
+                    let mut reply = wire::error("locked", "Too many wrong passwords");
+                    reply["retry_after"] = json!(super::whole_seconds(pause));
+                    reply
+                }
+            };
+            return send(&mut socket, reply).await;
+        }
     };
     static NEXT: AtomicU64 = AtomicU64::new(1);
     let id = NEXT.fetch_add(1, Ordering::Relaxed);
@@ -269,11 +295,11 @@ async fn connection(
         biased;
         _ = closing.changed() => Ok(()),
         result = async {
-        if let Some((code, token)) = token {
-            let committed = tokio::task::spawn_blocking(move || auth.lock().unwrap().commit_pair(&code, device))
+        if let Some(token) = token {
+            let remembered = tokio::task::spawn_blocking(move || auth.lock().unwrap().remember(device))
                 .await.map_err(|error| error.to_string())?;
-            if committed.is_err() { return reject(&mut socket, "unauthorized").await; }
-            send(&mut socket, json!({"t":"paired", "token": token})).await?;
+            if remembered.is_err() { return reject(&mut socket, "unauthorized").await; }
+            send(&mut socket, json!({"t":"authorized", "token": token})).await?;
         }
         send(&mut socket, json!({"t":"welcome", "v":wire::VERSION, "version":env!("CARGO_PKG_VERSION"), "device":name, "now_ms":crate::protocol::stamp::now_millis()})).await?;
         let mut ping = tokio::time::interval_at(Instant::now() + PING, PING);
@@ -406,7 +432,7 @@ mod tests {
     ) {
         let dir = tempfile::tempdir().unwrap();
         let auth = Arc::new(Mutex::new(
-            Auth::load(dir.path().join("remote-devices.json")).unwrap(),
+            Auth::load(dir.path().join("remote.json")).unwrap(),
         ));
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -421,6 +447,42 @@ mod tests {
         (dir, address, auth, rx, task)
     }
 
+    async fn connect(address: std::net::SocketAddr) -> WebSocketStream<TcpStream> {
+        let stream = TcpStream::connect(address).await.unwrap();
+        tokio_tungstenite::client_async(format!("ws://{address}/ws"), stream)
+            .await
+            .unwrap()
+            .0
+    }
+
+    /// A socket that has sent a password sign-in.
+    async fn login(
+        address: std::net::SocketAddr,
+        password: &str,
+        device: &str,
+    ) -> WebSocketStream<TcpStream> {
+        let mut socket = connect(address).await;
+        send(
+            &mut socket,
+            json!({"t":"login", "v":1, "password":password, "device":device}),
+        )
+        .await
+        .unwrap();
+        socket
+    }
+
+    async fn receive(socket: &mut WebSocketStream<TcpStream>) -> Value {
+        serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap()).unwrap()
+    }
+
+    async fn get(address: std::net::SocketAddr, request: &str) -> Vec<u8> {
+        let mut socket = TcpStream::connect(address).await.unwrap();
+        socket.write_all(request.as_bytes()).await.unwrap();
+        let mut reply = Vec::new();
+        socket.read_to_end(&mut reply).await.unwrap();
+        reply
+    }
+
     #[tokio::test]
     async fn http_serves_the_client_with_security_headers_and_rejects_foreign_origins() {
         let (_dir, address, _auth, _rx, task) = start().await;
@@ -431,10 +493,7 @@ mod tests {
                 "403 Forbidden",
             ),
         ] {
-            let mut socket = TcpStream::connect(address).await.unwrap();
-            socket.write_all(request.as_bytes()).await.unwrap();
-            let mut reply = String::new();
-            socket.read_to_string(&mut reply).await.unwrap();
+            let reply = String::from_utf8(get(address, request).await).unwrap();
             assert!(reply.contains(status), "{reply}");
             assert!(reply.contains(CSP));
             if status == "200 OK" {
@@ -442,6 +501,18 @@ mod tests {
                 assert!(reply.contains("minicore.token"));
             }
         }
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn the_home_screen_icon_is_a_png() {
+        let (_dir, address, _auth, _rx, task) = start().await;
+        let reply = get(address, "GET /icon.png HTTP/1.1\r\nHost: localhost\r\n\r\n").await;
+        let end = reply.windows(4).position(|s| s == b"\r\n\r\n").unwrap();
+        let head = String::from_utf8_lossy(&reply[..end]);
+        assert!(head.starts_with("HTTP/1.1 200 OK"), "{head}");
+        assert!(head.contains("Content-Type: image/png"), "{head}");
+        assert!(reply[end + 4..].starts_with(b"\x89PNG\r\n\x1a\n"));
         task.abort();
     }
 
@@ -466,19 +537,35 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rejected_pairing_writes_no_device_and_leaves_the_code_available() {
+    async fn wrong_passwords_are_refused_reported_and_then_paused() {
+        let (_dir, address, auth, mut rx, task) = start().await;
+        for attempt in 1..=5 {
+            let mut socket = login(address, "wrong-password", "phone").await;
+            let reply = receive(&mut socket).await;
+            let Msg::Remote(RemoteEvent::LoginRefused { locked }) = rx.recv().await.unwrap() else {
+                panic!("a refusal event")
+            };
+            if attempt < 5 {
+                assert_eq!(reply["code"], "wrong_password", "{reply}");
+                assert_eq!(reply["message"], "Wrong password");
+                assert!(locked.is_none());
+            } else {
+                assert_eq!(reply["code"], "locked", "{reply}");
+                assert_eq!(reply["retry_after"], 30);
+                assert_eq!(locked, Some(Duration::from_secs(30)));
+            }
+        }
+        let right = auth.lock().unwrap().password().to_owned();
+        let mut socket = login(address, &right, "phone").await;
+        assert_eq!(receive(&mut socket).await["code"], "locked");
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn a_busy_refusal_remembers_no_phone() {
         let (dir, address, auth, mut rx, task) = start().await;
-        let stream = TcpStream::connect(address).await.unwrap();
-        let (mut socket, _) = tokio_tungstenite::client_async(format!("ws://{address}/ws"), stream)
-            .await
-            .unwrap();
-        let code = auth.lock().unwrap().pairing.code.clone();
-        send(
-            &mut socket,
-            json!({"t":"pair", "v":1, "code":code, "device":"other phone"}),
-        )
-        .await
-        .unwrap();
+        let password = auth.lock().unwrap().password().to_owned();
+        let mut socket = login(address, &password, "other phone").await;
         let candidate = rx.recv().await.unwrap();
         let (tx, _messages) = mpsc::unbounded_channel();
         let (_fake, mut app) = crate::testing::FakeAgent::start(tx);
@@ -498,54 +585,38 @@ mod tests {
         });
         app.on_msg(candidate);
         assert_eq!(receive(&mut socket).await["code"], "busy");
-        assert!(!dir.path().join("remote-devices.json").exists());
-        assert!(auth.lock().unwrap().pairing.active());
+        let stored: Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.path().join("remote.json")).unwrap())
+                .unwrap();
+        assert_eq!(stored["devices"], json!([]));
         task.abort();
     }
 
     #[tokio::test]
     async fn invalid_device_names_and_pre_auth_filesystem_requests_are_refused() {
         let (_dir, address, auth, mut rx, task) = start().await;
-        let code = auth.lock().unwrap().pairing.code.clone();
+        let password = auth.lock().unwrap().password().to_owned();
         let mut requests = vec![json!({"t":"fs_roots", "id":"early"})];
         for device in ["".to_owned(), "bad\nname".into(), "x".repeat(65)] {
-            requests.push(json!({"t":"pair", "v":1, "code":code, "device":device}));
+            requests.push(json!({"t":"login", "v":1, "password":password, "device":device}));
         }
         for request in requests {
-            let stream = TcpStream::connect(address).await.unwrap();
-            let (mut socket, _) =
-                tokio_tungstenite::client_async(format!("ws://{address}/ws"), stream)
-                    .await
-                    .unwrap();
+            let mut socket = connect(address).await;
             send(&mut socket, request).await.unwrap();
             assert_eq!(receive(&mut socket).await["code"], "bad_request");
         }
-        assert!(rx.try_recv().is_err());
-        assert!(auth.lock().unwrap().pairing.active());
+        assert!(rx.try_recv().is_err(), "not counted as wrong passwords");
         task.abort();
     }
 
-    async fn receive(socket: &mut WebSocketStream<TcpStream>) -> Value {
-        serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap()).unwrap()
-    }
-
-    #[tokio::test]
-    async fn an_authenticated_controller_browses_and_creates_directories_only_inside_roots() {
-        let (dir, address, auth, mut rx, task) = start().await;
-        let root = dir.path().canonicalize().unwrap();
-        std::fs::create_dir(root.join("existing")).unwrap();
-        let outside = tempfile::tempdir().unwrap();
-        let stream = TcpStream::connect(address).await.unwrap();
-        let (mut socket, _) = tokio_tungstenite::client_async(format!("ws://{address}/ws"), stream)
-            .await
-            .unwrap();
-        let code = auth.lock().unwrap().pairing.code.clone();
-        send(
-            &mut socket,
-            json!({"t":"pair", "v":1, "code":code, "device":"phone"}),
-        )
-        .await
-        .unwrap();
+    /// Signs in with the right password and admits the phone as the reducer would.
+    async fn admitted(
+        address: std::net::SocketAddr,
+        auth: &Arc<Mutex<Auth>>,
+        rx: &mut mpsc::UnboundedReceiver<Msg>,
+    ) -> (WebSocketStream<TcpStream>, Connection) {
+        let password = auth.lock().unwrap().password().replace('-', " ");
+        let socket = login(address, &password, "phone").await;
         let Msg::Remote(RemoteEvent::Connect {
             connection,
             accepted,
@@ -555,7 +626,17 @@ mod tests {
         };
         accepted.send(true).unwrap();
         connection.send(json!({"t":"snapshot", "state":{}, "blocks":[]}));
-        for kind in ["paired", "welcome", "snapshot"] {
+        (socket, connection)
+    }
+
+    #[tokio::test]
+    async fn an_authenticated_controller_browses_and_creates_directories_only_inside_roots() {
+        let (dir, address, auth, mut rx, task) = start().await;
+        let root = dir.path().canonicalize().unwrap();
+        std::fs::create_dir(root.join("existing")).unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let (mut socket, connection) = admitted(address, &auth, &mut rx).await;
+        for kind in ["authorized", "welcome", "snapshot"] {
             assert_eq!(receive(&mut socket).await["t"], kind);
         }
         send(&mut socket, json!({"t":"fs_roots", "id":"roots"}))
@@ -652,45 +733,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pairing_precedes_welcome_and_the_reducer_snapshot_while_wrong_tokens_are_refused() {
+    async fn the_right_password_is_authorized_before_welcome_and_the_snapshot_and_unknown_tokens_are_not()
+     {
         let (_dir, address, auth, mut rx, task) = start().await;
-        let connect = || async {
-            let stream = TcpStream::connect(address).await.unwrap();
-            tokio_tungstenite::client_async(format!("ws://{address}/ws"), stream)
-                .await
-                .unwrap()
-                .0
-        };
-        let mut socket = connect().await;
-        send(&mut socket, json!({"t":"hello", "v":1, "token":"wrong"}))
+        let mut socket = connect(address).await;
+        send(&mut socket, json!({"t":"hello", "v":1, "token":"unknown"}))
             .await
             .unwrap();
-        let reply: Value =
-            serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap()).unwrap();
-        assert_eq!(reply["code"], "unauthorized");
-        let mut socket = connect().await;
-        let code = auth.lock().unwrap().pairing.code.clone();
-        send(
-            &mut socket,
-            json!({"t":"pair", "v":1, "code":code, "device":"phone"}),
-        )
-        .await
-        .unwrap();
-        let Msg::Remote(RemoteEvent::Connect {
-            connection,
-            accepted,
-        }) = rx.recv().await.unwrap()
-        else {
-            panic!("admission")
-        };
-        accepted.send(true).unwrap();
-        connection.send(json!({"t":"snapshot", "state":{}, "blocks":[]}));
-        for kind in ["paired", "welcome", "snapshot"] {
-            let reply: Value =
-                serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap())
-                    .unwrap();
+        assert_eq!(receive(&mut socket).await["code"], "unauthorized");
+        let (mut socket, _connection) = admitted(address, &auth, &mut rx).await;
+        let mut token = String::new();
+        for kind in ["authorized", "welcome", "snapshot"] {
+            let reply = receive(&mut socket).await;
             assert_eq!(reply["t"], kind);
-            if kind == "welcome" {
+            if kind == "authorized" {
+                token = reply["token"].as_str().unwrap().to_owned();
+            } else if kind == "welcome" {
                 assert_eq!(reply["v"], wire::VERSION);
                 assert_eq!(reply["version"], env!("CARGO_PKG_VERSION"));
                 assert_eq!(reply["device"], "phone");
@@ -699,6 +757,7 @@ mod tests {
                 assert!(reply.get("now_ms").is_none());
             }
         }
+        assert_eq!(auth.lock().unwrap().verify(&token).unwrap().name, "phone");
         task.abort();
     }
 }

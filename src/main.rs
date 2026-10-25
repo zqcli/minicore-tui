@@ -183,11 +183,8 @@ async fn run() -> i32 {
     };
 
     let remote = if args.remote {
-        match minicore_tui::remote::Bound::bind(
-            &launch.remote,
-            home.dir().join("remote-devices.json"),
-        )
-        .await
+        match minicore_tui::remote::Bound::bind(&launch.remote, home.dir().join("remote.json"))
+            .await
         {
             Ok(bound) => Some(bound),
             Err(error) => {

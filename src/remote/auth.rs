@@ -103,14 +103,18 @@ impl Auth {
 
     /// Checks `password` and makes a token for the phone; nothing is stored
     /// until [`Auth::remember`].
-    pub fn prepare_login(&mut self, password: &str, name: String) -> Result<(Device, String), Refusal> {
+    pub fn prepare_login(
+        &mut self,
+        password: &str,
+        name: String,
+    ) -> Result<(Device, String), Refusal> {
         let now = Instant::now();
         if let Some(until) = self.locked_until.filter(|until| now < *until) {
             return Err(Refusal::Locked(until - now));
         }
         if hash(&normalize(password)) != hash(&normalize(&self.stored.password)) {
             self.failures += 1;
-            if self.failures % ATTEMPTS == 0 {
+            if self.failures.is_multiple_of(ATTEMPTS) {
                 let runs = (self.failures / ATTEMPTS - 1).min(5);
                 let lock = (FIRST_LOCK * 2u32.pow(runs)).min(MAX_LOCK);
                 self.locked_until = Some(now + lock);
@@ -219,7 +223,10 @@ mod tests {
         let mut auth = Auth::load(file.clone()).unwrap();
         let typed = auth.password().replace('-', " ");
         let (device, token) = auth.prepare_login(&typed, "phone".into()).unwrap();
-        assert!(auth.verify(&token).is_none(), "not remembered before admission");
+        assert!(
+            auth.verify(&token).is_none(),
+            "not remembered before admission"
+        );
         auth.remember(device).unwrap();
         assert_eq!(URL_SAFE_NO_PAD.decode(&token).unwrap().len(), 32);
         let text = std::fs::read_to_string(&file).unwrap();
@@ -242,7 +249,10 @@ mod tests {
         let mut auth = Auth::load(dir.path().join("remote.json")).unwrap();
         let right = auth.password().to_owned();
         for _ in 0..4 {
-            assert_eq!(auth.prepare_login("wrong", "x".into()).unwrap_err(), Refusal::Wrong);
+            assert_eq!(
+                auth.prepare_login("wrong", "x".into()).unwrap_err(),
+                Refusal::Wrong
+            );
         }
         assert_eq!(
             auth.prepare_login("wrong", "x".into()).unwrap_err(),
@@ -268,10 +278,14 @@ mod tests {
     async fn a_new_password_signs_out_every_phone_and_short_ones_are_refused() {
         let dir = tempfile::tempdir().unwrap();
         let mut auth = Auth::load(dir.path().join("remote.json")).unwrap();
-        let (device, token) = auth.prepare_login(&auth.password().to_owned(), "p".into()).unwrap();
+        let password = auth.password().to_owned();
+        let (device, token) = auth.prepare_login(&password, "p".into()).unwrap();
         auth.remember(device).unwrap();
         assert!(auth.set_password(Some("short-1")).is_err());
-        assert!(auth.verify(&token).is_some(), "a refused change keeps phones");
+        assert!(
+            auth.verify(&token).is_some(),
+            "a refused change keeps phones"
+        );
         auth.set_password(Some("  correct horse  ")).unwrap();
         assert_eq!(auth.password(), "correct horse");
         assert!(auth.verify(&token).is_none());

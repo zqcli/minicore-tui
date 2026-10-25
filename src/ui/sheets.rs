@@ -2,7 +2,6 @@
 //! model and reasoning pickers, the approval prompt and the find bar each turn
 //! app state into one [`Sheet`]; the command and `@` file lists are plain rows.
 
-use ratatui::layout::Size;
 use ratatui::text::{Line, Span};
 
 use crate::app::overlay::{
@@ -14,18 +13,16 @@ use crate::app::{App, Overlay};
 use crate::protocol::{ModelInfo, Reasoning, SessionInfo};
 
 use super::panel::{Kind, Row, Sheet, Tone, body_lines, truncate};
-use super::qr;
 use super::theme::Styles;
 use crate::wrap::width;
 
 /// Rows of the completion list that show at once.
 const COMPLETION_ROWS: usize = 5;
 
-/// The sheet for the current overlay, in `room` cells; a pending interaction is one too, as it owns the keyboard.
-pub fn sheet(app: &App, styles: Styles, room: Size) -> Option<Sheet> {
+/// The sheet for the current overlay; a pending interaction is one too, as it owns the keyboard.
+pub fn sheet(app: &App, styles: Styles) -> Option<Sheet> {
     Some(match &app.overlay {
         Overlay::None => return interaction_sheet(app, styles),
-        Overlay::Remote => remote_sheet(app, styles, room),
         Overlay::Sessions {
             filter,
             selected,
@@ -56,91 +53,6 @@ pub fn sheet(app: &App, styles: Styles, room: Size) -> Option<Sheet> {
         | Overlay::Help { .. }
         | Overlay::Diff(_) => return None,
     })
-}
-
-/// Cells between the QR code and the facts beside it.
-const QR_GAP: usize = 2;
-/// Cells the facts need beside the QR code; narrower, the code gives way.
-const QR_FACTS: usize = 28;
-
-/// `/remote`: the mode, the address, the pairing code and, when it fits, its QR code.
-fn remote_sheet(app: &App, styles: Styles, room: Size) -> Sheet {
-    let remote = &app.remote;
-    let Some(url) = remote.url() else {
-        return Sheet::new("Remote", "/remote on to start · esc close")
-            .status("off")
-            .body(vec![Line::styled("  Remote control is off", styles.dim())]);
-    };
-    let status = remote.device_name().map_or_else(
-        || "waiting for phone".to_owned(),
-        |device| format!("connected · {device}"),
-    );
-    let sheet = Sheet::new("Remote", "esc close").status(status);
-    let pairing = remote.pairing();
-    let mut facts = vec![("url", url.to_owned())];
-    if let Some((code, expires)) = &pairing {
-        let left = expires
-            .saturating_duration_since(tokio::time::Instant::now())
-            .as_nanos()
-            .div_ceil(60_000_000_000);
-        let code = format!("{}-{} · {left} min left", &code[..4], &code[4..]);
-        facts.push(("code", code));
-    }
-    if let Some(device) = remote.device_name() {
-        facts.push(("device", device.to_owned()));
-    }
-    let link = pairing.map(|(code, _)| format!("{url}/#pair={code}"));
-    let qr = remote
-        .pairing_qr()
-        .map(|(modules, width)| qr::rows(modules, width))
-        .filter(|rows| {
-            let wide = rows.first().map_or(0, |row| width(row));
-            wide + QR_GAP + QR_FACTS <= usize::from(room.width)
-                && sheet.height() + rows.len() as u16 <= room.height
-        });
-    if let Some(rows) = qr {
-        let cells = usize::from(room.width) - width(&rows[0]) - QR_GAP;
-        let mut beside: Vec<_> = facts
-            .iter()
-            .map(|(name, value)| fact(name, value, cells - 10, styles))
-            .collect();
-        beside.push(Vec::new());
-        beside.push(vec![Span::styled(
-            "Scan with the phone camera",
-            styles.dim(),
-        )]);
-        let mut beside = beside.into_iter();
-        let body = rows
-            .into_iter()
-            .map(|row| {
-                let mut spans = vec![Span::styled(row, qr::STYLE)];
-                let fact = beside.next().unwrap_or_default();
-                if !fact.is_empty() {
-                    spans.push(Span::raw(" ".repeat(QR_GAP)));
-                    spans.extend(fact);
-                }
-                Line::from(spans)
-            })
-            .collect();
-        return sheet.body(body);
-    }
-    let mut body: Vec<_> = facts
-        .iter()
-        .map(|(name, value)| Line::from(fact(name, value, 120, styles)))
-        .collect();
-    if let Some(link) = &link {
-        body.push(Line::from(fact("link", link, 120, styles)));
-        body.push(Line::styled(
-            "  Enlarge the terminal to show the QR code",
-            styles.dim(),
-        ));
-    } else if remote.device_name().is_none() {
-        body.push(Line::styled(
-            "  The pairing code is used up or expired · /remote pair makes a new one",
-            styles.dim(),
-        ));
-    }
-    sheet.body(body)
 }
 
 /// A dim `name` padded to a column, then its `value` cut to `cells`.

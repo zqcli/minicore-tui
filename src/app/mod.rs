@@ -398,10 +398,7 @@ impl App {
             .map(|notice| notice.at + NOTICE_TTL);
         let flash = self.flash.iter().map(|(_, at)| *at + FLASH_TTL);
         let scrollbar = self.scrolled_at.map(|at| at + FLASH_TTL);
-        let pairing = matches!(self.overlay, Overlay::Remote)
-            .then(|| self.remote.next_pairing_expiry())
-            .flatten();
-        notices.chain(flash).chain(scrollbar).chain(pairing).min()
+        notices.chain(flash).chain(scrollbar).min()
     }
 
     /// The scrollbar shows while its thumb is held and briefly after a scroll.

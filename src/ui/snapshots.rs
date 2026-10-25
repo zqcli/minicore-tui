@@ -1171,28 +1171,14 @@ fn an_approval_shows_the_tool_its_target_and_its_input() {
     );
 }
 
-/// Remote control listening at a fixed address with a fixed pairing code.
+/// Remote control listening at a fixed address.
 fn listening(app: &mut App) {
-    let missing = PathBuf::from("no-such-dir").join("remote-devices.json");
-    let mut auth = crate::remote::auth::Auth::load(missing).expect("auth");
-    auth.pairing.code = "ABCDEFGH".into();
-    auth.pairing.expires = tokio::time::Instant::now() + std::time::Duration::from_secs(600);
-    app.remote.auth = Some(std::sync::Arc::new(std::sync::Mutex::new(auth)));
     app.remote.url = Some("http://192.168.1.20:8765".into());
-    app.remote.refresh_pairing_qr();
 }
 
-/// A phone is in control; its pairing code is spent.
+/// A phone is in control.
 fn connected(app: &mut App) {
     listening(app);
-    app.remote
-        .auth
-        .as_ref()
-        .expect("auth")
-        .lock()
-        .unwrap()
-        .pairing
-        .expires = tokio::time::Instant::now();
     let (outbound, _output) = mpsc::channel(1);
     let (close, _closing) = tokio::sync::watch::channel(None);
     app.remote.connection = Some(crate::remote::Connection {
@@ -1209,51 +1195,6 @@ fn connected(app: &mut App) {
 }
 
 #[test]
-fn the_remote_sheet_pairs_with_a_qr_code_beside_the_facts() {
-    let mut app = app();
-    conversation(&mut app);
-    listening(&mut app);
-    app.overlay = Overlay::Remote;
-    let screen = render(&mut app, 80, 26);
-    snapshot(
-        "tests/snapshots/remote-sheet.txt",
-        include_str!("../../tests/snapshots/remote-sheet.txt"),
-        screen,
-    );
-}
-
-#[test]
-fn a_small_terminal_gets_the_link_instead_of_the_qr_code() {
-    let mut app = app();
-    listening(&mut app);
-    app.overlay = Overlay::Remote;
-    for (width, height) in [(80, 20), (50, 40)] {
-        let screen = render(&mut app, width, height);
-        assert!(
-            screen.contains("link      http://192.168.1.20:8765/#pair=ABCDEFGH"),
-            "{screen}"
-        );
-        assert!(
-            screen.contains("code      ABCD-EFGH · 10 min left"),
-            "{screen}"
-        );
-        assert!(screen.contains("Enlarge the terminal"), "{screen}");
-        assert!(!screen.contains('█'), "{screen}");
-    }
-}
-
-#[test]
-fn the_remote_sheet_says_when_remote_control_is_off() {
-    let mut app = app();
-    app.overlay = Overlay::Remote;
-    snapshot(
-        "tests/snapshots/remote-off.txt",
-        include_str!("../../tests/snapshots/remote-off.txt"),
-        render(&mut app, 70, 12),
-    );
-}
-
-#[test]
 fn a_connected_phone_freezes_the_editor_and_marks_the_footer() {
     let mut app = app();
     conversation(&mut app);
@@ -1263,15 +1204,6 @@ fn a_connected_phone_freezes_the_editor_and_marks_the_footer() {
         "tests/snapshots/remote-connected.txt",
         include_str!("../../tests/snapshots/remote-connected.txt"),
         screen,
-    );
-    app.overlay = Overlay::Remote;
-    let screen = render(&mut app, 80, 20);
-    assert!(screen.contains("Remote   "), "{screen}");
-    assert!(screen.contains("connected · iPhone Safari"), "{screen}");
-    assert!(screen.contains("device    iPhone Safari"), "{screen}");
-    assert!(
-        !screen.contains("code "),
-        "a spent code is not shown:\n{screen}"
     );
 }
 

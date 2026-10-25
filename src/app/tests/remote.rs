@@ -6,7 +6,13 @@ use tokio::sync::{mpsc, oneshot, watch};
 
 use super::harness::*;
 use crate::app::{Action, Msg, Overlay, SessionOp};
-use crate::remote::{Bound, Connection, RemoteEvent, RemoteMode, auth::Device, wire::Intent};
+use std::sync::{Arc, Mutex};
+
+use crate::remote::{
+    Bound, Connection, RemoteEvent, RemoteMode,
+    auth::{Auth, Device},
+    wire::Intent,
+};
 
 fn phone(
     h: &mut Harness,
@@ -57,7 +63,7 @@ fn config(root: std::path::PathBuf) -> crate::config::Remote {
 }
 
 #[tokio::test]
-async fn a_real_phone_pairs_submits_through_the_agent_and_receives_the_user_block() {
+async fn a_real_phone_signs_in_submits_through_the_agent_and_receives_the_user_block() {
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::tungstenite::Message;
     let mut h = Harness::opened(display_read(0, 0)).await;
@@ -65,11 +71,11 @@ async fn a_real_phone_pairs_submits_through_the_agent_and_receives_the_user_bloc
     h.fake.script_held("turn.wait", waited("l1", completed()));
     let root = tempfile::tempdir().unwrap();
     let config = config(root.path().canonicalize().unwrap());
-    let bound = Bound::bind(&config, root.path().join("remote-devices.json"))
+    let bound = Bound::bind(&config, root.path().join("remote.json"))
         .await
         .unwrap();
     let address = bound.listener.local_addr().unwrap();
-    let code = bound.auth.lock().unwrap().pairing.code.clone();
+    let password = bound.auth.lock().unwrap().password().to_owned();
     h.app.remote.config = Some(config);
     h.app.enter_remote(bound);
     h.app.composer.set_text("untouched");
@@ -80,13 +86,13 @@ async fn a_real_phone_pairs_submits_through_the_agent_and_receives_the_user_bloc
             .unwrap();
         socket
             .send(Message::Text(
-                json!({"t":"pair", "v":1, "code":code, "device":"test phone"})
+                json!({"t":"login", "v":1, "password":password, "device":"test phone"})
                     .to_string()
                     .into(),
             ))
             .await
             .unwrap();
-        for kind in ["paired", "welcome", "snapshot"] {
+        for kind in ["authorized", "welcome", "snapshot"] {
             let reply: Value =
                 serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap())
                     .unwrap();
@@ -131,51 +137,6 @@ async fn a_real_phone_pairs_submits_through_the_agent_and_receives_the_user_bloc
         }
     }
     assert!(matches!(socket.next().await, Some(Ok(Message::Close(_)))));
-}
-
-#[tokio::test(start_paused = true)]
-async fn pairing_redraws_only_the_open_sheet_and_reuses_cached_qr_modules() {
-    let mut h = Harness::new();
-    let dir = tempfile::tempdir().unwrap();
-    let auth = std::sync::Arc::new(std::sync::Mutex::new(
-        crate::remote::auth::Auth::load(dir.path().join("remote-devices.json")).unwrap(),
-    ));
-    h.app.remote.auth = Some(auth.clone());
-    h.app.remote.url = Some("http://127.0.0.1:8765".into());
-    h.app.remote.refresh_pairing_qr();
-    let (matrix, width) = h.app.remote.pairing_qr().unwrap();
-    assert_eq!(matrix.len(), width * width);
-    let cached = matrix.as_ptr();
-    let now = tokio::time::Instant::now();
-    assert_eq!(h.app.next_expiry(), None);
-    h.app.overlay = Overlay::Remote;
-    assert_eq!(
-        h.app.next_expiry(),
-        Some(now + std::time::Duration::from_secs(60))
-    );
-    tokio::time::advance(std::time::Duration::from_secs(60)).await;
-    h.app.tick();
-    assert_eq!(h.app.remote.pairing_qr().unwrap().0.as_ptr(), cached);
-    assert_eq!(
-        h.app.next_expiry(),
-        Some(now + std::time::Duration::from_secs(120))
-    );
-    h.app.overlay = Overlay::None;
-    assert_eq!(h.app.next_expiry(), None);
-    tokio::time::advance(std::time::Duration::from_secs(480)).await;
-    h.app.overlay = Overlay::Remote;
-    assert_eq!(
-        h.app.next_expiry(),
-        Some(now + std::time::Duration::from_secs(600))
-    );
-    tokio::time::advance(std::time::Duration::from_secs(60)).await;
-    assert_eq!(h.app.next_expiry(), None);
-    assert!(h.app.remote.pairing_qr().is_none());
-    auth.lock().unwrap().pairing = crate::remote::auth::Pairing::new().unwrap();
-    h.app.remote.refresh_pairing_qr();
-    h.app.remote.stop("remote_off");
-    assert!(!auth.lock().unwrap().pairing.active());
-    assert!(h.app.remote.pairing_qr().is_none());
 }
 
 #[tokio::test(start_paused = true)]
@@ -336,7 +297,7 @@ async fn entering_remote_recalls_followups_and_an_agent_refusal_returns_only_to_
         .push_follow_up("queued".into());
     let dir = tempfile::tempdir().unwrap();
     let config = config(dir.path().canonicalize().unwrap());
-    let bound = Bound::bind(&config, dir.path().join("remote-devices.json"))
+    let bound = Bound::bind(&config, dir.path().join("remote.json"))
         .await
         .unwrap();
     h.app.remote.config = Some(config);
@@ -461,10 +422,7 @@ async fn remote_approval_keeps_the_local_keyboard_and_denied_commands_keep_the_d
     h.type_text("y");
     assert_eq!(h.app.composer.text(), "y");
     assert!(h.app.has_interaction());
-    assert!(
-        crate::ui::sheets::sheet(&h.app, h.app.styles, ratatui::layout::Size::new(80, 24))
-            .is_none()
-    );
+    assert!(crate::ui::sheets::sheet(&h.app, h.app.styles).is_none());
     for command in ["/new", "/model", "/compact"] {
         h.app.composer.set_text(command);
         h.app.overlay = Overlay::None;
@@ -495,4 +453,115 @@ async fn remote_off_restores_local_submit_and_quit_requires_two_requests_within_
     h.submit("local again");
     h.settle().await;
     assert_eq!(h.sends(), ["local again"]);
+}
+
+/// Remote control listening with a password file in `dir`.
+fn listening(h: &mut Harness, dir: &tempfile::TempDir) -> Arc<Mutex<Auth>> {
+    let auth = Arc::new(Mutex::new(
+        Auth::load(dir.path().join("remote.json")).unwrap(),
+    ));
+    h.app.remote.auth = Some(auth.clone());
+    h.app.remote.url = Some("http://localhost:8765".into());
+    auth
+}
+
+/// Types `command` and presses Enter, as at the keyboard.
+fn command(h: &mut Harness, command: &str) {
+    h.app.composer.set_text(command);
+    h.press(KeyCode::Enter);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_new_password_signs_the_phone_out_and_clears_the_failures() {
+    let mut h = Harness::new();
+    let dir = tempfile::tempdir().unwrap();
+    let auth = listening(&mut h, &dir);
+    let password = auth.lock().unwrap().password().to_owned();
+    let (device, token) = auth
+        .lock()
+        .unwrap()
+        .prepare_login(&password, "phone".into())
+        .unwrap();
+    auth.lock().unwrap().remember(device).unwrap();
+    let (_output, closing, admission) = phone(&mut h, 1, "phone");
+    assert!(admission.await.unwrap());
+    h.app
+        .on_msg(Msg::Remote(RemoteEvent::LoginRefused { locked: None }));
+    command(&mut h, "/remote password correct horse");
+    assert_eq!(*closing.borrow(), Some("signed_out"));
+    assert_eq!(h.app.remote.mode(), RemoteMode::Waiting);
+    assert_eq!(h.app.remote.failed_logins, 0);
+    assert_eq!(h.app.remote.password().as_deref(), Some("correct horse"));
+    assert!(auth.lock().unwrap().verify(&token).is_none());
+    assert_eq!(
+        h.notices(),
+        ["New remote password · phones must sign in again"]
+    );
+    command(&mut h, "/remote password");
+    assert_ne!(h.app.remote.password().as_deref(), Some("correct horse"));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_short_password_is_refused_and_changes_nothing() {
+    let mut h = Harness::new();
+    let dir = tempfile::tempdir().unwrap();
+    listening(&mut h, &dir);
+    let before = h.app.remote.password();
+    let (_output, closing, admission) = phone(&mut h, 1, "phone");
+    assert!(admission.await.unwrap());
+    command(&mut h, "/remote password a-b c");
+    assert_eq!(h.app.remote.password(), before);
+    assert_eq!(*closing.borrow(), None);
+    assert_eq!(h.app.remote.mode(), RemoteMode::Connected);
+    assert_eq!(
+        h.notices(),
+        ["Remote: A remote password needs at least 8 characters"]
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_password_command_never_reaches_the_prompt_history() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.fake.script("turn.send", json!({"turn":turn("l1")}));
+    h.fake.script_held("turn.wait", waited("l1", completed()));
+    h.submit("earlier prompt");
+    h.settle().await;
+    let dir = tempfile::tempdir().unwrap();
+    listening(&mut h, &dir);
+    command(&mut h, "/remote password correct horse");
+    assert_eq!(h.app.remote.password().as_deref(), Some("correct horse"));
+    h.press(KeyCode::Up);
+    assert_eq!(h.app.composer.text(), "earlier prompt");
+}
+
+#[tokio::test(start_paused = true)]
+async fn remote_status_while_off_says_how_to_start() {
+    let mut h = Harness::new();
+    command(&mut h, "/remote");
+    assert_eq!(
+        h.notices(),
+        ["Remote control is off · /remote on starts it"]
+    );
+    assert_eq!(h.app.remote.mode(), RemoteMode::Off);
+}
+
+#[tokio::test(start_paused = true)]
+async fn refused_sign_ins_are_counted_and_announced() {
+    let mut h = Harness::new();
+    h.app.remote.url = Some("http://localhost:8765".into());
+    h.app
+        .on_msg(Msg::Remote(RemoteEvent::LoginRefused { locked: None }));
+    assert_eq!(h.notices(), ["Remote: wrong password"]);
+    h.app.on_msg(Msg::Remote(RemoteEvent::LoginRefused {
+        locked: Some(std::time::Duration::from_secs(30)),
+    }));
+    assert_eq!(h.app.remote.failed_logins, 2);
+    assert_eq!(
+        h.app.remote.paused_until,
+        Some(tokio::time::Instant::now() + std::time::Duration::from_secs(30))
+    );
+    assert_eq!(
+        h.notices().last().unwrap(),
+        "Remote: sign-in paused for 30 s"
+    );
 }

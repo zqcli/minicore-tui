@@ -8,9 +8,9 @@ pub const VERSION: u64 = 1;
 #[derive(Deserialize)]
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum Handshake {
-    Pair {
+    Login {
         v: u64,
-        code: String,
+        password: String,
         device: String,
     },
     Hello {
@@ -22,7 +22,7 @@ pub enum Handshake {
 impl Handshake {
     pub fn version(&self) -> u64 {
         match self {
-            Self::Pair { v, .. } | Self::Hello { v, .. } => *v,
+            Self::Login { v, .. } | Self::Hello { v, .. } => *v,
         }
     }
 }

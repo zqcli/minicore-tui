@@ -5,12 +5,12 @@ use std::time::Duration;
 
 use serde_json::json;
 
-use super::{Action, Answer, App, Msg, NoticeLevel, Overlay, Panel, Session, tasks};
+use super::{Action, Answer, App, Msg, NoticeLevel, Overlay, Session, tasks};
 use crate::protocol::{self, Reasoning};
 use crate::remote::{
     Bound, RemoteEvent,
-    auth::Pairing,
-    fs,
+    auth::Auth,
+    fs, whole_seconds,
     wire::{self, Choice, Intent},
 };
 
@@ -53,29 +53,29 @@ impl App {
             self.restore_draft(&text);
         }
         self.remote.start(bound, self.tx.clone());
-        self.overlay = Overlay::Remote;
+        self.overlay = Overlay::None;
     }
 
     pub(super) fn remote_command(&mut self, command: &str) {
-        match command {
-            "" | "status" => self.open_panel(Panel::Remote),
-            "off" => {
-                self.remote.stop("remote_off");
-                self.overlay = Overlay::None;
-            }
-            "on" if self.remote.active() => self.open_panel(Panel::Remote),
-            "on" if self.remote.starting.is_some() => {}
-            "on" => {
+        let (name, argument) = command
+            .split_once(char::is_whitespace)
+            .map_or((command, ""), |(name, argument)| (name, argument.trim()));
+        match (name, argument) {
+            // The status screen already shows everything; only what covers it closes.
+            ("" | "status" | "on", "") if self.remote.active() => self.overlay = Overlay::None,
+            ("" | "status", "") => self.notice(
+                NoticeLevel::Info,
+                "Remote control is off · /remote on starts it",
+            ),
+            ("off", "") => self.remote.stop("remote_off"),
+            ("on", "") if self.remote.starting.is_some() => {}
+            ("on", "") => {
                 let config = self
                     .remote
                     .config
                     .clone()
                     .expect("remote settings initialized at startup");
-                let home = self
-                    .home
-                    .as_ref()
-                    .expect("TUI directory initialized at startup");
-                let file = home.dir().join("remote-devices.json");
+                let file = self.remote_file();
                 let tx = self.tx.clone();
                 self.remote.generation += 1;
                 let generation = self.remote.generation;
@@ -84,26 +84,43 @@ impl App {
                     let _ = tx.send(Msg::Remote(RemoteEvent::Bound(generation, result)));
                 }));
             }
-            "pair" => {
-                let result = self.remote.auth.as_ref().map(|auth| {
-                    let mut auth = auth.lock().unwrap();
-                    auth.pairing = Pairing::new()?;
-                    Ok::<_, String>(())
-                });
-                match result {
-                    Some(Err(error)) => self.notice(NoticeLevel::Error, error),
-                    Some(Ok(())) => {
-                        self.remote.refresh_pairing_qr();
-                        self.open_panel(Panel::Remote);
-                    }
-                    None => self.notice(
-                        NoticeLevel::Info,
-                        "Start remote control with /remote on first",
-                    ),
-                }
+            ("password", password) => {
+                self.change_password((!password.is_empty()).then_some(password))
             }
-            _ => self.notice(NoticeLevel::Error, "Use /remote [status|on|off|pair]"),
+            _ => self.notice(
+                NoticeLevel::Error,
+                "Use /remote [on|off|status|password [text]]",
+            ),
         }
+    }
+
+    fn remote_file(&self) -> PathBuf {
+        self.home
+            .as_ref()
+            .expect("TUI directory initialized at startup")
+            .dir()
+            .join("remote.json")
+    }
+
+    /// Sets the password, a generated one for `None`, which signs every phone out.
+    fn change_password(&mut self, password: Option<&str>) {
+        let result = match &self.remote.auth {
+            Some(auth) => auth.lock().unwrap().set_password(password),
+            None => Auth::load(self.remote_file()).and_then(|mut auth| auth.set_password(password)),
+        };
+        if let Err(error) = result {
+            self.notice(NoticeLevel::Error, format!("Remote: {error}"));
+            return;
+        }
+        if let Some(phone) = self.remote.connection.take() {
+            phone.bye("signed_out");
+        }
+        self.remote.failed_logins = 0;
+        self.remote.paused_until = None;
+        self.notice(
+            NoticeLevel::Info,
+            "New remote password · phones must sign in again",
+        );
     }
 
     pub(super) fn request_quit(&mut self) {
@@ -150,9 +167,21 @@ impl App {
                 if accepted.send(true).is_err() {
                     return;
                 }
+                self.remote.connected_at = protocol::stamp::now_millis();
                 if let Some(old) = self.remote.connection.replace(connection) {
                     old.bye("replaced");
                 }
+            }
+            RemoteEvent::LoginRefused { locked } => {
+                self.remote.failed_logins += 1;
+                let text = match locked {
+                    Some(pause) => {
+                        self.remote.paused_until = Some(tokio::time::Instant::now() + pause);
+                        format!("Remote: sign-in paused for {} s", whole_seconds(pause))
+                    }
+                    None => "Remote: wrong password".to_owned(),
+                };
+                self.notice(NoticeLevel::Info, text);
             }
             RemoteEvent::Disconnected(id) => {
                 if self
