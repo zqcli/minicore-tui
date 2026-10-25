@@ -443,3 +443,18 @@ test('forwarded background notices are recognised by their session label', () =>
   assert.equal(MC.noticeLabel('"Fix parser": model error'), null);
   assert.equal(MC.noticeLabel('Session renamed'), null);
 });
+
+test('only the streaming tail of a busy transcript is the block being written', () => {
+  const { MC } = load();
+  const said = (text, streaming = true) => ({ type: 'assistant', loop_id: 'l', request: 1, reasoning: '', text, streaming });
+  const tool = { type: 'tool', call_id: 'c', name: 'bash', detail: 'ls', state: 'succeeded' };
+  // The TUI keeps every assistant block of the running turn streaming; only the tail is still being written.
+  const turn = [blocks[0], said('first'), tool, said('second')];
+  assert.equal(MC.liveBlock(turn, true), 3);
+  assert.equal(MC.liveBlock(turn.slice(0, 3), true), -1, 'a tool at the tail: nothing is being written');
+  assert.equal(MC.liveBlock(turn, false), -1, 'idle: nothing is being written');
+  assert.equal(MC.liveBlock([...turn.slice(0, 3), said('done', false)], true), -1);
+  // A freshly started, still empty request is the tail: the earlier answer is done even though it is not shown as live.
+  assert.equal(MC.liveBlock([said('first'), said('')], true), 1);
+  assert.equal(MC.liveBlock([], true), -1);
+});

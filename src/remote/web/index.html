@@ -654,6 +654,13 @@ globalThis.MC = (() => {
     };
   }
 
+  // The block being written: the transcript's last block when it is a streaming assistant in a busy session.
+  // The TUI keeps every assistant block of a running turn streaming until the turn ends, so earlier ones are done.
+  const liveBlock = (blocks, busy) => {
+    const i = blocks.length - 1, b = blocks[i];
+    return busy && b && b.type === 'assistant' && b.streaming ? i : -1;
+  };
+
   // ---- paths ----
   function splitPath(p) {
     const sep = p.includes('/') ? '/' : '\\', parts = p.split(sep).filter(Boolean);
@@ -815,7 +822,7 @@ globalThis.MC = (() => {
     login, hello, intents, fs, createStore, intent, request, pending, disconnect, sendAgain, unconfirmed, diffBlocks, applyBlocks, reduce,
     explain, lockText, fmtClock, unreachable, fsError,
     relTime, dayGroup, groupSessions, matchSession, fmtElapsed, fmtDur, fmtTok,
-    toolKind, isDiffTool, activitySummary, turnEndText, compactionText, diffClass, statusLine,
+    toolKind, isDiffTool, liveBlock, activitySummary, turnEndText, compactionText, diffClass, statusLine,
     splitPath, within, crumbs, recentWorkspaces, liveGroups, backgroundSummary, sessionTransitions, noticeLabel, inline, parseMd, SAFE_URL,
   };
 })();
@@ -1216,7 +1223,7 @@ function fsCall(body, cb) {
 
 // ---- transcript ----
 const log = $('log'), box = $('blocks'), nodes = [], dirty = new Set(), open_ = new Set();
-let lo = 0, win = MC.WINDOW, stick = true, anchor = false, raf = 0, wasBusy = false;
+let lo = 0, win = MC.WINDOW, stick = true, anchor = false, raf = 0, wasBusy = false, liveIdx = -1;
 const schedule = () => { if (!raf) raf = requestAnimationFrame(flush); };
 const atBottom = () => log.scrollHeight - log.scrollTop - log.clientHeight < 80;
 const quiet = b => b.type === 'assistant' && !b.text && !b.reasoning;
@@ -1326,7 +1333,7 @@ function renderBlock(b, i) {
     case 'assistant': {
       const n = h('div', 'msg asst' + (b.text ? '' : ' bare'));
       if (quiet(b)) { n.hidden = true; return n; }
-      const live = b.streaming && S.state.status.busy;
+      const live = i === liveIdx;
       if (b.reasoning) {
         const k = 'r' + b.loop_id + ':' + b.request, o = open_.has(k), thinking = live && !b.text;
         n.append(h('div', 'think', h('button', { class: 'chip' + (thinking ? ' live' : ''), type: 'button', 'aria-expanded': String(o), onclick: () => toggle(k, i) },
@@ -1337,7 +1344,7 @@ function renderBlock(b, i) {
         md(MC.parseMd(b.text), body);
         if (live) caretInto(body);
         n.append(body);
-        if (!b.streaming) {
+        if (!live) {
           const c = h('button', { class: 'ib', type: 'button', 'aria-label': 'Copy message', onclick: () => copyText(b.text, c) }, icon('copy', 'sm'));
           n.append(h('div', 'acts', c));
         }
@@ -1364,6 +1371,12 @@ function renderBlock(b, i) {
 function flush() {
   raf = 0;
   if (!S.state) return;
+  // Only the block being written shows the caret, "Thinking" and no Copy; the one it hands over to re-renders.
+  const live = MC.liveBlock(S.blocks, S.state.status.busy);
+  if (live !== liveIdx) {
+    for (const i of [liveIdx, live]) if (i >= 0) dirty.add(i);
+    liveIdx = live;
+  }
   const bl = S.blocks, lo0 = lo, prevLen = lo + nodes.length;
   const wasStick = stick, fromBottom = log.scrollHeight - log.scrollTop, h0 = log.scrollHeight;
   const grew = bl.length > prevLen || dirty.has(bl.length - 1);
@@ -1482,9 +1495,8 @@ function renderState() {
     const x = s.sessions.find(y => y.id === id);
     if (!x || x.current || x.status !== 'approval') { n.remove(); attnToasts.delete(id); }
   }
-  if (!!s.status.busy !== wasBusy) { // carets and the Thinking label follow busy
+  if (!!s.status.busy !== wasBusy) { // the live block follows busy
     wasBusy = !!s.status.busy;
-    S.blocks.forEach((b, i) => { if (b.type === 'assistant' && b.streaming) dirty.add(i); });
     schedule();
   }
   renderStrip(); renderAppr(); renderTray(); updateComposer(); renderTop();
