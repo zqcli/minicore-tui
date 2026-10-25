@@ -102,3 +102,22 @@ pub fn bad_request(value: &Value) -> Value {
     }
     reply
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bad_requests_never_echo_an_oversized_or_non_string_id() {
+        for id in [
+            json!("x".repeat(65)),
+            json!("é".repeat(33)),
+            json!(1),
+            Value::Null,
+        ] {
+            assert_eq!(bad_request(&json!({"t":"fs_list", "id":id}))["id"], "");
+        }
+        let id = "x".repeat(64);
+        assert_eq!(bad_request(&json!({"t":"intent", "id":id}))["id"], id);
+    }
+}

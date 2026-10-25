@@ -479,10 +479,24 @@ mod tests {
         )
         .await
         .unwrap();
-        let Msg::Remote(RemoteEvent::Connect { accepted, .. }) = rx.recv().await.unwrap() else {
-            panic!("admission")
-        };
-        accepted.send(false).unwrap();
+        let candidate = rx.recv().await.unwrap();
+        let (tx, _messages) = mpsc::unbounded_channel();
+        let (_fake, mut app) = crate::testing::FakeAgent::start(tx);
+        app.remote.url = Some(format!("http://{address}"));
+        let (outbound, _output) = mpsc::channel(512);
+        let (close, _closing) = watch::channel(None);
+        app.remote.connection = Some(Connection {
+            id: 0,
+            generation: 0,
+            device: super::super::auth::Device {
+                name: "existing phone".into(),
+                token_sha256: "existing hash".into(),
+                paired_at: String::new(),
+            },
+            outbound,
+            close,
+        });
+        app.on_msg(candidate);
         assert_eq!(receive(&mut socket).await["code"], "busy");
         assert!(!dir.path().join("remote-devices.json").exists());
         assert!(auth.lock().unwrap().pairing.active());
