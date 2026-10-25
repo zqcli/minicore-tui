@@ -188,6 +188,9 @@ allow_insecure = false            # must be true for a non-loopback bind
 Remote settings are validated at startup, including with `--agent-config`.
 A non-loopback bind requires explicit consent because the listener has no TLS.
 Use a private network, tunnel or TLS reverse proxy for access across networks.
+A reverse proxy must preserve the browser-facing `Host` authority, including its
+port when present: the WebSocket Origin check compares that host and port with
+`Origin`. Replacing `Host` with the backend address causes a 403 response.
 `url` must start with `http://` or `https://` and have no trailing slash.
 Roots must be a non-empty list of existing directories; a leading `~/` expands
 from the user's home, and paths are canonicalized. These roots restrict the
@@ -206,7 +209,9 @@ address the OS selects for LAN routing. Set `url` explicitly when using a tunnel
 reverse proxy or a machine with multiple networks.
 
 Paired-device names, pairing timestamps and SHA-256 token hashes are stored in
-`<TUI dir>/remote-devices.json`, atomically and with mode 0600 on Unix. Plain tokens
+`<TUI dir>/remote-devices.json`, atomically and with mode 0600 on Unix. Windows
+inherits the directory's permissions; the TUI does not harden Windows ACLs, so
+restrict access to the TUI directory yourself. Plain tokens
 are never stored there. Delete the file and restart remote mode to forget devices.
 `/remote off` disconnects the phone, stops listening and restores local input;
 a phone disconnect alone leaves remote mode Waiting. A second device is refused,

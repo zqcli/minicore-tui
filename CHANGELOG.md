@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Remote streaming updates are frame-paced and send only newly appended text;
+  unchanged catalogs are cached. Pairing QR codes are encoded once, and the open
+  Remote sheet redraws at countdown boundaries and expiry without polling.
+- Rejected pairing does not store a device or spend a valid code. Phone approvals
+  validate the answer kind, and remote shutdown flushes `bye` and a close frame.
+- Directory browsing skips unreadable entries and looping symlinks; new folder
+  names reject Windows device names and trailing dots/spaces on every platform.
 - The phone directory picker can browse configured roots and create folders,
   with filesystem work off the terminal loop. Replaced or disconnected controllers
   cannot start queued directory operations or receive their results.

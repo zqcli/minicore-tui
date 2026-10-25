@@ -199,7 +199,8 @@ list holds no empty sessions. While `app.session` is `None`:
 ### Remote control
 
 `--remote` binds before entering the terminal; `/remote on` binds asynchronously.
-`RemoteMode` is Off, Waiting or Connected. Waiting still freezes local sending:
+`RemoteMode` is derived as Off, Waiting or Connected from the listener URL and
+accepted connection; it is not independently mutable. Waiting still freezes local sending:
 only `/remote off` restores local control. The reducer alone admits connections:
 a different device gets `busy`, the same token replaces the old socket with
 `bye replaced`. Connection ids keep old requests and disconnects from affecting
@@ -220,19 +221,28 @@ under the canonical configured roots. It creates no empty session. `--continue`
 still selects against the original launch workspace. Session selection and the
 phone catalog use canonical path-prefix checks, not file-content reads.
 
-After each main-loop iteration `sync_remote` returns immediately without a phone.
-Otherwise `remote::view` sends a snapshot on connection or residency change,
-index-wise revision upserts (plus the new length), and state only when its
-serialized value changes. The tracker keeps only the resident revisions and last
-state; it is not an event log. `LiveTurn::started_ms` is captured once so elapsed
+After each paced frame (or its inactive-terminal equivalent), and before exit,
+`sync_remote` returns immediately without a phone. Otherwise `remote::view` sends
+a snapshot on connection or residency change, revision-indexed block upserts,
+and state only when its serialized value changes. Streaming assistants use
+append-only suffix updates until they finish, when one full block is sent.
+The tracker keeps resident revisions, streaming keys and byte lengths, and the
+last serialized state; it is not an event log. Catalogs are cached by generation,
+so unchanged frames never rebuild or sort the full session catalog. `LiveTurn::started_ms` is captured once so elapsed
 time belongs to the client. The footer and projection share the pure
 `app::session::context_percent` calculation. The projection never imports UI code.
 
 Only connection tasks own network timers: a 10 s HTTP head/first-message limit,
 20 s pings and a 60 s idle cutoff. At most eight unauthenticated connections can
 wait, messages are limited to 1 MiB and each phone's outbound queue to 512
-messages; overflow drops that connection. No remote timer wakes the TUI main loop.
+messages; overflow drops that connection. Only an open Remote sheet with a valid
+pairing code adds countdown/expiry deadlines to the existing `next_expiry` path.
+QR modules are encoded once on code creation, stored in `Remote`, and rendered
+without encoding or mutable UI state. No remote polling timer wakes the main loop.
 Pairing codes expire after ten minutes, are single-use and lock after five failures.
+Pairing candidates are generated before reducer admission but consumed and persisted
+only after acceptance; rejected admission leaves the code available. Shutdown
+invalidates old codes and allows at most 500 ms for `bye` and WebSocket close.
 Device tokens are OS-random; only SHA-256 hashes reach `remote-devices.json`,
 atomically written with Unix mode 0600. The authenticated connection task runs
 directory-picker requests through `remote::fs` using `spawn_blocking`. Its reducer-owned close signal revokes queued
