@@ -40,7 +40,7 @@ document disagree after the feature lands, the code wins and this file is fixed.
   phone uses.
 - **Not in scope:** TLS, sleep prevention, per-device revocation, push
   notifications, delete/move/upload in the directory browser, Git clone,
-  `agent.reload`, `agent.shutdown`, `session.delete` from the phone.
+  `agent.reload` and `agent.shutdown` from the phone.
 
 ## Configuration and command line
 
@@ -235,6 +235,8 @@ password. `busy`: another device is in control. `version`: `v` is not 1.
 {"t":"intent","id":"c23","kind":"new_session","workspace":"/Users/me/Develops/app","profile":"coding"}
 {"t":"intent","id":"c24","kind":"set_model","model":"gpt-6-luna"}
 {"t":"intent","id":"c25","kind":"set_reasoning","level":"high"}
+{"t":"intent","id":"c29","kind":"rename_session","session_id":"ses_...","title":"Fix the parser"}
+{"t":"intent","id":"c30","kind":"delete_session","session_id":"ses_..."}
 {"t":"fs_roots","id":"c26"}
 {"t":"fs_list","id":"c27","path":"/Users/me/Develops","hidden":false}
 {"t":"fs_mkdir","id":"c28","parent":"/Users/me/Develops","name":"new-app"}
@@ -258,6 +260,8 @@ dispatched it, or refused it):
 | `open_session` | Open that session (it becomes resident in the TUI too). | unknown id; its workspace is outside `roots` |
 | `new_session` | Leave the session for a draft in `workspace` (default: the current draft workspace) with optional `profile`; the next `submit` creates it. No empty session is created. | workspace relative, outside `roots`, missing or not a directory; unknown profile |
 | `set_model` / `set_reasoning` | As `/model` and `/reasoning` (session or draft). | unknown model or level |
+| `rename_session` | Rename any listed session through the sessions picker's rename path (`session.rename` with its id); the title is trimmed, and an empty title clears it so the label falls back to the first prompt or short id. The catalog, the resident session and the phone's state follow; the notice `Session renamed` is forwarded. | unknown id; workspace outside `roots`; title over 200 characters or containing control characters |
+| `delete_session` | Delete a session permanently through the local delete path (`session.close` when loaded, then `session.delete`); it leaves the catalog and the phone's list; the notice `Session deleted` is forwarded. The phone confirms before sending. | unknown id; workspace outside `roots`; it is the resident session (`"Open another session before deleting this one"`) |
 
 `submit` and `queue` trim trailing whitespace like local sends.
 A refused `submit` or `queue` text is never put into the local composer. When the
