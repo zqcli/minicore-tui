@@ -7,8 +7,9 @@
   client. The phone signs in once with the password shown in the TUI and then
   controls the open session: it sends messages, steers, queues follow-ups,
   answers approvals, stops turns, loads older history, switches model and
-  reasoning, opens sessions, and starts new ones in folders it browses (or
-  creates) under the configured roots. See `docs/design-remote.md`.
+  reasoning, opens, renames and deletes sessions, and starts new ones in folders
+  it browses (or creates) under the configured roots. See
+  `docs/design-remote.md`.
 - While remote control is on, the TUI shows a status screen instead of the
   transcript: the address, the password, the phone in control, the session,
   workspace and model, what the Agent is doing and refused sign-ins. The editor

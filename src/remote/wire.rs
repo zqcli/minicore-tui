@@ -55,6 +55,13 @@ pub enum Intent {
     SetReasoning {
         level: String,
     },
+    RenameSession {
+        session_id: String,
+        title: String,
+    },
+    DeleteSession {
+        session_id: String,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -106,6 +113,22 @@ pub fn bad_request(value: &Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn session_rename_and_delete_intents_deserialize() {
+        let rename: Intent = serde_json::from_value(
+            json!({"t":"intent", "id":"c29", "kind":"rename_session", "session_id":"ses_1", "title":"Fix"}),
+        )
+        .unwrap();
+        assert!(
+            matches!(rename, Intent::RenameSession { session_id, title } if session_id == "ses_1" && title == "Fix")
+        );
+        let delete: Intent = serde_json::from_value(
+            json!({"t":"intent", "id":"c30", "kind":"delete_session", "session_id":"ses_1"}),
+        )
+        .unwrap();
+        assert!(matches!(delete, Intent::DeleteSession { session_id } if session_id == "ses_1"));
+    }
 
     #[test]
     fn bad_requests_never_echo_an_oversized_or_non_string_id() {

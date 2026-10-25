@@ -401,7 +401,7 @@ impl App {
         }
     }
 
-    fn rename_session(&self, session_id: String, title: String) {
+    pub(super) fn rename_session(&self, session_id: String, title: String) {
         let client = self.client.clone();
         self.spawn_msg(async move {
             let params = json!({ "session_id": session_id, "title": title.trim() });

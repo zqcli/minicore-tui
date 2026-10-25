@@ -258,15 +258,28 @@ impl App {
                 if self.loading_session {
                     return Err("A session is opening or being created".into());
                 }
-                let info = self
-                    .sessions
-                    .iter()
-                    .find(|s| s.session_id == session_id)
-                    .ok_or("Unknown session")?;
-                if !fs::within(self.remote.roots(), std::path::Path::new(&info.workspace)) {
-                    return Err("outside_roots".into());
-                }
+                self.remote_session(&session_id)?;
                 self.open_session(session_id);
+            }
+            Intent::RenameSession { session_id, title } => {
+                self.remote_session(&session_id)?;
+                if title.trim().chars().count() > 200 || title.chars().any(char::is_control) {
+                    return Err("bad_request".into());
+                }
+                self.rename_session(session_id, title);
+            }
+            Intent::DeleteSession { session_id } => {
+                self.remote_session(&session_id)?;
+                if self
+                    .session
+                    .as_ref()
+                    .is_some_and(|session| session.info.session_id == session_id)
+                {
+                    return Err("Open another session before deleting this one".into());
+                }
+                // Not `Action::DeleteSession`: local gating denies it in remote mode.
+                let client = self.client.clone();
+                self.spawn_msg(tasks::delete_session(client, session_id));
             }
             Intent::NewSession { workspace, profile } => {
                 if self.loading_session {
@@ -302,6 +315,19 @@ impl App {
                 let level = Reasoning::parse(&level).ok_or("Unknown reasoning level")?;
                 self.set_reasoning(level);
             }
+        }
+        Ok(())
+    }
+
+    /// A catalog session the phone may act on: known, and under the roots.
+    fn remote_session(&self, session_id: &str) -> Result<(), String> {
+        let info = self
+            .sessions
+            .iter()
+            .find(|s| s.session_id == session_id)
+            .ok_or("Unknown session")?;
+        if !fs::within(self.remote.roots(), std::path::Path::new(&info.workspace)) {
+            return Err("outside_roots".into());
         }
         Ok(())
     }

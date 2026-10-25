@@ -588,3 +588,129 @@ async fn the_status_screen_neither_scrolls_nor_selects() {
     assert!(h.app.press.is_none() && h.app.selection.is_none());
     assert_eq!(h.app.scroll, crate::app::Scroll::Follow);
 }
+
+/// `s1` resident and `s2` listed under the roots, `s3` outside them, with a
+/// phone admitted and its first snapshot sent.
+async fn catalog() -> (Harness, mpsc::Receiver<Value>) {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.app.remote.config = Some(config(std::path::PathBuf::from("/tmp/ws")));
+    h.app.remote.url = Some("http://localhost:8765".into());
+    for (id, workspace) in [("s2", "/tmp/ws/app"), ("s3", "/elsewhere")] {
+        let mut info = session_info(id);
+        info["workspace"] = json!(workspace);
+        h.app.sessions.push(serde_json::from_value(info).unwrap());
+    }
+    h.app.catalog_generation += 1;
+    let (mut output, _closing, admission) = phone(&mut h, 1, "phone");
+    assert!(admission.await.unwrap());
+    assert!(synced_sessions(&mut h, &mut output).is_some());
+    (h, output)
+}
+
+/// The session list of the last state the next sync sends, if it sends one.
+fn synced_sessions(h: &mut Harness, output: &mut mpsc::Receiver<Value>) -> Option<Vec<Value>> {
+    h.app.sync_remote();
+    let mut sessions = None;
+    while let Ok(message) = output.try_recv() {
+        if let Some(list) = message["state"]["sessions"].as_array() {
+            sessions = Some(list.clone());
+        }
+    }
+    sessions
+}
+
+fn listed<'a>(sessions: &'a [Value], id: &str) -> Option<&'a Value> {
+    sessions.iter().find(|session| session["id"] == id)
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_phone_renames_another_session_and_its_list_follows() {
+    let (mut h, mut output) = catalog().await;
+    let mut renamed = session_info("s2");
+    renamed["workspace"] = json!("/tmp/ws/app");
+    renamed["title"] = json!("Parser fix");
+    h.fake.script("session.rename", json!({"session": renamed}));
+    let before = h.calls("session.rename").len();
+    request(
+        &mut h,
+        json!({"kind":"rename_session", "session_id":"s2", "title":"  Parser fix  "}),
+    );
+    assert_eq!(output.recv().await.unwrap()["ok"], true);
+    h.settle().await;
+    let calls = h.calls("session.rename");
+    assert_eq!(calls.len(), before + 1);
+    assert_eq!(calls[before]["session_id"], "s2");
+    assert_eq!(calls[before]["title"], "Parser fix");
+    let sessions = synced_sessions(&mut h, &mut output).expect("a new state");
+    assert_eq!(listed(&sessions, "s2").unwrap()["title"], "Parser fix");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_long_or_control_character_title_is_refused_before_any_rename() {
+    let (mut h, mut output) = catalog().await;
+    let before = h.calls("session.rename").len();
+    for title in ["x".repeat(201), "two\nlines".into()] {
+        request(
+            &mut h,
+            json!({"kind":"rename_session", "session_id":"s2", "title":title}),
+        );
+        let ack = output.recv().await.unwrap();
+        assert_eq!(
+            (ack["ok"].clone(), ack["error"].clone()),
+            (json!(false), json!("bad_request"))
+        );
+    }
+    h.settle().await;
+    assert_eq!(h.calls("session.rename").len(), before);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_phone_deletes_another_session_and_it_leaves_the_list() {
+    let (mut h, mut output) = catalog().await;
+    h.fake.script("session.close", json!({}));
+    h.fake.script("session.delete", json!({}));
+    request(&mut h, json!({"kind":"delete_session", "session_id":"s2"}));
+    assert_eq!(output.recv().await.unwrap()["ok"], true);
+    h.settle().await;
+    assert_eq!(h.calls("session.close")[0]["session_id"], "s2");
+    assert_eq!(h.calls("session.delete")[0]["session_id"], "s2");
+    let sessions = synced_sessions(&mut h, &mut output).expect("a new state");
+    assert!(listed(&sessions, "s2").is_none());
+    assert!(listed(&sessions, "s1").is_some());
+    assert!(h.notices().contains(&"Session deleted".to_owned()));
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_resident_unknown_and_outside_sessions_are_neither_renamed_nor_deleted() {
+    let (mut h, mut output) = catalog().await;
+    let renames = h.calls("session.rename").len();
+    for (intent, error) in [
+        (
+            json!({"kind":"delete_session", "session_id":"s1"}),
+            "Open another session before deleting this one",
+        ),
+        (
+            json!({"kind":"delete_session", "session_id":"missing"}),
+            "Unknown session",
+        ),
+        (
+            json!({"kind":"delete_session", "session_id":"s3"}),
+            "outside_roots",
+        ),
+        (
+            json!({"kind":"rename_session", "session_id":"missing", "title":"x"}),
+            "Unknown session",
+        ),
+        (
+            json!({"kind":"rename_session", "session_id":"s3", "title":"x"}),
+            "outside_roots",
+        ),
+    ] {
+        request(&mut h, intent.clone());
+        assert_eq!(output.recv().await.unwrap()["error"], error, "{intent}");
+    }
+    h.settle().await;
+    assert!(h.calls("session.close").is_empty());
+    assert!(h.calls("session.delete").is_empty());
+    assert_eq!(h.calls("session.rename").len(), renames);
+}
