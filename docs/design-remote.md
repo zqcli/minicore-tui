@@ -307,7 +307,13 @@ Assistant `text` is raw Markdown; clients render it.
 - `State` is built, serialized and compared with the last one sent; only a
   difference sends `state`. Elapsed time is computed by the client from
   `started_ms`, so a running turn does not send a `state` every frame.
-- An idle TUI with a connected phone does nothing: no timers in the main loop.
+- An idle TUI with a connected phone does nothing unless the Remote sheet is
+  open with a valid pairing code. That sheet contributes its next whole-minute
+  countdown boundary and final expiry to the existing `next_expiry` deadline;
+  closing the sheet removes this wakeup. It does not add a polling timer.
+- Pairing-code creation encodes the QR matrix once in `Remote`. The UI reads
+  `pairing_qr()` and only converts cached modules to terminal rows; it holds no
+  encoding state and never encodes during a draw.
 
 ## Host directory interface
 

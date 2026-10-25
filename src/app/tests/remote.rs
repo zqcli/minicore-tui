@@ -134,6 +134,51 @@ async fn a_real_phone_pairs_submits_through_the_agent_and_receives_the_user_bloc
 }
 
 #[tokio::test(start_paused = true)]
+async fn pairing_redraws_only_the_open_sheet_and_reuses_cached_qr_modules() {
+    let mut h = Harness::new();
+    let dir = tempfile::tempdir().unwrap();
+    let auth = std::sync::Arc::new(std::sync::Mutex::new(
+        crate::remote::auth::Auth::load(dir.path().join("remote-devices.json")).unwrap(),
+    ));
+    h.app.remote.auth = Some(auth.clone());
+    h.app.remote.url = Some("http://127.0.0.1:8765".into());
+    h.app.remote.refresh_pairing_qr();
+    let (matrix, width) = h.app.remote.pairing_qr().unwrap();
+    assert_eq!(matrix.len(), width * width);
+    let cached = matrix.as_ptr();
+    let now = tokio::time::Instant::now();
+    assert_eq!(h.app.next_expiry(), None);
+    h.app.overlay = Overlay::Remote;
+    assert_eq!(
+        h.app.next_expiry(),
+        Some(now + std::time::Duration::from_secs(60))
+    );
+    tokio::time::advance(std::time::Duration::from_secs(60)).await;
+    h.app.tick();
+    assert_eq!(h.app.remote.pairing_qr().unwrap().0.as_ptr(), cached);
+    assert_eq!(
+        h.app.next_expiry(),
+        Some(now + std::time::Duration::from_secs(120))
+    );
+    h.app.overlay = Overlay::None;
+    assert_eq!(h.app.next_expiry(), None);
+    tokio::time::advance(std::time::Duration::from_secs(480)).await;
+    h.app.overlay = Overlay::Remote;
+    assert_eq!(
+        h.app.next_expiry(),
+        Some(now + std::time::Duration::from_secs(600))
+    );
+    tokio::time::advance(std::time::Duration::from_secs(60)).await;
+    assert_eq!(h.app.next_expiry(), None);
+    assert!(h.app.remote.pairing_qr().is_none());
+    auth.lock().unwrap().pairing = crate::remote::auth::Pairing::new().unwrap();
+    h.app.remote.refresh_pairing_qr();
+    h.app.remote.stop("remote_off");
+    assert!(!auth.lock().unwrap().pairing.active());
+    assert!(h.app.remote.pairing_qr().is_none());
+}
+
+#[tokio::test(start_paused = true)]
 async fn answers_validate_prompt_kind_and_index_before_consuming_the_interaction() {
     for approval in [true, false] {
         for choice in [
@@ -147,7 +192,7 @@ async fn answers_validate_prompt_kind_and_index_before_consuming_the_interaction
             json!("unknown"),
         ] {
             let mut h = Harness::opened(display_read(0, 0)).await;
-            h.app.remote.mode = RemoteMode::Waiting;
+            h.app.remote.url = Some("http://localhost:8765".into());
             let (mut output, _closing, admission) = phone(&mut h, 1, "phone");
             assert!(admission.await.unwrap());
             h.app.session.as_mut().unwrap().interaction = Some(crate::app::PendingInteraction {
@@ -188,7 +233,7 @@ async fn answers_validate_prompt_kind_and_index_before_consuming_the_interaction
 #[tokio::test(start_paused = true)]
 async fn queue_cancel_and_history_intents_use_the_existing_reducer_operations() {
     let mut h = Harness::opened(display_read(0, 0)).await;
-    h.app.remote.mode = RemoteMode::Waiting;
+    h.app.remote.url = Some("http://localhost:8765".into());
     let (mut output, _closing, admission) = phone(&mut h, 1, "phone");
     assert!(admission.await.unwrap());
     h.app.session.as_mut().unwrap().live = Some(crate::app::LiveTurn::new(
@@ -222,7 +267,7 @@ async fn model_reasoning_and_absolute_workspace_are_validated_before_dispatch() 
     let mut h = Harness::opened(display_read(0, 0)).await;
     h.fake
         .script("session.update", json!({"session": session_info("s1")}));
-    h.app.remote.mode = RemoteMode::Waiting;
+    h.app.remote.url = Some("http://localhost:8765".into());
     let (mut output, _closing, admission) = phone(&mut h, 1, "phone");
     assert!(admission.await.unwrap());
     for (intent, valid) in [
@@ -244,7 +289,7 @@ async fn model_reasoning_and_absolute_workspace_are_validated_before_dispatch() 
 #[tokio::test(start_paused = true)]
 async fn a_full_outbound_queue_drops_control_and_returns_to_waiting() {
     let mut h = Harness::new();
-    h.app.remote.mode = RemoteMode::Waiting;
+    h.app.remote.url = Some("http://localhost:8765".into());
     let (_output, closing, admission) = phone(&mut h, 1, "phone");
     assert!(admission.await.unwrap());
     for _ in 0..=512 {
@@ -260,7 +305,7 @@ async fn local_submit_is_refused_but_phone_submit_preserves_the_local_draft() {
     let mut h = Harness::opened(display_read(0, 0)).await;
     h.fake.script("turn.send", json!({"turn":turn("l1")}));
     h.fake.script_held("turn.wait", waited("l1", completed()));
-    h.app.remote.mode = RemoteMode::Waiting;
+    h.app.remote.url = Some("http://localhost:8765".into());
     h.app.composer.set_text("local draft");
     h.action(Action::Submit);
     assert_eq!(h.app.composer.text(), "local draft");
@@ -315,7 +360,7 @@ async fn entering_remote_recalls_followups_and_an_agent_refusal_returns_only_to_
 async fn controller_admission_replaces_only_the_same_device_and_disconnect_keeps_local_input_frozen()
  {
     let mut h = Harness::new();
-    h.app.remote.mode = RemoteMode::Waiting;
+    h.app.remote.url = Some("http://localhost:8765".into());
     let (_out, old, admission) = phone(&mut h, 1, "first");
     assert!(admission.await.unwrap());
     let (_out2, _close2, admission) = phone(&mut h, 2, "second");
@@ -328,7 +373,7 @@ async fn controller_admission_replaces_only_the_same_device_and_disconnect_keeps
     h.action(Action::Remote("off".into()));
     assert_eq!(*closing.borrow(), Some("remote_off"));
     assert_eq!(h.app.remote.mode(), RemoteMode::Off);
-    h.app.remote.mode = RemoteMode::Waiting;
+    h.app.remote.url = Some("http://localhost:8765".into());
     let (_out4, _close4, admission) = phone(&mut h, 4, "first");
     assert!(admission.await.unwrap());
     h.app.on_msg(Msg::Remote(RemoteEvent::Disconnected(4)));
@@ -343,7 +388,7 @@ async fn root_checks_and_stale_answers_refuse_before_dispatch_and_new_drafts_use
     let root = tempfile::tempdir().unwrap();
     let workspace = root.path().canonicalize().unwrap();
     h.app.remote.config = Some(config(workspace.clone()));
-    h.app.remote.mode = RemoteMode::Waiting;
+    h.app.remote.url = Some("http://localhost:8765".into());
     let (mut output, _close, admission) = phone(&mut h, 1, "phone");
     assert!(admission.await.unwrap());
     request(&mut h, json!({"kind":"open_session", "session_id":"s1"}));
@@ -376,7 +421,7 @@ async fn root_checks_and_stale_answers_refuse_before_dispatch_and_new_drafts_use
 #[tokio::test(start_paused = true)]
 async fn a_handshake_from_a_stopped_listener_cannot_take_control_after_restart() {
     let mut h = Harness::new();
-    h.app.remote.mode = RemoteMode::Waiting;
+    h.app.remote.url = Some("http://localhost:8765".into());
     h.app.remote.generation = 2;
     let (outbound, _output) = mpsc::channel(512);
     let (close, _closing) = watch::channel(None);
@@ -403,7 +448,7 @@ async fn a_handshake_from_a_stopped_listener_cannot_take_control_after_restart()
 #[tokio::test(start_paused = true)]
 async fn remote_approval_keeps_the_local_keyboard_and_denied_commands_keep_the_draft() {
     let mut h = Harness::opened(display_read(0, 0)).await;
-    h.app.remote.mode = RemoteMode::Waiting;
+    h.app.remote.url = Some("http://localhost:8765".into());
     h.app.session.as_mut().unwrap().interaction = Some(crate::app::PendingInteraction {
         turn: crate::protocol::TurnRef::new("s1", "l1"),
         interaction_id: "approval".into(),
@@ -432,7 +477,7 @@ async fn remote_approval_keeps_the_local_keyboard_and_denied_commands_keep_the_d
 #[tokio::test(start_paused = true)]
 async fn remote_off_restores_local_submit_and_quit_requires_two_requests_within_three_seconds() {
     let mut h = Harness::opened(display_read(0, 0)).await;
-    h.app.remote.mode = RemoteMode::Waiting;
+    h.app.remote.url = Some("http://localhost:8765".into());
     h.app.overlay = Overlay::None;
     h.ctrl(KeyCode::Char('c'));
     assert!(!h.app.quit);

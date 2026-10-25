@@ -94,7 +94,6 @@ impl Bound {
 #[derive(Default)]
 pub struct Remote {
     pub view: view::View,
-    pub mode: RemoteMode,
     pub connection: Option<Connection>,
     pub config: Option<crate::config::Remote>,
     pub auth: Option<Arc<Mutex<Auth>>>,
@@ -104,11 +103,18 @@ pub struct Remote {
     pub quit_armed: Option<tokio::time::Instant>,
     stop: Option<oneshot::Sender<()>>,
     server_task: Option<tokio::task::JoinHandle<()>>,
+    pairing_qr: Option<(Vec<bool>, usize)>,
 }
 
 impl Remote {
     pub fn mode(&self) -> RemoteMode {
-        self.mode
+        if self.url.is_none() {
+            RemoteMode::Off
+        } else if self.connection.is_some() {
+            RemoteMode::Connected
+        } else {
+            RemoteMode::Waiting
+        }
     }
     pub fn url(&self) -> Option<&str> {
         self.url.as_deref()
@@ -124,13 +130,41 @@ impl Remote {
             .active()
             .then(|| (auth.pairing.code.clone(), auth.pairing.expires))
     }
+    pub fn refresh_pairing_qr(&mut self) {
+        self.pairing_qr = self.pairing().and_then(|(code, _)| {
+            let link = format!("{}/#pair={code}", self.url.as_deref()?);
+            let qr = qrcode::QrCode::with_error_correction_level(link, qrcode::EcLevel::L).ok()?;
+            let width = qr.width();
+            let modules = (0..width * width)
+                .map(|i| qr[(i % width, i / width)] == qrcode::Color::Dark)
+                .collect();
+            Some((modules, width))
+        });
+    }
+
+    pub fn pairing_qr(&self) -> Option<(&[bool], usize)> {
+        self.pairing()?;
+        self.pairing_qr
+            .as_ref()
+            .map(|(modules, width)| (modules.as_slice(), *width))
+    }
+
+    pub fn next_pairing_expiry(&self) -> Option<tokio::time::Instant> {
+        let now = tokio::time::Instant::now();
+        let (_, expires) = self.pairing()?;
+        let minutes = (expires - now).as_nanos().div_ceil(60_000_000_000) as u64;
+        Some(expires - std::time::Duration::from_secs((minutes - 1) * 60))
+    }
+
     pub fn active(&self) -> bool {
-        self.mode != RemoteMode::Off
+        self.mode() != RemoteMode::Off
     }
     pub fn roots(&self) -> &[PathBuf] {
-        self.config
+        &self
+            .config
             .as_ref()
-            .map_or(&[], |config| config.roots.as_slice())
+            .expect("remote settings initialized at startup")
+            .roots
     }
 
     pub fn start(&mut self, bound: Bound, tx: crate::app::Tx) {
@@ -146,7 +180,7 @@ impl Remote {
         self.stop = Some(stop);
         self.auth = Some(bound.auth);
         self.url = Some(bound.url);
-        self.mode = RemoteMode::Waiting;
+        self.refresh_pairing_qr();
         self.starting = None;
     }
 
@@ -161,7 +195,7 @@ impl Remote {
         if let Some(stop) = self.stop.take() {
             let _ = stop.send(());
         }
-        self.mode = RemoteMode::Off;
+        self.pairing_qr = None;
         if let Some(auth) = self.auth.take() {
             auth.lock().unwrap().pairing.invalidate();
         }
@@ -182,7 +216,6 @@ impl Remote {
             .is_some_and(|phone| !phone.send(message))
         {
             self.connection = None;
-            self.mode = RemoteMode::Waiting;
         }
     }
 }

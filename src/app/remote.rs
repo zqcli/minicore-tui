@@ -8,7 +8,7 @@ use serde_json::json;
 use super::{Action, Answer, App, Msg, NoticeLevel, Overlay, Panel, Session, tasks};
 use crate::protocol::{self, Reasoning};
 use crate::remote::{
-    Bound, RemoteEvent, RemoteMode,
+    Bound, RemoteEvent,
     auth::Pairing,
     fs,
     wire::{self, Choice, Intent},
@@ -92,7 +92,10 @@ impl App {
                 });
                 match result {
                     Some(Err(error)) => self.notice(NoticeLevel::Error, error),
-                    Some(Ok(())) => self.open_panel(Panel::Remote),
+                    Some(Ok(())) => {
+                        self.remote.refresh_pairing_qr();
+                        self.open_panel(Panel::Remote);
+                    }
                     None => self.notice(
                         NoticeLevel::Info,
                         "Start remote control with /remote on first",
@@ -150,7 +153,6 @@ impl App {
                 if let Some(old) = self.remote.connection.replace(connection) {
                     old.bye("replaced");
                 }
-                self.remote.mode = RemoteMode::Connected;
             }
             RemoteEvent::Disconnected(id) => {
                 if self
@@ -160,7 +162,6 @@ impl App {
                     .is_some_and(|phone| phone.id == id)
                 {
                     self.remote.connection = None;
-                    self.remote.mode = RemoteMode::Waiting;
                 }
             }
             RemoteEvent::Request {

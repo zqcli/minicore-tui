@@ -1179,7 +1179,7 @@ fn listening(app: &mut App) {
     auth.pairing.expires = tokio::time::Instant::now() + std::time::Duration::from_secs(600);
     app.remote.auth = Some(std::sync::Arc::new(std::sync::Mutex::new(auth)));
     app.remote.url = Some("http://192.168.1.20:8765".into());
-    app.remote.mode = crate::remote::RemoteMode::Waiting;
+    app.remote.refresh_pairing_qr();
 }
 
 /// A phone is in control; its pairing code is spent.
@@ -1206,7 +1206,6 @@ fn connected(app: &mut App) {
         outbound,
         close,
     });
-    app.remote.mode = crate::remote::RemoteMode::Connected;
 }
 
 #[test]

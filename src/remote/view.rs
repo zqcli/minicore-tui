@@ -241,6 +241,12 @@ mod tests {
     fn connected_app() -> (crate::testing::FakeAgent, App) {
         let (tx, _rx) = mpsc::unbounded_channel();
         let (fake, mut app) = crate::testing::FakeAgent::start(tx);
+        app.remote.config = Some(crate::config::Remote {
+            bind: "127.0.0.1:0".parse().unwrap(),
+            url: None,
+            roots: vec![app.workspace.clone()],
+            allow_insecure: false,
+        });
         let (outbound, _output) = mpsc::channel(512);
         let (close, _closing) = watch::channel(None);
         app.remote.connection = Some(Connection {
@@ -428,6 +434,12 @@ mod tests {
     async fn only_changed_indices_are_upserted_and_residency_replaces_the_projection() {
         let (tx, _rx) = mpsc::unbounded_channel();
         let (_fake, mut app) = crate::testing::FakeAgent::start(tx);
+        app.remote.config = Some(crate::config::Remote {
+            bind: "127.0.0.1:0".parse().unwrap(),
+            url: None,
+            roots: vec![app.workspace.clone()],
+            allow_insecure: false,
+        });
         let (outbound, _output) = mpsc::channel(512);
         let (close, _closing) = watch::channel(None);
         app.remote.connection = Some(Connection {

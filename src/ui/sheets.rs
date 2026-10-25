@@ -81,8 +81,8 @@ fn remote_sheet(app: &App, styles: Styles, room: Size) -> Sheet {
     if let Some((code, expires)) = &pairing {
         let left = expires
             .saturating_duration_since(tokio::time::Instant::now())
-            .as_secs()
-            .div_ceil(60);
+            .as_nanos()
+            .div_ceil(60_000_000_000);
         let code = format!("{}-{} · {left} min left", &code[..4], &code[4..]);
         facts.push(("code", code));
     }
@@ -90,11 +90,14 @@ fn remote_sheet(app: &App, styles: Styles, room: Size) -> Sheet {
         facts.push(("device", device.to_owned()));
     }
     let link = pairing.map(|(code, _)| format!("{url}/#pair={code}"));
-    let qr = link.as_deref().and_then(qr::rows).filter(|rows| {
-        let wide = rows.first().map_or(0, |row| width(row));
-        wide + QR_GAP + QR_FACTS <= usize::from(room.width)
-            && sheet.height() + rows.len() as u16 <= room.height
-    });
+    let qr = remote
+        .pairing_qr()
+        .map(|(modules, width)| qr::rows(modules, width))
+        .filter(|rows| {
+            let wide = rows.first().map_or(0, |row| width(row));
+            wide + QR_GAP + QR_FACTS <= usize::from(room.width)
+                && sheet.height() + rows.len() as u16 <= room.height
+        });
     if let Some(rows) = qr {
         let cells = usize::from(room.width) - width(&rows[0]) - QR_GAP;
         let mut beside: Vec<_> = facts
