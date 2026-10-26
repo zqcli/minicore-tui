@@ -458,6 +458,7 @@ local composer during remote focus changes and is restored on local return.
 ```json
 {"i":40,"block":Block}
 {"i":41,"append":{"text":"new suffix","reasoning":"new thinking suffix"}}
+{"i":42,"append":{"output":["rest of the open line","next line",""]}}
 ```
 
 `block` replaces the whole block. `append` concatenates each supplied string to
@@ -467,6 +468,16 @@ at that index on this connection and the current block are both streaming
 assistants with the same `loop_id` and `request`, and neither text length has
 shrunk. Live assistant content is append-only. New, moved, replaced, or finished
 blocks use the full `block` form; when streaming ends the full block is sent once.
+A running tool's `append.output` continues its `output` the way the TUI's card
+grows: the first string is concatenated to the client's last output line (the
+line still being written, possibly `""`), every further string is pushed as a
+new line. The server sends it only when the last block sent at that index and
+the current one are both `running` tools whose `output_dropped` and every other
+field (call identity, name, detail, input, exit code, duration, line count,
+`truncated`) are unchanged; the tracker keeps a hash of those fields and the
+output's line count and last-line length, never the output. When the bounded
+tail drops lines from its start, anything else changes, or the tool finishes,
+the full `block` is sent; the finished block is always sent once in full.
 Snapshots always contain full blocks and replace everything. `app.notice`
 uses the routing above; local background notices keep their label prefix.
 
@@ -566,8 +577,8 @@ Assistant `text` is raw Markdown; clients render it.
 - The catalog portions of `State` are cached by the catalog generation, which
   changes on catalog assignment, merge or deletion (and listener generation for
   configured roots). Current-session marks are applied without rebuilding or
-  sorting catalogs. The tracker keeps streaming keys and byte lengths, not copies
-  of assistant content.
+  sorting catalogs. The tracker keeps streaming keys, byte and line counts, not copies
+  of assistant text or tool output.
 - `State` is built, serialized and compared with the last one sent; only a
   difference sends `state`. Elapsed time is computed by the client from
   `started_ms`, so a running turn does not send a `state` every frame.
