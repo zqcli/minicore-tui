@@ -40,8 +40,8 @@ test('the core script has no DOM or network access', () => {
 
 test('login and hello follow the handshake contract with a bounded device name', () => {
   const { MC, plain } = load();
-  assert.deepEqual(plain(MC.login('k7mq-x2pa-n9dt', 'iPhone Safari')), { t: 'login', v: 1, password: 'k7mq-x2pa-n9dt', device: 'iPhone Safari' });
-  assert.deepEqual(plain(MC.hello('tok')), { t: 'hello', v: 1, token: 'tok' });
+  assert.deepEqual(plain(MC.login('k7mq-x2pa-n9dt', 'iPhone Safari')), { t: 'login', v: 2, password: 'k7mq-x2pa-n9dt', device: 'iPhone Safari' });
+  assert.deepEqual(plain(MC.hello('tok')), { t: 'hello', v: 2, token: 'tok' });
   const ua = {
     'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1': 'iPhone Safari',
     'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/130.0 Mobile/15E148 Safari/604.1': 'iPhone Chrome',
@@ -68,6 +68,9 @@ test('every intent and filesystem request has the contract shape and a bounded u
     [I.answer('approval', 'allow_session'), { kind: 'answer', interaction_id: 'approval', choice: 'allow_session' }],
     [I.answer('approval', 'deny'), { kind: 'answer', interaction_id: 'approval', choice: 'deny' }],
     [I.answer('choice', 1), { kind: 'answer', interaction_id: 'choice', choice: 1 }],
+    [I.answer('approval', 'deny', 'use the helper instead'), { kind: 'answer', interaction_id: 'approval', choice: 'deny', message: 'use the helper instead' }],
+    [I.compact(), { kind: 'compact' }],
+    [I.unqueue(1, 'later'), { kind: 'unqueue', index: 1, text: 'later' }],
     [I.loadOlder(), { kind: 'load_older' }],
     [I.openSession('ses_one'), { kind: 'open_session', session_id: 'ses_one' }],
     [I.newSession('/work', 'coding'), { kind: 'new_session', workspace: '/work', profile: 'coding' }],
@@ -99,7 +102,53 @@ test('every intent and filesystem request has the contract shape and a bounded u
     assert.ok(Buffer.byteLength(msg.id) <= 64);
     ids.add(msg.id);
   }
-  assert.equal(ids.size, cases.length + fs.length);
+  const Q = MC.queries, qs = [
+    [Q.context(), { kind: 'context' }], [Q.changes(), { kind: 'changes' }], [Q.diff('src/a.rs'), { kind: 'diff', path: 'src/a.rs' }],
+    [Q.toolOutput('call', 65536), { kind: 'tool_output', call_id: 'call', offset: 65536 }], [Q.files('pars'), { kind: 'files', query: 'pars' }],
+  ];
+  for (const [spec, fields] of qs) {
+    const msg = plain(MC.query(s, spec));
+    assert.deepEqual(msg, { t: 'query', id: msg.id, ...fields });
+    ids.add(msg.id);
+  }
+  assert.equal(ids.size, cases.length + fs.length + qs.length);
+});
+
+test('at most four queries are in flight and results are matched to their id once', () => {
+  const { MC, plain } = load();
+  const s = MC.createStore(), sent = [];
+  while (MC.queryRoom(s)) sent.push(MC.query(s, MC.queries.changes()));
+  assert.equal(sent.length, 4);
+  const reply = { t: 'result', id: sent[0].id, ok: true, data: { branch: 'main', files: [], truncated: false } };
+  assert.deepEqual(plain(MC.reduce(s, reply, 0).result), reply);
+  assert.deepEqual(plain(MC.reduce(s, reply, 0)), {});
+  assert.equal(MC.queryRoom(s), true);
+  // A stale reply (unknown id) is ignored, and a dropped connection forgets the rest.
+  assert.deepEqual(plain(MC.reduce(s, { t: 'result', id: 'c999', ok: false, error: 'busy' }, 0)), {});
+  MC.disconnect(s);
+  assert.equal(s.q.size, 0);
+  assert.equal(MC.errorText('busy'), 'MiniCore is busy · try again in a moment');
+  assert.equal(MC.errorText('Open another session first'), 'Open another session first');
+});
+
+test('a removed queue pill drops the text the host returns, an edited one refills the composer', () => {
+  const { MC, plain } = load();
+  const s = MC.createStore();
+  const drop = MC.unqueue(s, 0, 'later', true);
+  assert.deepEqual(plain(drop), { t: 'intent', id: drop.id, kind: 'unqueue', index: 0, text: 'later' });
+  assert.deepEqual(plain(MC.reduce(s, { t: 'returned', text: 'later' }, 0)), {});
+  assert.deepEqual(plain(MC.reduce(s, { t: 'ack', id: drop.id, ok: true }, 0)).ack.ok, true);
+  MC.unqueue(s, 0, 'edit me', false);
+  assert.deepEqual(plain(MC.reduce(s, { t: 'returned', text: 'edit me' }, 0)), { returned: 'edit me' });
+  // A refused removal keeps nothing armed: a later identical return refills the composer.
+  const stale = MC.unqueue(s, 3, 'gone', true);
+  MC.reduce(s, { t: 'ack', id: stale.id, ok: false, error: 'stale' }, 0);
+  assert.deepEqual(plain(MC.reduce(s, { t: 'returned', text: 'gone' }, 0)), { returned: 'gone' });
+  // Unqueue is not a send: a dropped connection never offers it again.
+  MC.unqueue(s, 0, 'x', true);
+  MC.disconnect(s);
+  assert.equal(MC.unconfirmed(s).length, 0);
+  assert.deepEqual(plain(MC.reduce(s, { t: 'returned', text: 'x' }, 0)), { returned: 'x' });
 });
 
 test('filesystem replies are matched to their request id once', () => {
@@ -127,19 +176,22 @@ test('snapshot blocks with append and len truncation and state keep protocol fie
   assert.equal(s.blocks[1].reasoning, 'think more');
   // A full block replaces, and new indices extend the list.
   const done = { ...blocks[1], text: 'finished', streaming: false };
-  MC.reduce(s, { t: 'blocks', len: 3, upserts: [{ i: 1, block: done }, { i: 2, block: blocks[2] }] }, 0);
+  MC.reduce(s, { t: 'blocks', len: 3, upserts: [{ i: 1, block: done }, { i: 2, block: structuredClone(blocks[2]) }] }, 0);
   assert.deepEqual(plain(s.blocks), [blocks[0], done, blocks[2]]);
-  // append to a non-assistant block is ignored.
+  // Text appended to a user block is ignored; output lines append to a running tool.
   r = MC.reduce(s, { t: 'blocks', len: 3, upserts: [{ i: 0, append: { text: 'x' } }] }, 0);
   assert.deepEqual(plain(r.dirty), []);
   assert.equal(s.blocks[0].text, 'now');
+  r = MC.reduce(s, { t: 'blocks', len: 3, upserts: [{ i: 2, append: { output: ['a', 'b'] } }, { i: 2, append: { output: ['c'] } }] }, 0);
+  assert.deepEqual(plain(r.dirty), [2, 2]);
+  assert.deepEqual(plain(s.blocks[2].output), ['/work', 'a', 'b', 'c']);
   const idle = { ...state, status: { ...state.status, busy: false, started_ms: null }, interaction: null };
   assert.equal(MC.reduce(s, { t: 'state', state: idle }, 0).state, true);
   assert.deepEqual(plain(s.state), idle);
-  // The same session again only re-renders what changed; another session resets.
+  // The same session again only re-renders what changed (the tool lost its appended lines); another session resets.
   const again = MC.reduce(s, { t: 'snapshot', state: idle, blocks: structuredClone([blocks[0], done, blocks[2]]) }, 0);
   assert.equal(again.newSession, false);
-  assert.deepEqual(plain(again.dirty), []);
+  assert.deepEqual(plain(again.dirty), [2]);
   const draft = MC.reduce(s, { t: 'snapshot', state: { ...idle, session: null }, blocks: [] }, 0);
   assert.equal(draft.newSession, true);
   assert.equal(s.sid, null);
@@ -150,8 +202,9 @@ test('welcome sets the host clock offset and handshake messages map to screens',
   const { MC, plain } = load();
   const s = MC.createStore();
   assert.deepEqual(plain(MC.reduce(s, { t: 'authorized', token: 'tok' }, 0)), { token: 'tok' });
-  MC.reduce(s, { t: 'welcome', v: 1, version: '0.5.5', device: 'iPhone Safari', now_ms: 1761300003000 }, 1761300000000);
+  MC.reduce(s, { t: 'welcome', v: 2, version: '0.7.0', device: 'iPhone Safari', now_ms: 1761300003000 }, 1761300000000);
   assert.equal(s.skew, 3000);
+  assert.equal(s.version, '0.7.0');
   assert.equal(s.device, 'iPhone Safari');
   const gate = msg => plain(MC.reduce(MC.createStore(), msg, 0).gate);
   const wrong = gate({ t: 'error', code: 'wrong_password', message: 'x' });
@@ -235,9 +288,9 @@ test('other devices read per-device views and drop just one entry of this device
     { name: 'iPad Safari', session: 'x' },
   ];
   const before = structuredClone(devices);
-  assert.deepEqual(plain(MC.otherDevices(devices, 'iPhone Safari')), ['Mac Edge', 'iPhone Safari', 'iPad Safari']);
+  assert.deepEqual(plain(MC.otherDevices(devices, 'iPhone Safari')), [devices[1], devices[2], devices[3]]);
   assert.deepEqual(plain(MC.otherDevices(devices.slice(0, 1), 'iPhone Safari')), []);
-  assert.deepEqual(plain(MC.otherDevices(devices.slice(1, 2), 'iPhone Safari')), ['Mac Edge']);
+  assert.deepEqual(plain(MC.otherDevices(devices.slice(1, 2), 'iPhone Safari')).map(d => d.name), ['Mac Edge']);
   assert.deepEqual(plain(MC.otherDevices([], 'iPhone Safari')), []);
   assert.deepEqual(devices, before);
 });
@@ -312,10 +365,10 @@ test('sessions group by the local calendar day of host-adjusted time', () => {
   const now = Date.parse('2026-10-25T01:00:00Z'); // 09:00 local
   const at = iso => ({ id: iso, title: iso, workspace: '/w', updated_at: iso, current: false });
   const sessions = [at('2026-10-24T17:00:00Z'), at('2026-10-24T15:30:00Z'), at('2026-10-20T00:00:00Z'), at('2026-09-01T00:00:00Z')];
-  assert.deepEqual(plain(MC.groupSessions(sessions, now, tz, '')).map(g => [g.label, g.items.length]),
+  assert.deepEqual(plain(MC.sessionLayout(sessions, now, tz, '').groups).map(g => [g.label, g.items.length]),
     [['Today', 1], ['Yesterday', 1], ['Previous 7 days', 1], ['Older', 1]]);
   // In UTC the first two are both yesterday; a 3 s host offset moves nothing across a day here.
-  assert.deepEqual(plain(MC.groupSessions(sessions, now, 0, '')).map(g => g.label), ['Yesterday', 'Previous 7 days', 'Older']);
+  assert.deepEqual(plain(MC.sessionLayout(sessions, now, 0, '').groups).map(g => g.label), ['Yesterday', 'Previous 7 days', 'Older']);
   // The host clock offset decides: the phone is a day behind but the host says it is the next day.
   const skew = 86400000;
   assert.equal(MC.dayGroup(Date.parse('2026-10-25T00:30:00Z'), now - 86400000 + skew, tz), 'Today');
@@ -323,7 +376,7 @@ test('sessions group by the local calendar day of host-adjusted time', () => {
   assert.equal(MC.relTime(now - 5 * 60000, now, tz), '5m');
   assert.equal(MC.relTime(now - 3 * 3600000, now, tz), '3h');
   assert.equal(MC.relTime(Date.parse('2026-09-01T00:00:00Z'), now, tz), 'Sep 1');
-  assert.deepEqual(plain(MC.groupSessions([{ ...sessions[0], title: 'Fix parser' }, sessions[1]], now, tz, 'PARSER')).map(g => g.items[0].title), ['Fix parser']);
+  assert.deepEqual(plain(MC.sessionLayout([{ ...sessions[0], title: 'Fix parser' }, sessions[1]], now, tz, 'PARSER').groups).map(g => g.items[0].title), ['Fix parser']);
 });
 
 test('elapsed status line and summaries read like the TUI', () => {
@@ -332,19 +385,14 @@ test('elapsed status line and summaries read like the TUI', () => {
   assert.equal(MC.fmtElapsed(65000), '1m 05s');
   assert.equal(MC.fmtElapsed(3725000), '1h 02m');
   assert.equal(MC.fmtElapsed(-500), '0s');
-  assert.equal(MC.turnEndText(blocks[3]), 'Completed · 7.8 s · 2 requests · 1 tool · 2 files +10 −3');
-  assert.equal(MC.turnEndText({ ...blocks[3], changes: { files: 0, added: 0, removed: 0 } }), 'Completed · 7.8 s · 2 requests · 1 tool');
-  assert.equal(MC.turnEndText({ ...blocks[3], outcome: 'cancelled', changes: null, tools: 0 }), 'Stopped · 7.8 s · 2 requests');
+  const tz = -480, at = Date.parse('2026-10-25T06:02:00Z');
+  assert.deepEqual(plain(MC.turnEnd(blocks[3], at, tz)), { ok: true, parts: ['Completed', '7.8 s', '14:02', '12 tokens'], changes: { files: 2, added: 10, removed: 3 } });
+  assert.equal(MC.changesText(blocks[3].changes), '2 files +10 −3');
+  assert.equal(MC.turnEnd({ ...blocks[3], changes: { files: 0, added: 0, removed: 0 } }, null, tz).changes, null);
+  const stopped = plain(MC.turnEnd({ ...blocks[3], outcome: 'cancelled', usage: { input: 0, output: 0, cached: 0 } }, null, tz));
+  assert.deepEqual(stopped.parts, ['Stopped', '7.8 s']);
+  assert.equal(stopped.ok, false);
   assert.equal(MC.compactionText(blocks[4]), 'Context compacted · 32.1k → 2.7k tokens');
-  const tool = (name, detail) => ({ type: 'tool', call_id: name + detail, name, detail });
-  assert.equal(MC.activitySummary([tool('bash', 'a'), tool('bash', 'b'), tool('bash', 'c'), tool('edit', 'x.rs'), tool('apply_patch', 'y.rs'), tool('edit', 'x.rs')]),
-    'Ran 3 commands · edited 2 files');
-  assert.equal(MC.activitySummary([{ name: 'bash', state: 'running', call_id: 'c' }]), 'Running 1 command');
-  assert.equal(MC.activitySummary([tool('read', 'a'), tool('grep', 'b')]), 'Read 1 file · ran 1 search');
-  assert.equal(MC.diffClass('+added'), 'add');
-  assert.equal(MC.diffClass('-gone'), 'del');
-  assert.equal(MC.diffClass('+++ b/x'), 'meta');
-  assert.equal(MC.diffClass('@@ -1 +1 @@'), 'hunk');
   const running = { ...blocks[2], state: 'running', detail: 'cargo test' };
   const line = plain(MC.statusLine(state, [blocks[0], running], state.status.started_ms + 12000));
   assert.deepEqual(line, { label: 'Thinking', detail: 'bash · cargo test', elapsed: '12s', ctx: '42% context' });
@@ -352,6 +400,10 @@ test('elapsed status line and summaries read like the TUI', () => {
   assert.equal(stopping.label, 'Stopping…');
   assert.equal(stopping.detail, '');
   assert.equal(MC.statusLine({ ...state, status: { ...state.status, busy: false, started_ms: null } }, [], 0).elapsed, '');
+  // Stop is offered while a turn runs or a compaction is under way, and only then.
+  assert.equal(MC.canStop(state.status), true);
+  assert.equal(MC.canStop({ ...state.status, busy: false, compacting: true }), true);
+  assert.equal(MC.canStop({ ...state.status, busy: false }), false);
   assert.equal(MC.fsError({ error: 'exists' }), 'A folder with that name already exists.');
   assert.equal(MC.fsError({ error: 'io', message: 'Permission denied' }), 'Permission denied');
   assert.deepEqual(plain(MC.recentWorkspaces([{ workspace: '/a' }, { workspace: '/b' }, { workspace: '/a' }, { workspace: '/c' }], 2)), ['/a', '/b']);
@@ -401,8 +453,9 @@ test('install help is the browser prompt when offered, the Share hint on iOS unt
 const live = (id, status, extra = {}) => ({ id, title: id, workspace: '/w', updated_at: '2026-10-25T00:00:00Z', current: false, live: true, status, started_ms: null, unseen: false, ...extra });
 const idle = id => ({ id, title: id, workspace: '/w', updated_at: '2026-10-24T00:00:00Z', current: false, live: false });
 
-test('live sessions with work going on come first: approval, then by turn start', () => {
+test('the session list puts sessions that need you first, then running ones, then days', () => {
   const { MC, plain } = load();
+  const now = Date.parse('2026-10-25T12:00:00Z');
   const sessions = [
     idle('old'),
     live('late', 'running', { started_ms: 3000 }),
@@ -412,27 +465,37 @@ test('live sessions with work going on come first: approval, then by turn start'
     live('pack', 'compacting'),
     live('done', 'idle', { unseen: true }),
   ];
-  const g = plain(MC.liveGroups(sessions));
-  assert.deepEqual(g.active.map(x => x.id), ['ask', 'early', 'late', 'pack']);
-  // Idle live sessions and catalog-only ones keep their catalog order for the date groups.
-  assert.deepEqual(g.rest.map(x => x.id), ['old', 'fg', 'done']);
-  // Not-live entries carry only the catalog fields plus live:false and never land in the active group.
-  assert.deepEqual(Object.keys(sessions[0]).sort(), ['current', 'id', 'live', 'title', 'updated_at', 'workspace']);
-  assert.deepEqual(plain(MC.liveGroups([idle('a'), idle('b')])).active, []);
-  // Sessions from a server without live fields are treated as not live.
-  assert.deepEqual(plain(MC.liveGroups(state.sessions)).active, []);
+  const g = plain(MC.sessionLayout(sessions, now, 0, '').groups);
+  assert.deepEqual(g.map(x => [x.label, x.items.map(y => y.id)]), [
+    ['Needs you', ['ask']], ['Running', ['early', 'late', 'pack']], ['Today', ['fg', 'done']], ['Yesterday', ['old']]]);
+  // Sessions from a server without live fields are only grouped by day; the query filters by title or workspace.
+  assert.deepEqual(plain(MC.sessionLayout(state.sessions, now, 0, '').groups).map(x => x.label), ['Older']);
+  assert.deepEqual(plain(MC.sessionLayout(sessions, now, 0, 'ear').groups).map(x => x.items.map(y => y.id)), [['early']]);
 });
 
-test('the background summary names only non-zero parts with the right plural', () => {
+test('an open session list keeps its order while statuses change and puts new sessions on top of their group', () => {
   const { MC, plain } = load();
-  const sum = background => plain(MC.backgroundSummary({ ...state, background }));
-  assert.equal(sum({ running: 0, approval: 0 }).text, '');
-  assert.deepEqual(sum({ running: 0, approval: 0 }).parts, []);
-  assert.equal(sum({ running: 2, approval: 1 }).text, '2 running · 1 needs approval');
-  assert.deepEqual(sum({ running: 2, approval: 1 }).parts, [{ text: '2 running' }, { text: '1 needs approval', warn: true }]);
-  assert.equal(sum({ running: 1, approval: 0 }).text, '1 running');
-  assert.equal(sum({ running: 0, approval: 3 }).text, '3 need approval');
-  assert.equal(sum({ running: 0, approval: 3 }).approval, 3);
+  const now = Date.parse('2026-10-25T12:00:00Z');
+  const first = MC.sessionLayout([live('a', 'running', { started_ms: 1 }), live('b', 'approval'), idle('c')], now, 0, '');
+  const frozen = first.order;
+  // b's approval is answered and a starts waiting; c is gone; d is new and needs you.
+  const later = MC.sessionLayout([live('d', 'approval'), live('a', 'approval', { started_ms: 1 }), live('b', 'running', { started_ms: 2 })], now, 0, '', frozen);
+  assert.equal(later.order, frozen);
+  assert.deepEqual(plain(later.groups).map(x => [x.label, x.items.map(y => y.id)]), [['Needs you', ['d', 'b']], ['Running', ['a']]]);
+  // Opened again: sorted afresh.
+  const again = MC.sessionLayout([live('d', 'approval'), live('a', 'approval', { started_ms: 1 }), live('b', 'running', { started_ms: 2 })], now, 0, '');
+  assert.deepEqual(plain(again.groups).map(x => [x.label, x.items.map(y => y.id)]), [['Needs you', ['a', 'd']], ['Running', ['b']]]);
+});
+
+test('attention counts other sessions that need you plus this view, and notices name their session', () => {
+  const { MC } = load();
+  assert.equal(MC.attentionCount({ ...state, background: { running: 2, approval: 1 } }), 2);
+  assert.equal(MC.attentionCount({ ...state, interaction: null, background: { running: 2, approval: 0 } }), 0);
+  assert.deepEqual({ ...MC.noticeEvent('"Fix parser" needs approval · ctrl+r') }, { label: 'Fix parser', kind: 'approval' });
+  assert.deepEqual({ ...MC.noticeEvent('"Fix parser" finished in 3m 12s') }, { label: 'Fix parser', kind: 'finished' });
+  assert.deepEqual({ ...MC.noticeEvent('"Say "hi"" failed in 4s') }, { label: 'Say "hi"', kind: 'failed' });
+  assert.equal(MC.noticeEvent('"Fix parser": model error'), null);
+  assert.equal(MC.noticeEvent('Session renamed'), null);
 });
 
 test('state transitions report background approvals and unseen finishes once', () => {
@@ -475,17 +538,7 @@ test('device locations do not switch this client and attention excludes its own 
   assert.equal(s.sid, 'mine');
   assert.equal(s.state.session.id, 'mine');
   assert.deepEqual(fx.events, [{ kind: 'approval', id: 'other', title: 'other' }]);
-  assert.deepEqual(plain(MC.otherDevices(s.state.devices, 'iPhone Safari')), ['Mac Edge']);
-});
-
-test('forwarded background notices are recognised by their session label', () => {
-  const { MC } = load();
-  assert.equal(MC.noticeLabel('"Fix parser" needs approval · ctrl+r'), 'Fix parser');
-  assert.equal(MC.noticeLabel('"Fix parser" finished in 3m 12s'), 'Fix parser');
-  assert.equal(MC.noticeLabel('"Say "hi"" failed in 4s'), 'Say "hi"');
-  assert.equal(MC.noticeLabel('"Fix parser" interrupted in 9s'), 'Fix parser');
-  assert.equal(MC.noticeLabel('"Fix parser": model error'), null);
-  assert.equal(MC.noticeLabel('Session renamed'), null);
+  assert.deepEqual(plain(MC.otherDevices(s.state.devices, 'iPhone Safari')).map(d => d.name), ['Mac Edge']);
 });
 
 test('only the streaming tail of a busy transcript is the block being written', () => {
@@ -501,4 +554,65 @@ test('only the streaming tail of a busy transcript is the block being written', 
   // A freshly started, still empty request is the tail: the earlier answer is done even though it is not shown as live.
   assert.equal(MC.liveBlock([said('first'), said('')], true), 1);
   assert.equal(MC.liveBlock([], true), -1);
+});
+
+test('tool rows read as a past-tense verb, a target and meta, present tense while running', () => {
+  const { MC, plain } = load();
+  const t = (name, extra) => plain(MC.toolInfo({ ...blocks[2], name, ...extra }));
+  assert.deepEqual(t('bash', { detail: 'cargo test', duration_ms: 1200 }), { kind: 'cmd', run: false, verb: 'Ran', target: 'cargo test', dur: '1.2 s', exit: '', added: null, removed: null, note: '' });
+  assert.equal(t('bash', { state: 'running' }).verb, 'Running');
+  assert.equal(t('bash', { state: 'failed', exit_code: 101 }).exit, 'exit 101');
+  assert.equal(t('bash', { state: 'denied' }).note, 'denied');
+  assert.equal(t('read', { detail: 'src/a.rs', duration_ms: 40 }).dur, '');
+  const edit = t('apply_patch', { detail: 'src/a.rs', input: '*** Begin Patch\n*** Update File: src/a.rs\n@@\n-a\n+b\n+c\n*** End Patch' });
+  assert.deepEqual([edit.verb, edit.added, edit.removed], ['Edited', 2, 1]);
+  assert.deepEqual([t('write', { input_lines: 640 }).verb, t('write', { input_lines: 640 }).added], ['Wrote', 640]);
+  assert.deepEqual([t('todo_write', { detail: '3 items' }).verb, t('todo_write', { detail: '3 items' }).target], ['todo_write', '3 items']);
+  assert.equal(MC.midTrunc('gpt-6-luna'), 'gpt-6-luna');
+  assert.equal(MC.midTrunc('claude-opus-5-preview-2026-10-01'), 'claude-o…26-10-01');
+});
+
+test('diffs parse git hunks with line numbers and apply_patch envelopes without them', () => {
+  const { MC, plain } = load();
+  const git = plain(MC.parseDiff('diff --git a/src/a.rs b/src/a.rs\nindex 1..2 100644\n--- a/src/a.rs\n+++ b/src/a.rs\n@@ -10,3 +10,4 @@ fn main\n ctx\n-old\n+new\n+more\n ctx2\ndiff --git a/b.md b/b.md\n--- /dev/null\n+++ b/b.md\n@@ -0,0 +1 @@\n+# B'));
+  assert.deepEqual(git.map(f => [f.path, f.added, f.removed]), [['src/a.rs', 2, 1], ['b.md', 1, 0]]);
+  assert.deepEqual(git[0].hunks[0].lines.map(l => [l.t, l.s, l.a, l.b]), [['ctx', 'ctx', 10, 10], ['del', 'old', 11, null], ['add', 'new', null, 11], ['add', 'more', null, 12], ['ctx', 'ctx2', 12, 13]]);
+  // A content line that looks like a header inside a counted hunk stays content.
+  const tricky = plain(MC.parseDiff('--- a/x\n+++ b/x\n@@ -1,2 +1,2 @@\n--- not a header\n+++ still content\n same'));
+  assert.deepEqual(tricky.map(f => [f.path, f.added, f.removed]), [['x', 1, 1]]);
+  const patch = plain(MC.parseDiff('*** Begin Patch\n*** Update File: src/p.rs\n@@ fn split\n-a\n+b\n c\n*** Add File: new.txt\n+hello\n*** End Patch'));
+  assert.deepEqual(patch.map(f => [f.path, f.op, f.added, f.removed]), [['src/p.rs', 'update', 1, 1], ['new.txt', 'add', 1, 0]]);
+  assert.equal(patch[0].hunks[0].head, 'fn split');
+  assert.deepEqual(patch[0].hunks[0].lines.map(l => [l.t, l.a]), [['del', null], ['add', null], ['ctx', null]]);
+  assert.deepEqual(plain(MC.parseDiff('just text\nno diff')), []);
+  assert.deepEqual(plain(MC.diffStats('*** Update File: a\n@@\n-x\n+y\n+z')), { added: 2, removed: 1 });
+});
+
+test('approval keys answer only once armed, never from a text field or with a modifier', () => {
+  const { MC } = load();
+  const appr = state.interaction, choice = { ...appr, kind: 'choice', options: ['GitHub', 'GitLab'] };
+  assert.equal(MC.approvalKey(appr, 'y', false, 1000, 1600, false), 'allow');
+  assert.equal(MC.approvalKey(appr, 'A', false, 1000, 1600, false), 'allow_session');
+  assert.equal(MC.approvalKey(appr, 'n', false, 1000, 1600, false), 'deny');
+  // Within 600 ms of the sheet appearing or of the last key typed nothing answers.
+  assert.equal(MC.approvalKey(appr, 'y', false, 1000, 1599, false), null);
+  assert.equal(MC.approvalKey(appr, 'y', false, 1000, 1600, true), null);
+  assert.equal(MC.approvalKey(appr, 'y', true, 1000, 1600, false), null);
+  assert.equal(MC.approvalKey(appr, ' ', false, 1000, 1600, false), null);
+  assert.equal(MC.approvalKey(appr, 'Enter', false, 1000, 1600, false), null);
+  assert.equal(MC.approvalKey(choice, '2', false, 1000, 1600, false), 1);
+  assert.equal(MC.approvalKey(choice, '3', false, 1000, 1600, false), null);
+  assert.equal(MC.approvalKey(choice, 'y', false, 1000, 1600, false), null);
+});
+
+test('timestamps read as a clock today and carry the day otherwise', () => {
+  const { MC } = load();
+  const tz = -480, now = Date.parse('2026-10-25T06:00:00Z');
+  assert.equal(MC.stamp(Date.parse('2026-10-25T01:05:00Z'), now, tz), '09:05');
+  assert.equal(MC.stamp(Date.parse('2026-10-24T01:05:00Z'), now, tz), 'Yesterday 09:05');
+  assert.equal(MC.stamp(Date.parse('2026-10-03T01:05:00Z'), now, tz), 'Oct 3, 09:05');
+  assert.equal(MC.tilde('/Users/me/Develops/app'), '~/Develops/app');
+  assert.equal(MC.tilde('/home/me'), '~');
+  assert.equal(MC.tilde('/srv/work'), '/srv/work');
+  assert.equal(MC.fmtNum(48610), '48,610');
 });
