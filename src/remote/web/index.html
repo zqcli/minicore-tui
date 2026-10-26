@@ -2277,7 +2277,7 @@ function asstNode(b, i) {
   n._a = { key: b.loop_id + ':' + b.request, live, md: { cache: null, toks: [], els: [] }, body: h('div', 'md'), think: h('div') };
   n.append(n._a.think, n._a.body);
   updateAsst(n, b, i);
-  if (!live && b.text) n.append(answerActs(b));
+  if (!live && b.text) n.append(answerActs(b, i));
   return n;
 }
 function updateAsst(n, b, i) {
@@ -2295,10 +2295,14 @@ function updateAsst(n, b, i) {
   a.body.hidden = !b.text;
   if (a.live && b.text) caretInto(a.body);
 }
-function answerActs(b) {
+// Copy, Share and, once its turn has ended, the time it finished.
+function answerActs(b, i) {
   const c = h('button', { class: 'ib', type: 'button', 'aria-label': 'Copy answer', onclick: () => copyText(b.text, c) }, icon('copy', 'sm'));
   const s = h('button', { class: 'ib', type: 'button', 'aria-label': 'Share answer', onclick: () => share('MiniCore answer', b.text, s) }, icon('share', 'sm'));
-  return h('div', 'acts', c, s);
+  let j = i + 1;
+  while (j < S.blocks.length && S.blocks[j].type !== 'turn_end' && S.blocks[j].type !== 'user') j++;
+  const at = S.blocks[j] && S.blocks[j].type === 'turn_end' && turnClock(j);
+  return h('div', 'acts', c, s, at && h('time', '', MC.stamp(at, hostNow(), tz())));
 }
 function userNode(b, i) {
   const k = 'u' + i, lines = b.text.split('\n').length, long = lines > 12 || b.text.length > 900, o = isOpen(k, false);
@@ -2436,6 +2440,8 @@ function flush() {
   else if (serverPrepend && !wasStick) log.scrollTop = log.scrollHeight - fromBottom;
   else if (wasStick && !anchor) { log.scrollTop = log.scrollHeight; newOut(false); }
   else { log.scrollTop += topDelta; if (grew && !anchor && !wasStick) newOut(true); }
+  // Newer blocks are unmounted while reading far back: the pill leads back to them.
+  if (!pinned) newOut(true);
   anchor = null;
 }
 function newOut(on) { $('newout').hidden = !on; }
