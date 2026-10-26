@@ -19,6 +19,22 @@
 - The web client loads over slow links: the page is sent gzipped (129 KB becomes
   37 KB), and a reply is no longer cut off after 10 seconds while
   it is still arriving, which behind Cloudflare showed as error 520.
+- The phone client is redesigned. Sessions that need you are listed first with
+  a badge on the menu button; finished turns fold their tool steps into one
+  "Worked 47 s · 5 tools · +12 −4" row; tool steps are one-line rows whose
+  full output can be opened and loaded in full; thinking shows as "Thought for
+  12 s". The composer has a model chip, `/` for commands and prompt templates
+  (expanded on the computer like in the TUI), `@` for workspace files, recent
+  prompts, and queued messages you can edit or remove. Stop is a separate
+  button that is always visible while a turn runs (Esc on a keyboard).
+  Approvals say what they ask ("Run command", "Edit src/x.rs") with a rendered
+  diff, never approve by focus or a stray key, and Deny can tell the agent why.
+  A session menu opens Changes (the Git diff per file), Context with Compact
+  now, session info, find in session and export. Settings hold appearance, text
+  size, code wrap, Enter sends, keep screen awake and notifications while the
+  page is in the background. iPad and desktop get a sidebar and keyboard
+  shortcuts (`?`). The phone protocol is now version 2: reload open phone pages
+  after updating.
 
 ## 0.6.0 — 2026-10-25
 
