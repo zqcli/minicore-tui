@@ -4,8 +4,7 @@
 
 - In the web client, a running turn with text typed shows separate Queue and
   Steer buttons instead of a mode toggle; `Alt+Enter` (Option+Enter on macOS)
-  queues and `Enter`/`Cmd+Enter` steers, like the TUI, and `Tab` is ordinary
-  focus navigation. "Enter sends" now defaults to on for a mouse and keyboard
+  queues and `Enter`/`Cmd+Enter` steers, like the TUI. "Enter sends" now defaults to on for a mouse and keyboard
   and off on touch devices. Queued follow-ups are numbered and
   listed after pending steers. Collapsed thinking keeps its newest sentence on a
   line under the header that moves up as the agent thinks. On desktop the
@@ -24,8 +23,8 @@
   bundle that runs `bin/minicore-tui` now needs `--home <dir>` or
   `MINICORE_HOME`; otherwise it reads and writes its files inside `bin/`.
 - `Alt+Enter` queues a follow-up while a turn runs; `Ctrl+Enter` does the same
-  in terminals that report it (kitty-protocol terminals, Windows consoles). `Tab`
-  no longer queues. `Enter` steers, so check the dock label where neither key
+  in terminals that report it (kitty-protocol terminals, Windows consoles).
+  `Enter` steers, so check the dock label where neither key
   reaches the app; `docs/keybindings.md` lists the setup for macOS terminals and
   Windows Terminal. The dock tells the two apart: `↗ steer  …` rows, then
   `↳ follow-up 1  …` numbered in send order, and a hint row (`enter steer ·
