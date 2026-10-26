@@ -181,6 +181,7 @@ instead of being ignored.
 bind = ["127.0.0.1:8765", "[::1]:8765"] # default; one address or a list, numeric IP and port
 # url = "https://host.example:8765" # optional address used by the phone
 roots = ["~"]                    # default: HOME on Unix, USERPROFILE on Windows
+# roots = ['C:\', 'D:\']          # Windows: whole drives (single quotes keep the backslash)
 allow_insecure = false            # needed for a non-loopback bind without TLS
 tls = false                       # serve HTTPS and WSS with the certificate below
 # tls_cert = "~/certs/fullchain.pem" # PEM chain, leaf first
@@ -212,6 +213,11 @@ phone's directory picker and session selection, not the Agent's tools.
 The picker lists only directories under these roots (up to 1000 per listing),
 optionally including hidden names, and can create a single child directory.
 It cannot read file contents, upload, delete or move entries.
+On Windows a root may be a whole drive: `roots = ['C:\', 'D:\']`. In TOML use
+single quotes, because `"C:\"` is an invalid escape in a basic string (`"C:\\"`
+works too). `C:`, `C:/` and lowercase spellings mean the drive root `C:\`, never
+the current directory of drive C. The picker's Roots level then lists each drive
+as `C:\`, and the phone switches between them there.
 Errors name `config.toml`, the line and the `[remote]` key.
 
 Start with `--remote` or `/remote on`; the transcript area then shows the

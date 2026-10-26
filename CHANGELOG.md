@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- On Windows the phone's folder picker can browse whole drives: list them in
+  `[remote] roots`, for example `roots = ['C:\', 'D:\']` (single quotes in TOML),
+  and the picker's Roots level switches between them. `C:`, `C:/` and `c:\` all
+  mean the drive root, not the current directory of that drive.
 - The TUI directory is `--home`, else `$MINICORE_HOME`, else the executable's
   directory: a directory named `bin` is no longer replaced by its parent. A
   bundle that runs `bin/minicore-tui` now needs `--home <dir>` or

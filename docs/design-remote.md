@@ -663,7 +663,8 @@ authorized may finish; it is not rolled back.
 
 Operations:
 
-- `roots`: the configured roots, with `name` = last path component.
+- `roots`: the configured roots, with `name` = last path component; a root with
+  none (`/`, a Windows drive `C:\`) is named like its path.
 - `list(path, hidden)`: `path` is canonicalized and must be under a root
   (`Path::starts_with` on canonical paths). Returns only directories (symlinks
   whose canonical target is a directory under a root; the entry `path` is that
@@ -683,7 +684,9 @@ Operations:
 - Errors: `outside_roots`, `not_found`, `not_a_directory`, `invalid_name`,
   `exists`, `io` (message has the OS error).
 - On Windows returned paths drop the `\\?\` verbatim prefix; both forms are
-  accepted as input.
+  accepted as input. A drive root is `C:\` (`name` and `path`), its listing has
+  `parent: null`, and `mkdir` works directly in it. A `roots` entry `C:`, `C:/`
+  or `C:\` is normalized to `C:\` before canonicalization.
 - Root checks for sessions compare `SessionInfo::workspace` (the Agent stores it
   canonical) with the canonical roots by `Path::starts_with`, without file IO.
   `new_session` canonicalizes its `workspace` once.
