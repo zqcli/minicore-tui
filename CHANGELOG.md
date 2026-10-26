@@ -22,6 +22,8 @@
   completion list keeps `Tab`. The dock tells the two apart: `↗ steer  …` rows,
   then `↳ follow-up 1  …` numbered in send order, and a hint row (`enter steer ·
   tab follow-up`, `alt+↑ edit queued`) names the keys that act now.
+- Steering messages in the transcript are marked `↗ steering`, the arrow the
+  dock and the web client use for steers; `↳` now means a follow-up.
 - Remote mode listens on the IPv6 loopback too: the default `bind` is
   `127.0.0.1:8765` and `[::1]:8765`, so `http://localhost:8765` works however
   `localhost` resolves. `[remote] bind` takes one address or a list, such as
@@ -274,7 +276,7 @@ below.
 ### Transcript
 
 - A user message card shows when it was sent, `21:38 · 10/20/2026` in local
-  time, on the row under its text; steering cards add `↗ steering`. Live
+  time, on the row under its text; steering cards add `↳ steering`. Live
   messages take the Agent's `accepted_at`, history the stored timestamp; old
   history without one shows no row.
 - Rows added to the dock (a steer, a queued follow-up, a notice, an approval)
