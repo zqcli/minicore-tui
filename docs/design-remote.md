@@ -362,7 +362,7 @@ dispatched it, or refused it):
 
 | kind | Behaviour | Refused when |
 |---|---|---|
-| `submit` | In this device's draft: create one in its workspace with its launch settings and this first message. Idle session: send. Running: steer. Only the creating device changes view on adoption. | empty text; pending-open/create rules below |
+| `submit` | In this device's draft: create one in its workspace with its launch settings and this first message. Idle session: send. Running: steer. Only the creating device changes view on adoption. The text is read as the composer reads Enter (below). | a built-in command or a bare unknown `/word` (`"unknown_command"`); empty text, also after expansion; pending-open/create rules below |
 | `queue` | In this device's running session: queue a follow-up. Otherwise as `submit`. | as `submit` |
 | `cancel` | Interrupt the running turn, else cancel a running compaction, else nothing. | pending-create rule below |
 | `compact` | `/compact`'s path: `session.compact` for this device's session. | a draft (`"No session"`); a running turn or a compaction under way (`"busy"`); pending-create rule below |
@@ -395,7 +395,17 @@ live session even if it became the foreground meanwhile. If a non-live open
 reply arrives after its target was deleted, it is discarded with the notice
 `Session deleted while opening`; the device keeps its previous view.
 
-`submit` and `queue` trim trailing whitespace like local sends.
+`submit` and `queue` read the text with the composer's rules and code
+(`commands::parse`/`execute`, `App::prompt_text`): a line whose first word
+names a built-in command (`/compact`, `/model x`, `/rename`, also without its
+argument) is refused with `unknown_command`, since the client runs those
+itself; `/name args` naming a prompt template is expanded on the host (`$1`,
+`$@`, `$ARGUMENTS`, `${1:-default}`, quoted arguments); `//text` sends `/text`;
+a bare `/word` naming nothing (`/reveiw`) is refused with `unknown_command`,
+where the composer warns once. Anything else is sent unchanged: a path
+(`/usr/bin is…`), `/word` followed by other text (`/reveiw the parser`), a slash
+later in the text, `/9lives`, `/ hello`. Then trailing whitespace is trimmed
+like local sends.
 A refused `submit` or `queue` text is never put into the local composer. When the
 Agent later refuses a send (the path that calls `restore_draft` today) while a
 phone is connected, the text goes back as `returned` (see the routing below).

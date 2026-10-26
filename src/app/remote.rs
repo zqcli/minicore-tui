@@ -6,7 +6,8 @@ use std::time::Duration;
 use serde_json::json;
 
 use super::{
-    Action, Answer, App, LaunchSettings, Msg, NoticeLevel, Overlay, QueuedKind, Session, tasks,
+    Action, Answer, App, LaunchSettings, Msg, NoticeLevel, Overlay, QueuedKind, Session, commands,
+    tasks,
 };
 use crate::protocol::{self, Reasoning};
 use crate::remote::{
@@ -530,7 +531,16 @@ impl App {
         Ok(())
     }
 
+    /// Phone text read as the composer reads Enter; the client runs built-in commands itself.
     fn remote_text(&mut self, connection: u64, text: String, follow: bool) -> Result<(), String> {
+        let command = commands::parse(&text).and_then(|(name, arg)| commands::execute(name, arg));
+        if command.is_some() {
+            return Err("unknown_command".into());
+        }
+        let text = match self.prompt_text(&text).map_err(|_| "unknown_command")? {
+            Some(rewritten) => rewritten,
+            None => text,
+        };
         if text.trim().is_empty() {
             return Err("Remote text is empty".into());
         }

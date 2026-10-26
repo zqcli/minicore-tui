@@ -269,23 +269,20 @@ impl App {
             self.remote_flash();
             return None;
         }
-        if let Some(escaped) = text.strip_prefix('/').filter(|rest| rest.starts_with('/')) {
-            self.composer.set_text(escaped);
-        } else if let Some(expanded) =
-            commands::parse(text).and_then(|(name, argument)| self.expand_template(name, argument))
-        {
-            self.composer.set_text(&expanded);
-        } else if let Some(name) = commands::bare_word(text)
-            && self.armed_unknown.as_deref() != Some(text.trim())
-        {
-            let known = commands::COMMANDS
-                .iter()
-                .map(|command| command.name)
-                .chain(self.templates.iter().map(|template| template.name.as_str()));
-            let notice = commands::unknown_notice(name, commands::closest(name, known));
-            self.armed_unknown = Some(text.trim().to_owned());
-            self.notice(NoticeLevel::Error, notice);
-            return None;
+        match self.prompt_text(text) {
+            Ok(None) => {}
+            Ok(Some(rewritten)) => self.composer.set_text(&rewritten),
+            Err(name) if self.armed_unknown.as_deref() != Some(text.trim()) => {
+                let known = commands::COMMANDS
+                    .iter()
+                    .map(|command| command.name)
+                    .chain(self.templates.iter().map(|template| template.name.as_str()));
+                let notice = commands::unknown_notice(name, commands::closest(name, known));
+                self.armed_unknown = Some(text.trim().to_owned());
+                self.notice(NoticeLevel::Error, notice);
+                return None;
+            }
+            Err(_) => {}
         }
         Some(Action::Submit)
     }

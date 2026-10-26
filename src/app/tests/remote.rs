@@ -275,6 +275,56 @@ async fn a_deny_with_a_message_answers_first_then_steers_the_reason_into_the_sam
 }
 
 #[tokio::test(start_paused = true)]
+async fn phone_text_expands_templates_refuses_commands_and_keeps_other_slashes_as_the_composer_does()
+{
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.fake.script("turn.send", json!({"turn":turn("l1")}));
+    h.fake.script_held("turn.wait", waited("l1", completed()));
+    h.app.templates = vec![crate::app::templates::Template::parse(
+        "review".into(),
+        "---\ndescription: Review a file\n---\nReview $1 for ${2:-bugs}; all: $@\n",
+    )];
+    h.app.remote.url = Some("http://localhost:8765".into());
+    let (mut output, _closing, admission) = phone(&mut h, 1, "phone");
+    assert!(admission.await.unwrap());
+    request(&mut h, json!({"kind":"submit", "text":"/review lib.rs"}));
+    assert_eq!(output.recv().await.unwrap()["ok"], true);
+    h.until(|app| app.is_busy()).await;
+    assert_eq!(h.sends(), ["Review lib.rs for bugs; all: lib.rs"]);
+    let mut queued = Vec::new();
+    for (text, sent) in [
+        (
+            "/review parser.rs 'edge cases'",
+            Some("Review parser.rs for edge cases; all: parser.rs edge cases"),
+        ),
+        ("//review x", Some("/review x")),
+        ("/usr/bin is where it lives", Some("/usr/bin is where it lives")),
+        ("fix src/main.rs then /review", Some("fix src/main.rs then /review")),
+        ("/reveiw the parser", Some("/reveiw the parser")),
+        ("/9lives", Some("/9lives")),
+        ("/ hello", Some("/ hello")),
+        ("/compact", None),
+        ("/model mock", None),
+        ("/rename", None),
+        ("/reveiw", None),
+        ("  /foo-bar  ", None),
+    ] {
+        request(&mut h, json!({"kind":"queue", "text":text}));
+        let ack = output.recv().await.unwrap();
+        match sent {
+            Some(sent) => {
+                assert_eq!(ack["ok"], true, "{text}");
+                queued.push(sent);
+            }
+            None => assert_eq!(ack["error"], "unknown_command", "{text}"),
+        }
+    }
+    assert_eq!(h.queue(), queued);
+    assert!(h.notices().is_empty(), "{:?}", h.notices());
+    assert_eq!(h.sends().len(), 1);
+}
+
+#[tokio::test(start_paused = true)]
 async fn compact_runs_for_the_viewed_idle_session_and_is_refused_while_busy_or_in_a_draft() {
     let mut h = Harness::opened(display_read(0, 0)).await;
     h.app.remote.url = Some("http://localhost:8765".into());
