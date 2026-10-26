@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Reloading the web client over a slow link is faster: every file carries an
+  `ETag` and the browser revalidates it, so an unchanged page costs a few small
+  `304` replies instead of the whole download.
 - In the web client the composer's round button keeps its place and changes
   face: ↑ Send, ■ Stop while a turn runs and nothing is typed, ↗ Steer when text
   is typed during a turn, next to a plain-text **Follow-up** button. The model

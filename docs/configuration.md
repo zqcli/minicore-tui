@@ -278,11 +278,12 @@ Cloudflare serves the hostname over HTTPS, so the phone gets `https://` and
   the tunnel's **Origin Server Name** (`originServerName`) set to a name in the
   certificate, or **No TLS Verify** (`noTLSVerify`).
 
-Responses carry `Cache-Control: no-store, no-transform`, so Cloudflare does
+Responses carry `Cache-Control: no-cache, no-transform`, so Cloudflare does
 not rewrite the page (email obfuscation, Rocket Loader, injected scripts) and
-no zone setting needs changing. The server gzips the page itself, and a slow
-hop between Cloudflare and the computer only makes the first load slower: a
-reply is cut off only when it stops moving for 10 seconds. The server pings the phone every 20 seconds,
+no zone setting needs changing. The server gzips the page itself and gives
+every file an `ETag`, so a slow hop between Cloudflare and the computer only
+makes the first load slower: a reload revalidates each file with a small `304`,
+and a reply is cut off only when it stops moving for 10 seconds. The server pings the phone every 20 seconds,
 which keeps an idle connection open through Cloudflare.
 
 ### On the phone's home screen

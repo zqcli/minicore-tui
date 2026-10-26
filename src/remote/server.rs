@@ -11,6 +11,7 @@ use std::time::Duration;
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::net::TcpListener;
 use tokio::sync::{Semaphore, mpsc, oneshot, watch};
@@ -37,61 +38,63 @@ const FIRST: Duration = Duration::from_secs(10);
 const PING: Duration = Duration::from_secs(20);
 const IDLE: Duration = Duration::from_secs(60);
 pub const CSP: &str = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:";
-// `no-transform` keeps proxies such as Cloudflare from rewriting the page and its inline scripts.
-const HEADERS: [(&str, &str); 4] = [
-    ("Cache-Control", "no-store, no-transform"),
+const HEADERS: [(&str, &str); 3] = [
     ("X-Content-Type-Options", "nosniff"),
     ("Referrer-Policy", "no-referrer"),
     ("Content-Security-Policy", CSP),
 ];
+// `no-transform` keeps proxies such as Cloudflare from rewriting the page and its scripts.
+const NO_STORE: &str = "no-store, no-transform";
+/// Files are revalidated on every load, so a reload over a slow link costs a `304` per file.
+const REVALIDATE: &str = "Cache-Control: no-cache, no-transform\r\n";
 /// Replies are written in pieces of this size, each given `FIRST` to drain.
 const CHUNK: usize = 4096;
+const HTML: &str = "text/html; charset=utf-8";
+const JS: &str = "text/javascript; charset=utf-8";
+const PNG: &str = "image/png";
+
+macro_rules! files {
+    ($(($path:literal, $mime:expr, $file:literal)),* $(,)?) => {
+        &[$(($path, $mime, include_bytes!(concat!("web/", $file)) as &[u8])),*]
+    };
+}
 /// The web client's files: path, MIME type and body.
-const FILES: [(&str, &str, &[u8]); 8] = [
-    (
-        "/",
-        "text/html; charset=utf-8",
-        include_bytes!("web/index.html"),
-    ),
-    (
-        "/sw.js",
-        "text/javascript; charset=utf-8",
-        include_bytes!("web/sw.js"),
-    ),
+const FILES: &[(&str, &str, &[u8])] = files![
+    ("/", HTML, "index.html"),
+    ("/sw.js", JS, "sw.js"),
     (
         "/manifest.webmanifest",
         "application/manifest+json",
-        include_bytes!("web/manifest.webmanifest"),
+        "manifest.webmanifest"
     ),
-    ("/icon.svg", "image/svg+xml", include_bytes!("web/icon.svg")),
-    (
-        "/icon-192.png",
-        "image/png",
-        include_bytes!("web/icon-192.png"),
-    ),
-    (
-        "/icon-512.png",
-        "image/png",
-        include_bytes!("web/icon-512.png"),
-    ),
-    (
-        "/icon-maskable.png",
-        "image/png",
-        include_bytes!("web/icon-maskable.png"),
-    ),
-    (
-        "/apple-touch-icon.png",
-        "image/png",
-        include_bytes!("web/apple-touch-icon.png"),
-    ),
+    ("/icon.svg", "image/svg+xml", "icon.svg"),
+    ("/icon-192.png", PNG, "icon-192.png"),
+    ("/icon-512.png", PNG, "icon-512.png"),
+    ("/icon-maskable.png", PNG, "icon-maskable.png"),
+    ("/apple-touch-icon.png", PNG, "apple-touch-icon.png"),
 ];
 
-/// Gzipped copies of the text files, made on first request.
-static GZIPPED: [OnceLock<Vec<u8>>; FILES.len()] = [const { OnceLock::new() }; FILES.len()];
+/// What a file's bytes give once: the validator and, for text, the gzipped copy.
+struct Derived {
+    hash: String,
+    gzip: Option<Vec<u8>>,
+}
+
+static DERIVED: [OnceLock<Derived>; FILES.len()] = [const { OnceLock::new() }; FILES.len()];
+
+fn derive(index: usize) -> &'static Derived {
+    DERIVED[index].get_or_init(|| {
+        let (_, mime, body) = FILES[index];
+        Derived {
+            hash: format!("{:x}", Sha256::digest(body))[..16].to_owned(),
+            gzip: compressible(mime).then(|| gzip(body)),
+        }
+    })
+}
 
 /// PNGs are compressed already.
 fn compressible(mime: &str) -> bool {
-    mime != "image/png"
+    mime != PNG
 }
 
 fn gzip(body: &[u8]) -> Vec<u8> {
@@ -117,6 +120,17 @@ fn accepts_gzip(value: Option<&[u8]>) -> bool {
         })
 }
 
+/// Whether an `If-None-Match` list holds the validator (weak comparison, as `304` allows).
+fn none_match(value: Option<&[u8]>, etag: &str) -> bool {
+    value
+        .and_then(|value| std::str::from_utf8(value).ok())
+        .is_some_and(|value| {
+            value
+                .split(',')
+                .any(|item| item.trim().trim_start_matches("W/") == etag)
+        })
+}
+
 pub async fn serve(
     listeners: Vec<TcpListener>,
     tls: Option<TlsAcceptor>,
@@ -126,7 +140,7 @@ pub async fn serve(
     generation: u64,
     roots: Arc<[PathBuf]>,
 ) {
-    let permits = Arc::new(Semaphore::new(8));
+    let permits = Arc::new(Semaphore::new(32));
     let mut tasks = JoinSet::new();
     // Polling every listener registers a wakeup on each.
     let accept = |cx: &mut Context| {
@@ -236,18 +250,20 @@ impl<S: AsyncWrite + Unpin> AsyncWrite for Replay<S> {
 async fn http(
     stream: &mut (impl AsyncWrite + Unpin),
     status: &str,
-    extra: &str,
-    mime: &str,
+    headers: &str,
     body: &[u8],
 ) -> io::Result<()> {
-    let headers: String = HEADERS
+    let security: String = HEADERS
         .iter()
         .map(|(name, value)| format!("{name}: {value}\r\n"))
         .collect();
-    let head = format!(
-        "HTTP/1.1 {status}\r\n{headers}{extra}Content-Type: {mime}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-        body.len()
-    );
+    // A `304` carries no body and no length of its own.
+    let length = if status.starts_with("304") {
+        String::new()
+    } else {
+        format!("Content-Length: {}\r\n", body.len())
+    };
+    let head = format!("HTTP/1.1 {status}\r\n{security}{headers}{length}Connection: close\r\n\r\n");
     let stalled = || io::Error::from(io::ErrorKind::TimedOut);
     for chunk in std::iter::once(head.as_bytes()).chain(body.chunks(CHUNK)) {
         timeout(FIRST, stream.write_all(chunk))
@@ -258,6 +274,16 @@ async fn http(
     timeout(FIRST, stream.shutdown())
         .await
         .map_err(|_| stalled())?
+}
+
+/// A short reply that must not be cached.
+async fn refuse(
+    stream: &mut (impl AsyncWrite + Unpin),
+    status: &str,
+    text: &str,
+) -> io::Result<()> {
+    let headers = format!("Cache-Control: {NO_STORE}\r\nContent-Type: text/plain\r\n");
+    http(stream, status, &headers, text.as_bytes()).await
 }
 
 fn same_origin(origin: &[u8], host: Option<&[u8]>) -> bool {
@@ -302,7 +328,7 @@ async fn connection<S: AsyncRead + AsyncWrite + Unpin>(
         && header("upgrade").is_some_and(|v| v.eq_ignore_ascii_case(b"websocket"));
     if websocket {
         if header("origin").is_some_and(|origin| !same_origin(origin, header("host"))) {
-            return http(&mut stream, "403 Forbidden", "", "text/plain", b"Forbidden")
+            return refuse(&mut stream, "403 Forbidden", "Forbidden")
                 .await
                 .map_err(|e| e.to_string());
         }
@@ -310,22 +336,37 @@ async fn connection<S: AsyncRead + AsyncWrite + Unpin>(
         let file = FILES
             .iter()
             .position(|file| request.method == Some("GET") && path == Some(file.0));
-        let (status, extra, mime, body) = match file {
-            Some(index) => {
-                let (_, mime, body) = FILES[index];
-                if !compressible(mime) {
-                    ("200 OK", "", mime, body)
-                } else if accepts_gzip(header("accept-encoding")) {
-                    let body = GZIPPED[index].get_or_init(|| gzip(body));
-                    let extra = "Content-Encoding: gzip\r\nVary: Accept-Encoding\r\n";
-                    ("200 OK", extra, mime, body.as_slice())
-                } else {
-                    ("200 OK", "Vary: Accept-Encoding\r\n", mime, body)
-                }
-            }
-            None => ("404 Not Found", "", "text/plain", b"Not found".as_slice()),
+        let Some(index) = file else {
+            return refuse(&mut stream, "404 Not Found", "Not found")
+                .await
+                .map_err(|e| e.to_string());
         };
-        return http(&mut stream, status, extra, mime, body)
+        let (_, mime, body) = FILES[index];
+        let derived = derive(index);
+        let gzip = derived
+            .gzip
+            .as_deref()
+            .filter(|_| accepts_gzip(header("accept-encoding")));
+        // A strong validator names one representation, so the gzipped bytes get their own.
+        let etag = format!(
+            "\"{}{}\"",
+            derived.hash,
+            if gzip.is_some() { "-gzip" } else { "" }
+        );
+        let mut headers = format!("{REVALIDATE}ETag: {etag}\r\n");
+        if compressible(mime) {
+            headers += "Vary: Accept-Encoding\r\n";
+        }
+        if none_match(header("if-none-match"), &etag) {
+            return http(&mut stream, "304 Not Modified", &headers, b"")
+                .await
+                .map_err(|e| e.to_string());
+        }
+        headers += &format!("Content-Type: {mime}\r\n");
+        if gzip.is_some() {
+            headers += "Content-Encoding: gzip\r\n";
+        }
+        return http(&mut stream, "200 OK", &headers, gzip.unwrap_or(body))
             .await
             .map_err(|e| e.to_string());
     }
@@ -344,7 +385,7 @@ async fn connection<S: AsyncRead + AsyncWrite + Unpin>(
             stream,
             #[allow(clippy::result_large_err)] // Tungstenite fixes the callback's error type.
             |_: &Request, mut response: Response| {
-                for (name, value) in HEADERS {
+                for (name, value) in HEADERS.into_iter().chain([("Cache-Control", NO_STORE)]) {
                     response.headers_mut().insert(
                         tokio_tungstenite::tungstenite::http::HeaderName::from_bytes(
                             name.as_bytes(),
@@ -680,48 +721,28 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn every_client_file_is_served_with_its_type_and_bytes_even_with_a_query_string() {
+    async fn every_file_in_the_web_directory_is_served_with_its_type_and_bytes_even_with_a_query_string()
+     {
         let (_dir, address, _auth, _rx, task) = start().await;
-        let files: [(&str, &str, &[u8]); 8] = [
-            (
-                "/?source=pwa",
-                "text/html; charset=utf-8",
-                include_bytes!("web/index.html"),
-            ),
-            (
-                "/sw.js",
-                "text/javascript; charset=utf-8",
-                include_bytes!("web/sw.js"),
-            ),
-            (
-                "/manifest.webmanifest?v=2",
-                "application/manifest+json",
-                include_bytes!("web/manifest.webmanifest"),
-            ),
-            ("/icon.svg", "image/svg+xml", include_bytes!("web/icon.svg")),
-            (
-                "/icon-192.png",
-                "image/png",
-                include_bytes!("web/icon-192.png"),
-            ),
-            (
-                "/icon-512.png",
-                "image/png",
-                include_bytes!("web/icon-512.png"),
-            ),
-            (
-                "/icon-maskable.png",
-                "image/png",
-                include_bytes!("web/icon-maskable.png"),
-            ),
-            (
-                "/apple-touch-icon.png",
-                "image/png",
-                include_bytes!("web/apple-touch-icon.png"),
-            ),
-        ];
-        for (path, mime, body) in files {
-            let request = format!("GET {path} HTTP/1.1\r\nHost: localhost\r\n\r\n");
+        let mut seen = 0;
+        for entry in std::fs::read_dir("src/remote/web").unwrap() {
+            let name = entry.unwrap().file_name().into_string().unwrap();
+            let body = std::fs::read(format!("src/remote/web/{name}")).unwrap();
+            let path = if name == "index.html" {
+                "/".to_owned()
+            } else {
+                format!("/{name}")
+            };
+            let mime = match name.rsplit('.').next().unwrap() {
+                "html" => "text/html; charset=utf-8",
+                "js" | "mjs" => "text/javascript; charset=utf-8",
+                "css" => "text/css; charset=utf-8",
+                "webmanifest" => "application/manifest+json",
+                "svg" => "image/svg+xml",
+                "png" => "image/png",
+                other => panic!("no type for .{other}"),
+            };
+            let request = format!("GET {path}?v=2 HTTP/1.1\r\nHost: localhost\r\n\r\n");
             let reply = get(address, &request).await;
             let end = reply.windows(4).position(|s| s == b"\r\n\r\n").unwrap();
             let head = String::from_utf8_lossy(&reply[..end]);
@@ -730,10 +751,114 @@ mod tests {
                 head.contains(&format!("Content-Type: {mime}\r\n")),
                 "{head}"
             );
-            assert!(head.contains("Cache-Control: no-store, no-transform\r\n"));
             assert_eq!(&reply[end + 4..], body, "{path}");
+            seen += 1;
+        }
+        assert_eq!(
+            seen,
+            FILES.len(),
+            "a file is missing from FILES or the directory"
+        );
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn a_file_revalidates_to_a_bodyless_304_by_its_own_validator_for_each_encoding() {
+        let (_dir, address, _auth, _rx, task) = start().await;
+        let fetch = |path: &'static str, encoding: &'static str, none_match: Option<String>| async move {
+            let condition =
+                none_match.map_or(String::new(), |etag| format!("If-None-Match: {etag}\r\n"));
+            let request = format!(
+                "GET {path} HTTP/1.1\r\nHost: localhost\r\nAccept-Encoding: {encoding}\r\n{condition}\r\n"
+            );
+            let reply = get(address, &request).await;
+            let end = reply.windows(4).position(|s| s == b"\r\n\r\n").unwrap();
+            (
+                String::from_utf8(reply[..end].to_vec()).unwrap(),
+                reply[end + 4..].to_vec(),
+            )
+        };
+        let etag = |head: &str| {
+            head.lines()
+                .find_map(|line| line.strip_prefix("ETag: "))
+                .unwrap()
+                .to_owned()
+        };
+        for path in ["/", "/sw.js", "/icon-192.png"] {
+            let (head, body) = fetch(path, "identity", None).await;
+            let plain = etag(&head);
+            assert!(head.starts_with("HTTP/1.1 200 OK"), "{head}");
+            assert!(
+                head.contains("Cache-Control: no-cache, no-transform\r\n"),
+                "{head}"
+            );
+            assert_eq!(plain.len(), 18, "a quoted 16-digit hash: {plain}");
+            assert!(!body.is_empty());
+            for condition in [
+                plain.clone(),
+                format!("W/{plain}"),
+                format!("\"other\", {plain}"),
+            ] {
+                let (head, body) = fetch(path, "identity", Some(condition)).await;
+                assert!(
+                    head.starts_with("HTTP/1.1 304 Not Modified"),
+                    "{path}: {head}"
+                );
+                assert_eq!(etag(&head), plain);
+                assert!(head.contains("Cache-Control: no-cache, no-transform\r\n"));
+                assert!(!head.contains("Content-Length"), "{head}");
+                assert!(body.is_empty());
+            }
+            let (head, _) = fetch(path, "identity", Some("\"stale\"".into())).await;
+            assert!(head.starts_with("HTTP/1.1 200 OK"), "{path}: {head}");
+            if path == "/icon-192.png" {
+                continue;
+            }
+            // The gzipped bytes are another representation with another validator.
+            let (head, _) = fetch(path, "gzip", None).await;
+            let gzipped = etag(&head);
+            assert_ne!(gzipped, plain);
+            assert!(head.contains("Content-Encoding: gzip\r\n"));
+            let (head, body) = fetch(path, "gzip", Some(gzipped.clone())).await;
+            assert!(head.starts_with("HTTP/1.1 304 Not Modified"), "{head}");
+            assert!(body.is_empty());
+            assert!(head.contains("Vary: Accept-Encoding\r\n"));
+            let (head, _) = fetch(path, "gzip", Some(plain)).await;
+            assert!(head.starts_with("HTTP/1.1 200 OK"), "{head}");
         }
         task.abort();
+    }
+
+    #[tokio::test]
+    async fn a_first_load_serves_every_file_on_its_own_connection_all_at_once() {
+        let (_dir, address, _auth, _rx, task) = start().await;
+        // Behind a tunnel every file of a first load arrives on its own connection, all at once.
+        let mut sockets = Vec::new();
+        // The socket and the service worker come on top of the files.
+        for _ in 0..FILES.len() + 2 {
+            sockets.push(TcpStream::connect(address).await.unwrap());
+        }
+        for socket in &mut sockets {
+            let request = b"GET /manifest.webmanifest HTTP/1.1\r\nHost: localhost\r\n\r\n";
+            socket.write_all(request).await.unwrap();
+        }
+        for socket in &mut sockets {
+            let mut reply = Vec::new();
+            socket.read_to_end(&mut reply).await.unwrap();
+            assert!(reply.starts_with(b"HTTP/1.1 200 OK"));
+        }
+        task.abort();
+    }
+
+    #[test]
+    fn the_service_worker_precaches_every_file_it_does_not_cache_at_runtime() {
+        let worker = include_str!("web/sw.js");
+        for (path, ..) in FILES.iter().filter(|file| file.0 != "/sw.js") {
+            assert!(
+                worker.contains(&format!("'{path}'")),
+                "{path} is not in SHELL"
+            );
+        }
     }
 
     #[tokio::test]
@@ -775,9 +900,8 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn a_slow_link_gets_the_whole_reply_and_only_a_stalled_one_is_dropped() {
         let (mut server, mut client) = tokio::io::duplex(1024);
-        let writer = tokio::spawn(async move {
-            http(&mut server, "200 OK", "", "text/plain", &[b'x'; 64 * 1024]).await
-        });
+        let writer =
+            tokio::spawn(async move { http(&mut server, "200 OK", "", &[b'x'; 64 * 1024]).await });
         // 512 bytes per second: the reply takes over two minutes but never stops moving.
         let (mut reply, mut buffer) = (Vec::new(), [0; 1024]);
         loop {
@@ -791,7 +915,7 @@ mod tests {
         assert!(reply.ends_with(&[b'x'; 64 * 1024]));
 
         let (mut server, _client) = tokio::io::duplex(1024);
-        let error = http(&mut server, "200 OK", "", "text/plain", &[b'x'; 64 * 1024])
+        let error = http(&mut server, "200 OK", "", &[b'x'; 64 * 1024])
             .await
             .unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::TimedOut);
@@ -884,7 +1008,7 @@ mod tests {
         stream.read_to_end(&mut reply).await.unwrap();
         let reply = String::from_utf8(reply).unwrap();
         assert!(reply.starts_with("HTTP/1.1 200 OK\r\n"), "{reply}");
-        assert!(reply.contains("Cache-Control: no-store, no-transform\r\n"));
+        assert!(reply.contains("Cache-Control: no-cache, no-transform\r\n"));
         assert!(reply.contains(CSP));
         assert!(reply.ends_with(include_str!("web/index.html")));
 
