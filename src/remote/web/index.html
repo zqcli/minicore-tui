@@ -206,7 +206,8 @@ input.tf:focus{border-color:var(--ac);box-shadow:0 0 0 3px var(--acs)}
 .shead .sub2{display:block;font-size:var(--t13);font-weight:400;color:var(--tx3);margin-top:2px}
 .sbody{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:4px 20px 16px}
 .sfoot{flex:none;display:flex;gap:8px;padding:8px 20px calc(max(var(--sb),12px) + 4px)}
-.sfoot>.btn{flex:1}
+.sfoot>.btn{flex:1 1 auto;white-space:nowrap}
+.shead h2 .mono{font-size:var(--t16);font-weight:600}
 html.kb .sfoot{padding-bottom:12px}
 .list{display:flex;flex-direction:column;border-radius:var(--r2);background:var(--fill);overflow:hidden}
 [data-theme=dark] .list{background:var(--fill)}
@@ -300,7 +301,9 @@ pre{margin:0;font-size:var(--t13);line-height:1.5;tab-size:4}
 .tr .mt .add{color:var(--addt)}.tr .mt .del{color:var(--delt)}
 .tr .cv{flex:none;color:var(--tx3);transition:transform var(--fast)}
 .tr[aria-expanded=true] .cv{transform:rotate(90deg)}
-.tr.fold .vb{color:var(--tx2)}
+.tr.fold .tg{font-family:var(--font);font-size:var(--t13)}
+.tb pre.wrap{white-space:pre-wrap;overflow-wrap:anywhere}
+.think:last-child{margin-bottom:0}
 .tb{margin:2px 0 8px 9px;padding:4px 0 4px 16px;border-left:1px solid var(--line);display:flex;flex-direction:column;gap:6px;min-width:0}
 .tb .lbl{font-size:var(--t12);font-weight:600;color:var(--tx3);display:flex;gap:8px}
 .tb pre{padding:8px 10px;border-radius:var(--r1);background:var(--bg2);border:1px solid var(--line);overflow:auto;max-height:calc(1.5em * 20 + 18px);white-space:pre}
@@ -309,6 +312,13 @@ pre{margin:0;font-size:var(--t13);line-height:1.5;tab-size:4}
 .tbar .hint{margin-left:auto;padding-right:4px}
 .dec{font-size:var(--t12);font-weight:600;color:var(--tx3)}
 .dec.er{color:var(--er)}.dec.ok{color:var(--ok)}
+pre.view{border:0;border-radius:0;padding:0;background:none;max-height:none;font-size:var(--t12);line-height:1.5;white-space:pre}
+pre.view.wrap{white-space:pre-wrap;overflow-wrap:anywhere}
+.sheet .sbody>pre.view{margin:0 -4px}
+.banner.find{background:var(--bg);border-bottom:1px solid var(--line);padding-left:calc(var(--sl) + 14px);color:var(--tx3)}
+.fq{flex:1;min-width:0;border:0;background:none;font-size:max(16px,1rem);color:var(--tx);height:40px}
+.fq::-webkit-search-cancel-button{display:none}
+.fc{font-size:var(--t13);color:var(--tx3);font-variant-numeric:tabular-nums;white-space:nowrap}
 /* turn end, compaction */
 .te{display:flex;flex-wrap:wrap;align-items:center;gap:2px 6px;font-size:var(--t13);color:var(--tx3);line-height:1.4;padding:2px 2px}
 .te .ic{color:var(--ok)}
@@ -777,6 +787,69 @@ globalThis.MC = (() => {
     for (const f of parseDiff(text)) { added += f.added; removed += f.removed; }
     return { added, removed };
   }
+  const quiet = b => b.type === 'assistant' && !b.text && !b.reasoning;
+  // Consecutive reads and searches (empty assistant blocks between them do not count) group into one row.
+  function groupTools(blocks, from, to) {
+    const out = [];
+    let run = [];
+    const end = () => {
+      if (run.length > 1) {
+        let reads = 0, live = false;
+        for (const i of run) { if (toolKind(blocks[i].name) === 'read') reads++; if (blocks[i].state === 'running' || blocks[i].state === 'pending') live = true; }
+        const searches = run.length - reads;
+        out.push({
+          key: 'g' + blocks[run[0]].call_id, head: run[0], members: run, run: live,
+          label: !searches ? (live ? 'Reading ' : 'Read ') + plural(reads, 'file') : !reads ? (live ? 'Searching · ' : 'Searched ') + plural(searches, 'time')
+            : (live ? 'Exploring ' : 'Explored ') + plural(reads, 'file') + ' · ' + plural(searches, 'search', 'searches'),
+        });
+      }
+      run = [];
+    };
+    for (let i = from; i < to; i++) {
+      const b = blocks[i];
+      if (b.type === 'tool' && /^(read|search)$/.test(toolKind(b.name))) run.push(i);
+      else if (!quiet(b)) end();
+    }
+    end();
+    return out;
+  }
+  // A finished turn folds its work (tools, thinking, answers before the last tool) into one summary row at the first of
+  // them; user messages, compactions, the final answer and the turn-end line stay. The running turn has no turn end yet.
+  function foldTurns(blocks, from, to) {
+    const out = [];
+    let start = from;
+    for (let i = from; i < to; i++) {
+      const b = blocks[i];
+      if ((b.type === 'user' && b.kind !== 'steering') || b.type === 'earlier') { start = i + 1; continue; }
+      if (b.type !== 'turn_end') continue;
+      let fin = i, tools = 0, failed = 0;
+      for (let j = i - 1; j >= start && blocks[j].type !== 'tool'; j--) if (blocks[j].type === 'assistant' && blocks[j].text) { fin = j; break; }
+      const hidden = [];
+      for (let j = start; j < fin; j++) {
+        const x = blocks[j];
+        if (x.type === 'tool') { tools++; if (x.state === 'failed') failed++; }
+        if ((x.type === 'tool' || x.type === 'assistant') && !quiet(x)) hidden.push(j);
+      }
+      if (hidden.length) {
+        const c = b.changes;
+        out.push({ key: 'f' + b.loop_id, at: hidden[0], last: hidden[hidden.length - 1], hidden, tools, failed, ms: b.duration_ms,
+          added: c && c.files ? c.added : null, removed: c && c.files ? c.removed : null });
+      }
+      start = i + 1;
+    }
+    return out;
+  }
+  // Blocks in [from, to) whose text matches, case-insensitively: messages, answers, thinking, tool targets and output.
+  function findBlocks(blocks, q, from, to) {
+    const n = q.toLowerCase(), out = [];
+    for (let i = from; i < to && n; i++) {
+      const b = blocks[i];
+      const t = b.type === 'tool' ? b.detail + '\n' + b.output.join('\n') : b.type === 'user' ? b.text : b.type === 'assistant' ? b.text + '\n' + b.reasoning : '';
+      if (t.toLowerCase().includes(n)) out.push(i);
+    }
+    return out;
+  }
+  const foldText = f => 'Worked' + (f.ms != null ? ' ' + fmtDur(f.ms) : '');
   const OUTCOME = { completed: 'Completed', cancelled: 'Stopped', interrupted: 'Stopped', failed: 'Failed' };
   // The turn-end line: outcome, duration, clock time and tokens; the changes are a separate tappable part.
   function turnEnd(b, at, tz) {
@@ -1015,12 +1088,30 @@ globalThis.MC = (() => {
   }
   const norm = src => src.replace(/\r\n?/g, '\n');
   const parseMd = src => parseLines(norm(src).split('\n'), null);
+  // Streaming Markdown: blocks before the last stable checkpoint are kept (the same objects) and only the tail is
+  // parsed again. A checkpoint is stable once it and the line after it are complete: no block before it looked further.
+  function mdInc(c, src) {
+    src = norm(src);
+    if (!c || !src.startsWith(c.src)) c = { src: '', at: 0, head: [] };
+    const lines = src.slice(c.at).split('\n'), cps = [], tail = parseLines(lines, cps);
+    let cut = null;
+    for (const cp of cps) if (cp[0] > 0 && cp[0] + 2 <= lines.length - 1) cut = cp;
+    const next = { src, at: c.at, head: c.head };
+    if (cut) {
+      let off = 0;
+      for (let k = 0; k < cut[0]; k++) off += lines[k].length + 1;
+      next.at += off;
+      next.head = c.head.concat(tail.slice(0, cut[1]));
+    }
+    return { blocks: c.head.concat(tail), cache: next };
+  }
 
   return {
     V, WINDOW, backoff, basename, plural, cap, midTrunc, retireText, mergeReturned, otherDevices, deviceName, theme, installOffer,
     login, hello, intents, queries, fs, createStore, intent, request, query, queryRoom, unqueue, pending, disconnect, sendAgain, unconfirmed,
     diffBlocks, applyBlocks, reduce, explain, lockText, fmtClock, unreachable, fsError, errorText,
     clock, stamp, relTime, dayGroup, sessionLayout, matchSession, fmtElapsed, fmtDur, fmtTok, fmtNum,
+    groupTools, foldTurns, findBlocks, foldText, mdInc,
     toolKind, toolInfo, parseDiff, diffStats, liveBlock, turnEnd, changesText, compactionText, statusLine, canStop, approvalKey,
     BUILTINS, slashMenu, parseSlash, atToken, insertMention, pushRecent, literal,
     splitPath, within, crumbs, tilde, recentWorkspaces, sessionTransitions, noticeEvent, attentionCount, inline, parseMd, parseLines, SAFE_URL,
@@ -1588,6 +1679,7 @@ const bannersPart = part($('banners'), b => [
     h('button', { class: 'btn sm', type: 'button', onclick: () => openLive(b.attn.id) }, 'Review'),
     h('button', { class: 'ib s', type: 'button', 'aria-label': 'Dismiss', onclick: () => { dismissed.add(b.attn.id); renderBanners(); } }, icon('x', 'sm'))),
   b.conn && h('div', { class: 'banner', role: 'status' }, spin(), h('span', '', b.conn)),
+  b.find && findBar(),
 ]);
 const dismissed = new Set();
 function renderBanners() {
@@ -1595,6 +1687,7 @@ function renderBanners() {
   bannersPart({
     attn: x ? { id: x.id, title: x.title || 'Untitled session' } : null,
     conn: online() || halted ? '' : navigator.onLine === false ? 'Offline · waiting for network' : 'Reconnecting…',
+    find: fd.on && [fd.q, fd.ranges.length, fd.k],
   });
 }
 function renderConn() {
@@ -1847,7 +1940,7 @@ function openSessionMenu() {
 }
 function menuRows(row) {
   const s = S.state.session;
-  return [row('edit', 'Rename', () => rename(s.id)), row('info', 'Session info', openInfo), row('copy', 'Copy session id', () => copyText(s.id))];
+  return [row('edit', 'Rename', () => rename(s.id)), row('search', 'Find in session', openFind), row('info', 'Session info', openInfo), row('copy', 'Copy session id', () => copyText(s.id))];
 }
 function openInfo() {
   const s = S.state.session;
@@ -1969,7 +2062,7 @@ function resetTranscript() { nodes.forEach(n => n.remove()); nodes.length = 0; l
 function redrawAll() { for (let i = lo; i < hi; i++) dirty.add(i); schedule(); }
 // Opening or closing keeps the tapped row where it is on screen.
 function toggle(k, dflt, i, el) { ov.set(k, !isOpen(k, dflt)); dirty.add(i); hold(el); schedule(); }
-function hold(el) { anchor = { k: el && el.dataset.k, y: el ? el.getBoundingClientRect().top : 0 }; }
+function hold(el, k) { anchor = { k: k || (el && el.dataset.k), y: el ? el.getBoundingClientRect().top : 0 }; }
 
 function inl(tokens, p) {
   for (const t of tokens) {
@@ -2044,7 +2137,7 @@ function toolBody(b, f) {
 }
 function toolNode(b, i) {
   const k = 't' + b.call_id, f = MC.toolInfo(b), o = isOpen(k, b.state === 'failed');
-  return h('div', 'b tl', h('button', { class: 'tr', type: 'button', 'data-k': k, 'aria-expanded': String(o), onclick: e => toggle(k, b.state === 'failed', i, e.currentTarget) },
+  return h('div', 'tl', h('button', { class: 'tr', type: 'button', 'data-k': k, 'aria-expanded': String(o), onclick: e => toggle(k, b.state === 'failed', i, e.currentTarget) },
     stateIcon(b, f), h('span', 'vb', f.verb), h('span', 'tg', f.target), toolMeta(f), icon('chev', 'xs cv')), o && toolBody(b, f));
 }
 // A diff as files of hunks with line numbers and add/remove tints; wrapping follows the setting.
@@ -2069,18 +2162,29 @@ function thinkNode(b, i, live) {
       icon('sparkle', 'xs'), h('span', '', thinking ? 'Thinking…' : secs ? 'Thought for ' + secs + ' s' : 'Thought'), !thinking && icon('chev', 'xs cv')),
     (thinking || o) && h('div', 'rsn' + (thinking ? ' peek' : ''), thinking ? h('div', '', b.reasoning) : b.reasoning));
 }
+// An answer keeps its rendered Markdown blocks while it streams: only blocks after the last stable one are rebuilt.
 function asstNode(b, i) {
-  const live = i === liveIdx, n = h('div', 'b a');
-  if (quiet(b)) { n.hidden = true; return n; }
-  if (b.reasoning) n.append(thinkNode(b, i, live));
-  if (b.text) {
-    const body = h('div', 'md');
-    MC.parseMd(b.text).forEach(t => body.append(mdNode(t)));
-    if (live) caretInto(body);
-    n.append(body);
-    if (!live) n.append(answerActs(b));
-  }
+  const live = i === liveIdx, n = h('div', 'a');
+  n._a = { key: b.loop_id + ':' + b.request, live, md: { cache: null, toks: [], els: [] }, body: h('div', 'md'), think: h('div') };
+  n.append(n._a.think, n._a.body);
+  updateAsst(n, b, i);
+  if (!live && b.text) n.append(answerActs(b));
   return n;
+}
+function updateAsst(n, b, i) {
+  const a = n._a, m = a.md, r = MC.mdInc(m.cache, b.text);
+  n.hidden = quiet(b);
+  a.think.replaceWith(a.think = b.reasoning ? thinkNode(b, i, a.live) : h('div'));
+  m.cache = r.cache;
+  let k = 0;
+  while (k < m.toks.length && k < r.blocks.length && m.toks[k] === r.blocks[k]) k++;
+  for (let j = m.els.length - 1; j >= k; j--) m.els[j].remove();
+  m.els.length = m.toks.length = k;
+  const old = a.body.querySelector('.caret');
+  if (old) old.remove();
+  for (let j = k; j < r.blocks.length; j++) { const e = mdNode(r.blocks[j]); a.body.append(e); m.els.push(e); m.toks.push(r.blocks[j]); }
+  a.body.hidden = !b.text;
+  if (a.live && b.text) caretInto(a.body);
 }
 function answerActs(b) {
   const c = h('button', { class: 'ib', type: 'button', 'aria-label': 'Copy answer', onclick: () => copyText(b.text, c) }, icon('copy', 'sm'));
@@ -2090,7 +2194,7 @@ function answerActs(b) {
 function userNode(b, i) {
   const k = 'u' + i, lines = b.text.split('\n').length, long = lines > 12 || b.text.length > 900, o = isOpen(k, false);
   const more = h('button', { class: 'ib', type: 'button', 'aria-label': 'Message actions', 'aria-haspopup': 'dialog', onclick: () => userActions(b) }, icon('more', 'sm'));
-  const n = h('div', 'b u', b.kind === 'steering' && h('div', 'ulbl', icon('steer', 'xs'), 'Steer'),
+  const n = h('div', 'u', b.kind === 'steering' && h('div', 'ulbl', icon('steer', 'xs'), 'Steer'),
     h('div', { class: 'bubble' + (long && !o ? ' clip' : '') }, b.text),
     h('div', 'acts', long && h('button', { class: 'more2', type: 'button', 'data-k': k, onclick: e => toggle(k, false, i, e.currentTarget) }, o ? 'Show less' : 'Show more'),
       b.at && h('time', '', MC.stamp(b.at, hostNow(), tz())), more));
@@ -2122,19 +2226,56 @@ function blockNode(b, i) {
     case 'tool': return toolNode(b, i);
     case 'turn_end': {
       const t = MC.turnEnd(b, turnClock(i), tz());
-      return h('div', 'b te' + (t.ok ? '' : ' bad'), icon(t.ok ? 'check' : 'warn', 'xs'), h('span', 'oc', t.parts[0]), t.parts.slice(1).map(p => h('span', '', '· ' + p)),
+      return h('div', 'te' + (t.ok ? '' : ' bad'), icon(t.ok ? 'check' : 'warn', 'xs'), h('span', 'oc', t.parts[0]), t.parts.slice(1).map(p => h('span', '', '· ' + p)),
         t.changes && h('button', { class: 'chg', type: 'button', onclick: () => openChanges() }, '· ' + MC.changesText(t.changes)));
     }
     case 'compaction': {
       const k = 'c' + i, o = isOpen(k, false);
-      return h('div', 'b cmpx', h('button', { class: 'tr', type: 'button', 'data-k': k, disabled: !b.summary, 'aria-expanded': b.summary ? String(o) : null, onclick: e => toggle(k, false, i, e.currentTarget) },
+      return h('div', 'cmpx', h('button', { class: 'tr', type: 'button', 'data-k': k, disabled: !b.summary, 'aria-expanded': b.summary ? String(o) : null, onclick: e => toggle(k, false, i, e.currentTarget) },
         h('span', 'si', icon('layers', 'sm')), h('span', 'vb', MC.compactionText(b)), h('span', 'tg', ''), b.summary && icon('chev', 'xs cv')), o && h('div', 'rsn', b.summary));
     }
-    case 'earlier': return h('div', 'b', h('div', { style: 'display:flex;justify-content:center' }, loadEarlierBtn(MC.plural(b.hidden_items, 'earlier item'))));
-    default: return h('div', 'b');
+    case 'earlier': return h('div', { class: 'ear', style: 'display:flex;justify-content:center' }, loadEarlierBtn(MC.plural(b.hidden_items, 'earlier item')));
+    default: return h('div', 'x');
   }
 }
-function renderBlock(b, i) { const n = blockNode(b, i); n.dataset.i = i; return n; }
+// Folded turns and grouped reads: a block may carry the summary row, the group row or the trailing Hide row, and its
+// own content is hidden while folded away.
+function renderBlock(b, i) {
+  const n = blockNode(b, i), r = roles[i - lo];
+  let w = n;
+  if (r) {
+    const f = r.f, g = r.g, fo = f && !isOpen(f.key, false), go = g && isOpen(g.key, false);
+    const rows = [f && i === f.at && foldRow(f, i, !fo), g && i === g.head && !fo && groupRow(g, i, go)];
+    w = h('div', n.className, rows, n, f && !fo && i === f.last && h('button', { class: 'tr fold', type: 'button', 'data-k': f.key + 'h', onclick: e => { ov.set(f.key, false); for (const j of f.hidden) dirty.add(j); hold(e.currentTarget, f.key); schedule(); } },
+      h('span', 'si', icon('chevu', 'sm')), h('span', 'vb', 'Hide')));
+    n.className = '';
+    n.hidden = n.hidden || !!fo || !!(g && !go);
+    w.hidden = n.hidden && !kids(rows).length && !(f && !fo && i === f.last);
+  }
+  w.classList.add('b');
+  w.dataset.i = i;
+  return w;
+}
+function foldRow(f, i, open) {
+  return h('button', { class: 'tr fold', type: 'button', 'data-k': f.key, 'aria-expanded': String(open), onclick: e => { ov.set(f.key, !open); for (const j of f.hidden) dirty.add(j); hold(e.currentTarget); schedule(); } },
+    h('span', 'si', icon('layers', 'sm')), h('span', 'vb', MC.foldText(f)), h('span', 'tg', MC.plural(f.tools, 'tool')),
+    toolMeta({ added: f.added, removed: f.removed, dur: '', exit: f.failed ? f.failed + ' failed' : '', note: '' }), icon('chev', 'xs cv'));
+}
+function groupRow(g, i, open) {
+  const last = S.blocks[g.members[g.members.length - 1]];
+  return h('button', { class: 'tr', type: 'button', 'data-k': g.key, 'aria-expanded': String(open), onclick: e => { ov.set(g.key, !open); for (const j of g.members) dirty.add(j); hold(e.currentTarget); schedule(); } },
+    g.run ? h('span', 'si run', spin('sm')) : h('span', 'si', icon('search', 'sm')), h('span', 'vb', g.label), h('span', 'tg', open ? '' : last.detail), icon('chev', 'xs cv'));
+}
+// Fold and group roles of the mounted blocks; a block whose role changed is rendered again.
+let roles = [], sigs = [];
+function relayout() {
+  const bl = S.blocks, next = [];
+  for (const f of MC.foldTurns(bl, lo, hi)) for (const j of f.hidden) (next[j - lo] = next[j - lo] || {}).f = f;
+  for (const g of MC.groupTools(bl, lo, hi)) for (const j of g.members) (next[j - lo] = next[j - lo] || {}).g = g;
+  const ns = next.map(r => r && JSON.stringify([r.f && [r.f.key, r.f.at, r.f.last, isOpen(r.f.key, false), r.f.tools, r.f.failed], r.g && [r.g.key, r.g.head, r.g.label, r.g.run, isOpen(r.g.key, false), r.g.members.length]]));
+  for (let k = 0; k < Math.max(ns.length, sigs.length); k++) if (ns[k] !== sigs[k]) dirty.add(lo + k);
+  roles = next; sigs = ns;
+}
 function place(n, old) {
   if (old) {
     const f = old.contains(document.activeElement) && document.activeElement.dataset.k;
@@ -2166,9 +2307,14 @@ function flush() {
     for (const x of add) place(x);
   }
   hi = newHi;
+  if (lo !== lo0) sigs = [];
+  relayout();
   for (let i = lo; i < hi; i++) {
     if (!dirty.has(i) && nodes[i - lo]) continue;
-    const x = renderBlock(bl[i], i), old = nodes[i - lo];
+    const old = nodes[i - lo], b = bl[i];
+    // A streaming answer updates in place.
+    if (old && old._a && !roles[i - lo] && b.type === 'assistant' && old._a.key === b.loop_id + ':' + b.request && old._a.live === (i === liveIdx)) { updateAsst(old, b, i); continue; }
+    const x = renderBlock(b, i);
     if (!old) box.append(x);
     place(x, old);
     nodes[i - lo] = x;
@@ -2497,10 +2643,93 @@ document.addEventListener('keydown', e => {
 // Later phases fill these in.
 function openChanges() { toast('Changes are not available yet'); }
 function openContext() { toast('Context is not available yet'); }
-function openOutput() {}
+// The full-screen output viewer: the tail first, wrap and copy, and the whole output paged in through tool_output.
+function openOutput(b) {
+  const f = MC.toolInfo(b), out = b.output, total = b.output_lines != null ? b.output_lines : out.length + b.output_dropped;
+  const o = { text: out.join('\n'), full: !(b.output_dropped || b.truncated), loading: false, err: '', wrap: prefs.wrap, capped: false, shown: -1 };
+  const m = sheet({
+    key: 'out', cls: 'full', side: true, deps: () => [o.full, o.loading, o.err, o.wrap, o.text.length],
+    head: hid => h('h2', { id: hid }, h('span', 'mono', f.verb + ' ' + f.target), h('span', 'sub2', MC.fmtNum(total) + ' lines' + (o.full ? '' : ' · showing the last ' + MC.fmtNum(out.length)))),
+    body: () => [o.err && h('div', { class: 'serr', role: 'alert' }, icon('warn', 'sm'), h('span', '', o.err)), o.capped && h('p', 'hint', 'Showing the first 4 MB.'),
+      h('pre', { class: 'out view' + (o.wrap ? ' wrap' : ''), tabindex: '0' }, o.text)],
+    foot: () => [h('button', { class: 'btn sm', type: 'button', 'aria-pressed': String(o.wrap), onclick: () => { o.wrap = !o.wrap; m.refresh(); } }, icon('wrap', 'xs'), 'Wrap'),
+      h('button', { class: 'btn sm', type: 'button', onclick: e => copyText(o.text, e.currentTarget) }, icon('copy', 'xs'), 'Copy'),
+      !o.full && h('button', { class: 'btn sm primary', type: 'button', 'data-k': 'full', disabled: o.loading, onclick: () => loadFull(b, o, m) }, o.loading && spin('sm'), o.loading ? 'Loading…' : 'Load full output')],
+    // Tail first: a new text opens at its end.
+    after: body => { if (o.shown !== o.text.length) { o.shown = o.text.length; requestAnimationFrame(() => { body.scrollTop = body.scrollHeight; }); } },
+  });
+}
+function loadFull(b, o, m) {
+  const parts = [];
+  let off = 0, pages = 0;
+  o.loading = true; o.err = ''; m.refresh();
+  const next = () => ask(MC.queries.toolOutput(b.call_id, off), r => {
+    if (!r.ok) { o.loading = false; o.err = MC.errorText(r.error); return m.refresh(); }
+    parts.push(r.data.text); off = r.data.next_offset; pages++;
+    if (!r.data.eof && pages < 64) return next();
+    Object.assign(o, { text: parts.join('').replace(/\n$/, ''), full: true, loading: false, capped: !r.data.eof });
+    m.refresh();
+  });
+  next();
+}
 function compactNow() {}
 function exportSession() {}
-function openFind() {}
+// Find in the loaded transcript: matches are highlighted in place (CSS highlights), folds holding one open.
+const fd = { on: false, q: '', ranges: [], k: 0 };
+let findT = 0;
+function openFind() {
+  fd.on = true;
+  renderBanners();
+  const i = $('findq');
+  i.focus(); i.select();
+}
+function closeFind() {
+  fd.on = false; fd.q = ''; fd.ranges = [];
+  if (window.CSS && CSS.highlights) { CSS.highlights.delete('find'); CSS.highlights.delete('findc'); }
+  renderBanners();
+}
+function findBar() {
+  const n = fd.ranges.length;
+  return h('div', { class: 'banner find', role: 'search' }, icon('search', 'sm'),
+    h('input', { id: 'findq', type: 'search', class: 'fq', value: fd.q, placeholder: 'Find in session', 'aria-label': 'Find in session', 'data-k': 'findq', autocomplete: 'off', enterKeyHint: 'search',
+      oninput: e => { fd.q = e.target.value; clearTimeout(findT); findT = setTimeout(runFind, 150); },
+      onkeydown: e => { if (e.key === 'Enter') { e.preventDefault(); findStep(e.shiftKey ? -1 : 1); } else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeFind(); } } }),
+    h('span', { class: 'fc', 'aria-live': 'polite' }, fd.q ? (n ? fd.k + 1 + '/' + n : 'No matches') : ''),
+    h('button', { class: 'ib s', type: 'button', 'aria-label': 'Previous match', disabled: !n, onclick: () => findStep(-1) }, icon('chevu', 'sm')),
+    h('button', { class: 'ib s', type: 'button', 'aria-label': 'Next match', disabled: !n, onclick: () => findStep(1) }, icon('chevd', 'sm')),
+    h('button', { class: 'ib s', type: 'button', 'aria-label': 'Close find', onclick: closeFind }, icon('x', 'sm')));
+}
+function runFind() {
+  // Open the folds, groups and tool rows that hold a match, then collect ranges from the rendered text.
+  for (const i of MC.findBlocks(S.blocks, fd.q, lo, hi)) {
+    const r = roles[i - lo], b = S.blocks[i];
+    if (r && r.f) ov.set(r.f.key, true);
+    if (r && r.g) ov.set(r.g.key, true);
+    if (b.type === 'tool' && !b.detail.toLowerCase().includes(fd.q.toLowerCase())) ov.set('t' + b.call_id, true);
+    dirty.add(i);
+  }
+  flush();
+  const q = fd.q.toLowerCase(), ranges = [];
+  if (q) {
+    const w = document.createTreeWalker(box, NodeFilter.SHOW_TEXT, { acceptNode: t => t.parentElement.closest('[hidden]') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT });
+    while (w.nextNode()) {
+      const t = w.currentNode, s = t.data.toLowerCase();
+      for (let k = s.indexOf(q); k >= 0; k = s.indexOf(q, k + q.length)) { const r = new Range(); r.setStart(t, k); r.setEnd(t, k + q.length); ranges.push(r); }
+    }
+  }
+  fd.ranges = ranges; fd.k = Math.max(0, ranges.length - 1);
+  paintFind();
+}
+function findStep(d) { if (fd.ranges.length) { fd.k = (fd.k + d + fd.ranges.length) % fd.ranges.length; paintFind(); } }
+function paintFind() {
+  const r = fd.ranges[fd.k];
+  if (window.CSS && CSS.highlights) {
+    CSS.highlights.set('find', new Highlight(...fd.ranges));
+    if (r) CSS.highlights.set('findc', new Highlight(r)); else CSS.highlights.delete('findc');
+  }
+  if (r) { const y = r.getBoundingClientRect().top - log.getBoundingClientRect().top; log.scrollTop += y - log.clientHeight / 3; }
+  renderBanners();
+}
 function openHelp() {}
 
 // ---- lifecycle ----

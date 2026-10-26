@@ -669,3 +669,74 @@ test('recent prompts keep the newest first without repeats and at most fifty', (
   assert.equal(list.length, 50);
   assert.equal(list[0], 'p59');
 });
+
+const SAMPLES = [
+  '# Title\n\nIntro with **bold** and `code`.\n\n- a\n  - b\n- c\n\n3. x\n4. y\n\n```rust\nfn main() {\n\n    println!("hi");\n}\n```\n\n| A | B |\n|:--|--:|\n| 1 | **2** |\n| 3 | 4 |\n\n> quote\n> more\n\n---\n\nThe end.',
+  'Para one\nstill one\n\n- item\n\n- loose item\n  continued\n\nafter\n\n```\nunclosed fence\n\nwith blank lines',
+  'Text\r\n\r\n- crlf list\r\n- two\r\n\r\n## Heading\r\nbody',
+  '1. one\n2. two\n\n   indented para\n\n~~~\ntilde fence\n~~~\n\n- \n- x\n\n> q\n\nplain\n|not|a table\n\n|a|b|\n|-|-|\n|1|2|\n\nend',
+];
+
+test('incremental markdown equals a full parse for random splits and keeps finished blocks', () => {
+  const { MC, plain } = load();
+  let seed = 7;
+  const rnd = n => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed % n; };
+  for (const doc of SAMPLES) {
+    for (let run = 0; run < 40; run++) {
+      let cache = null, at = 0, kept = 0;
+      while (at < doc.length) {
+        at = Math.min(doc.length, at + 1 + rnd(run % 3 ? 12 : 3));
+        const prev = cache, r = MC.mdInc(cache, doc.slice(0, at));
+        assert.deepEqual(plain(r.blocks), plain(MC.parseMd(doc.slice(0, at))), JSON.stringify(doc.slice(0, at)));
+        // Blocks frozen earlier are handed back as the same objects.
+        if (prev) for (let k = 0; k < prev.head.length; k++) assert.equal(r.blocks[k], prev.head[k]);
+        kept = Math.max(kept, r.cache.head.length);
+        cache = r.cache;
+      }
+      assert.ok(kept > 0 || doc.length < 40);
+    }
+  }
+  // A text that is not an extension of the last one starts over.
+  const a = MC.mdInc(null, 'one\n\ntwo\n\nthree\n\nfour\n'), b = MC.mdInc(a.cache, 'other\n\ntext');
+  assert.deepEqual(plain(b.blocks), plain(MC.parseMd('other\n\ntext')));
+});
+
+const tool = (call_id, name, extra = {}) => ({ type: 'tool', call_id, name, detail: call_id, input: null, input_lines: null, state: 'succeeded', exit_code: 0, duration_ms: 10, output: [], output_dropped: 0, output_lines: 0, truncated: false, ...extra });
+const said = (text, reasoning = '', streaming = false) => ({ type: 'assistant', loop_id: 'l', request: 1, reasoning, text, streaming });
+const ask = text => ({ type: 'user', kind: 'prompt', text, at: 0 });
+const end = (loop_id, extra = {}) => ({ type: 'turn_end', loop_id, outcome: 'completed', duration_ms: 47000, requests: 2, tools: 3, usage: { input: 0, output: 0, cached: 0 }, changes: { files: 1, added: 12, removed: 4 }, ...extra });
+
+test('a finished turn folds tools and intermediate thinking before the final answer; the running turn does not', () => {
+  const { MC, plain } = load();
+  const bl = [ask('go'), said('', 'plan'), tool('a', 'bash'), said('checking'), tool('b', 'read', { state: 'failed' }), said(''), { type: 'user', kind: 'steering', text: 'also', at: 0 }, tool('c', 'edit'), said('Done.', 'final thought'), end('t1'),
+    ask('next'), tool('d', 'bash'), said('working', '', true)];
+  const f = plain(MC.foldTurns(bl, 0, bl.length));
+  assert.equal(f.length, 1);
+  assert.deepEqual(f[0], { key: 'ft1', at: 1, last: 7, hidden: [1, 2, 3, 4, 7], tools: 3, failed: 1, ms: 47000, added: 12, removed: 4 });
+  assert.equal(MC.foldText(f[0]), 'Worked 47.0 s');
+  // No answer after the last tool: everything up to the turn end folds.
+  const noAnswer = plain(MC.foldTurns([ask('go'), said('first'), tool('a', 'bash'), end('t2', { changes: null })], 0, 4));
+  assert.deepEqual(noAnswer[0].hidden, [1, 2]);
+  assert.equal(noAnswer[0].added, null);
+  // A turn of only an answer has nothing to fold; a window that starts mid-turn folds from its start.
+  assert.deepEqual(plain(MC.foldTurns([ask('hi'), said('hello'), end('t3')], 0, 3)), []);
+  assert.deepEqual(plain(MC.foldTurns(bl, 3, 10))[0].hidden, [3, 4, 7]);
+});
+
+test('consecutive reads and searches group into one row with a count', () => {
+  const { MC, plain } = load();
+  const bl = [tool('a', 'read'), said(''), tool('b', 'read'), tool('c', 'grep'), tool('d', 'bash'), tool('e', 'read'), tool('f', 'glob'), said('x'), tool('g', 'read'), tool('h', 'read', { state: 'running' }), tool('i', 'grep'), tool('j', 'grep')];
+  const g = plain(MC.groupTools(bl, 0, 9));
+  assert.deepEqual(g.map(x => [x.key, x.members, x.label]), [['ga', [0, 2, 3], 'Explored 2 files · 1 search'], ['ge', [5, 6], 'Explored 1 file · 1 search']]);
+  assert.deepEqual(plain(MC.groupTools(bl, 8, 10)).map(x => [x.label, x.run]), [['Reading 2 files', true]]);
+  assert.deepEqual(plain(MC.groupTools(bl, 10, 12)).map(x => x.label), ['Searched 2 times']);
+  assert.deepEqual(plain(MC.groupTools([tool('a', 'read')], 0, 1)), []);
+});
+
+test('find matches messages, answers, thinking, tool targets and output case-insensitively', () => {
+  const { MC, plain } = load();
+  const bl = [ask('Fix the Parser'), said('The parser is fixed', 'think about PARSER'), tool('a', 'bash', { detail: 'cargo test', output: ['parser ok'] }), end('t')];
+  assert.deepEqual(plain(MC.findBlocks(bl, 'parser', 0, 4)), [0, 1, 2]);
+  assert.deepEqual(plain(MC.findBlocks(bl, 'cargo', 1, 4)), [2]);
+  assert.deepEqual(plain(MC.findBlocks(bl, '', 0, 4)), []);
+});
