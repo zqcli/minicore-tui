@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- In the web client, a running turn with text typed shows separate Queue and
+  Steer buttons instead of a mode toggle; `Tab` or `Alt+Enter` queues and
+  `Enter`/`Cmd+Enter` steers, like the TUI. Queued follow-ups are numbered and
+  listed after pending steers. Collapsed thinking keeps its newest sentence on a
+  line under the header that moves up as the agent thinks. On desktop the
+  transcript, composer and title share one centred column beside the sidebar,
+  with side panels for changes and output, hover states and thin scrollbars.
 - On Windows the phone's folder picker can browse whole drives: list them in
   `[remote] roots`, for example `roots = ['C:\', 'D:\']` (single quotes in TOML),
   and the picker's Roots level switches between them. `C:`, `C:/` and `c:\` all
