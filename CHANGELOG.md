@@ -274,7 +274,7 @@ below.
 ### Transcript
 
 - A user message card shows when it was sent, `21:38 · 10/20/2026` in local
-  time, on the row under its text; steering cards add `↳ steering`. Live
+  time, on the row under its text; steering cards add `↗ steering`. Live
   messages take the Agent's `accepted_at`, history the stored timestamp; old
   history without one shows no row.
 - Rows added to the dock (a steer, a queued follow-up, a notice, an approval)

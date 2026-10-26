@@ -294,7 +294,7 @@ async fn a_steering_message_shows_the_time_the_agent_accepted_it() {
         h.sent_at("also the tests"),
         unix_millis("2026-10-20T21:39:30Z")
     );
-    assert!(h.screen(60, 14).contains("21:39 · 10/20/2026 · ↳ steering"));
+    assert!(h.screen(60, 14).contains("21:39 · 10/20/2026 · ↗ steering"));
 }
 
 #[tokio::test(start_paused = true)]
