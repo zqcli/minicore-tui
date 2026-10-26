@@ -178,13 +178,16 @@ test('snapshot blocks with append and len truncation and state keep protocol fie
   const done = { ...blocks[1], text: 'finished', streaming: false };
   MC.reduce(s, { t: 'blocks', len: 3, upserts: [{ i: 1, block: done }, { i: 2, block: structuredClone(blocks[2]) }] }, 0);
   assert.deepEqual(plain(s.blocks), [blocks[0], done, blocks[2]]);
-  // Text appended to a user block is ignored; output lines append to a running tool.
+  // Text appended to a user block is ignored. Tool output continues the line being written, then adds lines.
   r = MC.reduce(s, { t: 'blocks', len: 3, upserts: [{ i: 0, append: { text: 'x' } }] }, 0);
   assert.deepEqual(plain(r.dirty), []);
   assert.equal(s.blocks[0].text, 'now');
   r = MC.reduce(s, { t: 'blocks', len: 3, upserts: [{ i: 2, append: { output: ['a', 'b'] } }, { i: 2, append: { output: ['c'] } }] }, 0);
   assert.deepEqual(plain(r.dirty), [2, 2]);
-  assert.deepEqual(plain(s.blocks[2].output), ['/work', 'a', 'b', 'c']);
+  assert.deepEqual(plain(s.blocks[2].output), ['/worka', 'bc']);
+  s.blocks[2].output = [];
+  MC.reduce(s, { t: 'blocks', len: 3, upserts: [{ i: 2, append: { output: ['run'] } }, { i: 2, append: { output: ['ning ... ok', ''] } }] }, 0);
+  assert.deepEqual(plain(s.blocks[2].output), ['running ... ok', '']);
   const idle = { ...state, status: { ...state.status, busy: false, started_ms: null }, interaction: null };
   assert.equal(MC.reduce(s, { t: 'state', state: idle }, 0).state, true);
   assert.deepEqual(plain(s.state), idle);
@@ -641,7 +644,9 @@ test('a slash line is a built-in run here, a template sent as text, or refused a
   assert.deepEqual(plain(MC.parseSlash('  /rename Fix the parser  ', commands)), { builtin: 'rename', arg: 'Fix the parser' });
   assert.deepEqual(plain(MC.parseSlash('/diff', commands)), { builtin: 'changes', arg: '' });
   assert.deepEqual(plain(MC.parseSlash('/fix-tests src/parser', commands)), { template: 'fix-tests', arg: 'src/parser' });
-  assert.deepEqual(plain(MC.parseSlash('/Users/me/app is broken', commands)), { unknown: 'Users/me/app' });
+  assert.deepEqual(plain(MC.parseSlash('/nope', commands)), { unknown: 'nope' });
+  // Text the host sends as it is: a word with more text, paths, an escaped slash, a lone slash.
+  for (const t of ['/nope more text', '/Users/me/app is broken', '/Users/me/app', '//compact', '/ hello']) assert.equal(MC.parseSlash(t, commands), null, t);
   assert.equal(MC.parseSlash('fix the /tmp path', commands), null);
   assert.equal(MC.literal('/fix'), true);
   assert.equal(MC.literal('@src'), true);
@@ -739,4 +744,28 @@ test('find matches messages, answers, thinking, tool targets and output case-ins
   assert.deepEqual(plain(MC.findBlocks(bl, 'parser', 0, 4)), [0, 1, 2]);
   assert.deepEqual(plain(MC.findBlocks(bl, 'cargo', 1, 4)), [2]);
   assert.deepEqual(plain(MC.findBlocks(bl, '', 0, 4)), []);
+});
+
+test('approvals are titled by what is asked and show the command, diff or content first', () => {
+  const { MC, plain } = load();
+  const a = (tool, detail, input) => ({ id: 'x', kind: 'approval', tool, detail, input, prompt: '', options: ['Allow once', 'Deny', 'Allow ' + tool + ' this session'] });
+  assert.deepEqual(plain(MC.approvalTitle(a('bash', 'cargo test', 'cargo test'))), { text: 'Run command' });
+  const patch = '*** Begin Patch\n*** Update File: src/x.rs\n@@\n-a\n+b\n*** End Patch';
+  assert.deepEqual(plain(MC.approvalTitle(a('apply_patch', 'src/x.rs', patch))), { text: 'Edit', code: 'src/x.rs' });
+  assert.deepEqual(plain(MC.approvalTitle(a('apply_patch', '2 files', patch + '\n*** Add File: y.md\n+hi'))), { text: 'Edit 2 files' });
+  assert.deepEqual(plain(MC.approvalTitle(a('write', 'README.md', '# Hi'))), { text: 'Write', code: 'README.md' });
+  assert.deepEqual(plain(MC.approvalTitle(a('web_fetch', 'https://x.test', null))), { text: 'Fetch', code: 'https://x.test' });
+  assert.deepEqual(plain(MC.approvalTitle(a('mcp_thing', 'arg', null))), { text: 'Use', code: 'mcp_thing' });
+  assert.deepEqual(plain(MC.approvalBody(a('bash', 'ls', null))), { cmd: 'ls' });
+  assert.equal(plain(MC.approvalBody(a('apply_patch', 'src/x.rs', patch))).diff[0].path, 'src/x.rs');
+  const w = plain(MC.approvalBody(a('write', 'README.md', '# Hi\nthere'))).diff[0];
+  assert.deepEqual([w.path, w.added, w.hunks[0].lines.map(l => [l.t, l.s, l.b])], ['README.md', 2, [['add', '# Hi', 1], ['add', 'there', 2]]]);
+  assert.deepEqual(plain(MC.approvalBody(a('mcp_thing', 'arg', 'arg'))), { text: '' });
+});
+
+test('approval buttons use the host labels, allow first and deny last; choices are numbered', () => {
+  const { MC, plain } = load();
+  assert.deepEqual(plain(MC.approvalOptions(state.interaction)), [
+    { choice: 'allow', label: 'Allow once' }, { choice: 'allow_session', label: 'Allow bash this session' }, { choice: 'deny', label: 'Deny' }]);
+  assert.deepEqual(plain(MC.approvalOptions({ kind: 'choice', options: ['GitHub', 'GitLab'] })), [{ choice: 0, label: 'GitHub', n: 1 }, { choice: 1, label: 'GitLab', n: 2 }]);
 });

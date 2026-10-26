@@ -310,7 +310,7 @@ pre{margin:0;font-size:var(--t13);line-height:1.5;tab-size:4}
 .tb pre.cmd{max-height:none;white-space:pre-wrap;overflow-wrap:anywhere}
 .tbar{display:flex;align-items:center;gap:2px;margin-left:-8px}
 .tbar .hint{margin-left:auto;padding-right:4px}
-.dec{font-size:var(--t12);font-weight:600;color:var(--tx3)}
+.dec{display:flex;align-items:center;gap:4px;margin:-2px 0 4px 28px;font-size:var(--t12);font-weight:500;color:var(--tx3)}
 .dec.er{color:var(--er)}.dec.ok{color:var(--ok)}
 pre.view{border:0;border-radius:0;padding:0;background:none;max-height:none;font-size:var(--t12);line-height:1.5;white-space:pre}
 pre.view.wrap{white-space:pre-wrap;overflow-wrap:anywhere}
@@ -324,7 +324,7 @@ pre.view.wrap{white-space:pre-wrap;overflow-wrap:anywhere}
 .te .ic{color:var(--ok)}
 .te.bad .ic,.te.bad .oc{color:var(--wa)}
 .te .oc{font-weight:600;color:var(--tx2)}
-.te .chg{color:var(--ac);font-weight:500;min-height:32px;position:relative}
+.te .chg{display:inline-flex;align-items:center;gap:2px;color:var(--ac);font-weight:500;min-height:32px;position:relative;margin-left:4px}
 .te .chg::after{content:"";position:absolute;inset:-6px -4px}
 .cmpx{display:flex;flex-direction:column;border-top:1px dashed var(--line2);padding-top:4px}
 .cmpx .tr .vb{font-weight:500}
@@ -415,13 +415,14 @@ html.kb #dock{padding-bottom:6px}
 .ahead h2 code{font-size:.9em;font-weight:500}
 .ahead p{font-size:var(--t14);color:var(--tx2);margin-top:2px;line-height:1.4}
 .abtn{flex:none;display:flex;flex-direction:column;gap:8px;padding:10px 20px calc(max(var(--sb),12px) + 4px)}
-.abtn .row2{display:flex;gap:8px}
-.abtn .row2>.btn{flex:1}
+.row2{display:flex;gap:8px}
+.row2>.btn{flex:1}
 .reason{display:flex;gap:8px}
 .reason input{flex:1}
 .cmdbox{padding:10px 12px;border-radius:var(--r2);background:var(--bg);border:1px solid var(--line);font-size:var(--t14);white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.5}
 [data-theme=dark] .cmdbox{background:var(--bg)}
-.where2{font-size:var(--t12);color:var(--tx3);margin-top:6px}
+.where2{font-size:var(--t12);color:var(--tx3);margin:6px 0 2px}
+.sbody .dv{margin-top:4px}
 .opts{display:flex;flex-direction:column;gap:8px}
 .opts .btn{justify-content:flex-start;text-align:left;font-weight:500;padding:10px 14px;line-height:1.35}
 .opts .btn b{flex:none;width:22px;height:22px;border-radius:6px;display:grid;place-items:center;background:var(--fill2);font-size:var(--t12)}
@@ -577,14 +578,19 @@ globalThis.MC = (() => {
     for (let i = 0; i < neu.length; i++) if (JSON.stringify(old[i]) !== JSON.stringify(neu[i])) out.push(i);
     return out;
   }
-  // An upsert is {i, block}, or {i, append} adding text/reasoning to an assistant or output lines to a tool.
+  // An upsert is {i, block}, or {i, append} adding text/reasoning to an assistant or output to a tool: the first output
+  // string continues the line still being written, each further one is a new line.
   function applyBlocks(blocks, len, upserts) {
     blocks.length = len;
     const out = [];
     for (const u of upserts) {
       const b = blocks[u.i], a = u.append;
       if (!a) blocks[u.i] = u.block;
-      else if (b.type === 'tool' && a.output) b.output.push(...a.output);
+      else if (b.type === 'tool' && a.output) {
+        const o = b.output;
+        if (o.length) o[o.length - 1] += a.output[0]; else o.push(a.output[0]);
+        o.push(...a.output.slice(1));
+      }
       else if (b.type === 'assistant') {
         if (a.text) b.text += a.text;
         if (a.reasoning) b.reasoning += a.reasoning;
@@ -885,6 +891,34 @@ globalThis.MC = (() => {
   };
 
   // ---- approvals ----
+  // What is asked, from the tool and its detail: "Run command", "Edit `src/x.rs`", "Write `README.md`", "Edit 3 files".
+  function approvalTitle(a) {
+    const k = toolKind(a.tool), files = k === 'edit' && a.input ? parseDiff(a.input) : [];
+    if (k === 'cmd') return { text: 'Run command' };
+    if (files.length > 1) return { text: 'Edit ' + files.length + ' files' };
+    if (k === 'edit' || k === 'write') return { text: k === 'edit' ? 'Edit' : 'Write', code: files.length ? files[0].path : a.detail };
+    if (k === 'read') return { text: 'Read', code: a.detail };
+    if (k === 'web') return { text: 'Fetch', code: a.detail };
+    return { text: 'Use', code: a.tool };
+  }
+  // The host's labels come in the order [allow, deny, allow for session]; allow shows first and deny last.
+  const APPROVAL_CHOICES = ['allow', 'deny', 'allow_session'];
+  function approvalOptions(a) {
+    if (a.kind !== 'approval') return a.options.map((label, choice) => ({ choice, label, n: choice + 1 }));
+    const o = a.options.map((label, k) => ({ choice: APPROVAL_CHOICES[k], label }));
+    return [o[0], o[2], o[1]].filter(Boolean);
+  }
+  // What the sheet shows first: the command, a diff, the content to write, or the raw input.
+  function approvalBody(a) {
+    const k = toolKind(a.tool), input = a.input || '';
+    if (k === 'cmd') return { cmd: input || a.detail };
+    if (k === 'edit' && parseDiff(input).length) return { diff: parseDiff(input) };
+    if (k === 'write' && input) {
+      const lines = input.split('\n');
+      return { diff: [{ path: a.detail, op: 'add', added: lines.length, removed: 0, hunks: [{ head: '', lines: lines.map((s, i) => ({ t: 'add', s, a: null, b: i + 1 })) }] }] };
+    }
+    return { text: input && input !== a.detail ? input : '' };
+  }
   // Hardware keys answer only after the sheet has been visible, and the user has not typed, for 600 ms, never from a
   // text field and never with a modifier: a sentence being typed when the sheet appears cannot answer it.
   const ARM_MS = 600, APPROVAL_KEYS = { y: 'allow', a: 'allow_session', n: 'deny' };
@@ -958,13 +992,15 @@ globalThis.MC = (() => {
     const hit = all.filter(c => c.name.toLowerCase().includes(q));
     return hit.filter(c => c.name.toLowerCase().startsWith(q)).concat(hit.filter(c => !c.name.toLowerCase().startsWith(q)));
   }
-  // What a "/name args" line is: a built-in (run here), a template (sent; the host expands it) or unknown (refused here).
+  // What a "/name args" line is: a built-in (run here), a template (sent; the host expands it), a bare unknown "/word"
+  // (refused here, as the host would), or null for text sent as it is ("/word more text", paths, "//x").
   function parseSlash(text, commands) {
     const m = /^\/(\S+)(?:\s+([\s\S]*))?$/.exec(text.trim());
     if (!m) return null;
     const name = ALIAS[m[1]] || m[1], arg = (m[2] || '').trim();
     if (BUILTINS.some(c => c.name === name)) return { builtin: name, arg };
-    return commands.some(c => c.name === m[1]) ? { template: m[1], arg } : { unknown: m[1] };
+    if (commands.some(c => c.name === m[1])) return { template: m[1], arg };
+    return !arg && /^[\w-]+$/.test(m[1]) ? { unknown: m[1] } : null;
   }
   // The "@word" being typed at the caret, if any.
   function atToken(text, caret) {
@@ -1112,7 +1148,7 @@ globalThis.MC = (() => {
     diffBlocks, applyBlocks, reduce, explain, lockText, fmtClock, unreachable, fsError, errorText,
     clock, stamp, relTime, dayGroup, sessionLayout, matchSession, fmtElapsed, fmtDur, fmtTok, fmtNum,
     groupTools, foldTurns, findBlocks, foldText, mdInc,
-    toolKind, toolInfo, parseDiff, diffStats, liveBlock, turnEnd, changesText, compactionText, statusLine, canStop, approvalKey,
+    toolKind, toolInfo, parseDiff, diffStats, liveBlock, turnEnd, changesText, compactionText, statusLine, canStop, approvalKey, approvalTitle, approvalOptions, approvalBody,
     BUILTINS, slashMenu, parseSlash, atToken, insertMention, pushRecent, literal,
     splitPath, within, crumbs, tilde, recentWorkspaces, sessionTransitions, noticeEvent, attentionCount, inline, parseMd, parseLines, SAFE_URL,
   };
@@ -1609,7 +1645,7 @@ function sheet(o) {
     if (k === m.last && !force) return;
     m.last = k;
     const top = body.scrollTop;
-    fill(head, o.head ? o.head(id) : h('h2', { id }, o.title), !o.bare && h('button', { class: 'ib', type: 'button', 'aria-label': 'Close', onclick: () => m.close() }, icon('x')));
+    fill(head, o.head ? o.head(id) : h('h2', { id }, o.title), h('button', { class: 'ib', type: 'button', 'aria-label': o.closeLabel || 'Close', onclick: () => m.close() }, icon(o.closeIcon || 'x')));
     swap(body, o.body());
     const f = o.foot && o.foot();
     foot.hidden = !f;
@@ -2137,8 +2173,10 @@ function toolBody(b, f) {
 }
 function toolNode(b, i) {
   const k = 't' + b.call_id, f = MC.toolInfo(b), o = isOpen(k, b.state === 'failed');
+  const d = decided.get(b.call_id), dec = d && (d.you ? d.text + ' · you' : b.state === 'denied' ? 'Denied on another device' : b.state === 'pending' ? '' : 'Allowed on another device');
   return h('div', 'tl', h('button', { class: 'tr', type: 'button', 'data-k': k, 'aria-expanded': String(o), onclick: e => toggle(k, b.state === 'failed', i, e.currentTarget) },
-    stateIcon(b, f), h('span', 'vb', f.verb), h('span', 'tg', f.target), toolMeta(f), icon('chev', 'xs cv')), o && toolBody(b, f));
+    stateIcon(b, f), h('span', 'vb', f.verb), h('span', 'tg', f.target), toolMeta(f), icon('chev', 'xs cv')),
+    dec && h('div', 'dec' + (/^Denied/.test(dec) ? ' er' : ' ok'), icon(/^Denied/.test(dec) ? 'slash' : 'check', 'xs'), dec), o && toolBody(b, f));
 }
 // A diff as files of hunks with line numbers and add/remove tints; wrapping follows the setting.
 function diffView(files, opts = {}) {
@@ -2227,7 +2265,7 @@ function blockNode(b, i) {
     case 'turn_end': {
       const t = MC.turnEnd(b, turnClock(i), tz());
       return h('div', 'te' + (t.ok ? '' : ' bad'), icon(t.ok ? 'check' : 'warn', 'xs'), h('span', 'oc', t.parts[0]), t.parts.slice(1).map(p => h('span', '', '· ' + p)),
-        t.changes && h('button', { class: 'chg', type: 'button', onclick: () => openChanges() }, '· ' + MC.changesText(t.changes)));
+        t.changes && h('button', { class: 'chg', type: 'button', 'aria-label': 'Changes: ' + MC.changesText(t.changes), onclick: () => openChanges() }, icon('diff', 'xs'), MC.changesText(t.changes), icon('chev', 'xs')));
     }
     case 'compaction': {
       const k = 'c' + i, o = isOpen(k, false);
@@ -2581,36 +2619,71 @@ function openProfile() {
 let apprId = null, apprAt = 0, lastKey = 0;
 function syncApproval() {
   const a = S.state.interaction, m = findSheet('appr');
-  if (!a) { apprId = null; if (m) m.close(true); renderApprBar(); return; }
+  if (!a) {
+    // Answered elsewhere: the tool row says so once its state shows the outcome.
+    if (apprId && ap.call && !decided.has(ap.call)) { decided.set(ap.call, { you: false }); markCall(ap.call); }
+    apprId = null; ap.call = null;
+    if (m) m.close(true);
+    renderApprBar();
+    return;
+  }
   if (a.id !== apprId) {
     apprId = a.id; apprAt = Date.now();
+    const t = [...S.blocks].reverse().find(b => b.type === 'tool' && b.state === 'pending');
+    ap.call = t ? t.call_id : null;
     announce(a.kind === 'approval' ? 'Approval needed' : 'Question: ' + (a.prompt || ''));
     if (!m) openApproval(a);
   }
   renderApprBar();
 }
+const ap = { deny: false, reason: '', call: null };
+const decided = new Map();
 function openApproval() {
-  sheet({
-    key: 'appr', deps: () => [S.state.interaction, pendingKind('answer'), online()],
-    head: hid => { const a = S.state.interaction; return h('div', 'ahead', h('div', 'eicon', icon(a.kind === 'approval' ? 'shield' : 'info')), h('div', '', h('h2', { id: hid, tabindex: '-1', 'data-focus': true }, a.kind === 'approval' ? 'Approval needed' : a.prompt || 'Question'), a.kind === 'approval' && a.prompt && h('p', '', a.prompt))); },
+  ap.deny = false; ap.reason = '';
+  const m = sheet({
+    key: 'appr', closeIcon: 'chevd', closeLabel: 'Minimize', footCls: 'col', deps: () => [S.state.interaction, pendingKind('answer'), online(), ap.deny],
+    head: hid => {
+      const a = S.state.interaction, t = a.kind === 'approval' && MC.approvalTitle(a);
+      return h('div', 'ahead', h('div', 'eicon', icon(t ? 'shield' : 'info')), h('div', '',
+        h('h2', { id: hid, tabindex: '-1', 'data-focus': true }, t ? [t.text, t.code ? [' ', h('code', '', t.code)] : ''] : a.prompt || 'Question'),
+        t && a.prompt && h('p', '', a.prompt)));
+    },
     body: () => {
-      const a = S.state.interaction;
-      return [(a.tool || a.detail) && h('div', 'cmdbox mono', [a.tool, a.detail].filter(Boolean).join(' · ')), a.input && a.input !== a.detail && h('pre', { class: 'cmdbox', style: 'margin-top:8px' }, a.input)];
+      const a = S.state.interaction, p = MC.pending(S, 'answer');
+      if (a.kind !== 'approval') return h('div', 'opts', MC.approvalOptions(a).map(o => h('button', { class: 'btn', type: 'button', 'data-k': 'o' + o.n, disabled: !online() || !!p, onclick: () => answer(o.choice) },
+        p && p.spec.choice === o.choice ? spin() : h('b', '', String(o.n)), h('span', '', o.label))));
+      const x = MC.approvalBody(a);
+      return [x.cmd && [h('pre', 'cmdbox', '$ ' + x.cmd), h('div', 'where2', 'in ' + MC.tilde(cur().workspace))], x.diff && diffView(x.diff), x.text && h('pre', 'cmdbox', x.text)];
     },
     foot: () => {
       const a = S.state.interaction, p = MC.pending(S, 'answer'), dis = !online() || !!p;
-      const ans = (choice, label, cls) => h('button', { class: 'btn ' + cls, type: 'button', disabled: dis, onclick: () => answer(choice) }, p && p.spec.choice === choice && spin(), label);
-      return a.kind === 'approval' ? [ans('allow', a.options[0], 'primary'), ans('allow_session', a.options[2], ''), ans('deny', a.options[1], 'danger')] : a.options.map((o, k) => ans(k, o, ''));
+      if (a.kind !== 'approval') return hover.matches && h('div', 'akeys', 'Press 1–' + a.options.length + ' to answer');
+      const ans = (o, cls, fn) => h('button', { class: 'btn ' + cls, type: 'button', 'data-k': o.choice, disabled: dis, onclick: fn || (() => answer(o.choice)) }, p && p.spec.choice === o.choice && spin(), o.label);
+      const [allow, session, deny] = MC.approvalOptions(a);
+      if (ap.deny) return [h('form', { class: 'reason', onsubmit: e => { e.preventDefault(); answer('deny', ap.reason.trim()); } },
+        h('input', { class: 'tf', id: 'why', 'data-k': 'why', value: ap.reason, placeholder: 'Tell the agent why (optional)', 'aria-label': 'Reason for denying', autocomplete: 'off', enterKeyHint: 'send', oninput: e => { ap.reason = e.target.value; } })),
+        h('div', 'row2', h('button', { class: 'btn', type: 'button', onclick: () => { ap.deny = false; m.refresh(); } }, 'Back'), ans(deny, 'dangerfill', () => answer('deny', ap.reason.trim())))];
+      return [ans(allow, 'primary'), session && ans(session, ''), ans({ ...deny, label: deny.label + '…' }, 'danger', () => { ap.deny = true; m.refresh(); m.el.querySelector('#why').focus(); }),
+        hover.matches && h('div', 'akeys', 'Y allow · A allow for this session · N deny')];
     },
-    footCls: 'col', onClose: () => renderApprBar(),
+    onClose: () => renderApprBar(),
   });
 }
-function answer(choice, message) { const a = S.state.interaction; if (a && !pendingKind('answer')) intent(MC.intents.answer(a.id, choice, message)); }
+// An answer is recorded on the tool row it decided; a blank reason is a plain deny.
+function answer(choice, message) {
+  const a = S.state.interaction, call = ap.call;
+  if (!a || pendingKind('answer')) return;
+  intent(MC.intents.answer(a.id, choice, message || undefined), ack => {
+    if (!ack.ok) return toast(MC.errorText(ack.error), ack.error === 'stale' ? null : 'error');
+    if (call) { decided.set(call, { you: true, text: choice === 'deny' ? 'Denied' + (message ? ': “' + message + '”' : '') : choice === 'allow' ? 'Allowed once' : 'Allowed for this session' }); markCall(call); }
+  });
+}
+function markCall(call) { const i = S.blocks.findIndex(b => b.type === 'tool' && b.call_id === call); if (i >= 0) { dirty.add(i); schedule(); } }
 const apprPart = part($('apprbar'), b => b && [icon('hand', 'sm'), h('span', '', b), h('button', { class: 'btn sm', type: 'button', onclick: () => openApproval() }, 'Review')]);
 function renderApprBar() {
-  const a = S.state && S.state.interaction, show = !!a && !findSheet('appr');
+  const a = S.state && S.state.interaction, show = !!a && !findSheet('appr'), t = a && a.kind === 'approval' && MC.approvalTitle(a);
   $('apprbar').hidden = !show;
-  apprPart(show ? (a.kind === 'approval' ? 'Approval needed' : 'Question waiting') : null);
+  apprPart(show ? (t ? 'Approval needed · ' + t.text + (t.code ? ' ' + t.code : '') : 'Question · ' + (a.prompt || '')) : null);
 }
 // Hardware keys: y / a / n (or the option number) once armed, never from a text field.
 document.addEventListener('keydown', e => {
