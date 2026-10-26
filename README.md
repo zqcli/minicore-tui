@@ -31,8 +31,7 @@ target/release/minicore-tui --workspace ./project   # first run writes starter f
 ```
 
 Everything lives in one *TUI directory*: `--home`, else `$MINICORE_HOME`, else
-the directory of the executable (its parent when that is named `bin`, so a
-bundle with `bin/minicore-tui` needs nothing set).
+the directory of the executable.
 Providers and models are in `models.toml`, profiles and preferences in
 `config.toml`, the system prompt in `prompt/SYSTEM_PROMPT.md`, and every session
 in `session/`. On the first run the TUI writes commented starters, says what to
@@ -49,17 +48,17 @@ starts with. A draft typed meanwhile is kept. Full reference: [docs/configuratio
 
 Prebuilt packages: every CI run uploads one per platform (Linux x86_64, macOS
 arm64 and x86_64, Windows x86_64) as a workflow artifact,
-`minicore-tui-<version>-<target>`. Each is a TUI directory with
-`bin/minicore-tui` (`.exe` on Windows), the Agent included; `BUILD.txt` names
-the three revisions. Unpack it anywhere and run
-`bin/minicore-tui` from the project directory. On macOS a downloaded binary may
-need `xattr -d com.apple.quarantine bin/*` first.
+`minicore-tui-<version>-<target>`. Each holds `bin/minicore-tui` (`.exe` on
+Windows), the Agent included, and `BUILD.txt` naming the three revisions. Unpack
+it anywhere and run `bin/minicore-tui --home <DIR>` (or set `MINICORE_HOME`) from
+the project directory; without either, the TUI directory is `bin/` itself. On
+macOS a downloaded binary may need `xattr -d com.apple.quarantine bin/*` first.
 
 ### Options
 
 | Option | Meaning |
 |---|---|
-| `--home <DIR>` | The TUI directory. Default: `$MINICORE_HOME`, else the executable's directory (its parent when named `bin`). |
+| `--home <DIR>` | The TUI directory. Default: `$MINICORE_HOME`, else the executable's directory. |
 | `--agent <BIN>` | Run this external Agent executable instead of the built-in one. Default: `[agent] binary` in `config.toml`, if set. |
 | `--agent-config <FILE>` | Use this Agent config as is; no composition, no `models.toml`. For tests and advanced use. Replaces `--config`. |
 | `--workspace <DIR>` | Workspace of a new session. Default: the current directory. |

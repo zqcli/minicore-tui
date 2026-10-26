@@ -14,9 +14,9 @@ Resolved in this order:
 
 1. `--home DIR`
 2. `$MINICORE_HOME`
-3. the directory of the running executable, or its parent when that directory is
-   named `bin`. A release bundle (`bin/minicore-tui`, the Agent built in) is
-   therefore self-contained, with no flag or variable.
+3. the directory of the running executable. A release bundle runs as
+   `bin/minicore-tui`, so without a flag or variable its files would be written
+   inside `bin/`; give it `--home DIR` or `MINICORE_HOME`.
 
 On Linux the executable path is the resolved one, so a symlink in `bin/` leads
 to the symlink's target directory; use `--home` or `MINICORE_HOME` there.
@@ -31,7 +31,6 @@ to the symlink's target directory; use `--home` or `MINICORE_HOME` there.
   session/                   the Agent's data_dir: all sessions and Agent stores
     agent.toml               generated Agent config (mode 0600), rewritten each start
   history.jsonl              prompt history (↑ in the composer)
-  bin/minicore-tui           the executable in a release bundle, Agent included
 ```
 
 `history.jsonl` stays outside `session/` on purpose: it belongs to the composer,

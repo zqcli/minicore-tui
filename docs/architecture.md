@@ -95,7 +95,7 @@ the rows move, and the hit areas of the editor and of the open view. What `app` 
 ## Configuration
 
 All local state sits in one *TUI directory* (`--home`, `$MINICORE_HOME`, else the
-executable's directory or its parent named `bin`): `config.toml`, `models.toml`,
+executable's directory): `config.toml`, `models.toml`,
 `prompt/SYSTEM_PROMPT.md`, `prompt/commands/`, `session/` (the Agent's
 `data_dir`), `history.jsonl`. `config::prepare` runs before the terminal is
 touched:

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- The TUI directory is `--home`, else `$MINICORE_HOME`, else the executable's
+  directory: a directory named `bin` is no longer replaced by its parent. A
+  bundle that runs `bin/minicore-tui` now needs `--home <dir>` or
+  `MINICORE_HOME`; otherwise it reads and writes its files inside `bin/`.
 - `Tab` queues a follow-up while a turn runs, so queueing no longer depends on
   `Alt+Enter`, which most macOS terminals send as plain `Enter` (a steer). An open
   completion list keeps `Tab`. The dock tells the two apart: `↗ steer  …` rows,
