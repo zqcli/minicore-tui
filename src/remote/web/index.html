@@ -81,7 +81,7 @@ code,pre,.mono{font-family:var(--mono)}
 .ib.s::after{content:"";position:absolute;inset:-4px}
 .seg{display:flex;gap:2px;padding:2px;border-radius:var(--r2);background:var(--fill);overflow-x:auto;scrollbar-width:none}
 .seg::-webkit-scrollbar{display:none}
-.seg button{flex:1 0 auto;min-height:40px;padding:0 12px;border-radius:10px;font-size:var(--t14);font-weight:500;color:var(--tx2);white-space:nowrap;display:inline-flex;align-items:center;justify-content:center;gap:6px;transition:background var(--fast),color var(--fast)}
+.seg button{flex:1 0 auto;min-height:44px;padding:0 12px;border-radius:10px;font-size:var(--t14);font-weight:500;color:var(--tx2);white-space:nowrap;display:inline-flex;align-items:center;justify-content:center;gap:6px;transition:background var(--fast),color var(--fast)}
 .seg button[aria-checked=true]{background:var(--sf);color:var(--tx);box-shadow:0 1px 3px rgba(0,0,0,.12)}
 [data-theme=dark] .seg button[aria-checked=true]{background:var(--fill2)}
 input.tf{width:100%;min-height:44px;padding:0 12px;border-radius:var(--r2);border:1px solid var(--line2);background:var(--sf);font-size:max(16px,1rem);color:var(--tx)}
@@ -289,8 +289,10 @@ pre{margin:0;font-size:var(--t13);line-height:1.5;tab-size:4}
 .rsn{font-size:var(--t14);line-height:1.55;color:var(--tx3);white-space:pre-wrap;overflow-wrap:anywhere;padding-left:12px;border-left:2px solid var(--line);margin:4px 0 0 7px}
 .rsn.peek{max-height:calc(1.55em * 3);overflow:hidden;display:flex;flex-direction:column;justify-content:flex-end;-webkit-mask-image:linear-gradient(transparent,#000 60%);mask-image:linear-gradient(transparent,#000 60%)}
 /* tool rows */
-.tr{display:flex;align-items:center;gap:10px;width:100%;min-height:36px;padding:4px 2px;font-size:var(--t14);line-height:1.35;border-radius:var(--r1);color:var(--tx2)}
+.tr{display:flex;align-items:center;gap:10px;width:100%;min-height:40px;position:relative;padding:4px 2px;font-size:var(--t14);line-height:1.35;border-radius:var(--r1);color:var(--tx2)}
 .tr:active{background:var(--fill)}
+.tr::after,.acts .ib::after{content:"";position:absolute;inset:-2px 0}
+.acts .ib::after{inset:-4px}
 .tr .si{width:16px;display:grid;place-items:center;flex:none;color:var(--tx3)}
 .tr .si.ok{color:var(--ok)}.tr .si.er{color:var(--er)}.tr .si.wa{color:var(--wac)}.tr .si.run{color:var(--ac)}
 .tr .vb{flex:none;font-weight:500;color:var(--tx2)}
@@ -335,7 +337,7 @@ pre.view.wrap{white-space:pre-wrap;overflow-wrap:anywhere}
 #empty .appicon{width:56px;height:56px;border-radius:14px;margin-bottom:20px}
 .where{display:inline-flex;align-items:center;gap:6px;min-height:40px;padding:0 14px;border-radius:20px;background:var(--fill);color:var(--tx2);font-size:var(--t14);font-weight:500;margin-top:10px;max-width:100%}
 .where span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.sugg{display:grid;grid-template-columns:1fr 1fr;gap:8px;width:100%;max-width:520px;margin-top:28px}
+.sugg{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;width:100%;max-width:520px;margin-top:28px}
 .sugg button{display:flex;flex-direction:column;gap:2px;padding:12px 14px;border-radius:var(--r2);border:1px solid var(--line);text-align:left;font-size:var(--t14);font-weight:500;line-height:1.35;min-height:64px}
 .sugg button:active{background:var(--fill)}
 .sugg small{color:var(--tx3);font-weight:400;font-size:var(--t13);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
@@ -354,7 +356,7 @@ html.kb #dock{padding-bottom:6px}
 .st1 .mono{flex:1;min-width:0;font-size:var(--t12);color:var(--tx3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .st1 .el{font-size:var(--t13);color:var(--tx3);font-variant-numeric:tabular-nums;flex:none}
 .micro{font-size:var(--t12);color:var(--tx3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.ctxb{font-size:var(--t12);font-weight:500;color:var(--tx3);min-height:44px;padding:0 4px;font-variant-numeric:tabular-nums;flex:none}
+.ctxb{font-size:var(--t12);font-weight:500;color:var(--tx3);min-height:44px;min-width:44px;padding:0 4px;font-variant-numeric:tabular-nums;flex:none}
 .ctxb.hi{color:var(--wa)}
 .stop{flex:none;display:inline-flex;align-items:center;gap:6px;min-height:44px;padding:0 14px;border-radius:22px;background:var(--ers);color:var(--er);font-size:var(--t14);font-weight:600}
 .stop:disabled{opacity:.55}
@@ -371,7 +373,7 @@ html.kb #dock{padding-bottom:6px}
 .qp{display:flex;align-items:center;gap:4px;min-height:44px;padding:0 2px 0 12px;border-radius:var(--r2);background:var(--fill);font-size:var(--t14)}
 .qp .qk{flex:none;font-size:var(--t12);font-weight:600;color:var(--tx3)}
 .qp .qt{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:left;min-height:44px}
-.qp .ib{width:40px;height:40px;color:var(--tx3)}
+.qp .ib{color:var(--tx3)}
 #pop{margin-bottom:6px;max-height:min(46vh,calc(var(--h,100dvh)*.42));overflow-y:auto;overscroll-behavior:contain;border-radius:var(--r2);background:var(--sf);box-shadow:var(--sh),inset 0 0 0 1px var(--line);padding:4px}
 .opt{display:flex;align-items:center;gap:10px;width:100%;min-height:48px;padding:6px 10px;border-radius:var(--r1);text-align:left}
 .opt[aria-selected=true]{background:var(--fill)}
@@ -391,7 +393,9 @@ html.kb #dock{padding-bottom:6px}
 .chip.mode,#send{flex:none}
 .chip.mode{background:var(--acs);color:var(--ac)}
 .chip.mode.q{background:var(--fill);color:var(--tx2)}
-.chips .gap{flex:1}
+.cl{flex:1;min-width:0;display:flex;align-items:center;gap:6px;overflow-x:auto;scrollbar-width:none;padding:4px 16px 4px 0;margin:-4px 0;-webkit-mask-image:linear-gradient(to left,transparent,#000 16px);mask-image:linear-gradient(to left,transparent,#000 16px)}
+.cl::-webkit-scrollbar{display:none}
+.cl .chip{flex:none;max-width:62vw}
 #send{flex:none;width:36px;height:36px;border-radius:50%;display:grid;place-items:center;background:var(--ac);color:#fff;position:relative;transition:background var(--fast),transform .1s}
 [data-theme=dark] #send{background:#3b68e6}
 #send::after{content:"";position:absolute;inset:-5px}
@@ -418,6 +422,8 @@ html.kb #dock{padding-bottom:6px}
 .meter i{position:absolute;left:0;top:0;bottom:0;border-radius:5px;background:var(--ac)}
 .meter em{position:absolute;top:-4px;bottom:-4px;width:2px;margin-left:-1px;background:var(--wac)}
 .meter em.t{background:var(--ok)}
+kbd{font:500 var(--t12) var(--mono);padding:2px 6px;border-radius:6px;background:var(--fill);border:1px solid var(--line);white-space:nowrap}
+.keys{gap:12px 16px;align-items:center}
 /* approvals */
 .ahead{display:flex;gap:12px;align-items:flex-start;padding:4px 8px 10px 20px}
 .ahead .eicon{flex:none;width:40px;height:40px;border-radius:12px;margin:0;background:var(--was);color:var(--wa)}
@@ -467,7 +473,7 @@ html.kb #dock{padding-bottom:6px}
   .sheet.full{height:min(86vh,calc(var(--h,100dvh) - 48px));max-width:720px}
   .grab{height:12px}.grab::before{display:none}
   .sheet .sfoot,.sheet .abtn{padding-bottom:16px}
-  .sugg{grid-template-columns:repeat(4,1fr)}
+  .sugg{grid-template-columns:repeat(4,minmax(0,1fr))}
 }
 @media(min-width:1200px){
   .sheet.panel{top:0;bottom:0;right:0;left:auto;width:440px;max-width:none;height:var(--h,100dvh);max-height:none;border-radius:0;margin:0;box-shadow:none;border-left:1px solid var(--line);animation:fade var(--fast);padding-top:var(--st)}
@@ -2016,9 +2022,15 @@ function rename(id) {
 }
 function remove(id) {
   const x = S.state.sessions.find(y => y.id === id), o = { title: 'Delete “' + (x.title || 'Untitled session') + '”?', text: "This can't be undone.", label: 'Delete', danger: true, needsOnline: true, busy: false, err: '' };
-  o.ok = m => {
-    o.err = '';
-    if (intent(MC.intents.deleteSession(id), a => { o.busy = false; if (a.ok) m.close(); else { o.err = MC.errorText(a.error).replace(/: open it and press Esc$/, ''); m.refresh(); } })) o.busy = true;
+  // The host never deletes the session a device views: this device moves to a new session in that folder first.
+  const here = id === S.sid;
+  if (here) o.text = 'You move to a new session in this folder. This can’t be undone.';
+  const fail = a => { o.busy = false; o.err = MC.errorText(a.error).replace(/: open it and press Esc$/, ''); m.refresh(); };
+  const del = () => intent(MC.intents.deleteSession(id), a => { if (a.ok) m.close(); else fail(a); });
+  let m;
+  o.ok = mm => {
+    m = mm; o.err = '';
+    if (here ? intent(MC.intents.newSession(x.workspace), a => { if (!a.ok) fail(a); else if (!del()) fail({}); }) : del()) o.busy = true;
     m.refresh();
   };
   confirmSheet(o);
@@ -2505,12 +2517,11 @@ function unqueue(q, drop) {
 function renderTray() {
   trayPart({ lost: MC.unconfirmed(S).map(it => [it.id, it.text]), queue: S.state.queue.map((q, index) => ({ ...q, index })), on: online() });
 }
-const chipsPart = part($('chips'), c => [
+const chipsPart = part($('chips'), c => [h('div', 'cl',
   h('button', { class: 'chip icon', type: 'button', 'data-k': 'plus', 'aria-label': 'Commands, prompts and files', 'aria-haspopup': 'dialog', onclick: openPlus }, icon('plus', 'sm')),
   c.draft && h('button', { class: 'chip', type: 'button', 'data-k': 'folder', 'aria-label': 'Folder ' + c.draft.folder + ', change', onclick: () => openNew() }, icon('folder', 'xs'), h('span', '', c.draft.folder)),
   c.draft && c.draft.profiles && h('button', { class: 'chip', type: 'button', 'data-k': 'profile', 'aria-label': 'Profile ' + c.draft.profile + ', change', onclick: openProfile }, h('span', '', c.draft.profile || 'Profile')),
-  h('button', { class: 'chip', type: 'button', 'data-k': 'model', 'aria-label': 'Model ' + c.model + ', change', onclick: openModel }, h('span', '', c.modelShort), icon('chevd', 'xs')),
-  h('span', 'gap'),
+  h('button', { class: 'chip', type: 'button', 'data-k': 'model', 'aria-label': 'Model ' + c.model + ', change', onclick: openModel }, h('span', '', c.modelShort), icon('chevd', 'xs'))),
   c.busy && h('button', { class: 'chip mode' + (c.mode === 'queue' ? ' q' : ''), type: 'button', 'data-k': 'mode', 'aria-label': (c.mode === 'queue' ? 'Queue' : 'Steer') + ', switch', onclick: () => { mode = mode === 'queue' ? 'steer' : 'queue'; renderDock(); } },
     icon(c.mode === 'queue' ? 'clock' : 'steer', 'xs'), c.mode === 'queue' ? 'Queue' : 'Steer'),
   h('button', { id: 'send', type: 'submit', 'data-k': 'send', 'aria-label': c.sending ? 'Sending' : c.busy ? (c.mode === 'queue' ? 'Queue message' : 'Steer') : 'Send', disabled: c.disabled }, c.sending ? spin() : icon('up')),
@@ -2765,6 +2776,11 @@ document.addEventListener('keydown', e => {
     if (MC.canStop(st())) { e.preventDefault(); stop(); }
     return;
   }
+  const mod = e.metaKey || e.ctrlKey, k = e.key.toLowerCase();
+  if (!m && mod && k === 'k') { e.preventDefault(); openPlus(); return; }
+  if (!m && mod && k === 'f' && S.state.session) { e.preventDefault(); openFind(); return; }
+  if (!m && e.altKey && (k === 'arrowup' || k === 'arrowdown')) { e.preventDefault(); stepSession(k === 'arrowup' ? -1 : 1); return; }
+  if (!m && e.key === '?' && !inField(e.target)) { e.preventDefault(); openHelp(); return; }
   if (!m || e.key !== 'Tab') return;
   const f = [...m.el.querySelectorAll('button,input,textarea,a[href],[tabindex="0"]')].filter(x => !x.disabled && x.offsetParent);
   if (!f.length) return;
@@ -2918,7 +2934,16 @@ function paintFind() {
   if (r) { const y = r.getBoundingClientRect().top - log.getBoundingClientRect().top; log.scrollTop += y - log.clientHeight / 3; }
   renderBanners();
 }
-function openHelp() {}
+// Alt+↑/↓ walks the session list in the order the drawer shows it.
+function stepSession(d) {
+  const list = MC.sessionLayout(S.state.sessions, hostNow(), tz(), '', frozen).groups.flatMap(g => g.items), i = list.findIndex(x => x.current), x = list[i + d];
+  if (x && !pendingRow && intent(MC.intents.openSession(x.id))) pendingRow = x.id;
+}
+const KEYS = [['Esc', 'Stop the turn, or close the top sheet'], ['⌘/Ctrl Enter', 'Send'], ['Enter', 'Send when “Enter sends” is on'], ['↑ ↓', 'Recent prompts in an empty composer'],
+  ['⌘/Ctrl K', 'Commands and prompts'], ['⌘/Ctrl F', 'Find in session'], ['Alt ↑ ↓', 'Previous or next session'], ['Y A N', 'Allow, allow for session, deny'], ['?', 'This help']];
+function openHelp() {
+  sheet({ key: 'help', cls: 'dialog', title: 'Keyboard shortcuts', body: () => h('dl', 'kv keys', KEYS.map(([k, d]) => [h('dt', '', h('kbd', '', k)), h('dd', '', d)])) });
+}
 
 // ---- lifecycle ----
 document.addEventListener('visibilitychange', () => { if (document.hidden) hiddenAt = Date.now(); else wake(Date.now() - hiddenAt > 10000); syncWake(); });
