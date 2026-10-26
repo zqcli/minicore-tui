@@ -193,8 +193,11 @@ inputs change (no whole-region re-renders on every `state`). Budget: at most
   (≤ 200 ms, none with reduced motion), and text within a sentence only
   updates it in place. When done the header reads "Thought for 12 s ›" (the
   duration when the client watched it live) and the last line stays under it.
-  Tapping the header or the line expands the full text and back; the "show
-  thinking expanded" setting opens it by default.
+  Tapping the header or the line expands the full text and back, also while the
+  agent is still thinking: the open text grows in place (capped to a scrolling
+  box that follows the end only while the reader is at it), collapsing returns
+  to the one line, and the choice survives the turn ending. The "show thinking
+  expanded" setting opens it by default.
 - **Tools**: one-line rows: state icon · past-tense verb · muted mono target ·
   right-aligned meta (duration, `+12 −4`, exit code). Consecutive reads and
   searches group ("Read 6 files ›"). Tap expands inline: command, the **end**
@@ -235,8 +238,10 @@ inputs change (no whole-region re-renders on every `state`). Budget: at most
   needed · Review") to read the transcript, and is re-opened from it.
 - Choice questions: numbered options, neutral styling (no option is primary
   unless the host marks one).
-- The decision stays visible in the transcript on the tool row (allowed /
-  denied, by this device or another).
+- A denial stays on the tool row with its reason (by this device, or "Denied
+  on another device"). Allowed tools show nothing extra: the row's own state
+  says what happened, and a tool allowed for the session is answered by the host
+  without any message.
 
 ### Changes, context, session info
 
@@ -246,9 +251,23 @@ inputs change (no whole-region re-renders on every `state`). Budget: at most
 - **Context sheet** (⋯ → Context, the `% context` in the status strip):
   breakdown bars from `context`, and **Compact now** (confirm).
 - **Session info** (tap the title): title, id (copy), workspace, branch,
-  profile, model, created/updated, usage totals, other devices viewing it.
+  profile, the tools allowed for this session (when any), model, created/updated, usage totals, other devices viewing it.
 - **Export/Share**: the loaded transcript as Markdown through Web Share, else
   copied.
+
+### Notices
+
+The same four rules as the TUI (`docs/architecture.md`). Nothing announces what
+the user just did and can see: Copy turns its own button into a check for a
+moment (a "Copied" toast only where no button is left, such as a menu row or
+`/copy`), and renames, deletions and model changes show in the title, list and
+chips. A tool allowed for the session runs without any message, and the session
+info lists it. Toasts stay for what the user did not cause or needs to act on:
+a background approval or finished turn, a returned message, a refused action,
+errors (sticky until dismissed), a command or action that cannot run and why.
+While offline the send and queue controls are disabled and the banner is the
+single signal; other controls toast "Not connected" once. Notice text from the
+host arrives without TUI key hints.
 
 ### Background sessions and attention
 

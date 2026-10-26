@@ -250,7 +250,7 @@ html.kb .sfoot{padding-bottom:12px}
 .ulbl{display:flex;align-items:center;gap:4px;font-size:var(--t12);font-weight:600;color:var(--tx3);margin:0 6px 4px}
 .acts{display:flex;align-items:center;gap:2px;margin-top:2px;color:var(--tx3);font-size:var(--t12)}
 .acts .ib{width:36px;height:36px;color:var(--tx3)}
-.acts .ib.done{color:var(--ok)}
+button.done{color:var(--ok)}
 .acts time{padding:0 6px;font-variant-numeric:tabular-nums}
 .more2{font-size:var(--t13);font-weight:600;color:var(--ac);min-height:36px;padding:0 6px}
 .md{line-height:1.6;overflow-wrap:anywhere}
@@ -286,6 +286,7 @@ pre{margin:0;font-size:var(--t13);line-height:1.5;tab-size:4}
 .tk.live span{background:linear-gradient(90deg,var(--tx3) 35%,var(--tx) 50%,var(--tx3) 65%);background-size:300% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:shimmer 1.8s linear infinite}
 .tk .cv{transition:transform var(--fast)}
 .tk[aria-expanded=true] .cv{transform:rotate(90deg)}
+.rsn.live{max-height:min(40vh,18em);overflow-y:auto;overscroll-behavior:contain}
 .rsn{font-size:var(--t14);line-height:1.55;color:var(--tx3);white-space:pre-wrap;overflow-wrap:anywhere;padding-left:12px;border-left:2px solid var(--line);margin:4px 0 0 7px}
 .tp{height:20px;margin-left:20px;overflow:hidden;font-size:var(--t13);color:var(--tx3);cursor:pointer}
 .tp span{display:block;line-height:20px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -315,8 +316,8 @@ pre{margin:0;font-size:var(--t13);line-height:1.5;tab-size:4}
 .tb pre.cmd{max-height:none;white-space:pre-wrap;overflow-wrap:anywhere}
 .tbar{display:flex;align-items:center;gap:2px;margin-left:-8px}
 .tbar .hint{margin-left:auto;padding-right:4px}
-.dec{display:flex;align-items:center;gap:4px;margin:-2px 0 4px 28px;font-size:var(--t12);font-weight:500;color:var(--tx3)}
-.dec.er{color:var(--er)}.dec.ok{color:var(--ok)}
+.dec{display:flex;align-items:center;gap:4px;margin:-2px 0 4px 28px;font-size:var(--t12);font-weight:500;color:var(--er)}
+
 pre.view{border:0;border-radius:0;padding:0;background:none;max-height:none;font-size:var(--t12);line-height:1.5;white-space:pre}
 pre.view.wrap{white-space:pre-wrap;overflow-wrap:anywhere}
 .sheet .sbody>pre.view{margin:0 -4px}
@@ -596,14 +597,14 @@ globalThis.MC = (() => {
   // At most MAX_QUERIES are in flight per connection; the caller waits for room.
   const queryRoom = s => s.q.size < MAX_QUERIES;
   function query(s, spec) { const id = nextId(s); s.q.add(id); return { t: 'query', id, ...spec }; }
-  // Takes a queued follow-up back; when dropped, the host's returned text is discarded.
+  // Takes a queued follow-up back; dropped, the returned text is discarded.
   function unqueue(s, index, text, drop) {
     const msg = intent(s, intents.unqueue(index, text));
     if (drop) { s.intents.get(msg.id).drop = true; s.drops.push(text); }
     return msg;
   }
   const pending = (s, kind) => { for (const it of s.intents.values()) if (it.st === 'pending' && (!kind || it.kind === kind)) return it; return null; };
-  // A dropped socket leaves pending sends unconfirmed (the user decides); other intents show in the next snapshot.
+  // A dropped socket leaves pending sends unconfirmed; other intents show in the next snapshot.
   function disconnect(s) {
     s.fs.clear(); s.q.clear(); s.drops.length = 0;
     for (const it of [...s.intents.values()]) {
@@ -712,7 +713,6 @@ globalThis.MC = (() => {
     exists: 'A folder with that name already exists.', bad_request: 'MiniCore did not accept this request.',
   };
   const fsError = r => r.error === 'io' ? r.message || 'The folder could not be read.' : FS_ERR[r.error] || r.message || r.error || 'Something went wrong.';
-  // Refusals the host names by code read as sentences.
   const ERR = {
     busy: 'MiniCore is busy · try again in a moment', stale: 'Already answered', unknown_command: 'Unknown command',
     bad_request: 'MiniCore did not accept this request',
@@ -1083,7 +1083,7 @@ globalThis.MC = (() => {
   // The queue above the composer: numbered follow-ups and unread steers; the first `max` show until all are asked for.
   function queueView(queue, all, max = 3) {
     let n = 0;
-    // Steers first, as in the TUI; `index` stays the wire index.
+    // Steers first, as in the TUI.
     const items = queue.map((q, index) => ({ kind: q.kind, text: q.text, index, n: q.kind === 'follow' ? ++n : 0 }))
       .sort((a, b) => (a.kind === 'follow') - (b.kind === 'follow'));
     return { items: all ? items : items.slice(0, max), hidden: all ? 0 : Math.max(0, items.length - max), long: items.length > max };
@@ -1429,7 +1429,7 @@ const cur = () => S.state.session || S.state.draft;
 const mq = q => matchMedia(q);
 const wide = mq('(min-width: 900px)'), panelWide = mq('(min-width: 1200px)'), hover = mq('(hover: hover)'), reduced = mq('(prefers-reduced-motion: reduce)');
 const inField = n => !!(n && n.closest && n.closest('input,textarea,[contenteditable=true]'));
-// "Enter sends" is stored only once the user has chosen it, so the pointer-based default keeps following the device.
+// "Enter sends" is stored once chosen; until then the pointer default follows the device.
 const apple = /Mac|iPhone|iPad/.test(navigator.userAgent), ALT = apple ? '⌥' : 'Alt+', tips = () => prefs.enter ? 'Enter' : (apple ? '⌘' : 'Ctrl+') + 'Enter';
 const savePrefs = () => localStorage.setItem('minicore.prefs', JSON.stringify(enterSet ? prefs : { ...prefs, enter: undefined }));
 
@@ -1452,7 +1452,14 @@ document.addEventListener('mouseover', e => { const b = e.target.closest('button
 // ---- copy, share, toasts, announcements ----
 // navigator.clipboard is missing on plain-http LAN pages.
 function copyText(text, btn) {
-  const done = () => { if (btn) { btn.classList.add('done'); setTimeout(() => btn.classList.remove('done'), 1500); } toast('Copied'); };
+  // The button shows a check; a toast only where no button is left to show it.
+  const done = () => {
+    if (!btn) return toast('Copied');
+    const u = btn.querySelector('use'), was = u.getAttribute('href');
+    u.setAttribute('href', '#i-check');
+    btn.classList.add('done');
+    setTimeout(() => { u.setAttribute('href', was); btn.classList.remove('done'); }, 1500);
+  };
   const legacy = () => {
     const t = h('textarea', { value: text, readOnly: true, style: 'position:fixed;top:0;left:0;opacity:0;font-size:16px' });
     document.body.append(t);
@@ -1872,7 +1879,7 @@ function onNotice(n) {
   if (ev && ev.kind === 'failed') { const x = S.state.sessions.find(y => y.title === ev.label && !y.current); if (x) { failed.add(x.id); renderNav(); } }
   if (!ev) return toast(n.text, n.level);
   // The state carrying the same event can arrive just after its notice.
-  if (!seen()) setTimeout(() => { if (!seen()) toast(n.text.replace(/ · ctrl\+r$/, ''), n.level); }, 1500);
+  if (!seen()) setTimeout(() => { if (!seen()) toast(n.text, n.level); }, 1500);
 }
 // While the page is hidden: approvals and finished turns through the service worker, which brings the app back.
 function notify(text, id) {
@@ -1939,7 +1946,7 @@ function closeNav() {
   frozen = null;
   syncTick();
 }
-// The order stays put while the list is in front of the user.
+// The list order stays put while it is in front of the user.
 nav.addEventListener('pointerenter', () => { navLook = true; });
 nav.addEventListener('pointerleave', () => { navLook = false; if (!nav.contains(document.activeElement)) { frozen = null; renderNav(); } });
 nav.addEventListener('focusout', () => setTimeout(() => { if (!navLook && !nav.contains(document.activeElement) && wide.matches) { frozen = null; renderNav(); } }));
@@ -2114,7 +2121,7 @@ function openInfo() {
       const others = MC.otherDevices(S.state.devices, S.device).filter(d => d.session === x.id).map(d => d.name);
       const kv = (k, v) => v && [h('dt', '', k), h('dd', '', v)];
       return [h('h3', { style: 'font-size:var(--t18);font-weight:600;margin-bottom:12px' }, x.title || 'Untitled session'),
-        h('dl', 'kv', kv('Session', h('span', 'mono', x.id)), kv('Workspace', MC.tilde(x.workspace)), kv('Branch', x.branch), kv('Profile', x.profile),
+        h('dl', 'kv', kv('Session', h('span', 'mono', x.id)), kv('Workspace', MC.tilde(x.workspace)), kv('Branch', x.branch), kv('Profile', x.profile), kv('Allowed for this session', x.allowed.join(', ')),
           kv('Model', [x.model, x.reasoning].filter(Boolean).join(' · ')), kv('Updated', cat && MC.stamp(Date.parse(cat.updated_at), hostNow(), tz())),
           kv('Usage', (u.input || u.output) ? MC.fmtTok(u.input) + ' in · ' + MC.fmtTok(u.output) + ' out' + (u.cached ? ' · ' + MC.fmtTok(u.cached) + ' cached' : '') : ''),
           kv('Context', S.state.context_percent != null ? Math.round(S.state.context_percent) + '% used' : ''), kv('Also viewing', others.join(', '))),
@@ -2297,10 +2304,10 @@ function toolBody(b, f) {
 }
 function toolNode(b, i) {
   const k = 't' + b.call_id, f = MC.toolInfo(b), o = isOpen(k, b.state === 'failed');
-  const d = decided.get(b.call_id), dec = d && (d.you ? d.text + ' · you' : b.state === 'denied' ? 'Denied on another device' : b.state === 'pending' ? '' : 'Allowed on another device');
+  const d = decided.get(b.call_id), dec = d && (d.you ? d.text + ' · you' : b.state === 'denied' && 'Denied on another device');
   return h('div', 'tl', h('button', { class: 'tr', 'data-k': k, 'aria-expanded': String(o), onclick: e => toggle(k, b.state === 'failed', i, e.currentTarget) },
     stateIcon(b, f), h('span', 'vb', f.verb), h('span', 'tg', f.target), toolMeta(f), icon('chev', 'xs cv')),
-    dec && h('div', 'dec' + (/^Denied/.test(dec) ? ' er' : ' ok'), icon(/^Denied/.test(dec) ? 'slash' : 'check', 'xs'), dec), o && toolBody(b, f));
+    dec && h('div', 'dec', icon('slash', 'xs'), dec), o && toolBody(b, f));
 }
 function diffView(files, opts = {}) {
   return files.map(f => h('div', 'dv' + (opts.wrap ?? prefs.wrap ? ' wrap' : ''),
@@ -2318,28 +2325,35 @@ function thinkNode(b, i, k, thinking, o) {
   else if (!thinking && w && !w.end) w.end = now;
   const t = thinkT.get(k), secs = t && t.end ? Math.max(1, Math.round((t.end - t.start) / 1000)) : 0;
   const go = () => toggle(k, prefs.thinking, i, tk);
-  const tk = h('button', { class: 'tk' + (thinking ? ' live' : ''), 'data-k': k, 'aria-expanded': thinking ? null : String(o), disabled: thinking, onclick: go },
-    icon('sparkle', 'xs'), h('span', '', thinking ? 'Thinking…' : secs ? 'Thought for ' + secs + ' s' : 'Thought'), !thinking && icon('chev', 'xs cv'));
-  const line = o ? h('div', 'rsn', b.reasoning) : h('span', '', MC.thinkingPreview(b.reasoning));
-  const n = h('div', 'think', tk, o ? line : h('div', { class: 'tp', 'aria-hidden': 'true', onclick: thinking ? null : go }, line));
+  const tk = h('button', { class: 'tk' + (thinking ? ' live' : ''), 'data-k': k, 'aria-expanded': String(o), onclick: go },
+    icon('sparkle', 'xs'), h('span', '', thinking ? 'Thinking…' : secs ? 'Thought for ' + secs + ' s' : 'Thought'), icon('chev', 'xs cv'));
+  const line = o ? h('div', 'rsn' + (thinking ? ' live' : ''), b.reasoning) : h('span', '', MC.thinkingPreview(b.reasoning));
+  const n = h('div', 'think', tk, o ? line : h('div', { class: 'tp', 'aria-hidden': 'true', onclick: go }, line));
   n._x = line; n._o = o;
   return n;
 }
 function thinkText(n, text, live) {
   const to = n._o ? text : MC.thinkingPreview(text), el = n._x, was = el.textContent;
   if (to === was) return;
+  if (n._o) {
+    // The open live text grows by its new suffix and follows the end only while the reader is at it.
+    const end = el.scrollHeight - el.scrollTop - el.clientHeight < 8;
+    if (to.startsWith(was)) el.append(to.slice(was.length)); else el.textContent = to;
+    if (end) el.scrollTop = el.scrollHeight;
+    return;
+  }
   el.textContent = to;
   if (live && !n._o && was && !to.startsWith(was) && !reduced.matches) { el.classList.remove('up'); void el.offsetWidth; el.classList.add('up'); }
 }
 function thinkUpdate(a, b, i) {
-  const k = 'r' + b.loop_id + ':' + b.request, thinking = a.live && !b.text, o = !thinking && isOpen(k, prefs.thinking), sig = b.reasoning ? k + thinking + o : '';
+  const k = 'r' + b.loop_id + ':' + b.request, thinking = a.live && !b.text, o = isOpen(k, prefs.thinking), sig = b.reasoning ? k + thinking + o : '';
   if (sig === a.tsig) return sig && thinkText(a.think, b.reasoning, thinking);
   a.tsig = sig;
   const had = a.think.contains(document.activeElement), n = sig ? thinkNode(b, i, k, thinking, o) : h('div');
   a.think.replaceWith(a.think = n);
   if (had) n.querySelector('.tk').focus({ preventScroll: true });
+  if (thinking && o) n._x.scrollTop = n._x.scrollHeight;
 }
-// An answer keeps its rendered Markdown blocks while it streams.
 function asstNode(b, i) {
   const live = i === liveIdx, n = h('div', 'a');
   n._a = { key: b.loop_id + ':' + b.request, live, tsig: '', md: { cache: null, toks: [], els: [] }, body: h('div', 'md'), think: h('div') };
@@ -2465,7 +2479,7 @@ function place(n, old) {
 function flush() {
   raf = 0;
   if (!S.state) return;
-  // Only the block being written shows the caret and "Thinking".
+  // Only the block being written shows the caret.
   const live = MC.liveBlock(S.blocks, S.state.status.busy);
   if (live !== liveIdx) { for (const i of [liveIdx, live]) if (i >= 0) dirty.add(i); liveIdx = live; }
   const bl = S.blocks, n = bl.length, lo0 = lo, prevHi = hi;
@@ -2512,7 +2526,7 @@ function loadEarlierBtn(label) {
   const busy = pendingKind('load_older');
   return h('button', { class: 'pill', disabled: busy, 'data-k': 'earlier', onclick: e => loadEarlier(e.currentTarget) }, busy ? spin('sm') : icon('history', 'sm'), busy ? 'Loading…' : 'Load earlier' + (label ? ' · ' + label : ''));
 }
-// One control for both: mount more of what this page already has, else ask the host for an older page.
+// Mount more of what this page has, else ask the host for an older page.
 function loadEarlier(el) {
   if (lo > 0) {
     win += MC.WINDOW;
@@ -2549,7 +2563,7 @@ $('newout').addEventListener('click', toLatest);
 
 // ---- dock: status strip, queue, composer ----
 const ta = $('ta');
-// Stop is a ghost chip beside the label, away from the right-hand targets; the first activation arms it (see MC.stopArm).
+// Stop is a ghost chip beside the label; the first activation arms it (see MC.stopArm).
 const STOP_TEXT = { tap: 'Tap again to stop', click: 'Click again to stop', esc: 'Esc again to stop' };
 let stopS = MC.stopNew(), stopT = 0, stopPos = '', stopDown = null;
 const stopMode = () => stopS.armed ? (stopS.armed.esc ? 'esc' : hover.matches ? 'click' : 'tap') : '';
@@ -2572,7 +2586,7 @@ function renderStrip() {
   const b = $('strip').querySelector('.stop.armed');
   if (b && !b.style.getPropertyValue('--ad')) b.style.setProperty('--ad', stopS.armed.at - Date.now() + 'ms');
 }
-// The chip appearing, moving or going away starts the ghost-tap guard; a hidden strip ends the arming.
+// A chip that appears, moves or goes starts the ghost-tap guard.
 function syncStop() {
   const b = $('strip').hidden ? null : $('strip').querySelector('.stop'), r = b && b.getBoundingClientRect(), k = r ? Math.round(r.left) + ',' + Math.round(r.top) : '';
   if (k !== stopPos) { stopPos = k; stopS = MC.stopArm(stopS, { type: b ? 'show' : 'hide' }, Date.now()).s; }
@@ -2607,7 +2621,7 @@ let qAll = false;
 // A queued follow-up comes back from the host: into the composer to edit it, or dropped.
 const edits = new Set();
 function unqueue(q, drop) {
-  if (!online()) return toast('Not connected', 'error');
+  if (!online()) return;
   if (!drop) edits.add(q.text);
   send(MC.unqueue(S, q.index, q.text, drop));
   renderState();
@@ -2660,7 +2674,7 @@ function submit(kind) {
   const c = MC.parseSlash(text, S.state.commands);
   if (c && c.builtin) { ta.value = ''; composerInput(); return builtin(c); }
   if (c && c.unknown) return toast('Unknown command /' + c.unknown, 'error');
-  if (!online()) return toast('Not connected', 'error');
+  if (!online()) return;
   intent(kind === 'queue' ? MC.intents.queue(text) : MC.intents.submit(text));
   setMenu(null);
 }
@@ -2790,7 +2804,7 @@ let apprId = null, apprAt = 0, lastKey = 0;
 function syncApproval() {
   const a = S.state.interaction, m = findSheet('appr');
   if (!a) {
-    // Answered elsewhere: the tool row says so once its state shows the outcome.
+    // Answered elsewhere: a denied tool row says so.
     if (apprId && ap.call && !decided.has(ap.call)) { decided.set(ap.call, { you: false }); markCall(ap.call); }
     apprId = null; ap.call = null;
     if (m) m.close(true);
@@ -2840,13 +2854,13 @@ function openApproval() {
     onClose: () => renderApprBar(),
   });
 }
-// An answer is recorded on the tool row it decided; a blank reason is a plain deny.
+// Only a denial is recorded on its tool row, with the reason: it explains why the tool did not run.
 function answer(choice, message) {
   const a = S.state.interaction, call = ap.call;
   if (!a || pendingKind('answer')) return;
   intent(MC.intents.answer(a.id, choice, message || undefined), ack => {
     if (!ack.ok) return toast(MC.errorText(ack.error), ack.error === 'stale' ? null : 'error');
-    if (call) { decided.set(call, { you: true, text: choice === 'deny' ? 'Denied' + (message ? ': “' + message + '”' : '') : choice === 'allow' ? 'Allowed once' : 'Allowed for this session' }); markCall(call); }
+    if (call && choice === 'deny') { decided.set(call, { you: true, text: 'Denied' + (message ? ': “' + message + '”' : '') }); markCall(call); }
   });
 }
 function markCall(call) { const i = S.blocks.findIndex(b => b.type === 'tool' && b.call_id === call); if (i >= 0) { dirty.add(i); schedule(); } }
