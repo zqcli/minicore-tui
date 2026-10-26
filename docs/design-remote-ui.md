@@ -299,6 +299,9 @@ free-text answers to choice questions, reading file contents.
   view, bounds, `stale`/`busy`, template expansion, deny with message, tool
   output append).
 - Headless Edge and Playwright WebKit runs against the mock and the real
-  binary: every screen in light/dark at 390×844, 360×640 and 1024×768, no
-  console errors, the audit's B1/B2/M1 repros pass, streaming cost stays flat
+  binary: every screen in light/dark at 390×844, 360×640 and 1024×768 (and
+  desktop windows from 800×900 to 2560×1440 and 125 %/150 % zoom), the session
+  list reachable at every width (sidebar from 900 px, the menu button's drawer
+  below, resizing across 900 px both ways without a stuck state or lost scroll),
+  no console errors, the audit's B1/B2/M1 repros pass, streaming cost stays flat
   with answer length.
