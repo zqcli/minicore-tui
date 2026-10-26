@@ -355,7 +355,6 @@ html.kb #dock{padding-bottom:6px}
 .st1 b{font-weight:600;white-space:nowrap}
 .st1 .mono{flex:1;min-width:0;font-size:var(--t12);color:var(--tx3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .st1 .el{font-size:var(--t13);color:var(--tx3);font-variant-numeric:tabular-nums;flex:none}
-.micro{font-size:var(--t12);color:var(--tx3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ctxb{font-size:var(--t12);font-weight:500;color:var(--tx3);min-height:44px;min-width:44px;padding:0 4px;font-variant-numeric:tabular-nums;flex:none}
 .ctxb.hi{color:var(--wa)}
 .stop{flex:none;display:inline-flex;align-items:center;gap:6px;min-height:44px;padding:0 14px;border-radius:22px;background:var(--ers);color:var(--er);font-size:var(--t14);font-weight:600}
@@ -370,10 +369,15 @@ html.kb #dock{padding-bottom:6px}
 .lost>div{flex:1;min-width:0}
 .lost .lt{color:var(--tx);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .lost .btn{background:var(--sf);color:var(--tx)}
-.qp{display:flex;align-items:center;gap:4px;min-height:44px;padding:0 2px 0 12px;border-radius:var(--r2);background:var(--fill);font-size:var(--t14)}
-.qp .qk{flex:none;font-size:var(--t12);font-weight:600;color:var(--tx3)}
-.qp .qt{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:left;min-height:44px}
-.qp .ib{color:var(--tx3)}
+.qcap{padding:0 6px;font-size:var(--t12);color:var(--tx3)}
+.qp{display:flex;align-items:center;gap:6px;min-height:44px;padding:0 2px 0 12px;border-radius:var(--r2);background:var(--fill);font-size:var(--t14)}
+.qp>.ic,.qp .ib{color:var(--tx3)}
+.qp .qk{flex:none;font-size:var(--t12);font-weight:600;color:var(--tx3);white-space:nowrap}
+.qp .qt{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:left;min-height:44px;line-height:44px}
+.qp.steer{min-height:36px;padding-right:12px;background:none;box-shadow:inset 0 0 0 1px var(--line)}
+.qp.steer .qk{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.qp.steer .qt{min-height:0;line-height:inherit;color:var(--tx3)}
+.qmore{align-self:flex-start;min-height:36px;padding:0 8px;font-size:var(--t13);font-weight:600;color:var(--ac)}
 #pop{margin-bottom:6px;max-height:min(46vh,calc(var(--h,100dvh)*.42));overflow-y:auto;overscroll-behavior:contain;border-radius:var(--r2);background:var(--sf);box-shadow:var(--sh),inset 0 0 0 1px var(--line);padding:4px}
 .opt{display:flex;align-items:center;gap:10px;width:100%;min-height:48px;padding:6px 10px;border-radius:var(--r1);text-align:left}
 .opt[aria-selected=true]{background:var(--fill)}
@@ -384,15 +388,17 @@ html.kb #dock{padding-bottom:6px}
 #comp:focus-within{border-color:var(--ac)}
 #ta{display:block;width:100%;resize:none;border:0;background:none;padding:10px 8px 6px;margin:0;font-size:max(16px,1rem);line-height:1.45;max-height:calc(var(--h,100dvh)*.4);min-height:44px;overflow-y:auto;color:var(--tx)}
 #ta::placeholder{color:var(--tx3)}
-.chips{display:flex;align-items:center;gap:6px;min-width:0}
+.chips{display:flex;align-items:center;gap:8px;min-width:0;min-height:44px}
 .chip{display:inline-flex;align-items:center;gap:4px;min-height:36px;min-width:36px;padding:0 10px;border-radius:18px;background:var(--fill);color:var(--tx2);font-size:var(--t13);font-weight:500;white-space:nowrap;position:relative;flex:0 1 auto;overflow:hidden}
 .chip .ic{flex:none}
 .chip::after{content:"";position:absolute;inset:-4px -2px}
 .chip>span{overflow:hidden;text-overflow:ellipsis}
 .chip.icon{padding:0;justify-content:center;width:36px;flex:none;overflow:visible}
-.chip.mode,#send{flex:none}
-.chip.mode{background:var(--acs);color:var(--ac)}
-.chip.mode.q{background:var(--fill);color:var(--tx2)}
+#send{flex:none}
+.snd{display:flex;gap:8px;flex:none}
+.snd.off{visibility:hidden}
+.btn.sb{padding:0 14px;border-radius:22px;font-size:var(--t14);animation:fade var(--fast)}
+@media(max-width:479px){.rz{display:none}}
 .cl{flex:1;min-width:0;display:flex;align-items:center;gap:6px;overflow-x:auto;scrollbar-width:none;padding:4px 16px 4px 0;margin:-4px 0;-webkit-mask-image:linear-gradient(to left,transparent,#000 16px);mask-image:linear-gradient(to left,transparent,#000 16px)}
 .cl::-webkit-scrollbar{display:none}
 .cl .chip{flex:none;max-width:62vw}
@@ -1034,6 +1040,24 @@ globalThis.MC = (() => {
   const pushRecent = (list, text, max = 50) => [text, ...list.filter(x => x !== text)].slice(0, max);
   // Commands and paths are not prose: no autocorrect while the text starts with one.
   const literal = text => /^[/@]/.test(text);
+  // What a composer key does. Enter (when "Enter sends" is on) or ⌘/Ctrl+Enter steers while a turn runs and sends when idle;
+  // Tab or Alt+Enter queues a follow-up while a turn runs and text is typed. An open list keeps Tab and Enter for
+  // completion. null leaves the key to the browser.
+  function composerKey(k, c) {
+    const typed = c.text.trim() !== '';
+    if (c.popup && !k.mod) return null;
+    if (k.key === 'Tab') return c.busy && typed && !k.shift && !k.alt && !k.mod ? 'queue' : null;
+    if (k.key !== 'Enter') return null;
+    if (k.alt && !k.mod) return c.busy && typed ? 'queue' : null;
+    return k.mod || (c.enter && !k.shift && !k.alt) ? (c.busy ? 'steer' : 'send') : null;
+  }
+  // The queue above the composer: follow-ups numbered in order and steers the agent has not read yet. Only the first
+  // `max` show until all are asked for; `hidden` counts the rest and `long` says whether a toggle is needed.
+  function queueView(queue, all, max = 3) {
+    let n = 0;
+    const items = queue.map((q, index) => ({ kind: q.kind, text: q.text, index, n: q.kind === 'follow' ? ++n : 0 }));
+    return { items: all ? items : items.slice(0, max), hidden: all ? 0 : Math.max(0, items.length - max), long: items.length > max };
+  }
 
   // ---- changes, context, export ----
   const STATUS = { added: ['A', 'ok'], modified: ['M', ''], deleted: ['D', 'er'], renamed: ['R', ''], conflict: ['!', 'er'], unknown: ['?', ''] };
@@ -1197,7 +1221,7 @@ globalThis.MC = (() => {
     clock, stamp, relTime, dayGroup, sessionLayout, matchSession, fmtElapsed, fmtDur, fmtTok, fmtNum,
     groupTools, foldTurns, findBlocks, foldText, mdInc,
     toolKind, toolInfo, parseDiff, diffStats, liveBlock, turnEnd, changesText, compactionText, statusLine, canStop, approvalKey, approvalTitle, approvalOptions, approvalBody,
-    changeStatus, contextView, exportMd, BUILTINS, slashMenu, parseSlash, atToken, insertMention, pushRecent, literal,
+    changeStatus, contextView, exportMd, BUILTINS, slashMenu, parseSlash, atToken, insertMention, pushRecent, literal, composerKey, queueView,
     splitPath, within, crumbs, tilde, recentWorkspaces, sessionTransitions, noticeEvent, attentionCount, inline, parseMd, parseLines, SAFE_URL,
   };
 })();
@@ -1262,7 +1286,7 @@ osDark.addEventListener('change', applyTheme);
 <symbol id="i-shield" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"><path d="M12 3 19.5 6v5.5c0 4.6-3.2 8.2-7.5 9.5-4.3-1.3-7.5-4.9-7.5-9.5V6z"/></symbol>
 <symbol id="i-layers" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="m12 4 8.5 4.5L12 13 3.5 8.5z"/><path d="m3.5 12.5 8.5 4.5 8.5-4.5" stroke-linecap="round"/></symbol>
 <symbol id="i-steer" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 19 19 5M10 5h9v9"/></symbol>
-<symbol id="i-clock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></symbol>
+<symbol id="i-follow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 5v6a3 3 0 0 0 3 3h11M15 10l4 4-4 4"/></symbol>
 <symbol id="i-cloudoff" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 6.6A6 6 0 0 1 17.6 10a4 4 0 0 1 2.9 5.8M17 18.5H7a4.5 4.5 0 0 1-1.4-8.8M3.5 3.5l17 17"/></symbol>
 <symbol id="i-branch" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="7" cy="5.5" r="2"/><circle cx="7" cy="18.5" r="2"/><circle cx="17" cy="8" r="2"/><path d="M7 7.5v9M17 10c0 4-10 2.5-10 6.5"/></symbol>
 <symbol id="i-share" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 14.5V3.5M8 7l4-3.5L16 7M7.5 10.5h-1a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-6a2 2 0 0 0-2-2h-1"/></symbol>
@@ -2485,10 +2509,8 @@ log.addEventListener('scroll', () => { stick = atBottom(); if (stick && pinned) 
 $('newout').addEventListener('click', toLatest);
 
 // ---- dock: status strip, queue, composer ----
-let mode = 'steer';
 const ta = $('ta');
-const stripPart = part($('strip'), x => [spin(), h('div', 'stx', h('div', 'st1', h('b', '', x.label), x.detail && h('span', 'mono', x.detail), x.started && h('span', 'el', MC.fmtElapsed(hostNow() - x.started))),
-  x.micro && h('div', 'micro', x.micro)),
+const stripPart = part($('strip'), x => [spin(), h('div', 'stx', h('div', 'st1', h('b', '', x.label), x.detail && h('span', 'mono', x.detail), x.started && h('span', 'el', MC.fmtElapsed(hostNow() - x.started)))),
   x.ctx && h('button', { class: 'ctxb' + (x.hi ? ' hi' : ''), type: 'button', 'aria-label': x.ctx + ' of context used', onclick: () => openContext() }, x.ctx),
   x.stop && h('button', { class: 'stop', type: 'button', 'data-k': 'stop', disabled: x.stopping || !x.online, onclick: stop }, x.stopping ? spin('sm') : icon('stop', 'sm'), x.stopping ? 'Stopping' : 'Stop')]);
 function renderStrip() {
@@ -2499,7 +2521,6 @@ function renderStrip() {
   stripPart({
     label: x.label, detail: x.detail, started: (s.busy || s.compacting) && s.started_ms, ctx: S.state.context_percent != null ? Math.round(S.state.context_percent) + '%' : '',
     hi: S.state.context_percent >= 80, stop: MC.canStop(s), stopping: s.interrupting || pendingKind('cancel'), online: online(),
-    micro: s.busy ? (mode === 'queue' ? 'Queue · sends when this turn ends' : 'Steer · the agent reads it after the current step') : '',
   });
 }
 function stop() { if (MC.canStop(st()) && !st().interrupting && !pendingKind('cancel')) intent(MC.intents.cancel()); }
@@ -2508,10 +2529,13 @@ const trayPart = part($('tray'), t => [
     h('div', '', h('div', '', 'Not sent · it may or may not have arrived'), h('div', 'lt', text)),
     h('button', { class: 'btn sm', type: 'button', 'data-k': 'again' + id, disabled: !t.on, onclick: () => { send(MC.sendAgain(S, id)); renderState(); } }, icon('retry', 'xs'), 'Send again'),
     h('button', { class: 'ib s', type: 'button', 'aria-label': 'Edit instead', onclick: () => { S.intents.delete(id); fillComposer(MC.mergeReturned(ta.value, text)); renderState(); } }, icon('edit', 'sm')))),
-  t.queue.map(q => q.kind === 'steer' ? h('div', 'qp', h('span', 'qk', 'Steer'), h('span', 'qt', q.text))
-    : h('div', 'qp', h('span', 'qk', 'Queued'), h('button', { class: 'qt', type: 'button', 'data-k': 'q' + q.index, disabled: !t.on, 'aria-label': 'Edit queued message: ' + q.text, onclick: () => unqueue(q, false) }, q.text),
-      h('button', { class: 'ib', type: 'button', disabled: !t.on, 'aria-label': 'Remove queued message', onclick: () => unqueue(q, true) }, icon('x', 'sm')))),
+  t.q.follows && h('div', 'qcap', 'Follow-ups send when this turn ends'),
+  t.q.items.map(q => q.kind === 'steer' ? h('div', 'qp steer', icon('steer', 'xs'), h('span', 'qk', 'Steer · waiting for the next step'), h('span', 'qt', q.text))
+    : h('div', 'qp', icon('follow', 'xs'), h('span', 'qk', 'Follow-up ' + q.n), h('button', { class: 'qt', type: 'button', 'data-k': 'q' + q.index, disabled: !t.on, 'aria-label': 'Edit follow-up ' + q.n + ': ' + q.text, onclick: () => unqueue(q, false) }, q.text),
+      h('button', { class: 'ib', type: 'button', disabled: !t.on, 'aria-label': 'Remove follow-up ' + q.n, onclick: () => unqueue(q, true) }, icon('x', 'sm')))),
+  t.q.long && h('button', { class: 'qmore', type: 'button', 'data-k': 'qmore', 'aria-expanded': String(qAll), onclick: () => { qAll = !qAll; renderTray(); } }, t.q.hidden ? '+' + t.q.hidden + ' more' : 'Show less'),
 ]);
+let qAll = false;
 // A queued follow-up comes back from the host: into the composer to edit it, or dropped.
 const edits = new Set();
 function unqueue(q, drop) {
@@ -2521,25 +2545,28 @@ function unqueue(q, drop) {
   renderState();
 }
 function renderTray() {
-  trayPart({ lost: MC.unconfirmed(S).map(it => [it.id, it.text]), queue: S.state.queue.map((q, index) => ({ ...q, index })), on: online() });
+  const q = MC.queueView(S.state.queue, qAll);
+  trayPart({ lost: MC.unconfirmed(S).map(it => [it.id, it.text]), q: { ...q, follows: S.state.queue.some(x => x.kind === 'follow') }, on: online() });
 }
 const chipsPart = part($('chips'), c => [h('div', 'cl',
   h('button', { class: 'chip icon', type: 'button', 'data-k': 'plus', 'aria-label': 'Commands, prompts and files', 'aria-haspopup': 'dialog', onclick: openPlus }, icon('plus', 'sm')),
   c.draft && h('button', { class: 'chip', type: 'button', 'data-k': 'folder', 'aria-label': 'Folder ' + c.draft.folder + ', change', onclick: () => openNew() }, icon('folder', 'xs'), h('span', '', c.draft.folder)),
   c.draft && c.draft.profiles && h('button', { class: 'chip', type: 'button', 'data-k': 'profile', 'aria-label': 'Profile ' + c.draft.profile + ', change', onclick: openProfile }, h('span', '', c.draft.profile || 'Profile')),
-  h('button', { class: 'chip', type: 'button', 'data-k': 'model', 'aria-label': 'Model ' + c.model + ', change', onclick: openModel }, h('span', '', c.modelShort), icon('chevd', 'xs'))),
-  c.busy && h('button', { class: 'chip mode' + (c.mode === 'queue' ? ' q' : ''), type: 'button', 'data-k': 'mode', 'aria-label': (c.mode === 'queue' ? 'Queue' : 'Steer') + ', switch', onclick: () => { mode = mode === 'queue' ? 'steer' : 'queue'; renderDock(); } },
-    icon(c.mode === 'queue' ? 'clock' : 'steer', 'xs'), c.mode === 'queue' ? 'Queue' : 'Steer'),
-  h('button', { id: 'send', type: 'submit', 'data-k': 'send', 'aria-label': c.sending ? 'Sending' : c.busy ? (c.mode === 'queue' ? 'Queue message' : 'Steer') : 'Send', disabled: c.disabled }, c.sending ? spin() : icon('up')),
+  h('button', { class: 'chip', type: 'button', 'data-k': 'model', 'aria-label': 'Model ' + c.model + ', change', onclick: openModel }, h('span', '', c.modelShort), c.level && h('span', 'rz', '· ' + c.level), icon('chevd', 'xs'))),
+  c.busy ? h('div', 'snd' + (c.typed ? '' : ' off'),
+    h('button', { class: 'btn sb', type: 'button', id: 'queue', 'data-k': 'queue', title: c.tips && 'Queue a follow-up · Tab', 'aria-label': 'Queue as a follow-up', disabled: c.disabled, onclick: () => submit('queue') },
+      c.sending === 'queue' ? spin('sm') : icon('follow', 'sm'), 'Queue'),
+    h('button', { class: 'btn sb primary', type: 'submit', id: 'steer', 'data-k': 'steer', title: c.tips && 'Steer · ' + c.tips, 'aria-label': 'Steer the agent', disabled: c.disabled },
+      c.sending === 'submit' ? spin('sm') : icon('steer', 'sm'), 'Steer'))
+  : h('button', { id: 'send', type: 'submit', 'data-k': 'send', 'aria-label': c.sending ? 'Sending' : 'Send', disabled: c.disabled }, c.sending ? spin() : icon('up')),
 ]);
 function renderChips() {
-  const s = st(), c = cur(), lock = sending(), d = S.state.draft;
-  if (!s.busy) mode = 'steer';
+  const s = st(), c = cur(), lock = sending(), d = S.state.draft, typed = ta.value.trim() !== '';
   ta.readOnly = lock;
-  ta.placeholder = s.busy ? (mode === 'queue' ? 'Queue a follow-up…' : 'Steer the agent…') : S.state.session ? 'Message MiniCore · / for commands' : 'Describe a task to start';
-  const label = [c.model ? MC.midTrunc(c.model) : 'Model', c.reasoning].filter(Boolean).join(' · ');
+  ta.placeholder = s.busy ? (hover.matches ? 'Steer the agent… · Tab to queue a follow-up' : 'Steer, or queue a follow-up…') : S.state.session ? 'Message MiniCore · / for commands' : 'Describe a task to start';
   chipsPart({
-    model: c.model || '', modelShort: label, busy: !!s.busy, mode, sending: lock, disabled: lock || !online() || !ta.value.trim(),
+    model: c.model || '', modelShort: c.model ? MC.midTrunc(c.model, s.busy ? 12 : 17) : 'Model', level: c.reasoning, busy: !!s.busy, typed, sending: lock && (MC.pending(S, 'queue') ? 'queue' : 'submit'),
+    disabled: lock || !online() || !typed, tips: hover.matches && (prefs.enter ? 'Enter' : '⌘/Ctrl+Enter'),
     draft: !S.state.session && { folder: MC.basename(d.workspace), profile: d.profile, profiles: S.state.profiles.length > 1 },
   });
 }
@@ -2559,14 +2586,14 @@ function composerInput() {
 }
 function loadDraft() { if (!sending()) { ta.value = localStorage.getItem(draftKey()) || ''; composerInput(); } }
 function fillComposer(text) { ta.value = text; recall = -1; composerInput(); ta.focus(); ta.setSelectionRange(text.length, text.length); }
-function submit() {
+function submit(kind) {
   const text = ta.value;
   if (!text.trim() || sending()) return;
   const c = MC.parseSlash(text, S.state.commands);
   if (c && c.builtin) { ta.value = ''; composerInput(); return builtin(c); }
   if (c && c.unknown) return toast('Unknown command /' + c.unknown, 'error');
   if (!online()) return toast('Not connected', 'error');
-  intent(st().busy && mode === 'queue' ? MC.intents.queue(text) : MC.intents.submit(text));
+  intent(kind === 'queue' ? MC.intents.queue(text) : MC.intents.submit(text));
   setMenu(null);
 }
 function builtin(c) {
@@ -2653,8 +2680,8 @@ ta.addEventListener('keydown', e => {
     composerInput();
     return;
   }
-  if (e.key !== 'Enter') return;
-  if (e.metaKey || e.ctrlKey || (prefs.enter && !e.shiftKey && !e.altKey)) { e.preventDefault(); submit(); }
+  const act = MC.composerKey({ key: e.key, shift: e.shiftKey, alt: e.altKey, mod: e.metaKey || e.ctrlKey }, { busy: !!st().busy, text: ta.value, popup: !!(menu && menu.items.length), enter: prefs.enter });
+  if (act) { e.preventDefault(); submit(act); }
 });
 ta.addEventListener('blur', () => setTimeout(() => { if (document.activeElement !== ta) setMenu(null); }, 150));
 function remember(text) { recent = MC.pushRecent(recent, text); localStorage.setItem(recentKey, JSON.stringify(recent)); }
@@ -2945,7 +2972,7 @@ function stepSession(d) {
   const list = MC.sessionLayout(S.state.sessions, hostNow(), tz(), '', frozen).groups.flatMap(g => g.items), i = list.findIndex(x => x.current), x = list[i + d];
   if (x && !pendingRow && intent(MC.intents.openSession(x.id))) pendingRow = x.id;
 }
-const KEYS = [['Esc', 'Stop the turn, or close the top sheet'], ['⌘/Ctrl Enter', 'Send'], ['Enter', 'Send when “Enter sends” is on'], ['↑ ↓', 'Recent prompts in an empty composer'],
+const KEYS = [['Esc', 'Stop the turn, or close the top sheet'], ['Enter', 'Send, or steer a running turn (“Enter sends”)'], ['⌘/Ctrl Enter', 'Send, or steer a running turn'], ['Tab · Alt Enter', 'Queue a follow-up while a turn runs'], ['↑ ↓', 'Recent prompts in an empty composer'],
   ['⌘/Ctrl K', 'Commands and prompts'], ['⌘/Ctrl F', 'Find in session'], ['Alt ↑ ↓', 'Previous or next session'], ['Y A N', 'Allow, allow for session, deny'], ['?', 'This help']];
 function openHelp() {
   sheet({ key: 'help', cls: 'dialog', title: 'Keyboard shortcuts', body: () => h('dl', 'kv keys', KEYS.map(([k, d]) => [h('dt', '', h('kbd', '', k)), h('dd', '', d)])) });

@@ -788,3 +788,44 @@ test('changed files map their status to a badge and the transcript exports as Ma
   const md = MC.exportMd(state, [blocks[0], { ...blocks[1], streaming: false }, blocks[2], blocks[3], blocks[4]]);
   assert.equal(md, '# One\n\n`/work` · model\n\n**You (steer):** now\n\n**hello**\n\n- Ran `pwd`\n\n_Completed · 7.8 s · 12 tokens_\n\n_Context compacted · 32.1k → 2.7k tokens_\n');
 });
+
+test('Enter and Cmd/Ctrl+Enter steer while busy and send when idle; Tab and Alt+Enter queue only with text and no list', () => {
+  const { MC } = load();
+  const key = (k, mods = {}) => ({ key: k, shift: false, alt: false, mod: false, ...mods });
+  const ctx = (extra = {}) => ({ busy: true, text: 'next', popup: false, enter: true, ...extra });
+  assert.equal(MC.composerKey(key('Enter'), ctx()), 'steer');
+  assert.equal(MC.composerKey(key('Enter'), ctx({ busy: false })), 'send');
+  assert.equal(MC.composerKey(key('Enter', { mod: true }), ctx({ enter: false })), 'steer');
+  assert.equal(MC.composerKey(key('Enter', { mod: true }), ctx({ enter: false, busy: false })), 'send');
+  // Without "Enter sends" and with Shift, Enter is a new line.
+  assert.equal(MC.composerKey(key('Enter'), ctx({ enter: false })), null);
+  assert.equal(MC.composerKey(key('Enter', { shift: true }), ctx()), null);
+  assert.equal(MC.composerKey(key('Tab'), ctx()), 'queue');
+  assert.equal(MC.composerKey(key('Enter', { alt: true }), ctx()), 'queue');
+  assert.equal(MC.composerKey(key('Enter', { alt: true }), ctx({ enter: false })), 'queue');
+  // Nothing to queue, or nothing running: the keys keep their browser meaning.
+  assert.equal(MC.composerKey(key('Tab'), ctx({ text: '  \n' })), null);
+  assert.equal(MC.composerKey(key('Tab'), ctx({ busy: false })), null);
+  assert.equal(MC.composerKey(key('Enter', { alt: true }), ctx({ busy: false })), null);
+  assert.equal(MC.composerKey(key('Tab', { shift: true }), ctx()), null);
+  // An open list keeps Tab and Enter for completion; Cmd/Ctrl+Enter still sends.
+  assert.equal(MC.composerKey(key('Tab'), ctx({ popup: true })), null);
+  assert.equal(MC.composerKey(key('Enter'), ctx({ popup: true })), null);
+  assert.equal(MC.composerKey(key('Enter', { alt: true }), ctx({ popup: true })), null);
+  assert.equal(MC.composerKey(key('Enter', { mod: true }), ctx({ popup: true })), 'steer');
+  assert.equal(MC.composerKey(key('a'), ctx()), null);
+});
+
+test('the queue shows follow-ups numbered in order, waiting steers, and the first three until expanded', () => {
+  const { MC, plain } = load();
+  const q = [{ kind: 'steer', text: 's' }, { kind: 'follow', text: 'a' }, { kind: 'follow', text: 'b' }, { kind: 'follow', text: 'c' }, { kind: 'follow', text: 'd' }];
+  const v = plain(MC.queueView(q, false));
+  assert.deepEqual(v.items.map(x => [x.kind, x.index, x.n]), [['steer', 0, 0], ['follow', 1, 1], ['follow', 2, 2]]);
+  assert.deepEqual([v.hidden, v.long], [2, true]);
+  const all = plain(MC.queueView(q, true));
+  assert.deepEqual(all.items.map(x => x.n), [0, 1, 2, 3, 4]);
+  assert.deepEqual([all.hidden, all.long], [0, true]);
+  assert.deepEqual(plain(MC.queueView(q.slice(0, 3), false)), { items: plain(MC.queueView(q.slice(0, 3), true)).items, hidden: 0, long: false });
+  assert.deepEqual(plain(MC.queueView([], false)), { items: [], hidden: 0, long: false });
+});
+
