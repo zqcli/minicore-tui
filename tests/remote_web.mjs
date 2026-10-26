@@ -616,3 +616,56 @@ test('timestamps read as a clock today and carry the day otherwise', () => {
   assert.equal(MC.tilde('/srv/work'), '/srv/work');
   assert.equal(MC.fmtNum(48610), '48,610');
 });
+
+const commands = [{ name: 'fix-tests', description: 'Run the tests and fix failures', hint: '[path]' }, { name: 'review', description: 'Review', hint: '' }];
+
+test('the slash list filters by name with prefix matches first and templates before built-ins', () => {
+  const { MC, plain } = load();
+  const names = text => plain(MC.slashMenu(text, commands)).map(c => c.name);
+  assert.deepEqual(names('/').slice(0, 3), ['fix-tests', 'review', 'new']);
+  assert.ok(names('/').includes('settings'));
+  assert.deepEqual(names('/re'), ['review', 'rename']);
+  assert.deepEqual(names('/ss'), ['session', 'sessions']);
+  assert.deepEqual(names('/s').slice(0, 3), ['session', 'sessions', 'settings']);
+  assert.deepEqual(names('/fix'), ['fix-tests']);
+  assert.deepEqual(names('/zzz'), []);
+  // Only while the composer holds just the command word.
+  assert.equal(MC.slashMenu('/fix-tests src', commands), null);
+  assert.equal(MC.slashMenu('hello /fix', commands), null);
+  assert.equal(plain(MC.slashMenu('/', commands)).find(c => c.name === 'review').builtin, false);
+});
+
+test('a slash line is a built-in run here, a template sent as text, or refused as unknown', () => {
+  const { MC, plain } = load();
+  assert.deepEqual(plain(MC.parseSlash('/compact', commands)), { builtin: 'compact', arg: '' });
+  assert.deepEqual(plain(MC.parseSlash('  /rename Fix the parser  ', commands)), { builtin: 'rename', arg: 'Fix the parser' });
+  assert.deepEqual(plain(MC.parseSlash('/diff', commands)), { builtin: 'changes', arg: '' });
+  assert.deepEqual(plain(MC.parseSlash('/fix-tests src/parser', commands)), { template: 'fix-tests', arg: 'src/parser' });
+  assert.deepEqual(plain(MC.parseSlash('/Users/me/app is broken', commands)), { unknown: 'Users/me/app' });
+  assert.equal(MC.parseSlash('fix the /tmp path', commands), null);
+  assert.equal(MC.literal('/fix'), true);
+  assert.equal(MC.literal('@src'), true);
+  assert.equal(MC.literal('Fix /tmp'), false);
+});
+
+test('an @ mention is found at the caret and replaced by the chosen path', () => {
+  const { MC, plain } = load();
+  assert.deepEqual(plain(MC.atToken('see @par', 8)), { start: 4, end: 8, query: 'par' });
+  assert.deepEqual(plain(MC.atToken('@', 1)), { start: 0, end: 1, query: '' });
+  // The caret inside the word: the whole word is replaced.
+  assert.deepEqual(plain(MC.atToken('see @parser now', 6)), { start: 4, end: 11, query: 'p' });
+  assert.equal(MC.atToken('mail me@host', 12), null);
+  assert.equal(MC.atToken('see @par now', 12), null);
+  assert.deepEqual(plain(MC.insertMention('see @par now', { start: 4, end: 8 }, 'src/parser.rs')), { text: 'see @src/parser.rs now', caret: 19 });
+  assert.deepEqual(plain(MC.insertMention('@', { start: 0, end: 1 }, 'a.rs')), { text: '@a.rs ', caret: 6 });
+});
+
+test('recent prompts keep the newest first without repeats and at most fifty', () => {
+  const { MC, plain } = load();
+  let list = [];
+  for (const t of ['a', 'b', 'a', 'c']) list = MC.pushRecent(list, t);
+  assert.deepEqual(plain(list), ['c', 'a', 'b']);
+  for (let k = 0; k < 60; k++) list = MC.pushRecent(list, 'p' + k);
+  assert.equal(list.length, 50);
+  assert.equal(list[0], 'p59');
+});

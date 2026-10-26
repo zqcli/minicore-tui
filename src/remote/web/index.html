@@ -373,10 +373,12 @@ html.kb #dock{padding-bottom:6px}
 #ta{display:block;width:100%;resize:none;border:0;background:none;padding:10px 8px 6px;margin:0;font-size:max(16px,1rem);line-height:1.45;max-height:calc(var(--h,100dvh)*.4);min-height:44px;overflow-y:auto;color:var(--tx)}
 #ta::placeholder{color:var(--tx3)}
 .chips{display:flex;align-items:center;gap:6px;min-width:0}
-.chip{display:inline-flex;align-items:center;gap:4px;min-height:36px;min-width:36px;padding:0 10px;border-radius:18px;background:var(--fill);color:var(--tx2);font-size:var(--t13);font-weight:500;white-space:nowrap;position:relative;max-width:46%;flex:none}
+.chip{display:inline-flex;align-items:center;gap:4px;min-height:36px;min-width:36px;padding:0 10px;border-radius:18px;background:var(--fill);color:var(--tx2);font-size:var(--t13);font-weight:500;white-space:nowrap;position:relative;flex:0 1 auto;overflow:hidden}
+.chip .ic{flex:none}
 .chip::after{content:"";position:absolute;inset:-4px -2px}
 .chip>span{overflow:hidden;text-overflow:ellipsis}
-.chip.icon{padding:0;justify-content:center;width:36px}
+.chip.icon{padding:0;justify-content:center;width:36px;flex:none;overflow:visible}
+.chip.mode,#send{flex:none}
 .chip.mode{background:var(--acs);color:var(--ac)}
 .chip.mode.q{background:var(--fill);color:var(--tx2)}
 .chips .gap{flex:1}
@@ -866,6 +868,47 @@ globalThis.MC = (() => {
   // Sessions that need this device: other sessions waiting on an approval or question, plus this one's own.
   const attentionCount = state => state.background.approval + (state.interaction ? 1 : 0);
 
+  // ---- composer ----
+  // Commands the client handles itself; they are never sent as text.
+  const BUILTINS = [
+    ['new', 'Start a new session'], ['model', 'Choose the model and reasoning'], ['rename', 'Rename this session', '[title]'],
+    ['compact', 'Compact the context now'], ['context', 'Show what fills the context'], ['changes', 'Show the changed files'],
+    ['export', 'Share the transcript as Markdown'], ['find', 'Find in this session'], ['session', 'Show session details'],
+    ['sessions', 'Open the session list'], ['copy', 'Copy the last answer'], ['settings', 'Open settings'], ['help', 'Keyboard shortcuts'],
+  ].map(([name, description, hint]) => ({ name, description, hint: hint || '', builtin: true }));
+  const ALIAS = { diff: 'changes', resume: 'sessions', reasoning: 'model' };
+  // The command list while the composer holds only "/word": prefix matches first, templates before built-ins.
+  function slashMenu(text, commands) {
+    const m = /^\/(\S*)$/.exec(text);
+    if (!m) return null;
+    const q = m[1].toLowerCase(), all = commands.map(c => ({ ...c, builtin: false })).concat(BUILTINS);
+    const hit = all.filter(c => c.name.toLowerCase().includes(q));
+    return hit.filter(c => c.name.toLowerCase().startsWith(q)).concat(hit.filter(c => !c.name.toLowerCase().startsWith(q)));
+  }
+  // What a "/name args" line is: a built-in (run here), a template (sent; the host expands it) or unknown (refused here).
+  function parseSlash(text, commands) {
+    const m = /^\/(\S+)(?:\s+([\s\S]*))?$/.exec(text.trim());
+    if (!m) return null;
+    const name = ALIAS[m[1]] || m[1], arg = (m[2] || '').trim();
+    if (BUILTINS.some(c => c.name === name)) return { builtin: name, arg };
+    return commands.some(c => c.name === m[1]) ? { template: m[1], arg } : { unknown: m[1] };
+  }
+  // The "@word" being typed at the caret, if any.
+  function atToken(text, caret) {
+    const m = /(^|\s)@([^\s@]*)$/.exec(text.slice(0, caret));
+    if (!m) return null;
+    const tail = /^[^\s@]*/.exec(text.slice(caret))[0];
+    return { start: caret - m[2].length - 1, end: caret + tail.length, query: m[2] };
+  }
+  function insertMention(text, tok, path) {
+    const ins = '@' + path + ' ', rest = text.slice(tok.end).replace(/^ /, '');
+    return { text: text.slice(0, tok.start) + ins + rest, caret: tok.start + ins.length };
+  }
+  // Recent prompts, newest first, without repeats.
+  const pushRecent = (list, text, max = 50) => [text, ...list.filter(x => x !== text)].slice(0, max);
+  // Commands and paths are not prose: no autocorrect while the text starts with one.
+  const literal = text => /^[/@]/.test(text);
+
   function recentWorkspaces(sessions, max = 6) {
     const out = [];
     for (const x of sessions) if (!out.includes(x.workspace) && out.push(x.workspace) >= max) break;
@@ -979,6 +1022,7 @@ globalThis.MC = (() => {
     diffBlocks, applyBlocks, reduce, explain, lockText, fmtClock, unreachable, fsError, errorText,
     clock, stamp, relTime, dayGroup, sessionLayout, matchSession, fmtElapsed, fmtDur, fmtTok, fmtNum,
     toolKind, toolInfo, parseDiff, diffStats, liveBlock, turnEnd, changesText, compactionText, statusLine, canStop, approvalKey,
+    BUILTINS, slashMenu, parseSlash, atToken, insertMention, pushRecent, literal,
     splitPath, within, crumbs, tilde, recentWorkspaces, sessionTransitions, noticeEvent, attentionCount, inline, parseMd, parseLines, SAFE_URL,
   };
 })();
@@ -1322,6 +1366,9 @@ function connect() {
 function lost() {
   ready = false;
   MC.disconnect(S);
+  // An unconfirmed send lives in its card only, so it is never in two places to send twice.
+  for (const it of MC.unconfirmed(S)) $('ta').value = MC.retireText($('ta').value, it.text);
+  edits.clear();
   for (const cb of fsWait.values()) cb({ ok: false, error: 'io', message: 'Not connected' });
   fsWait.clear();
   failQueries();
@@ -1364,10 +1411,9 @@ function onMessage(msg) {
   if (fx.snapshot || fx.welcome) { renderConn(); pump(); }
   if (fx.ack) onAck(fx.ack);
   if (fx.returned != null) {
-    const ta = $('ta');
-    ta.value = MC.mergeReturned(ta.value, fx.returned);
-    composerInput();
-    toast('Message returned to the composer');
+    const mine = edits.delete(fx.returned);
+    fillComposer(MC.mergeReturned($('ta').value, fx.returned));
+    if (!mine) toast('Message returned to the composer');
   }
   if (fx.events) fx.events.forEach(attention);
   if (fx.notice) onNotice(fx.notice);
@@ -1376,7 +1422,8 @@ function onMessage(msg) {
 }
 function onAck(a) {
   const k = a.kind;
-  if ((k === 'submit' || k === 'queue') && a.ok) { $('ta').value = MC.retireText($('ta').value, a.text); composerInput(); }
+  if ((k === 'submit' || k === 'queue') && a.ok) { remember(a.text); $('ta').value = MC.retireText($('ta').value, a.text); composerInput(); }
+  if (k === 'unqueue' && !a.ok) edits.delete(a.spec.text);
   if (k === 'set_model') mp.model = null;
   if (k === 'set_reasoning') mp.level = null;
   if (k === 'open_session' && pendingRow === a.spec.session_id) { pendingRow = null; if (a.ok) closeNav(); }
@@ -1917,7 +1964,7 @@ const schedule = () => { if (!raf) raf = requestAnimationFrame(flush); };
 const atBottom = () => log.scrollHeight - log.scrollTop - log.clientHeight < 80;
 const quiet = b => b.type === 'assistant' && !b.text && !b.reasoning;
 const isOpen = (k, dflt) => ov.has(k) ? ov.get(k) : dflt;
-function onNewSession() { stick = true; pinned = true; win = MC.WINDOW; ov.clear(); thinkT.clear(); }
+function onNewSession() { stick = true; pinned = true; win = MC.WINDOW; ov.clear(); thinkT.clear(); loadDraft(); }
 function resetTranscript() { nodes.forEach(n => n.remove()); nodes.length = 0; lo = hi = 0; win = MC.WINDOW; pinned = true; ov.clear(); dirty.clear(); }
 function redrawAll() { for (let i = lo; i < hi; i++) dirty.add(i); schedule(); }
 // Opening or closing keeps the tapped row where it is on screen.
@@ -2191,7 +2238,7 @@ function renderStrip() {
   stripPart({
     label: x.label, detail: x.detail, started: (s.busy || s.compacting) && s.started_ms, ctx: S.state.context_percent != null ? Math.round(S.state.context_percent) + '%' : '',
     hi: S.state.context_percent >= 80, stop: MC.canStop(s), stopping: s.interrupting || pendingKind('cancel'), online: online(),
-    micro: s.busy ? (mode === 'queue' ? 'Queue: sends when this turn ends' : 'Steer: the agent reads it after the current step') : '',
+    micro: s.busy ? (mode === 'queue' ? 'Queue · sends when this turn ends' : 'Steer · the agent reads it after the current step') : '',
   });
 }
 function stop() { if (MC.canStop(st()) && !st().interrupting && !pendingKind('cancel')) intent(MC.intents.cancel()); }
@@ -2199,16 +2246,26 @@ const trayPart = part($('tray'), t => [
   t.lost.map(([id, text]) => h('div', { class: 'lost', role: 'alert' }, icon('warn', 'sm'),
     h('div', '', h('div', '', 'Not sent · it may or may not have arrived'), h('div', 'lt', text)),
     h('button', { class: 'btn sm', type: 'button', 'data-k': 'again' + id, disabled: !t.on, onclick: () => { send(MC.sendAgain(S, id)); renderState(); } }, icon('retry', 'xs'), 'Send again'),
-    h('button', { class: 'ib s', type: 'button', 'aria-label': 'Dismiss', onclick: () => { S.intents.delete(id); renderState(); } }, icon('x', 'sm')))),
-  t.queue.map(q => queuePill(q, t.on)),
+    h('button', { class: 'ib s', type: 'button', 'aria-label': 'Edit instead', onclick: () => { S.intents.delete(id); fillComposer(MC.mergeReturned(ta.value, text)); renderState(); } }, icon('edit', 'sm')))),
+  t.queue.map(q => q.kind === 'steer' ? h('div', 'qp', h('span', 'qk', 'Steer'), h('span', 'qt', q.text))
+    : h('div', 'qp', h('span', 'qk', 'Queued'), h('button', { class: 'qt', type: 'button', 'data-k': 'q' + q.index, disabled: !t.on, 'aria-label': 'Edit queued message: ' + q.text, onclick: () => unqueue(q, false) }, q.text),
+      h('button', { class: 'ib', type: 'button', disabled: !t.on, 'aria-label': 'Remove queued message', onclick: () => unqueue(q, true) }, icon('x', 'sm')))),
 ]);
-function queuePill(q) {
-  return h('div', 'qp', h('span', 'qk', q.kind === 'steer' ? 'Steer' : 'Queued'), h('span', 'qt', q.text));
+// A queued follow-up comes back from the host: into the composer to edit it, or dropped.
+const edits = new Set();
+function unqueue(q, drop) {
+  if (!online()) return toast('Not connected', 'error');
+  if (!drop) edits.add(q.text);
+  send(MC.unqueue(S, q.index, q.text, drop));
+  renderState();
 }
 function renderTray() {
   trayPart({ lost: MC.unconfirmed(S).map(it => [it.id, it.text]), queue: S.state.queue.map((q, index) => ({ ...q, index })), on: online() });
 }
 const chipsPart = part($('chips'), c => [
+  h('button', { class: 'chip icon', type: 'button', 'data-k': 'plus', 'aria-label': 'Commands, prompts and files', 'aria-haspopup': 'dialog', onclick: openPlus }, icon('plus', 'sm')),
+  c.draft && h('button', { class: 'chip', type: 'button', 'data-k': 'folder', 'aria-label': 'Folder ' + c.draft.folder + ', change', onclick: () => openNew() }, icon('folder', 'xs'), h('span', '', c.draft.folder)),
+  c.draft && c.draft.profiles && h('button', { class: 'chip', type: 'button', 'data-k': 'profile', 'aria-label': 'Profile ' + c.draft.profile + ', change', onclick: openProfile }, h('span', '', c.draft.profile || 'Profile')),
   h('button', { class: 'chip', type: 'button', 'data-k': 'model', 'aria-label': 'Model ' + c.model + ', change', onclick: openModel }, h('span', '', c.modelShort), icon('chevd', 'xs')),
   h('span', 'gap'),
   c.busy && h('button', { class: 'chip mode' + (c.mode === 'queue' ? ' q' : ''), type: 'button', 'data-k': 'mode', 'aria-label': (c.mode === 'queue' ? 'Queue' : 'Steer') + ', switch', onclick: () => { mode = mode === 'queue' ? 'steer' : 'queue'; renderDock(); } },
@@ -2216,31 +2273,163 @@ const chipsPart = part($('chips'), c => [
   h('button', { id: 'send', type: 'submit', 'data-k': 'send', 'aria-label': c.sending ? 'Sending' : c.busy ? (c.mode === 'queue' ? 'Queue message' : 'Steer') : 'Send', disabled: c.disabled }, c.sending ? spin() : icon('up')),
 ]);
 function renderChips() {
-  const s = st(), c = cur(), lock = sending();
+  const s = st(), c = cur(), lock = sending(), d = S.state.draft;
   if (!s.busy) mode = 'steer';
   ta.readOnly = lock;
-  ta.placeholder = s.busy ? (mode === 'queue' ? 'Queue a follow-up…' : 'Steer the agent…') : S.state.session ? 'Message MiniCore' : 'Describe a task to start';
+  ta.placeholder = s.busy ? (mode === 'queue' ? 'Queue a follow-up…' : 'Steer the agent…') : S.state.session ? 'Message MiniCore · / for commands' : 'Describe a task to start';
   const label = [c.model ? MC.midTrunc(c.model) : 'Model', c.reasoning].filter(Boolean).join(' · ');
-  chipsPart({ model: c.model || '', modelShort: label, busy: !!s.busy, mode, sending: lock, disabled: lock || !online() || !ta.value.trim() });
+  chipsPart({
+    model: c.model || '', modelShort: label, busy: !!s.busy, mode, sending: lock, disabled: lock || !online() || !ta.value.trim(),
+    draft: !S.state.session && { folder: MC.basename(d.workspace), profile: d.profile, profiles: S.state.profiles.length > 1 },
+  });
 }
 function renderDock() { renderStrip(); renderTray(); renderChips(); }
 function grow() {
   ta.style.height = 'auto';
   ta.style.height = ta.scrollHeight + 'px';
 }
-function composerInput() { grow(); renderChips(); }
-function fillComposer(text) { ta.value = text; composerInput(); ta.focus(); }
+// Drafts persist per session (and one for a new session) on this device.
+const draftKey = () => 'minicore.draft.' + (S.sid || 'new');
+function composerInput() {
+  grow(); renderChips(); updateMenu();
+  const lit = MC.literal(ta.value);
+  ta.setAttribute('autocorrect', lit ? 'off' : 'on');
+  ta.spellcheck = !lit;
+  if (ta.value) localStorage.setItem(draftKey(), ta.value); else localStorage.removeItem(draftKey());
+}
+function loadDraft() { if (!sending()) { ta.value = localStorage.getItem(draftKey()) || ''; composerInput(); } }
+function fillComposer(text) { ta.value = text; recall = -1; composerInput(); ta.focus(); ta.setSelectionRange(text.length, text.length); }
 function submit() {
   const text = ta.value;
-  if (!text.trim() || sending() || !online()) return;
+  if (!text.trim() || sending()) return;
+  const c = MC.parseSlash(text, S.state.commands);
+  if (c && c.builtin) { ta.value = ''; composerInput(); return builtin(c); }
+  if (c && c.unknown) return toast('Unknown command /' + c.unknown, 'error');
+  if (!online()) return toast('Not connected', 'error');
   intent(st().busy && mode === 'queue' ? MC.intents.queue(text) : MC.intents.submit(text));
+  setMenu(null);
+}
+function builtin(c) {
+  const s = S.state.session, need = () => { toast('Send a first message to start the session'); };
+  switch (c.builtin) {
+    case 'new': return openNew();
+    case 'model': return openModel();
+    case 'rename': return !s ? need() : c.arg ? intent(MC.intents.renameSession(s.id, c.arg)) : rename(s.id);
+    case 'compact': return !s ? need() : compactNow();
+    case 'context': return !s ? need() : openContext();
+    case 'changes': return !s ? need() : openChanges();
+    case 'export': return !s ? need() : exportSession();
+    case 'find': return openFind();
+    case 'session': return openInfo();
+    case 'sessions': return openNav();
+    case 'copy': { const b = [...S.blocks].reverse().find(x => x.type === 'assistant' && x.text); return b ? copyText(b.text) : toast('No answer to copy yet'); }
+    case 'settings': return openSettings();
+    case 'help': return openHelp();
+  }
 }
 $('comp').addEventListener('submit', e => { e.preventDefault(); submit(); });
-ta.addEventListener('input', composerInput);
+ta.addEventListener('input', () => { recall = -1; composerInput(); });
+ta.addEventListener('click', updateMenu);
+
+// The / command and @ file list above the composer; keyboard and touch navigable.
+let menu = null, filesT = 0, recall = -1;
+const recentKey = 'minicore.recent.' + HOST;
+let recent = JSON.parse(localStorage.getItem(recentKey) || '[]');
+const popPart = part($('pop'), m => m && (m.items.length ? m.items.map((x, k) => h('button', {
+  class: 'opt', type: 'button', role: 'option', id: 'opt' + k, 'aria-selected': String(k === m.sel), tabindex: '-1',
+  onmousedown: e => e.preventDefault(), onclick: () => accept(k),
+}, m.kind === 'cmd' ? [h('span', 'on', '/' + x.name), h('span', 'od', x.description), h('span', 'tag', x.hint || (x.builtin ? '' : 'template'))]
+  : [icon('file', 'sm'), h('span', { class: 'od', style: 'color:var(--tx)' }, x)])) : h('div', 'muted', m.busy ? 'Searching…' : m.kind === 'cmd' ? 'No matching commands' : 'No matching files')));
+function setMenu(m) {
+  menu = m;
+  $('pop').hidden = !m;
+  ta.setAttribute('aria-expanded', String(!!m));
+  if (m && m.items.length) ta.setAttribute('aria-activedescendant', 'opt' + m.sel); else ta.removeAttribute('aria-activedescendant');
+  popPart(m && { kind: m.kind, items: m.items, sel: m.sel, busy: m.busy });
+  const o = m && $('opt' + m.sel);
+  if (o) o.scrollIntoView({ block: 'nearest' });
+}
+function updateMenu() {
+  if (!S.state) return;
+  const text = ta.value, cmds = MC.slashMenu(text, S.state.commands);
+  if (cmds) return setMenu({ kind: 'cmd', items: cmds, sel: 0 });
+  const tok = ta.selectionStart === ta.selectionEnd && MC.atToken(text, ta.selectionStart);
+  if (!tok || !S.state.session) return setMenu(null);
+  if (menu && menu.kind === 'file' && menu.tok.query === tok.query) { menu.tok = tok; return; }
+  setMenu({ kind: 'file', items: menu && menu.kind === 'file' ? menu.items : [], sel: 0, tok, busy: true });
+  clearTimeout(filesT);
+  filesT = setTimeout(() => ask(MC.queries.files(tok.query), r => {
+    if (!menu || menu.kind !== 'file' || menu.tok.query !== tok.query) return;
+    setMenu({ ...menu, items: r.ok ? r.data.paths : [], busy: false, sel: 0 });
+    if (!r.ok) toast(MC.errorText(r.error), 'error');
+  }), 150);
+}
+function accept(k) {
+  const m = menu, x = m.items[k];
+  if (m.kind === 'file') {
+    const r = MC.insertMention(ta.value, m.tok, x);
+    ta.value = r.text; ta.setSelectionRange(r.caret, r.caret);
+  } else if (x.builtin && x.name !== 'rename') { ta.value = ''; setMenu(null); composerInput(); return builtin({ builtin: x.name, arg: '' }); }
+  else ta.value = '/' + x.name + ' ';
+  ta.focus();
+  composerInput();
+}
 ta.addEventListener('keydown', e => {
-  if (e.key !== 'Enter' || e.isComposing) return;
+  if (e.isComposing) return;
+  if (menu && menu.items.length && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+    e.preventDefault();
+    setMenu({ ...menu, sel: (menu.sel + (e.key === 'ArrowDown' ? 1 : menu.items.length - 1)) % menu.items.length });
+    return;
+  }
+  if (menu && menu.items.length && (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey && !e.metaKey && !e.ctrlKey))) { e.preventDefault(); accept(menu.sel); return; }
+  if (menu && e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setMenu(null); return; }
+  // Hardware keyboards walk the recent prompts with ↑/↓ from an empty composer.
+  if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && !e.altKey && !e.metaKey && !e.ctrlKey && !e.shiftKey && (ta.value === '' || ta.value === recent[recall])) {
+    const k = recall + (e.key === 'ArrowUp' ? 1 : -1);
+    if (k >= recent.length || (k < 0 && recall < 0)) return;
+    e.preventDefault();
+    recall = k;
+    ta.value = k < 0 ? '' : recent[k];
+    composerInput();
+    return;
+  }
+  if (e.key !== 'Enter') return;
   if (e.metaKey || e.ctrlKey || (prefs.enter && !e.shiftKey && !e.altKey)) { e.preventDefault(); submit(); }
 });
+ta.addEventListener('blur', () => setTimeout(() => { if (document.activeElement !== ta) setMenu(null); }, 150));
+function remember(text) { recent = MC.pushRecent(recent, text); localStorage.setItem(recentKey, JSON.stringify(recent)); }
+// The + sheet: commands and templates, recent prompts, a file mention.
+function openPlus() {
+  const row = (ic, label, sub, fn, mono) => h('button', { class: 'row flat', type: 'button', onclick: () => { m.close(true); fn(); } }, icon(ic, 'ri'),
+    h('span', 'rt', h('span', 'rm' + (mono ? ' mono' : ''), label), sub && h('span', 'rs', sub)));
+  const m = sheet({
+    key: 'plus', title: 'Add to your message', deps: () => [S.state.commands, recent.slice(0, 8), !!S.state.session],
+    body: () => {
+      const cmds = S.state.commands.map(c => ({ ...c, builtin: false })).concat(MC.BUILTINS);
+      return [S.state.session && [h('h3', 'sec2', 'Insert'), h('div', 'list', row('at', 'File', 'Mention a file in this workspace as @path', insertAt))],
+        recent.length > 0 && [h('h3', 'sec2', 'Recent prompts'), h('div', 'list', recent.slice(0, 8).map(t => row('history', t.length > 120 ? t.slice(0, 120) + '…' : t, null, () => fillComposer(t))))],
+        h('h3', 'sec2', 'Commands'), h('div', 'list', cmds.map(c => row(c.builtin ? 'term' : 'sparkle', '/' + c.name + (c.hint ? ' ' + c.hint : ''), c.description,
+          () => { setMenu({ kind: 'cmd', items: [c], sel: 0 }); accept(0); }, true)))];
+    },
+  });
+}
+function insertAt() {
+  const p = ta.selectionStart, v = ta.value, pre = p > 0 && !/\s$/.test(v.slice(0, p)) ? ' @' : '@';
+  ta.value = v.slice(0, p) + pre + v.slice(p);
+  ta.focus();
+  ta.setSelectionRange(p + pre.length, p + pre.length);
+  composerInput();
+}
+function openProfile() {
+  const d = S.state.draft;
+  const m = sheet({
+    key: 'profile', cls: 'dialog', title: 'Profile', deps: () => [S.state.draft.profile, S.state.profiles],
+    body: () => h('div', { class: 'list', role: 'radiogroup', 'aria-label': 'Profile' }, S.state.profiles.map(p => h('button', {
+      class: 'row flat', type: 'button', role: 'radio', 'aria-checked': String(p === S.state.draft.profile),
+      onclick: () => { if (p !== S.state.draft.profile) intent(MC.intents.newSession(d.workspace, p)); m.close(); },
+    }, h('span', 'rt', h('span', 'rm', p)), p === S.state.draft.profile && icon('check', 'ck')))),
+  });
+}
 
 // ---- approvals and questions ----
 let apprId = null, apprAt = 0, lastKey = 0;
@@ -2309,6 +2498,10 @@ document.addEventListener('keydown', e => {
 function openChanges() { toast('Changes are not available yet'); }
 function openContext() { toast('Context is not available yet'); }
 function openOutput() {}
+function compactNow() {}
+function exportSession() {}
+function openFind() {}
+function openHelp() {}
 
 // ---- lifecycle ----
 document.addEventListener('visibilitychange', () => { if (document.hidden) hiddenAt = Date.now(); else wake(Date.now() - hiddenAt > 10000); });
