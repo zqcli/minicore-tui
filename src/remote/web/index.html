@@ -971,8 +971,13 @@ globalThis.MC = (() => {
   }
 
   // ---- paths ----
-  function splitPath(p) {
-    const sep = p.includes('/') ? '/' : '\\', parts = p.split(sep).filter(Boolean);
+  // Windows paths (drive letters, UNC) use `\`, and `/` in them is accepted as the same separator; they compare without case.
+  const WIN = /^([A-Za-z]:([\\/]|$)|\\\\)/;
+  const canon = p => WIN.test(p) ? p.replace(/\//g, '\\') : p;
+  const pkey = p => WIN.test(p) ? canon(p).toLowerCase().replace(/\\+$/, '') : p;
+  const isDrive = p => /^[A-Za-z]:\\?$/.test(canon(p));
+  function splitPath(path) {
+    const p = canon(path), win = WIN.test(p), sep = win ? '\\' : '/', parts = p.split(sep).filter(Boolean);
     const out = parts.map((name, k) => {
       let q = (p.startsWith('\\\\') ? '\\\\' : p.startsWith(sep) ? sep : '') + parts.slice(0, k + 1).join(sep);
       if (/^[A-Za-z]:$/.test(q)) q += sep;
@@ -982,19 +987,19 @@ globalThis.MC = (() => {
     return out;
   }
   function within(p, root) {
-    if (p === root) return true;
-    const s = root.includes('/') ? '/' : '\\';
-    return p.startsWith(root.endsWith(s) ? root : root + s);
+    if (!WIN.test(root)) return p === root || p.startsWith(root.endsWith('/') ? root : root + '/');
+    const a = pkey(p), b = pkey(root);
+    return a === b || a.startsWith(b + '\\');
   }
   // Breadcrumbs from the innermost root that holds `path`, named like the root.
   function crumbs(path, roots) {
     const all = splitPath(path), root = roots.filter(r => within(path, r.path)).sort((a, b) => b.path.length - a.path.length)[0];
     if (!root) return all;
-    const k = all.findIndex(c => c.path === root.path);
+    const k = all.findIndex(c => pkey(c.path) === pkey(root.path));
     return k < 0 ? all : [{ name: root.name, path: root.path }, ...all.slice(k + 1)];
   }
-  // "~/Develops/app" for a home directory path.
-  const tilde = p => (p || '').replace(/^\/(Users|home)\/[^/]+(?=\/|$)/, '~');
+  // "~/Develops/app" (Windows: "~\work") for a home directory path.
+  const tilde = p => (p || '').replace(/^(?:\/(?:Users|home)\/[^/]+|[A-Za-z]:[\\/]Users[\\/][^\\/]+)(?=[\\/]|$)/i, '~');
 
   // ---- attention ----
   // Background sessions that started waiting for approval or finished unseen between two session lists.
@@ -1248,7 +1253,7 @@ globalThis.MC = (() => {
     groupTools, foldTurns, findBlocks, foldText, mdInc,
     toolKind, toolInfo, parseDiff, diffStats, liveBlock, turnEnd, changesText, compactionText, statusLine, canStop, approvalKey, approvalTitle, approvalOptions, approvalBody,
     changeStatus, contextView, exportMd, BUILTINS, slashMenu, parseSlash, atToken, insertMention, pushRecent, literal, composerKey, queueView, thinkingPreview,
-    splitPath, within, crumbs, tilde, recentWorkspaces, sessionTransitions, noticeEvent, attentionCount, inline, parseMd, parseLines, SAFE_URL,
+    splitPath, within, crumbs, tilde, isDrive, recentWorkspaces, sessionTransitions, noticeEvent, attentionCount, inline, parseMd, parseLines, SAFE_URL,
   };
 })();
 </script>
@@ -1287,6 +1292,7 @@ osDark.addEventListener('change', applyTheme);
 <symbol id="i-chevd" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 10 5 5 5-5"/></symbol>
 <symbol id="i-chevu" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 14 5-5 5 5"/></symbol>
 <symbol id="i-folder" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M3.5 7.5A2 2 0 0 1 5.5 5.5h3.6l2 2h7.4a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/></symbol>
+<symbol id="i-disk" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="13" width="17" height="6.5" rx="2"/><path d="m5.5 13 2-7.5h9l2 7.5M16.5 16.3h.01"/></symbol>
 <symbol id="i-folderplus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 7.5A2 2 0 0 1 5.5 5.5h3.6l2 2h7.4a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2zM12 10.5v5M9.5 13h5"/></symbol>
 <symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7.5"/></symbol>
 <symbol id="i-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/></symbol>
@@ -2197,7 +2203,7 @@ function renderNew() {
     ns.err && h('div', { class: 'serr', role: 'alert' }, icon('warn', 'sm'), h('span', '', ns.err)),
     L ? h('div', 'list', L.parent != null && folderRow(MC.basename(L.parent), 'Parent folder', L.parent, true, 'up'), L.entries.map(x => folderRow(x.name, null, x.path, true)),
       !L.entries.length && !ns.busy && h('div', 'muted', 'No folders here'))
-      : roots.length > 0 && h('div', 'list', roots.map(r => folderRow(r.name, MC.tilde(r.path), r.path, true))),
+      : roots.length > 0 && h('div', 'list', roots.map(r => MC.isDrive(r.path) ? folderRow(r.name, null, r.path, true, 'disk') : folderRow(r.name, MC.tilde(r.path), r.path, true))),
     L && L.truncated && h('div', 'hint', 'Only the first 1000 folders are shown.'),
   ];
 }

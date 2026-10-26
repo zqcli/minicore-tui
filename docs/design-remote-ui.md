@@ -282,6 +282,11 @@ wake on visibility/pageshow/focus/online, unconfirmed sends never resent
 automatically), host clock offset, the iOS keyboard handling (`--h`, `--kb`),
 safe areas, the PWA (manifest, service worker, install row, theme-color sync),
 per-device views, live background sessions, the folder picker and new folder.
+The folder picker reads paths the way the host writes them: Unix, Windows drive
+roots (`C:\`, `D:\work`, `/` accepted as the same separator, compared without
+case) and UNC shares. The Roots crumb is always there so switching drives is
+one tap, the Roots view marks drives with a disk icon, and `~` stands for
+`C:\Users\name` too.
 
 ## Not in scope
 

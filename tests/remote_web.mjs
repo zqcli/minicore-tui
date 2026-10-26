@@ -850,3 +850,72 @@ test('the thinking preview is the newest sentence without Markdown markers', () 
   // Only the tail is read: a huge text costs the same and still ends with the newest line.
   assert.equal(p('x\n'.repeat(100000) + 'last words here'), 'last words here');
 });
+
+test('Windows paths split into drive, folder and UNC crumbs and accept either separator', () => {
+  const { MC, plain } = load();
+  const parts = path => plain(MC.splitPath(path)).map(c => [c.name, c.path]);
+  assert.deepEqual(parts('C:\\'), [['C:', 'C:\\']]);
+  assert.deepEqual(parts('C:\\Users\\x'), [['C:', 'C:\\'], ['Users', 'C:\\Users'], ['x', 'C:\\Users\\x']]);
+  assert.deepEqual(parts('D:\\work'), [['D:', 'D:\\'], ['work', 'D:\\work']]);
+  assert.deepEqual(parts('\\\\server\\share\\dir'), [['server', '\\\\server'], ['share', '\\\\server\\share'], ['dir', '\\\\server\\share\\dir']]);
+  // `/` inside a drive path is the same separator; the crumbs come back in the `\` form the host uses.
+  assert.deepEqual(parts('C:/Users/x'), parts('C:\\Users\\x'));
+  assert.deepEqual(parts('C:\\Users/x\\src'), parts('C:\\Users\\x\\src'));
+  assert.deepEqual(parts('/work/app'), [['/', '/'], ['work', '/work'], ['app', '/work/app']]);
+  assert.deepEqual(parts('C:'), [['C:', 'C:\\']]);
+  assert.equal(MC.basename('C:\\'), 'C:');
+  assert.equal(MC.basename('D:\\work\\app'), 'app');
+  assert.equal(MC.basename('\\\\server\\share'), 'share');
+  assert.equal(MC.isDrive('C:\\'), true);
+  assert.equal(MC.isDrive('d:'), true);
+  assert.equal(MC.isDrive('C:\\Users'), false);
+  assert.equal(MC.isDrive('/'), false);
+  assert.equal(MC.isDrive('\\\\server\\share'), false);
+});
+
+test('Windows paths compare by folder and without case, and never match another drive or a longer name', () => {
+  const { MC } = load();
+  assert.equal(MC.within('C:\\', 'C:\\'), true);
+  assert.equal(MC.within('C:\\Users\\x', 'C:\\'), true);
+  assert.equal(MC.within('C:\\Users\\x', 'C:\\Users'), true);
+  assert.equal(MC.within('C:\\Users\\x', 'C:\\Users\\x'), true);
+  assert.equal(MC.within('c:\\users\\X', 'C:\\Users'), true);
+  assert.equal(MC.within('C:/Users/x', 'C:\\Users'), true);
+  assert.equal(MC.within('C:\\Users2', 'C:\\Users'), false);
+  assert.equal(MC.within('D:\\work', 'C:\\'), false);
+  assert.equal(MC.within('C:\\work', 'D:\\'), false);
+  assert.equal(MC.within('\\\\server\\share\\dir', '\\\\server\\share'), true);
+  assert.equal(MC.within('\\\\server\\share2', '\\\\server\\share'), false);
+  assert.equal(MC.within('/work/app', 'C:\\'), false);
+  assert.equal(MC.within('C:\\work', '/work'), false);
+  assert.equal(MC.within('/work', '/'), true);
+});
+
+test('crumbs start at the drive root or share root that holds the folder, one tap from Roots', () => {
+  const { MC, plain } = load();
+  const roots = [{ path: 'C:\\', name: 'C:' }, { path: 'D:\\', name: 'D:' }, { path: 'D:\\work', name: 'work' }];
+  const c = (path, r = roots) => plain(MC.crumbs(path, r)).map(x => [x.name, x.path]);
+  assert.deepEqual(c('C:\\'), [['C:', 'C:\\']]);
+  assert.deepEqual(c('C:\\Users\\x'), [['C:', 'C:\\'], ['Users', 'C:\\Users'], ['x', 'C:\\Users\\x']]);
+  // The innermost root wins, also when the host's casing differs.
+  assert.deepEqual(c('D:\\work\\app'), [['work', 'D:\\work'], ['app', 'D:\\work\\app']]);
+  assert.deepEqual(c('d:\\Work\\app'), [['work', 'D:\\work'], ['app', 'd:\\Work\\app']]);
+  assert.deepEqual(c('D:\\other'), [['D:', 'D:\\'], ['other', 'D:\\other']]);
+  assert.deepEqual(c('C:\\Users\\x', [{ path: '\\\\nas\\share', name: 'share' }]).map(x => x[0]), ['C:', 'Users', 'x']);
+  assert.deepEqual(c('\\\\nas\\share\\proj\\src', [{ path: '\\\\nas\\share', name: 'share' }]), [['share', '\\\\nas\\share'], ['proj', '\\\\nas\\share\\proj'], ['src', '\\\\nas\\share\\proj\\src']]);
+});
+
+test('home folders read as ~ on Windows too, and recent workspaces on other drives keep their path', () => {
+  const { MC, plain } = load();
+  assert.equal(MC.tilde('C:\\Users\\me\\work\\app'), '~\\work\\app');
+  assert.equal(MC.tilde('c:\\users\\me'), '~');
+  assert.equal(MC.tilde('C:/Users/me/work'), '~/work');
+  assert.equal(MC.tilde('D:\\work\\app'), 'D:\\work\\app');
+  assert.equal(MC.tilde('C:\\Usersx\\me'), 'C:\\Usersx\\me');
+  assert.equal(MC.tilde('\\\\nas\\share\\Users\\me'), '\\\\nas\\share\\Users\\me');
+  assert.equal(MC.tilde('/Users/me/work'), '~/work');
+  assert.equal(MC.tilde(null), '');
+  const sessions = [{ workspace: 'C:\\Users\\me\\app' }, { workspace: 'D:\\work\\api' }, { workspace: 'C:\\Users\\me\\app' }, { workspace: '\\\\nas\\share\\site' }];
+  const recent = plain(MC.recentWorkspaces(sessions));
+  assert.deepEqual(recent.map(w => [MC.basename(w), MC.tilde(w)]), [['app', '~\\app'], ['api', 'D:\\work\\api'], ['site', '\\\\nas\\share\\site']]);
+});
