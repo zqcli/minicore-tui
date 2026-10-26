@@ -337,6 +337,9 @@ sign-in.
 {"t":"intent","id":"c18","kind":"queue","text":"..."}
 {"t":"intent","id":"c19","kind":"cancel"}
 {"t":"intent","id":"c20","kind":"answer","interaction_id":"...","choice":"allow"}
+{"t":"intent","id":"c31","kind":"answer","interaction_id":"...","choice":"deny","message":"Use the staging bucket"}
+{"t":"intent","id":"c32","kind":"compact"}
+{"t":"intent","id":"c33","kind":"unqueue","index":1,"text":"run the tests too"}
 {"t":"intent","id":"c21","kind":"load_older"}
 {"t":"intent","id":"c22","kind":"open_session","session_id":"ses_..."}
 {"t":"intent","id":"c23","kind":"new_session","workspace":"/Users/me/Develops/app","profile":"coding"}
@@ -362,7 +365,9 @@ dispatched it, or refused it):
 | `submit` | In this device's draft: create one in its workspace with its launch settings and this first message. Idle session: send. Running: steer. Only the creating device changes view on adoption. | empty text; pending-open/create rules below |
 | `queue` | In this device's running session: queue a follow-up. Otherwise as `submit`. | as `submit` |
 | `cancel` | Interrupt the running turn, else cancel a running compaction, else nothing. | pending-create rule below |
-| `answer` | Approvals accept only `"allow"`, `"allow_session"`, or `"deny"`; choice prompts accept only an in-range row index. Goes through the local answer path, so session allowance is remembered. | no pending interaction or id differs (`"stale"`); wrong answer kind or index (`"bad_request"`), leaving the interaction untouched; pending-create rule below |
+| `compact` | `/compact`'s path: `session.compact` for this device's session. | a draft (`"No session"`); a running turn or a compaction under way (`"busy"`); pending-create rule below |
+| `unqueue` | Removes the queued follow-up at `index` of `state.queue` and sends its text back as `returned` to the requester only (never to the local composer). | the entry is not a follow-up (steers already sent cannot be taken back), is missing, or its text differs from `text`, and in a draft (`"stale"`); pending-create rule below |
+| `answer` | Approvals accept only `"allow"`, `"allow_session"`, or `"deny"`; choice prompts accept only an in-range row index. Goes through the local answer path, so session allowance is remembered. An optional `message` with `"deny"` is steered (`turn.steer`, as a running turn's Enter does, trailing whitespace trimmed) into the same turn right after `interaction.answer`, so the agent hears why. | no pending interaction or id differs (`"stale"`); wrong answer kind or index, or a `message` that is blank or beside anything but an approval's `"deny"` (`"bad_request"`), leaving the interaction untouched; pending-create rule below |
 | `load_older` | Load an older history page into this device's session transcript. | no session; pending-create rule below |
 | `open_session` | Change only this device's view: a live session switches at once (no `session.open`), another is opened and assigned on adoption. | unknown id; workspace outside `roots`; pending-open/create rules below |
 | `new_session` | Change only this device's view to a draft in `workspace` (default: its viewed workspace), with optional `profile` and that profile's/default settings; the next `submit` creates it. No empty session is created. | workspace relative, outside `roots`, missing or not a directory; unknown profile; pending-open/create rules below |

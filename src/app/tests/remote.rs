@@ -196,6 +196,165 @@ async fn answers_validate_prompt_kind_and_index_before_consuming_the_interaction
     }
 }
 
+/// A running turn `l1` in the foreground waiting on an approval or a choice.
+fn pending(h: &mut Harness, approval: bool) {
+    let session = h.app.session.as_mut().unwrap();
+    session.live = Some(crate::app::LiveTurn::new(
+        crate::protocol::TurnRef::new("s1", "l1"),
+        0,
+    ));
+    session.interaction = Some(crate::app::PendingInteraction {
+        turn: crate::protocol::TurnRef::new("s1", "l1"),
+        interaction_id: "interaction".into(),
+        tool_call_id: "call".into(),
+        tool_name: "bash".into(),
+        prompt: "choose".into(),
+        kind: if approval {
+            crate::app::InteractionKind::Approval
+        } else {
+            crate::app::InteractionKind::Choice(vec!["one".into(), "two".into()])
+        },
+        selected: 0,
+    });
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_deny_with_a_message_answers_first_then_steers_the_reason_into_the_same_turn() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.app.remote.url = Some("http://localhost:8765".into());
+    let (mut output, _closing, admission) = phone(&mut h, 1, "phone");
+    assert!(admission.await.unwrap());
+    pending(&mut h, true);
+    request(
+        &mut h,
+        json!({"kind":"answer", "interaction_id":"interaction", "choice":"deny", "message":"Use the staging bucket  "}),
+    );
+    assert_eq!(output.recv().await.unwrap()["ok"], true);
+    h.settle().await;
+    let methods: Vec<String> = h
+        .fake
+        .methods()
+        .into_iter()
+        .filter(|method| method == "interaction.answer" || method == "turn.steer")
+        .collect();
+    assert_eq!(methods, ["interaction.answer", "turn.steer"]);
+    assert_eq!(
+        h.calls("interaction.answer")[0]["answer"],
+        json!({"type":"approval", "decision":"deny"})
+    );
+    let steer = &h.calls("turn.steer")[0];
+    assert_eq!(
+        (&steer["loop_id"], &steer["text"]),
+        (&json!("l1"), &json!("Use the staging bucket"))
+    );
+
+    // A plain answer steers nothing; a message beside anything but a deny is refused untouched.
+    pending(&mut h, true);
+    request(
+        &mut h,
+        json!({"kind":"answer", "interaction_id":"interaction", "choice":"deny"}),
+    );
+    assert_eq!(output.recv().await.unwrap()["ok"], true);
+    for (approval, choice, message) in [
+        (true, json!("allow"), "why"),
+        (true, json!("allow_session"), "why"),
+        (true, json!("deny"), "  "),
+        (false, json!(1), "why"),
+    ] {
+        pending(&mut h, approval);
+        request(
+            &mut h,
+            json!({"kind":"answer", "interaction_id":"interaction", "choice":choice, "message":message}),
+        );
+        assert_eq!(output.recv().await.unwrap()["error"], "bad_request");
+        assert!(h.app.has_interaction());
+    }
+    h.settle().await;
+    assert_eq!(h.calls("interaction.answer").len(), 2);
+    assert_eq!(h.calls("turn.steer").len(), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn compact_runs_for_the_viewed_idle_session_and_is_refused_while_busy_or_in_a_draft() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.app.remote.url = Some("http://localhost:8765".into());
+    let (mut output, _closing, admission) = phone(&mut h, 1, "phone");
+    assert!(admission.await.unwrap());
+    let progress = || {
+        serde_json::from_value(json!({"operation_id":"auto-1", "phase":"summarizing", "covered_item_count":0, "retained_item_count":0})).unwrap()
+    };
+    for (live, compacting) in [(true, false), (false, true)] {
+        let session = h.app.session.as_mut().unwrap();
+        session.live = live.then(|| {
+            crate::app::LiveTurn::new(crate::protocol::TurnRef::new("s1", "l1"), 0)
+        });
+        session.compaction = compacting.then(progress);
+        request(&mut h, json!({"kind":"compact"}));
+        assert_eq!(output.recv().await.unwrap()["error"], "busy");
+    }
+    h.app.session.as_mut().unwrap().compaction = None;
+    request(&mut h, json!({"kind":"compact"}));
+    assert_eq!(output.recv().await.unwrap()["ok"], true);
+    h.settle().await;
+    let calls = h.calls("session.compact");
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0]["session_id"], "s1");
+
+    let mut draft = Harness::new();
+    draft.app.remote.url = Some("http://localhost:8765".into());
+    let (mut output, _closing, admission) = phone(&mut draft, 1, "phone");
+    assert!(admission.await.unwrap());
+    request(&mut draft, json!({"kind":"compact"}));
+    assert_eq!(output.recv().await.unwrap()["error"], "No session");
+    draft.settle().await;
+    assert!(draft.calls("session.compact").is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn unqueue_returns_a_matching_follow_up_only_to_its_requester() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.app.remote.url = Some("http://localhost:8765".into());
+    let (mut first, _close, admission) = phone(&mut h, 1, "first");
+    assert!(admission.await.unwrap());
+    let (mut second, _close2, admission) = phone(&mut h, 2, "second");
+    assert!(admission.await.unwrap());
+    let session = h.app.session.as_mut().unwrap();
+    session.live = Some(crate::app::LiveTurn::new(
+        crate::protocol::TurnRef::new("s1", "l1"),
+        0,
+    ));
+    session.queue.push(crate::app::Queued {
+        text: "steered".into(),
+        kind: crate::app::QueuedKind::Steer,
+        at: None,
+    });
+    session.push_follow_up("one".into());
+    session.push_follow_up("two".into());
+    for (index, text) in [(0, "steered"), (1, "two"), (3, "one")] {
+        request(&mut h, json!({"kind":"unqueue", "index":index, "text":text}));
+        assert_eq!(
+            messages(&mut first),
+            [json!({"t":"ack", "id":"request", "ok":false, "error":"stale"})]
+        );
+    }
+    assert_eq!(h.queue(), ["steered", "one", "two"]);
+    request_from(
+        &mut h,
+        2,
+        json!({"kind":"unqueue", "index":1, "text":"one"}),
+    );
+    assert_eq!(
+        messages(&mut second),
+        [
+            json!({"t":"returned", "text":"one"}),
+            json!({"t":"ack", "id":"request", "ok":true})
+        ]
+    );
+    assert!(messages(&mut first).is_empty());
+    assert_eq!(h.queue(), ["steered", "two"]);
+    assert!(h.app.composer.is_empty());
+}
+
 #[tokio::test(start_paused = true)]
 async fn queue_cancel_and_history_intents_use_the_existing_reducer_operations() {
     let mut h = Harness::opened(display_read(0, 0)).await;

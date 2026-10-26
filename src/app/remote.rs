@@ -5,7 +5,9 @@ use std::time::Duration;
 
 use serde_json::json;
 
-use super::{Action, Answer, App, LaunchSettings, Msg, NoticeLevel, Overlay, Session, tasks};
+use super::{
+    Action, Answer, App, LaunchSettings, Msg, NoticeLevel, Overlay, QueuedKind, Session, tasks,
+};
 use crate::protocol::{self, Reasoning};
 use crate::remote::{
     Bound, DraftSettings, NoticeTarget, Phone, PhoneView, RemoteEvent,
@@ -366,9 +368,31 @@ impl App {
                     self.escape();
                 }
             }
+            Intent::Compact => {
+                let session = self.session.as_ref().ok_or("No session")?;
+                if session.is_busy() || session.compacting() {
+                    return Err("busy".into());
+                }
+                self.compact();
+            }
+            Intent::Unqueue { index, text } => {
+                let session = self
+                    .session
+                    .as_mut()
+                    .filter(|session| {
+                        session.queue.get(index).is_some_and(|queued| {
+                            queued.kind == QueuedKind::Follow && queued.text == text
+                        })
+                    })
+                    .ok_or("stale")?;
+                session.queue.remove(index);
+                self.remote
+                    .send(Some(connection), json!({"t":"returned", "text":text}));
+            }
             Intent::Answer {
                 interaction_id,
                 choice,
+                message,
             } => {
                 let interaction = self
                     .session
@@ -390,7 +414,16 @@ impl App {
                     }
                     _ => return Err("bad_request".into()),
                 };
+                if message
+                    .as_ref()
+                    .is_some_and(|message| answer != Answer::Deny || message.trim().is_empty())
+                {
+                    return Err("bad_request".into());
+                }
                 self.answer(answer);
+                if let Some(message) = message {
+                    self.steer(message.trim_end().to_owned());
+                }
             }
             Intent::LoadOlder => {
                 if self.session.is_none() {

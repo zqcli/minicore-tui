@@ -209,7 +209,7 @@ impl App {
         );
     }
 
-    fn steer(&mut self, text: String) {
+    pub(super) fn steer(&mut self, text: String) {
         let Some(session) = self.session.as_mut() else {
             self.composer.restore_text(&text);
             return;
@@ -330,7 +330,7 @@ impl App {
         self.set_model(self.models[next].id.clone());
     }
 
-    fn compact(&mut self) {
+    pub(super) fn compact(&mut self) {
         let Some(session) = self.session.as_mut() else {
             return;
         };

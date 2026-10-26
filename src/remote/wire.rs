@@ -37,9 +37,17 @@ pub enum Intent {
         text: String,
     },
     Cancel,
+    Compact,
+    /// Takes back the queued follow-up at `index` of `state.queue` while it still reads `text`.
+    Unqueue {
+        index: usize,
+        text: String,
+    },
     Answer {
         interaction_id: String,
         choice: Choice,
+        /// Steered into the same turn after a deny, so the agent hears why.
+        message: Option<String>,
     },
     LoadOlder,
     OpenSession {
