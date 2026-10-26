@@ -45,6 +45,9 @@ pub fn dock(app: &App, styles: Styles, width: u16, height: u16) -> Dock {
         above.push(Line::default());
         above.push(line);
     }
+    if local && let Some(hint) = key_hint(app) {
+        above.push(padded(&hint, width, styles.faint()));
+    }
     if let Some(notice) = app.notices.back() {
         above.push(Line::default());
         above.push(notice_line(notice, styles, width));
@@ -111,31 +114,59 @@ fn padded(text: &str, width: u16, style: Style) -> Line<'static> {
     ])
 }
 
+/// Steers first (the Agent applies them first), then follow-ups numbered in send order.
 fn queued_rows(session: &Session, styles: Styles, width: u16) -> Vec<Line<'static>> {
-    // Steering messages are applied first, so they are listed first.
     let mut queue: Vec<_> = session.queue.iter().collect();
     queue.sort_by_key(|queued| queued.kind == QueuedKind::Follow);
+    let mut follow = 0;
     let mut rows: Vec<Line<'static>> = queue
         .into_iter()
         .take(QUEUE_ROWS)
         .map(|queued| {
-            let text = format!("{}: {}", queued.label(), queued.text);
-            padded(&text, width, styles.faint())
+            let label = match queued.kind {
+                QueuedKind::Steer => "↗ steer".to_owned(),
+                QueuedKind::Follow => {
+                    follow += 1;
+                    format!("↳ follow-up {follow}")
+                }
+            };
+            let room = usize::from(width).saturating_sub(wrap::width(&label) + 4);
+            let text = wrap::sanitize(&queued.text.replace('\n', " ")).into_owned();
+            Line::from(vec![
+                Span::raw(" "),
+                Span::styled(label, styles.meta()),
+                Span::raw("  "),
+                Span::styled(wrap::truncate(&text, room), styles.faint()),
+            ])
         })
         .collect();
     if session.queue.len() > QUEUE_ROWS {
         let more = format!("+{} more queued", session.queue.len() - QUEUE_ROWS);
         rows.push(padded(&more, width, styles.faint()));
     }
+    rows
+}
+
+/// The keys that act on the queue now: Enter steers and Tab queues while a
+/// draft waits, `alt+↑` takes follow-ups back.
+fn key_hint(app: &App) -> Option<String> {
+    let session = app.session.as_ref().filter(|_| !app.has_interaction())?;
+    let drafting = !app.composer.is_empty();
+    let mut keys = Vec::new();
+    if drafting && session.is_busy() {
+        keys.push("enter steer");
+    }
+    if drafting && (session.is_busy() || session.compacting()) {
+        keys.push("tab follow-up");
+    }
     if session
         .queue
         .iter()
         .any(|queued| queued.kind == QueuedKind::Follow)
     {
-        let hint = "↳ alt+up to edit the queued follow-ups";
-        rows.push(padded(hint, width, styles.faint()));
+        keys.push("alt+↑ edit queued");
     }
-    rows
+    (!keys.is_empty()).then(|| keys.join(" · "))
 }
 
 /// `⠋ Working (esc to interrupt) · Running bash … · request 3` while

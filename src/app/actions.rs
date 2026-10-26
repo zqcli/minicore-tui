@@ -21,7 +21,7 @@ const CONTEXT_EVERY: std::time::Duration = std::time::Duration::from_secs(2);
 pub enum Action {
     /// Enter: send when idle, steer when a turn runs.
     Submit,
-    /// Alt+Enter: queue a follow-up.
+    /// Tab or Alt+Enter: queue a follow-up.
     QueueFollowUp,
     OpenSession(String),
     NewSession,
@@ -161,7 +161,7 @@ impl App {
         self.submit_composer(false);
     }
 
-    /// Alt+Enter: queue a follow-up; when idle it just sends.
+    /// Tab or Alt+Enter: queue a follow-up; when idle it just sends.
     fn submit_follow_up(&mut self) {
         self.submit_composer(true);
     }

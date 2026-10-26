@@ -80,6 +80,10 @@ impl App {
         }
         match key.code {
             KeyCode::Enter if alt => return Some(Action::QueueFollowUp),
+            // Option is not Meta in most macOS terminals, so Alt+Enter needs a plain key.
+            KeyCode::Tab if !self.composer.is_empty() && (self.is_busy() || self.compacting()) => {
+                return Some(Action::QueueFollowUp);
+            }
             KeyCode::Enter if shift => self.composer.newline(),
             KeyCode::Enter => return self.submit_or_command(),
             KeyCode::Char('j') if ctrl => self.composer.newline(),

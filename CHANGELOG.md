@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- `Tab` queues a follow-up while a turn runs, so queueing no longer depends on
+  `Alt+Enter`, which most macOS terminals send as plain `Enter` (a steer). An open
+  completion list keeps `Tab`. The dock tells the two apart: `↗ steer  …` rows,
+  then `↳ follow-up 1  …` numbered in send order, and a hint row (`enter steer ·
+  tab follow-up`, `alt+↑ edit queued`) names the keys that act now.
 - Remote mode listens on the IPv6 loopback too: the default `bind` is
   `127.0.0.1:8765` and `[::1]:8765`, so `http://localhost:8765` works however
   `localhost` resolves. `[remote] bind` takes one address or a list, such as

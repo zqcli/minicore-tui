@@ -1,0 +1,20 @@
+   parse.
+
+ ▎ bash                                                          4.2s
+ ▎ $ cargo test --lib
+ ▎ ... (16 more lines, click or ctrl+o to expand)
+
+   completed in 12s · 2 requests · 1 tool · 2 files changed (+40 −7)
+
+  ↗ steer  focus on the parser first
+  ↳ follow-up 1  then update the docs
+  ↳ follow-up 2  and the changelog
+
+  ⠋ Working (esc to interrupt) · Running bash cargo test --workspace
+  enter steer · tab follow-up · alt+↑ edit queued
+
+ ▎
+ ▎one more thing
+ ▎
+ ▎
+ ▸ minicore-tui · gpt 6 luna · max · 0m · queued

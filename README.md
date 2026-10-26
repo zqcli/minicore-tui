@@ -128,7 +128,7 @@ history is `history.jsonl` in the TUI directory.
 
  transcript (scrollable, 1-column gutter, ▎ rails)
  …
- Follow-up: also update the README
+ ↳ follow-up 1  also update the README
  ⠋ Working (esc to interrupt) · Thinking · 1m12s · request 7 · 12 tools
 
  ▎ editor band (4–12 rows; the / and @ lists open inside it)
@@ -138,7 +138,8 @@ history is `history.jsonl` in the TUI directory.
 The look follows pi-rail-ui. While something is in flight a Working line sits
 above the editor with the phase (`Thinking`, `Running <tool> <detail>`,
 `Waiting for approval`, `Compacting context`, …), elapsed time, request and
-tool counts. Queued messages show as `Steering:` / `Follow-up:` rows above it.
+tool counts. Queued messages show as `↗ steer` / `↳ follow-up N` rows above it, with a hint
+for the keys that act on them.
 The latest notice is a railed line in the band: info fades after 5 seconds,
 errors stay until the next key press.
 
@@ -175,8 +176,8 @@ without a report. The TUI never estimates it.
   commands that read a session (`/compact`, `/context`, `/diff`,
   `/rename`, `/export`, `/copy`, `/session`) and the `@` file picker say
   `No session yet: send a message first`.
-- **Steering and queue.** `Enter` while a turn runs steers it; `Alt+Enter` queues
-  a follow-up sent after the turn; `Alt+↑` takes the queued follow-ups back.
+- **Steering and queue.** `Enter` while a turn runs steers it; `Tab` (or `Alt+Enter`)
+  queues a follow-up sent after the turn; `Alt+↑` takes the queued follow-ups back.
   `Esc` interrupts. A message sent while a compaction after a turn is
   running waits in the queue and is sent when the session is idle.
 - **Compaction** shows as a status phase and leaves a `[compaction]` box with
@@ -236,7 +237,7 @@ machine and answers its approvals: keep the password to yourself, change it with
 
 The complete map is [docs/keybindings.md](docs/keybindings.md). The essentials:
 
-- `Enter` send or steer, `Alt+Enter` follow-up, `Shift+Enter` / `Ctrl+J` newline,
+- `Enter` send or steer, `Tab` follow-up, `Shift+Enter` / `Ctrl+J` newline,
   `Esc` interrupt (idle: clear the draft), `Ctrl+C` clear / quit, `Ctrl+D` quit;
 - `Ctrl+R` sessions, `Ctrl+L` model, `Shift+Tab` reasoning, `Ctrl+O` tool cards,
   `Ctrl+T` reasoning text, `Ctrl+F` find, `F1` help;

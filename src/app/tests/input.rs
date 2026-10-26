@@ -129,6 +129,68 @@ async fn follow_ups_queue_behind_a_running_turn_and_alt_up_recalls_the_newest() 
 }
 
 #[tokio::test(start_paused = true)]
+async fn tab_queues_a_follow_up_while_a_turn_runs_like_alt_enter() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.fake.script("turn.send", json!({"turn": turn("l1")}));
+    h.fake.script_held("turn.wait", waited("l1", completed()));
+    h.submit("start");
+    h.until(|app| app.is_busy()).await;
+
+    h.press(KeyCode::Tab);
+    assert!(h.queue().is_empty(), "an empty draft queues nothing");
+
+    h.type_text("by tab");
+    h.press(KeyCode::Tab);
+    h.type_text("by alt enter");
+    h.key(KeyCode::Enter, KeyModifiers::ALT);
+    assert_eq!(h.queue(), ["by tab", "by alt enter"]);
+    assert_eq!(h.app.composer.text(), "");
+    assert!(
+        h.calls("turn.steer").is_empty(),
+        "a follow-up is not a steer"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn tab_with_a_completion_list_open_completes_instead_of_queueing() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.fake.script("turn.send", json!({"turn": turn("l1")}));
+    h.fake.script_held("turn.wait", waited("l1", completed()));
+    h.submit("start");
+    h.until(|app| app.is_busy()).await;
+
+    h.type_text("/mode");
+    h.press(KeyCode::Tab);
+    assert_eq!(h.app.composer.text(), "/model ");
+    assert!(h.queue().is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn tab_does_nothing_in_an_idle_session() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.type_text("draft");
+    h.press(KeyCode::Tab);
+    assert_eq!(h.app.composer.text(), "draft");
+    assert!(h.sends().is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn tab_asks_to_queue_during_a_compaction() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.emit(
+        "session_state",
+        json!({"state": {"session_id": "s1", "status": "idle",
+                         "compaction": {"operation_id": "auto-l1", "phase": "summarizing",
+                                        "covered_item_count": 8, "retained_item_count": 2}}}),
+    )
+    .await;
+    h.until(|app| app.compacting()).await;
+    h.type_text("later");
+    let key = crossterm::event::KeyEvent::from(KeyCode::Tab);
+    assert_eq!(h.app.on_key(key), Some(crate::app::Action::QueueFollowUp));
+}
+
+#[tokio::test(start_paused = true)]
 async fn ctrl_c_clears_a_draft_and_a_second_press_within_half_a_second_quits() {
     let mut h = Harness::opened(display_read(0, 0)).await;
     h.type_text("x");

@@ -8,18 +8,27 @@ press clears the notices.
 `Shift+Enter` and `Alt+Enter` are distinct keys only in terminals that support
 the kitty keyboard protocol; `Ctrl+J` always inserts a newline.
 
+A steer and a follow-up are different: a steer (`Enter` while busy) goes to the
+running turn and is applied at its next step; a follow-up (`Tab`) waits for the
+turn to end and starts the next one. The dock above the editor lists them,
+steers first as `↗ steer  <text>`, then `↳ follow-up 1  <text>` numbered in send
+order, three rows and `+N more queued`. A hint row under the Working line names
+the keys that act now: `enter steer · tab follow-up` while a draft waits during
+a turn, and `alt+↑ edit queued` while follow-ups exist.
+
 ## Composer
 
 | Key | Action |
 |---|---|
 | `Enter` | Send when the session is idle; steer the running turn when it is busy. A draft whose first word names a command (`/model`, `/rename x`) or a prompt template runs it. A bare `/word` that names nothing (`/modle`) is not sent: a notice offers the nearest command, and a second `Enter` (or a leading `//`, which sends the rest) sends it as text. Any other draft, `/usr/bin/env is broken` and `/usr/bin` included, is a prompt. |
-| `Alt+Enter` | Queue the draft as a follow-up while a turn runs; send it when idle. |
+| `Tab` | While a turn runs or a compaction is under way, queue the draft as a follow-up: it is sent when the session is idle, one per turn, oldest first. An open command or `@` list keeps `Tab` for completion. With no draft, or when idle, it does nothing. |
+| `Alt+Enter` | The same as `Tab`, and it also sends the draft when idle. Most macOS terminals do not send Option as Meta, so there `Alt+Enter` arrives as plain `Enter`; use `Tab`. |
 | `Shift+Enter`, `Ctrl+J` | Newline. |
 | `Esc` | Close an open picker or view first; in the editor, cancel an active selection before interrupting a turn, cancelling a compaction or clearing the draft. |
 | `Ctrl+C` | Copy the editor selection when one exists; otherwise clear the draft, with a second press within 500 ms quitting. |
 | `Ctrl+D` | Quit when the draft is empty; otherwise delete the character after the cursor. |
 | `↑` / `↓` | Move between lines of a multi-line draft; on the first or last line, browse prompt history. The last 100 prompts, paste chips included, are kept in `history.jsonl` in the TUI directory and survive a restart; a prompt over 32 KiB stays in memory only. |
-| `Alt+↑` | Take the queued follow-ups back into an empty draft, separated by blank lines. |
+| `Alt+↑` | Take the queued follow-ups back into an empty draft, separated by blank lines. A steer cannot be taken back. |
 | `Ctrl+X` | Cut the editor selection when one exists; otherwise copy the last assistant answer, as `/copy` does. |
 | `Ctrl+G` | Edit the draft in `[ui] editor` from `config.toml`, else `$VISUAL`, else `$EDITOR`. |
 | `/` at the start of the draft | Open the command palette. `Enter` runs the highlighted command; with no match it sends the line as a prompt. |

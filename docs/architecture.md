@@ -402,7 +402,7 @@ unknown, and the line then shows only `N files changed`, never a zero.
 
 Steering: `Enter` while busy queues a `Steer` entry and calls `turn.steer`;
 `steer_progress` moves applied steers into the transcript. Refused or unapplied
-steers become follow-ups, which `Alt+Enter` also queues locally and `Alt+↑` takes
+steers become follow-ups, which `Tab` (or `Alt+Enter`) also queues locally and `Alt+↑` takes
 back into an empty draft, all of them, joined by blank lines. The first prompt
 of an untitled session becomes its title through `session.rename`.
 

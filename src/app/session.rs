@@ -150,15 +150,6 @@ pub enum QueuedKind {
     Follow,
 }
 
-impl Queued {
-    pub fn label(&self) -> &'static str {
-        match self.kind {
-            QueuedKind::Steer => "Steering",
-            QueuedKind::Follow => "Follow-up",
-        }
-    }
-}
-
 pub struct PendingInteraction {
     pub turn: TurnRef,
     pub interaction_id: String,
