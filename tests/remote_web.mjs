@@ -827,6 +827,9 @@ test('the queue shows follow-ups numbered in order, waiting steers, and the firs
   assert.deepEqual([all.hidden, all.long], [0, true]);
   assert.deepEqual(plain(MC.queueView(q.slice(0, 3), false)), { items: plain(MC.queueView(q.slice(0, 3), true)).items, hidden: 0, long: false });
   assert.deepEqual(plain(MC.queueView([], false)), { items: [], hidden: 0, long: false });
+  // A steer sent after a follow-up is still listed first and keeps its wire index.
+  const mixed = plain(MC.queueView([{ kind: 'follow', text: 'a' }, { kind: 'steer', text: 'b' }, { kind: 'follow', text: 'c' }], true));
+  assert.deepEqual(mixed.items.map(x => [x.kind, x.index, x.n]), [['steer', 1, 0], ['follow', 0, 1], ['follow', 2, 2]]);
 });
 
 test('the thinking preview is the newest sentence without Markdown markers', () => {
