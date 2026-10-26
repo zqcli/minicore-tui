@@ -22,7 +22,8 @@ the v2 additions below.
   one-line rows and fold away when a turn ends; approvals, failures and
   sessions that need you stand out by shape and colour.
 - **Safe by construction.** Nothing approves by focus or a stray key; Stop is
-  always one tap away while anything runs; destructive actions confirm.
+  always reachable while anything runs but needs a second, deliberate tap;
+  destructive actions confirm.
 - **Fewer boxes, clear type.** Flat assistant text, tinted user bubbles, ruled
   tool rows, cards only for approvals and summaries.
 - **Phone first, then iPad and desktop**, which get a persistent sidebar and
@@ -108,7 +109,8 @@ inputs change (no whole-region re-renders on every `state`). Budget: at most
   Footer is one line: connection dot + device name, other devices count.
 - **Settings** (full-screen sheet): Appearance (System/Light/Dark), text size
   (4 steps), wrap code by default, show thinking expanded, Enter sends (for
-  hardware keyboards; default off on touch), keep screen awake while a turn
+  hardware keyboards; on by default for a fine pointer with hover, off on touch,
+  and stored only once chosen), keep screen awake while a turn
   runs (Wake Lock), notifications while this page is open (Notification API
   through the service worker, only where supported, asked on first use),
   connected devices with what each views, host and version (`welcome.version`),
@@ -131,16 +133,34 @@ inputs change (no whole-region re-renders on every `state`). Budget: at most
   (↗ icon). Both labels show at every width; the model chip drops its effort
   and truncates in the middle to make room. Hover devices get tooltips with
   the shortcuts.
-- **Stop** is a separate, always visible button while a turn runs or
-  compaction is under way (in the status strip above the composer, ≥ 44 px),
-  never in the send position. Esc stops on hardware keyboards.
+- **Stop** is a compact ghost chip (red outline and text, no fill, 32 px tall
+  inside a 40 px hit area) in the status strip next to the activity label
+  ("Thinking 15s ■ Stop"), on the left half and away from the right-hand
+  targets: the context % stays right, the queue ✕ and Steer/Send sit below with
+  at least 12 px between. It shows while a turn runs or a compaction is under
+  way, never in the send position. Stopping is deliberate:
+  - The first activation arms it: it turns into a filled red pill, "Tap again
+    to stop" ("Click again to stop" on hover devices), with a 3 s underline
+    that drains; a second activation within 3 s stops. After 3 s, on any other
+    tap or key, on scrolling, or when the turn ends, it disarms. Arming is
+    announced through the `aria-live` region.
+  - **Esc** (no sheet or list open) arms the same chip as "Esc again to stop";
+    a second Esc within 3 s stops. The TUI keeps its single Esc.
+  - Ghost taps are ignored: activations within 500 ms after the chip appeared
+    or moved (for example right after sending, when the strip first shows) and
+    pointer gestures that travelled more than 10 px (a scroll).
+  - While stopping it reads "Stopping…" with a spinner and is disabled; it goes
+    away when the turn ends. Cancelling a compaction uses the same chip.
+  The logic is `MC.stopArm(state, event, now)`.
 - **Steer** sends the text into the running turn (`submit`; the agent reads it
   after the current step); **Queue** sends a follow-up (`queue`; sent when the
   turn ends). Hardware keys mirror the TUI: Enter (with "Enter sends") or
-  Cmd/Ctrl+Enter steers while busy and sends when idle; **Tab** or **Alt+Enter**
-  queue while busy with text typed and no `/` or `@` list open (the list keeps
-  Tab and Enter for completion). The placeholder says so ("Steer the agent… ·
-  Tab to queue a follow-up").
+  Cmd/Ctrl+Enter steers while busy and sends when idle; **Alt+Enter**
+  (Option+Enter on macOS; browsers report it, so no settings are needed) queues
+  while busy with text typed and no `/` or `@` list open (the list keeps Tab and
+  Enter for completion). Tab is plain browser focus navigation, Shift+Enter adds
+  a line. The placeholder and button tooltips say so ("Enter to steer ·
+  ⌥Enter to queue", Alt+Enter off Apple platforms).
 - `/` at the start opens a filtered command list: built-ins handled by the
   client (`/new`, `/model`, `/rename`, `/compact`, `/context`, `/changes`,
   `/export`, `/settings`) and `state.commands` templates (sent as text, the
@@ -271,8 +291,8 @@ share one column (780 px, 860 px from 1700 px) centred beside the sidebar, with
 the title left-aligned to it. Desktop pointers get hover states, tooltips from
 the buttons' labels and thin themed scrollbars; tables wider than the column
 scroll instead of breaking words. Shortcuts:
-Esc stop (or close the top sheet), Cmd/Ctrl+K command list, Cmd/Ctrl+Enter
-send or steer (Enter does when the setting is on; Tab or Alt+Enter queue),
+Esc close the top sheet (twice to stop the turn), Cmd/Ctrl+K command list,
+Cmd/Ctrl+Enter send or steer (Enter does when the setting is on; Alt+Enter queues),
 Cmd/Ctrl+F find, Alt+↑/↓ previous/next session, `?` shortcut help.
 
 ## Kept from v1

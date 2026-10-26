@@ -3,12 +3,18 @@
 ## Unreleased
 
 - In the web client, a running turn with text typed shows separate Queue and
-  Steer buttons instead of a mode toggle; `Tab` or `Alt+Enter` queues and
-  `Enter`/`Cmd+Enter` steers, like the TUI. Queued follow-ups are numbered and
+  Steer buttons instead of a mode toggle; `Alt+Enter` (Option+Enter on macOS)
+  queues and `Enter`/`Cmd+Enter` steers, like the TUI, and `Tab` is ordinary
+  focus navigation. "Enter sends" now defaults to on for a mouse and keyboard
+  and off on touch devices. Queued follow-ups are numbered and
   listed after pending steers. Collapsed thinking keeps its newest sentence on a
   line under the header that moves up as the agent thinks. On desktop the
   transcript, composer and title share one centred column beside the sidebar,
   with side panels for changes and output, hover states and thin scrollbars.
+- Stopping a turn from the web client is deliberate: Stop is a small outlined
+  chip next to "Thinking 15s", away from Steer and the queue's ✕. A tap arms it
+  ("Tap again to stop", three seconds), a second tap stops, and `Esc` twice does
+  the same; taps right after it appears or moves, and scrolls, are ignored.
 - On Windows the phone's folder picker can browse whole drives: list them in
   `[remote] roots`, for example `roots = ['C:\', 'D:\']` (single quotes in TOML),
   and the picker's Roots level switches between them. `C:`, `C:/` and `c:\` all
