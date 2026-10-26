@@ -407,6 +407,17 @@ html.kb #dock{padding-bottom:6px}
 .sbody>.serr{margin-bottom:8px}
 .sfoot.col{flex-direction:column}
 .shead .ahead{flex:1;padding:0}
+/* changes, context */
+.st{flex:none;width:22px;height:22px;border-radius:6px;display:grid;place-items:center;font:600 var(--t12) var(--mono);background:var(--fill2);color:var(--tx2)}
+.st.ok{background:var(--oks);color:var(--ok)}.st.er{background:var(--ers);color:var(--er)}
+.ic.flip{transform:scaleX(-1)}
+.cbar{display:flex;align-items:baseline;gap:10px;margin:4px 0 10px}
+.cbar b{font-size:var(--t22);font-weight:600}
+.cbar span{color:var(--tx3);font-size:var(--t14)}
+.meter{position:relative;height:10px;border-radius:5px;background:var(--fill2)}
+.meter i{position:absolute;left:0;top:0;bottom:0;border-radius:5px;background:var(--ac)}
+.meter em{position:absolute;top:-4px;bottom:-4px;width:2px;margin-left:-1px;background:var(--wac)}
+.meter em.t{background:var(--ok)}
 /* approvals */
 .ahead{display:flex;gap:12px;align-items:flex-start;padding:4px 8px 10px 20px}
 .ahead .eicon{flex:none;width:40px;height:40px;border-radius:12px;margin:0;background:var(--was);color:var(--wa)}
@@ -1018,6 +1029,37 @@ globalThis.MC = (() => {
   // Commands and paths are not prose: no autocorrect while the text starts with one.
   const literal = text => /^[/@]/.test(text);
 
+  // ---- changes, context, export ----
+  const STATUS = { added: ['A', 'ok'], modified: ['M', ''], deleted: ['D', 'er'], renamed: ['R', ''], conflict: ['!', 'er'], unknown: ['?', ''] };
+  const changeStatus = s => STATUS[s] || STATUS.unknown;
+  // The context reply as a bar and rows; the reply's optional parts show only when present.
+  function contextView(d) {
+    const pct = v => v == null || !d.window ? null : Math.min(100, v / d.window * 100);
+    const c = d.coverage, l = d.last_compaction;
+    return {
+      percent: d.percent, used: fmtTok(d.tokens) + ' of ' + fmtTok(d.window) + ' tokens', trigger: pct(d.trigger_tokens), target: pct(d.target_tokens),
+      rows: [
+        d.history_tokens != null && ['History', fmtTok(d.history_tokens) + ' tokens'],
+        d.trigger_tokens != null && ['Compacts at', fmtTok(d.trigger_tokens) + (d.target_tokens != null ? ' → ' + fmtTok(d.target_tokens) : '')],
+        c && ['Covers', plural(c.turns, 'turn') + ' · ' + plural(c.items, 'item') + ' · ' + c.kept + ' kept'],
+        l && ['Last compaction', cap(l.origin) + ' · ' + l.status + (l.before != null ? ' · ' + fmtTok(l.before) + ' → ' + fmtTok(l.after) : '')],
+      ].filter(Boolean),
+      failure: d.failure || '', compacting: !!d.compacting,
+    };
+  }
+  // The loaded transcript as Markdown: messages, answers, one line per tool and the turn-end lines.
+  function exportMd(state, blocks) {
+    const s = state.session, out = ['# ' + (s.title || 'Untitled session'), '', '`' + s.workspace + '`' + (s.model ? ' · ' + s.model : ''), ''];
+    for (const b of blocks) {
+      if (b.type === 'user') out.push(b.kind === 'steering' ? '**You (steer):** ' + b.text : '## You\n\n' + b.text, '');
+      else if (b.type === 'assistant' && b.text) out.push(b.text, '');
+      else if (b.type === 'tool') { const f = toolInfo(b); out.push('- ' + f.verb + ' `' + f.target + '`' + (f.exit ? ' (' + f.exit + ')' : f.note ? ' (' + f.note + ')' : ''), ''); }
+      else if (b.type === 'turn_end') out.push('_' + turnEnd(b, null, 0).parts.join(' · ') + '_', '');
+      else if (b.type === 'compaction') out.push('_' + compactionText(b) + '_', '');
+    }
+    return out.join('\n').replace(/\n{3,}/g, '\n\n').trim() + '\n';
+  }
+
   function recentWorkspaces(sessions, max = 6) {
     const out = [];
     for (const x of sessions) if (!out.includes(x.workspace) && out.push(x.workspace) >= max) break;
@@ -1149,7 +1191,7 @@ globalThis.MC = (() => {
     clock, stamp, relTime, dayGroup, sessionLayout, matchSession, fmtElapsed, fmtDur, fmtTok, fmtNum,
     groupTools, foldTurns, findBlocks, foldText, mdInc,
     toolKind, toolInfo, parseDiff, diffStats, liveBlock, turnEnd, changesText, compactionText, statusLine, canStop, approvalKey, approvalTitle, approvalOptions, approvalBody,
-    BUILTINS, slashMenu, parseSlash, atToken, insertMention, pushRecent, literal,
+    changeStatus, contextView, exportMd, BUILTINS, slashMenu, parseSlash, atToken, insertMention, pushRecent, literal,
     splitPath, within, crumbs, tilde, recentWorkspaces, sessionTransitions, noticeEvent, attentionCount, inline, parseMd, parseLines, SAFE_URL,
   };
 })();
@@ -1770,8 +1812,12 @@ function onNotice(n) {
   // The state carrying the same event can arrive just after its notice.
   if (!seen()) setTimeout(() => { if (!seen()) toast(n.text.replace(/ · ctrl\+r$/, ''), n.level); }, 1500);
 }
-// Phase 5 replaces this with service-worker notifications.
-function notify() {}
+// While the page is hidden: approvals and finished turns through the service worker, which brings the app back.
+function notify(text, id) {
+  if (!document.hidden || !prefs.notify || typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+  navigator.serviceWorker.ready.then(r => r.showNotification('MiniCore', { body: text, tag: id || 'minicore', data: { session: id }, icon: '/icon-192.png' }));
+}
+if ('serviceWorker' in navigator) navigator.serviceWorker.addEventListener('message', e => { const id = e.data && e.data.open; if (id && S.state && id !== S.sid) openLive(id); });
 
 // ---- state ----
 let tick = 0;
@@ -1792,7 +1838,13 @@ function renderState() {
   const s = S.state;
   for (const id of failed) if (s.sessions.some(x => x.id === id && x.current)) failed.delete(id);
   renderBar(); renderBanners(); renderNav(); renderDock(); syncApproval();
-  if (!!s.status.busy !== wasBusy) { wasBusy = !!s.status.busy; announce(wasBusy ? 'Working' : 'Turn ended'); schedule(); }
+  if (!!s.status.busy !== wasBusy) {
+    wasBusy = !!s.status.busy;
+    announce(wasBusy ? 'Working' : 'Turn ended');
+    if (!wasBusy && s.session) notify('“' + (s.session.title || 'Untitled session') + '” finished', s.session.id);
+    schedule();
+  }
+  syncWake();
   renderTop(); renderEmpty(); refreshSheets(); renderAttention(); syncTick();
 }
 
@@ -1918,8 +1970,13 @@ function onPrefs(k) {
   if (k === 'wrap' || k === 'thinking') redrawAll();
   if (k === 'wake') syncWake();
 }
-// Phase 5 fills this in.
-function syncWake() {}
+// The screen stays on while this view's turn runs and the page is visible, when the setting asks for it.
+let wakeLock = null;
+function syncWake() {
+  const want = prefs.wake && !!S.state && !!(st().busy || st().compacting) && !document.hidden && 'wakeLock' in navigator;
+  if (want && !wakeLock) { wakeLock = 1; navigator.wakeLock.request('screen').then(l => { wakeLock = l; if (!prefs.wake) syncWake(); }, () => { wakeLock = null; }); }
+  else if (!want && wakeLock && wakeLock.release) { wakeLock.release(); wakeLock = null; }
+}
 
 // ---- session menu, info, rename, delete ----
 function sessionActions(id) {
@@ -1976,7 +2033,9 @@ function openSessionMenu() {
 }
 function menuRows(row) {
   const s = S.state.session;
-  return [row('edit', 'Rename', () => rename(s.id)), row('search', 'Find in session', openFind), row('info', 'Session info', openInfo), row('copy', 'Copy session id', () => copyText(s.id))];
+  return [row('edit', 'Rename', () => rename(s.id)), row('diff', 'Changes', openChanges), row('gauge', 'Context', openContext), row('layers', 'Compact now', () => compactNow()),
+    row('search', 'Find in session', openFind), row('info', 'Session info', openInfo), row('copy', 'Copy session id', () => copyText(s.id)), row('share', 'Share or export', exportSession),
+    row('trash', 'Delete session', () => remove(s.id), 'bad')];
 }
 function openInfo() {
   const s = S.state.session;
@@ -2632,6 +2691,7 @@ function syncApproval() {
     const t = [...S.blocks].reverse().find(b => b.type === 'tool' && b.state === 'pending');
     ap.call = t ? t.call_id : null;
     announce(a.kind === 'approval' ? 'Approval needed' : 'Question: ' + (a.prompt || ''));
+    notify(a.kind === 'approval' ? 'Approval needed: ' + MC.approvalTitle(a).text + ' ' + (MC.approvalTitle(a).code || '') : a.prompt || 'A question is waiting', S.sid);
     if (!m) openApproval(a);
   }
   renderApprBar();
@@ -2714,8 +2774,60 @@ document.addEventListener('keydown', e => {
 });
 
 // Later phases fill these in.
-function openChanges() { toast('Changes are not available yet'); }
-function openContext() { toast('Context is not available yet'); }
+// Changes: the workspace's changed files, then one file's diff in the same panel; pull down or ↻ to refresh.
+function openChanges() {
+  const c = { files: null, branch: null, truncated: false, err: '', path: null, diff: null, wrap: prefs.wrap, busy: false };
+  const load = () => { c.busy = true; c.err = ''; m.refresh(); ask(MC.queries.changes(), r => { c.busy = false; if (r.ok) Object.assign(c, r.data); else c.err = MC.errorText(r.error); m.refresh(); }); };
+  const file = path => { c.path = path; c.diff = null; c.err = ''; m.refresh(); ask(MC.queries.diff(path), r => { if (c.path !== path) return; if (r.ok) c.diff = r.data; else c.err = MC.errorText(r.error); m.refresh(); }); };
+  const back = h('button', { class: 'ib', type: 'button', 'aria-label': 'All changes', onclick: () => { c.path = null; m.refresh(); } }, icon('chev', 'flip'));
+  const m = sheet({
+    key: 'changes', cls: 'full', side: true, deps: () => [c, online()],
+    head: hid => [c.path && back, h('h2', { id: hid }, c.path ? h('span', 'mono', MC.basename(c.path)) : 'Changes',
+      h('span', 'sub2', c.path ? c.path : [c.branch, c.files && MC.plural(c.files.length, 'file')].filter(Boolean).join(' · '))),
+      !c.path && h('button', { class: 'ib', type: 'button', 'aria-label': 'Refresh', disabled: c.busy, onclick: load }, c.busy ? spin() : icon('retry'))],
+    body: () => {
+      if (c.err) return h('div', { class: 'serr', role: 'alert' }, icon('warn', 'sm'), h('span', '', c.err));
+      if (c.path) return c.diff ? [h('div', 'tbar', h('button', { type: 'button', 'aria-pressed': String(c.wrap), onclick: () => { c.wrap = !c.wrap; m.refresh(); } }, icon('wrap', 'xs'), 'Wrap'),
+        c.diff.truncated && h('span', 'hint', 'Diff truncated')), diffView(MC.parseDiff(c.diff.lines.join('\n')).map(f => ({ ...f, path: f.path || c.path })), { wrap: c.wrap })] : h('div', 'loadrow', spin(), 'Loading diff…');
+      if (!c.files) return h('div', 'loadrow', spin(), 'Loading changes…');
+      if (!c.files.length) return h('div', 'muted', 'No changes in this workspace');
+      return [h('div', 'list', c.files.map(f => { const [l, cls] = MC.changeStatus(f.status), dir = f.path.slice(0, -MC.basename(f.path).length);
+        return h('button', { class: 'row flat', type: 'button', 'data-k': f.path, 'aria-label': f.status + ' ' + f.path, onclick: () => file(f.path) }, h('span', 'st ' + cls, l),
+          h('span', 'rt', h('span', 'rm mono', MC.basename(f.path)), dir && h('span', 'rs', dir)), icon('chev', 'sm ri')); })),
+        c.truncated && h('p', { class: 'hint', style: 'margin-top:8px' }, 'Only the first 200 files are listed.')];
+    },
+  });
+  pull(m, () => { if (!c.path) load(); });
+  load();
+}
+// Pull down at the top of a sheet to refresh it.
+function pull(m, fn) {
+  const b = m.el.querySelector('.sbody');
+  let y0 = null;
+  b.addEventListener('touchstart', e => { y0 = b.scrollTop <= 0 ? e.touches[0].clientY : null; }, { passive: true });
+  b.addEventListener('touchend', e => { if (y0 != null && e.changedTouches[0].clientY - y0 > 80) fn(); y0 = null; });
+}
+// Context: how full it is, when it compacts, and Compact now.
+function openContext() {
+  const c = { d: null, err: '' };
+  const load = () => ask(MC.queries.context(), r => { if (r.ok) c.d = r.data; else c.err = MC.errorText(r.error); m.refresh(); });
+  const m = sheet({
+    key: 'context', side: true, title: 'Context', deps: () => [c, st().busy, st().compacting, online()],
+    body: () => {
+      if (c.err) return h('div', { class: 'serr', role: 'alert' }, icon('warn', 'sm'), h('span', '', c.err));
+      if (!c.d) return h('div', 'loadrow', spin(), 'Loading…');
+      const x = MC.contextView(c.d);
+      return [h('div', 'cbar', h('b', '', Math.round(x.percent) + '%'), h('span', '', x.used)),
+        h('div', { class: 'meter', role: 'meter', 'aria-valuenow': String(Math.round(x.percent)), 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-label': 'Context used' },
+          h('i', { style: 'width:' + x.percent + '%' + (x.percent >= 80 ? ';background:var(--wac)' : '') }), x.trigger != null && h('em', { style: 'left:' + x.trigger + '%', title: 'Compacts here' }), x.target != null && h('em', { class: 't', style: 'left:' + x.target + '%', title: 'Compacts down to here' })),
+        h('dl', { class: 'kv', style: 'margin-top:16px' }, x.rows.map(([k, val]) => [h('dt', '', k), h('dd', '', val)])),
+        x.failure && h('div', { class: 'serr', style: 'margin-top:12px' }, icon('warn', 'sm'), h('span', '', x.failure))];
+    },
+    foot: () => h('button', { class: 'btn block', type: 'button', disabled: !online() || st().busy || st().compacting, onclick: () => compactNow(() => { c.d = null; setTimeout(load, 2000); m.refresh(); }) },
+      st().compacting ? [spin(), 'Compacting…'] : [icon('layers', 'sm'), 'Compact now']),
+  });
+  load();
+}
 // The full-screen output viewer: the tail first, wrap and copy, and the whole output paged in through tool_output.
 function openOutput(b) {
   const f = MC.toolInfo(b), out = b.output, total = b.output_lines != null ? b.output_lines : out.length + b.output_dropped;
@@ -2745,8 +2857,11 @@ function loadFull(b, o, m) {
   });
   next();
 }
-function compactNow() {}
-function exportSession() {}
+function compactNow(done) {
+  confirmSheet({ title: 'Compact the context now?', text: 'MiniCore summarises earlier turns to free context. The transcript stays as it is.', label: 'Compact', needsOnline: true,
+    ok: m => { m.close(true); intent(MC.intents.compact(), a => { if (!a.ok) toast(MC.errorText(a.error), 'error'); else if (done) done(); }); } });
+}
+function exportSession() { share(S.state.session.title || 'MiniCore session', MC.exportMd(S.state, S.blocks)); }
 // Find in the loaded transcript: matches are highlighted in place (CSS highlights), folds holding one open.
 const fd = { on: false, q: '', ranges: [], k: 0 };
 let findT = 0;
@@ -2806,7 +2921,7 @@ function paintFind() {
 function openHelp() {}
 
 // ---- lifecycle ----
-document.addEventListener('visibilitychange', () => { if (document.hidden) hiddenAt = Date.now(); else wake(Date.now() - hiddenAt > 10000); });
+document.addEventListener('visibilitychange', () => { if (document.hidden) hiddenAt = Date.now(); else wake(Date.now() - hiddenAt > 10000); syncWake(); });
 // A page restored from the back/forward cache lost its socket; focus catches resumes that fire no visibility change.
 addEventListener('pageshow', e => { if (e.persisted) wake(true); });
 addEventListener('focus', () => wake(false));

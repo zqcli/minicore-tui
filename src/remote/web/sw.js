@@ -27,3 +27,14 @@ addEventListener('fetch', e => {
     return cached().then(c => c || r);
   }, () => cached().then(c => c || Response.error())));
 });
+// A notification tap focuses the app (opening it if needed) and asks it to show that session.
+addEventListener('notificationclick', e => {
+  e.notification.close();
+  const id = e.notification.data && e.notification.data.session;
+  e.waitUntil(clients.matchAll({ type: 'window' }).then(list => {
+    const c = list[0];
+    if (!c) return clients.openWindow('/');
+    c.postMessage({ open: id });
+    return c.focus();
+  }));
+});
