@@ -287,7 +287,10 @@ pre{margin:0;font-size:var(--t13);line-height:1.5;tab-size:4}
 .tk .cv{transition:transform var(--fast)}
 .tk[aria-expanded=true] .cv{transform:rotate(90deg)}
 .rsn{font-size:var(--t14);line-height:1.55;color:var(--tx3);white-space:pre-wrap;overflow-wrap:anywhere;padding-left:12px;border-left:2px solid var(--line);margin:4px 0 0 7px}
-.rsn.peek{max-height:calc(1.55em * 3);overflow:hidden;display:flex;flex-direction:column;justify-content:flex-end;-webkit-mask-image:linear-gradient(transparent,#000 60%);mask-image:linear-gradient(transparent,#000 60%)}
+.tp{height:20px;margin-left:20px;overflow:hidden;font-size:var(--t13);color:var(--tx3);cursor:pointer}
+.tp span{display:block;line-height:20px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tp span.up{animation:tick .18s var(--ease)}
+@keyframes tick{from{transform:translateY(100%);opacity:0}}
 /* tool rows */
 .tr{display:flex;align-items:center;gap:10px;width:100%;min-height:40px;position:relative;padding:4px 2px;font-size:var(--t14);line-height:1.35;border-radius:var(--r1);color:var(--tx2)}
 .tr:active{background:var(--fill)}
@@ -1059,6 +1062,14 @@ globalThis.MC = (() => {
     return { items: all ? items : items.slice(0, max), hidden: all ? 0 : Math.max(0, items.length - max), long: items.length > max };
   }
 
+  // The newest sentence of the reasoning text for the one-line preview: last non-empty line, last sentence of it, Markdown
+  // markers stripped. Only the tail is read, so it stays cheap while the text grows.
+  function thinkingPreview(text) {
+    const lines = norm(text.slice(-1200)).split('\n').map(l => l.replace(/^\s*(?:#{1,6}\s+|>\s*|[-*+]\s+|\d{1,9}[.)]\s+)+/, '').replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/[`*~]+|__/g, '').trim()).filter(Boolean);
+    const sentences = (lines.pop() || '').split(/(?<=[.!?。！？])\s+|(?<=[。！？])/).filter(Boolean);
+    return sentences.pop() || '';
+  }
+
   // ---- changes, context, export ----
   const STATUS = { added: ['A', 'ok'], modified: ['M', ''], deleted: ['D', 'er'], renamed: ['R', ''], conflict: ['!', 'er'], unknown: ['?', ''] };
   const changeStatus = s => STATUS[s] || STATUS.unknown;
@@ -1221,7 +1232,7 @@ globalThis.MC = (() => {
     clock, stamp, relTime, dayGroup, sessionLayout, matchSession, fmtElapsed, fmtDur, fmtTok, fmtNum,
     groupTools, foldTurns, findBlocks, foldText, mdInc,
     toolKind, toolInfo, parseDiff, diffStats, liveBlock, turnEnd, changesText, compactionText, statusLine, canStop, approvalKey, approvalTitle, approvalOptions, approvalBody,
-    changeStatus, contextView, exportMd, BUILTINS, slashMenu, parseSlash, atToken, insertMention, pushRecent, literal, composerKey, queueView,
+    changeStatus, contextView, exportMd, BUILTINS, slashMenu, parseSlash, atToken, insertMention, pushRecent, literal, composerKey, queueView, thinkingPreview,
     splitPath, within, crumbs, tilde, recentWorkspaces, sessionTransitions, noticeEvent, attentionCount, inline, parseMd, parseLines, SAFE_URL,
   };
 })();
@@ -2284,21 +2295,39 @@ function diffView(files, opts = {}) {
         !nums && h('span', 'sgn', l.t === 'add' ? '+' : l.t === 'del' ? '−' : ' '), h('span', 'c', l.s || ' '))));
     })));
 }
-function thinkNode(b, i, live) {
-  const k = 'r' + b.loop_id + ':' + b.request, now = Date.now(), thinking = live && !b.text, w = thinkT.get(k);
+// Thinking: the header, then its newest sentence on one line that slides up when a new one starts; the full text when
+// open. Only a change of state rebuilds the block; new text updates the line in place.
+function thinkNode(b, i, k, thinking, o) {
+  const now = Date.now(), w = thinkT.get(k);
   if (thinking && !w) thinkT.set(k, { start: now });
   else if (!thinking && w && !w.end) w.end = now;
   const t = thinkT.get(k), secs = t && t.end ? Math.max(1, Math.round((t.end - t.start) / 1000)) : 0;
-  const o = !thinking && isOpen(k, prefs.thinking);
-  return h('div', 'think',
-    h('button', { class: 'tk' + (thinking ? ' live' : ''), type: 'button', 'data-k': k, 'aria-expanded': thinking ? null : String(o), disabled: thinking, onclick: e => toggle(k, prefs.thinking, i, e.currentTarget) },
-      icon('sparkle', 'xs'), h('span', '', thinking ? 'Thinking…' : secs ? 'Thought for ' + secs + ' s' : 'Thought'), !thinking && icon('chev', 'xs cv')),
-    (thinking || o) && h('div', 'rsn' + (thinking ? ' peek' : ''), thinking ? h('div', '', b.reasoning) : b.reasoning));
+  const go = () => toggle(k, prefs.thinking, i, tk);
+  const tk = h('button', { class: 'tk' + (thinking ? ' live' : ''), type: 'button', 'data-k': k, 'aria-expanded': thinking ? null : String(o), disabled: thinking, onclick: go },
+    icon('sparkle', 'xs'), h('span', '', thinking ? 'Thinking…' : secs ? 'Thought for ' + secs + ' s' : 'Thought'), !thinking && icon('chev', 'xs cv'));
+  const line = o ? h('div', 'rsn', b.reasoning) : h('span', '', MC.thinkingPreview(b.reasoning));
+  const n = h('div', 'think', tk, o ? line : h('div', { class: 'tp', 'aria-hidden': 'true', onclick: thinking ? null : go }, line));
+  n._x = line; n._o = o;
+  return n;
+}
+function thinkText(n, text, live) {
+  const to = n._o ? text : MC.thinkingPreview(text), el = n._x, was = el.textContent;
+  if (to === was) return;
+  el.textContent = to;
+  if (live && !n._o && was && !to.startsWith(was) && !reduced.matches) { el.classList.remove('up'); void el.offsetWidth; el.classList.add('up'); }
+}
+function thinkUpdate(a, b, i) {
+  const k = 'r' + b.loop_id + ':' + b.request, thinking = a.live && !b.text, o = !thinking && isOpen(k, prefs.thinking), sig = b.reasoning ? k + thinking + o : '';
+  if (sig === a.tsig) return sig && thinkText(a.think, b.reasoning, thinking);
+  a.tsig = sig;
+  const had = a.think.contains(document.activeElement), n = sig ? thinkNode(b, i, k, thinking, o) : h('div');
+  a.think.replaceWith(a.think = n);
+  if (had) n.querySelector('.tk').focus({ preventScroll: true });
 }
 // An answer keeps its rendered Markdown blocks while it streams: only blocks after the last stable one are rebuilt.
 function asstNode(b, i) {
   const live = i === liveIdx, n = h('div', 'a');
-  n._a = { key: b.loop_id + ':' + b.request, live, md: { cache: null, toks: [], els: [] }, body: h('div', 'md'), think: h('div') };
+  n._a = { key: b.loop_id + ':' + b.request, live, tsig: '', md: { cache: null, toks: [], els: [] }, body: h('div', 'md'), think: h('div') };
   n.append(n._a.think, n._a.body);
   updateAsst(n, b, i);
   if (!live && b.text) n.append(answerActs(b, i));
@@ -2307,7 +2336,7 @@ function asstNode(b, i) {
 function updateAsst(n, b, i) {
   const a = n._a, m = a.md, r = MC.mdInc(m.cache, b.text);
   n.hidden = quiet(b);
-  a.think.replaceWith(a.think = b.reasoning ? thinkNode(b, i, a.live) : h('div'));
+  thinkUpdate(a, b, i);
   m.cache = r.cache;
   let k = 0;
   while (k < m.toks.length && k < r.blocks.length && m.toks[k] === r.blocks[k]) k++;
@@ -2948,7 +2977,7 @@ function runFind() {
   flush();
   const q = fd.q.toLowerCase(), ranges = [];
   if (q) {
-    const w = document.createTreeWalker(box, NodeFilter.SHOW_TEXT, { acceptNode: t => t.parentElement.closest('[hidden]') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT });
+    const w = document.createTreeWalker(box, NodeFilter.SHOW_TEXT, { acceptNode: t => t.parentElement.closest('[hidden],.tp') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT });
     while (w.nextNode()) {
       const t = w.currentNode, s = t.data.toLowerCase();
       for (let k = s.indexOf(q); k >= 0; k = s.indexOf(q, k + q.length)) { const r = new Range(); r.setStart(t, k); r.setEnd(t, k + q.length); ranges.push(r); }

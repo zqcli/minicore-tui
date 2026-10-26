@@ -829,3 +829,24 @@ test('the queue shows follow-ups numbered in order, waiting steers, and the firs
   assert.deepEqual(plain(MC.queueView([], false)), { items: [], hidden: 0, long: false });
 });
 
+test('the thinking preview is the newest sentence without Markdown markers', () => {
+  const { MC } = load();
+  const p = MC.thinkingPreview;
+  assert.equal(p(''), '');
+  assert.equal(p('Check the parser'), 'Check the parser');
+  assert.equal(p('First line\nSecond line\n\n  \n'), 'Second line');
+  // A long paragraph shows its newest sentence, also while that sentence is still being written.
+  assert.equal(p('The user reports a bug. I should read the code. Then run the'), 'Then run the');
+  assert.equal(p('The user reports a bug. I should read the code.'), 'I should read the code.');
+  assert.equal(p('先读代码。然后运行测试'), '然后运行测试');
+  assert.equal(p('Does it fail? Yes it does!'), 'Yes it does!');
+  // Paths and versions with dots are not sentence ends.
+  assert.equal(p('Open src/ui/mod.rs and v1.2.3 now'), 'Open src/ui/mod.rs and v1.2.3 now');
+  assert.equal(p('**Considering the fix**'), 'Considering the fix');
+  assert.equal(p('# Plan\n- read `split_path` in __main__\n'), 'read split_path in main');
+  assert.equal(p('1. Run [the tests](https://x.test/a) first'), 'Run the tests first');
+  assert.equal(p('> quoted ~~old~~ idea'), 'quoted old idea');
+  assert.equal(p('thinking\n---\n'), '---');
+  // Only the tail is read: a huge text costs the same and still ends with the newest line.
+  assert.equal(p('x\n'.repeat(100000) + 'last words here'), 'last words here');
+});

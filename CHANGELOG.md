@@ -22,8 +22,9 @@
 - The phone client is redesigned. Sessions that need you are listed first with
   a badge on the menu button; finished turns fold their tool steps into one
   "Worked 47 s · 5 tools · +12 −4" row; tool steps are one-line rows whose
-  full output can be opened and loaded in full; thinking shows as "Thought for
-  12 s". The composer has a model chip, `/` for commands and prompt templates
+  full output can be opened and loaded in full; thinking shows a "Thinking…"
+  header with its newest sentence on one line (then "Thought for 12 s"), and
+  opens to the full text. The composer has a model chip, `/` for commands and prompt templates
   (expanded on the computer like in the TUI), `@` for workspace files and
   recent prompts. While a turn runs, typed text goes out with an explicit
   **Steer** or **Queue** button (Enter or Cmd/Ctrl+Enter steers, Tab or

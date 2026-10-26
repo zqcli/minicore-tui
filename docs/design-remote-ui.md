@@ -167,9 +167,14 @@ inputs change (no whole-region re-renders on every `state`). Budget: at most
   (finished top-level blocks are kept; only the open tail is re-parsed). Only
   the block being written shows the caret. Actions under a finished answer:
   Copy, Share (Web Share API where available), and time.
-- **Thinking**: a muted "Thinking…" line with a shimmer and the live text
-  capped to 3 lines with a fade; when done "Thought ›" (with duration when the
-  client watched it live), expandable; "show thinking expanded" setting.
+- **Thinking**: collapsed but alive. A muted "Thinking…" header with a shimmer
+  and, under it, one line (fixed height, ellipsis at the end) with the newest
+  sentence of the reasoning; when a new sentence starts the line slides up
+  (≤ 200 ms, none with reduced motion), and text within a sentence only
+  updates it in place. When done the header reads "Thought for 12 s ›" (the
+  duration when the client watched it live) and the last line stays under it.
+  Tapping the header or the line expands the full text and back; the "show
+  thinking expanded" setting opens it by default.
 - **Tools**: one-line rows: state icon · past-tense verb · muted mono target ·
   right-aligned meta (duration, `+12 −4`, exit code). Consecutive reads and
   searches group ("Read 6 files ›"). Tap expands inline: command, the **end**
