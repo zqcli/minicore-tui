@@ -200,7 +200,8 @@ fn catalog(app: &App) -> Value {
         .collect();
     json!({"sessions":sessions,
         "models":app.models.iter().map(|model| json!({"id":model.id, "reasoning":model.supported_reasoning})).collect::<Vec<_>>(),
-        "profiles":app.profiles.iter().map(|profile| &profile.id).collect::<Vec<_>>()})
+        "profiles":app.profiles.iter().map(|profile| &profile.id).collect::<Vec<_>>(),
+        "commands":app.templates.iter().map(|template| json!({"name":template.name, "description":template.description, "hint":template.hint})).collect::<Vec<_>>()})
 }
 
 fn state(app: &App, catalog: &Value, view: &PhoneView, loading: bool) -> Value {
@@ -267,7 +268,7 @@ fn state(app: &App, catalog: &Value, view: &PhoneView, loading: bool) -> Value {
     })).collect();
     let (running, approval) = app.other_counts(current);
     json!({
-        "session":session.map(|s| json!({"id":s.info.session_id, "title":crate::app::overlay::session_label(&s.info, session), "workspace":fs::display(Path::new(&s.info.workspace)), "profile":s.info.profile, "model":s.info.model, "reasoning":s.info.reasoning})),
+        "session":session.map(|s| json!({"id":s.info.session_id, "title":crate::app::overlay::session_label(&s.info, session), "workspace":fs::display(Path::new(&s.info.workspace)), "profile":s.info.profile, "model":s.info.model, "reasoning":s.info.reasoning, "branch":s.branch()})),
         "draft":{"workspace":fs::display(workspace), "profile":profile, "model":model, "reasoning":reasoning},
         "status":{"label":session.and_then(Session::status_label), "busy":session.is_some_and(Session::is_busy), "started_ms":live.map(|live| live.started_ms), "interrupting":live.is_some_and(|live| live.interrupting), "compacting":session.is_some_and(Session::compacting), "loading":loading},
         "usage":{"input":session.map_or(0, |s| s.usage.input), "output":session.map_or(0, |s| s.usage.output), "cached":session.map_or(0, |s| s.usage.cached)},
@@ -275,7 +276,7 @@ fn state(app: &App, catalog: &Value, view: &PhoneView, loading: bool) -> Value {
         "older":session.is_some_and(|s| s.loaded_from > 0), "sessions":sessions,
         "background":{"running":running, "approval":approval},
         "devices":app.remote.phones.iter().map(|phone| json!({"name":phone.connection.device.name, "session":phone.view.session_id()})).collect::<Vec<_>>(),
-        "models":catalog["models"], "profiles":catalog["profiles"]
+        "models":catalog["models"], "profiles":catalog["profiles"], "commands":catalog["commands"]
     })
 }
 
@@ -392,6 +393,35 @@ mod tests {
         for field in ["profile", "model", "reasoning"] {
             assert!(changed[0]["state"]["draft"][field].is_null());
         }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn templates_and_the_footer_branch_are_in_the_state_and_only_a_change_sends_it() {
+        let (_fake, mut app) = connected_app();
+        app.templates = vec![
+            crate::app::templates::Template::parse("fix".into(), "Fix $1"),
+            crate::app::templates::Template::parse(
+                "review".into(),
+                "---\ndescription: Review staged changes\nargument-hint: [focus]\n---\nReview",
+            ),
+        ];
+        let mut view = View::default();
+        let state = sync(&mut view, &mut app)[0]["state"].clone();
+        assert_eq!(
+            state["commands"],
+            json!([{"name":"fix", "description":"Fix $1", "hint":""},
+                   {"name":"review", "description":"Review staged changes", "hint":"[focus]"}])
+        );
+        assert!(state["session"]["branch"].is_null());
+        let presentation = |branch: &str| {
+            serde_json::from_value(json!({"session_id":"s1", "git_branch":branch})).unwrap()
+        };
+        app.session.as_mut().unwrap().presentation = Some(presentation("feat/ui2"));
+        let changed = sync(&mut view, &mut app);
+        assert_eq!(changed[0]["state"]["session"]["branch"], "feat/ui2");
+        assert!(sync(&mut view, &mut app).is_empty());
+        app.session.as_mut().unwrap().presentation = Some(presentation(" "));
+        assert!(sync(&mut view, &mut app)[0]["state"]["session"]["branch"].is_null());
     }
 
     #[tokio::test(start_paused = true)]

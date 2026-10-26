@@ -267,6 +267,12 @@ impl Session {
         self.compaction.is_some()
     }
 
+    /// The Git branch the footer shows, from the last presentation.
+    pub fn branch(&self) -> Option<&str> {
+        let branch = self.presentation.as_ref()?.git_branch.as_deref();
+        branch.filter(|branch| !branch.trim().is_empty())
+    }
+
     pub fn status_label(&self) -> Option<&'static str> {
         if self.compacting() {
             Some("Compacting context")

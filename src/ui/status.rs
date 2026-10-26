@@ -238,10 +238,7 @@ fn footer(app: &App, styles: Styles, width: u16) -> Line<'static> {
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_else(|| app.workspace.display().to_string());
-    let branch = session
-        .and_then(|session| session.presentation.as_ref())
-        .and_then(|presentation| presentation.git_branch.as_deref())
-        .filter(|branch| !branch.trim().is_empty());
+    let branch = session.and_then(Session::branch);
 
     let model = app.model_id().map_or_else(Vec::new, |id| {
         let model = wrap::truncate(&model_label(id), 24);

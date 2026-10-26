@@ -475,7 +475,7 @@ uses the routing above; local background notices keep their label prefix.
 ```json
 {
   "session": null | {"id":"ses_...","title":"Fix parser","workspace":"/abs","profile":"coding",
-                     "model":"gpt-6-luna","reasoning":"high"},
+                     "model":"gpt-6-luna","reasoning":"high","branch":"main"|null},
   "draft": {"workspace":"/abs","profile":"coding"|null,"model":"..."|null,"reasoning":"..."|null},
   "status": {"label":"Thinking"|null,"busy":false,"started_ms":1761300000000|null,
              "interrupting":false,"compacting":false,"loading":false},
@@ -491,7 +491,8 @@ uses the routing above; local background notices keep their label prefix.
   "background": {"running":1,"approval":0},
   "devices": [{"name":"iPhone Safari","session":"ses_..."},{"name":"Mac Edge","session":null}],
   "models": [{"id":"gpt-6-luna","reasoning":["low","medium","high"]}],
-  "profiles": ["coding","ask"]
+  "profiles": ["coding","ask"],
+  "commands": [{"name":"review","description":"Review staged changes","hint":"[focus]"}]
 }
 ```
 
@@ -512,6 +513,13 @@ uses the routing above; local background notices keep their label prefix.
   shared. `unseen` clears when any device opens the session, and a turn ending
   in a session any device views does not mark it unseen; the foreground also
   stays seen as before.
+- `session.branch` is the Git branch the footer shows for that session
+  (`Session::branch`: the last `session.presentation` after a
+  `workspace.status`, blank names dropped), or `null`. A draft has no session
+  and the TUI knows no branch for it.
+- `commands` are the prompt templates (`prompt/commands/*.md`): name, the
+  description line and the `argument-hint`, sorted by name, shared by every
+  device and built with the cached catalog. Sending `/name args` expands one.
 - `older`: an older page can be loaded. `sessions`: the catalog filtered to
   workspaces under `roots`, newest first, at most 50. `context_percent` is the
   footer's figure, never an estimate. The pure calculation lives in

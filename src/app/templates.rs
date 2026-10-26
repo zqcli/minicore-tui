@@ -14,7 +14,7 @@ pub struct Template {
 }
 
 impl Template {
-    pub(super) fn parse(name: String, text: &str) -> Self {
+    pub fn parse(name: String, text: &str) -> Self {
         let (meta, body) = split_front_matter(text);
         let field = |key: &str| {
             meta.lines()
