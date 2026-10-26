@@ -4,7 +4,7 @@ use std::io;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
@@ -44,6 +44,8 @@ const HEADERS: [(&str, &str); 4] = [
     ("Referrer-Policy", "no-referrer"),
     ("Content-Security-Policy", CSP),
 ];
+/// Replies are written in pieces of this size, each given `FIRST` to drain.
+const CHUNK: usize = 4096;
 /// The web client's files: path, MIME type and body.
 const FILES: [(&str, &str, &[u8]); 8] = [
     (
@@ -83,6 +85,37 @@ const FILES: [(&str, &str, &[u8]); 8] = [
         include_bytes!("web/apple-touch-icon.png"),
     ),
 ];
+
+/// Gzipped copies of the text files, made on first request.
+static GZIPPED: [OnceLock<Vec<u8>>; FILES.len()] = [const { OnceLock::new() }; FILES.len()];
+
+/// PNGs are compressed already.
+fn compressible(mime: &str) -> bool {
+    mime != "image/png"
+}
+
+fn gzip(body: &[u8]) -> Vec<u8> {
+    use std::io::Write;
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
+    encoder.write_all(body).unwrap();
+    encoder.finish().unwrap()
+}
+
+fn accepts_gzip(value: Option<&[u8]>) -> bool {
+    value
+        .and_then(|value| std::str::from_utf8(value).ok())
+        .is_some_and(|value| {
+            value.split(',').any(|item| {
+                let mut parts = item.split(';');
+                parts.next().unwrap().trim().eq_ignore_ascii_case("gzip")
+                    && parts.all(|part| {
+                        part.trim()
+                            .strip_prefix("q=")
+                            .is_none_or(|q| q.parse::<f32>().is_ok_and(|q| q > 0.0))
+                    })
+            })
+        })
+}
 
 pub async fn serve(
     listeners: Vec<TcpListener>,
@@ -199,9 +232,11 @@ impl<S: AsyncWrite + Unpin> AsyncWrite for Replay<S> {
     }
 }
 
+/// Writes a reply, dropping the link only when it stops moving: a slow proxy hop may need minutes.
 async fn http(
     stream: &mut (impl AsyncWrite + Unpin),
     status: &str,
+    extra: &str,
     mime: &str,
     body: &[u8],
 ) -> io::Result<()> {
@@ -210,12 +245,19 @@ async fn http(
         .map(|(name, value)| format!("{name}: {value}\r\n"))
         .collect();
     let head = format!(
-        "HTTP/1.1 {status}\r\n{headers}Content-Type: {mime}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 {status}\r\n{headers}{extra}Content-Type: {mime}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
     );
-    stream.write_all(&[head.as_bytes(), body].concat()).await?;
+    let stalled = || io::Error::from(io::ErrorKind::TimedOut);
+    for chunk in std::iter::once(head.as_bytes()).chain(body.chunks(CHUNK)) {
+        timeout(FIRST, stream.write_all(chunk))
+            .await
+            .map_err(|_| stalled())??;
+    }
     // Over TLS this sends close_notify, without which the reply looks truncated.
-    stream.shutdown().await
+    timeout(FIRST, stream.shutdown())
+        .await
+        .map_err(|_| stalled())?
 }
 
 fn same_origin(origin: &[u8], host: Option<&[u8]>) -> bool {
@@ -260,21 +302,31 @@ async fn connection<S: AsyncRead + AsyncWrite + Unpin>(
         && header("upgrade").is_some_and(|v| v.eq_ignore_ascii_case(b"websocket"));
     if websocket {
         if header("origin").is_some_and(|origin| !same_origin(origin, header("host"))) {
-            return http(&mut stream, "403 Forbidden", "text/plain", b"Forbidden")
+            return http(&mut stream, "403 Forbidden", "", "text/plain", b"Forbidden")
                 .await
                 .map_err(|e| e.to_string());
         }
     } else {
         let file = FILES
             .iter()
-            .find(|file| request.method == Some("GET") && path == Some(file.0));
-        let (status, mime, body) = match file {
-            Some(&(_, mime, body)) => ("200 OK", mime, body),
-            None => ("404 Not Found", "text/plain", b"Not found".as_slice()),
+            .position(|file| request.method == Some("GET") && path == Some(file.0));
+        let (status, extra, mime, body) = match file {
+            Some(index) => {
+                let (_, mime, body) = FILES[index];
+                if !compressible(mime) {
+                    ("200 OK", "", mime, body)
+                } else if accepts_gzip(header("accept-encoding")) {
+                    let body = GZIPPED[index].get_or_init(|| gzip(body));
+                    let extra = "Content-Encoding: gzip\r\nVary: Accept-Encoding\r\n";
+                    ("200 OK", extra, mime, body.as_slice())
+                } else {
+                    ("200 OK", "Vary: Accept-Encoding\r\n", mime, body)
+                }
+            }
+            None => ("404 Not Found", "", "text/plain", b"Not found".as_slice()),
         };
-        return timeout(FIRST, http(&mut stream, status, mime, body))
+        return http(&mut stream, status, extra, mime, body)
             .await
-            .map_err(|e| e.to_string())?
             .map_err(|e| e.to_string());
     }
     let config = WebSocketConfig::default()
@@ -677,6 +729,67 @@ mod tests {
             assert_eq!(&reply[end + 4..], body, "{path}");
         }
         task.abort();
+    }
+
+    #[tokio::test]
+    async fn text_files_are_gzipped_for_clients_that_accept_it_and_pngs_never_are() {
+        use std::io::Read;
+        let (_dir, address, _auth, _rx, task) = start().await;
+        for (path, encoding, gzipped) in [
+            ("/", "gzip, deflate, br", true),
+            ("/sw.js", "br;q=1, GZIP;q=0.5", true),
+            ("/", "gzip;q=0", false),
+            ("/", "br", false),
+            ("/icon-192.png", "gzip", false),
+        ] {
+            let request = format!(
+                "GET {path} HTTP/1.1\r\nHost: localhost\r\nAccept-Encoding: {encoding}\r\n\r\n"
+            );
+            let reply = get(address, &request).await;
+            let end = reply.windows(4).position(|s| s == b"\r\n\r\n").unwrap();
+            let head = String::from_utf8_lossy(&reply[..end]);
+            let file = FILES.iter().find(|file| file.0 == path).unwrap().2;
+            assert_eq!(
+                head.contains("Content-Encoding: gzip\r\n"),
+                gzipped,
+                "{path} {encoding}"
+            );
+            let mut body = Vec::new();
+            if gzipped {
+                let mut decoder = flate2::read::GzDecoder::new(&reply[end + 4..]);
+                decoder.read_to_end(&mut body).unwrap();
+                assert!(reply.len() - end - 4 < file.len(), "{path} is not smaller");
+            } else {
+                body.extend_from_slice(&reply[end + 4..]);
+            }
+            assert_eq!(body, file, "{path} {encoding}");
+        }
+        task.abort();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_slow_link_gets_the_whole_reply_and_only_a_stalled_one_is_dropped() {
+        let (mut server, mut client) = tokio::io::duplex(1024);
+        let writer = tokio::spawn(async move {
+            http(&mut server, "200 OK", "", "text/plain", &[b'x'; 64 * 1024]).await
+        });
+        // 512 bytes per second: the reply takes over two minutes but never stops moving.
+        let (mut reply, mut buffer) = (Vec::new(), [0; 1024]);
+        loop {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            match client.read(&mut buffer).await.unwrap() {
+                0 => break,
+                n => reply.extend_from_slice(&buffer[..n]),
+            }
+        }
+        writer.await.unwrap().unwrap();
+        assert!(reply.ends_with(&[b'x'; 64 * 1024]));
+
+        let (mut server, _client) = tokio::io::duplex(1024);
+        let error = http(&mut server, "200 OK", "", "text/plain", &[b'x'; 64 * 1024])
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
     }
 
     #[tokio::test]

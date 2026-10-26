@@ -230,7 +230,12 @@ Every HTTP response carries `Cache-Control: no-store, no-transform`, `X-Content-
 `Referrer-Policy: no-referrer` and
 `Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:`.
 `no-transform` stops proxies such as Cloudflare from rewriting the page (email
-obfuscation, Rocket Loader, injected beacons) or recompressing it. `'self'`
+obfuscation, Rocket Loader, injected beacons) or recompressing it, so the
+server compresses itself: the page, service worker, manifest and SVG icon go
+out gzipped (made once, on first request) to clients whose `Accept-Encoding`
+allows gzip, with `Vary: Accept-Encoding`; PNGs are sent as they are. A reply
+is written in 4 KiB pieces and dropped only when one piece makes no progress
+for 10 s, so a slow proxy hop can take minutes without being cut off. `'self'`
 covers the service worker and the manifest through `default-src`, and the
 same-host `ws:` and `wss:` socket in current browsers (WebKit since 2022).
 
@@ -620,6 +625,7 @@ gains no new branch beyond calling `sync_remote` once per iteration.
 |---|---|
 | TLS handshake | 10 s |
 | Request head | 8 KiB, 10 s |
+| HTTP reply | dropped after 10 s without progress |
 | WebSocket message in | 1 MiB |
 | First message | 10 s |
 | Unauthenticated connections | 8 |

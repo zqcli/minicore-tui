@@ -16,6 +16,9 @@
   again by `/remote on`, so a renewed certificate needs only `/remote off` and
   `/remote on`. A LAN or public bind with TLS no longer needs
   `allow_insecure`.
+- The web client loads over slow links: the page is sent gzipped (129 KB becomes
+  37 KB), and a reply is no longer cut off after 10 seconds while
+  it is still arriving, which behind Cloudflare showed as error 520.
 
 ## 0.6.0 — 2026-10-25
 

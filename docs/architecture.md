@@ -296,6 +296,7 @@ time belongs to the client. The footer and projection share the pure
 `app::session::context_percent` calculation. The projection never imports UI code.
 
 Only connection tasks own network timers: a 10 s HTTP head/first-message limit,
+a 10 s no-progress limit while writing a reply,
 20 s pings and a 60 s idle cutoff. At most eight unauthenticated connections can
 wait, messages are limited to 1 MiB and each phone's outbound queue to 512
 messages; overflow drops that connection. No remote polling timer wakes the main
