@@ -5,24 +5,42 @@ goes to the frontmost surface, in this order: the fatal screen, an open picker
 or view, a pending approval prompt, then the composer and transcript. Any key
 press clears the notices.
 
-`Shift+Enter` and `Alt+Enter` are distinct keys only in terminals that support
-the kitty keyboard protocol; `Ctrl+J` always inserts a newline.
+`Shift+Enter` and `Ctrl+Enter` are distinct keys only in terminals that support
+the kitty keyboard protocol (and on Windows consoles); `Ctrl+J` always inserts
+a newline.
 
 A steer and a follow-up are different: a steer (`Enter` while busy) goes to the
-running turn and is applied at its next step; a follow-up (`Tab`) waits for the
-turn to end and starts the next one. The dock above the editor lists them,
-steers first as `↗ steer  <text>`, then `↳ follow-up 1  <text>` numbered in send
-order, three rows and `+N more queued`. A hint row under the Working line names
-the keys that act now: `enter steer · tab follow-up` while a draft waits during
-a turn, and `alt+↑ edit queued` while follow-ups exist.
+running turn and is applied at its next step; a follow-up (`Alt+Enter`) waits
+for the turn to end and starts the next one. The dock above the editor lists
+them, steers first as `↗ steer  <text>`, then `↳ follow-up 1  <text>` numbered
+in send order, three rows and `+N more queued`. A hint row under the Working
+line names the keys that act now: `enter steer · alt+enter follow-up` while a
+draft waits during a turn, and `alt+↑ edit queued` while follow-ups exist.
+
+### Alt+Enter by terminal
+
+`Alt+Enter` queues a follow-up; `Ctrl+Enter` does the same where the terminal
+reports it. If neither reaches the TUI, `Enter` steers instead, so check the
+dock label before sending.
+
+- Linux (GNOME Terminal and other VTE terminals, Konsole, xterm, Alacritty,
+  kitty, WezTerm, foot) and tmux: `Alt+Enter` works as it is.
+- macOS: Option is not Alt by default. Terminal.app: Settings → Profiles →
+  Keyboard → "Use Option as Meta key". iTerm2: Settings → Profiles → Keys →
+  Left Option key → "Esc+". Ghostty: `macos-option-as-alt = true`. kitty:
+  `macos_option_as_alt yes`. WezTerm works by default. Or use `Ctrl+Enter` in a
+  kitty-protocol terminal.
+- Windows Terminal: `Alt+Enter` toggles full screen by default. Use
+  `Ctrl+Enter`, or free the key with `{ "command": "unbound", "keys": "alt+enter" }`
+  in the `actions` list of `settings.json`. The legacy console host (conhost)
+  also takes `Alt+Enter` for full screen; use `Ctrl+Enter` there.
 
 ## Composer
 
 | Key | Action |
 |---|---|
 | `Enter` | Send when the session is idle; steer the running turn when it is busy. A draft whose first word names a command (`/model`, `/rename x`) or a prompt template runs it. A bare `/word` that names nothing (`/modle`) is not sent: a notice offers the nearest command, and a second `Enter` (or a leading `//`, which sends the rest) sends it as text. Any other draft, `/usr/bin/env is broken` and `/usr/bin` included, is a prompt. |
-| `Tab` | While a turn runs or a compaction is under way, queue the draft as a follow-up: it is sent when the session is idle, one per turn, oldest first. An open command or `@` list keeps `Tab` for completion. With no draft, or when idle, it does nothing. |
-| `Alt+Enter` | The same as `Tab`, and it also sends the draft when idle. Most macOS terminals do not send Option as Meta, so there `Alt+Enter` arrives as plain `Enter`; use `Tab`. |
+| `Alt+Enter`, `Ctrl+Enter` | While a turn runs or a compaction is under way, queue the draft as a follow-up: it is sent when the session is idle, one per turn, oldest first. When idle it sends the draft. With no draft it does nothing. See the terminal notes above; where a terminal reports `Ctrl+Enter` as `Enter`, it steers. |
 | `Shift+Enter`, `Ctrl+J` | Newline. |
 | `Esc` | Close an open picker or view first; in the editor, cancel an active selection before interrupting a turn, cancelling a compaction or clearing the draft. |
 | `Ctrl+C` | Copy the editor selection when one exists; otherwise clear the draft, with a second press within 500 ms quitting. |

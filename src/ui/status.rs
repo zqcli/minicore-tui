@@ -147,7 +147,7 @@ fn queued_rows(session: &Session, styles: Styles, width: u16) -> Vec<Line<'stati
     rows
 }
 
-/// The keys that act on the queue now: Enter steers and Tab queues while a
+/// The keys that act on the queue now: Enter steers and Alt+Enter queues while a
 /// draft waits, `alt+↑` takes follow-ups back.
 fn key_hint(app: &App) -> Option<String> {
     let session = app.session.as_ref().filter(|_| !app.has_interaction())?;
@@ -157,7 +157,7 @@ fn key_hint(app: &App) -> Option<String> {
         keys.push("enter steer");
     }
     if drafting && (session.is_busy() || session.compacting()) {
-        keys.push("tab follow-up");
+        keys.push("alt+enter follow-up");
     }
     if session
         .queue

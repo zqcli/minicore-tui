@@ -129,53 +129,61 @@ async fn follow_ups_queue_behind_a_running_turn_and_alt_up_recalls_the_newest() 
 }
 
 #[tokio::test(start_paused = true)]
-async fn tab_queues_a_follow_up_while_a_turn_runs_like_alt_enter() {
+async fn alt_enter_and_ctrl_enter_queue_follow_ups_while_enter_steers() {
     let mut h = Harness::opened(display_read(0, 0)).await;
     h.fake.script("turn.send", json!({"turn": turn("l1")}));
+    h.fake
+        .script("turn.steer", json!({"ok": true, "steer_index": 0}));
     h.fake.script_held("turn.wait", waited("l1", completed()));
     h.submit("start");
     h.until(|app| app.is_busy()).await;
 
-    h.press(KeyCode::Tab);
+    h.key(KeyCode::Enter, KeyModifiers::ALT);
     assert!(h.queue().is_empty(), "an empty draft queues nothing");
 
-    h.type_text("by tab");
-    h.press(KeyCode::Tab);
     h.type_text("by alt enter");
     h.key(KeyCode::Enter, KeyModifiers::ALT);
-    assert_eq!(h.queue(), ["by tab", "by alt enter"]);
-    assert_eq!(h.app.composer.text(), "");
+    h.type_text("by ctrl enter");
+    h.key(KeyCode::Enter, KeyModifiers::CONTROL);
+    assert_eq!(h.queue(), ["by alt enter", "by ctrl enter"]);
     assert!(
         h.calls("turn.steer").is_empty(),
         "a follow-up is not a steer"
     );
+
+    h.type_text("now");
+    h.press(KeyCode::Enter);
+    h.settle().await;
+    assert_eq!(h.calls("turn.steer").len(), 1);
 }
 
 #[tokio::test(start_paused = true)]
-async fn tab_with_a_completion_list_open_completes_instead_of_queueing() {
+async fn tab_does_nothing_in_the_composer() {
     let mut h = Harness::opened(display_read(0, 0)).await;
     h.fake.script("turn.send", json!({"turn": turn("l1")}));
     h.fake.script_held("turn.wait", waited("l1", completed()));
-    h.submit("start");
+    h.type_text("draft");
+    h.press(KeyCode::Tab);
+    assert_eq!(h.app.composer.text(), "draft");
+    h.press(KeyCode::Enter);
     h.until(|app| app.is_busy()).await;
 
-    h.type_text("/mode");
+    h.type_text("busy");
     h.press(KeyCode::Tab);
-    assert_eq!(h.app.composer.text(), "/model ");
+    assert_eq!(h.app.composer.text(), "busy");
     assert!(h.queue().is_empty());
 }
 
 #[tokio::test(start_paused = true)]
-async fn tab_does_nothing_in_an_idle_session() {
+async fn tab_with_a_completion_list_open_completes() {
     let mut h = Harness::opened(display_read(0, 0)).await;
-    h.type_text("draft");
+    h.type_text("/mode");
     h.press(KeyCode::Tab);
-    assert_eq!(h.app.composer.text(), "draft");
-    assert!(h.sends().is_empty());
+    assert_eq!(h.app.composer.text(), "/model ");
 }
 
 #[tokio::test(start_paused = true)]
-async fn tab_asks_to_queue_during_a_compaction() {
+async fn alt_enter_queues_during_a_compaction() {
     let mut h = Harness::opened(display_read(0, 0)).await;
     h.emit(
         "session_state",
@@ -186,7 +194,7 @@ async fn tab_asks_to_queue_during_a_compaction() {
     .await;
     h.until(|app| app.compacting()).await;
     h.type_text("later");
-    let key = crossterm::event::KeyEvent::from(KeyCode::Tab);
+    let key = crossterm::event::KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT);
     assert_eq!(h.app.on_key(key), Some(crate::app::Action::QueueFollowUp));
 }
 

@@ -21,7 +21,7 @@ const KEYS: &[KeyRow] = &[
         action: "send, or steer while a turn runs",
     },
     KeyRow {
-        keys: "tab, alt+enter",
+        keys: "alt+enter, ctrl+enter",
         action: "queue a follow-up while a turn runs",
     },
     KeyRow {

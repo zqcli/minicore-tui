@@ -11,7 +11,7 @@
   ↳ follow-up 2  and the changelog
 
   ⠋ Working (esc to interrupt) · Running bash cargo test --workspace
-  enter steer · tab follow-up · alt+↑ edit queued
+  enter steer · alt+enter follow-up · alt+↑ edit queued
 
  ▎
  ▎one more thing

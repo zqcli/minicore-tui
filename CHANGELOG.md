@@ -17,11 +17,13 @@
   directory: a directory named `bin` is no longer replaced by its parent. A
   bundle that runs `bin/minicore-tui` now needs `--home <dir>` or
   `MINICORE_HOME`; otherwise it reads and writes its files inside `bin/`.
-- `Tab` queues a follow-up while a turn runs, so queueing no longer depends on
-  `Alt+Enter`, which most macOS terminals send as plain `Enter` (a steer). An open
-  completion list keeps `Tab`. The dock tells the two apart: `↗ steer  …` rows,
-  then `↳ follow-up 1  …` numbered in send order, and a hint row (`enter steer ·
-  tab follow-up`, `alt+↑ edit queued`) names the keys that act now.
+- `Alt+Enter` queues a follow-up while a turn runs; `Ctrl+Enter` does the same
+  in terminals that report it (kitty-protocol terminals, Windows consoles). `Tab`
+  no longer queues. `Enter` steers, so check the dock label where neither key
+  reaches the app; `docs/keybindings.md` lists the setup for macOS terminals and
+  Windows Terminal. The dock tells the two apart: `↗ steer  …` rows, then
+  `↳ follow-up 1  …` numbered in send order, and a hint row (`enter steer ·
+  alt+enter follow-up`, `alt+↑ edit queued`) names the keys that act now.
 - Steering messages in the transcript are marked `↗ steering`, the arrow the
   dock and the web client use for steers; `↳` now means a follow-up.
 - Remote mode listens on the IPv6 loopback too: the default `bind` is

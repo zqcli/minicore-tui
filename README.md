@@ -12,8 +12,9 @@ file is the whole program. Version 0.4 is a rewrite of the v0.3 frontend; see
 - current stable Rust (edition 2024) to build; no older toolchain is tested;
 - a terminal with an alternate screen, raw mode and bracketed paste. Mouse
   reporting is used for the wheel, clicks and selection. `Shift+Enter` and
-  `Alt+Enter` need a terminal with the kitty keyboard protocol; `Ctrl+J` always
-  inserts a newline.
+  `Ctrl+Enter` need a terminal with the kitty keyboard protocol; `Ctrl+J` always
+  inserts a newline. `Alt+Enter` needs the terminal to pass Alt (on macOS, Option
+  as Meta or Esc+); see [docs/keybindings.md](docs/keybindings.md).
 
 Built-in backend: Agent 0.8.0, which links Runtime 0.8.0; `Cargo.toml` pins the
 Agent by its release tag and `Cargo.lock` fixes both. An
@@ -175,7 +176,7 @@ without a report. The TUI never estimates it.
   commands that read a session (`/compact`, `/context`, `/diff`,
   `/rename`, `/export`, `/copy`, `/session`) and the `@` file picker say
   `No session yet: send a message first`.
-- **Steering and queue.** `Enter` while a turn runs steers it; `Tab` (or `Alt+Enter`)
+- **Steering and queue.** `Enter` while a turn runs steers it; `Alt+Enter` (or `Ctrl+Enter`)
   queues a follow-up sent after the turn; `Alt+↑` takes the queued follow-ups back.
   `Esc` interrupts. A message sent while a compaction after a turn is
   running waits in the queue and is sent when the session is idle.
@@ -236,7 +237,7 @@ machine and answers its approvals: keep the password to yourself, change it with
 
 The complete map is [docs/keybindings.md](docs/keybindings.md). The essentials:
 
-- `Enter` send or steer, `Tab` follow-up, `Shift+Enter` / `Ctrl+J` newline,
+- `Enter` send or steer, `Alt+Enter` follow-up, `Shift+Enter` / `Ctrl+J` newline,
   `Esc` interrupt (idle: clear the draft), `Ctrl+C` clear / quit, `Ctrl+D` quit;
 - `Ctrl+R` sessions, `Ctrl+L` model, `Shift+Tab` reasoning, `Ctrl+O` tool cards,
   `Ctrl+T` reasoning text, `Ctrl+F` find, `F1` help;

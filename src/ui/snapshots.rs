@@ -575,13 +575,13 @@ fn the_dock_hint_follows_what_the_keys_can_do() {
     app.composer.set_text("draft");
     assert_eq!(
         hint_row(&render(&mut app, 70, 12)),
-        Some("enter steer · tab follow-up")
+        Some("enter steer · alt+enter follow-up")
     );
 
     queue(&mut app, &[("later", Follow)]);
     assert_eq!(
         hint_row(&render(&mut app, 70, 12)),
-        Some("enter steer · tab follow-up · alt+↑ edit queued")
+        Some("enter steer · alt+enter follow-up · alt+↑ edit queued")
     );
 
     app.composer.clear();
