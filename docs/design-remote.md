@@ -11,8 +11,9 @@ document disagree after the feature lands, the code wins and this file is fixed.
 ## Decisions
 
 - **Intents in, projection out.** The phone never sends Agent RPC. It sends a
-  closed set of intents that the reducer executes like local actions, and it
-  receives a projection of its own session or draft built from `App` state:
+  closed set of intents that the reducer executes like local actions and a
+  closed set of queries the host relays as bounded Agent reads for its own view,
+  and it receives a projection of its own session or draft built from `App` state:
   a snapshot on connect or view change, then changed blocks (by block revision) and state
   changes. Turn lifecycle, reconciliation, approvals, follow-ups and titles stay
   in the Rust reducer only.

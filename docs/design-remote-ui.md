@@ -38,17 +38,24 @@ own view (its session or draft), as v1 intents do.
 
 | kind | fields | effect |
 |---|---|---|
-| `compact` | — | `session.compact` for the viewed session; refused while a turn runs or compaction is under way (`busy`). `cancel` already stops a compaction. |
-| `unqueue` | `index`, `text` | Removes the queued follow-up `queue[index]` if its text still equals `text` (else `stale`); the text goes back to the requester as `returned`. Steers already sent cannot be taken back. |
-| `answer` | + optional `message` (deny only) | Denies, then steers `message` into the same turn so the agent hears why. |
-| `submit` / `queue` | text | Text that starts with `/name` naming a prompt template is expanded on the host exactly as the TUI does (`$1`, `$@`, …). Another `/word` the TUI would treat as a command is refused with `unknown_command`; the client handles built-in commands itself and never sends them. |
+| `compact` | — | `session.compact` for the viewed session; refused while a turn runs or compaction is under way (`busy`), and in a draft (`No session`). `cancel` already stops a compaction. |
+| `unqueue` | `index`, `text` | Removes the queued follow-up `queue[index]` if its text still equals `text` (else `stale`); the text goes back to the requester as `returned`. Steers already sent cannot be taken back (`stale`). |
+| `answer` | + optional `message` (deny only) | Denies, then steers `message` into the same turn so the agent hears why. A blank `message`, or one beside anything but an approval's `deny`, is `bad_request`. |
+| `submit` / `queue` | text | Text that starts with `/name` naming a prompt template is expanded on the host exactly as the TUI does (`$1`, `$@`, …); `//text` sends `/text`. A built-in command line, and a bare `/word` naming nothing (where the composer warns once), are refused with `unknown_command`; the client handles built-in commands itself and never sends them. |
 
 ### Queries (`{"t":"query","id","kind",...}` → `{"t":"result","id","ok":true,"data":{...}}` or `{"t":"result","id","ok":false,"error":"..."}`)
 
 Relays of existing Agent RPC for the viewed session, answered only to the
 requester. At most 4 queries in flight per connection (more → `busy`); each is
 bounded as listed. A query whose session left the device's view still
-answers (the client ignores stale replies by id).
+answers (the client ignores stale replies by id). A draft answers
+`No session`. The exact `data` shapes are in `docs/design-remote.md`
+("Queries"); they differ from this table in two places: `context` carries the
+`/context` figures (`tokens`, `window`, `percent`, `budget`, `history_tokens`,
+`trigger_tokens`, `target_tokens`, coverage, last compaction), because the
+Agent reports no per-category breakdown, and `changes` rows have no line
+counts (each needs a `changes.diff`); `diff` returns `added` and `removed`
+instead. `diff` of a path not in the list is `stale`.
 
 | kind | fields | Agent RPC | `data` (bounded) |
 |---|---|---|---|
@@ -72,7 +79,8 @@ answers (the client ignores stale replies by id).
 
 A running tool block whose new output only adds lines at the end is sent as
 `{"i":n,"append":{"output":[...lines]}}` instead of the whole block, like
-assistant text. When the bounded tail drops lines from its start, or anything
+assistant text. The first string continues the last output line (the line
+still being written), the rest are new lines. When the bounded tail drops lines from its start, or anything
 else changes, the full `block` is sent. The finished block is always sent once
 in full.
 
