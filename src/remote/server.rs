@@ -28,7 +28,7 @@ use super::{
     Connection, RemoteEvent,
     auth::{Auth, Refusal},
     fs,
-    wire::{self, FsRequest, Handshake},
+    wire::{self, FsRequest, Handshake, Query},
 };
 use crate::app::{Msg, Tx};
 
@@ -474,6 +474,11 @@ async fn connection<S: AsyncRead + AsyncWrite + Unpin>(
                                         finished.await.map_err(|_| "TUI closed")?;
                                         continue;
                                     }
+                                } else if value["t"] == "query" {
+                                    if let Ok(query) = Query::deserialize(&value) {
+                                        tx.send(Msg::Remote(RemoteEvent::Query { connection: id, id: request_id.to_owned(), query })).map_err(|_| "TUI closed")?;
+                                        continue;
+                                    }
                                 } else if let Ok(request) = FsRequest::deserialize(&value) {
                                     let reply = filesystem(request_id.to_owned(), request, roots.clone(), revoked.clone()).await?;
                                     let Some(reply) = reply else { break };
@@ -807,9 +812,12 @@ mod tests {
             .await
             .unwrap()
             .0;
-        send(&mut socket, json!({"t":"hello", "v":wire::VERSION, "token":"unknown"}))
-            .await
-            .unwrap();
+        send(
+            &mut socket,
+            json!({"t":"hello", "v":wire::VERSION, "token":"unknown"}),
+        )
+        .await
+        .unwrap();
         assert_eq!(receive(&mut socket).await["code"], "unauthorized");
         task.abort();
     }
@@ -894,9 +902,12 @@ mod tests {
             let stream = tls_connect(address, &cert).await;
             match tokio_tungstenite::client_async(request, stream).await {
                 Ok((mut socket, _)) if origin.contains("localhost") => {
-                    send(&mut socket, json!({"t":"hello", "v":wire::VERSION, "token":"unknown"}))
-                        .await
-                        .unwrap();
+                    send(
+                        &mut socket,
+                        json!({"t":"hello", "v":wire::VERSION, "token":"unknown"}),
+                    )
+                    .await
+                    .unwrap();
                     assert_eq!(receive(&mut socket).await["code"], "unauthorized");
                 }
                 Err(tungstenite::Error::Http(response)) if origin.contains("foreign") => {
@@ -987,6 +998,7 @@ mod tests {
             view: super::super::PhoneView::foreground(&app),
             projection: Default::default(),
             connected_at: jiff::Timestamp::UNIX_EPOCH,
+            queries: 0,
         });
         let stored = || -> Value {
             serde_json::from_str(&std::fs::read_to_string(dir.path().join("remote.json")).unwrap())
@@ -1016,7 +1028,9 @@ mod tests {
         let password = auth.lock().unwrap().password().to_owned();
         let mut requests = vec![json!({"t":"fs_roots", "id":"early"})];
         for device in ["".to_owned(), "bad\nname".into(), "x".repeat(65)] {
-            requests.push(json!({"t":"login", "v":wire::VERSION, "password":password, "device":device}));
+            requests.push(
+                json!({"t":"login", "v":wire::VERSION, "password":password, "device":device}),
+            );
         }
         for request in requests {
             let mut socket = connect(address).await;
@@ -1126,6 +1140,38 @@ mod tests {
         task.abort();
     }
 
+    #[tokio::test]
+    async fn a_query_reaches_the_reducer_and_a_malformed_one_is_a_failed_result() {
+        let (_dir, address, auth, mut rx, task) = start().await;
+        let (mut socket, _connection) = admitted(address, &auth, &mut rx).await;
+        for kind in ["authorized", "welcome", "snapshot"] {
+            assert_eq!(receive(&mut socket).await["t"], kind);
+        }
+        send(&mut socket, json!({"t":"query", "id":"q1", "kind":"diff"}))
+            .await
+            .unwrap();
+        assert_eq!(
+            receive(&mut socket).await,
+            json!({"t":"result", "id":"q1", "ok":false, "error":"bad_request"})
+        );
+        send(
+            &mut socket,
+            json!({"t":"query", "id":"q2", "kind":"diff", "path":"src/a.rs"}),
+        )
+        .await
+        .unwrap();
+        let Msg::Remote(RemoteEvent::Query {
+            id,
+            query: Query::Diff { path },
+            ..
+        }) = rx.recv().await.unwrap()
+        else {
+            panic!("a query")
+        };
+        assert_eq!((id.as_str(), path.as_str()), ("q2", "src/a.rs"));
+        task.abort();
+    }
+
     #[tokio::test(start_paused = true)]
     async fn revoked_connections_cannot_start_queued_filesystem_work() {
         let dir = tempfile::tempdir().unwrap();
@@ -1172,9 +1218,12 @@ mod tests {
      {
         let (_dir, address, auth, mut rx, task) = start().await;
         let mut socket = connect(address).await;
-        send(&mut socket, json!({"t":"hello", "v":wire::VERSION, "token":"unknown"}))
-            .await
-            .unwrap();
+        send(
+            &mut socket,
+            json!({"t":"hello", "v":wire::VERSION, "token":"unknown"}),
+        )
+        .await
+        .unwrap();
         assert_eq!(receive(&mut socket).await["code"], "unauthorized");
         let (mut socket, _connection) = admitted(address, &auth, &mut rx).await;
         let mut token = String::new();

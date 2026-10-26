@@ -31,13 +31,27 @@ pub enum DiffRow {
 
 impl DiffRow {
     /// The row as `c` copies it: without the line-number gutter.
-    fn body(&self) -> String {
+    pub fn body(&self) -> String {
         match self {
             Self::Blank => String::new(),
             Self::Note(text) | Self::Hunk(text) => text.clone(),
             Self::Line { kind, text, .. } => format!("{}{text}", sign(*kind)),
         }
     }
+}
+
+/// `changes.list` of the workspace's live Git changes, as the diff view reads them.
+pub fn workspace_changes() -> serde_json::Value {
+    json!({"scope": "workspace", "limit": 200, "max_bytes": 262_144})
+}
+
+/// Added and removed lines of one path's records.
+pub fn measure(pages: &[DiffPage]) -> (usize, usize) {
+    // Records are counted one by one: line indexes only identify a line within a record.
+    pages
+        .iter()
+        .map(|page| protocol::changes::count_lines(std::slice::from_ref(page)))
+        .fold((0, 0), |sum, count| (sum.0 + count.0, sum.1 + count.1))
 }
 
 pub fn sign(kind: LineKind) -> &'static str {
@@ -231,7 +245,7 @@ impl App {
     pub(super) fn open_diff(&self) -> DiffState {
         self.call(
             protocol::METHOD_CHANGES_LIST,
-            json!({"scope": "workspace", "limit": 200, "max_bytes": 262_144}),
+            workspace_changes(),
             SessionOp::ChangeFiles,
         );
         DiffState {
@@ -376,12 +390,7 @@ impl App {
         let file = diff.files.iter_mut().find(|file| file.path == query.path);
         match result {
             Ok(pages) => {
-                // Records are counted one by one: line indexes only identify a
-                // line within a record.
-                let (added, removed) = pages
-                    .iter()
-                    .map(|page| protocol::changes::count_lines(std::slice::from_ref(page)))
-                    .fold((0, 0), |sum, count| (sum.0 + count.0, sum.1 + count.1));
+                let (added, removed) = measure(&pages);
                 if let Some(file) = file {
                     file.lines = Some((added, removed));
                     file.failed = false;

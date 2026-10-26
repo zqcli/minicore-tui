@@ -350,10 +350,15 @@ sign-in.
 {"t":"fs_roots","id":"c26"}
 {"t":"fs_list","id":"c27","path":"/Users/me/Develops","hidden":false}
 {"t":"fs_mkdir","id":"c28","parent":"/Users/me/Develops","name":"new-app"}
+{"t":"query","id":"q1","kind":"context"}
+{"t":"query","id":"q2","kind":"changes"}
+{"t":"query","id":"q3","kind":"diff","path":"src/parser.rs"}
+{"t":"query","id":"q4","kind":"tool_output","call_id":"call_...","offset":0}
+{"t":"query","id":"q5","kind":"files","query":"pars"}
 ```
 
 `id` is a client string of at most 64 bytes, echoed in the answer. Unknown `t`
-or `kind`, or missing fields, answer `ack`/`fs` with `ok:false` and
+or `kind`, or missing fields, answer `ack`/`fs`/`result` with `ok:false` and
 `error:"bad_request"`; the connection stays open. An invalid or oversized `id`
 is returned as the empty string, never echoed without its 64-byte bound.
 
@@ -416,6 +421,67 @@ stopped listener) are ignored. Two devices answering the same approval: the
 first answer wins, the second gets `ack` with `error:"stale"` and the client
 says `Already answered` while the next `state` closes its sheet.
 
+### Queries
+
+A query relays one bounded Agent read for the requesting device's own view (its
+session; a draft answers `"No session"`) and is answered only to that
+connection as `result`, once the Agent replies. Queries do not focus the view,
+so they never move the TUI foreground, and the pending-open/create rules do
+not apply to them. The reducer counts each connection's queries waiting on the
+Agent: a fifth one is answered `"busy"` at once, and each reply frees its slot,
+also when its connection has gone (the reply is then dropped). A query whose
+session left the device's view still answers; the client ignores stale
+replies by id. Agent errors are passed on as their message.
+
+```json
+{"t":"result","id":"q1","ok":true,"data":{...}}
+{"t":"result","id":"q1","ok":false,"error":"busy"|"stale"|"No session"|"bad_request"|"<Agent message>"}
+```
+
+| kind | fields | Agent RPC | refused when |
+|---|---|---|---|
+| `context` | — | `session.context` | — |
+| `changes` | — | `changes.list` with `/diff`'s parameters (`scope:"workspace"`, `limit:200`, `max_bytes:262144`) | — |
+| `diff` | `path` | that same `changes.list`, then `changes.diff` (paged to the end, as the diff view reads) for every record of `path` | `path` is not in the list (`"stale"`) |
+| `tool_output` | `call_id`, `offset` (UTF-8 byte offset) | `tool.output` with the call's full identity from the viewed transcript, `stream:"output"`, `max_bytes:65536` | no tool block with that `call_id` in the viewed transcript (`"stale"`, before any RPC) |
+| `files` | `query` | `workspace.files` with the `@` list's parameters (`recursive:true`, `max_bytes:262144`) and `query`, `limit:50` | — |
+
+`data` per kind:
+
+```json
+// context: the figures the /context view shows. tokens/window/percent: the
+// last request's report (session.presentation; percent of the input budget,
+// else of the window, as the footer); the rest from session.context.
+{"tokens":31200|null,"window":64000|null,"percent":78.0|null,"budget":40000|null,
+ "history_tokens":370|null,"trigger_tokens":32000|null,"target_tokens":16000|null,
+ "compacting":false,"coverage":{"turns":6,"items":12,"kept":3}|null,
+ "last_compaction":{"origin":"automatic"|"manual"|null,
+                    "status":"compacted"|"noop"|"failed"|"unknown_write"|"unknown",
+                    "before":4200|null,"after":900|null}|null,
+ "failure":"context_uncompressible"|null}
+// changes: one row per path in list order; branch = state.session.branch;
+// truncated = more records follow (next_cursor).
+{"branch":"main"|null,"files":[{"path":"src/a.rs",
+  "status":"added"|"modified"|"deleted"|"renamed"|"conflict"|"unknown"}],"truncated":false}
+// diff: the diff view's rows without the line-number gutter: "@@ -a,b +c,d @@",
+// "+text", "-text", " text", "" between records, and notes ("── change 1 of 2 ──",
+// "No differences.", "Binary file: the diff is not shown.", "… the diff continues").
+// added/removed count lines as the diff view's file column; truncated: cut at
+// 256 KiB of line text or truncated by the Agent.
+{"path":"src/a.rs","lines":["@@ -1,1 +1,2 @@","-old","+new","+more"],"added":2,"removed":1,"truncated":false}
+// tool_output: one page; offset is where text starts (past bytes the Agent no
+// longer keeps); continue with next_offset until eof.
+{"text":"...","offset":0,"next_offset":65536,"eof":false,"truncated":false}
+// files: regular files only, workspace-relative, at most 50; truncated: the
+// Agent's page is partial, more may match.
+{"paths":["src/main.rs"],"truncated":false}
+```
+
+The Agent reports no per-category token breakdown, so `context` carries the
+`/context` figures instead. `changes` lists no line counts: they need one
+`changes.diff` per file, which the `diff` query of the opened file returns
+(`added`, `removed`).
+
 ### Server → client
 
 ```json
@@ -430,6 +496,7 @@ says `Already answered` while the next `state` closes its sheet.
 {"t":"fs","id":"c27","ok":true,"listing":Listing}
 {"t":"fs","id":"c28","ok":true,"created":"/Users/me/Develops/new-app"}
 {"t":"fs","id":"c27","ok":false,"error":"outside_roots","message":"..."}
+{"t":"result","id":"q1","ok":true,"data":{...}}
 {"t":"bye","reason":"remote_off"|"tui_exit"|"replaced"|"signed_out"}
 ```
 
@@ -442,7 +509,7 @@ Routing, with several devices connected:
 | Asynchronous session `notice` | Plain text to devices viewing that session; `"<label>": text` to other devices |
 | Background-attention `notice` (approval or turn end) | Only devices not viewing that session, with its session label |
 | App-wide `notice` (remote, password, config) | Every connection |
-| `ack`, `fs` | Only the connection that sent the request |
+| `ack`, `fs`, `result` | Only the connection that sent the request |
 | `returned` | The connection that last sent `submit`/`queue` **to that session**, if connected; otherwise devices viewing it; otherwise kept in `Session::returned` for local control |
 | `bye` | `replaced`: only the older connection of that device; `remote_off`, `tui_exit`, `signed_out`: every connection |
 
@@ -645,6 +712,7 @@ workspace.
 | `src/remote/wire.rs` | Serde types of every message above |
 | `src/remote/view.rs` | `State`/`Block` projection from `&App`, the shared catalog cache and the per-connection diff tracker |
 | `src/remote/fs.rs` | Host directory functions |
+| `src/remote/query.rs` | Query relays: the Agent reads per kind and the `data` mapping, run off the reducer |
 | `src/remote/web/` | `index.html` (the whole client: HTML, CSS, JS), `sw.js`, `manifest.webmanifest` and the icons, embedded with `include_bytes!` |
 | `src/app/remote.rs` | `App` side: `/remote` commands, mode changes, local gating, intents, `sync_remote` |
 | `src/ui/views/remote.rs` | The remote status screen; composer placeholder and footer mark live with the composer and footer |
@@ -666,6 +734,9 @@ gains no new branch beyond calling `sync_remote` once per iteration.
 | Outbound queue per connection | 512 messages, then the connection is dropped |
 | Ping / idle close | 20 s / 60 s |
 | Directory entries per listing | 1000 |
+| Queries waiting on the Agent per connection | 4, then `busy` |
+| `diff` text / `tool_output` page / `files` names | 256 KiB / 64 KiB / 50 |
+| `changes` records listed | 200 (one `changes.list` page) |
 | Sessions in `State` | 50 |
 | Wrong passwords | 5 in a row → 30 s pause, doubling per further 5, at most 15 min |
 | Remembered phones | 20 (so at most 20 devices connected, one connection each) |

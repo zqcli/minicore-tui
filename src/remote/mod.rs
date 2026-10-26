@@ -2,6 +2,7 @@
 
 pub mod auth;
 pub mod fs;
+pub mod query;
 pub mod server;
 pub mod tls;
 pub mod view;
@@ -191,6 +192,8 @@ pub struct Phone {
     pub view: PhoneView,
     pub projection: view::View,
     pub connected_at: jiff::Timestamp,
+    /// Queries waiting on the Agent, at most `query::IN_FLIGHT`.
+    pub queries: u8,
 }
 
 impl Phone {
@@ -387,6 +390,17 @@ pub enum RemoteEvent {
         id: String,
         intent: wire::Intent,
         done: oneshot::Sender<()>,
+    },
+    Query {
+        connection: u64,
+        id: String,
+        query: wire::Query,
+    },
+    /// The Agent's reply to a query, for its connection if that is still admitted.
+    Answered {
+        connection: u64,
+        id: String,
+        result: Result<Value, String>,
     },
     Disconnected(u64),
     /// A wrong password; `locked` is the pause it started or ran into.

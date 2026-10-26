@@ -13,8 +13,8 @@ use crate::protocol::{self, Reasoning};
 use crate::remote::{
     Bound, DraftSettings, NoticeTarget, Phone, PhoneView, RemoteEvent,
     auth::Auth,
-    fs, view, whole_seconds,
-    wire::{self, Choice, Intent},
+    fs, query, view, whole_seconds,
+    wire::{self, Choice, Intent, Query},
 };
 
 pub const REMOTE_FLASH: &str = "Remote control is on · /remote off to take back";
@@ -206,6 +206,7 @@ impl App {
                     view,
                     projection: view::View::default(),
                     connected_at: jiff::Timestamp::now(),
+                    queries: 0,
                 });
             }
             RemoteEvent::LoginRefused { locked } => {
@@ -218,6 +219,22 @@ impl App {
                     None => "Remote: wrong password".to_owned(),
                 };
                 self.notice(NoticeLevel::Info, text);
+            }
+            RemoteEvent::Query {
+                connection,
+                id,
+                query,
+            } => self.phone_query(connection, id, query),
+            RemoteEvent::Answered {
+                connection,
+                id,
+                result,
+            } => {
+                if let Some(phone) = self.phone_mut(connection) {
+                    phone.queries -= 1;
+                    self.remote
+                        .send(Some(connection), wire::result(&id, result));
+                }
             }
             RemoteEvent::Disconnected(id) => {
                 self.remote.phones.retain(|phone| phone.connection.id != id);
@@ -241,6 +258,50 @@ impl App {
                 }
                 let _ = done.send(());
             }
+        }
+    }
+
+    fn phone_mut(&mut self, connection: u64) -> Option<&mut Phone> {
+        self.remote
+            .phones
+            .iter_mut()
+            .find(|phone| phone.connection.id == connection)
+    }
+
+    /// Starts a query for the phone's own view without focusing it: reads move no foreground.
+    fn phone_query(&mut self, connection: u64, id: String, query: Query) {
+        let Some(phone) = self
+            .remote
+            .phones
+            .iter()
+            .find(|phone| phone.connection.id == connection)
+        else {
+            return;
+        };
+        let started = if phone.queries == query::IN_FLIGHT {
+            Err("busy".to_owned())
+        } else {
+            let session = phone
+                .view
+                .session_id()
+                .map(|id| self.live(id).expect("a phone views a live session"));
+            query::start(self.client.clone(), session, query)
+        };
+        match started {
+            Ok(work) => {
+                self.phone_mut(connection).unwrap().queries += 1;
+                self.spawn_msg(async move {
+                    let result = work.await;
+                    Msg::Remote(RemoteEvent::Answered {
+                        connection,
+                        id,
+                        result,
+                    })
+                });
+            }
+            Err(error) => self
+                .remote
+                .send(Some(connection), wire::result(&id, Err(error))),
         }
     }
 

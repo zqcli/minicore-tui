@@ -1203,6 +1203,7 @@ fn admit(app: &mut App, name: &str, at: &str) {
         view: crate::remote::PhoneView::foreground(app),
         projection: Default::default(),
         connected_at: at.parse().expect("time"),
+        queries: 0,
     });
 }
 

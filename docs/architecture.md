@@ -27,7 +27,8 @@ src/
                 scaffold (first-run starters)
   remote/       phone protocol, listener, authentication and semantic projection:
                 mod (mode, listeners, connection, events), auth, server, tls
-                (certificate loading), wire, view, fs (host directories); web/
+                (certificate loading), wire, view, fs (host directories), query
+                (Agent reads relayed for one phone's view); web/
                 holds embedded client assets
   rpc.rs        Agent child process and JSON-RPC Client
   protocol/     serde DTOs and constants only: methods, error codes, required
@@ -155,7 +156,7 @@ enum Msg {
     Notice(NoticeLevel, String),
     DraftEdited(Option<String>),
     Flash(String),                          // `Copied!` over the transcript
-    Remote(RemoteEvent),                    // listener admission, intents, disconnects
+    Remote(RemoteEvent),                    // listener admission, intents, queries, disconnects
 }
 ```
 
@@ -258,7 +259,13 @@ global first text and composer cannot be stolen; another device receives
 `Another device is opening a session`.
 
 Remote text uses the same submit/send paths without changing local composer
-text or history. Each session keeps its last text-sending connection;
+text or history, and the composer's line rules (`App::prompt_text`): templates
+expand, built-in commands are refused.
+
+Phone queries (`remote::query`) are Agent reads for the phone's own view that
+do not focus it: the reducer checks the view and the per-phone limit of four in
+flight, then a spawned task calls the Agent and posts `RemoteEvent::Answered`,
+which frees the slot and answers the connection if it is still admitted. Each session keeps its last text-sending connection;
 `restore_draft` sends `returned` there if connected, else to its viewers, else
 keeps it in `Session::returned` until local control returns. A scoped
 `Remote::notice_target` routes synchronous notices to the requester and async
@@ -287,10 +294,12 @@ viewed session epoch change sends a snapshot; otherwise it sends
 revision-indexed block upserts and state only when the serialized value differs
 from what that phone was last sent. Current-session marks, interaction, usage,
 queue and background counts are per-view; catalogs and device locations are
-shared. A phone whose queue overflows is dropped alone. Streaming assistants use
-append-only suffix updates until they finish, when one full block is sent.
-The tracker keeps viewed revisions, streaming keys and byte lengths, and the
-last serialized state; it is not an event log. Catalogs are cached by generation,
+shared. A phone whose queue overflows is dropped alone. Streaming assistants and
+running tools whose output only grew use append-only updates until they finish
+(or, for a tool, until its tail drops lines or another field changes), when one
+full block is sent. The tracker keeps viewed revisions, streaming keys, byte and
+line counts (a hash of a running tool's other fields), and the last serialized
+state; it is not an event log. Catalogs are cached by generation,
 so unchanged frames never rebuild or sort the full session catalog. `LiveTurn::started_ms` is captured once so elapsed
 time belongs to the client. The footer and projection share the pure
 `app::session::context_percent` calculation. The projection never imports UI code.

@@ -276,7 +276,7 @@ async fn a_deny_with_a_message_answers_first_then_steers_the_reason_into_the_sam
 
 #[tokio::test(start_paused = true)]
 async fn phone_text_expands_templates_refuses_commands_and_keeps_other_slashes_as_the_composer_does()
-{
+ {
     let mut h = Harness::opened(display_read(0, 0)).await;
     h.fake.script("turn.send", json!({"turn":turn("l1")}));
     h.fake.script_held("turn.wait", waited("l1", completed()));
@@ -298,8 +298,14 @@ async fn phone_text_expands_templates_refuses_commands_and_keeps_other_slashes_a
             Some("Review parser.rs for edge cases; all: parser.rs edge cases"),
         ),
         ("//review x", Some("/review x")),
-        ("/usr/bin is where it lives", Some("/usr/bin is where it lives")),
-        ("fix src/main.rs then /review", Some("fix src/main.rs then /review")),
+        (
+            "/usr/bin is where it lives",
+            Some("/usr/bin is where it lives"),
+        ),
+        (
+            "fix src/main.rs then /review",
+            Some("fix src/main.rs then /review"),
+        ),
         ("/reveiw the parser", Some("/reveiw the parser")),
         ("/9lives", Some("/9lives")),
         ("/ hello", Some("/ hello")),
@@ -335,9 +341,8 @@ async fn compact_runs_for_the_viewed_idle_session_and_is_refused_while_busy_or_i
     };
     for (live, compacting) in [(true, false), (false, true)] {
         let session = h.app.session.as_mut().unwrap();
-        session.live = live.then(|| {
-            crate::app::LiveTurn::new(crate::protocol::TurnRef::new("s1", "l1"), 0)
-        });
+        session.live =
+            live.then(|| crate::app::LiveTurn::new(crate::protocol::TurnRef::new("s1", "l1"), 0));
         session.compaction = compacting.then(progress);
         request(&mut h, json!({"kind":"compact"}));
         assert_eq!(output.recv().await.unwrap()["error"], "busy");
@@ -381,7 +386,10 @@ async fn unqueue_returns_a_matching_follow_up_only_to_its_requester() {
     session.push_follow_up("one".into());
     session.push_follow_up("two".into());
     for (index, text) in [(0, "steered"), (1, "two"), (3, "one")] {
-        request(&mut h, json!({"kind":"unqueue", "index":index, "text":text}));
+        request(
+            &mut h,
+            json!({"kind":"unqueue", "index":index, "text":text}),
+        );
         assert_eq!(
             messages(&mut first),
             [json!({"t":"ack", "id":"request", "ok":false, "error":"stale"})]
@@ -1924,4 +1932,249 @@ async fn a_late_open_result_cannot_bring_back_a_session_deleted_by_another_devic
     h.app.sync_remote();
     assert_eq!(projected(&mut a)["session"]["id"], "s1");
     assert_eq!(projected(&mut b)["session"]["id"], "s2");
+}
+
+fn query_from(h: &mut Harness, connection: u64, id: &str, query: Value) {
+    h.app.on_msg(Msg::Remote(RemoteEvent::Query {
+        connection,
+        id: id.into(),
+        query: serde_json::from_value(query).unwrap(),
+    }));
+}
+
+/// The `result` messages waiting in `output`, without their `t`.
+fn results(output: &mut mpsc::Receiver<Value>) -> Vec<Value> {
+    messages(output)
+        .into_iter()
+        .filter(|message| message["t"] == "result")
+        .map(|mut message| {
+            message.as_object_mut().unwrap().remove("t");
+            message
+        })
+        .collect()
+}
+
+fn live_mut<'a>(h: &'a mut Harness, id: &str) -> &'a mut crate::app::Session {
+    let app = &mut h.app;
+    app.session
+        .iter_mut()
+        .chain(app.background.iter_mut())
+        .find(|session| session.info.session_id == id)
+        .unwrap()
+}
+
+#[tokio::test(start_paused = true)]
+async fn context_and_files_queries_read_the_requesting_devices_session_and_map_the_reply() {
+    let (mut h, mut a, mut b) = separate_views().await;
+    h.fake.script(
+        "session.context@s2",
+        json!({"session_id":"s2", "current_operation":null,
+               "coverage":{"covered_loop_count":6, "covered_item_count":12, "retained_item_count":3},
+               "last_result":{"operation_id":"auto-1", "origin":"automatic", "status":"compacted",
+                              "before_tokens":4200, "after_tokens":900},
+               "budget":{"estimated_history_tokens":370, "input_budget_tokens":40000,
+                         "trigger_tokens":32000, "target_tokens":16000},
+               "automatic":{"current":null, "last":null}, "last_prepare_failure":null}),
+    );
+    h.fake.script(
+        "workspace.files@s1",
+        json!({"entries":[{"path":"src/main.rs", "kind":"file", "size":1}, {"path":"src", "kind":"directory"}],
+               "truncated":true, "scan_complete":false}),
+    );
+    live_mut(&mut h, "s2").presentation = Some(
+        serde_json::from_value(json!({"session_id":"s2",
+        "context":{"tokens":18000, "window":64000, "percent":28.1, "kind":"reported"}}))
+        .unwrap(),
+    );
+    messages(&mut a);
+    messages(&mut b);
+    query_from(&mut h, 2, "c", json!({"kind":"context"}));
+    query_from(&mut h, 1, "f", json!({"kind":"files", "query":"main"}));
+    h.settle().await;
+    assert_eq!(
+        h.calls("session.context").last().unwrap()["session_id"],
+        "s2"
+    );
+    assert_eq!(
+        results(&mut b),
+        [json!({"id":"c", "ok":true, "data":{
+            "tokens":18000, "window":64000, "percent":45.0, "budget":40000, "history_tokens":370,
+            "trigger_tokens":32000, "target_tokens":16000, "compacting":false,
+            "coverage":{"turns":6, "items":12, "kept":3},
+            "last_compaction":{"origin":"automatic", "status":"compacted", "before":4200, "after":900},
+            "failure":null}})]
+    );
+    assert_eq!(
+        h.calls("workspace.files").last().unwrap(),
+        &json!({"session_id":"s1", "recursive":true, "query":"main", "limit":50, "max_bytes":262_144})
+    );
+    assert_eq!(
+        results(&mut a),
+        [json!({"id":"f", "ok":true, "data":{"paths":["src/main.rs"], "truncated":true}})]
+    );
+
+    let mut draft = Harness::new();
+    draft.app.remote.url = Some("http://localhost:8765".into());
+    let (mut output, _closing, admission) = phone(&mut draft, 1, "phone");
+    assert!(admission.await.unwrap());
+    query_from(&mut draft, 1, "draft", json!({"kind":"context"}));
+    assert_eq!(
+        results(&mut output),
+        [json!({"id":"draft", "ok":false, "error":"No session"})]
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn changes_and_diff_queries_list_the_workspace_like_the_diff_view_and_refuse_unlisted_paths()
+{
+    let (mut h, mut a, _b) = separate_views().await;
+    h.fake.script(
+        "changes.list@s1",
+        json!({"records":[
+            {"change_ref":"workspace:a", "path":"src/a.rs", "kind":"modified", "details_available":true},
+            {"change_ref":"workspace:b", "path":"new.txt", "kind":"added", "details_available":true},
+            {"change_ref":"workspace:c", "path":"src/a.rs", "kind":"modified", "details_available":true}],
+            "next_cursor":{"offset":3}, "total":4, "warnings":[]}),
+    );
+    h.fake.script(
+        "changes.diff@s1",
+        json!({"hunks":[{"old_start":0, "old_count":1, "new_start":0, "new_count":2, "lines":[
+                {"kind":"removed", "old_index":0, "text":"old\n", "line_complete":true},
+                {"kind":"added", "new_index":0, "text":"new\n", "line_complete":true},
+                {"kind":"added", "new_index":1, "text":"more\n", "line_complete":true}]}],
+               "next_cursor":null, "complete":true, "binary":false, "availability":"available",
+               "stale":false, "truncated":false}),
+    );
+    live_mut(&mut h, "s1").presentation = Some(
+        serde_json::from_value(json!({"session_id":"s1", "git_branch":"feat/parser"})).unwrap(),
+    );
+    messages(&mut a);
+    query_from(&mut h, 1, "changes", json!({"kind":"changes"}));
+    h.settle().await;
+    let lists = h.calls("changes.list");
+    assert_eq!(
+        lists.last().unwrap(),
+        &json!({"session_id":"s1", "scope":"workspace", "limit":200, "max_bytes":262_144})
+    );
+    assert_eq!(
+        results(&mut a),
+        [
+            json!({"id":"changes", "ok":true, "data":{"branch":"feat/parser", "files":[
+            {"path":"src/a.rs", "status":"modified"}, {"path":"new.txt", "status":"added"}],
+            "truncated":true}})
+        ]
+    );
+    query_from(&mut h, 1, "diff", json!({"kind":"diff", "path":"new.txt"}));
+    query_from(
+        &mut h,
+        1,
+        "gone",
+        json!({"kind":"diff", "path":"README.md"}),
+    );
+    h.settle().await;
+    assert_eq!(h.calls("changes.list").len(), lists.len() + 2);
+    let diffs = h.calls("changes.diff");
+    assert_eq!(diffs.len(), 1);
+    assert_eq!(
+        (&diffs[0]["session_id"], &diffs[0]["change_ref"]),
+        (&json!("s1"), &json!("workspace:b"))
+    );
+    let mut answers = results(&mut a);
+    answers.sort_by_key(|answer| answer["id"].as_str().unwrap().to_owned());
+    assert_eq!(
+        answers,
+        [
+            json!({"id":"diff", "ok":true, "data":{"path":"new.txt", "added":2, "removed":1, "truncated":false,
+                "lines":["@@ -1,1 +1,2 @@", "-old", "+new", "+more"]}}),
+            json!({"id":"gone", "ok":false, "error":"stale"}),
+        ]
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn tool_output_pages_a_call_of_the_viewed_transcript_and_another_sessions_call_is_stale() {
+    let (mut h, mut a, mut b) = separate_views().await;
+    let call = crate::transcript::ToolCall::new(
+        crate::protocol::ToolRef {
+            session_id: "s1".into(),
+            loop_id: "loop-s1".into(),
+            request_index: 2,
+            tool_call_id: "call-1".into(),
+        },
+        "bash",
+    );
+    live_mut(&mut h, "s1")
+        .transcript
+        .push(crate::transcript::Block::Tool(Box::new(call)));
+    h.fake.script(
+        "tool.output",
+        json!({"tool_ref":{"session_id":"s1", "loop_id":"loop-s1", "request_index":2, "tool_call_id":"call-1"},
+               "stream":"output", "encoding":"utf8", "base_offset":10, "next_offset":25, "observed_end":40,
+               "eof":false, "truncated":false, "availability":"available", "data":"hello output\n"}),
+    );
+    messages(&mut a);
+    messages(&mut b);
+    query_from(
+        &mut h,
+        1,
+        "out",
+        json!({"kind":"tool_output", "call_id":"call-1", "offset":10}),
+    );
+    query_from(
+        &mut h,
+        2,
+        "other",
+        json!({"kind":"tool_output", "call_id":"call-1", "offset":0}),
+    );
+    h.settle().await;
+    assert_eq!(
+        h.calls("tool.output"),
+        [
+            json!({"session_id":"s1", "loop_id":"loop-s1", "request_index":2, "tool_call_id":"call-1",
+                "stream":"output", "offset":10, "max_bytes":65_536})
+        ]
+    );
+    assert_eq!(
+        results(&mut a),
+        [
+            json!({"id":"out", "ok":true, "data":{"text":"hello output\n", "offset":10, "next_offset":25,
+                "eof":false, "truncated":false}})
+        ]
+    );
+    assert_eq!(
+        results(&mut b),
+        [json!({"id":"other", "ok":false, "error":"stale"})]
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_fifth_query_in_flight_is_busy_and_a_reply_after_the_phone_left_is_dropped() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.app.remote.url = Some("http://localhost:8765".into());
+    let (mut first, _close, admission) = phone(&mut h, 1, "first");
+    assert!(admission.await.unwrap());
+    let (mut second, _close2, admission) = phone(&mut h, 2, "second");
+    assert!(admission.await.unwrap());
+    h.fake
+        .script_held("session.context", json!({"session_id":"s1"}));
+    for id in ["1", "2", "3", "4", "5"] {
+        query_from(&mut h, 1, id, json!({"kind":"context"}));
+    }
+    query_from(&mut h, 2, "left", json!({"kind":"context"}));
+    h.settle().await;
+    assert_eq!(
+        results(&mut first),
+        [json!({"id":"5", "ok":false, "error":"busy"})]
+    );
+    h.app.on_msg(Msg::Remote(RemoteEvent::Disconnected(2)));
+    h.fake.release("session.context");
+    h.settle().await;
+    let answered = results(&mut first);
+    assert_eq!(answered.len(), 4);
+    assert!(answered.iter().all(|answer| answer["ok"] == true));
+    assert!(results(&mut second).is_empty());
+    assert_eq!(h.app.remote.phones[0].queries, 0);
+    query_from(&mut h, 1, "again", json!({"kind":"context"}));
+    h.settle().await;
+    assert_eq!(results(&mut first)[0]["ok"], true);
 }

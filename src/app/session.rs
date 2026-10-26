@@ -7,7 +7,7 @@ use crate::protocol::event::{PreviewState, ToolOutcome};
 use crate::protocol::read::{InterruptedRequest, TurnRecord};
 use crate::protocol::read::{RawHistoryItem, UserKind};
 use crate::protocol::{
-    AgentEvent, CompactStatus, CompactionPhase, CompactionProgress, CompactionResult,
+    AgentEvent, CompactStatus, CompactionPhase, CompactionProgress, CompactionResult, ContextUsage,
     SessionContext, SessionInfo, SessionPresentation, ToolRef, TurnRef, TurnWaitResult, Usage,
     UsageTotals,
 };
@@ -1056,8 +1056,13 @@ pub(crate) fn input_budget(context: Option<&SessionContext>) -> Option<u64> {
 /// The last reported context usage as a percentage of its input budget or model window.
 pub fn context_percent(session: &Session) -> Option<f64> {
     let usage = session.presentation.as_ref()?.context.as_ref()?;
+    reported_percent(usage, session.context.as_ref())
+}
+
+/// Reported usage as a percentage of the input budget in `context`, else of the model window.
+pub fn reported_percent(usage: &ContextUsage, context: Option<&SessionContext>) -> Option<f64> {
     let tokens = usage.tokens?;
-    match input_budget(session.context.as_ref()) {
+    match input_budget(context) {
         Some(budget) => Some(tokens as f64 / budget as f64 * 100.0),
         None => usage.percent.or_else(|| {
             usage
