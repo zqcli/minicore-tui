@@ -351,17 +351,22 @@ pre.view.wrap{white-space:pre-wrap;overflow-wrap:anywhere}
 html.kb #dock{padding-bottom:6px}
 #dock>*{max-width:var(--col);margin-left:auto;margin-right:auto}
 #newout{position:absolute;left:50%;bottom:calc(100% + 8px);transform:translateX(-50%);box-shadow:var(--sh);background:var(--sf);color:var(--tx);z-index:5;animation:rise var(--fast) var(--ease)}
-#strip{display:flex;align-items:center;gap:10px;min-height:44px;padding:0 0 4px 6px}
+#strip{display:flex;align-items:center;gap:10px;min-height:44px;padding:0 0 4px 6px;margin-bottom:8px}
 #strip .spin{color:var(--ac)}
 .stx{flex:1;min-width:0;display:flex;flex-direction:column;line-height:1.3}
-.st1{display:flex;align-items:baseline;gap:8px;min-width:0;font-size:var(--t14)}
+.st1{display:flex;align-items:center;gap:8px;min-width:0;font-size:var(--t14)}
 .st1 b{font-weight:600;white-space:nowrap}
 .st1 .mono{flex:1;min-width:0;font-size:var(--t12);color:var(--tx3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .st1 .el{font-size:var(--t13);color:var(--tx3);font-variant-numeric:tabular-nums;flex:none}
 .ctxb{font-size:var(--t12);font-weight:500;color:var(--tx3);min-height:44px;min-width:44px;padding:0 4px;font-variant-numeric:tabular-nums;flex:none}
 .ctxb.hi{color:var(--wa)}
-.stop{flex:none;display:inline-flex;align-items:center;gap:6px;min-height:44px;padding:0 14px;border-radius:22px;background:var(--ers);color:var(--er);font-size:var(--t14);font-weight:600}
-.stop:disabled{opacity:.55}
+.stop{flex:none;display:inline-flex;align-items:center;min-height:40px;padding:4px 0;color:var(--er);font-size:var(--t13);font-weight:600}
+.sc{position:relative;display:inline-flex;align-items:center;gap:5px;height:32px;padding:0 12px;border-radius:16px;box-shadow:inset 0 0 0 1px currentColor;overflow:hidden;white-space:nowrap}
+.stop:disabled{opacity:.6}
+.stop.armed .sc{background:var(--er);color:#fff;box-shadow:none}
+[data-theme=dark] .stop.armed .sc{color:#1c0b0c}
+.stop.armed .sc::after{content:"";position:absolute;left:0;right:0;bottom:0;height:3px;background:currentColor;opacity:.55;transform-origin:left;animation:drain 3s linear var(--ad,0s) forwards}
+@keyframes drain{to{transform:scaleX(0)}}
 #apprbar{display:flex;align-items:center;gap:10px;min-height:48px;margin-bottom:6px;padding:4px 4px 4px 14px;border-radius:var(--r2);background:var(--was);color:var(--wa);font-size:var(--t14);font-weight:500;animation:rise var(--fast) var(--ease)}
 #apprbar>span{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #apprbar .btn{min-height:40px;background:var(--wac);color:#fff}
@@ -500,8 +505,9 @@ kbd{font:500 var(--t12) var(--mono);padding:2px 6px;border-radius:6px;background
   .ib:hover,.sopen:hover,.tr:hover,.opt:hover,.sugg button:hover,.cbh button:hover,.tbar button:hover,.crumbs button:hover,.qmore:hover{background:var(--fill)}
   .chip:hover,.row:hover:not(:disabled),.pill:hover,.srow.cur .sopen:hover,.seg button:hover{background:var(--fill2)}
   .seg button[aria-checked=true]:hover{background:var(--sf)}
-  .btn:hover:not(:disabled),.stop:hover:not(:disabled),#send:hover:not(:disabled){filter:brightness(.94)}
-  [data-theme=dark] .btn:hover:not(:disabled),[data-theme=dark] .stop:hover:not(:disabled),[data-theme=dark] #send:hover:not(:disabled){filter:brightness(1.2)}
+  .stop:hover:not(:disabled):not(.armed) .sc{background:var(--ers)}
+  .btn:hover:not(:disabled),#send:hover:not(:disabled){filter:brightness(.94)}
+  [data-theme=dark] .btn:hover:not(:disabled),[data-theme=dark] #send:hover:not(:disabled){filter:brightness(1.2)}
 }
 </style>
 <script id="core">
@@ -567,8 +573,7 @@ globalThis.MC = (() => {
   };
   // The stored appearance choice ('light', 'dark', anything else = System) and the OS preference give the effective theme.
   const theme = (choice, osDark) => choice === 'light' || choice === 'dark' ? choice : osDark ? 'dark' : 'light';
-  // The install help to offer: none once installed, the browser's own prompt when it gave one, else on iPhone and iPad
-  // the Share-sheet hint until it is dismissed.
+  // The install help to offer: none once installed, the browser's prompt, or on iOS the Share-sheet hint until dismissed.
   const installOffer = (standalone, prompt, device, dismissed) =>
     standalone ? null : prompt ? 'prompt' : /^(iPhone|iPad) /.test(device) && !dismissed ? 'ios' : null;
   const fs = {
@@ -591,14 +596,14 @@ globalThis.MC = (() => {
   // At most MAX_QUERIES are in flight per connection; the caller waits for room.
   const queryRoom = s => s.q.size < MAX_QUERIES;
   function query(s, spec) { const id = nextId(s); s.q.add(id); return { t: 'query', id, ...spec }; }
-  // Takes a queued follow-up back; when dropped, the text the host returns for it is discarded instead of refilling the composer.
+  // Takes a queued follow-up back; when dropped, the host's returned text is discarded.
   function unqueue(s, index, text, drop) {
     const msg = intent(s, intents.unqueue(index, text));
     if (drop) { s.intents.get(msg.id).drop = true; s.drops.push(text); }
     return msg;
   }
   const pending = (s, kind) => { for (const it of s.intents.values()) if (it.st === 'pending' && (!kind || it.kind === kind)) return it; return null; };
-  // A dropped socket leaves pending sends unconfirmed (the user decides); other intents show their outcome in the next snapshot.
+  // A dropped socket leaves pending sends unconfirmed (the user decides); other intents show in the next snapshot.
   function disconnect(s) {
     s.fs.clear(); s.q.clear(); s.drops.length = 0;
     for (const it of [...s.intents.values()]) {
@@ -619,8 +624,7 @@ globalThis.MC = (() => {
     for (let i = 0; i < neu.length; i++) if (JSON.stringify(old[i]) !== JSON.stringify(neu[i])) out.push(i);
     return out;
   }
-  // An upsert is {i, block}, or {i, append} adding text/reasoning to an assistant or output to a tool: the first output
-  // string continues the line still being written, each further one is a new line.
+  // An upsert is {i, block} or {i, append}, adding text/reasoning to an assistant or output to a tool (the first output string continues the open line).
   function applyBlocks(blocks, len, upserts) {
     blocks.length = len;
     const out = [];
@@ -708,7 +712,7 @@ globalThis.MC = (() => {
     exists: 'A folder with that name already exists.', bad_request: 'MiniCore did not accept this request.',
   };
   const fsError = r => r.error === 'io' ? r.message || 'The folder could not be read.' : FS_ERR[r.error] || r.message || r.error || 'Something went wrong.';
-  // Intent and query refusals the host names by code read as sentences; free-text errors pass through.
+  // Refusals the host names by code read as sentences.
   const ERR = {
     busy: 'MiniCore is busy · try again in a moment', stale: 'Already answered', unknown_command: 'Unknown command',
     bad_request: 'MiniCore did not accept this request',
@@ -718,7 +722,7 @@ globalThis.MC = (() => {
   // ---- time ----
   const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   const pad = n => String(n).padStart(2, '0');
-  // tz is Date#getTimezoneOffset() in minutes; days are counted on the phone's local calendar.
+  // tz is Date#getTimezoneOffset() in minutes.
   const localDay = (ms, tz) => Math.floor((ms - tz * 60000) / 86400000);
   const clock = (ms, tz) => { const d = new Date(ms - tz * 60000); return pad(d.getUTCHours()) + ':' + pad(d.getUTCMinutes()); };
   function relTime(ms, now, tz) {
@@ -747,9 +751,8 @@ globalThis.MC = (() => {
   const matchSession = (x, query) => ((x.title || '') + '\n' + x.workspace).toLowerCase().includes((query || '').trim().toLowerCase());
   const busyStatus = st => st === 'running' || st === 'approval' || st === 'compacting';
   const GROUPS = ['Needs you', 'Running', ...DAYS];
-  // The drawer: Needs you (longest waiting first), Running (oldest turn first), then catalog order by day. With `frozen`
-  // (the order captured when the drawer opened) rows keep their place while statuses change, and sessions new since
-  // then go to the top of their group.
+  // The drawer: Needs you (longest waiting first), Running (oldest first), then catalog order by day. `frozen` is the order
+  // captured on open: rows keep their place and new sessions go to the top of their group.
   function sessionLayout(sessions, now, tz, query, frozen) {
     const start = x => x.started_ms == null ? Infinity : x.started_ms;
     const rows = sessions.map((x, k) => {
@@ -788,7 +791,6 @@ globalThis.MC = (() => {
     return 'other';
   }
   const VERB = { cmd: ['Ran', 'Running'], edit: ['Edited', 'Editing'], write: ['Wrote', 'Writing'], read: ['Read', 'Reading'], search: ['Searched', 'Searching'], web: ['Fetched', 'Fetching'], ask: ['Asked', 'Asking'] };
-  // One tool row: past-tense verb (present while running), muted target and right-aligned meta.
   function toolInfo(b) {
     const k = toolKind(b.name), run = b.state === 'running' || b.state === 'pending', v = VERB[k];
     const d = k === 'edit' && b.input ? diffStats(b.input) : k === 'write' && b.input_lines ? { added: b.input_lines, removed: 0 } : null;
@@ -799,8 +801,7 @@ globalThis.MC = (() => {
       note: b.state === 'denied' ? 'denied' : b.state === 'cancelled' ? 'cancelled' : b.state === 'failed' && b.exit_code == null ? 'failed' : '',
     };
   }
-  // Unified diffs (git, numbered hunks) and apply_patch envelopes (*** Update File:, unnumbered hunks) as files of
-  // hunks of lines {t: add|del|ctx, s, a: old line, b: new line}; numbers are null when the format has none.
+  // Unified diffs and apply_patch envelopes as files of hunks of lines {t: add|del|ctx, s, a: old line, b: new line}; null numbers when absent.
   function parseDiff(text) {
     const files = [];
     let f = null, h = null, a = 0, b = 0, left = null, m;
@@ -860,8 +861,8 @@ globalThis.MC = (() => {
     end();
     return out;
   }
-  // A finished turn folds its work (tools, thinking, answers before the last tool) into one summary row at the first of
-  // them; user messages, compactions, the final answer and the turn-end line stay. The running turn has no turn end yet.
+  // A finished turn folds its work (tools, thinking, answers before the last tool) into one summary row; messages, compactions,
+  // the final answer and the turn-end line stay.
   function foldTurns(blocks, from, to) {
     const out = [];
     let start = from;
@@ -923,16 +924,25 @@ globalThis.MC = (() => {
   }
   // Stop shows while a turn runs or a compaction is under way, and stays until the host confirms it stopped.
   const canStop = st => !!(st.busy || st.compacting);
-
-  // The block being written: the transcript's last block when it is a streaming assistant in a busy session.
-  // The TUI keeps every assistant block of a running turn streaming until the turn ends, so earlier ones are done.
+  // Stop asks twice: the first activation or Esc arms the chip for STOP_ARM ms, the second stops. `at` is when the chip
+  // appeared or moved; taps within STOP_GUARD of it or from a pointer that travelled over STOP_SLOP px are accidents.
+  const STOP_ARM = 3000, STOP_GUARD = 500, STOP_SLOP = 10, stopNew = () => ({ at: null, armed: null });
+  function stopArm(s, ev, now) {
+    const t = ev.type, armed = s.armed && now - s.armed.at <= STOP_ARM ? s.armed : null, to = (a, act = null) => ({ s: { at: s.at, armed: a }, act });
+    if (t === 'hide') return { s: stopNew(), act: null };
+    if (t === 'show') return { s: { at: now, armed }, act: null };
+    if (t === 'other') return to(null);
+    if (s.at === null || t === 'tick' || (t === 'tap' && (ev.moved > STOP_SLOP || now - s.at < STOP_GUARD))) return to(armed);
+    return armed ? to(null, 'stop') : to({ at: now, esc: t === 'esc' }, 'arm');
+  }
+  // The block being written: the last block when it is a streaming assistant in a busy session.
   const liveBlock = (blocks, busy) => {
     const i = blocks.length - 1, b = blocks[i];
     return busy && b && b.type === 'assistant' && b.streaming ? i : -1;
   };
 
   // ---- approvals ----
-  // What is asked, from the tool and its detail: "Run command", "Edit `src/x.rs`", "Write `README.md`", "Edit 3 files".
+  // What is asked: "Run command", "Edit `src/x.rs`", "Edit 3 files".
   function approvalTitle(a) {
     const k = toolKind(a.tool), files = k === 'edit' && a.input ? parseDiff(a.input) : [];
     if (k === 'cmd') return { text: 'Run command' };
@@ -960,8 +970,7 @@ globalThis.MC = (() => {
     }
     return { text: input && input !== a.detail ? input : '' };
   }
-  // Hardware keys answer only after the sheet has been visible, and the user has not typed, for 600 ms, never from a
-  // text field and never with a modifier: a sentence being typed when the sheet appears cannot answer it.
+  // Keys answer only after 600 ms without typing since the sheet appeared, never from a text field or with a modifier.
   const ARM_MS = 600, APPROVAL_KEYS = { y: 'allow', a: 'allow_session', n: 'deny' };
   function approvalKey(interaction, key, mods, armedFrom, now, inField) {
     if (inField || mods || now - armedFrom < ARM_MS) return null;
@@ -971,7 +980,7 @@ globalThis.MC = (() => {
   }
 
   // ---- paths ----
-  // Windows paths (drive letters, UNC) use `\`, and `/` in them is accepted as the same separator; they compare without case.
+  // Windows paths (drive letters, UNC) take `\` or `/` and compare without case.
   const WIN = /^([A-Za-z]:([\\/]|$)|\\\\)/;
   const canon = p => WIN.test(p) ? p.replace(/\//g, '\\') : p;
   const pkey = p => WIN.test(p) ? canon(p).toLowerCase().replace(/\\+$/, '') : p;
@@ -1013,7 +1022,7 @@ globalThis.MC = (() => {
     }
     return out;
   }
-  // The session label and outcome of a forwarded background notice ("Fix parser" needs approval · ctrl+r, "Fix parser" failed in 4s).
+  // Label and outcome of a forwarded background notice.
   function noticeEvent(text) {
     const m = /^"(.+)" (needs approval|finished|failed|interrupted|cancelled|stopped)\b/.exec(text);
     return m ? { label: m[1], kind: m[2] === 'needs approval' ? 'approval' : m[2] === 'failed' ? 'failed' : 'finished' } : null;
@@ -1038,8 +1047,7 @@ globalThis.MC = (() => {
     const hit = all.filter(c => c.name.toLowerCase().includes(q));
     return hit.filter(c => c.name.toLowerCase().startsWith(q)).concat(hit.filter(c => !c.name.toLowerCase().startsWith(q)));
   }
-  // What a "/name args" line is: a built-in (run here), a template (sent; the host expands it), a bare unknown "/word"
-  // (refused here, as the host would), or null for text sent as it is ("/word more text", paths, "//x").
+  // What a "/name args" line is: a built-in (run here), a template (sent), a bare unknown "/word" (refused), or null for plain text.
   function parseSlash(text, commands) {
     const m = /^\/(\S+)(?:\s+([\s\S]*))?$/.exec(text.trim());
     if (!m) return null;
@@ -1063,29 +1071,25 @@ globalThis.MC = (() => {
   const pushRecent = (list, text, max = 50) => [text, ...list.filter(x => x !== text)].slice(0, max);
   // Commands and paths are not prose: no autocorrect while the text starts with one.
   const literal = text => /^[/@]/.test(text);
-  // What a composer key does. Enter (when "Enter sends" is on) or ⌘/Ctrl+Enter steers while a turn runs and sends when idle;
-  // Tab or Alt+Enter queues a follow-up while a turn runs and text is typed. An open list keeps Tab and Enter for
-  // completion. null leaves the key to the browser.
+  // Enter (when "Enter sends" is on) or ⌘/Ctrl+Enter steers a running turn and sends when idle; Alt/Option+Enter queues a
+  // follow-up. An open list keeps Enter. null leaves the key to the browser.
   function composerKey(k, c) {
     const typed = c.text.trim() !== '';
     if (c.popup && !k.mod) return null;
-    if (k.key === 'Tab') return c.busy && typed && !k.shift && !k.alt && !k.mod ? 'queue' : null;
     if (k.key !== 'Enter') return null;
     if (k.alt && !k.mod) return c.busy && typed ? 'queue' : null;
     return k.mod || (c.enter && !k.shift && !k.alt) ? (c.busy ? 'steer' : 'send') : null;
   }
-  // The queue above the composer: follow-ups numbered in order and steers the agent has not read yet. Only the first
-  // `max` show until all are asked for; `hidden` counts the rest and `long` says whether a toggle is needed.
+  // The queue above the composer: numbered follow-ups and unread steers; the first `max` show until all are asked for.
   function queueView(queue, all, max = 3) {
     let n = 0;
-    // Steers come first, as in the TUI: the agent reads them before any follow-up; `index` stays the wire index.
+    // Steers first, as in the TUI; `index` stays the wire index.
     const items = queue.map((q, index) => ({ kind: q.kind, text: q.text, index, n: q.kind === 'follow' ? ++n : 0 }))
       .sort((a, b) => (a.kind === 'follow') - (b.kind === 'follow'));
     return { items: all ? items : items.slice(0, max), hidden: all ? 0 : Math.max(0, items.length - max), long: items.length > max };
   }
 
-  // The newest sentence of the reasoning text for the one-line preview: last non-empty line, last sentence of it, Markdown
-  // markers stripped. Only the tail is read, so it stays cheap while the text grows.
+  // The newest sentence of the reasoning text, Markdown stripped; only the tail is read.
   function thinkingPreview(text) {
     const lines = norm(text.slice(-1200)).split('\n').map(l => l.replace(/^\s*(?:#{1,6}\s+|>\s*|[-*+]\s+|\d{1,9}[.)]\s+)+/, '').replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/[`*~]+|__/g, '').trim()).filter(Boolean);
     const sentences = (lines.pop() || '').split(/(?<=[.!?。！？])\s+|(?<=[。！？])/).filter(Boolean);
@@ -1174,11 +1178,10 @@ globalThis.MC = (() => {
     }
     return { list, k };
   }
-  // Top-level blocks of `lines`; `cps` collects [line, blocks so far] wherever a block may start with nothing pending.
+  // Top-level blocks of `lines`; `cps` collects [line, blocks so far] at possible block starts.
   function parseLines(lines, cps) {
     const out = [], LI = /^(\s*)([-*+]|\d{1,9}[.)])\s+(.*)/;
     let para = [], i = 0, m;
-    // A last line that is only a marker ("- ") stays text until the item's first characters arrive.
     const li = k => { const x = LI.exec(lines[k] || ''); return x && (k < lines.length - 1 || x[3].trim()) ? x : null; };
     const flush = () => { if (para.length) out.push({ t: 'p', c: inline(para.join('\n')) }); para = []; };
     while (i < lines.length) {
@@ -1229,8 +1232,7 @@ globalThis.MC = (() => {
   }
   const norm = src => src.replace(/\r\n?/g, '\n');
   const parseMd = src => parseLines(norm(src).split('\n'), null);
-  // Streaming Markdown: blocks before the last stable checkpoint are kept (the same objects) and only the tail is
-  // parsed again. A checkpoint is stable once it and the line after it are complete: no block before it looked further.
+  // Streaming Markdown: blocks before the last stable checkpoint are kept and only the tail is parsed again.
   function mdInc(c, src) {
     src = norm(src);
     if (!c || !src.startsWith(c.src)) c = { src: '', at: 0, head: [] };
@@ -1253,7 +1255,7 @@ globalThis.MC = (() => {
     diffBlocks, applyBlocks, reduce, explain, lockText, fmtClock, unreachable, fsError, errorText,
     clock, stamp, relTime, dayGroup, sessionLayout, matchSession, fmtElapsed, fmtDur, fmtTok, fmtNum,
     groupTools, foldTurns, findBlocks, foldText, mdInc,
-    toolKind, toolInfo, parseDiff, diffStats, liveBlock, turnEnd, changesText, compactionText, statusLine, canStop, approvalKey, approvalTitle, approvalOptions, approvalBody,
+    toolKind, toolInfo, parseDiff, diffStats, liveBlock, turnEnd, changesText, compactionText, statusLine, canStop, stopArm, stopNew, STOP_ARM, approvalKey, approvalTitle, approvalOptions, approvalBody,
     changeStatus, contextView, exportMd, BUILTINS, slashMenu, parseSlash, atToken, insertMention, pushRecent, literal, composerKey, queueView, thinkingPreview,
     splitPath, within, crumbs, tilde, isDrive, recentWorkspaces, sessionTransitions, noticeEvent, attentionCount, inline, parseMd, parseLines, SAFE_URL,
   };
@@ -1261,16 +1263,15 @@ globalThis.MC = (() => {
 </script>
 <script>
 'use strict';
-// Before first paint: the stored appearance (or the OS) decides data-theme, System keeps following the OS, and the
-// text size scales the rem-based type.
+// Before first paint: the stored appearance (or the OS) decides data-theme, and the text size scales the type.
 const osDark = matchMedia('(prefers-color-scheme: dark)');
-const prefs = Object.assign({ theme: 'system', text: 1, wrap: true, thinking: false, enter: !matchMedia('(pointer: coarse)').matches, wake: false, notify: false },
-  JSON.parse(localStorage.getItem('minicore.prefs') || '{}'));
+const stored = JSON.parse(localStorage.getItem('minicore.prefs') || '{}');
+let enterSet = 'enter' in stored;
+const prefs = Object.assign({ theme: 'system', text: 1, wrap: true, thinking: false, enter: matchMedia('(hover: hover) and (pointer: fine)').matches, wake: false, notify: false }, stored);
 function applyTheme() {
   const root = document.documentElement;
   root.dataset.theme = MC.theme(prefs.theme, osDark.matches);
   root.style.setProperty('--ts', prefs.text);
-  // Each theme-color variant shows the colour its OS scheme would get, so an explicit choice sets both.
   const bar = { light: '#ffffff', dark: '#0e0e10' };
   document.getElementById('tc').content = bar[MC.theme(prefs.theme, false)];
   document.getElementById('tcd').content = bar[MC.theme(prefs.theme, true)];
@@ -1428,7 +1429,9 @@ const cur = () => S.state.session || S.state.draft;
 const mq = q => matchMedia(q);
 const wide = mq('(min-width: 900px)'), panelWide = mq('(min-width: 1200px)'), hover = mq('(hover: hover)'), reduced = mq('(prefers-reduced-motion: reduce)');
 const inField = n => !!(n && n.closest && n.closest('input,textarea,[contenteditable=true]'));
-const savePrefs = () => localStorage.setItem('minicore.prefs', JSON.stringify(prefs));
+// "Enter sends" is stored only once the user has chosen it, so the pointer-based default keeps following the device.
+const apple = /Mac|iPhone|iPad/.test(navigator.userAgent), ALT = apple ? '⌥' : 'Alt+', tips = () => prefs.enter ? 'Enter' : (apple ? '⌘' : 'Ctrl+') + 'Enter';
+const savePrefs = () => localStorage.setItem('minicore.prefs', JSON.stringify(enterSet ? prefs : { ...prefs, enter: undefined }));
 
 // A region that re-renders only when its input changes; focus inside it survives through data-k.
 function part(host, render) {
@@ -1700,7 +1703,7 @@ function failQueries() {
 }
 
 // ---- modal manager: the drawer and every sheet ----
-// Focus moves in and back, everything below is inert, Esc and swipe down close, and the keyboard lift applies to all.
+// Focus moves in and back, everything below is inert, Esc and swipe down close.
 const stack = [];
 function pushModal(m) {
   m.opener = document.activeElement;
@@ -1708,7 +1711,6 @@ function pushModal(m) {
   layout();
   requestAnimationFrame(() => {
     const f = m.el.querySelector('[data-focus]');
-    // On touch screens the dialog itself takes focus: no ring on a control, no keyboard the user did not ask for.
     (f && (hover.matches || m.focusField) ? f : m.el).focus({ preventScroll: true });
   });
 }
@@ -1890,7 +1892,7 @@ function syncTick() {
 }
 function onTick() {
   const el = $('strip').querySelector('.el'), x = st();
-  if (el && x.started_ms) el.textContent = MC.fmtElapsed(hostNow() - x.started_ms);
+  if (el && x.started_ms) { el.textContent = MC.fmtElapsed(hostNow() - x.started_ms); syncStop(); }
   if (navShown()) for (const e of $('nav').querySelectorAll('[data-start]')) e.textContent = MC.fmtElapsed(hostNow() - +e.dataset.start);
 }
 function renderState() {
@@ -1937,7 +1939,7 @@ function closeNav() {
   frozen = null;
   syncTick();
 }
-// The order stays put while the list is in front of the user: an open drawer, or a sidebar being pointed at or used.
+// The order stays put while the list is in front of the user.
 nav.addEventListener('pointerenter', () => { navLook = true; });
 nav.addEventListener('pointerleave', () => { navLook = false; if (!nav.contains(document.activeElement)) { frozen = null; renderNav(); } });
 nav.addEventListener('focusout', () => setTimeout(() => { if (!navLook && !nav.contains(document.activeElement) && wide.matches) { frozen = null; renderNav(); } }));
@@ -1982,7 +1984,7 @@ wide.addEventListener('change', () => { if (wide.matches) closeNav(); layout(); 
 let installPrompt = null;
 const standalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
 const SIZES = [['Small', .9], ['Default', 1], ['Large', 1.1], ['Larger', 1.2]];
-function setPref(k, v) { prefs[k] = v; savePrefs(); applyTheme(); onPrefs(k); refreshSheets(); }
+function setPref(k, v) { prefs[k] = v; enterSet ||= k === 'enter'; savePrefs(); applyTheme(); onPrefs(k); refreshSheets(); }
 function seg(label, items, value, set) {
   return h('div', { class: 'seg', role: 'radiogroup', 'aria-label': label }, items.map(([l, v]) => h('button', { role: 'radio', 'data-k': label + l, 'aria-checked': String(v === value), onclick: () => set(v) }, l)));
 }
@@ -2310,8 +2312,6 @@ function diffView(files, opts = {}) {
         !nums && h('span', 'sgn', l.t === 'add' ? '+' : l.t === 'del' ? '−' : ' '), h('span', 'c', l.s || ' '))));
     })));
 }
-// Thinking: the header, then its newest sentence on one line that slides up when a new one starts; the full text when
-// open. Only a change of state rebuilds the block; new text updates the line in place.
 function thinkNode(b, i, k, thinking, o) {
   const now = Date.now(), w = thinkT.get(k);
   if (thinking && !w) thinkT.set(k, { start: now });
@@ -2339,7 +2339,7 @@ function thinkUpdate(a, b, i) {
   a.think.replaceWith(a.think = n);
   if (had) n.querySelector('.tk').focus({ preventScroll: true });
 }
-// An answer keeps its rendered Markdown blocks while it streams: only blocks after the last stable one are rebuilt.
+// An answer keeps its rendered Markdown blocks while it streams.
 function asstNode(b, i) {
   const live = i === liveIdx, n = h('div', 'a');
   n._a = { key: b.loop_id + ':' + b.request, live, tsig: '', md: { cache: null, toks: [], els: [] }, body: h('div', 'md'), think: h('div') };
@@ -2417,8 +2417,6 @@ function blockNode(b, i) {
     default: return h('div', 'x');
   }
 }
-// Folded turns and grouped reads: a block may carry the summary row, the group row or the trailing Hide row, and its
-// own content is hidden while folded away.
 function renderBlock(b, i) {
   const n = blockNode(b, i), r = roles[i - lo];
   let w = n;
@@ -2467,7 +2465,7 @@ function place(n, old) {
 function flush() {
   raf = 0;
   if (!S.state) return;
-  // Only the block being written shows the caret and "Thinking"; the one it hands over to re-renders.
+  // Only the block being written shows the caret and "Thinking".
   const live = MC.liveBlock(S.blocks, S.state.status.busy);
   if (live !== liveIdx) { for (const i of [liveIdx, live]) if (i >= 0) dirty.add(i); liveIdx = live; }
   const bl = S.blocks, n = bl.length, lo0 = lo, prevHi = hi;
@@ -2551,9 +2549,17 @@ $('newout').addEventListener('click', toLatest);
 
 // ---- dock: status strip, queue, composer ----
 const ta = $('ta');
-const stripPart = part($('strip'), x => [spin(), h('div', 'stx', h('div', 'st1', h('b', '', x.label), x.detail && h('span', 'mono', x.detail), x.started && h('span', 'el', MC.fmtElapsed(hostNow() - x.started)))),
-  x.ctx && h('button', { class: 'ctxb' + (x.hi ? ' hi' : ''), 'aria-label': x.ctx + ' of context used', onclick: () => openContext() }, x.ctx),
-  x.stop && h('button', { class: 'stop', 'data-k': 'stop', disabled: x.stopping || !x.online, onclick: stop }, x.stopping ? spin('sm') : icon('stop', 'sm'), x.stopping ? 'Stopping' : 'Stop')]);
+// Stop is a ghost chip beside the label, away from the right-hand targets; the first activation arms it (see MC.stopArm).
+const STOP_TEXT = { tap: 'Tap again to stop', click: 'Click again to stop', esc: 'Esc again to stop' };
+let stopS = MC.stopNew(), stopT = 0, stopPos = '', stopDown = null;
+const stopMode = () => stopS.armed ? (stopS.armed.esc ? 'esc' : hover.matches ? 'click' : 'tap') : '';
+const stopPart = x => h('button', { class: 'stop' + (x.arm ? ' armed' : ''), 'data-k': 'stop', disabled: x.stopping || !x.online,
+  onpointerdown: e => { stopDown = [e.clientX, e.clientY]; },
+  onclick: e => stopEv({ type: 'tap', moved: e.detail && stopDown ? Math.hypot(e.clientX - stopDown[0], e.clientY - stopDown[1]) : 0 }) },
+  h('span', 'sc', x.stopping ? spin('sm') : x.arm ? null : icon('stop', 'sm'), x.stopping ? 'Stopping…' : x.arm ? STOP_TEXT[x.arm] : 'Stop'));
+const stripPart = part($('strip'), x => [spin(), h('div', 'stx', h('div', 'st1', h('b', '', x.label), x.started && h('span', 'el', MC.fmtElapsed(hostNow() - x.started)),
+  x.stop && stopPart(x), x.detail && h('span', 'mono', x.detail))),
+  x.ctx && h('button', { class: 'ctxb' + (x.hi ? ' hi' : ''), 'aria-label': x.ctx + ' of context used', onclick: () => openContext() }, x.ctx)]);
 function renderStrip() {
   const s = st(), on = !!(s.busy || s.compacting || s.loading);
   $('strip').hidden = !on;
@@ -2561,9 +2567,30 @@ function renderStrip() {
   const x = MC.statusLine(S.state, S.blocks, hostNow());
   stripPart({
     label: x.label, detail: x.detail, started: (s.busy || s.compacting) && s.started_ms, ctx: S.state.context_percent != null ? Math.round(S.state.context_percent) + '%' : '',
-    hi: S.state.context_percent >= 80, stop: MC.canStop(s), stopping: s.interrupting || pendingKind('cancel'), online: online(),
+    hi: S.state.context_percent >= 80, stop: MC.canStop(s), stopping: s.interrupting || pendingKind('cancel'), online: online(), arm: stopMode(),
   });
+  const b = $('strip').querySelector('.stop.armed');
+  if (b && !b.style.getPropertyValue('--ad')) b.style.setProperty('--ad', stopS.armed.at - Date.now() + 'ms');
 }
+// The chip appearing, moving or going away starts the ghost-tap guard; a hidden strip ends the arming.
+function syncStop() {
+  const b = $('strip').hidden ? null : $('strip').querySelector('.stop'), r = b && b.getBoundingClientRect(), k = r ? Math.round(r.left) + ',' + Math.round(r.top) : '';
+  if (k !== stopPos) { stopPos = k; stopS = MC.stopArm(stopS, { type: b ? 'show' : 'hide' }, Date.now()).s; }
+}
+function stopEv(ev) {
+  const r = MC.stopArm(stopS, ev, Date.now());
+  stopS = r.s;
+  clearTimeout(stopT);
+  if (stopS.armed) stopT = setTimeout(() => stopEv({ type: 'tick' }), MC.STOP_ARM + 20);
+  if (r.act === 'stop') stop();
+  if (r.act === 'arm') announce(STOP_TEXT[stopMode()]);
+  renderStrip();
+}
+// Using anything else, or scrolling, disarms.
+const disarm = e => { if (stopS.armed && !(e.target.closest && e.target.closest('.stop'))) stopEv({ type: 'other' }); };
+document.addEventListener('pointerdown', disarm, true);
+document.addEventListener('keydown', e => { if (e.key !== 'Escape') disarm(e); }, true);
+for (const t of ['wheel', 'touchmove']) document.addEventListener(t, disarm, { capture: true, passive: true });
 function stop() { if (MC.canStop(st()) && !st().interrupting && !pendingKind('cancel')) intent(MC.intents.cancel()); }
 const trayPart = part($('tray'), t => [
   t.lost.map(([id, text]) => h('div', { class: 'lost', role: 'alert' }, icon('warn', 'sm'),
@@ -2595,7 +2622,7 @@ const chipsPart = part($('chips'), c => [h('div', 'cl',
   c.draft && c.draft.profiles && h('button', { class: 'chip', 'data-k': 'profile', 'aria-label': 'Profile ' + c.draft.profile + ', change', onclick: openProfile }, h('span', '', c.draft.profile || 'Profile')),
   h('button', { class: 'chip', 'data-k': 'model', 'aria-label': 'Model ' + c.model + ', change', onclick: openModel }, h('span', '', c.modelShort), c.level && h('span', 'rz', '· ' + c.level), icon('chevd', 'xs'))),
   c.busy ? h('div', 'snd' + (c.typed ? '' : ' off'),
-    h('button', { class: 'btn sb', id: 'queue', 'data-k': 'queue', title: c.tips && 'Queue a follow-up · Tab', 'aria-label': 'Queue as a follow-up', disabled: c.disabled, onclick: () => submit('queue') },
+    h('button', { class: 'btn sb', id: 'queue', 'data-k': 'queue', title: c.tips && 'Queue a follow-up · ' + ALT + 'Enter', 'aria-label': 'Queue as a follow-up', disabled: c.disabled, onclick: () => submit('queue') },
       c.sending === 'queue' ? spin('sm') : icon('follow', 'sm'), 'Queue'),
     h('button', { class: 'btn sb primary', type: 'submit', id: 'steer', 'data-k': 'steer', title: c.tips && 'Steer · ' + c.tips, 'aria-label': 'Steer the agent', disabled: c.disabled },
       c.sending === 'submit' ? spin('sm') : icon('steer', 'sm'), 'Steer'))
@@ -2604,17 +2631,18 @@ const chipsPart = part($('chips'), c => [h('div', 'cl',
 function renderChips() {
   const s = st(), c = cur(), lock = sending(), d = S.state.draft, typed = ta.value.trim() !== '';
   ta.readOnly = lock;
-  ta.placeholder = s.busy ? (hover.matches ? 'Steer the agent… · Tab to queue a follow-up' : 'Steer, or queue a follow-up…') : S.state.session ? 'Message MiniCore · / for commands' : 'Describe a task to start';
+  ta.placeholder = s.busy ? (hover.matches ? tips() + ' to steer · ' + ALT + 'Enter to queue' : 'Steer, or queue a follow-up…') : S.state.session ? 'Message MiniCore · / for commands' : 'Describe a task to start';
   chipsPart({
     model: c.model || '', modelShort: c.model ? MC.midTrunc(c.model, s.busy ? 12 : 17) : 'Model', level: c.reasoning, busy: !!s.busy, typed, sending: lock && (MC.pending(S, 'queue') ? 'queue' : 'submit'),
-    disabled: lock || !online() || !typed, tips: hover.matches && (prefs.enter ? 'Enter' : '⌘/Ctrl+Enter'),
+    disabled: lock || !online() || !typed, tips: hover.matches && tips(),
     draft: !S.state.session && { folder: MC.basename(d.workspace), profile: d.profile, profiles: S.state.profiles.length > 1 },
   });
 }
-function renderDock() { renderStrip(); renderTray(); renderChips(); }
+function renderDock() { renderStrip(); renderTray(); renderChips(); syncStop(); }
 function grow() {
   ta.style.height = 'auto';
   ta.style.height = ta.scrollHeight + 'px';
+  syncStop();
 }
 const draftKey = () => 'minicore.draft.' + (S.sid || 'new');
 function composerInput() {
@@ -2844,7 +2872,7 @@ document.addEventListener('keydown', e => {
     if (m) { e.preventDefault(); m.close(); return; }
     const p = stack.find(x => x.panel);
     if (p) { e.preventDefault(); p.close(); return; }
-    if (MC.canStop(st())) { e.preventDefault(); stop(); }
+    if (MC.canStop(st())) { e.preventDefault(); stopEv({ type: 'esc' }); }
     return;
   }
   const mod = e.metaKey || e.ctrlKey, k = e.key.toLowerCase();
@@ -2860,7 +2888,6 @@ document.addEventListener('keydown', e => {
   else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
 });
 
-// Changes: the workspace's changed files, then one file's diff in the same panel; pull down or ↻ to refresh.
 function openChanges() {
   const c = { files: null, branch: null, truncated: false, err: '', path: null, diff: null, wrap: prefs.wrap, busy: false };
   const load = () => { c.busy = true; c.err = ''; m.refresh(); ask(MC.queries.changes(), r => { c.busy = false; if (r.ok) Object.assign(c, r.data); else c.err = MC.errorText(r.error); m.refresh(); }); };
@@ -2970,7 +2997,6 @@ function findBar() {
     h('button', { class: 'ib s', 'aria-label': 'Close find', onclick: closeFind }, icon('x', 'sm')));
 }
 function runFind() {
-  // Open the folds, groups and tool rows that hold a match, then collect ranges from the rendered text.
   for (const i of MC.findBlocks(S.blocks, fd.q, lo, hi)) {
     const r = roles[i - lo], b = S.blocks[i];
     if (r && r.f) ov.set(r.f.key, true);
@@ -3004,7 +3030,7 @@ function stepSession(d) {
   const list = MC.sessionLayout(S.state.sessions, hostNow(), tz(), '', frozen).groups.flatMap(g => g.items), i = list.findIndex(x => x.current), x = list[i + d];
   if (x && !pendingRow && intent(MC.intents.openSession(x.id))) pendingRow = x.id;
 }
-const KEYS = [['Esc', 'Stop the turn, or close the top sheet'], ['Enter', 'Send, or steer a running turn (“Enter sends”)'], ['⌘/Ctrl Enter', 'Send, or steer a running turn'], ['Tab · Alt Enter', 'Queue a follow-up while a turn runs'], ['↑ ↓', 'Recent prompts in an empty composer'],
+const KEYS = [['Esc', 'Close the top sheet; twice to stop the turn'], ['Enter', 'Send, or steer a running turn (“Enter sends”)'], ['⌘/Ctrl Enter', 'Send, or steer a running turn'], ['⌥/Alt Enter', 'Queue a follow-up while a turn runs'], ['↑ ↓', 'Recent prompts in an empty composer'],
   ['⌘/Ctrl K', 'Commands and prompts'], ['⌘/Ctrl F', 'Find in session'], ['Alt ↑ ↓', 'Previous or next session'], ['Y A N', 'Allow, allow for session, deny'], ['?', 'This help']];
 function openHelp() {
   sheet({ key: 'help', cls: 'dialog', title: 'Keyboard shortcuts', body: () => h('dl', 'kv keys', KEYS.map(([k, d]) => [h('dt', '', h('kbd', '', k)), h('dd', '', d)])) });
@@ -3012,7 +3038,7 @@ function openHelp() {
 
 // ---- lifecycle ----
 document.addEventListener('visibilitychange', () => { if (document.hidden) hiddenAt = Date.now(); else wake(Date.now() - hiddenAt > 10000); syncWake(); });
-// A page restored from the back/forward cache lost its socket; focus catches resumes that fire no visibility change.
+// A page restored from the back/forward cache lost its socket.
 addEventListener('pageshow', e => { if (e.persisted) wake(true); });
 addEventListener('focus', () => wake(false));
 addEventListener('online', () => { renderConn(); wake(false); });
@@ -3021,7 +3047,7 @@ addEventListener('beforeinstallprompt', e => { e.preventDefault(); installPrompt
 addEventListener('appinstalled', () => { installPrompt = null; refreshSheets(); });
 if ('serviceWorker' in navigator && isSecureContext) navigator.serviceWorker.register('/sw.js');
 if (window.visualViewport) {
-  // iOS keeps the layout viewport under the keyboard; fixed bottom sheets are lifted by the part it covers.
+  // iOS keeps the layout viewport under the keyboard; sheets are lifted by the part it covers.
   const fit = () => {
     if (window.scrollY) scrollTo(0, 0);
     const root = document.documentElement, kb = Math.max(0, Math.round(innerHeight - visualViewport.height - visualViewport.offsetTop));

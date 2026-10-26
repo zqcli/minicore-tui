@@ -789,31 +789,75 @@ test('changed files map their status to a badge and the transcript exports as Ma
   assert.equal(md, '# One\n\n`/work` · model\n\n**You (steer):** now\n\n**hello**\n\n- Ran `pwd`\n\n_Completed · 7.8 s · 12 tokens_\n\n_Context compacted · 32.1k → 2.7k tokens_\n');
 });
 
-test('Enter and Cmd/Ctrl+Enter steer while busy and send when idle; Tab and Alt+Enter queue only with text and no list', () => {
+test('composer keys: Enter and Cmd/Ctrl+Enter steer or send, Alt+Enter queues, Tab and Shift+Enter are left alone', () => {
   const { MC } = load();
-  const key = (k, mods = {}) => ({ key: k, shift: false, alt: false, mod: false, ...mods });
-  const ctx = (extra = {}) => ({ busy: true, text: 'next', popup: false, enter: true, ...extra });
-  assert.equal(MC.composerKey(key('Enter'), ctx()), 'steer');
-  assert.equal(MC.composerKey(key('Enter'), ctx({ busy: false })), 'send');
-  assert.equal(MC.composerKey(key('Enter', { mod: true }), ctx({ enter: false })), 'steer');
-  assert.equal(MC.composerKey(key('Enter', { mod: true }), ctx({ enter: false, busy: false })), 'send');
-  // Without "Enter sends" and with Shift, Enter is a new line.
-  assert.equal(MC.composerKey(key('Enter'), ctx({ enter: false })), null);
-  assert.equal(MC.composerKey(key('Enter', { shift: true }), ctx()), null);
-  assert.equal(MC.composerKey(key('Tab'), ctx()), 'queue');
-  assert.equal(MC.composerKey(key('Enter', { alt: true }), ctx()), 'queue');
-  assert.equal(MC.composerKey(key('Enter', { alt: true }), ctx({ enter: false })), 'queue');
-  // Nothing to queue, or nothing running: the keys keep their browser meaning.
-  assert.equal(MC.composerKey(key('Tab'), ctx({ text: '  \n' })), null);
-  assert.equal(MC.composerKey(key('Tab'), ctx({ busy: false })), null);
-  assert.equal(MC.composerKey(key('Enter', { alt: true }), ctx({ busy: false })), null);
-  assert.equal(MC.composerKey(key('Tab', { shift: true }), ctx()), null);
-  // An open list keeps Tab and Enter for completion; Cmd/Ctrl+Enter still sends.
-  assert.equal(MC.composerKey(key('Tab'), ctx({ popup: true })), null);
-  assert.equal(MC.composerKey(key('Enter'), ctx({ popup: true })), null);
-  assert.equal(MC.composerKey(key('Enter', { alt: true }), ctx({ popup: true })), null);
-  assert.equal(MC.composerKey(key('Enter', { mod: true }), ctx({ popup: true })), 'steer');
-  assert.equal(MC.composerKey(key('a'), ctx()), null);
+  const base = { key: 'Enter', shift: false, alt: false, mod: false };
+  const ctx = { busy: true, text: 'next', popup: false, enter: true };
+  // [name, key, expected as [busy, idle] for "Enter sends" on, then off]
+  const table = [
+    ['Enter', {}, ['steer', 'send'], [null, null]],
+    ['Shift+Enter', { shift: true }, [null, null], [null, null]],
+    ['Alt+Enter', { alt: true }, ['queue', null], ['queue', null]],
+    ['Cmd/Ctrl+Enter', { mod: true }, ['steer', 'send'], ['steer', 'send']],
+    ['Tab', { key: 'Tab' }, [null, null], [null, null]],
+    ['Alt+Tab', { key: 'Tab', alt: true }, [null, null], [null, null]],
+    ['a', { key: 'a' }, [null, null], [null, null]],
+  ];
+  for (const [name, mods, on, off] of table) {
+    for (const [enter, want] of [[true, on], [false, off]]) {
+      for (const [i, busy] of [true, false].entries()) {
+        assert.equal(MC.composerKey({ ...base, ...mods }, { ...ctx, busy, enter }), want[i], `${name} busy=${busy} enter=${enter}`);
+      }
+    }
+  }
+  // An open list keeps Enter and Alt+Enter for completion; Cmd/Ctrl+Enter still steers or sends.
+  for (const [name, mods, want] of [['Enter', {}, null], ['Shift+Enter', { shift: true }, null], ['Alt+Enter', { alt: true }, null],
+    ['Tab', { key: 'Tab' }, null], ['Cmd/Ctrl+Enter', { mod: true }, 'steer']]) {
+    assert.equal(MC.composerKey({ ...base, ...mods }, { ...ctx, popup: true }), want, name + ' with a list');
+  }
+  // Nothing typed: there is nothing to queue.
+  assert.equal(MC.composerKey({ ...base, alt: true }, { ...ctx, text: '  \n' }), null);
+});
+
+test('stop asks twice: arm, confirm in time, expire, and ghost taps are ignored', () => {
+  const { MC, plain } = load();
+  const run = (s, ev, now) => { const r = MC.stopArm(s, ev, now); return { s: plain(r.s), act: r.act }; };
+  const tap = (moved = 0) => ({ type: 'tap', moved });
+  const shown = run(MC.stopNew(), { type: 'show' }, 1000).s;
+  assert.equal(run(MC.stopNew(), tap(), 5000).act, null, 'no chip, no stop');
+  // Right after the chip appeared or moved, activations are ghost taps.
+  assert.equal(run(shown, tap(), 1499).act, null);
+  assert.equal(run(shown, { type: 'esc' }, 1100).act, 'arm', 'Esc is a key press, not a ghost tap');
+  const moved = run(shown, { type: 'show' }, 3000).s;
+  assert.equal(run(moved, tap(), 3200).act, null);
+  // Arm, then confirm within 3 s.
+  const armed = run(shown, tap(), 2000);
+  assert.deepEqual([armed.act, armed.s.armed], ['arm', { at: 2000, esc: false }]);
+  const done = run(armed.s, tap(), 5000);
+  assert.deepEqual([done.act, done.s.armed], ['stop', null]);
+  // Late, the second tap only arms again; a tick drops the expired arming.
+  const late = run(armed.s, tap(), 5001);
+  assert.deepEqual([late.act, late.s.armed], ['arm', { at: 5001, esc: false }]);
+  assert.equal(run(armed.s, { type: 'tick' }, 5001).s.armed, null);
+  // A pointer that travelled over 10 px was a scroll: it neither arms nor confirms.
+  assert.equal(run(shown, tap(11), 2000).act, null);
+  assert.equal(run(armed.s, tap(11), 2500).act, null);
+  assert.deepEqual(run(armed.s, tap(10), 2500).act, 'stop');
+  // Using anything else, or the turn ending, disarms.
+  assert.equal(run(armed.s, { type: 'other' }, 2100).s.armed, null);
+  assert.equal(run(run(armed.s, { type: 'other' }, 2100).s, tap(), 2200).act, 'arm');
+  assert.deepEqual(run(armed.s, { type: 'hide' }, 2100).s, { at: null, armed: null });
+  // The chip moving keeps the arming but restarts the guard.
+  const slid = run(armed.s, { type: 'show' }, 2400);
+  assert.equal(slid.s.armed.at, 2000);
+  assert.equal(run(slid.s, tap(), 2600).act, null);
+  assert.equal(run(slid.s, tap(), 2900).act, 'stop');
+  // Esc twice stops; the first Esc arms the "Esc again" chip.
+  const esc1 = run(shown, { type: 'esc' }, 2000);
+  assert.deepEqual([esc1.act, esc1.s.armed.esc], ['arm', true]);
+  assert.equal(run(esc1.s, { type: 'esc' }, 4900).act, 'stop');
+  assert.equal(run(esc1.s, { type: 'esc' }, 5100).act, 'arm');
+  assert.equal(run(MC.stopNew(), { type: 'esc' }, 2000).act, null, 'Esc with no chip does nothing');
 });
 
 test('the queue shows follow-ups numbered in order, waiting steers, and the first three until expanded', () => {
