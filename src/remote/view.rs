@@ -136,14 +136,12 @@ impl Streaming {
                 text: text.len(),
                 reasoning: reasoning.len(),
             }),
-            Block::Tool(call) if call.state == ToolState::Running => {
-                Some(Self::Tool {
-                    facts: facts(call),
-                    dropped: call.output_dropped,
-                    lines: call.output.len(),
-                    open: call.output.last()?.len(),
-                })
-            }
+            Block::Tool(call) if call.state == ToolState::Running => Some(Self::Tool {
+                facts: facts(call),
+                dropped: call.output_dropped,
+                lines: call.output.len(),
+                open: call.output.last()?.len(),
+            }),
             _ => None,
         }
     }
@@ -580,7 +578,10 @@ mod tests {
             vec![json!({"t":"blocks", "len":1, "upserts":[{"i":0, "append":{"output":output}}]})]
         };
         tool(&mut app).push_output("o\nthree\n");
-        assert_eq!(sync(&mut view, &mut app), appended(json!(["o", "three", ""])));
+        assert_eq!(
+            sync(&mut view, &mut app),
+            appended(json!(["o", "three", ""]))
+        );
         tool(&mut app).expanded = Some(true);
         assert!(sync(&mut view, &mut app).is_empty(), "a fold sends nothing");
         tool(&mut app).push_output("four");
