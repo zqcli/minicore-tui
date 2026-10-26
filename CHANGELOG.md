@@ -2,12 +2,18 @@
 
 ## Unreleased
 
-- In the web client, a running turn with text typed shows separate Queue and
-  Steer buttons instead of a mode toggle; `Alt+Enter` (Option+Enter on macOS)
-  queues and `Enter`/`Cmd+Enter` steers, like the TUI. "Enter sends" now defaults to on for a mouse and keyboard
-  and off on touch devices. Queued follow-ups are numbered and
-  listed after pending steers. Collapsed thinking keeps its newest sentence on a
-  line under the header that moves up as the agent thinks. On desktop the
+- In the web client the composer's round button keeps its place and changes
+  face: ↑ Send, ■ Stop while a turn runs and nothing is typed, ↗ Steer when text
+  is typed during a turn, next to a plain-text **Follow-up** button. The model
+  is a plain text button on the right of the composer. Stop takes effect at once;
+  it ignores a tap right after it appeared (a double tap on Send) and scrolls,
+  and with text typed it is in a menu opened by a long press or right click on
+  the button. `Esc` stops the turn with one press. `Alt+Enter` (Option+Enter on
+  macOS) queues a follow-up and `Enter`/`Cmd+Enter` steers, like the TUI;
+  `Tab` is ordinary focus navigation. "Enter sends" now defaults to on for a
+  mouse and keyboard and off on touch devices. Queued follow-ups are numbered
+  and listed after pending steers. Collapsed thinking keeps its newest sentence
+  on a line under the header that moves up as the agent thinks. On desktop the
   transcript, composer and title share one centred column beside the sidebar,
   with side panels for changes and output, hover states and thin scrollbars.
 - Fewer messages: a tool you allowed for the session no longer raises
@@ -23,10 +29,6 @@
 - In the web client the thinking block can be expanded while the agent is still
   thinking: the text grows in place and collapsing returns to the one-line
   preview.
-- Stopping a turn from the web client is deliberate: Stop is a small outlined
-  chip next to "Thinking 15s", away from Steer and the queue's ✕. A tap arms it
-  ("Tap again to stop", three seconds), a second tap stops, and `Esc` twice does
-  the same; taps right after it appears or moves, and scrolls, are ignored.
 - On Windows the phone's folder picker can browse whole drives: list them in
   `[remote] roots`, for example `roots = ['C:\', 'D:\']` (single quotes in TOML),
   and the picker's Roots level switches between them. `C:`, `C:/` and `c:\` all

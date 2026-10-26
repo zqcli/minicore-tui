@@ -22,8 +22,8 @@ the v2 additions below.
   one-line rows and fold away when a turn ends; approvals, failures and
   sessions that need you stand out by shape and colour.
 - **Safe by construction.** Nothing approves by focus or a stray key; Stop is
-  always reachable while anything runs but needs a second, deliberate tap;
-  destructive actions confirm.
+  always reachable while anything runs, takes the send button's place, and is
+  guarded against double taps and scrolls; destructive actions confirm.
 - **Fewer boxes, clear type.** Flat assistant text, tinted user bubbles, ruled
   tool rows, cards only for approvals and summaries.
 - **Phone first, then iPad and desktop**, which get a persistent sidebar and
@@ -122,38 +122,44 @@ inputs change (no whole-region re-renders on every `state`). Budget: at most
 ### Composer
 
 - Two-row card at the bottom: auto-growing textarea (max 40 % of the visual
-  viewport), then a chip row (at least 44 px tall, so nothing moves when
-  the buttons change): **+** (sheet: prompt templates and commands, recent
-  prompts, insert `@file`), **model · effort** chip (one chip, middle
-  truncated, opens the model sheet), in a draft also **profile** and
-  **folder** chips; on the right the send controls: the round **↑ send**
-  button when idle, nothing while a turn runs and the composer is empty, and
-  while a turn runs with text typed two explicit buttons 8 px apart, both at
-  least 44 px tall: secondary **Queue** (follow-up icon) and primary **Steer**
-  (↗ icon). Both labels show at every width; the model chip drops its effort
-  and truncates in the middle to make room. Hover devices get tooltips with
+  viewport), then a bottom row at least 44 px tall: **+** (sheet: prompt
+  templates and commands, recent prompts, insert `@file`) and, in a draft, the
+  **folder** and **profile** chips on the left; on the right the **slot** and
+  the **primary button**. The primary is a 40 px round button that keeps its
+  place and only changes face; the slot is a plain text button (no fill or
+  border at rest, a subtle fill on hover, focus and press; at least 40 px
+  tall):
+
+  | State | Primary | Slot |
+  |---|---|---|
+  | idle, empty | ↑ Send, disabled | model · effort ⌄ |
+  | idle, text | ↑ Send (accent) | model · effort ⌄ |
+  | working, empty | ■ Stop (neutral: `--tx` fill, `--bg` icon) | model · effort ⌄ |
+  | working, text | ↗ Steer (accent) | ↳ Follow-up (accent text button) |
+  | stopping | spinner, disabled | model · effort ⌄ |
+
+  A compaction counts as working with nothing typed: the primary is Stop and
+  cancels it. The model text is middle-truncated (16 characters on a phone, 28
+  on a wide screen) and opens the model sheet. Hover devices get tooltips with
   the shortcuts.
-- **Stop** is a compact ghost chip (red outline and text, no fill, 32 px tall
-  inside a 40 px hit area) in the status strip next to the activity label
-  ("Thinking 15s ■ Stop"), on the left half and away from the right-hand
-  targets: the context % stays right, the queue ✕ and Steer/Send sit below with
-  at least 12 px between. It shows while a turn runs or a compaction is under
-  way, never in the send position. Stopping is deliberate:
-  - The first activation arms it: it turns into a filled red pill, "Tap again
-    to stop" ("Click again to stop" on hover devices), with a 3 s underline
-    that drains; a second activation within 3 s stops. After 3 s, on any other
-    tap or key, on scrolling, or when the turn ends, it disarms. Arming is
-    announced through the `aria-live` region.
-  - **Esc** (no sheet or list open) arms the same chip as "Esc again to stop";
-    a second Esc within 3 s stops. The TUI keeps its single Esc.
-  - Ghost taps are ignored: activations within 500 ms after the chip appeared
-    or moved (for example right after sending, when the strip first shows) and
-    pointer gestures that travelled more than 10 px (a scroll).
-  - While stopping it reads "Stopping…" with a spinner and is disabled; it goes
-    away when the turn ends. Cancelling a compaction uses the same chip.
-  The logic is `MC.stopArm(state, event, now)`.
+- **Stop** is the primary button while a turn runs and nothing is typed, and
+  stops at once: no arming step. It is guarded against accidents by logic in
+  `MC.primaryTap`:
+  - The action comes from the live textarea value at the moment of the tap, so
+    typing then tapping steers and never stops.
+  - A tap within 600 ms after the primary turned into Stop is ignored (the
+    second half of a double tap on Send, as the composer empties and the turn
+    starts or the steer is acknowledged).
+  - A pointer gesture that travelled more than 10 px is a scroll, not a tap.
+  With text typed during a turn, Stop stays reachable: a long press (450 ms) on
+  the primary, or a right click or the context-menu key, opens a small menu
+  above it: ↗ Steer now · Enter, ↳ Queue as follow-up · ⌥/Alt+Enter, ■ Stop
+  the turn · Esc. **Esc** (no sheet, list or menu open) stops the turn with a
+  single press, like the TUI. The primary's `aria-label` follows its face
+  (Send, Steer, Stop the turn, Stopping); a change to Stop, Steer or Stopping
+  is announced through the `aria-live` region, typing is not.
 - **Steer** sends the text into the running turn (`submit`; the agent reads it
-  after the current step); **Queue** sends a follow-up (`queue`; sent when the
+  after the current step); **Follow-up** sends a follow-up (`queue`; sent when the
   turn ends). Hardware keys mirror the TUI: Enter (with "Enter sends") or
   Cmd/Ctrl+Enter steers while busy and sends when idle; **Alt+Enter**
   (Option+Enter on macOS; browsers report it, so no settings are needed) queues
@@ -310,7 +316,7 @@ share one column (780 px, 860 px from 1700 px) centred beside the sidebar, with
 the title left-aligned to it. Desktop pointers get hover states, tooltips from
 the buttons' labels and thin themed scrollbars; tables wider than the column
 scroll instead of breaking words. Shortcuts:
-Esc close the top sheet (twice to stop the turn), Cmd/Ctrl+K command list,
+Esc close the top sheet or menu, else stop the turn, Cmd/Ctrl+K command list,
 Cmd/Ctrl+Enter send or steer (Enter does when the setting is on; Alt+Enter queues),
 Cmd/Ctrl+F find, Alt+↑/↓ previous/next session, `?` shortcut help.
 
