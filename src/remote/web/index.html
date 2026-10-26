@@ -26,7 +26,7 @@
   --font:-apple-system,BlinkMacSystemFont,"SF Pro Text","PingFang SC","Noto Sans SC","Segoe UI",Roboto,sans-serif;
   --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
   --t12:.75rem;--t13:.8125rem;--t14:.875rem;--t16:1rem;--t18:1.125rem;--t22:1.375rem;
-  --r1:8px;--r2:12px;--r3:20px;--ease:cubic-bezier(.2,.8,.2,1);--fast:.15s;--slow:.25s;
+  --col:780px;--r1:8px;--r2:12px;--r3:20px;--ease:cubic-bezier(.2,.8,.2,1);--fast:.15s;--slow:.25s;
   --st:env(safe-area-inset-top);--sb:env(safe-area-inset-bottom);--sl:env(safe-area-inset-left);--sr:env(safe-area-inset-right);
   color-scheme:light
 }
@@ -142,7 +142,7 @@ input.tf:focus{border-color:var(--ac);box-shadow:0 0 0 3px var(--acs)}
 .banner .btn{min-height:32px}
 #mid{flex:1;min-height:0;position:relative}
 #log{height:100%;overflow-y:auto;overflow-x:hidden;overscroll-behavior-y:contain;-webkit-overflow-scrolling:touch;padding:8px calc(var(--sr) + 16px) 24px calc(var(--sl) + 16px)}
-#col{max-width:780px;margin:0 auto;display:flex;flex-direction:column}
+#col{max-width:var(--col);margin:0 auto;display:flex;flex-direction:column}
 #blocks{display:flex;flex-direction:column}
 #top{display:flex;justify-content:center;gap:8px;flex-wrap:wrap}
 #top:not(:empty){padding:4px 0 12px}
@@ -276,7 +276,7 @@ pre{margin:0;font-size:var(--t13);line-height:1.5;tab-size:4}
 .md .cb code{padding:0;background:none;font-size:inherit}
 .tw{overflow-x:auto;border:1px solid var(--line);border-radius:var(--r2);background:linear-gradient(to right,var(--bg) 30%,transparent),linear-gradient(to left,var(--bg) 30%,transparent) 100% 0,radial-gradient(farthest-side at 0 50%,rgba(0,0,0,.14),transparent),radial-gradient(farthest-side at 100% 50%,rgba(0,0,0,.14),transparent) 100% 0;background-repeat:no-repeat;background-size:40px 100%,40px 100%,14px 100%,14px 100%;background-attachment:local,local,scroll,scroll}
 .md table{border-collapse:collapse;font-size:var(--t14);line-height:1.45;min-width:100%}
-.md th,.md td{padding:8px 12px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top;min-width:6em}
+.md th,.md td{padding:8px 12px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top;min-width:6em;overflow-wrap:normal}
 .md tr:last-child td{border-bottom:0}
 .md th{font-weight:600;background:var(--bg2);white-space:nowrap}
 /* thinking */
@@ -287,7 +287,10 @@ pre{margin:0;font-size:var(--t13);line-height:1.5;tab-size:4}
 .tk .cv{transition:transform var(--fast)}
 .tk[aria-expanded=true] .cv{transform:rotate(90deg)}
 .rsn{font-size:var(--t14);line-height:1.55;color:var(--tx3);white-space:pre-wrap;overflow-wrap:anywhere;padding-left:12px;border-left:2px solid var(--line);margin:4px 0 0 7px}
-.rsn.peek{max-height:calc(1.55em * 3);overflow:hidden;display:flex;flex-direction:column;justify-content:flex-end;-webkit-mask-image:linear-gradient(transparent,#000 60%);mask-image:linear-gradient(transparent,#000 60%)}
+.tp{height:20px;margin-left:20px;overflow:hidden;font-size:var(--t13);color:var(--tx3);cursor:pointer}
+.tp span{display:block;line-height:20px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tp span.up{animation:tick .18s var(--ease)}
+@keyframes tick{from{transform:translateY(100%);opacity:0}}
 /* tool rows */
 .tr{display:flex;align-items:center;gap:10px;width:100%;min-height:40px;position:relative;padding:4px 2px;font-size:var(--t14);line-height:1.35;border-radius:var(--r1);color:var(--tx2)}
 .tr:active{background:var(--fill)}
@@ -346,7 +349,7 @@ pre.view.wrap{white-space:pre-wrap;overflow-wrap:anywhere}
 /* dock */
 #dock{flex:none;position:relative;z-index:4;padding:6px calc(var(--sr) + 10px) calc(max(var(--sb),8px) + 2px) calc(var(--sl) + 10px);background:var(--bg)}
 html.kb #dock{padding-bottom:6px}
-#dock>*{max-width:780px;margin-left:auto;margin-right:auto}
+#dock>*{max-width:var(--col);margin-left:auto;margin-right:auto}
 #newout{position:absolute;left:50%;bottom:calc(100% + 8px);transform:translateX(-50%);box-shadow:var(--sh);background:var(--sf);color:var(--tx);z-index:5;animation:rise var(--fast) var(--ease)}
 #strip{display:flex;align-items:center;gap:10px;min-height:44px;padding:0 0 4px 6px}
 #strip .spin{color:var(--ac)}
@@ -355,7 +358,6 @@ html.kb #dock{padding-bottom:6px}
 .st1 b{font-weight:600;white-space:nowrap}
 .st1 .mono{flex:1;min-width:0;font-size:var(--t12);color:var(--tx3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .st1 .el{font-size:var(--t13);color:var(--tx3);font-variant-numeric:tabular-nums;flex:none}
-.micro{font-size:var(--t12);color:var(--tx3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ctxb{font-size:var(--t12);font-weight:500;color:var(--tx3);min-height:44px;min-width:44px;padding:0 4px;font-variant-numeric:tabular-nums;flex:none}
 .ctxb.hi{color:var(--wa)}
 .stop{flex:none;display:inline-flex;align-items:center;gap:6px;min-height:44px;padding:0 14px;border-radius:22px;background:var(--ers);color:var(--er);font-size:var(--t14);font-weight:600}
@@ -370,10 +372,15 @@ html.kb #dock{padding-bottom:6px}
 .lost>div{flex:1;min-width:0}
 .lost .lt{color:var(--tx);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .lost .btn{background:var(--sf);color:var(--tx)}
-.qp{display:flex;align-items:center;gap:4px;min-height:44px;padding:0 2px 0 12px;border-radius:var(--r2);background:var(--fill);font-size:var(--t14)}
-.qp .qk{flex:none;font-size:var(--t12);font-weight:600;color:var(--tx3)}
-.qp .qt{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:left;min-height:44px}
-.qp .ib{color:var(--tx3)}
+.qcap{padding:0 6px;font-size:var(--t12);color:var(--tx3)}
+.qp{display:flex;align-items:center;gap:6px;min-height:44px;padding:0 2px 0 12px;border-radius:var(--r2);background:var(--fill);font-size:var(--t14)}
+.qp>.ic,.qp .ib{color:var(--tx3)}
+.qp .qk{flex:none;font-size:var(--t12);font-weight:600;color:var(--tx3);white-space:nowrap}
+.qp .qt{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:left;min-height:44px;line-height:44px}
+.qp.steer{min-height:36px;padding-right:12px;background:none;box-shadow:inset 0 0 0 1px var(--line)}
+.qp.steer .qk{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.qp.steer .qt{min-height:0;line-height:inherit;color:var(--tx3)}
+.qmore{align-self:flex-start;min-height:36px;padding:0 8px;font-size:var(--t13);font-weight:600;color:var(--ac)}
 #pop{margin-bottom:6px;max-height:min(46vh,calc(var(--h,100dvh)*.42));overflow-y:auto;overscroll-behavior:contain;border-radius:var(--r2);background:var(--sf);box-shadow:var(--sh),inset 0 0 0 1px var(--line);padding:4px}
 .opt{display:flex;align-items:center;gap:10px;width:100%;min-height:48px;padding:6px 10px;border-radius:var(--r1);text-align:left}
 .opt[aria-selected=true]{background:var(--fill)}
@@ -384,15 +391,17 @@ html.kb #dock{padding-bottom:6px}
 #comp:focus-within{border-color:var(--ac)}
 #ta{display:block;width:100%;resize:none;border:0;background:none;padding:10px 8px 6px;margin:0;font-size:max(16px,1rem);line-height:1.45;max-height:calc(var(--h,100dvh)*.4);min-height:44px;overflow-y:auto;color:var(--tx)}
 #ta::placeholder{color:var(--tx3)}
-.chips{display:flex;align-items:center;gap:6px;min-width:0}
+.chips{display:flex;align-items:center;gap:8px;min-width:0;min-height:44px}
 .chip{display:inline-flex;align-items:center;gap:4px;min-height:36px;min-width:36px;padding:0 10px;border-radius:18px;background:var(--fill);color:var(--tx2);font-size:var(--t13);font-weight:500;white-space:nowrap;position:relative;flex:0 1 auto;overflow:hidden}
 .chip .ic{flex:none}
 .chip::after{content:"";position:absolute;inset:-4px -2px}
 .chip>span{overflow:hidden;text-overflow:ellipsis}
 .chip.icon{padding:0;justify-content:center;width:36px;flex:none;overflow:visible}
-.chip.mode,#send{flex:none}
-.chip.mode{background:var(--acs);color:var(--ac)}
-.chip.mode.q{background:var(--fill);color:var(--tx2)}
+#send{flex:none}
+.snd{display:flex;gap:8px;flex:none}
+.snd.off{visibility:hidden}
+.btn.sb{padding:0 14px;border-radius:22px;font-size:var(--t14);animation:fade var(--fast)}
+@media(max-width:479px){.rz{display:none}}
 .cl{flex:1;min-width:0;display:flex;align-items:center;gap:6px;overflow-x:auto;scrollbar-width:none;padding:4px 16px 4px 0;margin:-4px 0;-webkit-mask-image:linear-gradient(to left,transparent,#000 16px);mask-image:linear-gradient(to left,transparent,#000 16px)}
 .cl::-webkit-scrollbar{display:none}
 .cl .chip{flex:none;max-width:62vw}
@@ -431,7 +440,6 @@ kbd{font:500 var(--t12) var(--mono);padding:2px 6px;border-radius:6px;background
 .ahead h2{font-size:var(--t18);font-weight:600;line-height:1.3;overflow-wrap:anywhere}
 .ahead h2 code{font-size:.9em;font-weight:500}
 .ahead p{font-size:var(--t14);color:var(--tx2);margin-top:2px;line-height:1.4}
-.abtn{flex:none;display:flex;flex-direction:column;gap:8px;padding:10px 20px calc(max(var(--sb),12px) + 4px)}
 .row2{display:flex;gap:8px}
 .row2>.btn{flex:1}
 .reason{display:flex;gap:8px}
@@ -468,16 +476,32 @@ kbd{font:500 var(--t12) var(--mono);padding:2px 6px;border-radius:6px;background
 @media(min-width:900px){
   #nav{position:relative;z-index:auto;transform:none;visibility:visible;transition:none;box-shadow:none;width:300px;height:auto;border-right:1px solid var(--line);background:var(--bg2)}
   #nav .nclose,#menu{display:none}
-  .bar{padding-left:calc(var(--sl) + 12px)}
+  .bar{padding-inline:max(calc(var(--sl) + 12px),calc((100% - var(--col)) / 2 - 8px))}
+  #ttl{align-items:flex-start;padding:0 8px}
   .sheet{bottom:auto;top:max(6vh,calc(var(--st) + 12px));max-height:min(86vh,calc(var(--h,100dvh) - 48px));border-radius:var(--r3);width:calc(100% - 48px);animation:rise var(--slow) var(--ease)}
   .sheet.full{height:min(86vh,calc(var(--h,100dvh) - 48px));max-width:720px}
   .grab{height:12px}.grab::before{display:none}
-  .sheet .sfoot,.sheet .abtn{padding-bottom:16px}
-  .sugg{grid-template-columns:repeat(4,minmax(0,1fr))}
+  .sheet .sfoot{padding-bottom:16px}
+  .sugg{max-width:560px}
+  .opt{min-height:40px}
 }
 @media(min-width:1200px){
-  .sheet.panel{top:0;bottom:0;right:0;left:auto;width:440px;max-width:none;height:var(--h,100dvh);max-height:none;border-radius:0;margin:0;box-shadow:none;border-left:1px solid var(--line);animation:fade var(--fast);padding-top:var(--st)}
-  html.haspanel #main{margin-right:440px}
+  :root{--pw:clamp(440px,30vw,600px)}
+  .sheet.panel{top:0;bottom:0;right:0;left:auto;width:var(--pw);max-width:none;height:var(--h,100dvh);max-height:none;border-radius:0;margin:0;box-shadow:none;border-left:1px solid var(--line);animation:fade var(--fast);padding-top:var(--st)}
+  .sheet.panel .shead{padding-top:6px;border-bottom:1px solid var(--line)}
+  .sheet.panel .sfoot{border-top:1px solid var(--line)}
+  html.haspanel #main{margin-right:var(--pw)}
+}
+@media(min-width:1700px){:root{--col:860px}}
+/* desktop pointers: hover states, tooltips come from aria-label, thin scrollbars */
+@media(hover:hover){
+  *{scrollbar-width:thin;scrollbar-color:var(--line2) transparent}
+  #log{scrollbar-gutter:stable both-edges}
+  .ib:hover,.sopen:hover,.tr:hover,.opt:hover,.sugg button:hover,.cbh button:hover,.tbar button:hover,.crumbs button:hover,.qmore:hover{background:var(--fill)}
+  .chip:hover,.row:hover:not(:disabled),.pill:hover,.srow.cur .sopen:hover,.seg button:hover{background:var(--fill2)}
+  .seg button[aria-checked=true]:hover{background:var(--sf)}
+  .btn:hover:not(:disabled),.stop:hover:not(:disabled),#send:hover:not(:disabled){filter:brightness(.94)}
+  [data-theme=dark] .btn:hover:not(:disabled),[data-theme=dark] .stop:hover:not(:disabled),[data-theme=dark] #send:hover:not(:disabled){filter:brightness(1.2)}
 }
 </style>
 <script id="core">
@@ -947,8 +971,13 @@ globalThis.MC = (() => {
   }
 
   // ---- paths ----
-  function splitPath(p) {
-    const sep = p.includes('/') ? '/' : '\\', parts = p.split(sep).filter(Boolean);
+  // Windows paths (drive letters, UNC) use `\`, and `/` in them is accepted as the same separator; they compare without case.
+  const WIN = /^([A-Za-z]:([\\/]|$)|\\\\)/;
+  const canon = p => WIN.test(p) ? p.replace(/\//g, '\\') : p;
+  const pkey = p => WIN.test(p) ? canon(p).toLowerCase().replace(/\\+$/, '') : p;
+  const isDrive = p => /^[A-Za-z]:\\?$/.test(canon(p));
+  function splitPath(path) {
+    const p = canon(path), win = WIN.test(p), sep = win ? '\\' : '/', parts = p.split(sep).filter(Boolean);
     const out = parts.map((name, k) => {
       let q = (p.startsWith('\\\\') ? '\\\\' : p.startsWith(sep) ? sep : '') + parts.slice(0, k + 1).join(sep);
       if (/^[A-Za-z]:$/.test(q)) q += sep;
@@ -958,19 +987,19 @@ globalThis.MC = (() => {
     return out;
   }
   function within(p, root) {
-    if (p === root) return true;
-    const s = root.includes('/') ? '/' : '\\';
-    return p.startsWith(root.endsWith(s) ? root : root + s);
+    if (!WIN.test(root)) return p === root || p.startsWith(root.endsWith('/') ? root : root + '/');
+    const a = pkey(p), b = pkey(root);
+    return a === b || a.startsWith(b + '\\');
   }
   // Breadcrumbs from the innermost root that holds `path`, named like the root.
   function crumbs(path, roots) {
     const all = splitPath(path), root = roots.filter(r => within(path, r.path)).sort((a, b) => b.path.length - a.path.length)[0];
     if (!root) return all;
-    const k = all.findIndex(c => c.path === root.path);
+    const k = all.findIndex(c => pkey(c.path) === pkey(root.path));
     return k < 0 ? all : [{ name: root.name, path: root.path }, ...all.slice(k + 1)];
   }
-  // "~/Develops/app" for a home directory path.
-  const tilde = p => (p || '').replace(/^\/(Users|home)\/[^/]+(?=\/|$)/, '~');
+  // "~/Develops/app" (Windows: "~\work") for a home directory path.
+  const tilde = p => (p || '').replace(/^(?:\/(?:Users|home)\/[^/]+|[A-Za-z]:[\\/]Users[\\/][^\\/]+)(?=[\\/]|$)/i, '~');
 
   // ---- attention ----
   // Background sessions that started waiting for approval or finished unseen between two session lists.
@@ -1034,6 +1063,34 @@ globalThis.MC = (() => {
   const pushRecent = (list, text, max = 50) => [text, ...list.filter(x => x !== text)].slice(0, max);
   // Commands and paths are not prose: no autocorrect while the text starts with one.
   const literal = text => /^[/@]/.test(text);
+  // What a composer key does. Enter (when "Enter sends" is on) or ⌘/Ctrl+Enter steers while a turn runs and sends when idle;
+  // Tab or Alt+Enter queues a follow-up while a turn runs and text is typed. An open list keeps Tab and Enter for
+  // completion. null leaves the key to the browser.
+  function composerKey(k, c) {
+    const typed = c.text.trim() !== '';
+    if (c.popup && !k.mod) return null;
+    if (k.key === 'Tab') return c.busy && typed && !k.shift && !k.alt && !k.mod ? 'queue' : null;
+    if (k.key !== 'Enter') return null;
+    if (k.alt && !k.mod) return c.busy && typed ? 'queue' : null;
+    return k.mod || (c.enter && !k.shift && !k.alt) ? (c.busy ? 'steer' : 'send') : null;
+  }
+  // The queue above the composer: follow-ups numbered in order and steers the agent has not read yet. Only the first
+  // `max` show until all are asked for; `hidden` counts the rest and `long` says whether a toggle is needed.
+  function queueView(queue, all, max = 3) {
+    let n = 0;
+    // Steers come first, as in the TUI: the agent reads them before any follow-up; `index` stays the wire index.
+    const items = queue.map((q, index) => ({ kind: q.kind, text: q.text, index, n: q.kind === 'follow' ? ++n : 0 }))
+      .sort((a, b) => (a.kind === 'follow') - (b.kind === 'follow'));
+    return { items: all ? items : items.slice(0, max), hidden: all ? 0 : Math.max(0, items.length - max), long: items.length > max };
+  }
+
+  // The newest sentence of the reasoning text for the one-line preview: last non-empty line, last sentence of it, Markdown
+  // markers stripped. Only the tail is read, so it stays cheap while the text grows.
+  function thinkingPreview(text) {
+    const lines = norm(text.slice(-1200)).split('\n').map(l => l.replace(/^\s*(?:#{1,6}\s+|>\s*|[-*+]\s+|\d{1,9}[.)]\s+)+/, '').replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/[`*~]+|__/g, '').trim()).filter(Boolean);
+    const sentences = (lines.pop() || '').split(/(?<=[.!?。！？])\s+|(?<=[。！？])/).filter(Boolean);
+    return sentences.pop() || '';
+  }
 
   // ---- changes, context, export ----
   const STATUS = { added: ['A', 'ok'], modified: ['M', ''], deleted: ['D', 'er'], renamed: ['R', ''], conflict: ['!', 'er'], unknown: ['?', ''] };
@@ -1197,8 +1254,8 @@ globalThis.MC = (() => {
     clock, stamp, relTime, dayGroup, sessionLayout, matchSession, fmtElapsed, fmtDur, fmtTok, fmtNum,
     groupTools, foldTurns, findBlocks, foldText, mdInc,
     toolKind, toolInfo, parseDiff, diffStats, liveBlock, turnEnd, changesText, compactionText, statusLine, canStop, approvalKey, approvalTitle, approvalOptions, approvalBody,
-    changeStatus, contextView, exportMd, BUILTINS, slashMenu, parseSlash, atToken, insertMention, pushRecent, literal,
-    splitPath, within, crumbs, tilde, recentWorkspaces, sessionTransitions, noticeEvent, attentionCount, inline, parseMd, parseLines, SAFE_URL,
+    changeStatus, contextView, exportMd, BUILTINS, slashMenu, parseSlash, atToken, insertMention, pushRecent, literal, composerKey, queueView, thinkingPreview,
+    splitPath, within, crumbs, tilde, isDrive, recentWorkspaces, sessionTransitions, noticeEvent, attentionCount, inline, parseMd, parseLines, SAFE_URL,
   };
 })();
 </script>
@@ -1237,6 +1294,7 @@ osDark.addEventListener('change', applyTheme);
 <symbol id="i-chevd" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 10 5 5 5-5"/></symbol>
 <symbol id="i-chevu" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 14 5-5 5 5"/></symbol>
 <symbol id="i-folder" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M3.5 7.5A2 2 0 0 1 5.5 5.5h3.6l2 2h7.4a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/></symbol>
+<symbol id="i-disk" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="13" width="17" height="6.5" rx="2"/><path d="m5.5 13 2-7.5h9l2 7.5M16.5 16.3h.01"/></symbol>
 <symbol id="i-folderplus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 7.5A2 2 0 0 1 5.5 5.5h3.6l2 2h7.4a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2zM12 10.5v5M9.5 13h5"/></symbol>
 <symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7.5"/></symbol>
 <symbol id="i-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/></symbol>
@@ -1262,9 +1320,8 @@ osDark.addEventListener('change', applyTheme);
 <symbol id="i-shield" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"><path d="M12 3 19.5 6v5.5c0 4.6-3.2 8.2-7.5 9.5-4.3-1.3-7.5-4.9-7.5-9.5V6z"/></symbol>
 <symbol id="i-layers" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="m12 4 8.5 4.5L12 13 3.5 8.5z"/><path d="m3.5 12.5 8.5 4.5 8.5-4.5" stroke-linecap="round"/></symbol>
 <symbol id="i-steer" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 19 19 5M10 5h9v9"/></symbol>
-<symbol id="i-clock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></symbol>
+<symbol id="i-follow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 5v6a3 3 0 0 0 3 3h11M15 10l4 4-4 4"/></symbol>
 <symbol id="i-cloudoff" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 6.6A6 6 0 0 1 17.6 10a4 4 0 0 1 2.9 5.8M17 18.5H7a4.5 4.5 0 0 1-1.4-8.8M3.5 3.5l17 17"/></symbol>
-<symbol id="i-branch" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="7" cy="5.5" r="2"/><circle cx="7" cy="18.5" r="2"/><circle cx="17" cy="8" r="2"/><path d="M7 7.5v9M17 10c0 4-10 2.5-10 6.5"/></symbol>
 <symbol id="i-share" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 14.5V3.5M8 7l4-3.5L16 7M7.5 10.5h-1a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-6a2 2 0 0 0-2-2h-1"/></symbol>
 <symbol id="i-wrap" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h13a3 3 0 0 1 0 6h-4M15 16l-2 2 2 2M4 18h5"/></symbol>
 <symbol id="i-open" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4.5h5.5V10M19.5 4.5 12 12M10 5.5H6.5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V14"/></symbol>
@@ -1272,7 +1329,6 @@ osDark.addEventListener('change', applyTheme);
 <symbol id="i-history" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 12a7.5 7.5 0 1 0 2.2-5.3L4.5 9"/><path d="M4.5 4.5V9H9M12 8v4l3 2"/></symbol>
 <symbol id="i-gauge" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M4.2 17a8.5 8.5 0 1 1 15.6 0"/><path d="m12 13 3.5-4"/></symbol>
 <symbol id="i-diff" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M13.5 3.5H7a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9z"/><path d="M12 9v5M9.5 11.5h5M9.5 17h5"/></symbol>
-<symbol id="i-key" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="6.5" width="19" height="11" rx="2"/><path d="M6 10h.01M9 10h.01M12 10h.01M15 10h.01M18 10h.01M7 14h10"/></symbol>
 </defs>
 </svg>
 
@@ -1342,6 +1398,7 @@ const $ = id => document.getElementById(id);
 const kids = k => k.flat(Infinity).filter(x => typeof x === 'string' ? x !== '' : x instanceof Node);
 function h(tag, p, ...c) {
   const n = document.createElement(tag);
+  if (tag === 'button') n.type = 'button';
   if (typeof p === 'string') n.className = p;
   else if (p) for (const k in p) {
     const v = p[k];
@@ -1388,6 +1445,7 @@ function swap(host, nodes) {
   if (n) n.focus({ preventScroll: true });
 }
 
+document.addEventListener('mouseover', e => { const b = e.target.closest('button[aria-label]'); if (b && !b.title) b.title = b.getAttribute('aria-label'); });
 // ---- copy, share, toasts, announcements ----
 // navigator.clipboard is missing on plain-http LAN pages.
 function copyText(text, btn) {
@@ -1403,7 +1461,6 @@ function copyText(text, btn) {
   };
   if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).then(done, legacy); else legacy();
 }
-// Web Share where the browser has it, else the clipboard.
 function share(title, text, btn) {
   if (navigator.share) navigator.share({ title, text }).catch(() => {}); else copyText(text, btn);
 }
@@ -1411,14 +1468,13 @@ function share(title, text, btn) {
 function toast(text, level, act) {
   const box = $('toasts'), sticky = level === 'error';
   const n = h('div', { class: 'toast' + (sticky ? ' error' : ''), role: sticky ? 'alert' : 'status' }, sticky && icon('warn', 'sm'), h('span', '', text),
-    act && h('button', { class: 'tact', type: 'button', onclick: () => { n.remove(); act.fn(); } }, act.label),
-    sticky && h('button', { class: 'ib', type: 'button', 'aria-label': 'Dismiss', onclick: () => n.remove() }, icon('x', 'sm')));
+    act && h('button', { class: 'tact', onclick: () => { n.remove(); act.fn(); } }, act.label),
+    sticky && h('button', { class: 'ib', 'aria-label': 'Dismiss', onclick: () => n.remove() }, icon('x', 'sm')));
   box.append(n);
   while (box.children.length > 3) box.firstChild.remove();
   if (!sticky) setTimeout(() => n.remove(), act ? 6000 : 3000);
   return n;
 }
-// State changes for screen readers (never tokens).
 const announce = text => { $('live').textContent = text; };
 
 // ---- screens ----
@@ -1433,8 +1489,8 @@ function show(name) {
 function gateScreen(g) {
   const eicon = h('div', 'eicon' + (g.icon === 'warn' ? ' warn' : ''), icon(g.icon, 'lg'));
   fill($('gate'), h('div', 'col', g.spinner ? h('img', { class: 'appicon', src: '/icon.svg', alt: '' }) : eicon, h('h1', '', g.title), g.text && h('p', 'sub', g.text),
-    g.spinner && spin(), g.action && h('div', 'gate-acts', h('button', { class: 'btn primary block', type: 'button', onclick: () => gateAction(g.action) }, g.label),
-      g.signin && h('button', { class: 'btn ghost', type: 'button', onclick: signOut }, 'Sign in with a password'))));
+    g.spinner && spin(), g.action && h('div', 'gate-acts', h('button', { class: 'btn primary block', onclick: () => gateAction(g.action) }, g.label),
+      g.signin && h('button', { class: 'btn ghost', onclick: signOut }, 'Sign in with a password'))));
   show('gate');
 }
 function gateAction(a) {
@@ -1469,7 +1525,7 @@ function signinError(text, o = {}) {
   $('pwf').classList.toggle('bad', !!text && !o.warn && !o.retry);
   e.hidden = !text;
   e.className = 'ferr' + (o.warn ? ' warn' : '');
-  fill(e, text && icon(o.warn ? 'info' : 'warn', 'sm'), h('span', '', text), o.retry && h('button', { type: 'button', onclick: doLogin }, 'Retry'));
+  fill(e, text && icon(o.warn ? 'info' : 'warn', 'sm'), h('span', '', text), o.retry && h('button', { onclick: doLogin }, 'Retry'));
 }
 function signinBusy(on) {
   const b = $('sgo');
@@ -1693,7 +1749,7 @@ function sheet(o) {
     if (k === m.last && !force) return;
     m.last = k;
     const top = body.scrollTop;
-    fill(head, o.head ? o.head(id) : h('h2', { id }, o.title), h('button', { class: 'ib', type: 'button', 'aria-label': o.closeLabel || 'Close', onclick: () => m.close() }, icon(o.closeIcon || 'x')));
+    fill(head, o.head ? o.head(id) : h('h2', { id }, o.title), h('button', { class: 'ib', 'aria-label': o.closeLabel || 'Close', onclick: () => m.close() }, icon(o.closeIcon || 'x')));
     swap(body, o.body());
     const f = o.foot && o.foot();
     foot.hidden = !f;
@@ -1717,7 +1773,6 @@ function sheet(o) {
 }
 const findSheet = key => stack.find(m => m.key === key);
 function refreshSheets() { for (const m of stack) if (m.refresh) m.refresh(); }
-// Swipe down on the grabber or header closes a sheet; swipe left closes the drawer.
 function swipeClose(el, m) {
   let y0 = null;
   el.addEventListener('touchstart', e => { y0 = e.target.closest('.grab,.shead,.ahead') ? e.touches[0].clientY : null; }, { passive: true });
@@ -1734,13 +1789,12 @@ function swipeClose(el, m) {
     if (dy > 80) m.close();
   });
 }
-// A small confirm dialog for destructive actions.
 function confirmSheet(o) {
   const m = sheet({
     key: 'confirm', cls: 'dialog', title: o.title, deps: () => [o.busy, o.err, online()],
     body: () => [o.text && h('p', { class: 'hint', style: 'font-size:var(--t16)' }, o.text), o.err && h('div', { class: 'serr', role: 'alert', style: 'margin-top:12px' }, icon('warn', 'sm'), h('span', '', o.err))],
-    foot: () => [h('button', { class: 'btn', type: 'button', 'data-k': 'no', onclick: () => m.close() }, 'Cancel'),
-      h('button', { class: 'btn ' + (o.danger ? 'dangerfill' : 'primary'), type: 'button', 'data-k': 'ok', disabled: o.busy || (o.needsOnline && !online()), onclick: () => o.ok(m) }, o.busy && spin(), o.label)],
+    foot: () => [h('button', { class: 'btn', 'data-k': 'no', onclick: () => m.close() }, 'Cancel'),
+      h('button', { class: 'btn ' + (o.danger ? 'dangerfill' : 'primary'), 'data-k': 'ok', disabled: o.busy || (o.needsOnline && !online()), onclick: () => o.ok(m) }, o.busy && spin(), o.label)],
   });
   return m;
 }
@@ -1760,8 +1814,8 @@ function renderBar() {
 }
 const bannersPart = part($('banners'), b => [
   b.attn && h('div', { class: 'banner warn', role: 'status' }, icon('hand', 'sm'), h('span', '', '“' + b.attn.title + '” ' + (b.attn.kind === 'choice' ? 'has a question' : 'needs approval')),
-    h('button', { class: 'btn sm', type: 'button', onclick: () => openLive(b.attn.id) }, 'Review'),
-    h('button', { class: 'ib s', type: 'button', 'aria-label': 'Dismiss', onclick: () => { dismissed.add(b.attn.id); renderBanners(); } }, icon('x', 'sm'))),
+    h('button', { class: 'btn sm', onclick: () => openLive(b.attn.id) }, 'Review'),
+    h('button', { class: 'ib s', 'aria-label': 'Dismiss', onclick: () => { dismissed.add(b.attn.id); renderBanners(); } }, icon('x', 'sm'))),
   b.conn && h('div', { class: 'banner', role: 'status' }, spin(), h('span', '', b.conn)),
   b.find && findBar(),
 ]);
@@ -1861,9 +1915,9 @@ const navShown = () => wide.matches || nav.classList.contains('on');
 function buildNav() {
   const q = h('input', { type: 'search', placeholder: 'Search sessions', 'aria-label': 'Search sessions', autocomplete: 'off', enterKeyHint: 'search', oninput: () => { query = q.value; renderNav(); } });
   fill(nav, h('div', 'nhead', h('img', { src: '/icon.svg', alt: '' }), h('div', '', h('b', '', 'MiniCore'), h('small', '', HOST)),
-    h('button', { class: 'ib', type: 'button', 'aria-label': 'Settings', onclick: openSettings }, icon('gear')),
-    h('button', { class: 'ib nclose', type: 'button', 'aria-label': 'Close', onclick: closeNav }, icon('x'))),
-    h('button', { class: 'btn primary nnew', type: 'button', 'data-focus': true, onclick: () => openNew() }, icon('plus', 'sm'), 'New session'),
+    h('button', { class: 'ib', 'aria-label': 'Settings', onclick: openSettings }, icon('gear')),
+    h('button', { class: 'ib nclose', 'aria-label': 'Close', onclick: closeNav }, icon('x'))),
+    h('button', { class: 'btn primary nnew', 'data-focus': true, onclick: () => openNew() }, icon('plus', 'sm'), 'New session'),
     h('label', 'search', icon('search', 'sm'), q), h('div', 'nlist'), h('div', 'nfoot'));
   listPart = part(nav.querySelector('.nlist'), renderList);
   footPart = part(nav.querySelector('.nfoot'), f => [h('span', 'cdot' + (f.on ? '' : ' off')), h('span', '', f.text)]);
@@ -1911,13 +1965,12 @@ function sessionRow([id, title, ws, current, status, started, unseen, rel, bad])
   const what = status === 'approval' ? h('span', 'warn', 'Needs you') : status === 'running' ? (started ? h('span', { 'data-start': started }, MC.fmtElapsed(hostNow() - started)) : 'Running')
     : status === 'compacting' ? 'Compacting' : bad ? h('span', 'er', 'Failed') : unseen ? 'New result' : rel;
   return h('div', 'srow' + (current ? ' cur' : ''), h('button', {
-    class: 'sopen', type: 'button', 'data-k': 's' + id, 'aria-current': current ? 'page' : null,
+    class: 'sopen', 'data-k': 's' + id, 'aria-current': current ? 'page' : null,
     'aria-label': (title || 'Untitled session') + ', ' + MC.basename(ws) + (status === 'approval' ? ', needs you' : status === 'running' ? ', running' : ''),
     onclick: () => { if (current) return closeNav(); if (!pendingRow && intent(MC.intents.openSession(id))) { pendingRow = id; renderNav(); } },
   }, shape, h('span', 'rt', h('span', 'rm', title || 'Untitled session'), h('span', 'rs', what, ' · ' + MC.basename(ws))), pendingRow === id && spin('sm')),
-  h('button', { class: 'ib more', type: 'button', 'data-k': 'm' + id, 'aria-label': 'Actions for ' + (title || 'Untitled session'), 'aria-haspopup': 'dialog', onclick: () => sessionActions(id) }, icon('more')));
+  h('button', { class: 'ib more', 'data-k': 'm' + id, 'aria-label': 'Actions for ' + (title || 'Untitled session'), 'aria-haspopup': 'dialog', onclick: () => sessionActions(id) }, icon('more')));
 }
-// Swipe left closes the drawer.
 (() => {
   let x0 = null;
   nav.addEventListener('touchstart', e => { x0 = wide.matches ? null : e.touches[0].clientX; }, { passive: true });
@@ -1931,7 +1984,7 @@ const standalone = () => matchMedia('(display-mode: standalone)').matches || nav
 const SIZES = [['Small', .9], ['Default', 1], ['Large', 1.1], ['Larger', 1.2]];
 function setPref(k, v) { prefs[k] = v; savePrefs(); applyTheme(); onPrefs(k); refreshSheets(); }
 function seg(label, items, value, set) {
-  return h('div', { class: 'seg', role: 'radiogroup', 'aria-label': label }, items.map(([l, v]) => h('button', { type: 'button', role: 'radio', 'data-k': label + l, 'aria-checked': String(v === value), onclick: () => set(v) }, l)));
+  return h('div', { class: 'seg', role: 'radiogroup', 'aria-label': label }, items.map(([l, v]) => h('button', { role: 'radio', 'data-k': label + l, 'aria-checked': String(v === value), onclick: () => set(v) }, l)));
 }
 function switchRow(label, sub, on, set, disabled) {
   return h('label', 'sw', h('span', '', label, sub && h('small', '', sub)), h('input', { type: 'checkbox', role: 'switch', 'data-k': label, checked: on, disabled, onchange: e => set(e.target.checked) }));
@@ -1960,10 +2013,10 @@ function openSettings() {
         h('h3', 'sec2', 'About'), h('div', 'list',
           h('div', 'row flat', h('span', 'rt', h('span', 'rm', 'Host')), h('span', 'val', HOST)),
           h('div', 'row flat', h('span', 'rt', h('span', 'rm', 'MiniCore')), h('span', 'val', (S.version || '?') + ' · protocol ' + MC.V)),
-          inst === 'prompt' && h('button', { class: 'row flat', type: 'button', onclick: () => { installPrompt.prompt(); installPrompt = null; refreshSheets(); } }, icon('down', 'ri'), h('span', 'rt', h('span', 'rm', 'Install app'), h('span', 'rs', 'Open MiniCore from your home screen'))),
+          inst === 'prompt' && h('button', { class: 'row flat', onclick: () => { installPrompt.prompt(); installPrompt = null; refreshSheets(); } }, icon('down', 'ri'), h('span', 'rt', h('span', 'rm', 'Install app'), h('span', 'rs', 'Open MiniCore from your home screen'))),
           inst === 'ios' && h('div', 'row flat', icon('share', 'ri'), h('span', 'rt', h('span', 'rm', 'Install app'), h('span', 'rs', 'Share → Add to Home Screen')),
-            h('button', { class: 'ib s', type: 'button', 'aria-label': 'Dismiss', onclick: () => { localStorage.setItem('minicore.installHint', '1'); refreshSheets(); } }, icon('x', 'sm')))),
-        h('div', { style: 'margin-top:24px' }, h('button', { class: 'btn block danger', type: 'button', onclick: () => confirmSheet({ title: 'Sign out of this device?', text: 'You will need the password shown on your computer to connect again.', label: 'Sign out', danger: true, ok: m => { m.close(true); signOut(); } }) }, icon('logout', 'sm'), 'Sign out')),
+            h('button', { class: 'ib s', 'aria-label': 'Dismiss', onclick: () => { localStorage.setItem('minicore.installHint', '1'); refreshSheets(); } }, icon('x', 'sm')))),
+        h('div', { style: 'margin-top:24px' }, h('button', { class: 'btn block danger', onclick: () => confirmSheet({ title: 'Sign out of this device?', text: 'You will need the password shown on your computer to connect again.', label: 'Sign out', danger: true, ok: m => { m.close(true); signOut(); } }) }, icon('logout', 'sm'), 'Sign out')),
       ];
     },
   });
@@ -1990,10 +2043,10 @@ function sessionActions(id) {
   const m = sheet({
     key: 'actions', cls: 'dialog', head: hid => h('h2', { id: hid }, x.title || 'Untitled session', h('span', 'sub2', MC.tilde(x.workspace))),
     body: () => h('div', 'list',
-      !current && h('button', { class: 'row flat', type: 'button', 'data-focus': true, onclick: () => { m.close(true); openLive(id); } }, icon('open', 'ri'), h('span', 'rt', h('span', 'rm', 'Open'))),
-      h('button', { class: 'row flat', type: 'button', 'data-focus': current, onclick: () => { m.close(true); rename(id); } }, icon('edit', 'ri'), h('span', 'rt', h('span', 'rm', 'Rename'))),
-      h('button', { class: 'row flat', type: 'button', onclick: () => { m.close(true); copyText(id); } }, icon('copy', 'ri'), h('span', 'rt', h('span', 'rm', 'Copy session id'))),
-      h('button', { class: 'row flat bad', type: 'button', disabled: current, onclick: () => { m.close(true); remove(id); } }, icon('trash', 'ri'),
+      !current && h('button', { class: 'row flat', 'data-focus': true, onclick: () => { m.close(true); openLive(id); } }, icon('open', 'ri'), h('span', 'rt', h('span', 'rm', 'Open'))),
+      h('button', { class: 'row flat', 'data-focus': current, onclick: () => { m.close(true); rename(id); } }, icon('edit', 'ri'), h('span', 'rt', h('span', 'rm', 'Rename'))),
+      h('button', { class: 'row flat', onclick: () => { m.close(true); copyText(id); } }, icon('copy', 'ri'), h('span', 'rt', h('span', 'rm', 'Copy session id'))),
+      h('button', { class: 'row flat bad', disabled: current, onclick: () => { m.close(true); remove(id); } }, icon('trash', 'ri'),
         h('span', 'rt', h('span', 'rm', 'Delete session'), current && h('span', 'rs', 'Open another session first')))),
   });
 }
@@ -2013,11 +2066,11 @@ function rename(id) {
         placeholder: 'Session title', autocomplete: 'off', enterKeyHint: 'done', oninput: e => { d.value = e.target.value; } }),
       h('p', { class: 'hint', style: 'margin-top:8px' }, 'Leave empty to use the first message'),
       d.err && h('div', { class: 'serr', role: 'alert', style: 'margin-top:8px' }, icon('warn', 'sm'), h('span', '', d.err))),
-    foot: () => [h('button', { class: 'btn', type: 'button', onclick: () => m.close() }, 'Cancel'),
+    foot: () => [h('button', { class: 'btn', onclick: () => m.close() }, 'Cancel'),
       h('button', { class: 'btn primary', type: 'submit', form: 'renf', 'data-k': 'save', disabled: d.busy || !online() }, d.busy && spin(), d.busy ? 'Saving…' : 'Save')],
   });
   const i = m.el.querySelector('input');
-  // Synchronous focus inside the tap so iOS opens the keyboard.
+  // Focus inside the tap so iOS opens the keyboard.
   i.focus({ preventScroll: true }); i.select();
 }
 function remove(id) {
@@ -2037,7 +2090,7 @@ function remove(id) {
 }
 function openSessionMenu() {
   const s = S.state.session;
-  const row = (ic, label, fn, cls) => h('button', { class: 'row flat' + (cls ? ' ' + cls : ''), type: 'button', onclick: () => { m.close(true); fn(); } }, icon(ic, 'ri'), h('span', 'rt', h('span', 'rm', label)));
+  const row = (ic, label, fn, cls) => h('button', { class: 'row flat' + (cls ? ' ' + cls : ''), onclick: () => { m.close(true); fn(); } }, icon(ic, 'ri'), h('span', 'rt', h('span', 'rm', label)));
   const m = sheet({
     key: 'menu', cls: 'dialog', head: hid => h('h2', { id: hid }, s.title || 'Untitled session', h('span', 'sub2', MC.tilde(s.workspace))),
     body: () => h('div', 'list', menuRows(row)),
@@ -2063,7 +2116,7 @@ function openInfo() {
           kv('Model', [x.model, x.reasoning].filter(Boolean).join(' · ')), kv('Updated', cat && MC.stamp(Date.parse(cat.updated_at), hostNow(), tz())),
           kv('Usage', (u.input || u.output) ? MC.fmtTok(u.input) + ' in · ' + MC.fmtTok(u.output) + ' out' + (u.cached ? ' · ' + MC.fmtTok(u.cached) + ' cached' : '') : ''),
           kv('Context', S.state.context_percent != null ? Math.round(S.state.context_percent) + '% used' : ''), kv('Also viewing', others.join(', '))),
-        h('div', { style: 'display:flex;gap:8px;margin-top:16px' }, h('button', { class: 'btn sm', type: 'button', onclick: e => copyText(x.id, e.currentTarget) }, icon('copy', 'xs'), 'Copy id'))];
+        h('div', { style: 'display:flex;gap:8px;margin-top:16px' }, h('button', { class: 'btn sm', onclick: e => copyText(x.id, e.currentTarget) }, icon('copy', 'xs'), 'Copy id'))];
     },
   });
 }
@@ -2077,7 +2130,7 @@ function openModel() {
     body: () => {
       const s = S.state, c = cur(), model = mp.model || c.model, m = s.models.find(x => x.id === model), level = mp.level || c.reasoning;
       return [h('div', { class: 'list', role: 'radiogroup', 'aria-label': 'Model' }, s.models.map(x => h('button', {
-        class: 'row flat', type: 'button', role: 'radio', 'data-k': 'm' + x.id, 'aria-checked': String(x.id === model), disabled: !online(),
+        class: 'row flat', role: 'radio', 'data-k': 'm' + x.id, 'aria-checked': String(x.id === model), disabled: !online(),
         onclick: () => { if (x.id !== model && intent(MC.intents.setModel(x.id))) mp.model = x.id; refreshSheets(); },
       }, h('span', 'rt', h('span', 'rm', x.id), h('span', 'rs', x.reasoning.length ? x.reasoning.join(' · ') : 'No reasoning levels')),
       x.id === model && (mp.model ? spin('sm') : icon('check', 'ck'))))),
@@ -2094,7 +2147,7 @@ function openNew() {
   const me = ns;
   sheet({
     key: 'new', cls: 'full', title: 'New session', onClose: () => { if (ns === me) ns = null; }, deps: () => [ns && { ...ns, roots: !!ns.roots }, online(), S.state.profiles],
-    body: renderNew, foot: () => h('button', { class: 'btn primary block', type: 'button', 'data-k': 'start', disabled: !ns.sel || ns.starting || !online(), onclick: () => {
+    body: renderNew, foot: () => h('button', { class: 'btn primary block', 'data-k': 'start', disabled: !ns.sel || ns.starting || !online(), onclick: () => {
       if (intent(MC.intents.newSession(ns.sel, ns.profile), a => { if (!ns) return; ns.starting = false; if (a.ok) { findSheet('new').close(); closeNav(); } else { ns.err = MC.errorText(a.error); refreshSheets(); } })) ns.starting = true;
       refreshSheets();
     } }, ns.starting && spin(), ns.sel ? 'Start in ' + MC.basename(ns.sel) : 'Choose a folder'),
@@ -2132,7 +2185,7 @@ function mkdir() {
 }
 function renderNew() {
   const s = S.state, L = ns.listing, roots = ns.roots || [], recent = MC.recentWorkspaces(s.sessions);
-  const folderRow = (name, sub, path, nav, ic) => h('button', { class: 'row', type: 'button', 'data-k': (nav ? 'n' : 's') + path, disabled: ns.starting,
+  const folderRow = (name, sub, path, nav, ic) => h('button', { class: 'row', 'data-k': (nav ? 'n' : 's') + path, disabled: ns.starting,
     onclick: () => nav ? list(path) : (ns.sel = path, refreshSheets()) }, icon(ic || 'folder', 'ri'), h('span', 'rt', h('span', 'rm', name), sub && h('span', 'rs', sub)),
     nav ? icon('chev', 'sm ri') : ns.sel === path && icon('check', 'ck'));
   const crumbs = L && MC.crumbs(L.path, roots);
@@ -2141,18 +2194,18 @@ function renderNew() {
     profiles.length > 1 && [h('h3', 'sec2', 'Profile'), seg('Profile', profiles.map(p => [p, p]), ns.profile, p => { ns.profile = p; refreshSheets(); })],
     recent.length > 0 && [h('h3', 'sec2', 'Recent workspaces'), h('div', 'list', recent.map(w => folderRow(MC.basename(w), MC.tilde(w), w, false)))],
     h('h3', 'sec2', h('span', '', 'Browse'), ns.busy && spin('sm')),
-    L && h('nav', { class: 'crumbs', 'aria-label': 'Folder path' }, h('button', { type: 'button', onclick: () => { ns.listing = null; ns.mk = false; refreshSheets(); } }, 'Roots'),
-      crumbs.map((c, k) => [icon('chev', 'xs'), h('button', { type: 'button', 'aria-current': k === crumbs.length - 1 ? 'location' : null, onclick: () => list(c.path) }, c.name)])),
+    L && h('nav', { class: 'crumbs', 'aria-label': 'Folder path' }, h('button', { onclick: () => { ns.listing = null; ns.mk = false; refreshSheets(); } }, 'Roots'),
+      crumbs.map((c, k) => [icon('chev', 'xs'), h('button', { 'aria-current': k === crumbs.length - 1 ? 'location' : null, onclick: () => list(c.path) }, c.name)])),
     L && h('div', 'tools', h('label', 'sw', h('span', '', 'Show hidden'), h('input', { type: 'checkbox', role: 'switch', checked: ns.hidden, onchange: e => { ns.hidden = e.target.checked; list(L.path); } })),
-      h('button', { class: 'btn ghost sm', type: 'button', 'aria-expanded': String(ns.mk), onclick: () => { ns.mk = !ns.mk; refreshSheets(); if (ns.mk) findSheet('new').el.querySelector('#mkname').focus(); } }, icon('folderplus', 'sm'), 'New folder')),
+      h('button', { class: 'btn ghost sm', 'aria-expanded': String(ns.mk), onclick: () => { ns.mk = !ns.mk; refreshSheets(); if (ns.mk) findSheet('new').el.querySelector('#mkname').focus(); } }, icon('folderplus', 'sm'), 'New folder')),
     ns.mk && L && h('div', 'mkrow',
       h('input', { id: 'mkname', class: 'tf', 'data-k': 'mk', value: ns.mkName, placeholder: 'Folder name', 'aria-label': 'New folder name', autocapitalize: 'none', autocomplete: 'off', spellcheck: 'false', enterKeyHint: 'done',
         oninput: e => { ns.mkName = e.target.value; }, onkeydown: e => { if (e.key === 'Enter') { e.preventDefault(); mkdir(); } } }),
-      h('button', { class: 'btn primary', type: 'button', disabled: ns.busy, onclick: mkdir }, 'Create')),
+      h('button', { class: 'btn primary', disabled: ns.busy, onclick: mkdir }, 'Create')),
     ns.err && h('div', { class: 'serr', role: 'alert' }, icon('warn', 'sm'), h('span', '', ns.err)),
     L ? h('div', 'list', L.parent != null && folderRow(MC.basename(L.parent), 'Parent folder', L.parent, true, 'up'), L.entries.map(x => folderRow(x.name, null, x.path, true)),
       !L.entries.length && !ns.busy && h('div', 'muted', 'No folders here'))
-      : roots.length > 0 && h('div', 'list', roots.map(r => folderRow(r.name, MC.tilde(r.path), r.path, true))),
+      : roots.length > 0 && h('div', 'list', roots.map(r => MC.isDrive(r.path) ? folderRow(r.name, null, r.path, true, 'disk') : folderRow(r.name, MC.tilde(r.path), r.path, true))),
     L && L.truncated && h('div', 'hint', 'Only the first 1000 folders are shown.'),
   ];
 }
@@ -2167,7 +2220,6 @@ const isOpen = (k, dflt) => ov.has(k) ? ov.get(k) : dflt;
 function onNewSession() { stick = true; pinned = true; win = MC.WINDOW; ov.clear(); thinkT.clear(); loadDraft(); }
 function resetTranscript() { nodes.forEach(n => n.remove()); nodes.length = 0; lo = hi = 0; win = MC.WINDOW; pinned = true; ov.clear(); dirty.clear(); }
 function redrawAll() { for (let i = lo; i < hi; i++) dirty.add(i); schedule(); }
-// Opening or closing keeps the tapped row where it is on screen.
 function toggle(k, dflt, i, el) { ov.set(k, !isOpen(k, dflt)); dirty.add(i); hold(el); schedule(); }
 function hold(el, k) { anchor = { k: k || (el && el.dataset.k), y: el ? el.getBoundingClientRect().top : 0 }; }
 
@@ -2195,11 +2247,10 @@ function mdNode(t) {
   if (t.t === 'quote') return h('blockquote', '', t.c.map(mdNode));
   return h('hr');
 }
-// Code with a language label, Wrap and Copy; wrapping follows the setting until toggled here.
 function codeBlock(lang, text) {
   const n = h('div', 'cb' + (prefs.wrap ? ' wrap' : ''));
-  const w = h('button', { type: 'button', 'aria-pressed': String(prefs.wrap), onclick: () => w.setAttribute('aria-pressed', String(n.classList.toggle('wrap'))) }, icon('wrap', 'xs'), 'Wrap');
-  const c = h('button', { type: 'button', 'aria-label': 'Copy code', onclick: () => copyText(text, c) }, icon('copy', 'xs'), 'Copy');
+  const w = h('button', { 'aria-pressed': String(prefs.wrap), onclick: () => w.setAttribute('aria-pressed', String(n.classList.toggle('wrap'))) }, icon('wrap', 'xs'), 'Wrap');
+  const c = h('button', { 'aria-label': 'Copy code', onclick: () => copyText(text, c) }, icon('copy', 'xs'), 'Copy');
   n.append(h('div', 'cbh', h('span', '', lang), w, c), h('pre', '', h('code', '', text)));
   return n;
 }
@@ -2230,26 +2281,25 @@ function toolBody(b, f) {
   const input = b.input || '', files = f.kind === 'edit' && input ? MC.parseDiff(input) : [];
   const total = b.output_lines != null ? b.output_lines : out.length + (b.output_dropped || 0);
   let pre = null;
-  const wrap = h('button', { type: 'button', 'aria-pressed': String(prefs.wrap), onclick: () => { const on = pre.classList.toggle('wrap'); wrap.setAttribute('aria-pressed', String(on)); } }, icon('wrap', 'xs'), 'Wrap');
-  const copy = h('button', { type: 'button', onclick: () => copyText(out.join('\n'), copy) }, icon('copy', 'xs'), 'Copy');
+  const wrap = h('button', { 'aria-pressed': String(prefs.wrap), onclick: () => { const on = pre.classList.toggle('wrap'); wrap.setAttribute('aria-pressed', String(on)); } }, icon('wrap', 'xs'), 'Wrap');
+  const copy = h('button', { onclick: () => copyText(out.join('\n'), copy) }, icon('copy', 'xs'), 'Copy');
   return h('div', 'tb',
     f.kind === 'cmd' && h('pre', 'cmd', '$ ' + (input || b.detail)),
     files.length > 0 ? diffView(files) : f.kind === 'write' && input && h('pre', '', input.split('\n').slice(0, 400).join('\n')),
     (tail.length > 0 || earlier > 0) && [
       h('div', 'lbl', h('span', '', 'Output'), earlier > 0 && h('span', '', 'last ' + tail.length + ' of ' + MC.fmtNum(total) + ' lines')),
       pre = outBlock(tail),
-      h('div', 'tbar', wrap, copy, h('button', { type: 'button', onclick: () => openOutput(b) }, icon('open', 'xs'), 'Open'), b.truncated && h('span', 'hint', 'Output truncated'))],
+      h('div', 'tbar', wrap, copy, h('button', { onclick: () => openOutput(b) }, icon('open', 'xs'), 'Open'), b.truncated && h('span', 'hint', 'Output truncated'))],
     !tail.length && !earlier && !files.length && f.kind !== 'cmd' && h('div', 'hint', f.run ? 'Running…' : 'No output'),
     !tail.length && !earlier && f.kind === 'cmd' && !f.run && h('div', 'hint', 'No output'));
 }
 function toolNode(b, i) {
   const k = 't' + b.call_id, f = MC.toolInfo(b), o = isOpen(k, b.state === 'failed');
   const d = decided.get(b.call_id), dec = d && (d.you ? d.text + ' · you' : b.state === 'denied' ? 'Denied on another device' : b.state === 'pending' ? '' : 'Allowed on another device');
-  return h('div', 'tl', h('button', { class: 'tr', type: 'button', 'data-k': k, 'aria-expanded': String(o), onclick: e => toggle(k, b.state === 'failed', i, e.currentTarget) },
+  return h('div', 'tl', h('button', { class: 'tr', 'data-k': k, 'aria-expanded': String(o), onclick: e => toggle(k, b.state === 'failed', i, e.currentTarget) },
     stateIcon(b, f), h('span', 'vb', f.verb), h('span', 'tg', f.target), toolMeta(f), icon('chev', 'xs cv')),
     dec && h('div', 'dec' + (/^Denied/.test(dec) ? ' er' : ' ok'), icon(/^Denied/.test(dec) ? 'slash' : 'check', 'xs'), dec), o && toolBody(b, f));
 }
-// A diff as files of hunks with line numbers and add/remove tints; wrapping follows the setting.
 function diffView(files, opts = {}) {
   return files.map(f => h('div', 'dv' + (opts.wrap ?? prefs.wrap ? ' wrap' : ''),
     h('div', 'dvh', h('span', '', f.path || 'Changes'), f.added > 0 && h('span', 'add', '+' + f.added), f.removed > 0 && h('span', 'del', '−' + f.removed)),
@@ -2260,21 +2310,39 @@ function diffView(files, opts = {}) {
         !nums && h('span', 'sgn', l.t === 'add' ? '+' : l.t === 'del' ? '−' : ' '), h('span', 'c', l.s || ' '))));
     })));
 }
-function thinkNode(b, i, live) {
-  const k = 'r' + b.loop_id + ':' + b.request, now = Date.now(), thinking = live && !b.text, w = thinkT.get(k);
+// Thinking: the header, then its newest sentence on one line that slides up when a new one starts; the full text when
+// open. Only a change of state rebuilds the block; new text updates the line in place.
+function thinkNode(b, i, k, thinking, o) {
+  const now = Date.now(), w = thinkT.get(k);
   if (thinking && !w) thinkT.set(k, { start: now });
   else if (!thinking && w && !w.end) w.end = now;
   const t = thinkT.get(k), secs = t && t.end ? Math.max(1, Math.round((t.end - t.start) / 1000)) : 0;
-  const o = !thinking && isOpen(k, prefs.thinking);
-  return h('div', 'think',
-    h('button', { class: 'tk' + (thinking ? ' live' : ''), type: 'button', 'data-k': k, 'aria-expanded': thinking ? null : String(o), disabled: thinking, onclick: e => toggle(k, prefs.thinking, i, e.currentTarget) },
-      icon('sparkle', 'xs'), h('span', '', thinking ? 'Thinking…' : secs ? 'Thought for ' + secs + ' s' : 'Thought'), !thinking && icon('chev', 'xs cv')),
-    (thinking || o) && h('div', 'rsn' + (thinking ? ' peek' : ''), thinking ? h('div', '', b.reasoning) : b.reasoning));
+  const go = () => toggle(k, prefs.thinking, i, tk);
+  const tk = h('button', { class: 'tk' + (thinking ? ' live' : ''), 'data-k': k, 'aria-expanded': thinking ? null : String(o), disabled: thinking, onclick: go },
+    icon('sparkle', 'xs'), h('span', '', thinking ? 'Thinking…' : secs ? 'Thought for ' + secs + ' s' : 'Thought'), !thinking && icon('chev', 'xs cv'));
+  const line = o ? h('div', 'rsn', b.reasoning) : h('span', '', MC.thinkingPreview(b.reasoning));
+  const n = h('div', 'think', tk, o ? line : h('div', { class: 'tp', 'aria-hidden': 'true', onclick: thinking ? null : go }, line));
+  n._x = line; n._o = o;
+  return n;
+}
+function thinkText(n, text, live) {
+  const to = n._o ? text : MC.thinkingPreview(text), el = n._x, was = el.textContent;
+  if (to === was) return;
+  el.textContent = to;
+  if (live && !n._o && was && !to.startsWith(was) && !reduced.matches) { el.classList.remove('up'); void el.offsetWidth; el.classList.add('up'); }
+}
+function thinkUpdate(a, b, i) {
+  const k = 'r' + b.loop_id + ':' + b.request, thinking = a.live && !b.text, o = !thinking && isOpen(k, prefs.thinking), sig = b.reasoning ? k + thinking + o : '';
+  if (sig === a.tsig) return sig && thinkText(a.think, b.reasoning, thinking);
+  a.tsig = sig;
+  const had = a.think.contains(document.activeElement), n = sig ? thinkNode(b, i, k, thinking, o) : h('div');
+  a.think.replaceWith(a.think = n);
+  if (had) n.querySelector('.tk').focus({ preventScroll: true });
 }
 // An answer keeps its rendered Markdown blocks while it streams: only blocks after the last stable one are rebuilt.
 function asstNode(b, i) {
   const live = i === liveIdx, n = h('div', 'a');
-  n._a = { key: b.loop_id + ':' + b.request, live, md: { cache: null, toks: [], els: [] }, body: h('div', 'md'), think: h('div') };
+  n._a = { key: b.loop_id + ':' + b.request, live, tsig: '', md: { cache: null, toks: [], els: [] }, body: h('div', 'md'), think: h('div') };
   n.append(n._a.think, n._a.body);
   updateAsst(n, b, i);
   if (!live && b.text) n.append(answerActs(b, i));
@@ -2283,7 +2351,7 @@ function asstNode(b, i) {
 function updateAsst(n, b, i) {
   const a = n._a, m = a.md, r = MC.mdInc(m.cache, b.text);
   n.hidden = quiet(b);
-  a.think.replaceWith(a.think = b.reasoning ? thinkNode(b, i, a.live) : h('div'));
+  thinkUpdate(a, b, i);
   m.cache = r.cache;
   let k = 0;
   while (k < m.toks.length && k < r.blocks.length && m.toks[k] === r.blocks[k]) k++;
@@ -2295,10 +2363,9 @@ function updateAsst(n, b, i) {
   a.body.hidden = !b.text;
   if (a.live && b.text) caretInto(a.body);
 }
-// Copy, Share and, once its turn has ended, the time it finished.
 function answerActs(b, i) {
-  const c = h('button', { class: 'ib', type: 'button', 'aria-label': 'Copy answer', onclick: () => copyText(b.text, c) }, icon('copy', 'sm'));
-  const s = h('button', { class: 'ib', type: 'button', 'aria-label': 'Share answer', onclick: () => share('MiniCore answer', b.text, s) }, icon('share', 'sm'));
+  const c = h('button', { class: 'ib', 'aria-label': 'Copy answer', onclick: () => copyText(b.text, c) }, icon('copy', 'sm'));
+  const s = h('button', { class: 'ib', 'aria-label': 'Share answer', onclick: () => share('MiniCore answer', b.text, s) }, icon('share', 'sm'));
   let j = i + 1;
   while (j < S.blocks.length && S.blocks[j].type !== 'turn_end' && S.blocks[j].type !== 'user') j++;
   const at = S.blocks[j] && S.blocks[j].type === 'turn_end' && turnClock(j);
@@ -2306,23 +2373,22 @@ function answerActs(b, i) {
 }
 function userNode(b, i) {
   const k = 'u' + i, lines = b.text.split('\n').length, long = lines > 12 || b.text.length > 900, o = isOpen(k, false);
-  const more = h('button', { class: 'ib', type: 'button', 'aria-label': 'Message actions', 'aria-haspopup': 'dialog', onclick: () => userActions(b) }, icon('more', 'sm'));
+  const more = h('button', { class: 'ib', 'aria-label': 'Message actions', 'aria-haspopup': 'dialog', onclick: () => userActions(b) }, icon('more', 'sm'));
   const n = h('div', 'u', b.kind === 'steering' && h('div', 'ulbl', icon('steer', 'xs'), 'Steer'),
     h('div', { class: 'bubble' + (long && !o ? ' clip' : '') }, b.text),
-    h('div', 'acts', long && h('button', { class: 'more2', type: 'button', 'data-k': k, onclick: e => toggle(k, false, i, e.currentTarget) }, o ? 'Show less' : 'Show more'),
+    h('div', 'acts', long && h('button', { class: 'more2', 'data-k': k, onclick: e => toggle(k, false, i, e.currentTarget) }, o ? 'Show less' : 'Show more'),
       b.at && h('time', '', MC.stamp(b.at, hostNow(), tz())), more));
   n.addEventListener('contextmenu', e => { if (!hover.matches) { e.preventDefault(); userActions(b); } });
   return n;
 }
 function userActions(b) {
-  const row = (ic, label, fn) => h('button', { class: 'row flat', type: 'button', onclick: () => { m.close(true); fn(); } }, icon(ic, 'ri'), h('span', 'rt', h('span', 'rm', label)));
+  const row = (ic, label, fn) => h('button', { class: 'row flat', onclick: () => { m.close(true); fn(); } }, icon(ic, 'ri'), h('span', 'rt', h('span', 'rm', label)));
   const m = sheet({
     key: 'uact', cls: 'dialog', head: hid => h('h2', { id: hid }, 'Message', b.at && h('span', 'sub2', MC.stamp(b.at, hostNow(), tz()))),
     body: () => h('div', 'list', row('copy', 'Copy', () => copyText(b.text)), row('edit', 'Edit in composer', () => fillComposer(b.text)),
       row('retry', 'Send again', () => { if (!sending()) intent(st().busy ? MC.intents.queue(b.text) : MC.intents.submit(b.text)); })),
   });
 }
-// The turn's clock time: its prompt's time plus its duration.
 function turnClock(i) {
   const b = S.blocks[i];
   for (let j = i - 1; j >= 0; j--) {
@@ -2340,11 +2406,11 @@ function blockNode(b, i) {
     case 'turn_end': {
       const t = MC.turnEnd(b, turnClock(i), tz());
       return h('div', 'te' + (t.ok ? '' : ' bad'), icon(t.ok ? 'check' : 'warn', 'xs'), h('span', 'oc', t.parts[0]), t.parts.slice(1).map(p => h('span', '', '· ' + p)),
-        t.changes && h('button', { class: 'chg', type: 'button', 'aria-label': 'Changes: ' + MC.changesText(t.changes), onclick: () => openChanges() }, icon('diff', 'xs'), MC.changesText(t.changes), icon('chev', 'xs')));
+        t.changes && h('button', { class: 'chg', 'aria-label': 'Changes: ' + MC.changesText(t.changes), onclick: () => openChanges() }, icon('diff', 'xs'), MC.changesText(t.changes), icon('chev', 'xs')));
     }
     case 'compaction': {
       const k = 'c' + i, o = isOpen(k, false);
-      return h('div', 'cmpx', h('button', { class: 'tr', type: 'button', 'data-k': k, disabled: !b.summary, 'aria-expanded': b.summary ? String(o) : null, onclick: e => toggle(k, false, i, e.currentTarget) },
+      return h('div', 'cmpx', h('button', { class: 'tr', 'data-k': k, disabled: !b.summary, 'aria-expanded': b.summary ? String(o) : null, onclick: e => toggle(k, false, i, e.currentTarget) },
         h('span', 'si', icon('layers', 'sm')), h('span', 'vb', MC.compactionText(b)), h('span', 'tg', ''), b.summary && icon('chev', 'xs cv')), o && h('div', 'rsn', b.summary));
     }
     case 'earlier': return h('div', { class: 'ear', style: 'display:flex;justify-content:center' }, loadEarlierBtn(MC.plural(b.hidden_items, 'earlier item')));
@@ -2359,7 +2425,7 @@ function renderBlock(b, i) {
   if (r) {
     const f = r.f, g = r.g, fo = f && !isOpen(f.key, false), go = g && isOpen(g.key, false);
     const rows = [f && i === f.at && foldRow(f, i, !fo), g && i === g.head && !fo && groupRow(g, i, go)];
-    w = h('div', n.className, rows, n, f && !fo && i === f.last && h('button', { class: 'tr fold', type: 'button', 'data-k': f.key + 'h', onclick: e => { ov.set(f.key, false); for (const j of f.hidden) dirty.add(j); hold(e.currentTarget, f.key); schedule(); } },
+    w = h('div', n.className, rows, n, f && !fo && i === f.last && h('button', { class: 'tr fold', 'data-k': f.key + 'h', onclick: e => { ov.set(f.key, false); for (const j of f.hidden) dirty.add(j); hold(e.currentTarget, f.key); schedule(); } },
       h('span', 'si', icon('chevu', 'sm')), h('span', 'vb', 'Hide')));
     n.className = '';
     n.hidden = n.hidden || !!fo || !!(g && !go);
@@ -2370,13 +2436,13 @@ function renderBlock(b, i) {
   return w;
 }
 function foldRow(f, i, open) {
-  return h('button', { class: 'tr fold', type: 'button', 'data-k': f.key, 'aria-expanded': String(open), onclick: e => { ov.set(f.key, !open); for (const j of f.hidden) dirty.add(j); hold(e.currentTarget); schedule(); } },
+  return h('button', { class: 'tr fold', 'data-k': f.key, 'aria-expanded': String(open), onclick: e => { ov.set(f.key, !open); for (const j of f.hidden) dirty.add(j); hold(e.currentTarget); schedule(); } },
     h('span', 'si', icon('layers', 'sm')), h('span', 'vb', MC.foldText(f)), h('span', 'tg', MC.plural(f.tools, 'tool')),
     toolMeta({ added: f.added, removed: f.removed, dur: '', exit: f.failed ? f.failed + ' failed' : '', note: '' }), icon('chev', 'xs cv'));
 }
 function groupRow(g, i, open) {
   const last = S.blocks[g.members[g.members.length - 1]];
-  return h('button', { class: 'tr', type: 'button', 'data-k': g.key, 'aria-expanded': String(open), onclick: e => { ov.set(g.key, !open); for (const j of g.members) dirty.add(j); hold(e.currentTarget); schedule(); } },
+  return h('button', { class: 'tr', 'data-k': g.key, 'aria-expanded': String(open), onclick: e => { ov.set(g.key, !open); for (const j of g.members) dirty.add(j); hold(e.currentTarget); schedule(); } },
     g.run ? h('span', 'si run', spin('sm')) : h('span', 'si', icon('search', 'sm')), h('span', 'vb', g.label), h('span', 'tg', open ? '' : last.detail), icon('chev', 'xs cv'));
 }
 // Fold and group roles of the mounted blocks; a block whose role changed is rendered again.
@@ -2425,8 +2491,7 @@ function flush() {
   for (let i = lo; i < hi; i++) {
     if (!dirty.has(i) && nodes[i - lo]) continue;
     const old = nodes[i - lo], b = bl[i];
-    // A streaming answer updates in place.
-    if (old && old._a && !roles[i - lo] && b.type === 'assistant' && old._a.key === b.loop_id + ':' + b.request && old._a.live === (i === liveIdx)) { updateAsst(old, b, i); continue; }
+        if (old && old._a && !roles[i - lo] && b.type === 'assistant' && old._a.key === b.loop_id + ':' + b.request && old._a.live === (i === liveIdx)) { updateAsst(old, b, i); continue; }
     const x = renderBlock(b, i);
     if (!old) box.append(x);
     place(x, old);
@@ -2447,7 +2512,7 @@ function flush() {
 function newOut(on) { $('newout').hidden = !on; }
 function loadEarlierBtn(label) {
   const busy = pendingKind('load_older');
-  return h('button', { class: 'pill', type: 'button', disabled: busy, 'data-k': 'earlier', onclick: e => loadEarlier(e.currentTarget) }, busy ? spin('sm') : icon('history', 'sm'), busy ? 'Loading…' : 'Load earlier' + (label ? ' · ' + label : ''));
+  return h('button', { class: 'pill', disabled: busy, 'data-k': 'earlier', onclick: e => loadEarlier(e.currentTarget) }, busy ? spin('sm') : icon('history', 'sm'), busy ? 'Loading…' : 'Load earlier' + (label ? ' · ' + label : ''));
 }
 // One control for both: mount more of what this page already has, else ask the host for an older page.
 function loadEarlier(el) {
@@ -2473,9 +2538,9 @@ const SUGG = [['Explain this project', 'Structure, entry points and how it fits 
   ['Review my uncommitted changes', 'Spot bugs and risky edits'], ['Find TODOs', 'List open TODO and FIXME notes']];
 const emptyPart = part($('empty'), e => e.loading ? h('div', 'loadrow', spin(), 'Opening session…') : e.session ? h('div', 'muted', 'No messages yet.') : [
   h('img', { class: 'appicon', src: '/icon.svg', alt: '' }), h('h2', '', 'What should we work on?'),
-  h('button', { class: 'where', type: 'button', 'aria-label': 'Change folder, ' + e.ws, onclick: () => openNew() }, icon('folder', 'sm'), h('span', '', MC.basename(e.ws)), icon('chevd', 'xs')),
+  h('button', { class: 'where', 'aria-label': 'Change folder, ' + e.ws, onclick: () => openNew() }, icon('folder', 'sm'), h('span', '', MC.basename(e.ws)), icon('chevd', 'xs')),
   h('div', { class: 'hint', style: 'margin-top:6px' }, MC.tilde(e.ws)),
-  h('div', 'sugg', SUGG.map(([t, d]) => h('button', { type: 'button', onclick: () => fillComposer(t) }, t, h('small', '', d))))]);
+  h('div', 'sugg', SUGG.map(([t, d]) => h('button', { onclick: () => fillComposer(t) }, t, h('small', '', d))))]);
 function renderEmpty() {
   const s = S.state, e = $('empty');
   e.hidden = S.blocks.length > 0;
@@ -2485,12 +2550,10 @@ log.addEventListener('scroll', () => { stick = atBottom(); if (stick && pinned) 
 $('newout').addEventListener('click', toLatest);
 
 // ---- dock: status strip, queue, composer ----
-let mode = 'steer';
 const ta = $('ta');
-const stripPart = part($('strip'), x => [spin(), h('div', 'stx', h('div', 'st1', h('b', '', x.label), x.detail && h('span', 'mono', x.detail), x.started && h('span', 'el', MC.fmtElapsed(hostNow() - x.started))),
-  x.micro && h('div', 'micro', x.micro)),
-  x.ctx && h('button', { class: 'ctxb' + (x.hi ? ' hi' : ''), type: 'button', 'aria-label': x.ctx + ' of context used', onclick: () => openContext() }, x.ctx),
-  x.stop && h('button', { class: 'stop', type: 'button', 'data-k': 'stop', disabled: x.stopping || !x.online, onclick: stop }, x.stopping ? spin('sm') : icon('stop', 'sm'), x.stopping ? 'Stopping' : 'Stop')]);
+const stripPart = part($('strip'), x => [spin(), h('div', 'stx', h('div', 'st1', h('b', '', x.label), x.detail && h('span', 'mono', x.detail), x.started && h('span', 'el', MC.fmtElapsed(hostNow() - x.started)))),
+  x.ctx && h('button', { class: 'ctxb' + (x.hi ? ' hi' : ''), 'aria-label': x.ctx + ' of context used', onclick: () => openContext() }, x.ctx),
+  x.stop && h('button', { class: 'stop', 'data-k': 'stop', disabled: x.stopping || !x.online, onclick: stop }, x.stopping ? spin('sm') : icon('stop', 'sm'), x.stopping ? 'Stopping' : 'Stop')]);
 function renderStrip() {
   const s = st(), on = !!(s.busy || s.compacting || s.loading);
   $('strip').hidden = !on;
@@ -2499,19 +2562,21 @@ function renderStrip() {
   stripPart({
     label: x.label, detail: x.detail, started: (s.busy || s.compacting) && s.started_ms, ctx: S.state.context_percent != null ? Math.round(S.state.context_percent) + '%' : '',
     hi: S.state.context_percent >= 80, stop: MC.canStop(s), stopping: s.interrupting || pendingKind('cancel'), online: online(),
-    micro: s.busy ? (mode === 'queue' ? 'Queue · sends when this turn ends' : 'Steer · the agent reads it after the current step') : '',
   });
 }
 function stop() { if (MC.canStop(st()) && !st().interrupting && !pendingKind('cancel')) intent(MC.intents.cancel()); }
 const trayPart = part($('tray'), t => [
   t.lost.map(([id, text]) => h('div', { class: 'lost', role: 'alert' }, icon('warn', 'sm'),
     h('div', '', h('div', '', 'Not sent · it may or may not have arrived'), h('div', 'lt', text)),
-    h('button', { class: 'btn sm', type: 'button', 'data-k': 'again' + id, disabled: !t.on, onclick: () => { send(MC.sendAgain(S, id)); renderState(); } }, icon('retry', 'xs'), 'Send again'),
-    h('button', { class: 'ib s', type: 'button', 'aria-label': 'Edit instead', onclick: () => { S.intents.delete(id); fillComposer(MC.mergeReturned(ta.value, text)); renderState(); } }, icon('edit', 'sm')))),
-  t.queue.map(q => q.kind === 'steer' ? h('div', 'qp', h('span', 'qk', 'Steer'), h('span', 'qt', q.text))
-    : h('div', 'qp', h('span', 'qk', 'Queued'), h('button', { class: 'qt', type: 'button', 'data-k': 'q' + q.index, disabled: !t.on, 'aria-label': 'Edit queued message: ' + q.text, onclick: () => unqueue(q, false) }, q.text),
-      h('button', { class: 'ib', type: 'button', disabled: !t.on, 'aria-label': 'Remove queued message', onclick: () => unqueue(q, true) }, icon('x', 'sm')))),
+    h('button', { class: 'btn sm', 'data-k': 'again' + id, disabled: !t.on, onclick: () => { send(MC.sendAgain(S, id)); renderState(); } }, icon('retry', 'xs'), 'Send again'),
+    h('button', { class: 'ib s', 'aria-label': 'Edit instead', onclick: () => { S.intents.delete(id); fillComposer(MC.mergeReturned(ta.value, text)); renderState(); } }, icon('edit', 'sm')))),
+  t.q.follows && h('div', 'qcap', 'Follow-ups send when this turn ends'),
+  t.q.items.map(q => q.kind === 'steer' ? h('div', 'qp steer', icon('steer', 'xs'), h('span', 'qk', 'Steer · waiting for the next step'), h('span', 'qt', q.text))
+    : h('div', 'qp', icon('follow', 'xs'), h('span', 'qk', 'Follow-up ' + q.n), h('button', { class: 'qt', 'data-k': 'q' + q.index, disabled: !t.on, 'aria-label': 'Edit follow-up ' + q.n + ': ' + q.text, onclick: () => unqueue(q, false) }, q.text),
+      h('button', { class: 'ib', disabled: !t.on, 'aria-label': 'Remove follow-up ' + q.n, onclick: () => unqueue(q, true) }, icon('x', 'sm')))),
+  t.q.long && h('button', { class: 'qmore', 'data-k': 'qmore', 'aria-expanded': String(qAll), onclick: () => { qAll = !qAll; renderTray(); } }, t.q.hidden ? '+' + t.q.hidden + ' more' : 'Show less'),
 ]);
+let qAll = false;
 // A queued follow-up comes back from the host: into the composer to edit it, or dropped.
 const edits = new Set();
 function unqueue(q, drop) {
@@ -2521,25 +2586,28 @@ function unqueue(q, drop) {
   renderState();
 }
 function renderTray() {
-  trayPart({ lost: MC.unconfirmed(S).map(it => [it.id, it.text]), queue: S.state.queue.map((q, index) => ({ ...q, index })), on: online() });
+  const q = MC.queueView(S.state.queue, qAll);
+  trayPart({ lost: MC.unconfirmed(S).map(it => [it.id, it.text]), q: { ...q, follows: S.state.queue.some(x => x.kind === 'follow') }, on: online() });
 }
 const chipsPart = part($('chips'), c => [h('div', 'cl',
-  h('button', { class: 'chip icon', type: 'button', 'data-k': 'plus', 'aria-label': 'Commands, prompts and files', 'aria-haspopup': 'dialog', onclick: openPlus }, icon('plus', 'sm')),
-  c.draft && h('button', { class: 'chip', type: 'button', 'data-k': 'folder', 'aria-label': 'Folder ' + c.draft.folder + ', change', onclick: () => openNew() }, icon('folder', 'xs'), h('span', '', c.draft.folder)),
-  c.draft && c.draft.profiles && h('button', { class: 'chip', type: 'button', 'data-k': 'profile', 'aria-label': 'Profile ' + c.draft.profile + ', change', onclick: openProfile }, h('span', '', c.draft.profile || 'Profile')),
-  h('button', { class: 'chip', type: 'button', 'data-k': 'model', 'aria-label': 'Model ' + c.model + ', change', onclick: openModel }, h('span', '', c.modelShort), icon('chevd', 'xs'))),
-  c.busy && h('button', { class: 'chip mode' + (c.mode === 'queue' ? ' q' : ''), type: 'button', 'data-k': 'mode', 'aria-label': (c.mode === 'queue' ? 'Queue' : 'Steer') + ', switch', onclick: () => { mode = mode === 'queue' ? 'steer' : 'queue'; renderDock(); } },
-    icon(c.mode === 'queue' ? 'clock' : 'steer', 'xs'), c.mode === 'queue' ? 'Queue' : 'Steer'),
-  h('button', { id: 'send', type: 'submit', 'data-k': 'send', 'aria-label': c.sending ? 'Sending' : c.busy ? (c.mode === 'queue' ? 'Queue message' : 'Steer') : 'Send', disabled: c.disabled }, c.sending ? spin() : icon('up')),
+  h('button', { class: 'chip icon', 'data-k': 'plus', 'aria-label': 'Commands, prompts and files', 'aria-haspopup': 'dialog', onclick: openPlus }, icon('plus', 'sm')),
+  c.draft && h('button', { class: 'chip', 'data-k': 'folder', 'aria-label': 'Folder ' + c.draft.folder + ', change', onclick: () => openNew() }, icon('folder', 'xs'), h('span', '', c.draft.folder)),
+  c.draft && c.draft.profiles && h('button', { class: 'chip', 'data-k': 'profile', 'aria-label': 'Profile ' + c.draft.profile + ', change', onclick: openProfile }, h('span', '', c.draft.profile || 'Profile')),
+  h('button', { class: 'chip', 'data-k': 'model', 'aria-label': 'Model ' + c.model + ', change', onclick: openModel }, h('span', '', c.modelShort), c.level && h('span', 'rz', '· ' + c.level), icon('chevd', 'xs'))),
+  c.busy ? h('div', 'snd' + (c.typed ? '' : ' off'),
+    h('button', { class: 'btn sb', id: 'queue', 'data-k': 'queue', title: c.tips && 'Queue a follow-up · Tab', 'aria-label': 'Queue as a follow-up', disabled: c.disabled, onclick: () => submit('queue') },
+      c.sending === 'queue' ? spin('sm') : icon('follow', 'sm'), 'Queue'),
+    h('button', { class: 'btn sb primary', type: 'submit', id: 'steer', 'data-k': 'steer', title: c.tips && 'Steer · ' + c.tips, 'aria-label': 'Steer the agent', disabled: c.disabled },
+      c.sending === 'submit' ? spin('sm') : icon('steer', 'sm'), 'Steer'))
+  : h('button', { id: 'send', type: 'submit', 'data-k': 'send', 'aria-label': c.sending ? 'Sending' : 'Send', disabled: c.disabled }, c.sending ? spin() : icon('up')),
 ]);
 function renderChips() {
-  const s = st(), c = cur(), lock = sending(), d = S.state.draft;
-  if (!s.busy) mode = 'steer';
+  const s = st(), c = cur(), lock = sending(), d = S.state.draft, typed = ta.value.trim() !== '';
   ta.readOnly = lock;
-  ta.placeholder = s.busy ? (mode === 'queue' ? 'Queue a follow-up…' : 'Steer the agent…') : S.state.session ? 'Message MiniCore · / for commands' : 'Describe a task to start';
-  const label = [c.model ? MC.midTrunc(c.model) : 'Model', c.reasoning].filter(Boolean).join(' · ');
+  ta.placeholder = s.busy ? (hover.matches ? 'Steer the agent… · Tab to queue a follow-up' : 'Steer, or queue a follow-up…') : S.state.session ? 'Message MiniCore · / for commands' : 'Describe a task to start';
   chipsPart({
-    model: c.model || '', modelShort: label, busy: !!s.busy, mode, sending: lock, disabled: lock || !online() || !ta.value.trim(),
+    model: c.model || '', modelShort: c.model ? MC.midTrunc(c.model, s.busy ? 12 : 17) : 'Model', level: c.reasoning, busy: !!s.busy, typed, sending: lock && (MC.pending(S, 'queue') ? 'queue' : 'submit'),
+    disabled: lock || !online() || !typed, tips: hover.matches && (prefs.enter ? 'Enter' : '⌘/Ctrl+Enter'),
     draft: !S.state.session && { folder: MC.basename(d.workspace), profile: d.profile, profiles: S.state.profiles.length > 1 },
   });
 }
@@ -2548,7 +2616,6 @@ function grow() {
   ta.style.height = 'auto';
   ta.style.height = ta.scrollHeight + 'px';
 }
-// Drafts persist per session (and one for a new session) on this device.
 const draftKey = () => 'minicore.draft.' + (S.sid || 'new');
 function composerInput() {
   grow(); renderChips(); updateMenu();
@@ -2559,14 +2626,14 @@ function composerInput() {
 }
 function loadDraft() { if (!sending()) { ta.value = localStorage.getItem(draftKey()) || ''; composerInput(); } }
 function fillComposer(text) { ta.value = text; recall = -1; composerInput(); ta.focus(); ta.setSelectionRange(text.length, text.length); }
-function submit() {
+function submit(kind) {
   const text = ta.value;
   if (!text.trim() || sending()) return;
   const c = MC.parseSlash(text, S.state.commands);
   if (c && c.builtin) { ta.value = ''; composerInput(); return builtin(c); }
   if (c && c.unknown) return toast('Unknown command /' + c.unknown, 'error');
   if (!online()) return toast('Not connected', 'error');
-  intent(st().busy && mode === 'queue' ? MC.intents.queue(text) : MC.intents.submit(text));
+  intent(kind === 'queue' ? MC.intents.queue(text) : MC.intents.submit(text));
   setMenu(null);
 }
 function builtin(c) {
@@ -2596,7 +2663,7 @@ let menu = null, filesT = 0, recall = -1;
 const recentKey = 'minicore.recent.' + HOST;
 let recent = JSON.parse(localStorage.getItem(recentKey) || '[]');
 const popPart = part($('pop'), m => m && (m.items.length ? m.items.map((x, k) => h('button', {
-  class: 'opt', type: 'button', role: 'option', id: 'opt' + k, 'aria-selected': String(k === m.sel), tabindex: '-1',
+  class: 'opt', role: 'option', id: 'opt' + k, 'aria-selected': String(k === m.sel), tabindex: '-1',
   onmousedown: e => e.preventDefault(), onclick: () => accept(k),
 }, m.kind === 'cmd' ? [h('span', 'on', '/' + x.name), h('span', 'od', x.description), h('span', 'tag', x.hint || (x.builtin ? '' : 'template'))]
   : [icon('file', 'sm'), h('span', { class: 'od', style: 'color:var(--tx)' }, x)])) : h('div', 'muted', m.busy ? 'Searching…' : m.kind === 'cmd' ? 'No matching commands' : 'No matching files')));
@@ -2653,14 +2720,13 @@ ta.addEventListener('keydown', e => {
     composerInput();
     return;
   }
-  if (e.key !== 'Enter') return;
-  if (e.metaKey || e.ctrlKey || (prefs.enter && !e.shiftKey && !e.altKey)) { e.preventDefault(); submit(); }
+  const act = MC.composerKey({ key: e.key, shift: e.shiftKey, alt: e.altKey, mod: e.metaKey || e.ctrlKey }, { busy: !!st().busy, text: ta.value, popup: !!(menu && menu.items.length), enter: prefs.enter });
+  if (act) { e.preventDefault(); submit(act); }
 });
 ta.addEventListener('blur', () => setTimeout(() => { if (document.activeElement !== ta) setMenu(null); }, 150));
 function remember(text) { recent = MC.pushRecent(recent, text); localStorage.setItem(recentKey, JSON.stringify(recent)); }
-// The + sheet: commands and templates, recent prompts, a file mention.
 function openPlus() {
-  const row = (ic, label, sub, fn, mono) => h('button', { class: 'row flat', type: 'button', onclick: () => { m.close(true); fn(); } }, icon(ic, 'ri'),
+  const row = (ic, label, sub, fn, mono) => h('button', { class: 'row flat', onclick: () => { m.close(true); fn(); } }, icon(ic, 'ri'),
     h('span', 'rt', h('span', 'rm' + (mono ? ' mono' : ''), label), sub && h('span', 'rs', sub)));
   const m = sheet({
     key: 'plus', title: 'Add to your message', deps: () => [S.state.commands, recent.slice(0, 8), !!S.state.session],
@@ -2685,7 +2751,7 @@ function openProfile() {
   const m = sheet({
     key: 'profile', cls: 'dialog', title: 'Profile', deps: () => [S.state.draft.profile, S.state.profiles],
     body: () => h('div', { class: 'list', role: 'radiogroup', 'aria-label': 'Profile' }, S.state.profiles.map(p => h('button', {
-      class: 'row flat', type: 'button', role: 'radio', 'aria-checked': String(p === S.state.draft.profile),
+      class: 'row flat', role: 'radio', 'aria-checked': String(p === S.state.draft.profile),
       onclick: () => { if (p !== S.state.draft.profile) intent(MC.intents.newSession(d.workspace, p)); m.close(); },
     }, h('span', 'rt', h('span', 'rm', p)), p === S.state.draft.profile && icon('check', 'ck')))),
   });
@@ -2727,7 +2793,7 @@ function openApproval() {
     },
     body: () => {
       const a = S.state.interaction, p = MC.pending(S, 'answer');
-      if (a.kind !== 'approval') return h('div', 'opts', MC.approvalOptions(a).map(o => h('button', { class: 'btn', type: 'button', 'data-k': 'o' + o.n, disabled: !online() || !!p, onclick: () => answer(o.choice) },
+      if (a.kind !== 'approval') return h('div', 'opts', MC.approvalOptions(a).map(o => h('button', { class: 'btn', 'data-k': 'o' + o.n, disabled: !online() || !!p, onclick: () => answer(o.choice) },
         p && p.spec.choice === o.choice ? spin() : h('b', '', String(o.n)), h('span', '', o.label))));
       const x = MC.approvalBody(a);
       return [x.cmd && [h('pre', 'cmdbox', '$ ' + x.cmd), h('div', 'where2', 'in ' + MC.tilde(cur().workspace))], x.diff && diffView(x.diff), x.text && h('pre', 'cmdbox', x.text)];
@@ -2735,11 +2801,11 @@ function openApproval() {
     foot: () => {
       const a = S.state.interaction, p = MC.pending(S, 'answer'), dis = !online() || !!p;
       if (a.kind !== 'approval') return hover.matches && h('div', 'akeys', 'Press 1–' + a.options.length + ' to answer');
-      const ans = (o, cls, fn) => h('button', { class: 'btn ' + cls, type: 'button', 'data-k': o.choice, disabled: dis, onclick: fn || (() => answer(o.choice)) }, p && p.spec.choice === o.choice && spin(), o.label);
+      const ans = (o, cls, fn) => h('button', { class: 'btn ' + cls, 'data-k': o.choice, disabled: dis, onclick: fn || (() => answer(o.choice)) }, p && p.spec.choice === o.choice && spin(), o.label);
       const [allow, session, deny] = MC.approvalOptions(a);
       if (ap.deny) return [h('form', { class: 'reason', onsubmit: e => { e.preventDefault(); answer('deny', ap.reason.trim()); } },
         h('input', { class: 'tf', id: 'why', 'data-k': 'why', value: ap.reason, placeholder: 'Tell the agent why (optional)', 'aria-label': 'Reason for denying', autocomplete: 'off', enterKeyHint: 'send', oninput: e => { ap.reason = e.target.value; } })),
-        h('div', 'row2', h('button', { class: 'btn', type: 'button', onclick: () => { ap.deny = false; m.refresh(); } }, 'Back'), ans(deny, 'dangerfill', () => answer('deny', ap.reason.trim())))];
+        h('div', 'row2', h('button', { class: 'btn', onclick: () => { ap.deny = false; m.refresh(); } }, 'Back'), ans(deny, 'dangerfill', () => answer('deny', ap.reason.trim())))];
       return [ans(allow, 'primary'), session && ans(session, ''), ans({ ...deny, label: deny.label + '…' }, 'danger', () => { ap.deny = true; m.refresh(); m.el.querySelector('#why').focus(); }),
         hover.matches && h('div', 'akeys', 'Y allow · A allow for this session · N deny')];
     },
@@ -2756,13 +2822,12 @@ function answer(choice, message) {
   });
 }
 function markCall(call) { const i = S.blocks.findIndex(b => b.type === 'tool' && b.call_id === call); if (i >= 0) { dirty.add(i); schedule(); } }
-const apprPart = part($('apprbar'), b => b && [icon('hand', 'sm'), h('span', '', b), h('button', { class: 'btn sm', type: 'button', onclick: () => openApproval() }, 'Review')]);
+const apprPart = part($('apprbar'), b => b && [icon('hand', 'sm'), h('span', '', b), h('button', { class: 'btn sm', onclick: () => openApproval() }, 'Review')]);
 function renderApprBar() {
   const a = S.state && S.state.interaction, show = !!a && !findSheet('appr'), t = a && a.kind === 'approval' && MC.approvalTitle(a);
   $('apprbar').hidden = !show;
   apprPart(show ? (t ? 'Approval needed · ' + t.text + (t.code ? ' ' + t.code : '') : 'Question · ' + (a.prompt || '')) : null);
 }
-// Hardware keys: y / a / n (or the option number) once armed, never from a text field.
 document.addEventListener('keydown', e => {
   const m = topModal(), a = S.state && S.state.interaction, armedFrom = Math.max(apprAt, lastKey);
   lastKey = Date.now();
@@ -2795,26 +2860,25 @@ document.addEventListener('keydown', e => {
   else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
 });
 
-// Later phases fill these in.
 // Changes: the workspace's changed files, then one file's diff in the same panel; pull down or ↻ to refresh.
 function openChanges() {
   const c = { files: null, branch: null, truncated: false, err: '', path: null, diff: null, wrap: prefs.wrap, busy: false };
   const load = () => { c.busy = true; c.err = ''; m.refresh(); ask(MC.queries.changes(), r => { c.busy = false; if (r.ok) Object.assign(c, r.data); else c.err = MC.errorText(r.error); m.refresh(); }); };
   const file = path => { c.path = path; c.diff = null; c.err = ''; m.refresh(); ask(MC.queries.diff(path), r => { if (c.path !== path) return; if (r.ok) c.diff = r.data; else c.err = MC.errorText(r.error); m.refresh(); }); };
-  const back = h('button', { class: 'ib', type: 'button', 'aria-label': 'All changes', onclick: () => { c.path = null; m.refresh(); } }, icon('chev', 'flip'));
+  const back = h('button', { class: 'ib', 'aria-label': 'All changes', onclick: () => { c.path = null; m.refresh(); } }, icon('chev', 'flip'));
   const m = sheet({
     key: 'changes', cls: 'full', side: true, deps: () => [c, online()],
     head: hid => [c.path && back, h('h2', { id: hid }, c.path ? h('span', 'mono', MC.basename(c.path)) : 'Changes',
       h('span', 'sub2', c.path ? c.path : [c.branch, c.files && MC.plural(c.files.length, 'file')].filter(Boolean).join(' · '))),
-      !c.path && h('button', { class: 'ib', type: 'button', 'aria-label': 'Refresh', disabled: c.busy, onclick: load }, c.busy ? spin() : icon('retry'))],
+      !c.path && h('button', { class: 'ib', 'aria-label': 'Refresh', disabled: c.busy, onclick: load }, c.busy ? spin() : icon('retry'))],
     body: () => {
       if (c.err) return h('div', { class: 'serr', role: 'alert' }, icon('warn', 'sm'), h('span', '', c.err));
-      if (c.path) return c.diff ? [h('div', 'tbar', h('button', { type: 'button', 'aria-pressed': String(c.wrap), onclick: () => { c.wrap = !c.wrap; m.refresh(); } }, icon('wrap', 'xs'), 'Wrap'),
+      if (c.path) return c.diff ? [h('div', 'tbar', h('button', { 'aria-pressed': String(c.wrap), onclick: () => { c.wrap = !c.wrap; m.refresh(); } }, icon('wrap', 'xs'), 'Wrap'),
         c.diff.truncated && h('span', 'hint', 'Diff truncated')), diffView(MC.parseDiff(c.diff.lines.join('\n')).map(f => ({ ...f, path: f.path || c.path })), { wrap: c.wrap })] : h('div', 'loadrow', spin(), 'Loading diff…');
       if (!c.files) return h('div', 'loadrow', spin(), 'Loading changes…');
       if (!c.files.length) return h('div', 'muted', 'No changes in this workspace');
       return [h('div', 'list', c.files.map(f => { const [l, cls] = MC.changeStatus(f.status), dir = f.path.slice(0, -MC.basename(f.path).length);
-        return h('button', { class: 'row flat', type: 'button', 'data-k': f.path, 'aria-label': f.status + ' ' + f.path, onclick: () => file(f.path) }, h('span', 'st ' + cls, l),
+        return h('button', { class: 'row flat', 'data-k': f.path, 'aria-label': f.status + ' ' + f.path, onclick: () => file(f.path) }, h('span', 'st ' + cls, l),
           h('span', 'rt', h('span', 'rm mono', MC.basename(f.path)), dir && h('span', 'rs', dir)), icon('chev', 'sm ri')); })),
         c.truncated && h('p', { class: 'hint', style: 'margin-top:8px' }, 'Only the first 200 files are listed.')];
     },
@@ -2822,14 +2886,12 @@ function openChanges() {
   pull(m, () => { if (!c.path) load(); });
   load();
 }
-// Pull down at the top of a sheet to refresh it.
 function pull(m, fn) {
   const b = m.el.querySelector('.sbody');
   let y0 = null;
   b.addEventListener('touchstart', e => { y0 = b.scrollTop <= 0 ? e.touches[0].clientY : null; }, { passive: true });
   b.addEventListener('touchend', e => { if (y0 != null && e.changedTouches[0].clientY - y0 > 80) fn(); y0 = null; });
 }
-// Context: how full it is, when it compacts, and Compact now.
 function openContext() {
   const c = { d: null, err: '' };
   const load = () => ask(MC.queries.context(), r => { if (r.ok) c.d = r.data; else c.err = MC.errorText(r.error); m.refresh(); });
@@ -2845,12 +2907,11 @@ function openContext() {
         h('dl', { class: 'kv', style: 'margin-top:16px' }, x.rows.map(([k, val]) => [h('dt', '', k), h('dd', '', val)])),
         x.failure && h('div', { class: 'serr', style: 'margin-top:12px' }, icon('warn', 'sm'), h('span', '', x.failure))];
     },
-    foot: () => h('button', { class: 'btn block', type: 'button', disabled: !online() || st().busy || st().compacting, onclick: () => compactNow(() => { c.d = null; setTimeout(load, 2000); m.refresh(); }) },
+    foot: () => h('button', { class: 'btn block', disabled: !online() || st().busy || st().compacting, onclick: () => compactNow(() => { c.d = null; setTimeout(load, 2000); m.refresh(); }) },
       st().compacting ? [spin(), 'Compacting…'] : [icon('layers', 'sm'), 'Compact now']),
   });
   load();
 }
-// The full-screen output viewer: the tail first, wrap and copy, and the whole output paged in through tool_output.
 function openOutput(b) {
   const f = MC.toolInfo(b), out = b.output, total = b.output_lines != null ? b.output_lines : out.length + b.output_dropped;
   const o = { text: out.join('\n'), full: !(b.output_dropped || b.truncated), loading: false, err: '', wrap: prefs.wrap, capped: false, shown: -1 };
@@ -2859,10 +2920,9 @@ function openOutput(b) {
     head: hid => h('h2', { id: hid }, h('span', 'mono', f.verb + ' ' + f.target), h('span', 'sub2', MC.fmtNum(total) + ' lines' + (o.full ? '' : ' · showing the last ' + MC.fmtNum(out.length)))),
     body: () => [o.err && h('div', { class: 'serr', role: 'alert' }, icon('warn', 'sm'), h('span', '', o.err)), o.capped && h('p', 'hint', 'Showing the first 4 MB.'),
       h('pre', { class: 'out view' + (o.wrap ? ' wrap' : ''), tabindex: '0' }, o.text)],
-    foot: () => [h('button', { class: 'btn sm', type: 'button', 'aria-pressed': String(o.wrap), onclick: () => { o.wrap = !o.wrap; m.refresh(); } }, icon('wrap', 'xs'), 'Wrap'),
-      h('button', { class: 'btn sm', type: 'button', onclick: e => copyText(o.text, e.currentTarget) }, icon('copy', 'xs'), 'Copy'),
-      !o.full && h('button', { class: 'btn sm primary', type: 'button', 'data-k': 'full', disabled: o.loading, onclick: () => loadFull(b, o, m) }, o.loading && spin('sm'), o.loading ? 'Loading…' : 'Load full output')],
-    // Tail first: a new text opens at its end.
+    foot: () => [h('button', { class: 'btn sm', 'aria-pressed': String(o.wrap), onclick: () => { o.wrap = !o.wrap; m.refresh(); } }, icon('wrap', 'xs'), 'Wrap'),
+      h('button', { class: 'btn sm', onclick: e => copyText(o.text, e.currentTarget) }, icon('copy', 'xs'), 'Copy'),
+      !o.full && h('button', { class: 'btn sm primary', 'data-k': 'full', disabled: o.loading, onclick: () => loadFull(b, o, m) }, o.loading && spin('sm'), o.loading ? 'Loading…' : 'Load full output')],
     after: body => { if (o.shown !== o.text.length) { o.shown = o.text.length; requestAnimationFrame(() => { body.scrollTop = body.scrollHeight; }); } },
   });
 }
@@ -2905,9 +2965,9 @@ function findBar() {
       oninput: e => { fd.q = e.target.value; clearTimeout(findT); findT = setTimeout(runFind, 150); },
       onkeydown: e => { if (e.key === 'Enter') { e.preventDefault(); findStep(e.shiftKey ? -1 : 1); } else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeFind(); } } }),
     h('span', { class: 'fc', 'aria-live': 'polite' }, fd.q ? (n ? fd.k + 1 + '/' + n : 'No matches') : ''),
-    h('button', { class: 'ib s', type: 'button', 'aria-label': 'Previous match', disabled: !n, onclick: () => findStep(-1) }, icon('chevu', 'sm')),
-    h('button', { class: 'ib s', type: 'button', 'aria-label': 'Next match', disabled: !n, onclick: () => findStep(1) }, icon('chevd', 'sm')),
-    h('button', { class: 'ib s', type: 'button', 'aria-label': 'Close find', onclick: closeFind }, icon('x', 'sm')));
+    h('button', { class: 'ib s', 'aria-label': 'Previous match', disabled: !n, onclick: () => findStep(-1) }, icon('chevu', 'sm')),
+    h('button', { class: 'ib s', 'aria-label': 'Next match', disabled: !n, onclick: () => findStep(1) }, icon('chevd', 'sm')),
+    h('button', { class: 'ib s', 'aria-label': 'Close find', onclick: closeFind }, icon('x', 'sm')));
 }
 function runFind() {
   // Open the folds, groups and tool rows that hold a match, then collect ranges from the rendered text.
@@ -2921,7 +2981,7 @@ function runFind() {
   flush();
   const q = fd.q.toLowerCase(), ranges = [];
   if (q) {
-    const w = document.createTreeWalker(box, NodeFilter.SHOW_TEXT, { acceptNode: t => t.parentElement.closest('[hidden]') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT });
+    const w = document.createTreeWalker(box, NodeFilter.SHOW_TEXT, { acceptNode: t => t.parentElement.closest('[hidden],.tp') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT });
     while (w.nextNode()) {
       const t = w.currentNode, s = t.data.toLowerCase();
       for (let k = s.indexOf(q); k >= 0; k = s.indexOf(q, k + q.length)) { const r = new Range(); r.setStart(t, k); r.setEnd(t, k + q.length); ranges.push(r); }
@@ -2940,12 +3000,11 @@ function paintFind() {
   if (r) { const y = r.getBoundingClientRect().top - log.getBoundingClientRect().top; log.scrollTop += y - log.clientHeight / 3; }
   renderBanners();
 }
-// Alt+↑/↓ walks the session list in the order the drawer shows it.
 function stepSession(d) {
   const list = MC.sessionLayout(S.state.sessions, hostNow(), tz(), '', frozen).groups.flatMap(g => g.items), i = list.findIndex(x => x.current), x = list[i + d];
   if (x && !pendingRow && intent(MC.intents.openSession(x.id))) pendingRow = x.id;
 }
-const KEYS = [['Esc', 'Stop the turn, or close the top sheet'], ['⌘/Ctrl Enter', 'Send'], ['Enter', 'Send when “Enter sends” is on'], ['↑ ↓', 'Recent prompts in an empty composer'],
+const KEYS = [['Esc', 'Stop the turn, or close the top sheet'], ['Enter', 'Send, or steer a running turn (“Enter sends”)'], ['⌘/Ctrl Enter', 'Send, or steer a running turn'], ['Tab · Alt Enter', 'Queue a follow-up while a turn runs'], ['↑ ↓', 'Recent prompts in an empty composer'],
   ['⌘/Ctrl K', 'Commands and prompts'], ['⌘/Ctrl F', 'Find in session'], ['Alt ↑ ↓', 'Previous or next session'], ['Y A N', 'Allow, allow for session, deny'], ['?', 'This help']];
 function openHelp() {
   sheet({ key: 'help', cls: 'dialog', title: 'Keyboard shortcuts', body: () => h('dl', 'kv keys', KEYS.map(([k, d]) => [h('dt', '', h('kbd', '', k)), h('dd', '', d)])) });
@@ -2958,7 +3017,6 @@ addEventListener('pageshow', e => { if (e.persisted) wake(true); });
 addEventListener('focus', () => wake(false));
 addEventListener('online', () => { renderConn(); wake(false); });
 addEventListener('offline', renderConn);
-// Chromium's install prompt waits for the Settings row.
 addEventListener('beforeinstallprompt', e => { e.preventDefault(); installPrompt = e; refreshSheets(); });
 addEventListener('appinstalled', () => { installPrompt = null; refreshSheets(); });
 if ('serviceWorker' in navigator && isSecureContext) navigator.serviceWorker.register('/sw.js');

@@ -120,17 +120,27 @@ inputs change (no whole-region re-renders on every `state`). Budget: at most
 ### Composer
 
 - Two-row card at the bottom: auto-growing textarea (max 40 % of the visual
-  viewport), then a chip row: **+** (sheet: prompt templates and commands,
-  recent prompts, insert `@file`), **model · effort** chip (one chip, middle
+  viewport), then a chip row (at least 44 px tall, so nothing moves when
+  the buttons change): **+** (sheet: prompt templates and commands, recent
+  prompts, insert `@file`), **model · effort** chip (one chip, middle
   truncated, opens the model sheet), in a draft also **profile** and
-  **folder** chips; on the right the **send** button.
+  **folder** chips; on the right the send controls: the round **↑ send**
+  button when idle, nothing while a turn runs and the composer is empty, and
+  while a turn runs with text typed two explicit buttons 8 px apart, both at
+  least 44 px tall: secondary **Queue** (follow-up icon) and primary **Steer**
+  (↗ icon). Both labels show at every width; the model chip drops its effort
+  and truncates in the middle to make room. Hover devices get tooltips with
+  the shortcuts.
 - **Stop** is a separate, always visible button while a turn runs or
   compaction is under way (in the status strip above the composer, ≥ 44 px),
   never in the send position. Esc stops on hardware keyboards.
-- While busy with text typed, a small **Steer / Queue** toggle chip sits in the
-  chip row (always present while busy, so nothing jumps); microcopy under the
-  status explains: "Steer: the agent reads it after the current step" /
-  "Queue: sends when this turn ends".
+- **Steer** sends the text into the running turn (`submit`; the agent reads it
+  after the current step); **Queue** sends a follow-up (`queue`; sent when the
+  turn ends). Hardware keys mirror the TUI: Enter (with "Enter sends") or
+  Cmd/Ctrl+Enter steers while busy and sends when idle; **Tab** or **Alt+Enter**
+  queue while busy with text typed and no `/` or `@` list open (the list keeps
+  Tab and Enter for completion). The placeholder says so ("Steer the agent… ·
+  Tab to queue a follow-up").
 - `/` at the start opens a filtered command list: built-ins handled by the
   client (`/new`, `/model`, `/rename`, `/compact`, `/context`, `/changes`,
   `/export`, `/settings`) and `state.commands` templates (sent as text, the
@@ -140,9 +150,14 @@ inputs change (no whole-region re-renders on every `state`). Budget: at most
   with ↑ in an empty composer on hardware keyboards.
 - `enterkeyhint="send"`, `autocapitalize="sentences"`, autocorrect off while
   the text starts with `/` or `@`; drafts persist per session as today.
-- Queued follow-ups are pills above the composer: tap to edit (unqueue into
-  the composer), ✕ to remove (unqueue and drop). Unconfirmed sends keep their
-  single "Not sent · Send again" card; the composer is not filled twice.
+- The queue shows above the composer under one caption, "Follow-ups send when
+  this turn ends": follow-ups are pills `↳ Follow-up 1` + text (tap to edit =
+  unqueue into the composer, ✕ to remove = unqueue and drop), steers the agent
+  has not read yet are muted `↗ Steer · waiting for the next step` rows that
+  cannot be removed. Three show at first, then "+N more" expands the rest. A
+  steer's bubble in the transcript keeps its "↗ Steer" label; a follow-up that
+  was sent is an ordinary message. Unconfirmed sends keep their single "Not
+  sent · Send again" card; the composer is not filled twice.
 
 ### Transcript
 
@@ -152,9 +167,14 @@ inputs change (no whole-region re-renders on every `state`). Budget: at most
   (finished top-level blocks are kept; only the open tail is re-parsed). Only
   the block being written shows the caret. Actions under a finished answer:
   Copy, Share (Web Share API where available), and time.
-- **Thinking**: a muted "Thinking…" line with a shimmer and the live text
-  capped to 3 lines with a fade; when done "Thought ›" (with duration when the
-  client watched it live), expandable; "show thinking expanded" setting.
+- **Thinking**: collapsed but alive. A muted "Thinking…" header with a shimmer
+  and, under it, one line (fixed height, ellipsis at the end) with the newest
+  sentence of the reasoning; when a new sentence starts the line slides up
+  (≤ 200 ms, none with reduced motion), and text within a sentence only
+  updates it in place. When done the header reads "Thought for 12 s ›" (the
+  duration when the client watched it live) and the last line stays under it.
+  Tapping the header or the line expands the full text and back; the "show
+  thinking expanded" setting opens it by default.
 - **Tools**: one-line rows: state icon · past-tense verb · muted mono target ·
   right-aligned meta (duration, `+12 −4`, exit code). Consecutive reads and
   searches group ("Read 6 files ›"). Tap expands inline: command, the **end**
@@ -245,10 +265,15 @@ buttons; status never by colour alone.
 ### iPad and desktop
 
 ≥ 900 px: persistent sidebar + transcript; sheets become centred dialogs or a
-right-hand panel (Changes, output viewer, context) at ≥ 1200 px. Shortcuts:
+right-hand panel (Changes, output viewer, context) at ≥ 1200 px, 30 % of the
+width between 440 and 600 px. The transcript, the composer and the top bar
+share one column (780 px, 860 px from 1700 px) centred beside the sidebar, with
+the title left-aligned to it. Desktop pointers get hover states, tooltips from
+the buttons' labels and thin themed scrollbars; tables wider than the column
+scroll instead of breaking words. Shortcuts:
 Esc stop (or close the top sheet), Cmd/Ctrl+K command list, Cmd/Ctrl+Enter
-send (Enter sends when the setting is on), Cmd/Ctrl+F find, Alt+↑/↓ previous/
-next session, `?` shortcut help.
+send or steer (Enter does when the setting is on; Tab or Alt+Enter queue),
+Cmd/Ctrl+F find, Alt+↑/↓ previous/next session, `?` shortcut help.
 
 ## Kept from v1
 
@@ -257,6 +282,11 @@ wake on visibility/pageshow/focus/online, unconfirmed sends never resent
 automatically), host clock offset, the iOS keyboard handling (`--h`, `--kb`),
 safe areas, the PWA (manifest, service worker, install row, theme-color sync),
 per-device views, live background sessions, the folder picker and new folder.
+The folder picker reads paths the way the host writes them: Unix, Windows drive
+roots (`C:\`, `D:\work`, `/` accepted as the same separator, compared without
+case) and UNC shares. The Roots crumb is always there so switching drives is
+one tap, the Roots view marks drives with a disk icon, and `~` stands for
+`C:\Users\name` too.
 
 ## Not in scope
 
@@ -274,6 +304,9 @@ free-text answers to choice questions, reading file contents.
   view, bounds, `stale`/`busy`, template expansion, deny with message, tool
   output append).
 - Headless Edge and Playwright WebKit runs against the mock and the real
-  binary: every screen in light/dark at 390×844, 360×640 and 1024×768, no
-  console errors, the audit's B1/B2/M1 repros pass, streaming cost stays flat
+  binary: every screen in light/dark at 390×844, 360×640 and 1024×768 (and
+  desktop windows from 800×900 to 2560×1440 and 125 %/150 % zoom), the session
+  list reachable at every width (sidebar from 900 px, the menu button's drawer
+  below, resizing across 900 px both ways without a stuck state or lost scroll),
+  no console errors, the audit's B1/B2/M1 repros pass, streaming cost stays flat
   with answer length.

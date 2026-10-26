@@ -788,3 +788,137 @@ test('changed files map their status to a badge and the transcript exports as Ma
   const md = MC.exportMd(state, [blocks[0], { ...blocks[1], streaming: false }, blocks[2], blocks[3], blocks[4]]);
   assert.equal(md, '# One\n\n`/work` · model\n\n**You (steer):** now\n\n**hello**\n\n- Ran `pwd`\n\n_Completed · 7.8 s · 12 tokens_\n\n_Context compacted · 32.1k → 2.7k tokens_\n');
 });
+
+test('Enter and Cmd/Ctrl+Enter steer while busy and send when idle; Tab and Alt+Enter queue only with text and no list', () => {
+  const { MC } = load();
+  const key = (k, mods = {}) => ({ key: k, shift: false, alt: false, mod: false, ...mods });
+  const ctx = (extra = {}) => ({ busy: true, text: 'next', popup: false, enter: true, ...extra });
+  assert.equal(MC.composerKey(key('Enter'), ctx()), 'steer');
+  assert.equal(MC.composerKey(key('Enter'), ctx({ busy: false })), 'send');
+  assert.equal(MC.composerKey(key('Enter', { mod: true }), ctx({ enter: false })), 'steer');
+  assert.equal(MC.composerKey(key('Enter', { mod: true }), ctx({ enter: false, busy: false })), 'send');
+  // Without "Enter sends" and with Shift, Enter is a new line.
+  assert.equal(MC.composerKey(key('Enter'), ctx({ enter: false })), null);
+  assert.equal(MC.composerKey(key('Enter', { shift: true }), ctx()), null);
+  assert.equal(MC.composerKey(key('Tab'), ctx()), 'queue');
+  assert.equal(MC.composerKey(key('Enter', { alt: true }), ctx()), 'queue');
+  assert.equal(MC.composerKey(key('Enter', { alt: true }), ctx({ enter: false })), 'queue');
+  // Nothing to queue, or nothing running: the keys keep their browser meaning.
+  assert.equal(MC.composerKey(key('Tab'), ctx({ text: '  \n' })), null);
+  assert.equal(MC.composerKey(key('Tab'), ctx({ busy: false })), null);
+  assert.equal(MC.composerKey(key('Enter', { alt: true }), ctx({ busy: false })), null);
+  assert.equal(MC.composerKey(key('Tab', { shift: true }), ctx()), null);
+  // An open list keeps Tab and Enter for completion; Cmd/Ctrl+Enter still sends.
+  assert.equal(MC.composerKey(key('Tab'), ctx({ popup: true })), null);
+  assert.equal(MC.composerKey(key('Enter'), ctx({ popup: true })), null);
+  assert.equal(MC.composerKey(key('Enter', { alt: true }), ctx({ popup: true })), null);
+  assert.equal(MC.composerKey(key('Enter', { mod: true }), ctx({ popup: true })), 'steer');
+  assert.equal(MC.composerKey(key('a'), ctx()), null);
+});
+
+test('the queue shows follow-ups numbered in order, waiting steers, and the first three until expanded', () => {
+  const { MC, plain } = load();
+  const q = [{ kind: 'steer', text: 's' }, { kind: 'follow', text: 'a' }, { kind: 'follow', text: 'b' }, { kind: 'follow', text: 'c' }, { kind: 'follow', text: 'd' }];
+  const v = plain(MC.queueView(q, false));
+  assert.deepEqual(v.items.map(x => [x.kind, x.index, x.n]), [['steer', 0, 0], ['follow', 1, 1], ['follow', 2, 2]]);
+  assert.deepEqual([v.hidden, v.long], [2, true]);
+  const all = plain(MC.queueView(q, true));
+  assert.deepEqual(all.items.map(x => x.n), [0, 1, 2, 3, 4]);
+  assert.deepEqual([all.hidden, all.long], [0, true]);
+  assert.deepEqual(plain(MC.queueView(q.slice(0, 3), false)), { items: plain(MC.queueView(q.slice(0, 3), true)).items, hidden: 0, long: false });
+  assert.deepEqual(plain(MC.queueView([], false)), { items: [], hidden: 0, long: false });
+  // A steer sent after a follow-up is still listed first and keeps its wire index.
+  const mixed = plain(MC.queueView([{ kind: 'follow', text: 'a' }, { kind: 'steer', text: 'b' }, { kind: 'follow', text: 'c' }], true));
+  assert.deepEqual(mixed.items.map(x => [x.kind, x.index, x.n]), [['steer', 1, 0], ['follow', 0, 1], ['follow', 2, 2]]);
+});
+
+test('the thinking preview is the newest sentence without Markdown markers', () => {
+  const { MC } = load();
+  const p = MC.thinkingPreview;
+  assert.equal(p(''), '');
+  assert.equal(p('Check the parser'), 'Check the parser');
+  assert.equal(p('First line\nSecond line\n\n  \n'), 'Second line');
+  // A long paragraph shows its newest sentence, also while that sentence is still being written.
+  assert.equal(p('The user reports a bug. I should read the code. Then run the'), 'Then run the');
+  assert.equal(p('The user reports a bug. I should read the code.'), 'I should read the code.');
+  assert.equal(p('先读代码。然后运行测试'), '然后运行测试');
+  assert.equal(p('Does it fail? Yes it does!'), 'Yes it does!');
+  // Paths and versions with dots are not sentence ends.
+  assert.equal(p('Open src/ui/mod.rs and v1.2.3 now'), 'Open src/ui/mod.rs and v1.2.3 now');
+  assert.equal(p('**Considering the fix**'), 'Considering the fix');
+  assert.equal(p('# Plan\n- read `split_path` in __main__\n'), 'read split_path in main');
+  assert.equal(p('1. Run [the tests](https://x.test/a) first'), 'Run the tests first');
+  assert.equal(p('> quoted ~~old~~ idea'), 'quoted old idea');
+  assert.equal(p('thinking\n---\n'), '---');
+  // Only the tail is read: a huge text costs the same and still ends with the newest line.
+  assert.equal(p('x\n'.repeat(100000) + 'last words here'), 'last words here');
+});
+
+test('Windows paths split into drive, folder and UNC crumbs and accept either separator', () => {
+  const { MC, plain } = load();
+  const parts = path => plain(MC.splitPath(path)).map(c => [c.name, c.path]);
+  assert.deepEqual(parts('C:\\'), [['C:', 'C:\\']]);
+  assert.deepEqual(parts('C:\\Users\\x'), [['C:', 'C:\\'], ['Users', 'C:\\Users'], ['x', 'C:\\Users\\x']]);
+  assert.deepEqual(parts('D:\\work'), [['D:', 'D:\\'], ['work', 'D:\\work']]);
+  assert.deepEqual(parts('\\\\server\\share\\dir'), [['server', '\\\\server'], ['share', '\\\\server\\share'], ['dir', '\\\\server\\share\\dir']]);
+  // `/` inside a drive path is the same separator; the crumbs come back in the `\` form the host uses.
+  assert.deepEqual(parts('C:/Users/x'), parts('C:\\Users\\x'));
+  assert.deepEqual(parts('C:\\Users/x\\src'), parts('C:\\Users\\x\\src'));
+  assert.deepEqual(parts('/work/app'), [['/', '/'], ['work', '/work'], ['app', '/work/app']]);
+  assert.deepEqual(parts('C:'), [['C:', 'C:\\']]);
+  assert.equal(MC.basename('C:\\'), 'C:');
+  assert.equal(MC.basename('D:\\work\\app'), 'app');
+  assert.equal(MC.basename('\\\\server\\share'), 'share');
+  assert.equal(MC.isDrive('C:\\'), true);
+  assert.equal(MC.isDrive('d:'), true);
+  assert.equal(MC.isDrive('C:\\Users'), false);
+  assert.equal(MC.isDrive('/'), false);
+  assert.equal(MC.isDrive('\\\\server\\share'), false);
+});
+
+test('Windows paths compare by folder and without case, and never match another drive or a longer name', () => {
+  const { MC } = load();
+  assert.equal(MC.within('C:\\', 'C:\\'), true);
+  assert.equal(MC.within('C:\\Users\\x', 'C:\\'), true);
+  assert.equal(MC.within('C:\\Users\\x', 'C:\\Users'), true);
+  assert.equal(MC.within('C:\\Users\\x', 'C:\\Users\\x'), true);
+  assert.equal(MC.within('c:\\users\\X', 'C:\\Users'), true);
+  assert.equal(MC.within('C:/Users/x', 'C:\\Users'), true);
+  assert.equal(MC.within('C:\\Users2', 'C:\\Users'), false);
+  assert.equal(MC.within('D:\\work', 'C:\\'), false);
+  assert.equal(MC.within('C:\\work', 'D:\\'), false);
+  assert.equal(MC.within('\\\\server\\share\\dir', '\\\\server\\share'), true);
+  assert.equal(MC.within('\\\\server\\share2', '\\\\server\\share'), false);
+  assert.equal(MC.within('/work/app', 'C:\\'), false);
+  assert.equal(MC.within('C:\\work', '/work'), false);
+  assert.equal(MC.within('/work', '/'), true);
+});
+
+test('crumbs start at the drive root or share root that holds the folder, one tap from Roots', () => {
+  const { MC, plain } = load();
+  const roots = [{ path: 'C:\\', name: 'C:' }, { path: 'D:\\', name: 'D:' }, { path: 'D:\\work', name: 'work' }];
+  const c = (path, r = roots) => plain(MC.crumbs(path, r)).map(x => [x.name, x.path]);
+  assert.deepEqual(c('C:\\'), [['C:', 'C:\\']]);
+  assert.deepEqual(c('C:\\Users\\x'), [['C:', 'C:\\'], ['Users', 'C:\\Users'], ['x', 'C:\\Users\\x']]);
+  // The innermost root wins, also when the host's casing differs.
+  assert.deepEqual(c('D:\\work\\app'), [['work', 'D:\\work'], ['app', 'D:\\work\\app']]);
+  assert.deepEqual(c('d:\\Work\\app'), [['work', 'D:\\work'], ['app', 'd:\\Work\\app']]);
+  assert.deepEqual(c('D:\\other'), [['D:', 'D:\\'], ['other', 'D:\\other']]);
+  assert.deepEqual(c('C:\\Users\\x', [{ path: '\\\\nas\\share', name: 'share' }]).map(x => x[0]), ['C:', 'Users', 'x']);
+  assert.deepEqual(c('\\\\nas\\share\\proj\\src', [{ path: '\\\\nas\\share', name: 'share' }]), [['share', '\\\\nas\\share'], ['proj', '\\\\nas\\share\\proj'], ['src', '\\\\nas\\share\\proj\\src']]);
+});
+
+test('home folders read as ~ on Windows too, and recent workspaces on other drives keep their path', () => {
+  const { MC, plain } = load();
+  assert.equal(MC.tilde('C:\\Users\\me\\work\\app'), '~\\work\\app');
+  assert.equal(MC.tilde('c:\\users\\me'), '~');
+  assert.equal(MC.tilde('C:/Users/me/work'), '~/work');
+  assert.equal(MC.tilde('D:\\work\\app'), 'D:\\work\\app');
+  assert.equal(MC.tilde('C:\\Usersx\\me'), 'C:\\Usersx\\me');
+  assert.equal(MC.tilde('\\\\nas\\share\\Users\\me'), '\\\\nas\\share\\Users\\me');
+  assert.equal(MC.tilde('/Users/me/work'), '~/work');
+  assert.equal(MC.tilde(null), '');
+  const sessions = [{ workspace: 'C:\\Users\\me\\app' }, { workspace: 'D:\\work\\api' }, { workspace: 'C:\\Users\\me\\app' }, { workspace: '\\\\nas\\share\\site' }];
+  const recent = plain(MC.recentWorkspaces(sessions));
+  assert.deepEqual(recent.map(w => [MC.basename(w), MC.tilde(w)]), [['app', '~\\app'], ['api', 'D:\\work\\api'], ['site', '\\\\nas\\share\\site']]);
+});
