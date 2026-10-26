@@ -53,7 +53,7 @@ document disagree after the feature lands, the code wins and this file is fixed.
   gives a fresh snapshot.
 - **Web client first.** The TUI serves a single-file web client that installs
   as a home-screen app and opens offline from a service worker cache.
-  The protocol below is versioned (`v: 1`) and is the interface a future native
+  The protocol below is versioned (`v: 2`) and is the interface a future native
   or Flutter client uses too, so it carries semantic data, never rendered rows.
 - **Optional TLS with a user certificate.** Default bind is loopback on both
   families. `tls = true` serves HTTPS and WSS with a PEM certificate and key the
@@ -294,7 +294,7 @@ Process exit allows at most 500 ms for the connection task to flush and close.
   `bye remote_off` and nothing is stored. The web client keeps the token in `localStorage` (`minicore.token`)
   and later signs in with `hello`. The server compares SHA-256 hashes.
 
-## Protocol v1
+## Protocol v2
 
 ### Handshake
 
@@ -304,15 +304,15 @@ names are `bad_request` and do not count as a wrong password.
 Client's first message, one of:
 
 ```json
-{"t":"login","v":1,"password":"k7mq-x2pa-n9dt","device":"iPhone Safari"}
-{"t":"hello","v":1,"token":"<base64url>"}
+{"t":"login","v":2,"password":"k7mq-x2pa-n9dt","device":"iPhone Safari"}
+{"t":"hello","v":2,"token":"<base64url>"}
 ```
 
 Server answers, in order:
 
 ```json
 {"t":"authorized","token":"<base64url>"}                  // only after a login
-{"t":"welcome","v":1,"version":"0.6.0","device":"iPhone Safari","now_ms":1761300003000}
+{"t":"welcome","v":2,"version":"0.6.0","device":"iPhone Safari","now_ms":1761300003000}
 {"t":"snapshot","state":{...},"blocks":[...]}
 ```
 
@@ -327,7 +327,7 @@ On failure, the server sends one error and closes:
 `wrong_password`: the login password is wrong. `locked`: sign-in is paused; the
 error carries `"retry_after":<whole seconds, rounded up>`. `unauthorized`: the
 `hello` token is unknown (signed out); the client forgets it and asks for the
-password. `version`: `v` is not 1. Another connected device never refuses a
+password. `version`: `v` is not 2 (a v1 client must reload). Another connected device never refuses a
 sign-in.
 
 ### Client → server (after the handshake)

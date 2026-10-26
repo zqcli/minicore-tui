@@ -1,9 +1,9 @@
-//! Phone protocol v1 input and reply envelopes.
+//! Phone protocol v2 input and reply envelopes.
 
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-pub const VERSION: u64 = 1;
+pub const VERSION: u64 = 2;
 
 #[derive(Deserialize)]
 #[serde(tag = "t", rename_all = "snake_case")]

@@ -91,7 +91,7 @@ async fn a_real_phone_signs_in_submits_through_the_agent_and_receives_the_user_b
             .unwrap();
         socket
             .send(Message::Text(
-                json!({"t":"login", "v":1, "password":password, "device":"test phone"})
+                json!({"t":"login", "v":crate::remote::wire::VERSION, "password":password, "device":"test phone"})
                     .to_string()
                     .into(),
             ))

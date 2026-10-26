@@ -630,7 +630,7 @@ mod tests {
         let mut socket = connect(address).await;
         send(
             &mut socket,
-            json!({"t":"login", "v":1, "password":password, "device":device}),
+            json!({"t":"login", "v":wire::VERSION, "password":password, "device":device}),
         )
         .await
         .unwrap();
@@ -807,7 +807,7 @@ mod tests {
             .await
             .unwrap()
             .0;
-        send(&mut socket, json!({"t":"hello", "v":1, "token":"unknown"}))
+        send(&mut socket, json!({"t":"hello", "v":wire::VERSION, "token":"unknown"}))
             .await
             .unwrap();
         assert_eq!(receive(&mut socket).await["code"], "unauthorized");
@@ -894,7 +894,7 @@ mod tests {
             let stream = tls_connect(address, &cert).await;
             match tokio_tungstenite::client_async(request, stream).await {
                 Ok((mut socket, _)) if origin.contains("localhost") => {
-                    send(&mut socket, json!({"t":"hello", "v":1, "token":"unknown"}))
+                    send(&mut socket, json!({"t":"hello", "v":wire::VERSION, "token":"unknown"}))
                         .await
                         .unwrap();
                     assert_eq!(receive(&mut socket).await["code"], "unauthorized");
@@ -1016,7 +1016,7 @@ mod tests {
         let password = auth.lock().unwrap().password().to_owned();
         let mut requests = vec![json!({"t":"fs_roots", "id":"early"})];
         for device in ["".to_owned(), "bad\nname".into(), "x".repeat(65)] {
-            requests.push(json!({"t":"login", "v":1, "password":password, "device":device}));
+            requests.push(json!({"t":"login", "v":wire::VERSION, "password":password, "device":device}));
         }
         for request in requests {
             let mut socket = connect(address).await;
@@ -1151,11 +1151,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_version_1_client_is_refused_before_sign_in_with_the_version_error() {
+        let (_dir, address, auth, mut rx, task) = start().await;
+        let password = auth.lock().unwrap().password().to_owned();
+        for request in [
+            json!({"t":"login", "v":1, "password":password, "device":"phone"}),
+            json!({"t":"hello", "v":1, "token":"unknown"}),
+        ] {
+            let mut socket = connect(address).await;
+            send(&mut socket, request).await.unwrap();
+            assert_eq!(receive(&mut socket).await["code"], "version");
+        }
+        assert_eq!(wire::VERSION, 2);
+        assert!(rx.try_recv().is_err(), "neither admitted nor counted");
+        task.abort();
+    }
+
+    #[tokio::test]
     async fn the_right_password_is_authorized_before_welcome_and_the_snapshot_and_unknown_tokens_are_not()
      {
         let (_dir, address, auth, mut rx, task) = start().await;
         let mut socket = connect(address).await;
-        send(&mut socket, json!({"t":"hello", "v":1, "token":"unknown"}))
+        send(&mut socket, json!({"t":"hello", "v":wire::VERSION, "token":"unknown"}))
             .await
             .unwrap();
         assert_eq!(receive(&mut socket).await["code"], "unauthorized");
