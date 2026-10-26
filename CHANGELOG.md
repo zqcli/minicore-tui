@@ -10,6 +10,19 @@
   line under the header that moves up as the agent thinks. On desktop the
   transcript, composer and title share one centred column beside the sidebar,
   with side panels for changes and output, hover states and thin scrollbars.
+- Fewer messages: a tool you allowed for the session no longer raises
+  `Allowed bash for this session` on every call (the TUI and the web client stay
+  silent; `/session` and the web session info list the allowed tools), and the
+  web tool row shows no "Allowed" line, only a denial with its reason.
+  "Session renamed", "Session deleted", "New session: model …" and "Compaction
+  cancelled" are gone or a brief flash, since the title, list and footer already
+  show them. The TUI's own hints (`Press Ctrl+C again to quit`, unknown
+  commands) no longer reach phones, and phones get background-attention text
+  without the TUI's `ctrl+r`. Copy in the web client turns its button into a
+  check instead of a toast.
+- In the web client the thinking block can be expanded while the agent is still
+  thinking: the text grows in place and collapsing returns to the one-line
+  preview.
 - Stopping a turn from the web client is deliberate: Stop is a small outlined
   chip next to "Thinking 15s", away from Steer and the queue's ✕. A tap arms it
   ("Tap again to stop", three seconds), a second tap stops, and `Esc` twice does
