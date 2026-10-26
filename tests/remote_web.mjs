@@ -819,45 +819,37 @@ test('composer keys: Enter and Cmd/Ctrl+Enter steer or send, Alt+Enter queues, T
   assert.equal(MC.composerKey({ ...base, alt: true }, { ...ctx, text: '  \n' }), null);
 });
 
-test('stop asks twice: arm, confirm in time, expire, and ghost taps are ignored', () => {
-  const { MC, plain } = load();
-  const run = (s, ev, now) => { const r = MC.stopArm(s, ev, now); return { s: plain(r.s), act: r.act }; };
-  const tap = (moved = 0) => ({ type: 'tap', moved });
-  const shown = run(MC.stopNew(), { type: 'show' }, 1000).s;
-  assert.equal(run(MC.stopNew(), tap(), 5000).act, null, 'no chip, no stop');
-  // Right after the chip appeared or moved, activations are ghost taps.
-  assert.equal(run(shown, tap(), 1499).act, null);
-  assert.equal(run(shown, { type: 'esc' }, 1100).act, 'arm', 'Esc is a key press, not a ghost tap');
-  const moved = run(shown, { type: 'show' }, 3000).s;
-  assert.equal(run(moved, tap(), 3200).act, null);
-  // Arm, then confirm within 3 s.
-  const armed = run(shown, tap(), 2000);
-  assert.deepEqual([armed.act, armed.s.armed], ['arm', { at: 2000, esc: false }]);
-  const done = run(armed.s, tap(), 5000);
-  assert.deepEqual([done.act, done.s.armed], ['stop', null]);
-  // Late, the second tap only arms again; a tick drops the expired arming.
-  const late = run(armed.s, tap(), 5001);
-  assert.deepEqual([late.act, late.s.armed], ['arm', { at: 5001, esc: false }]);
-  assert.equal(run(armed.s, { type: 'tick' }, 5001).s.armed, null);
-  // A pointer that travelled over 10 px was a scroll: it neither arms nor confirms.
-  assert.equal(run(shown, tap(11), 2000).act, null);
-  assert.equal(run(armed.s, tap(11), 2500).act, null);
-  assert.deepEqual(run(armed.s, tap(10), 2500).act, 'stop');
-  // Using anything else, or the turn ending, disarms.
-  assert.equal(run(armed.s, { type: 'other' }, 2100).s.armed, null);
-  assert.equal(run(run(armed.s, { type: 'other' }, 2100).s, tap(), 2200).act, 'arm');
-  assert.deepEqual(run(armed.s, { type: 'hide' }, 2100).s, { at: null, armed: null });
-  // The chip moving keeps the arming but restarts the guard.
-  const slid = run(armed.s, { type: 'show' }, 2400);
-  assert.equal(slid.s.armed.at, 2000);
-  assert.equal(run(slid.s, tap(), 2600).act, null);
-  assert.equal(run(slid.s, tap(), 2900).act, 'stop');
-  // Esc twice stops; the first Esc arms the "Esc again" chip.
-  const esc1 = run(shown, { type: 'esc' }, 2000);
-  assert.deepEqual([esc1.act, esc1.s.armed.esc], ['arm', true]);
-  assert.equal(run(esc1.s, { type: 'esc' }, 4900).act, 'stop');
-  assert.equal(run(esc1.s, { type: 'esc' }, 5100).act, 'arm');
-  assert.equal(run(MC.stopNew(), { type: 'esc' }, 2000).act, null, 'Esc with no chip does nothing');
+test('the primary button is send when idle, stop while working with nothing typed, steer with text typed during a turn', () => {
+  const { MC } = load();
+  const face = (busy, compacting, text, stopping = false) => MC.primaryKind({ busy, compacting, text, stopping });
+  // [busy, compacting, text, stopping] -> face
+  const table = [
+    [false, false, '', false, 'send'], [false, false, 'hi', false, 'send'], [false, false, '  \n', false, 'send'],
+    [true, false, '', false, 'stop'], [true, false, '  ', false, 'stop'], [true, false, 'hi', false, 'steer'],
+    [false, true, '', false, 'stop'], [false, true, 'hi', false, 'send'],
+    [true, false, '', true, 'stopping'], [true, false, 'hi', true, 'stopping'], [false, true, '', true, 'stopping'],
+  ];
+  for (const [busy, compacting, text, stopping, want] of table) assert.equal(face(busy, compacting, text, stopping), want, JSON.stringify([busy, compacting, text, stopping]));
+});
+
+test('a tap on the primary decides from the live text and ignores double taps on Send and scrolls', () => {
+  const { MC } = load();
+  const tap = (c, now = 10000, moved = 0) => MC.primaryTap({ busy: true, compacting: false, text: '', stopping: false, stopAt: 0, ...c }, now, moved);
+  assert.equal(tap({}), 'stop');
+  assert.equal(tap({ compacting: true, busy: false }), 'stop');
+  // The button still shows Stop but text was typed since: the tap steers, it never stops.
+  assert.equal(tap({ text: 'next' }), 'steer');
+  assert.equal(tap({ text: 'next', busy: false }), 'send');
+  assert.equal(tap({ busy: false }), null, 'nothing to send');
+  assert.equal(tap({ stopping: true }), null);
+  // A tap within 600 ms after the button became Stop is the second half of a double tap on Send.
+  assert.equal(tap({ stopAt: 9401 }), null);
+  assert.equal(tap({ stopAt: 9400 }), 'stop');
+  assert.equal(tap({ stopAt: 9401, text: 'next' }), 'steer', 'the guard only protects Stop');
+  // A pointer that travelled over 10 px was a scroll.
+  assert.equal(tap({}, 10000, 11), null);
+  assert.equal(tap({}, 10000, 10), 'stop');
+  assert.equal(tap({ text: 'next' }, 10000, 30), null);
 });
 
 test('the queue shows follow-ups numbered in order, waiting steers, and the first three until expanded', () => {

@@ -352,22 +352,15 @@ pre.view.wrap{white-space:pre-wrap;overflow-wrap:anywhere}
 html.kb #dock{padding-bottom:6px}
 #dock>*{max-width:var(--col);margin-left:auto;margin-right:auto}
 #newout{position:absolute;left:50%;bottom:calc(100% + 8px);transform:translateX(-50%);box-shadow:var(--sh);background:var(--sf);color:var(--tx);z-index:5;animation:rise var(--fast) var(--ease)}
-#strip{display:flex;align-items:center;gap:10px;min-height:44px;padding:0 0 4px 6px;margin-bottom:8px}
+#strip{display:flex;align-items:center;gap:10px;min-height:44px;padding:0 0 4px 6px}
 #strip .spin{color:var(--ac)}
 .stx{flex:1;min-width:0;display:flex;flex-direction:column;line-height:1.3}
-.st1{display:flex;align-items:center;gap:8px;min-width:0;font-size:var(--t14)}
+.st1{display:flex;align-items:baseline;gap:8px;min-width:0;font-size:var(--t14)}
 .st1 b{font-weight:600;white-space:nowrap}
 .st1 .mono{flex:1;min-width:0;font-size:var(--t12);color:var(--tx3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .st1 .el{font-size:var(--t13);color:var(--tx3);font-variant-numeric:tabular-nums;flex:none}
 .ctxb{font-size:var(--t12);font-weight:500;color:var(--tx3);min-height:44px;min-width:44px;padding:0 4px;font-variant-numeric:tabular-nums;flex:none}
 .ctxb.hi{color:var(--wa)}
-.stop{flex:none;display:inline-flex;align-items:center;min-height:40px;padding:4px 0;color:var(--er);font-size:var(--t13);font-weight:600}
-.sc{position:relative;display:inline-flex;align-items:center;gap:5px;height:32px;padding:0 12px;border-radius:16px;box-shadow:inset 0 0 0 1px currentColor;overflow:hidden;white-space:nowrap}
-.stop:disabled{opacity:.6}
-.stop.armed .sc{background:var(--er);color:#fff;box-shadow:none}
-[data-theme=dark] .stop.armed .sc{color:#1c0b0c}
-.stop.armed .sc::after{content:"";position:absolute;left:0;right:0;bottom:0;height:3px;background:currentColor;opacity:.55;transform-origin:left;animation:drain 3s linear var(--ad,0s) forwards}
-@keyframes drain{to{transform:scaleX(0)}}
 #apprbar{display:flex;align-items:center;gap:10px;min-height:48px;margin-bottom:6px;padding:4px 4px 4px 14px;border-radius:var(--r2);background:var(--was);color:var(--wa);font-size:var(--t14);font-weight:500;animation:rise var(--fast) var(--ease)}
 #apprbar>span{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #apprbar .btn{min-height:40px;background:var(--wac);color:#fff}
@@ -403,19 +396,24 @@ html.kb #dock{padding-bottom:6px}
 .chip::after{content:"";position:absolute;inset:-4px -2px}
 .chip>span{overflow:hidden;text-overflow:ellipsis}
 .chip.icon{padding:0;justify-content:center;width:36px;flex:none;overflow:visible}
-#send{flex:none}
-.snd{display:flex;gap:8px;flex:none}
-.snd.off{visibility:hidden}
-.btn.sb{padding:0 14px;border-radius:22px;font-size:var(--t14);animation:fade var(--fast)}
-@media(max-width:479px){.rz{display:none}}
 .cl{flex:1;min-width:0;display:flex;align-items:center;gap:6px;overflow-x:auto;scrollbar-width:none;padding:4px 16px 4px 0;margin:-4px 0;-webkit-mask-image:linear-gradient(to left,transparent,#000 16px);mask-image:linear-gradient(to left,transparent,#000 16px)}
 .cl::-webkit-scrollbar{display:none}
 .cl .chip{flex:none;max-width:62vw}
-#send{flex:none;width:36px;height:36px;border-radius:50%;display:grid;place-items:center;background:var(--ac);color:#fff;position:relative;transition:background var(--fast),transform .1s}
-[data-theme=dark] #send{background:#3b68e6}
-#send::after{content:"";position:absolute;inset:-5px}
-#send:disabled{background:var(--fill2);color:var(--tx3)}
-#send:active:not(:disabled){transform:scale(.94)}
+.tbtn{flex:none;display:inline-flex;align-items:center;gap:4px;min-height:40px;padding:0 8px;border-radius:8px;color:var(--tx2);font-size:var(--t14);white-space:nowrap}
+.tbtn>span:first-child{overflow:hidden;text-overflow:ellipsis}
+.tbtn.acc{color:var(--ac);font-weight:600}
+.tbtn:active:not(:disabled),.tbtn:focus-visible{background:var(--fill)}
+.tbtn:disabled{opacity:.45}
+.pri{flex:none;width:40px;height:40px;border-radius:50%;display:grid;place-items:center;background:var(--ac);color:#fff;position:relative;transition:background var(--fast),transform .1s}
+[data-theme=dark] .pri.send,[data-theme=dark] .pri.steer{background:#3b68e6}
+.pri.stop{background:var(--tx);color:var(--bg)}
+.pri:disabled{background:var(--fill2);color:var(--tx3)}
+.pri:active:not(:disabled){transform:scale(.94)}
+#comp{position:relative}
+#pmenu{position:absolute;right:6px;bottom:54px;z-index:6;min-width:230px;padding:4px;border-radius:var(--r2);background:var(--sf);box-shadow:var(--sh),inset 0 0 0 1px var(--line);animation:rise var(--fast) var(--ease)}
+.pm{display:flex;align-items:center;gap:10px;width:100%;min-height:44px;padding:0 10px;border-radius:var(--r1);font-size:var(--t14);text-align:left}
+.pm:focus-visible,.pm:active{outline:none;background:var(--fill)}
+.pm .pk{margin-left:auto;padding-left:12px;font-size:var(--t12);color:var(--tx3)}
 
 .crumbs{display:flex;align-items:center;flex-wrap:wrap;gap:2px;margin:0 0 8px;color:var(--tx3);font-size:var(--t14)}
 .crumbs button{min-height:36px;padding:0 6px;border-radius:var(--r1);color:var(--ac);font-weight:500}
@@ -506,9 +504,9 @@ kbd{font:500 var(--t12) var(--mono);padding:2px 6px;border-radius:6px;background
   .ib:hover,.sopen:hover,.tr:hover,.opt:hover,.sugg button:hover,.cbh button:hover,.tbar button:hover,.crumbs button:hover,.qmore:hover{background:var(--fill)}
   .chip:hover,.row:hover:not(:disabled),.pill:hover,.srow.cur .sopen:hover,.seg button:hover{background:var(--fill2)}
   .seg button[aria-checked=true]:hover{background:var(--sf)}
-  .stop:hover:not(:disabled):not(.armed) .sc{background:var(--ers)}
-  .btn:hover:not(:disabled),#send:hover:not(:disabled){filter:brightness(.94)}
-  [data-theme=dark] .btn:hover:not(:disabled),[data-theme=dark] #send:hover:not(:disabled){filter:brightness(1.2)}
+  .tbtn:hover,.pm:hover{background:var(--fill)}
+  .btn:hover:not(:disabled),.pri:hover:not(:disabled){filter:brightness(.94)}
+  [data-theme=dark] .btn:hover:not(:disabled),[data-theme=dark] .pri:hover:not(:disabled){filter:brightness(1.2)}
 }
 </style>
 <script id="core">
@@ -924,16 +922,17 @@ globalThis.MC = (() => {
   }
   // Stop shows while a turn runs or a compaction is under way, and stays until the host confirms it stopped.
   const canStop = st => !!(st.busy || st.compacting);
-  // Stop asks twice: the first activation or Esc arms the chip for STOP_ARM ms, the second stops. `at` is when the chip
-  // appeared or moved; taps within STOP_GUARD of it or from a pointer that travelled over STOP_SLOP px are accidents.
-  const STOP_ARM = 3000, STOP_GUARD = 500, STOP_SLOP = 10, stopNew = () => ({ at: null, armed: null });
-  function stopArm(s, ev, now) {
-    const t = ev.type, armed = s.armed && now - s.armed.at <= STOP_ARM ? s.armed : null, to = (a, act = null) => ({ s: { at: s.at, armed: a }, act });
-    if (t === 'hide') return { s: stopNew(), act: null };
-    if (t === 'show') return { s: { at: now, armed }, act: null };
-    if (t === 'other') return to(null);
-    if (s.at === null || t === 'tick' || (t === 'tap' && (ev.moved > STOP_SLOP || now - s.at < STOP_GUARD))) return to(armed);
-    return armed ? to(null, 'stop') : to({ at: now, esc: t === 'esc' }, 'arm');
+  // The composer's primary button changes face, never place: send when idle, stop while a turn or compaction runs with
+  // nothing typed, steer with text typed during a turn. c = { busy, compacting, text, stopping }.
+  const primaryKind = c => c.stopping ? 'stopping' : c.text.trim() ? (c.busy ? 'steer' : 'send') : c.busy || c.compacting ? 'stop' : 'send';
+  // What a tap on it does. The kind comes from the live text, so typing then tapping never stops. A tap within STOP_GUARD of
+  // the button becoming Stop (a double tap on Send as the composer empties) or from a pointer that travelled over TAP_SLOP px
+  // (a scroll) does nothing. c adds stopAt: when the button became Stop. Returns 'send' | 'steer' | 'stop' | null.
+  const STOP_GUARD = 600, TAP_SLOP = 10;
+  function primaryTap(c, now, moved) {
+    const kind = primaryKind(c);
+    if (moved > TAP_SLOP || kind === 'stopping' || (kind === 'send' && !c.text.trim())) return null;
+    return kind === 'stop' && now - c.stopAt < STOP_GUARD ? null : kind;
   }
   // The block being written: the last block when it is a streaming assistant in a busy session.
   const liveBlock = (blocks, busy) => {
@@ -1255,7 +1254,7 @@ globalThis.MC = (() => {
     diffBlocks, applyBlocks, reduce, explain, lockText, fmtClock, unreachable, fsError, errorText,
     clock, stamp, relTime, dayGroup, sessionLayout, matchSession, fmtElapsed, fmtDur, fmtTok, fmtNum,
     groupTools, foldTurns, findBlocks, foldText, mdInc,
-    toolKind, toolInfo, parseDiff, diffStats, liveBlock, turnEnd, changesText, compactionText, statusLine, canStop, stopArm, stopNew, STOP_ARM, approvalKey, approvalTitle, approvalOptions, approvalBody,
+    toolKind, toolInfo, parseDiff, diffStats, liveBlock, turnEnd, changesText, compactionText, statusLine, canStop, primaryKind, primaryTap, TAP_SLOP, approvalKey, approvalTitle, approvalOptions, approvalBody,
     changeStatus, contextView, exportMd, BUILTINS, slashMenu, parseSlash, atToken, insertMention, pushRecent, literal, composerKey, queueView, thinkingPreview,
     splitPath, within, crumbs, tilde, isDrive, recentWorkspaces, sessionTransitions, noticeEvent, attentionCount, inline, parseMd, parseLines, SAFE_URL,
   };
@@ -1899,7 +1898,7 @@ function syncTick() {
 }
 function onTick() {
   const el = $('strip').querySelector('.el'), x = st();
-  if (el && x.started_ms) { el.textContent = MC.fmtElapsed(hostNow() - x.started_ms); syncStop(); }
+  if (el && x.started_ms) el.textContent = MC.fmtElapsed(hostNow() - x.started_ms);
   if (navShown()) for (const e of $('nav').querySelectorAll('[data-start]')) e.textContent = MC.fmtElapsed(hostNow() - +e.dataset.start);
 }
 function renderState() {
@@ -2563,16 +2562,7 @@ $('newout').addEventListener('click', toLatest);
 
 // ---- dock: status strip, queue, composer ----
 const ta = $('ta');
-// Stop is a ghost chip beside the label; the first activation arms it (see MC.stopArm).
-const STOP_TEXT = { tap: 'Tap again to stop', click: 'Click again to stop', esc: 'Esc again to stop' };
-let stopS = MC.stopNew(), stopT = 0, stopPos = '', stopDown = null;
-const stopMode = () => stopS.armed ? (stopS.armed.esc ? 'esc' : hover.matches ? 'click' : 'tap') : '';
-const stopPart = x => h('button', { class: 'stop' + (x.arm ? ' armed' : ''), 'data-k': 'stop', disabled: x.stopping || !x.online,
-  onpointerdown: e => { stopDown = [e.clientX, e.clientY]; },
-  onclick: e => stopEv({ type: 'tap', moved: e.detail && stopDown ? Math.hypot(e.clientX - stopDown[0], e.clientY - stopDown[1]) : 0 }) },
-  h('span', 'sc', x.stopping ? spin('sm') : x.arm ? null : icon('stop', 'sm'), x.stopping ? 'Stopping…' : x.arm ? STOP_TEXT[x.arm] : 'Stop'));
-const stripPart = part($('strip'), x => [spin(), h('div', 'stx', h('div', 'st1', h('b', '', x.label), x.started && h('span', 'el', MC.fmtElapsed(hostNow() - x.started)),
-  x.stop && stopPart(x), x.detail && h('span', 'mono', x.detail))),
+const stripPart = part($('strip'), x => [spin(), h('div', 'stx', h('div', 'st1', h('b', '', x.label), x.started && h('span', 'el', MC.fmtElapsed(hostNow() - x.started)), x.detail && h('span', 'mono', x.detail))),
   x.ctx && h('button', { class: 'ctxb' + (x.hi ? ' hi' : ''), 'aria-label': x.ctx + ' of context used', onclick: () => openContext() }, x.ctx)]);
 function renderStrip() {
   const s = st(), on = !!(s.busy || s.compacting || s.loading);
@@ -2581,30 +2571,9 @@ function renderStrip() {
   const x = MC.statusLine(S.state, S.blocks, hostNow());
   stripPart({
     label: x.label, detail: x.detail, started: (s.busy || s.compacting) && s.started_ms, ctx: S.state.context_percent != null ? Math.round(S.state.context_percent) + '%' : '',
-    hi: S.state.context_percent >= 80, stop: MC.canStop(s), stopping: s.interrupting || pendingKind('cancel'), online: online(), arm: stopMode(),
+    hi: S.state.context_percent >= 80,
   });
-  const b = $('strip').querySelector('.stop.armed');
-  if (b && !b.style.getPropertyValue('--ad')) b.style.setProperty('--ad', stopS.armed.at - Date.now() + 'ms');
 }
-// A chip that appears, moves or goes starts the ghost-tap guard.
-function syncStop() {
-  const b = $('strip').hidden ? null : $('strip').querySelector('.stop'), r = b && b.getBoundingClientRect(), k = r ? Math.round(r.left) + ',' + Math.round(r.top) : '';
-  if (k !== stopPos) { stopPos = k; stopS = MC.stopArm(stopS, { type: b ? 'show' : 'hide' }, Date.now()).s; }
-}
-function stopEv(ev) {
-  const r = MC.stopArm(stopS, ev, Date.now());
-  stopS = r.s;
-  clearTimeout(stopT);
-  if (stopS.armed) stopT = setTimeout(() => stopEv({ type: 'tick' }), MC.STOP_ARM + 20);
-  if (r.act === 'stop') stop();
-  if (r.act === 'arm') announce(STOP_TEXT[stopMode()]);
-  renderStrip();
-}
-// Using anything else, or scrolling, disarms.
-const disarm = e => { if (stopS.armed && !(e.target.closest && e.target.closest('.stop'))) stopEv({ type: 'other' }); };
-document.addEventListener('pointerdown', disarm, true);
-document.addEventListener('keydown', e => { if (e.key !== 'Escape') disarm(e); }, true);
-for (const t of ['wheel', 'touchmove']) document.addEventListener(t, disarm, { capture: true, passive: true });
 function stop() { if (MC.canStop(st()) && !st().interrupting && !pendingKind('cancel')) intent(MC.intents.cancel()); }
 const trayPart = part($('tray'), t => [
   t.lost.map(([id, text]) => h('div', { class: 'lost', role: 'alert' }, icon('warn', 'sm'),
@@ -2630,33 +2599,80 @@ function renderTray() {
   const q = MC.queueView(S.state.queue, qAll);
   trayPart({ lost: MC.unconfirmed(S).map(it => [it.id, it.text]), q: { ...q, follows: S.state.queue.some(x => x.kind === 'follow') }, on: online() });
 }
+// The bottom row of the composer: + and the draft's folder and profile on the left, then the slot (the model as plain text,
+// or Follow-up while a turn runs with text typed) and the primary button, which keeps its place and changes face.
+const PRIMARY = {
+  send: { icon: 'up', label: 'Send' }, steer: { icon: 'steer', label: 'Steer' },
+  stop: { icon: 'stop', label: 'Stop the turn' }, stopping: { icon: null, label: 'Stopping' },
+};
+let primary = '', stopAt = 0, press = null;
+const composerState = () => {
+  const s = st(), lock = sending();
+  return { busy: !!s.busy, compacting: !!s.compacting, text: ta.value, stopping: MC.canStop(s) && (!!s.interrupting || pendingKind('cancel')), lock };
+};
 const chipsPart = part($('chips'), c => [h('div', 'cl',
   h('button', { class: 'chip icon', 'data-k': 'plus', 'aria-label': 'Commands, prompts and files', 'aria-haspopup': 'dialog', onclick: openPlus }, icon('plus', 'sm')),
   c.draft && h('button', { class: 'chip', 'data-k': 'folder', 'aria-label': 'Folder ' + c.draft.folder + ', change', onclick: () => openNew() }, icon('folder', 'xs'), h('span', '', c.draft.folder)),
-  c.draft && c.draft.profiles && h('button', { class: 'chip', 'data-k': 'profile', 'aria-label': 'Profile ' + c.draft.profile + ', change', onclick: openProfile }, h('span', '', c.draft.profile || 'Profile')),
-  h('button', { class: 'chip', 'data-k': 'model', 'aria-label': 'Model ' + c.model + ', change', onclick: openModel }, h('span', '', c.modelShort), c.level && h('span', 'rz', '· ' + c.level), icon('chevd', 'xs'))),
-  c.busy ? h('div', 'snd' + (c.typed ? '' : ' off'),
-    h('button', { class: 'btn sb', id: 'queue', 'data-k': 'queue', title: c.tips && 'Queue a follow-up · ' + ALT + 'Enter', 'aria-label': 'Queue as a follow-up', disabled: c.disabled, onclick: () => submit('queue') },
-      c.sending === 'queue' ? spin('sm') : icon('follow', 'sm'), 'Queue'),
-    h('button', { class: 'btn sb primary', type: 'submit', id: 'steer', 'data-k': 'steer', title: c.tips && 'Steer · ' + c.tips, 'aria-label': 'Steer the agent', disabled: c.disabled },
-      c.sending === 'submit' ? spin('sm') : icon('steer', 'sm'), 'Steer'))
-  : h('button', { id: 'send', type: 'submit', 'data-k': 'send', 'aria-label': c.sending ? 'Sending' : 'Send', disabled: c.disabled }, c.sending ? spin() : icon('up')),
+  c.draft && c.draft.profiles && h('button', { class: 'chip', 'data-k': 'profile', 'aria-label': 'Profile ' + c.draft.profile + ', change', onclick: openProfile }, h('span', '', c.draft.profile || 'Profile'))),
+  c.followUp
+    ? h('button', { class: 'tbtn acc', 'data-k': 'follow', title: c.tips && 'Queue as follow-up · ' + ALT + 'Enter', 'aria-label': 'Queue as a follow-up', disabled: c.disabled, onclick: () => submit('queue') }, icon('follow', 'sm'), 'Follow-up')
+    : h('button', { class: 'tbtn', 'data-k': 'model', 'aria-label': 'Model ' + c.model + ', change', onclick: openModel }, h('span', '', c.modelShort), c.level && h('span', 'rz', '· ' + c.level), icon('chevd', 'xs')),
+  h('button', { id: 'pri', class: 'pri ' + c.kind, type: 'button', 'data-k': 'pri', title: c.tip, 'aria-label': PRIMARY[c.kind].label, disabled: c.disabled,
+    onpointerdown: priDown, onpointermove: priMove, onpointerup: priEnd, onpointercancel: priEnd, oncontextmenu: priMenu, onclick: priTap },
+    c.kind === 'stopping' ? spin() : icon(PRIMARY[c.kind].icon)),
 ]);
 function renderChips() {
-  const s = st(), c = cur(), lock = sending(), d = S.state.draft, typed = ta.value.trim() !== '';
-  ta.readOnly = lock;
+  const s = st(), c = cur(), d = S.state.draft, cs = composerState(), kind = MC.primaryKind(cs), typed = cs.text.trim() !== '';
+  ta.readOnly = cs.lock;
   ta.placeholder = s.busy ? (hover.matches ? tips() + ' to steer · ' + ALT + 'Enter to queue' : 'Steer, or queue a follow-up…') : S.state.session ? 'Message MiniCore · / for commands' : 'Describe a task to start';
+  if (kind !== primary) {
+    if (kind !== 'steer') closePriMenu();
+    if (kind === 'stop') stopAt = Date.now();
+    // Only the turn-related faces are announced, so typing does not chatter.
+    if (kind !== 'send' && primary !== '') announce(PRIMARY[kind].label);
+    primary = kind;
+  }
+  const tip = !hover.matches ? null : kind === 'send' ? 'Send · ' + tips() : kind === 'stop' ? 'Stop the turn · Esc'
+    : kind === 'steer' ? 'Steer · ' + tips() + ' · right-click for more' : null;
   chipsPart({
-    model: c.model || '', modelShort: c.model ? MC.midTrunc(c.model, s.busy ? 12 : 17) : 'Model', level: c.reasoning, busy: !!s.busy, typed, sending: lock && (MC.pending(S, 'queue') ? 'queue' : 'submit'),
-    disabled: lock || !online() || !typed, tips: hover.matches && tips(),
-    draft: !S.state.session && { folder: MC.basename(d.workspace), profile: d.profile, profiles: S.state.profiles.length > 1 },
+    kind, tip, tips: hover.matches && tips(), followUp: cs.busy && typed && kind === 'steer', draft: !S.state.session && { folder: MC.basename(d.workspace), profile: d.profile, profiles: S.state.profiles.length > 1 },
+    model: c.model || '', modelShort: c.model ? MC.midTrunc(c.model, wide.matches ? 28 : 16) : 'Model', level: c.reasoning,
+    disabled: cs.lock || !online() || kind === 'stopping' || (kind === 'send' && !typed),
   });
 }
-function renderDock() { renderStrip(); renderTray(); renderChips(); syncStop(); }
+// A tap on the primary asks MC what it means from the live text. A long press or right click opens the menu while text is
+// typed during a turn, which is where Stop is otherwise out of reach.
+function priDown(e) {
+  press = { x: e.clientX, y: e.clientY, moved: 0, fired: false, timer: 0 };
+  if (e.pointerType !== 'mouse') press.timer = setTimeout(() => { press.fired = true; openPriMenu(); }, 450);
+}
+function priMove(e) {
+  if (!press) return;
+  press.moved = Math.max(press.moved, Math.hypot(e.clientX - press.x, e.clientY - press.y));
+  if (press.moved > MC.TAP_SLOP) clearTimeout(press.timer);
+}
+function priEnd() { if (press) clearTimeout(press.timer); }
+function priMenu(e) { e.preventDefault(); openPriMenu(); }
+function priTap(e) {
+  const p = press;
+  press = null;
+  if (p && p.fired) return;
+  const act = MC.primaryTap({ ...composerState(), stopAt: primary === 'stop' ? stopAt : Date.now() }, Date.now(), p && e.detail ? p.moved : 0);
+  if (act === 'stop') stop(); else if (act) submit(act);
+}
+function openPriMenu() {
+  if ($('pmenu') || MC.primaryKind(composerState()) !== 'steer') return;
+  const item = (ic, label, key, fn) => h('button', { class: 'pm', role: 'menuitem', onclick: () => { closePriMenu(); fn(); } }, icon(ic, 'sm'), h('span', '', label), h('span', 'pk', key));
+  $('comp').append(h('div', { id: 'pmenu', role: 'menu', 'aria-label': 'Turn actions' },
+    item('steer', 'Steer now', tips(), () => submit('steer')), item('follow', 'Queue as follow-up', ALT + 'Enter', () => submit('queue')), item('stop', 'Stop the turn', 'Esc', stop)));
+  $('pmenu').firstChild.focus({ preventScroll: true });
+}
+function closePriMenu() { const m = $('pmenu'); if (m) m.remove(); }
+document.addEventListener('pointerdown', e => { if (!e.target.closest('#pmenu')) closePriMenu(); }, true);
+function renderDock() { renderStrip(); renderTray(); renderChips(); }
 function grow() {
   ta.style.height = 'auto';
   ta.style.height = ta.scrollHeight + 'px';
-  syncStop();
 }
 const draftKey = () => 'minicore.draft.' + (S.sid || 'new');
 function composerInput() {
@@ -2696,7 +2712,6 @@ function builtin(c) {
     case 'help': return openHelp();
   }
 }
-$('comp').addEventListener('submit', e => { e.preventDefault(); submit(); });
 ta.addEventListener('input', () => { recall = -1; composerInput(); });
 ta.addEventListener('click', updateMenu);
 
@@ -2883,10 +2898,11 @@ document.addEventListener('keydown', e => {
   if (screen !== 'main') return;
   const m = topModal();
   if (e.key === 'Escape') {
+    if ($('pmenu')) { e.preventDefault(); closePriMenu(); return; }
     if (m) { e.preventDefault(); m.close(); return; }
     const p = stack.find(x => x.panel);
     if (p) { e.preventDefault(); p.close(); return; }
-    if (MC.canStop(st())) { e.preventDefault(); stopEv({ type: 'esc' }); }
+    if (MC.canStop(st())) { e.preventDefault(); stop(); }
     return;
   }
   const mod = e.metaKey || e.ctrlKey, k = e.key.toLowerCase();
@@ -3044,7 +3060,7 @@ function stepSession(d) {
   const list = MC.sessionLayout(S.state.sessions, hostNow(), tz(), '', frozen).groups.flatMap(g => g.items), i = list.findIndex(x => x.current), x = list[i + d];
   if (x && !pendingRow && intent(MC.intents.openSession(x.id))) pendingRow = x.id;
 }
-const KEYS = [['Esc', 'Close the top sheet; twice to stop the turn'], ['Enter', 'Send, or steer a running turn (“Enter sends”)'], ['⌘/Ctrl Enter', 'Send, or steer a running turn'], ['⌥/Alt Enter', 'Queue a follow-up while a turn runs'], ['↑ ↓', 'Recent prompts in an empty composer'],
+const KEYS = [['Esc', 'Close the top sheet, or stop the turn'], ['Enter', 'Send, or steer a running turn (“Enter sends”)'], ['⌘/Ctrl Enter', 'Send, or steer a running turn'], ['⌥/Alt Enter', 'Queue a follow-up while a turn runs'], ['↑ ↓', 'Recent prompts in an empty composer'],
   ['⌘/Ctrl K', 'Commands and prompts'], ['⌘/Ctrl F', 'Find in session'], ['Alt ↑ ↓', 'Previous or next session'], ['Y A N', 'Allow, allow for session, deny'], ['?', 'This help']];
 function openHelp() {
   sheet({ key: 'help', cls: 'dialog', title: 'Keyboard shortcuts', body: () => h('dl', 'kv keys', KEYS.map(([k, d]) => [h('dt', '', h('kbd', '', k)), h('dd', '', d)])) });
