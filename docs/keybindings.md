@@ -156,7 +156,7 @@ counter.
 |---|---|
 | Command list | The text after `/` stays in the composer and filters the commands fuzzily, best match first. `Enter` runs the highlighted command with the argument typed after its name; `Tab` completes `/name ` without running. After `/model `, `/new `, `/reasoning ` or `/theme ` the list offers that command's arguments (model ids, profiles, levels) and `Enter` runs the command with the highlighted one. Prompt templates are listed with their description. `Esc` closes the list and leaves the draft as it is; deleting the `/` closes it too. |
 | Sessions | Type to filter by title. `Enter` opens the session. `Ctrl+N` renames the selected one (`Enter` saves, `Esc` cancels; an empty title clears it). `Ctrl+D` twice deletes the selected one; the open session cannot be deleted. Sessions of this workspace come first, newest first. Each row ends with its last activity; the open one says `current`, one from another workspace names it, and a title shared with another row adds the short id. |
-| Session (`/session`) | Id, title, workspace, profile, model, history items and token totals. `Enter` or `c` copies the id. |
+| Session (`/session`) | Id, title, workspace, profile, model, history items, token totals and the tools allowed for the session (when there are any). `Enter` or `c` copies the id. |
 | Context (`/context`) | Show context usage. `r` re-reads the report (it also reads on open); `c` copies it; `Esc` closes. |
 | Model | Type to filter by id. `Enter` switches to the highlighted model; the current one is marked `✓`. |
 | Reasoning | `Enter` applies the highlighted level; the current one is marked `✓`. |
@@ -195,7 +195,7 @@ the name.
 | `/sessions`, `/resume` | Open the sessions picker. Live sessions come first, each row starting with its state: `running 2m`, `needs approval`, `compacting` or `new` (a turn ended unseen). Opening a live one switches at once; a session that is still working cannot be deleted (`Stop "<title>" first: open it and press Esc`). |
 | `/rename <title>` | Rename the current session (an empty title is an error). |
 | `/model [id]` | Switch to the model (an exact id or a unique fuzzy match), or open the picker. When the model does not support the current reasoning level, the switch also moves to the nearest level it supports (the higher one on a tie) and a notice names it. `Ctrl+P` and `Ctrl+L` do the same, and a draft adjusts the level its session will start with. |
-| `/session` | Show the open session's id, workspace, profile, model, item count and token totals. |
+| `/session` | Show the open session's id, workspace, profile, model, item count, token totals and the tools allowed for the session. |
 | `/reasoning [level]` | Set the level directly, or open the picker when no valid level is given. |
 | `/compact` | Run manual compaction; refused while a turn runs. |
 | `/diff` | Show the workspace's live Git working-tree changes, including untracked files. |

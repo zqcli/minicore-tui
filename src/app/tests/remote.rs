@@ -654,7 +654,7 @@ async fn every_phone_gets_its_snapshot_then_the_changes_and_sees_who_is_connecte
 }
 
 #[tokio::test(start_paused = true)]
-async fn an_intent_is_acked_only_to_its_sender_and_notices_reach_every_phone() {
+async fn an_intent_is_acked_only_to_its_sender_and_only_a_sign_in_attempt_reaches_every_phone() {
     let mut h = Harness::opened(display_read(0, 0)).await;
     h.app.remote.url = Some("http://localhost:8765".into());
     let (mut a, _close, admission) = phone(&mut h, 1, "first");
@@ -664,9 +664,39 @@ async fn an_intent_is_acked_only_to_its_sender_and_notices_reach_every_phone() {
     request_from(&mut h, 2, json!({"kind":"cancel"}));
     assert_eq!(received(&mut a), Vec::<Value>::new());
     assert_eq!(received(&mut b), ["ack"]);
-    h.app.notice(crate::app::NoticeLevel::Info, "for everyone");
+    h.app.notice(crate::app::NoticeLevel::Info, "TUI only");
+    assert_eq!(received(&mut a), Vec::<Value>::new());
+    h.app
+        .on_msg(Msg::Remote(RemoteEvent::LoginRefused { locked: None }));
     assert_eq!(received(&mut a), ["notice"]);
     assert_eq!(received(&mut b), ["notice"]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_tool_allowed_for_the_session_is_answered_without_telling_the_phone() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.fake.script("interaction.answer", json!({"ok": true}));
+    h.app.remote.url = Some("http://localhost:8765".into());
+    let (mut a, _close, admission) = phone(&mut h, 1, "first");
+    assert!(admission.await.unwrap());
+    received(&mut a);
+    h.app
+        .session
+        .as_mut()
+        .unwrap()
+        .allowed_tools
+        .insert("bash".into());
+    h.emit(
+        "interaction_requested",
+        json!({"turn": turn("l1"), "interaction": {
+            "interaction_id": "i1", "tool_call_id": "c1", "tool_name": "bash",
+            "kind": {"type": "approval", "data": {"prompt": "Allow bash?"}}}}),
+    )
+    .await;
+    h.settle().await;
+    assert_eq!(h.calls("interaction.answer").len(), 1);
+    assert!(h.notices().is_empty());
+    assert!(!received(&mut a).contains(&json!("notice")));
 }
 
 #[tokio::test(start_paused = true)]
@@ -1067,7 +1097,7 @@ async fn a_phone_deletes_another_session_and_it_leaves_the_list() {
     let sessions = synced_sessions(&mut h, &mut output).expect("a new state");
     assert!(listed(&sessions, "s2").is_none());
     assert!(listed(&sessions, "s1").is_some());
-    assert!(h.notices().contains(&"Session deleted".to_owned()));
+    assert!(h.notices().is_empty());
 }
 
 #[tokio::test(start_paused = true)]
@@ -1658,14 +1688,14 @@ async fn notices_follow_the_intent_or_session_and_attention_excludes_its_viewers
     );
     assert_eq!(
         b.try_recv().unwrap()["text"],
-        "\"First\" needs approval · ctrl+r"
+        "\"First\" needs approval",
+        "the phone's text carries no TUI key hint"
     );
     h.app.on_msg(Msg::Notice(
         crate::app::NoticeLevel::Info,
-        "app wide".into(),
+        "tui only".into(),
     ));
-    assert_eq!(a.try_recv().unwrap()["text"], "app wide");
-    assert_eq!(b.try_recv().unwrap()["text"], "app wide");
+    assert!(messages(&mut a).is_empty() && messages(&mut b).is_empty());
 }
 
 #[tokio::test(start_paused = true)]

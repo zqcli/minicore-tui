@@ -198,7 +198,7 @@ async fn ctrl_d_twice_deletes_the_row_the_filtered_picker_shows() {
     let deleted = h.calls("session.delete");
     assert_eq!(deleted.len(), 1);
     assert_eq!(deleted[0]["session_id"], "s_beta");
-    assert_eq!(h.notices(), ["Session deleted"]);
+    assert!(h.notices().is_empty(), "the row leaving the picker says it");
     let screen = h.screen(80, 20);
     assert_eq!(
         screen.matches("beta").count(),

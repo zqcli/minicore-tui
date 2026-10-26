@@ -501,6 +501,20 @@ fn an_open_overlay_is_not_drawn_over_the_composer() {
 }
 
 #[test]
+fn the_session_view_lists_the_tools_allowed_for_the_session_only_when_there_are_some() {
+    let mut app = app();
+    app.overlay = Overlay::SessionInfo { items: Some(4) };
+    assert!(!render(&mut app, 80, 24).contains("allowed"));
+    app.session
+        .as_mut()
+        .unwrap()
+        .allowed_tools
+        .extend(["edit".to_owned(), "bash".to_owned()]);
+    let screen = render(&mut app, 80, 24);
+    assert!(screen.contains("allowed   bash, edit"), "{screen}");
+}
+
+#[test]
 fn a_view_dims_the_composer_and_keys_typed_in_it_do_not_edit_the_draft() {
     let mut app = app();
     app.overlay = Overlay::Help { scroll: 0 };

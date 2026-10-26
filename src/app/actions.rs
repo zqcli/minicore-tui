@@ -422,7 +422,7 @@ impl App {
         self.call(protocol::METHOD_INTERACTION_ANSWER, fields, SessionOp::Done);
     }
 
-    /// A new approval: answered at once for a tool allowed for the session,
+    /// A new approval: answered silently for a tool allowed for the session,
     /// else its card is read for the input it would run, which an `edit`
     /// card only has once it has run.
     pub(super) fn on_approval_requested(&mut self) {
@@ -434,12 +434,7 @@ impl App {
         };
         let approval = matches!(interaction.kind, InteractionKind::Approval);
         if approval && session.allowed_tools.contains(&interaction.tool_name) {
-            let tool = interaction.tool_name.clone();
             self.answer(Answer::Allow);
-            self.notice(
-                NoticeLevel::Info,
-                format!("Allowed {tool} for this session"),
-            );
             return;
         }
         let card = session

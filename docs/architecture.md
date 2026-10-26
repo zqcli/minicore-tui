@@ -193,7 +193,7 @@ list holds no empty sessions. While `app.session` is `None`:
 
 - `App::launch` holds the settings the next session takes: the command-line
   flags, then what `/model`, `/reasoning`, `Ctrl+L`, `Ctrl+P`, `Shift+Tab` and
-  `/new <profile>` set, which confirm with a notice instead of `session.update`.
+  `/new <profile>` set, which the footer shows instead of `session.update`.
   The footer resolves them with the profile's defaults (`profile.list`; the
   Agent's default profile comes from `config.toml` and is unknown for a raw
   `--agent-config`) through `App::model_id` and `App::reasoning`.
@@ -272,8 +272,19 @@ keeps it in `Session::returned` until local control returns. A scoped
 session notices to its viewers plain and to other devices with the session
 label. Foreground results/events and `with_background` set that scope;
 open/rename/delete results retain their session id too. Labels are resolved only
-when a notice is emitted, not on every event. App-wide notices go to all,
-background attention only to non-viewers, and acks only to the requester.
+when a notice is emitted, not on every event. A notice raised by the TUI's own
+keys stays in the TUI (`NoticeTarget::Local`, the default); only a refused
+sign-in goes to all phones, background attention to non-viewers (with text
+free of TUI key hints), and acks only to the requester.
+
+Notices follow four rules. What the user just caused and can see (a title, a
+list row, the footer, a chip) gets no message, or at most the TUI flash. What
+the user pre-authorized (a tool allowed for the session) is answered silently;
+`/session` and `state.session.allowed` list those tools. What the user did not
+cause and may need to act on (a background approval or finished turn, a refused
+or returned message, a connection problem, an error) is a notice, errors until
+dismissed. A decision is recorded only where it explains something: a denial
+stays on its tool row. Each event reaches each surface once.
 Deleting any viewed session is refused. A successful in-flight deletion also
 resets views that opened its target meanwhile to default drafts, so every
 session view still names a live session; a remote open reply for a target

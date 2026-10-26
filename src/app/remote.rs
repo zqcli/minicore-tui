@@ -218,7 +218,10 @@ impl App {
                     }
                     None => "Remote: wrong password".to_owned(),
                 };
+                // A sign-in attempt concerns every connected phone.
+                self.remote.notice_target = NoticeTarget::All;
                 self.notice(NoticeLevel::Info, text);
+                self.remote.notice_target = NoticeTarget::Local;
             }
             RemoteEvent::Query {
                 connection,
@@ -253,7 +256,7 @@ impl App {
                 {
                     self.remote.notice_target = NoticeTarget::Phone(connection);
                     let result = self.phone_intent(connection, intent);
-                    self.remote.notice_target = NoticeTarget::All;
+                    self.remote.notice_target = NoticeTarget::Local;
                     self.remote.send(Some(connection), wire::ack(&id, result));
                 }
                 let _ = done.send(());

@@ -212,8 +212,9 @@ async fn a_background_approval_notifies_and_is_answered_only_once_shown() {
     );
     assert_eq!(answers[1]["interaction_id"], "i2");
     assert!(
+        !h.notices().iter().any(|text| text.contains("Allowed")),
+        "{:?}",
         h.notices()
-            .contains(&"\"First\": Allowed bash for this session".to_owned())
     );
     assert_eq!(h.app.session.as_ref().unwrap().info.session_id, "s2");
 }

@@ -378,7 +378,7 @@ dispatched it, or refused it):
 | `open_session` | Change only this device's view: a live session switches at once (no `session.open`), another is opened and assigned on adoption. | unknown id; workspace outside `roots`; pending-open/create rules below |
 | `new_session` | Change only this device's view to a draft in `workspace` (default: its viewed workspace), with optional `profile` and that profile's/default settings; the next `submit` creates it. No empty session is created. | workspace relative, outside `roots`, missing or not a directory; unknown profile; pending-open/create rules below |
 | `set_model` / `set_reasoning` | As `/model` and `/reasoning`: a session update persists for that session; a draft changes only this device's launch settings. Draft notices go only to this device. | unknown model or level; pending-create rule below |
-| `rename_session` | Rename any listed session through the sessions picker's rename path (`session.rename` with its id); the title is trimmed, and an empty title clears it so the label falls back to the first prompt or short id. The catalog, the live session and the phones' states follow; the notice `Session renamed` is forwarded. | unknown id; workspace outside `roots`; title over 200 characters or containing control characters; pending-create rule below |
+| `rename_session` | Rename any listed session through the sessions picker's rename path (`session.rename` with its id); the title is trimmed, and an empty title clears it so the label falls back to the first prompt or short id. The catalog, the live session and the phones' states follow; no notice is sent, the new title is the confirmation. | unknown id; workspace outside `roots`; title over 200 characters or containing control characters; pending-create rule below |
 | `delete_session` | Delete permanently through the local path (`session.close` when loaded, then `session.delete`); it leaves the catalog and the lists. The phone confirms before sending. | unknown id; workspace outside `roots`; viewed by the requester (`"Open another session before deleting this one"`) or another device (`Open on "<device name>"`); the existing foreground or working-live-session refusal; pending-create rule below |
 
 `loading_session` remains global. While an open is pending, another non-live
@@ -509,7 +509,8 @@ Routing, with several devices connected:
 | Synchronous intent `notice` | Only the requesting connection |
 | Asynchronous session `notice` | Plain text to devices viewing that session; `"<label>": text` to other devices |
 | Background-attention `notice` (approval or turn end) | Only devices not viewing that session, with its session label |
-| App-wide `notice` (remote, password, config) | Every connection |
+| Sign-in attempt `notice` (wrong password, sign-in paused) | Every connection |
+| Any other TUI notice (key hints, local refusals, `/remote` status, config) | The TUI only |
 | `ack`, `fs`, `result` | Only the connection that sent the request |
 | `returned` | The connection that last sent `submit`/`queue` **to that session**, if connected; otherwise devices viewing it; otherwise kept in `Session::returned` for local control |
 | `bye` | `replaced`: only the older connection of that device; `remote_off`, `tui_exit`, `signed_out`: every connection |
@@ -554,7 +555,8 @@ uses the routing above; local background notices keep their label prefix.
 ```json
 {
   "session": null | {"id":"ses_...","title":"Fix parser","workspace":"/abs","profile":"coding",
-                     "model":"gpt-6-luna","reasoning":"high","branch":"main"|null},
+                     "model":"gpt-6-luna","reasoning":"high","branch":"main"|null,
+                     "allowed":["bash","edit"]},
   "draft": {"workspace":"/abs","profile":"coding"|null,"model":"..."|null,"reasoning":"..."|null},
   "status": {"label":"Thinking"|null,"busy":false,"started_ms":1761300000000|null,
              "interrupting":false,"compacting":false,"loading":false},
@@ -592,6 +594,9 @@ uses the routing above; local background notices keep their label prefix.
   shared. `unseen` clears when any device opens the session, and a turn ending
   in a session any device views does not mark it unseen; the foreground also
   stays seen as before.
+- `session.allowed` is the sorted list of tool names the user allowed for this
+  session (`allow_session`); their approvals are answered without a notice.
+  It is `[]` when there are none.
 - `session.branch` is the Git branch the footer shows for that session
   (`Session::branch`: the last `session.presentation` after a
   `workspace.status`, blank names dropped), or `null`. A draft has no session

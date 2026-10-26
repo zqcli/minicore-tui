@@ -336,5 +336,6 @@ async fn a_cancelled_manual_compaction_says_so() {
     );
     h.fake.release("session.compact");
     h.settle().await;
-    assert_eq!(h.notices(), ["Compaction cancelled"]);
+    assert!(h.notices().is_empty());
+    assert_eq!(h.app.flash.as_ref().unwrap().0, "Compaction cancelled");
 }

@@ -433,7 +433,6 @@ impl App {
             session.info = info.clone();
         }
         self.merge_catalog_info(info);
-        self.notice(NoticeLevel::Info, "Session renamed");
     }
 
     /// The `@token` that ends at the cursor, without its `@`.

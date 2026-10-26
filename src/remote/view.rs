@@ -331,7 +331,7 @@ fn state(app: &App, catalog: &Value, view: &PhoneView, loading: bool) -> Value {
     })).collect();
     let (running, approval) = app.other_counts(current);
     json!({
-        "session":session.map(|s| json!({"id":s.info.session_id, "title":crate::app::overlay::session_label(&s.info, session), "workspace":fs::display(Path::new(&s.info.workspace)), "profile":s.info.profile, "model":s.info.model, "reasoning":s.info.reasoning, "branch":s.branch()})),
+        "session":session.map(|s| json!({"id":s.info.session_id, "title":crate::app::overlay::session_label(&s.info, session), "workspace":fs::display(Path::new(&s.info.workspace)), "profile":s.info.profile, "model":s.info.model, "reasoning":s.info.reasoning, "branch":s.branch(), "allowed":s.allowed_tools})),
         "draft":{"workspace":fs::display(workspace), "profile":profile, "model":model, "reasoning":reasoning},
         "status":{"label":session.and_then(Session::status_label), "busy":session.is_some_and(Session::is_busy), "started_ms":live.map(|live| live.started_ms), "interrupting":live.is_some_and(|live| live.interrupting), "compacting":session.is_some_and(Session::compacting), "loading":loading},
         "usage":{"input":session.map_or(0, |s| s.usage.input), "output":session.map_or(0, |s| s.usage.output), "cached":session.map_or(0, |s| s.usage.cached)},
@@ -485,6 +485,23 @@ mod tests {
         assert!(sync(&mut view, &mut app).is_empty());
         app.session.as_mut().unwrap().presentation = Some(presentation(" "));
         assert!(sync(&mut view, &mut app)[0]["state"]["session"]["branch"].is_null());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_tools_allowed_for_the_session_are_in_the_state_sorted() {
+        let (_fake, mut app) = connected_app();
+        let mut view = View::default();
+        assert_eq!(
+            sync(&mut view, &mut app)[0]["state"]["session"]["allowed"],
+            json!([])
+        );
+        assert!(sync(&mut view, &mut app).is_empty());
+        let allowed = &mut app.session.as_mut().unwrap().allowed_tools;
+        allowed.extend(["edit".to_owned(), "bash".to_owned()]);
+        assert_eq!(
+            sync(&mut view, &mut app)[0]["state"]["session"]["allowed"],
+            json!(["bash", "edit"])
+        );
     }
 
     #[tokio::test(start_paused = true)]

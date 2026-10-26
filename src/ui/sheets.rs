@@ -513,7 +513,7 @@ fn session_info_sheet(app: &App, items: Option<usize>, styles: Styles) -> Sheet 
         .iter()
         .find(|profile| profile.id == info.profile)
         .and_then(|profile| profile.approval.as_deref());
-    let facts = [
+    let mut facts = vec![
         ("id", info.session_id.clone()),
         ("title", session_label(info, Some(session))),
         ("workspace", info.workspace.clone()),
@@ -534,6 +534,10 @@ fn session_info_sheet(app: &App, items: Option<usize>, styles: Styles) -> Sheet 
         ),
         ("tokens", tokens),
     ];
+    if !session.allowed_tools.is_empty() {
+        let tools: Vec<&str> = session.allowed_tools.iter().map(String::as_str).collect();
+        facts.push(("allowed", tools.join(", ")));
+    }
     let body = facts
         .into_iter()
         .map(|(name, value)| Line::from(fact(name, &value, 120, styles)))

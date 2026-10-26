@@ -412,7 +412,7 @@ impl App {
             }
             CompactStatus::Noop => self.notice(NoticeLevel::Info, "Nothing to compact yet"),
             CompactStatus::Failed if result.failure_kind.as_deref() == Some("cancelled") => {
-                self.notice(NoticeLevel::Info, "Compaction cancelled");
+                self.flash = Some(("Compaction cancelled".into(), tokio::time::Instant::now()));
             }
             CompactStatus::Failed => self.notice(
                 NoticeLevel::Error,
