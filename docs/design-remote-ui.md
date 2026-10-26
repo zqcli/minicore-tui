@@ -265,7 +265,12 @@ buttons; status never by colour alone.
 ### iPad and desktop
 
 ≥ 900 px: persistent sidebar + transcript; sheets become centred dialogs or a
-right-hand panel (Changes, output viewer, context) at ≥ 1200 px. Shortcuts:
+right-hand panel (Changes, output viewer, context) at ≥ 1200 px, 30 % of the
+width between 440 and 600 px. The transcript, the composer and the top bar
+share one column (780 px, 860 px from 1700 px) centred beside the sidebar, with
+the title left-aligned to it. Desktop pointers get hover states, tooltips from
+the buttons' labels and thin themed scrollbars; tables wider than the column
+scroll instead of breaking words. Shortcuts:
 Esc stop (or close the top sheet), Cmd/Ctrl+K command list, Cmd/Ctrl+Enter
 send or steer (Enter does when the setting is on; Tab or Alt+Enter queue),
 Cmd/Ctrl+F find, Alt+↑/↓ previous/next session, `?` shortcut help.
