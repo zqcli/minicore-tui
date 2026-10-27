@@ -108,8 +108,13 @@ re-renders on every `state`).
   on the right. A group folds with its header (remembered per workspace path
   in `localStorage`), shows five rows and then "Show N more", and a search
   shows every match in every group with a match. Status by shape and colour:
-  amber hand = needs you, spinner + elapsed = running, red ! = failed last
-  turn, dot = new result. The order never changes while the drawer is open
+  amber hand = needs you, spinner = running, red ! = failed last
+  turn, dot = new result. Rows are single-line, 36 px on hover devices and
+  44 px on touch, with 14/15 px titles and a 16 px status column. Workspace
+  headers are 32 px tall. Hover or keyboard focus replaces the relative time
+  with the actions button in the same slot; touch keeps a compact actions
+  button visible. Pinned rows omit workspace subtitles rather than taking
+  another line. The order never changes while the drawer is open
   (rows update in place); it re-sorts when reopened. ⌘/Ctrl+Shift+F focuses
   the search (a hint shows on hover devices; ⌘/Ctrl+K stays the command list).
   Footer is one line: connection dot + device name, other devices count.

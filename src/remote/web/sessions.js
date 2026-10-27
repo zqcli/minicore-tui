@@ -182,17 +182,16 @@ export function clearFailed() { for (const id of failed) if (S.state.sessions.so
 export const openLive = id => { if (intent(MC.intents.openSession(id))) pendingRow = id; };
 // ---- state ----
 let tick = 0;
-// One 1 s timer, only while this view's turn runs or a visible session list shows a running session's elapsed time.
+// Only active work in this view needs elapsed-time updates.
 export function syncTick() {
   const s = S.state, x = s && s.status;
-  const want = !!s && (!!(x.started_ms && (x.busy || x.compacting)) || (navShown() && s.sessions.some(y => y.live && y.status === 'running' && y.started_ms)));
+  const want = !!s && !!(x.started_ms && (x.busy || x.compacting));
   if (want && !tick) tick = setInterval(onTick, 1000);
   if (!want && tick) { clearInterval(tick); tick = 0; }
 }
 function onTick() {
   const x = turnStatus();
   if (x.started_ms) for (const el of $('strip').querySelectorAll('.el')) el.textContent = MC.fmtElapsed(hostNow() - x.started_ms);
-  if (navShown()) for (const e of $('nav').querySelectorAll('[data-start]')) e.textContent = MC.fmtElapsed(hostNow() - +e.dataset.start);
 }
 // ---- navigation: drawer on phones, sidebar on wide screens ----
 const nav = $('nav'), navModal = { el: nav, close: () => closeNav() };
@@ -246,7 +245,7 @@ export function renderNav() {
   if (!navShown() || !S.state) return;
   const s = S.state, lay = MC.sessionLayout(s.sessions, query, frozen), searching = query.trim() !== '';
   if (nav.classList.contains('on') || navLook || nav.contains(document.activeElement)) frozen = lay.order;
-  const row = x => [x.id, x.title, x.workspace, x.current, x.live && x.status, x.started_ms, x.unseen, MC.relTime(Date.parse(x.updated_at), hostNow(), tz()), failed.has(x.id)];
+  const row = x => [x.id, x.title, x.workspace, x.current, x.live && x.status, x.unseen, MC.relTime(Date.parse(x.updated_at), hostNow(), tz()), failed.has(x.id)];
   listPart({
     groups: lay.groups.map(g => {
       const v = MC.groupRows(g.items, g.pinned != null || searching || moreWs.has(g.ws));
@@ -269,17 +268,16 @@ function renderList(l) {
     !g.closed && g.hidden > 0 && h('button', { class: 'gmore', 'data-k': 'x' + encodeURIComponent(g.ws) }, 'Show ' + g.hidden + ' more')]);
 }
 // `pinned` rows (Needs you, Running) name their folder; a workspace group's header already does.
-function sessionRow([id, title, ws, current, status, started, unseen, rel, bad], pinned) {
+function sessionRow([id, title, ws, current, status, unseen, rel, bad], pinned) {
   const shape = status === 'approval' ? h('span', { class: 'sst warn', title: 'Needs you' }, icon('hand', 'sm'))
     : status === 'running' || status === 'compacting' ? h('span', 'sst', spin('sm'))
     : bad ? h('span', { class: 'sst er', title: 'Last turn failed' }, icon('alert', 'sm'))
     : unseen ? h('span', { class: 'sst', title: 'New result' }, h('i', 'ndot')) : h('span', 'sst');
-  const what = status === 'approval' ? '' : status === 'running' ? (started ? h('span', { 'data-start': started }, MC.fmtElapsed(hostNow() - started)) : 'Running')
-    : status === 'compacting' ? 'Compacting' : bad ? h('span', 'er', 'Failed') : unseen ? 'New' : rel;
-  return h('div', 'srow' + (current ? ' cur' : '') + (pinned ? '' : ' one'), h('button', {
+  const what = pinned ? MC.basename(ws) : rel;
+  return h('div', 'srow' + (current ? ' cur' : ''), h('button', {
     class: 'sopen', 'data-k': 's' + id, 'aria-current': current ? 'page' : null,
     'aria-label': MC.titled(title) + ', ' + MC.basename(ws) + (status === 'approval' ? ', needs you' : status === 'running' ? ', running' : ''),
-  }, shape, rowText(MC.titled(title), pinned && MC.basename(ws)), h('span', 'stime', what), pendingRow === id && spin('sm')),
+  }, pendingRow === id ? h('span', 'sst', spin('sm')) : shape, rowText(MC.titled(title)), h('span', 'stime' + (pinned ? ' workspace' : ''), what)),
   h('button', { class: 'ib more', 'data-k': 'm' + id, 'aria-label': 'Actions for ' + MC.titled(title), 'aria-haspopup': 'dialog' }, icon('more')));
 }
 (() => {

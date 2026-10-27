@@ -10,6 +10,8 @@
 - Built-in backend: Agent 0.8.1 with Runtime 0.8.0, pinned by tag (0.8.0 before).
   A failed turn now carries what the provider said: its HTTP status, error code
   and type, and the full message.
+- Workspace-grouped session lists use denser single-line rows with more room
+  for titles; desktop row actions replace the time on hover or keyboard focus.
 - The composer uses a lighter, compact toolbar: transparent icon and context
   buttons, smaller model text and primary button, with larger touch hit areas.
 - Web client: the status strip above the composer follows the running tool.
