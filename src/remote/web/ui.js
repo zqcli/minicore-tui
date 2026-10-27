@@ -14,7 +14,8 @@ export function h(tag, p, ...c) {
     if (v == null || v === false) continue;
     if (k === 'class') n.className = v;
     else if (k.startsWith('on')) n.addEventListener(k.slice(2), v);
-    else if (k in n && !k.includes('-') && k !== 'spellcheck' && k !== 'list') n[k] = v;
+    // `form`, `list` and `spellcheck` are read-only or take other values as properties.
+    else if (k in n && !k.includes('-') && k !== 'spellcheck' && k !== 'list' && k !== 'form') n[k] = v;
     else n.setAttribute(k, v === true ? '' : v);
   }
   n.append(...kids(c));
