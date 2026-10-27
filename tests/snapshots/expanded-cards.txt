@@ -1,5 +1,5 @@
 
-  minicore-tui v0.6.0
+  minicore-tui v0.7.0
 
   esc interrupt · ctrl+c clear · / commands · @ files · ctrl+o expand
   ctrl+r sessions
