@@ -31,7 +31,8 @@ export function icon(name, cls) {
 export const fill = (n, ...k) => n.replaceChildren(...kids(k));
 export const spin = cls => h('span', 'spin' + (cls ? ' ' + cls : ''));
 const mq = q => matchMedia(q);
-export const wide = mq('(min-width: 900px)'), panelWide = mq('(min-width: 1200px)'), hover = mq('(hover: hover)'), reduced = mq('(prefers-reduced-motion: reduce)');
+export const wide = mq('(min-width: 900px)'), hover = mq('(hover: hover)'), reduced = mq('(prefers-reduced-motion: reduce)');
+const panelWide = mq('(min-width: 1200px)');
 export const inField = n => !!(n && n.closest && n.closest('input,textarea,[contenteditable=true]'));
 // A region that re-renders only when its input changes; focus inside it survives through data-k.
 export function part(host, render) {
@@ -89,7 +90,6 @@ export function toast(text, level, act) {
   box.append(n);
   while (box.children.length > 3) box.firstChild.remove();
   if (!sticky) setTimeout(() => n.remove(), act ? 6000 : 3000);
-  return n;
 }
 export const announce = text => { $('live').textContent = text; };
 
@@ -134,7 +134,7 @@ export function sheet(o) {
   if (old) old.close(true);
   const id = 'sh' + ++sid, el = h('section', { class: 'sheet ' + (o.cls || ''), role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': id, tabindex: '-1' });
   const head = h('header', 'shead'), body = h('div', 'sbody'), foot = h('div', 'sfoot' + (o.footCls ? ' ' + o.footCls : ''));
-  const m = { key: o.key, el, o, last: undefined, focusField: o.focusField };
+  const m = { key: o.key, el, last: undefined, focusField: o.focusField };
   m.panel = !!o.side && panelWide.matches;
   if (m.panel) { el.classList.add('panel'); el.setAttribute('aria-modal', 'false'); for (const p of stack.filter(x => x.panel)) p.close(true); }
   m.refresh = force => {

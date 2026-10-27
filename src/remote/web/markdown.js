@@ -114,4 +114,4 @@ function mdInc(c, src) {
   return { blocks: c.head.concat(tail), cache: next };
 }
 
-export { SAFE_URL, norm, inline, parseMd, parseLines, mdInc };
+export { norm, inline, parseMd, mdInc };

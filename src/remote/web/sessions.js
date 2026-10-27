@@ -39,7 +39,7 @@ export function openNav() {
   if (wide.matches) return nav.querySelector('input').focus();
   frozen = null;
   nav.classList.add('on');
-  pushModal({ key: 'nav', el: nav, close: closeNav });
+  pushModal({ el: nav, close: closeNav });
   renderNav(); syncTick();
 }
 export function closeNav() {

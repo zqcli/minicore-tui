@@ -625,19 +625,12 @@ function recentWorkspaces(sessions, max = 6) {
 }
 
 export {
-  V, WINDOW, backoff, basename, plural, cap, titled, quiet,
-  midTrunc, retireText, mergeReturned, otherDevices, deviceName, installOffer,
-  login, hello, intents, queries, fs, createStore,
-  intent, request, query, queryRoom, unqueue, pending,
-  disconnect, sendAgain, unconfirmed, diffBlocks, applyBlocks, reduce,
-  explain, lockText, fmtClock, unreachable, fsError, errorText,
-  clock, stamp, relTime, dayGroup, sessionLayout, matchSession,
-  fmtElapsed, fmtDur, fmtTok, fmtNum, groupTools, foldTurns,
-  findBlocks, foldText, toolKind, toolInfo, parseDiff, diffStats,
-  liveBlock, turnEnd, changesText, compactionText, statusLine, canStop,
-  primaryKind, primaryTap, TAP_SLOP, approvalKey, approvalTitle, approvalOptions,
-  approvalBody, approvalLine, changeStatus, contextView, exportMd, BUILTINS, slashMenu,
-  parseSlash, atToken, insertMention, pushRecent, literal, composerKey,
-  queueView, thinkingPreview, splitPath, within, crumbs, tilde,
-  isDrive, recentWorkspaces, sessionTransitions, noticeEvent, attentionCount,
+  V, WINDOW, backoff, basename, plural, titled, quiet, midTrunc, retireText, mergeReturned, otherDevices, deviceName,
+  installOffer, login, hello, intents, queries, fs, createStore, intent, request, query, queryRoom, unqueue, pending, disconnect,
+  sendAgain, unconfirmed, reduce, lockText, unreachable, fsError, errorText, clock, stamp, relTime, dayGroup, sessionLayout,
+  fmtElapsed, fmtTok, fmtNum, groupTools, foldTurns, findBlocks, foldText, toolInfo, parseDiff, diffStats, liveBlock, turnEnd,
+  changesText, compactionText, statusLine, canStop, primaryKind, primaryTap, TAP_SLOP, approvalKey, approvalTitle,
+  approvalOptions, approvalBody, approvalLine, changeStatus, contextView, exportMd, BUILTINS, slashMenu, parseSlash, atToken,
+  insertMention, pushRecent, literal, composerKey, queueView, thinkingPreview, splitPath, within, crumbs, tilde, isDrive,
+  recentWorkspaces, sessionTransitions, noticeEvent, attentionCount,
 };
