@@ -253,9 +253,13 @@ worker, manifest and SVG icon go out gzipped (made once, on first request) to
 clients whose `Accept-Encoding` allows gzip, with `Vary: Accept-Encoding`; PNGs are
 sent as they are. A reply is written in 4 KiB pieces and dropped only when one
 piece makes no progress for 10 s, so a slow proxy hop can take minutes without
-being cut off. Every reply closes its connection, and a tunnel opens one per
-request, so the 32 unauthenticated connections the server admits cover a first
-load that fetches every file at once.
+being cut off. A connection stays open for the next request (HTTP/1.1
+keep-alive): requests are answered in turn until one carries `Connection: close`,
+is not a `GET` or comes over HTTP/1.0 (that reply says `Connection: close` and
+ends the connection), or the client sends nothing for 10 s. A socket upgrade may
+follow plain requests on the same connection. So a first load reuses a browser's
+few connections instead of opening a TCP (and TLS) handshake per file; the 32
+unauthenticated connections the server admits still cover the worst case.
 
 The service worker (`sw.js`, secure contexts only: `https://` or `localhost`)
 precaches every client file except itself, and answers same-origin `GET`s network

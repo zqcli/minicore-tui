@@ -200,22 +200,19 @@ pub async fn serve(
     let _ = timeout(FIRST, async { while tasks.join_next().await.is_some() {} }).await;
 }
 
-/// Reads through the end of the request head; the bytes may run past it.
-async fn head(stream: &mut (impl AsyncRead + Unpin)) -> io::Result<Vec<u8>> {
-    let mut bytes = vec![0; HEAD_LIMIT];
-    let mut len = 0;
+/// Reads until `buffer` holds a whole request head and returns its length; the bytes may run past it.
+async fn head(stream: &mut (impl AsyncRead + Unpin), buffer: &mut Vec<u8>) -> io::Result<usize> {
     loop {
-        let n = stream.read(&mut bytes[len..]).await?;
-        if n == 0 {
-            return Err(io::Error::from(io::ErrorKind::UnexpectedEof));
+        if let Some(end) = buffer.windows(4).position(|s| s == b"\r\n\r\n") {
+            return Ok(end + 4);
         }
-        len += n;
-        if bytes[..len].windows(4).any(|s| s == b"\r\n\r\n") {
-            bytes.truncate(len);
-            return Ok(bytes);
-        }
-        if len == HEAD_LIMIT {
+        if buffer.len() >= HEAD_LIMIT {
             return Err(io::Error::other("request head too large"));
+        }
+        let mut chunk = [0; 2048];
+        match stream.read(&mut chunk).await? {
+            0 => return Err(io::Error::from(io::ErrorKind::UnexpectedEof)),
+            n => buffer.extend_from_slice(&chunk[..n]),
         }
     }
 }
@@ -264,11 +261,13 @@ impl<S: AsyncWrite + Unpin> AsyncWrite for Replay<S> {
 }
 
 /// Writes a reply, dropping the link only when it stops moving: a slow proxy hop may need minutes.
+/// The connection ends after a reply that says `close`; otherwise it stays for the next request.
 async fn http(
     stream: &mut (impl AsyncWrite + Unpin),
     status: &str,
     headers: &str,
     body: &[u8],
+    close: bool,
 ) -> io::Result<()> {
     let security: String = HEADERS
         .iter()
@@ -280,27 +279,43 @@ async fn http(
     } else {
         format!("Content-Length: {}\r\n", body.len())
     };
-    let head = format!("HTTP/1.1 {status}\r\n{security}{headers}{length}Connection: close\r\n\r\n");
+    let ending = if close { "Connection: close\r\n" } else { "" };
+    let head = format!("HTTP/1.1 {status}\r\n{security}{headers}{length}{ending}\r\n");
     let stalled = || io::Error::from(io::ErrorKind::TimedOut);
     for chunk in std::iter::once(head.as_bytes()).chain(body.chunks(CHUNK)) {
         timeout(FIRST, stream.write_all(chunk))
             .await
             .map_err(|_| stalled())??;
     }
-    // Over TLS this sends close_notify, without which the reply looks truncated.
-    timeout(FIRST, stream.shutdown())
-        .await
-        .map_err(|_| stalled())?
+    // Over TLS a closing shutdown sends close_notify, without which the reply looks truncated.
+    timeout(FIRST, async {
+        if close {
+            stream.shutdown().await
+        } else {
+            stream.flush().await
+        }
+    })
+    .await
+    .map_err(|_| stalled())?
+}
+
+/// What the web client's files and the refusals answer: everything but the socket.
+struct Reply {
+    status: &'static str,
+    headers: String,
+    body: &'static [u8],
+    /// Whether the connection stays open for the next request.
+    keep: bool,
 }
 
 /// A short reply that must not be cached.
-async fn refuse(
-    stream: &mut (impl AsyncWrite + Unpin),
-    status: &str,
-    text: &str,
-) -> io::Result<()> {
-    let headers = format!("Cache-Control: {NO_STORE}\r\nContent-Type: text/plain\r\n");
-    http(stream, status, &headers, text.as_bytes()).await
+fn refusal(status: &'static str, text: &'static str, keep: bool) -> Reply {
+    Reply {
+        status,
+        headers: format!("Cache-Control: {NO_STORE}\r\nContent-Type: text/plain\r\n"),
+        body: text.as_bytes(),
+        keep,
+    }
 }
 
 fn same_origin(origin: &[u8], host: Option<&[u8]>) -> bool {
@@ -315,21 +330,8 @@ fn same_origin(origin: &[u8], host: Option<&[u8]>) -> bool {
         && host.is_some_and(|host| authority.as_bytes().eq_ignore_ascii_case(host))
 }
 
-async fn connection<S: AsyncRead + AsyncWrite + Unpin>(
-    mut stream: S,
-    auth: Arc<Mutex<Auth>>,
-    tx: Tx,
-    permit: tokio::sync::OwnedSemaphorePermit,
-    generation: u64,
-    roots: Arc<[PathBuf]>,
-) -> Result<(), String> {
-    let bytes = timeout(FIRST, head(&mut stream))
-        .await
-        .map_err(|e| e.to_string())?
-        .map_err(|e| e.to_string())?;
-    let mut headers = [httparse::EMPTY_HEADER; 128];
-    let mut request = httparse::Request::new(&mut headers);
-    request.parse(&bytes).map_err(|e| e.to_string())?;
+/// The reply to a request, or `None` for a socket upgrade that passed the origin check.
+fn route(request: &httparse::Request) -> Option<Reply> {
     let header = |name: &str| {
         request
             .headers
@@ -340,59 +342,102 @@ async fn connection<S: AsyncRead + AsyncWrite + Unpin>(
     let path = request
         .path
         .map(|path| path.split_once('?').map_or(path, |(path, _)| path));
-    let websocket = request.method == Some("GET")
+    let get = request.method == Some("GET");
+    // Only a GET has no body to skip, and HTTP/1.0 closes unless asked otherwise.
+    let keep = get
+        && request.version == Some(1)
+        && !header("connection").is_some_and(|value| {
+            String::from_utf8_lossy(value)
+                .split(',')
+                .any(|token| token.trim().eq_ignore_ascii_case("close"))
+        });
+    if get
         && path == Some("/ws")
-        && header("upgrade").is_some_and(|v| v.eq_ignore_ascii_case(b"websocket"));
-    if websocket {
-        if header("origin").is_some_and(|origin| !same_origin(origin, header("host"))) {
-            return refuse(&mut stream, "403 Forbidden", "Forbidden")
-                .await
-                .map_err(|e| e.to_string());
-        }
-    } else {
-        let file = FILES
-            .iter()
-            .position(|file| request.method == Some("GET") && path == Some(file.0));
-        let Some(index) = file else {
-            return refuse(&mut stream, "404 Not Found", "Not found")
-                .await
-                .map_err(|e| e.to_string());
-        };
-        let (_, mime, body) = FILES[index];
-        let derived = derive(index);
-        let gzip = derived
-            .gzip
-            .as_deref()
-            .filter(|_| accepts_gzip(header("accept-encoding")));
-        // A strong validator names one representation, so the gzipped bytes get their own.
-        let etag = format!(
-            "\"{}{}\"",
-            derived.hash,
-            if gzip.is_some() { "-gzip" } else { "" }
-        );
-        let mut headers = format!("{REVALIDATE}ETag: {etag}\r\n");
-        if compressible(mime) {
-            headers += "Vary: Accept-Encoding\r\n";
-        }
-        if none_match(header("if-none-match"), &etag) {
-            return http(&mut stream, "304 Not Modified", &headers, b"")
-                .await
-                .map_err(|e| e.to_string());
-        }
-        headers += &format!("Content-Type: {mime}\r\n");
-        if gzip.is_some() {
-            headers += "Content-Encoding: gzip\r\n";
-        }
-        return http(&mut stream, "200 OK", &headers, gzip.unwrap_or(body))
+        && header("upgrade").is_some_and(|v| v.eq_ignore_ascii_case(b"websocket"))
+    {
+        return header("origin")
+            .is_some_and(|origin| !same_origin(origin, header("host")))
+            .then(|| refusal("403 Forbidden", "Forbidden", false));
+    }
+    let Some(index) = FILES.iter().position(|file| get && path == Some(file.0)) else {
+        return Some(refusal("404 Not Found", "Not found", keep));
+    };
+    let (_, mime, body) = FILES[index];
+    let derived = derive(index);
+    let gzip = derived
+        .gzip
+        .as_deref()
+        .filter(|_| accepts_gzip(header("accept-encoding")));
+    // A strong validator names one representation, so the gzipped bytes get their own.
+    let etag = format!(
+        "\"{}{}\"",
+        derived.hash,
+        if gzip.is_some() { "-gzip" } else { "" }
+    );
+    let mut headers = format!("{REVALIDATE}ETag: {etag}\r\n");
+    if compressible(mime) {
+        headers += "Vary: Accept-Encoding\r\n";
+    }
+    if none_match(header("if-none-match"), &etag) {
+        return Some(Reply {
+            status: "304 Not Modified",
+            headers,
+            body: b"",
+            keep,
+        });
+    }
+    headers += &format!("Content-Type: {mime}\r\n");
+    if gzip.is_some() {
+        headers += "Content-Encoding: gzip\r\n";
+    }
+    Some(Reply {
+        status: "200 OK",
+        headers,
+        body: gzip.unwrap_or(body),
+        keep,
+    })
+}
+
+async fn connection<S: AsyncRead + AsyncWrite + Unpin>(
+    mut stream: S,
+    auth: Arc<Mutex<Auth>>,
+    tx: Tx,
+    permit: tokio::sync::OwnedSemaphorePermit,
+    generation: u64,
+    roots: Arc<[PathBuf]>,
+) -> Result<(), String> {
+    // Requests are served one after another on the connection until one asks for the socket; a client
+    // that sends nothing for `FIRST` between them is dropped.
+    let mut buffer = Vec::new();
+    loop {
+        let end = timeout(FIRST, head(&mut stream, &mut buffer))
             .await
-            .map_err(|e| e.to_string());
+            .map_err(|e| e.to_string())?
+            .map_err(|e| e.to_string())?;
+        let mut headers = [httparse::EMPTY_HEADER; 128];
+        let mut request = httparse::Request::new(&mut headers);
+        request.parse(&buffer[..end]).map_err(|e| e.to_string())?;
+        let Some(reply) = route(&request) else { break };
+        http(
+            &mut stream,
+            reply.status,
+            &reply.headers,
+            reply.body,
+            !reply.keep,
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+        if !reply.keep {
+            return Ok(());
+        }
+        buffer.drain(..end);
     }
     let config = WebSocketConfig::default()
         .max_message_size(Some(1024 * 1024))
         .max_frame_size(Some(1024 * 1024));
     // Tungstenite parses the request head itself.
     let stream = Replay {
-        read: bytes,
+        read: buffer,
         at: 0,
         inner: stream,
     };
@@ -704,8 +749,10 @@ mod tests {
         serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap()).unwrap()
     }
 
+    /// One request on its own connection, read until the server closes it.
     async fn get(address: std::net::SocketAddr, request: &str) -> Vec<u8> {
         let mut socket = TcpStream::connect(address).await.unwrap();
+        let request = request.replacen("\r\n\r\n", "\r\nConnection: close\r\n\r\n", 1);
         socket.write_all(request.as_bytes()).await.unwrap();
         let mut reply = Vec::new();
         socket.read_to_end(&mut reply).await.unwrap();
@@ -847,7 +894,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_first_load_serves_every_file_on_its_own_connection_all_at_once() {
+    async fn a_first_load_may_open_every_connection_at_once() {
         let (_dir, address, _auth, _rx, task) = start().await;
         // Behind a tunnel every file of a first load arrives on its own connection, all at once.
         let mut sockets = Vec::new();
@@ -856,7 +903,8 @@ mod tests {
             sockets.push(TcpStream::connect(address).await.unwrap());
         }
         for socket in &mut sockets {
-            let request = b"GET /manifest.webmanifest HTTP/1.1\r\nHost: localhost\r\n\r\n";
+            let request =
+                b"GET /manifest.webmanifest HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
             socket.write_all(request).await.unwrap();
         }
         for socket in &mut sockets {
@@ -865,6 +913,115 @@ mod tests {
             assert!(reply.starts_with(b"HTTP/1.1 200 OK"));
         }
         task.abort();
+    }
+
+    /// One reply read off a connection that stays open: the head and a body of the announced length.
+    async fn reply(socket: &mut (impl AsyncRead + Unpin)) -> (String, Vec<u8>) {
+        let mut bytes = Vec::new();
+        let end = head(socket, &mut bytes).await.unwrap();
+        let head = String::from_utf8(bytes[..end].to_vec()).unwrap();
+        let length = head
+            .lines()
+            .find_map(|line| line.strip_prefix("Content-Length: "))
+            .map_or(0, |length| length.parse::<usize>().unwrap());
+        let mut body = bytes.split_off(end);
+        let have = body.len();
+        body.resize(length, 0);
+        socket.read_exact(&mut body[have..]).await.unwrap();
+        (head, body)
+    }
+
+    #[tokio::test]
+    async fn several_requests_share_one_connection_until_one_says_close_or_asks_for_the_socket() {
+        let (_dir, address, _auth, _rx, task) = start().await;
+        let mut socket = TcpStream::connect(address).await.unwrap();
+        let ask = |path: &str, extra: &str| {
+            format!("GET {path} HTTP/1.1\r\nHost: localhost\r\n{extra}\r\n")
+        };
+        socket
+            .write_all(ask("/icon.svg", "").as_bytes())
+            .await
+            .unwrap();
+        let (first, body) = reply(&mut socket).await;
+        assert!(first.starts_with("HTTP/1.1 200 OK"), "{first}");
+        assert!(!first.contains("Connection:"), "{first}");
+        assert_eq!(body, include_bytes!("web/icon.svg"));
+        // The next request on the same connection revalidates and is answered by a bodyless 304.
+        let etag = first
+            .lines()
+            .find_map(|line| line.strip_prefix("ETag: "))
+            .unwrap();
+        let condition = format!("If-None-Match: {etag}\r\n");
+        socket
+            .write_all(ask("/icon.svg", &condition).as_bytes())
+            .await
+            .unwrap();
+        let (second, body) = reply(&mut socket).await;
+        assert!(second.starts_with("HTTP/1.1 304 Not Modified"), "{second}");
+        assert!(body.is_empty() && !second.contains("Connection:"));
+        // An unknown path is answered and the connection stays.
+        socket
+            .write_all(ask("/missing", "").as_bytes())
+            .await
+            .unwrap();
+        assert!(
+            reply(&mut socket)
+                .await
+                .0
+                .starts_with("HTTP/1.1 404 Not Found")
+        );
+        // The socket upgrade comes on the same connection too.
+        let (mut ws, _) = tokio_tungstenite::client_async(format!("ws://{address}/ws"), socket)
+            .await
+            .unwrap();
+        send(
+            &mut ws,
+            json!({"t":"hello", "v":wire::VERSION, "token":"unknown"}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(receive(&mut ws).await["code"], "unauthorized");
+
+        // `Connection: close` is answered with the same header and the end of the connection.
+        let mut socket = TcpStream::connect(address).await.unwrap();
+        socket
+            .write_all(ask("/icon.svg", "").as_bytes())
+            .await
+            .unwrap();
+        reply(&mut socket).await;
+        socket
+            .write_all(ask("/icon.svg", "Connection: close\r\n").as_bytes())
+            .await
+            .unwrap();
+        let mut rest = Vec::new();
+        socket.read_to_end(&mut rest).await.unwrap();
+        let rest = String::from_utf8(rest).unwrap();
+        assert!(rest.starts_with("HTTP/1.1 200 OK") && rest.contains("Connection: close\r\n"));
+        task.abort();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_connection_that_sends_no_next_request_is_closed_after_the_idle_wait() {
+        let dir = tempfile::tempdir().unwrap();
+        let auth = Arc::new(Mutex::new(
+            Auth::load(dir.path().join("remote.json")).unwrap(),
+        ));
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let permit = Arc::new(Semaphore::new(1)).try_acquire_owned().unwrap();
+        let (server, mut client) = tokio::io::duplex(64 * 1024);
+        let task = tokio::spawn(connection(server, auth, tx, permit, 0, Vec::new().into()));
+        client
+            .write_all(b"GET /icon.svg HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            .await
+            .unwrap();
+        assert!(reply(&mut client).await.0.starts_with("HTTP/1.1 200 OK"));
+        tokio::time::sleep(FIRST - Duration::from_secs(1)).await;
+        assert!(!task.is_finished(), "closed before the idle wait ran out");
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        assert!(task.is_finished());
+        let mut rest = Vec::new();
+        client.read_to_end(&mut rest).await.unwrap();
+        assert!(rest.is_empty());
     }
 
     #[test]
@@ -929,7 +1086,9 @@ mod tests {
     async fn a_slow_link_gets_the_whole_reply_and_only_a_stalled_one_is_dropped() {
         let (mut server, mut client) = tokio::io::duplex(1024);
         let writer =
-            tokio::spawn(async move { http(&mut server, "200 OK", "", &[b'x'; 64 * 1024]).await });
+            tokio::spawn(
+                async move { http(&mut server, "200 OK", "", &[b'x'; 64 * 1024], true).await },
+            );
         // 512 bytes per second: the reply takes over two minutes but never stops moving.
         let (mut reply, mut buffer) = (Vec::new(), [0; 1024]);
         loop {
@@ -943,7 +1102,7 @@ mod tests {
         assert!(reply.ends_with(&[b'x'; 64 * 1024]));
 
         let (mut server, _client) = tokio::io::duplex(1024);
-        let error = http(&mut server, "200 OK", "", &[b'x'; 64 * 1024])
+        let error = http(&mut server, "200 OK", "", &[b'x'; 64 * 1024], true)
             .await
             .unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::TimedOut);
@@ -1029,7 +1188,7 @@ mod tests {
 
         let mut stream = tls_connect(address, &cert).await;
         stream
-            .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
             .await
             .unwrap();
         let mut reply = Vec::new();
