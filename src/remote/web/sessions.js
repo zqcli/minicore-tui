@@ -1,7 +1,7 @@
 import * as MC from './core.js';
 import { HOST, S, fsCall, hostNow, intent, online, st, tz } from './net.js';
 import { compactNow, confirmSheet, exportSession, openChanges, openContext, openModel, openSettings, seg } from './sheets.js';
-import { $, actions, closeAll, copyText, fill, findSheet, h, icon, layout, part, popModal, pushModal, refreshSheets, sheet, spin, stack, wide } from './ui.js';
+import { $, actions, closeAll, copyText, errBox, fill, findSheet, h, icon, layout, menuRow, part, popModal, pushModal, refreshSheets, rowText, sheet, spin, stack, wide } from './ui.js';
 
 export const failed = new Set();
 
@@ -78,10 +78,10 @@ function sessionRow([id, title, ws, current, status, started, unseen, rel, bad])
     : status === 'compacting' ? 'Compacting' : bad ? h('span', 'er', 'Failed') : unseen ? 'New result' : rel;
   return h('div', 'srow' + (current ? ' cur' : ''), h('button', {
     class: 'sopen', 'data-k': 's' + id, 'aria-current': current ? 'page' : null,
-    'aria-label': (title || 'Untitled session') + ', ' + MC.basename(ws) + (status === 'approval' ? ', needs you' : status === 'running' ? ', running' : ''),
+    'aria-label': MC.titled(title) + ', ' + MC.basename(ws) + (status === 'approval' ? ', needs you' : status === 'running' ? ', running' : ''),
     onclick: () => { if (current) return closeNav(); if (!pendingRow && intent(MC.intents.openSession(id))) { pendingRow = id; renderNav(); } },
-  }, shape, h('span', 'rt', h('span', 'rm', title || 'Untitled session'), h('span', 'rs', what, ' · ' + MC.basename(ws))), pendingRow === id && spin('sm')),
-  h('button', { class: 'ib more', 'data-k': 'm' + id, 'aria-label': 'Actions for ' + (title || 'Untitled session'), 'aria-haspopup': 'dialog', onclick: () => sessionActions(id) }, icon('more')));
+  }, shape, rowText(MC.titled(title), [what, ' · ' + MC.basename(ws)]), pendingRow === id && spin('sm')),
+  h('button', { class: 'ib more', 'data-k': 'm' + id, 'aria-label': 'Actions for ' + MC.titled(title), 'aria-haspopup': 'dialog', onclick: () => sessionActions(id) }, icon('more')));
 }
 (() => {
   let x0 = null;
@@ -93,14 +93,13 @@ wide.addEventListener('change', () => { if (wide.matches) closeNav(); layout(); 
 // ---- session menu, info, rename, delete ----
 function sessionActions(id) {
   const x = S.state.sessions.find(y => y.id === id), current = x.current;
-  const m = sheet({
-    key: 'actions', cls: 'dialog', head: hid => h('h2', { id: hid }, x.title || 'Untitled session', h('span', 'sub2', MC.tilde(x.workspace))),
-    body: () => h('div', 'list',
-      !current && h('button', { class: 'row flat', 'data-focus': true, onclick: () => { m.close(true); openLive(id); } }, icon('open', 'ri'), h('span', 'rt', h('span', 'rm', 'Open'))),
-      h('button', { class: 'row flat', 'data-focus': current, onclick: () => { m.close(true); rename(id); } }, icon('edit', 'ri'), h('span', 'rt', h('span', 'rm', 'Rename'))),
-      h('button', { class: 'row flat', onclick: () => { m.close(true); copyText(id); } }, icon('copy', 'ri'), h('span', 'rt', h('span', 'rm', 'Copy session id'))),
-      h('button', { class: 'row flat bad', disabled: current, onclick: () => { m.close(true); remove(id); } }, icon('trash', 'ri'),
-        h('span', 'rt', h('span', 'rm', 'Delete session'), current && h('span', 'rs', 'Open another session first')))),
+  sheet({
+    key: 'actions', cls: 'dialog', head: hid => h('h2', { id: hid }, MC.titled(x.title), h('span', 'sub2', MC.tilde(x.workspace))),
+    body: m => h('div', 'list',
+      !current && menuRow(m, 'open', 'Open', () => openLive(id), { focus: true }),
+      menuRow(m, 'edit', 'Rename', () => rename(id), { focus: current }),
+      menuRow(m, 'copy', 'Copy session id', () => copyText(id)),
+      menuRow(m, 'trash', 'Delete session', () => remove(id), { cls: 'bad', disabled: current, sub: current && 'Open another session first' })),
   });
 }
 export function rename(id) {
@@ -117,8 +116,8 @@ export function rename(id) {
     body: () => h('form', { novalidate: true, onsubmit: save, id: 'renf' },
       h('input', { class: 'tf', type: 'text', value: d.value, maxLength: 200, readOnly: d.busy, 'data-focus': true, 'data-k': 'ren', 'aria-label': 'Session title',
         placeholder: 'Session title', autocomplete: 'off', enterKeyHint: 'done', oninput: e => { d.value = e.target.value; } }),
-      h('p', { class: 'hint', style: 'margin-top:8px' }, 'Leave empty to use the first message'),
-      d.err && h('div', { class: 'serr', role: 'alert', style: 'margin-top:8px' }, icon('warn', 'sm'), h('span', '', d.err))),
+      h('p', 'hint mt8', 'Leave empty to use the first message'),
+      d.err && errBox(d.err, 'mt8')),
     foot: () => [h('button', { class: 'btn', onclick: () => m.close() }, 'Cancel'),
       h('button', { class: 'btn primary', type: 'submit', form: 'renf', 'data-k': 'save', disabled: d.busy || !online() }, d.busy && spin(), d.busy ? 'Saving…' : 'Save')],
   });
@@ -127,7 +126,7 @@ export function rename(id) {
   i.focus({ preventScroll: true }); i.select();
 }
 function remove(id) {
-  const x = S.state.sessions.find(y => y.id === id), o = { title: 'Delete “' + (x.title || 'Untitled session') + '”?', text: "This can't be undone.", label: 'Delete', danger: true, needsOnline: true, busy: false, err: '' };
+  const x = S.state.sessions.find(y => y.id === id), o = { title: 'Delete “' + MC.titled(x.title) + '”?', text: "This can't be undone.", label: 'Delete', danger: true, needsOnline: true, busy: false, err: '' };
   // The host never deletes the session a device views: this device moves to a new session in that folder first.
   const here = id === S.sid;
   if (here) o.text = 'You move to a new session in this folder. This can’t be undone.';
@@ -143,17 +142,14 @@ function remove(id) {
 }
 export function openSessionMenu() {
   const s = S.state.session;
-  const row = (ic, label, fn, cls) => h('button', { class: 'row flat' + (cls ? ' ' + cls : ''), onclick: () => { m.close(true); fn(); } }, icon(ic, 'ri'), h('span', 'rt', h('span', 'rm', label)));
-  const m = sheet({
-    key: 'menu', cls: 'dialog', head: hid => h('h2', { id: hid }, s.title || 'Untitled session', h('span', 'sub2', MC.tilde(s.workspace))),
-    body: () => h('div', 'list', menuRows(row)),
+  sheet({
+    key: 'menu', cls: 'dialog', head: hid => h('h2', { id: hid }, MC.titled(s.title), h('span', 'sub2', MC.tilde(s.workspace))),
+    body: m => h('div', 'list',
+      menuRow(m, 'edit', 'Rename', () => rename(s.id)), menuRow(m, 'diff', 'Changes', openChanges), menuRow(m, 'gauge', 'Context', openContext),
+      menuRow(m, 'layers', 'Compact now', () => compactNow()), menuRow(m, 'search', 'Find in session', () => actions.find()), menuRow(m, 'info', 'Session info', openInfo),
+      menuRow(m, 'copy', 'Copy session id', () => copyText(s.id)), menuRow(m, 'share', 'Share or export', exportSession),
+      menuRow(m, 'trash', 'Delete session', () => remove(s.id), { cls: 'bad' })),
   });
-}
-function menuRows(row) {
-  const s = S.state.session;
-  return [row('edit', 'Rename', () => rename(s.id)), row('diff', 'Changes', openChanges), row('gauge', 'Context', openContext), row('layers', 'Compact now', () => compactNow()),
-    row('search', 'Find in session', () => actions.find()), row('info', 'Session info', openInfo), row('copy', 'Copy session id', () => copyText(s.id)), row('share', 'Share or export', exportSession),
-    row('trash', 'Delete session', () => remove(s.id), 'bad')];
 }
 export function openInfo() {
   const s = S.state.session;
@@ -164,12 +160,12 @@ export function openInfo() {
       const x = S.state.session, u = S.state.usage, cat = S.state.sessions.find(y => y.id === x.id);
       const others = MC.otherDevices(S.state.devices, S.device).filter(d => d.session === x.id).map(d => d.name);
       const kv = (k, v) => v && [h('dt', '', k), h('dd', '', v)];
-      return [h('h3', { style: 'font-size:var(--t18);font-weight:600;margin-bottom:12px' }, x.title || 'Untitled session'),
+      return [h('h3', 'stitle', MC.titled(x.title)),
         h('dl', 'kv', kv('Session', h('span', 'mono', x.id)), kv('Workspace', MC.tilde(x.workspace)), kv('Branch', x.branch), kv('Profile', x.profile), kv('Allowed for this session', x.allowed.join(', ')),
           kv('Model', [x.model, x.reasoning].filter(Boolean).join(' · ')), kv('Updated', cat && MC.stamp(Date.parse(cat.updated_at), hostNow(), tz())),
           kv('Usage', (u.input || u.output) ? MC.fmtTok(u.input) + ' in · ' + MC.fmtTok(u.output) + ' out' + (u.cached ? ' · ' + MC.fmtTok(u.cached) + ' cached' : '') : ''),
           kv('Context', S.state.context_percent != null ? Math.round(S.state.context_percent) + '% used' : ''), kv('Also viewing', others.join(', '))),
-        h('div', { style: 'display:flex;gap:8px;margin-top:16px' }, h('button', { class: 'btn sm', onclick: e => copyText(x.id, e.currentTarget) }, icon('copy', 'xs'), 'Copy id'))];
+        h('div', 'sacts', h('button', { class: 'btn sm', onclick: e => copyText(x.id, e.currentTarget) }, icon('copy', 'xs'), 'Copy id'))];
     },
   });
 }
@@ -221,7 +217,7 @@ function mkdir() {
 function renderNew() {
   const s = S.state, L = ns.listing, roots = ns.roots || [], recent = MC.recentWorkspaces(s.sessions);
   const folderRow = (name, sub, path, nav, ic) => h('button', { class: 'row', 'data-k': (nav ? 'n' : 's') + path, disabled: ns.starting,
-    onclick: () => nav ? list(path) : (ns.sel = path, refreshSheets()) }, icon(ic || 'folder', 'ri'), h('span', 'rt', h('span', 'rm', name), sub && h('span', 'rs', sub)),
+    onclick: () => nav ? list(path) : (ns.sel = path, refreshSheets()) }, icon(ic || 'folder', 'ri'), rowText(name, sub),
     nav ? icon('chev', 'sm ri') : ns.sel === path && icon('check', 'ck'));
   const crumbs = L && MC.crumbs(L.path, roots);
   const profiles = s.profiles;
@@ -237,7 +233,7 @@ function renderNew() {
       h('input', { id: 'mkname', class: 'tf', 'data-k': 'mk', value: ns.mkName, placeholder: 'Folder name', 'aria-label': 'New folder name', autocapitalize: 'none', autocomplete: 'off', spellcheck: 'false', enterKeyHint: 'done',
         oninput: e => { ns.mkName = e.target.value; }, onkeydown: e => { if (e.key === 'Enter') { e.preventDefault(); mkdir(); } } }),
       h('button', { class: 'btn primary', disabled: ns.busy, onclick: mkdir }, 'Create')),
-    ns.err && h('div', { class: 'serr', role: 'alert' }, icon('warn', 'sm'), h('span', '', ns.err)),
+    ns.err && errBox(ns.err),
     L ? h('div', 'list', L.parent != null && folderRow(MC.basename(L.parent), 'Parent folder', L.parent, true, 'up'), L.entries.map(x => folderRow(x.name, null, x.path, true)),
       !L.entries.length && !ns.busy && h('div', 'muted', 'No folders here'))
       : roots.length > 0 && h('div', 'list', roots.map(r => MC.isDrive(r.path) ? folderRow(r.name, null, r.path, true, 'disk') : folderRow(r.name, MC.tilde(r.path), r.path, true))),

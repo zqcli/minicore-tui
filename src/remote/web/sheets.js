@@ -1,12 +1,12 @@
 import * as MC from './core.js';
 import { HOST, S, ask, cur, intent, online, st } from './net.js';
 import { installApp, installable, prefs, setPref, standalone } from './platform.js';
-import { actions, copyText, diffView, h, icon, refreshSheets, share, sheet, spin, toast } from './ui.js';
+import { actions, copyText, diffView, errBox, h, icon, refreshSheets, rowText, share, sheet, spin, toast } from './ui.js';
 
 export function confirmSheet(o) {
   const m = sheet({
     key: 'confirm', cls: 'dialog', title: o.title, deps: () => [o.busy, o.err, online()],
-    body: () => [o.text && h('p', { class: 'hint', style: 'font-size:var(--t16)' }, o.text), o.err && h('div', { class: 'serr', role: 'alert', style: 'margin-top:12px' }, icon('warn', 'sm'), h('span', '', o.err))],
+    body: () => [o.text && h('p', 'hint big', o.text), o.err && errBox(o.err, 'mt12')],
     foot: () => [h('button', { class: 'btn', 'data-k': 'no', onclick: () => m.close() }, 'Cancel'),
       h('button', { class: 'btn ' + (o.danger ? 'dangerfill' : 'primary'), 'data-k': 'ok', disabled: o.busy || (o.needsOnline && !online()), onclick: () => o.ok(m) }, o.busy && spin(), o.label)],
   });
@@ -40,14 +40,14 @@ export function openSettings() {
           switchRow('Notifications', canNotify ? (Notification.permission === 'denied' ? 'Blocked in the browser settings' : 'Approvals and finished turns while this page is in the background') : 'Not available on this page',
             prefs.notify && canNotify && Notification.permission === 'granted', v => setNotify(v), !canNotify || Notification.permission === 'denied')),
         h('h3', 'sec2', 'Connected devices'), h('div', 'list', s.devices.map((d, k) => h('div', 'row flat', icon(/iPhone|Android/.test(d.name) ? 'tabs' : 'term', 'ri'),
-          h('span', 'rt', h('span', 'rm', d.name + (d.name === S.device && k === s.devices.findIndex(x => x.name === S.device) ? ' (this device)' : '')), h('span', 'rs', 'Viewing ' + where(d)))))),
+          rowText(d.name + (d.name === S.device && k === s.devices.findIndex(x => x.name === S.device) ? ' (this device)' : ''), 'Viewing ' + where(d))))),
         h('h3', 'sec2', 'About'), h('div', 'list',
-          h('div', 'row flat', h('span', 'rt', h('span', 'rm', 'Host')), h('span', 'val', HOST)),
-          h('div', 'row flat', h('span', 'rt', h('span', 'rm', 'MiniCore')), h('span', 'val', (S.version || '?') + ' · protocol ' + MC.V)),
-          inst === 'prompt' && h('button', { class: 'row flat', onclick: installApp }, icon('down', 'ri'), h('span', 'rt', h('span', 'rm', 'Install app'), h('span', 'rs', 'Open MiniCore from your home screen'))),
-          inst === 'ios' && h('div', 'row flat', icon('share', 'ri'), h('span', 'rt', h('span', 'rm', 'Install app'), h('span', 'rs', 'Share → Add to Home Screen')),
+          h('div', 'row flat', rowText('Host'), h('span', 'val', HOST)),
+          h('div', 'row flat', rowText('MiniCore'), h('span', 'val', (S.version || '?') + ' · protocol ' + MC.V)),
+          inst === 'prompt' && h('button', { class: 'row flat', onclick: installApp }, icon('down', 'ri'), rowText('Install app', 'Open MiniCore from your home screen')),
+          inst === 'ios' && h('div', 'row flat', icon('share', 'ri'), rowText('Install app', 'Share → Add to Home Screen'),
             h('button', { class: 'ib s', 'aria-label': 'Dismiss', onclick: () => { localStorage.setItem('minicore.installHint', '1'); refreshSheets(); } }, icon('x', 'sm')))),
-        h('div', { style: 'margin-top:24px' }, h('button', { class: 'btn block danger', onclick: () => confirmSheet({ title: 'Sign out of this device?', text: 'You will need the password shown on your computer to connect again.', label: 'Sign out', danger: true, ok: m => { m.close(true); actions.signOut(); } }) }, icon('logout', 'sm'), 'Sign out')),
+        h('div', 'mt24', h('button', { class: 'btn block danger', onclick: () => confirmSheet({ title: 'Sign out of this device?', text: 'You will need the password shown on your computer to connect again.', label: 'Sign out', danger: true, ok: m => { m.close(true); actions.signOut(); } }) }, icon('logout', 'sm'), 'Sign out')),
       ];
     },
   });
@@ -69,7 +69,7 @@ export function openModel() {
       return [h('div', { class: 'list', role: 'radiogroup', 'aria-label': 'Model' }, s.models.map(x => h('button', {
         class: 'row flat', role: 'radio', 'data-k': 'm' + x.id, 'aria-checked': String(x.id === model), disabled: !online(),
         onclick: () => { if (x.id !== model && intent(MC.intents.setModel(x.id))) mp.model = x.id; refreshSheets(); },
-      }, h('span', 'rt', h('span', 'rm', x.id), h('span', 'rs', x.reasoning.length ? x.reasoning.join(' · ') : 'No reasoning levels')),
+      }, rowText(x.id, x.reasoning.length ? x.reasoning.join(' · ') : 'No reasoning levels'),
       x.id === model && (mp.model ? spin('sm') : icon('check', 'ck'))))),
       m && m.reasoning.length > 0 && [h('h3', 'sec2', 'Reasoning'), seg('Reasoning', m.reasoning.map(l => [l, l]), level, l => { if (l !== level && intent(MC.intents.setReasoning(l))) mp.level = l; refreshSheets(); })]];
     },
@@ -87,15 +87,15 @@ export function openChanges() {
       h('span', 'sub2', c.path ? c.path : [c.branch, c.files && MC.plural(c.files.length, 'file')].filter(Boolean).join(' · '))),
       !c.path && h('button', { class: 'ib', 'aria-label': 'Refresh', disabled: c.busy, onclick: load }, c.busy ? spin() : icon('retry'))],
     body: () => {
-      if (c.err) return h('div', { class: 'serr', role: 'alert' }, icon('warn', 'sm'), h('span', '', c.err));
+      if (c.err) return errBox(c.err);
       if (c.path) return c.diff ? [h('div', 'tbar', h('button', { 'aria-pressed': String(c.wrap), onclick: () => { c.wrap = !c.wrap; m.refresh(); } }, icon('wrap', 'xs'), 'Wrap'),
         c.diff.truncated && h('span', 'hint', 'Diff truncated')), diffView(MC.parseDiff(c.diff.lines.join('\n')).map(f => ({ ...f, path: f.path || c.path })), c.wrap)] : h('div', 'loadrow', spin(), 'Loading diff…');
       if (!c.files) return h('div', 'loadrow', spin(), 'Loading changes…');
       if (!c.files.length) return h('div', 'muted', 'No changes in this workspace');
       return [h('div', 'list', c.files.map(f => { const [l, cls] = MC.changeStatus(f.status), dir = f.path.slice(0, -MC.basename(f.path).length);
         return h('button', { class: 'row flat', 'data-k': f.path, 'aria-label': f.status + ' ' + f.path, onclick: () => file(f.path) }, h('span', 'st ' + cls, l),
-          h('span', 'rt', h('span', 'rm mono', MC.basename(f.path)), dir && h('span', 'rs', dir)), icon('chev', 'sm ri')); })),
-        c.truncated && h('p', { class: 'hint', style: 'margin-top:8px' }, 'Only the first 200 files are listed.')];
+          rowText(MC.basename(f.path), dir, true), icon('chev', 'sm ri')); })),
+        c.truncated && h('p', 'hint mt8', 'Only the first 200 files are listed.')];
     },
   });
   pull(m, () => { if (!c.path) load(); });
@@ -113,14 +113,14 @@ export function openContext() {
   const m = sheet({
     key: 'context', side: true, title: 'Context', deps: () => [c, st().busy, st().compacting, online()],
     body: () => {
-      if (c.err) return h('div', { class: 'serr', role: 'alert' }, icon('warn', 'sm'), h('span', '', c.err));
+      if (c.err) return errBox(c.err);
       if (!c.d) return h('div', 'loadrow', spin(), 'Loading…');
       const x = MC.contextView(c.d);
       return [h('div', 'cbar', h('b', '', Math.round(x.percent) + '%'), h('span', '', x.used)),
         h('div', { class: 'meter', role: 'meter', 'aria-valuenow': String(Math.round(x.percent)), 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-label': 'Context used' },
           h('i', { style: 'width:' + x.percent + '%' + (x.percent >= 80 ? ';background:var(--wac)' : '') }), x.trigger != null && h('em', { style: 'left:' + x.trigger + '%', title: 'Compacts here' }), x.target != null && h('em', { class: 't', style: 'left:' + x.target + '%', title: 'Compacts down to here' })),
-        h('dl', { class: 'kv', style: 'margin-top:16px' }, x.rows.map(([k, val]) => [h('dt', '', k), h('dd', '', val)])),
-        x.failure && h('div', { class: 'serr', style: 'margin-top:12px' }, icon('warn', 'sm'), h('span', '', x.failure))];
+        h('dl', 'kv mt16', x.rows.map(([k, val]) => [h('dt', '', k), h('dd', '', val)])),
+        x.failure && errBox(x.failure, 'mt12', false)];
     },
     foot: () => h('button', { class: 'btn block', disabled: !online() || st().busy || st().compacting, onclick: () => compactNow(() => { c.d = null; setTimeout(load, 2000); m.refresh(); }) },
       st().compacting ? [spin(), 'Compacting…'] : [icon('layers', 'sm'), 'Compact now']),
@@ -133,7 +133,7 @@ export function openOutput(b) {
   const m = sheet({
     key: 'out', cls: 'full', side: true, deps: () => [o.full, o.loading, o.err, o.wrap, o.text.length],
     head: hid => h('h2', { id: hid }, h('span', 'mono', f.verb + ' ' + f.target), h('span', 'sub2', MC.fmtNum(total) + ' lines' + (o.full ? '' : ' · showing the last ' + MC.fmtNum(out.length)))),
-    body: () => [o.err && h('div', { class: 'serr', role: 'alert' }, icon('warn', 'sm'), h('span', '', o.err)), o.capped && h('p', 'hint', 'Showing the first 4 MB.'),
+    body: () => [o.err && errBox(o.err), o.capped && h('p', 'hint', 'Showing the first 4 MB.'),
       h('pre', { class: 'out view' + (o.wrap ? ' wrap' : ''), tabindex: '0' }, o.text)],
     foot: () => [h('button', { class: 'btn sm', 'aria-pressed': String(o.wrap), onclick: () => { o.wrap = !o.wrap; m.refresh(); } }, icon('wrap', 'xs'), 'Wrap'),
       h('button', { class: 'btn sm', onclick: e => copyText(o.text, e.currentTarget) }, icon('copy', 'xs'), 'Copy'),

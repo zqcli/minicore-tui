@@ -21,7 +21,7 @@ export function syncApproval() {
     const t = [...S.blocks].reverse().find(b => b.type === 'tool' && b.state === 'pending');
     ap.call = t ? t.call_id : null;
     announce(a.kind === 'approval' ? 'Approval needed' : 'Question: ' + (a.prompt || ''));
-    notify(a.kind === 'approval' ? 'Approval needed: ' + MC.approvalTitle(a).text + ' ' + (MC.approvalTitle(a).code || '') : a.prompt || 'A question is waiting', S.sid);
+    notify(a.kind === 'approval' ? 'Approval needed: ' + MC.approvalLine(a) : a.prompt || 'A question is waiting', S.sid);
     if (!m) openApproval(a);
   }
   renderApprBar();
@@ -69,9 +69,9 @@ function answer(choice, message) {
 }
 const apprPart = part($('apprbar'), b => b && [icon('hand', 'sm'), h('span', '', b), h('button', { class: 'btn sm', onclick: () => openApproval() }, 'Review')]);
 function renderApprBar() {
-  const a = S.state && S.state.interaction, show = !!a && !findSheet('appr'), t = a && a.kind === 'approval' && MC.approvalTitle(a);
+  const a = S.state && S.state.interaction, show = !!a && !findSheet('appr');
   $('apprbar').hidden = !show;
-  apprPart(show ? (t ? 'Approval needed · ' + t.text + (t.code ? ' ' + t.code : '') : 'Question · ' + (a.prompt || '')) : null);
+  apprPart(show ? (a.kind === 'approval' ? 'Approval needed · ' + MC.approvalLine(a) : 'Question · ' + (a.prompt || '')) : null);
 }
 document.addEventListener('keydown', e => {
   const m = topModal(), a = S.state && S.state.interaction, armedFrom = Math.max(apprAt, lastKey);

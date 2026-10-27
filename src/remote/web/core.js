@@ -6,6 +6,7 @@ const backoff = n => Math.min(15000, 1000 * 2 ** n);
 const basename = p => (p || '').split(/[\\/]/).filter(Boolean).pop() || p || '';
 const plural = (n, one, many) => n + ' ' + (n === 1 ? one : many || one + 's');
 const cap = s => s ? s[0].toUpperCase() + s.slice(1) : s;
+const titled = title => title || 'Untitled session';
 // "gpt-6-…-preview": long names keep both ends.
 const midTrunc = (s, n = 17) => s.length <= n ? s : s.slice(0, (n - 1) >> 1) + '…' + s.slice(-((n - 1) >> 1));
 
@@ -437,6 +438,11 @@ function approvalTitle(a) {
   if (k === 'web') return { text: 'Fetch', code: a.detail };
   return { text: 'Use', code: a.tool };
 }
+// The approval as one line: "Run command", "Edit `src/x.rs`".
+function approvalLine(a) {
+  const t = approvalTitle(a);
+  return t.text + (t.code ? ' ' + t.code : '');
+}
 // The host's labels come in the order [allow, deny, allow for session]; allow shows first and deny last.
 const APPROVAL_CHOICES = ['allow', 'deny', 'allow_session'];
 function approvalOptions(a) {
@@ -601,7 +607,7 @@ function contextView(d) {
 }
 // The loaded transcript as Markdown: messages, answers, one line per tool and the turn-end lines.
 function exportMd(state, blocks) {
-  const s = state.session, out = ['# ' + (s.title || 'Untitled session'), '', '`' + s.workspace + '`' + (s.model ? ' · ' + s.model : ''), ''];
+  const s = state.session, out = ['# ' + titled(s.title), '', '`' + s.workspace + '`' + (s.model ? ' · ' + s.model : ''), ''];
   for (const b of blocks) {
     if (b.type === 'user') out.push(b.kind === 'steering' ? '**You (steer):** ' + b.text : '## You\n\n' + b.text, '');
     else if (b.type === 'assistant' && b.text) out.push(b.text, '');
@@ -619,7 +625,7 @@ function recentWorkspaces(sessions, max = 6) {
 }
 
 export {
-  V, WINDOW, backoff, basename, plural, cap,
+  V, WINDOW, backoff, basename, plural, cap, titled, quiet,
   midTrunc, retireText, mergeReturned, otherDevices, deviceName, installOffer,
   login, hello, intents, queries, fs, createStore,
   intent, request, query, queryRoom, unqueue, pending,
@@ -630,7 +636,7 @@ export {
   findBlocks, foldText, toolKind, toolInfo, parseDiff, diffStats,
   liveBlock, turnEnd, changesText, compactionText, statusLine, canStop,
   primaryKind, primaryTap, TAP_SLOP, approvalKey, approvalTitle, approvalOptions,
-  approvalBody, changeStatus, contextView, exportMd, BUILTINS, slashMenu,
+  approvalBody, approvalLine, changeStatus, contextView, exportMd, BUILTINS, slashMenu,
   parseSlash, atToken, insertMention, pushRecent, literal, composerKey,
   queueView, thinkingPreview, splitPath, within, crumbs, tilde,
   isDrive, recentWorkspaces, sessionTransitions, noticeEvent, attentionCount,

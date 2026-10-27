@@ -3,7 +3,7 @@ import { HOST, S, ask, cur, hostNow, intent, online, pendingKind, repaint, send,
 import { prefs } from './platform.js';
 import { openInfo, openNav, openNew, rename } from './sessions.js';
 import { compactNow, exportSession, openChanges, openContext, openHelp, openModel, openSettings } from './sheets.js';
-import { $, actions, announce, copyText, h, hover, icon, part, sheet, spin, toast, wide } from './ui.js';
+import { $, actions, announce, copyText, h, hover, icon, menuRow, part, sheet, spin, toast, wide } from './ui.js';
 
 // "Enter sends" is stored once chosen; until then the pointer default follows the device.
 const apple = /Mac|iPhone|iPad/.test(navigator.userAgent), ALT = apple ? '⌥' : 'Alt+', tips = () => prefs.enter ? 'Enter' : (apple ? '⌘' : 'Ctrl+') + 'Enter';
@@ -170,7 +170,7 @@ const popPart = part($('pop'), m => m && (m.items.length ? m.items.map((x, k) =>
   class: 'opt', role: 'option', id: 'opt' + k, 'aria-selected': String(k === m.sel), tabindex: '-1',
   onmousedown: e => e.preventDefault(), onclick: () => accept(k),
 }, m.kind === 'cmd' ? [h('span', 'on', '/' + x.name), h('span', 'od', x.description), h('span', 'tag', x.hint || (x.builtin ? '' : 'template'))]
-  : [icon('file', 'sm'), h('span', { class: 'od', style: 'color:var(--tx)' }, x)])) : h('div', 'muted', m.busy ? 'Searching…' : m.kind === 'cmd' ? 'No matching commands' : 'No matching files')));
+  : [icon('file', 'sm'), h('span', 'od file', x)])) : h('div', 'muted', m.busy ? 'Searching…' : m.kind === 'cmd' ? 'No matching commands' : 'No matching files')));
 function setMenu(m) {
   menu = m;
   $('pop').hidden = !m;
@@ -230,16 +230,14 @@ ta.addEventListener('keydown', e => {
 ta.addEventListener('blur', () => setTimeout(() => { if (document.activeElement !== ta) setMenu(null); }, 150));
 function remember(text) { recent = MC.pushRecent(recent, text); localStorage.setItem(recentKey, JSON.stringify(recent)); }
 export function openPlus() {
-  const row = (ic, label, sub, fn, mono) => h('button', { class: 'row flat', onclick: () => { m.close(true); fn(); } }, icon(ic, 'ri'),
-    h('span', 'rt', h('span', 'rm' + (mono ? ' mono' : ''), label), sub && h('span', 'rs', sub)));
-  const m = sheet({
+  sheet({
     key: 'plus', title: 'Add to your message', deps: () => [S.state.commands, recent.slice(0, 8), !!S.state.session],
-    body: () => {
+    body: m => {
       const cmds = S.state.commands.map(c => ({ ...c, builtin: false })).concat(MC.BUILTINS);
-      return [S.state.session && [h('h3', 'sec2', 'Insert'), h('div', 'list', row('at', 'File', 'Mention a file in this workspace as @path', insertAt))],
-        recent.length > 0 && [h('h3', 'sec2', 'Recent prompts'), h('div', 'list', recent.slice(0, 8).map(t => row('history', t.length > 120 ? t.slice(0, 120) + '…' : t, null, () => fillComposer(t))))],
-        h('h3', 'sec2', 'Commands'), h('div', 'list', cmds.map(c => row(c.builtin ? 'term' : 'sparkle', '/' + c.name + (c.hint ? ' ' + c.hint : ''), c.description,
-          () => { setMenu({ kind: 'cmd', items: [c], sel: 0 }); accept(0); }, true)))];
+      return [S.state.session && [h('h3', 'sec2', 'Insert'), h('div', 'list', menuRow(m, 'at', 'File', insertAt, { sub: 'Mention a file in this workspace as @path' }))],
+        recent.length > 0 && [h('h3', 'sec2', 'Recent prompts'), h('div', 'list', recent.slice(0, 8).map(t => menuRow(m, 'history', t.length > 120 ? t.slice(0, 120) + '…' : t, () => fillComposer(t))))],
+        h('h3', 'sec2', 'Commands'), h('div', 'list', cmds.map(c => menuRow(m, c.builtin ? 'term' : 'sparkle', '/' + c.name + (c.hint ? ' ' + c.hint : ''),
+          () => { setMenu({ kind: 'cmd', items: [c], sel: 0 }); accept(0); }, { sub: c.description, mono: true })))];
     },
   });
 }

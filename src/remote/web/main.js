@@ -175,7 +175,7 @@ function connectionLost() {
 // ---- top bar and banners ----
 function renderBar() {
   const s = S.state, c = cur(), badge = s.background.approval;
-  $('title').textContent = s.session ? s.session.title || 'Untitled session' : 'New session';
+  $('title').textContent = s.session ? MC.titled(s.session.title) : 'New session';
   $('sub').textContent = [MC.basename(c.workspace), s.session && s.session.branch].filter(Boolean).join(' · ');
   const m = $('menu'), old = m.querySelector('.dotn');
   if (badge && (!old || old.textContent !== String(badge))) {
@@ -195,7 +195,7 @@ const dismissed = new Set();
 function renderBanners() {
   const s = S.state, x = s.sessions.find(y => y.live && !y.current && y.status === 'approval' && !dismissed.has(y.id));
   bannersPart({
-    attn: x ? { id: x.id, title: x.title || 'Untitled session' } : null,
+    attn: x ? { id: x.id, title: MC.titled(x.title) } : null,
     conn: online() || halted ? '' : navigator.onLine === false ? 'Offline · waiting for network' : 'Reconnecting…',
   });
 }
@@ -221,12 +221,12 @@ $('moreb').addEventListener('click', openSessionMenu);
 let badgeN = -1;
 function renderAttention() {
   const s = S.state, n = screen === 'main' && s ? MC.attentionCount(s) : 0;
-  const t = s && s.session ? s.session.title || 'Untitled session' : 'MiniCore';
+  const t = s && s.session ? MC.titled(s.session.title) : 'MiniCore';
   document.title = (n ? '(' + n + ') ' : '') + (t === 'MiniCore' ? t : t + ' · MiniCore');
   if (n !== badgeN && navigator.setAppBadge) { badgeN = n; (n ? navigator.setAppBadge(n) : navigator.clearAppBadge()).catch(() => {}); }
 }
 function attention(e) {
-  const label = e.title || 'Untitled session';
+  const label = MC.titled(e.title);
   recentAttn.set(label, Date.now());
   dismissed.delete(e.id);
   if (e.kind === 'finished') toast('“' + label + '” finished', null, { label: 'Open', fn: () => openLive(e.id) });
@@ -250,7 +250,7 @@ function renderState() {
   if (!!s.status.busy !== wasBusy) {
     wasBusy = !!s.status.busy;
     announce(wasBusy ? 'Working' : 'Turn ended');
-    if (!wasBusy && s.session) notify('“' + (s.session.title || 'Untitled session') + '” finished', s.session.id);
+    if (!wasBusy && s.session) notify('“' + MC.titled(s.session.title) + '” finished', s.session.id);
     schedule();
   }
   syncWake();

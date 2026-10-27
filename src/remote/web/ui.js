@@ -41,12 +41,19 @@ export function part(host, render) {
     if (k !== last) { last = k; swap(host, render(input)); }
   };
 }
-function swap(host, nodes) {
+// Runs `change`, which replaces what is inside `host`; a focused [data-k] element comes back in `into`.
+export function keepFocus(host, change, into = host) {
   const a = document.activeElement, k = host.contains(a) && a.dataset.k;
-  fill(host, nodes);
-  const n = k && host.querySelector('[data-k="' + k + '"]');
+  change();
+  const n = k && into.querySelector('[data-k="' + k + '"]');
   if (n) n.focus({ preventScroll: true });
 }
+const swap = (host, nodes) => keepFocus(host, () => fill(host, nodes));
+export const errBox = (text, cls, alert = true) => h('div', { class: 'serr' + (cls ? ' ' + cls : ''), role: alert && 'alert' }, icon('warn', 'sm'), h('span', '', text));
+export const rowText = (label, sub, mono) => h('span', 'rt', h('span', 'rm' + (mono ? ' mono' : ''), label), sub && h('span', 'rs', sub));
+// A row of a menu sheet: it closes the sheet first, then acts.
+export const menuRow = (m, name, label, fn, o = {}) => h('button', { class: 'row flat' + (o.cls ? ' ' + o.cls : ''), disabled: o.disabled, 'data-focus': o.focus, onclick: () => { m.close(true); fn(); } },
+  icon(name, 'ri'), rowText(label, o.sub, o.mono));
 
 // ---- copy, share, toasts, announcements ----
 // navigator.clipboard is missing on plain-http LAN pages.
@@ -60,7 +67,7 @@ export function copyText(text, btn) {
     setTimeout(() => { u.setAttribute('href', was); btn.classList.remove('done'); }, 1500);
   };
   const legacy = () => {
-    const t = h('textarea', { value: text, readOnly: true, style: 'position:fixed;top:0;left:0;opacity:0;font-size:16px' });
+    const t = h('textarea', { class: 'sink', value: text, readOnly: true });
     document.body.append(t);
     t.select(); t.setSelectionRange(0, text.length);
     let ok = false;
@@ -136,7 +143,7 @@ export function sheet(o) {
     m.last = k;
     const top = body.scrollTop;
     fill(head, o.head ? o.head(id) : h('h2', { id }, o.title), h('button', { class: 'ib', 'aria-label': o.closeLabel || 'Close', onclick: () => m.close() }, icon(o.closeIcon || 'x')));
-    swap(body, o.body());
+    swap(body, o.body(m));
     const f = o.foot && o.foot();
     foot.hidden = !f;
     if (f) swap(foot, f);

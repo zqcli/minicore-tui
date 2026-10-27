@@ -749,6 +749,13 @@ test('approvals are titled by what is asked and show the command, diff or conten
   assert.deepEqual(plain(MC.approvalBody(a('mcp_thing', 'arg', 'arg'))), { text: '' });
 });
 
+test('an approval reads as one line with its target, and a session without a title is called untitled', () => {
+  const a = (tool, detail) => ({ id: 'x', kind: 'approval', tool, detail, input: null, prompt: '', options: [] });
+  assert.equal(MC.approvalLine(a('bash', 'ls')), 'Run command');
+  assert.equal(MC.approvalLine(a('write', 'README.md')), 'Write README.md');
+  assert.deepEqual([MC.titled(''), MC.titled(null), MC.titled('Fix paths')], ['Untitled session', 'Untitled session', 'Fix paths']);
+});
+
 test('approval buttons use the host labels, allow first and deny last; choices are numbered', () => {
   assert.deepEqual(plain(MC.approvalOptions(state.interaction)), [
     { choice: 'allow', label: 'Allow once' }, { choice: 'allow_session', label: 'Allow bash this session' }, { choice: 'deny', label: 'Deny' }]);
