@@ -3,7 +3,7 @@ import { sessionEvent, onNotice, renderAttention, renderBanners } from './attent
 import { syncApproval } from './approval.js';
 import { closePriMenu, openPlus, renderDock, returned, sent, stop, unconfirmedHome, unqueueRefused } from './composer.js';
 import { boot, closed, handshake, isMain, wake } from './connection.js';
-import { S, bind, cur, pump, repaint, st } from './net.js';
+import { S, bind, pump, repaint, turnStatus, viewed } from './net.js';
 import { notify, syncWake } from './platform.js';
 import { buildNav, clearFailed, clearPending, closeNav, openInfo, openLive, openNav, openNew, openSessionMenu, renderNav, settle, stepSession, syncTick } from './sessions.js';
 import { modelSettled, openHelp } from './sheets.js';
@@ -45,7 +45,7 @@ function connectionLost() {
 
 // ---- top bar ----
 function renderBar() {
-  const s = S.state, c = cur(), badge = s.background.approval;
+  const s = S.state, c = viewed(), badge = s.background.approval;
   set($('title'), 'textContent', s.session ? MC.titled(s.session.title) : 'New session');
   set($('sub'), 'textContent', [MC.basename(c.workspace), s.session && s.session.branch].filter(Boolean).join(' · '));
   const m = $('menu'), old = m.querySelector('.dotn');
@@ -94,7 +94,7 @@ document.addEventListener('keydown', e => {
     if (m) { e.preventDefault(); m.close(); return; }
     const p = topPanel();
     if (p) { e.preventDefault(); p.close(); return; }
-    if (MC.canStop(st())) { e.preventDefault(); stop(); }
+    if (MC.canStop(turnStatus())) { e.preventDefault(); stop(); }
     return;
   }
   const mod = e.metaKey || e.ctrlKey, k = e.key.toLowerCase();

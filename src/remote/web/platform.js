@@ -1,4 +1,4 @@
-import { S, st } from './net.js';
+import { S, turnStatus } from './net.js';
 import { actions, refreshSheets } from './ui.js';
 
 const stored = JSON.parse(localStorage.getItem('minicore.prefs') || '{}');
@@ -25,7 +25,7 @@ export const standalone = () => matchMedia('(display-mode: standalone)').matches
 // The screen stays on while this view's turn runs and the page is visible, when the setting asks for it.
 let wakeLock = null;
 export function syncWake() {
-  const want = prefs.wake && !!S.state && !!(st().busy || st().compacting) && !document.hidden && 'wakeLock' in navigator;
+  const want = prefs.wake && !!S.state && !!(turnStatus().busy || turnStatus().compacting) && !document.hidden && 'wakeLock' in navigator;
   if (want && !wakeLock) { wakeLock = 1; navigator.wakeLock.request('screen').then(l => { wakeLock = l; if (!prefs.wake) syncWake(); }, () => { wakeLock = null; }); }
   else if (!want && wakeLock && wakeLock.release) { wakeLock.release(); wakeLock = null; }
 }

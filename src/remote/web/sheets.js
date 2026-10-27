@@ -1,5 +1,5 @@
 import * as MC from './core.js';
-import { HOST, S, ask, cur, intent, online, st } from './net.js';
+import { HOST, S, ask, intent, online, turnStatus, viewed } from './net.js';
 import { installApp, installable, prefs, setPref, standalone } from './platform.js';
 import { actions, copyText, diffView, errBox, h, icon, refreshSheets, rowText, share, sheet, spin, toast } from './ui.js';
 
@@ -57,21 +57,22 @@ function setNotify(on) {
   Notification.requestPermission().then(p => setPref('notify', p === 'granted'));
 }
 // ---- model sheet ----
-const mp = { model: null, level: null };
+// The model and reasoning level asked for and not yet confirmed by the host.
+const modelPending = { model: null, level: null };
 // A rejected or dropped change stops showing as pending.
-export function modelSettled(kind) { if (kind !== 'set_reasoning') mp.model = null; if (kind !== 'set_model') mp.level = null; }
+export function modelSettled(kind) { if (kind !== 'set_reasoning') modelPending.model = null; if (kind !== 'set_model') modelPending.level = null; }
 export function openModel() {
   if (!S.state.models.length) return toast('No models are configured');
   sheet({
-    key: 'model', title: 'Model', deps: () => [cur(), S.state.models, mp, online()],
+    key: 'model', title: 'Model', deps: () => [viewed(), S.state.models, modelPending, online()],
     body: () => {
-      const s = S.state, c = cur(), model = mp.model || c.model, m = s.models.find(x => x.id === model), level = mp.level || c.reasoning;
+      const s = S.state, c = viewed(), model = modelPending.model || c.model, m = s.models.find(x => x.id === model), level = modelPending.level || c.reasoning;
       return [h('div', { class: 'list', role: 'radiogroup', 'aria-label': 'Model' }, s.models.map(x => h('button', {
         class: 'row flat', role: 'radio', 'data-k': 'm' + x.id, 'aria-checked': String(x.id === model), disabled: !online(),
-        onclick: () => { if (x.id !== model && intent(MC.intents.setModel(x.id))) mp.model = x.id; refreshSheets(); },
+        onclick: () => { if (x.id !== model && intent(MC.intents.setModel(x.id))) modelPending.model = x.id; refreshSheets(); },
       }, rowText(x.id, x.reasoning.length ? x.reasoning.join(' · ') : 'No reasoning levels'),
-      x.id === model && (mp.model ? spin('sm') : icon('check', 'ck'))))),
-      m && m.reasoning.length > 0 && [h('h3', 'sec2', 'Reasoning'), seg('Reasoning', m.reasoning.map(l => [l, l]), level, l => { if (l !== level && intent(MC.intents.setReasoning(l))) mp.level = l; refreshSheets(); })]];
+      x.id === model && (modelPending.model ? spin('sm') : icon('check', 'ck'))))),
+      m && m.reasoning.length > 0 && [h('h3', 'sec2', 'Reasoning'), seg('Reasoning', m.reasoning.map(l => [l, l]), level, l => { if (l !== level && intent(MC.intents.setReasoning(l))) modelPending.level = l; refreshSheets(); })]];
     },
   });
 }
@@ -111,7 +112,7 @@ export function openContext() {
   const c = { d: null, err: '' };
   const load = () => ask(MC.queries.context(), r => { if (r.ok) c.d = r.data; else c.err = MC.errorText(r.error); m.refresh(); });
   const m = sheet({
-    key: 'context', side: true, title: 'Context', deps: () => [c, st().busy, st().compacting, online()],
+    key: 'context', side: true, title: 'Context', deps: () => [c, turnStatus().busy, turnStatus().compacting, online()],
     body: () => {
       if (c.err) return errBox(c.err);
       if (!c.d) return h('div', 'loadrow', spin(), 'Loading…');
@@ -122,8 +123,8 @@ export function openContext() {
         h('dl', 'kv mt16', x.rows.map(([k, val]) => [h('dt', '', k), h('dd', '', val)])),
         x.failure && errBox(x.failure, 'mt12', false)];
     },
-    foot: () => h('button', { class: 'btn block', disabled: !online() || st().busy || st().compacting, onclick: () => compactNow(() => { c.d = null; setTimeout(load, 2000); m.refresh(); }) },
-      st().compacting ? [spin(), 'Compacting…'] : [icon('layers', 'sm'), 'Compact now']),
+    foot: () => h('button', { class: 'btn block', disabled: !online() || turnStatus().busy || turnStatus().compacting, onclick: () => compactNow(() => { c.d = null; setTimeout(load, 2000); m.refresh(); }) },
+      turnStatus().compacting ? [spin(), 'Compacting…'] : [icon('layers', 'sm'), 'Compact now']),
   });
   load();
 }

@@ -1,5 +1,5 @@
 import * as MC from './core.js';
-import { HOST, S, abandon, ask, cur, hostNow, intent, online, pendingKind, repaint, send, sending, st } from './net.js';
+import { HOST, S, abandon, ask, hostNow, intent, online, pendingKind, repaint, send, sending, turnStatus, viewed } from './net.js';
 import { prefs } from './platform.js';
 import { openInfo, openNav, openNew, rename } from './sessions.js';
 import { compactNow, exportSession, openChanges, openContext, openHelp, openModel, openSettings } from './sheets.js';
@@ -12,7 +12,7 @@ const ta = $('ta');
 const stripPart = part($('strip'), x => [spin(), h('div', 'stx', h('div', 'st1', h('b', '', x.label), x.started && h('span', 'el', MC.fmtElapsed(hostNow() - x.started)), x.detail && h('span', 'mono', x.detail))),
   x.ctx && h('button', { class: 'ctxb' + (x.hi ? ' hi' : ''), 'aria-label': x.ctx + ' of context used', onclick: () => openContext() }, x.ctx)]);
 function renderStrip() {
-  const s = st(), on = !!(s.busy || s.compacting || s.loading);
+  const s = turnStatus(), on = !!(s.busy || s.compacting || s.loading);
   set($('strip'), 'hidden', !on);
   if (!on) return;
   const x = MC.statusLine(S.state, S.blocks, hostNow());
@@ -21,7 +21,7 @@ function renderStrip() {
     hi: S.state.context_percent >= 80,
   });
 }
-export function stop() { if (MC.canStop(st()) && !st().interrupting && !pendingKind('cancel')) intent(MC.intents.cancel()); }
+export function stop() { if (MC.canStop(turnStatus()) && !turnStatus().interrupting && !pendingKind('cancel')) intent(MC.intents.cancel()); }
 const trayPart = part($('tray'), t => [
   t.lost.map(([id, text]) => h('div', { class: 'lost', role: 'alert' }, icon('warn', 'sm'),
     h('div', '', h('div', '', 'Not sent · it may or may not have arrived'), h('div', 'lt', text)),
@@ -55,7 +55,7 @@ const PRIMARY = {
 };
 let primary = '', stopAt = 0, press = null;
 const composerState = () => {
-  const s = st(), lock = sending();
+  const s = turnStatus(), lock = sending();
   return { busy: !!s.busy, compacting: !!s.compacting, text: ta.value, stopping: MC.canStop(s) && (!!s.interrupting || pendingKind('cancel')), lock };
 };
 const chipsPart = part($('chips'), c => [h('div', 'cl',
@@ -70,7 +70,7 @@ const chipsPart = part($('chips'), c => [h('div', 'cl',
     c.kind === 'stopping' ? spin() : icon(PRIMARY[c.kind].icon)),
 ]);
 function renderChips() {
-  const s = st(), c = cur(), d = S.state.draft, cs = composerState(), kind = MC.primaryKind(cs), typed = cs.text.trim() !== '';
+  const s = turnStatus(), c = viewed(), d = S.state.draft, cs = composerState(), kind = MC.primaryKind(cs), typed = cs.text.trim() !== '';
   set(ta, 'readOnly', cs.lock);
   set(ta, 'placeholder', s.busy ? (hover.matches ? tips() + ' to steer · ' + ALT + 'Enter to queue' : 'Steer, or queue a follow-up…') : S.state.session ? 'Message MiniCore · / for commands' : 'Describe a task to start');
   if (kind !== primary) {
@@ -227,7 +227,7 @@ ta.addEventListener('keydown', e => {
     composerInput();
     return;
   }
-  const act = MC.composerKey({ key: e.key, shift: e.shiftKey, alt: e.altKey, mod: e.metaKey || e.ctrlKey }, { busy: !!st().busy, text: ta.value, popup: !!(menu && menu.items.length), enter: prefs.enter });
+  const act = MC.composerKey({ key: e.key, shift: e.shiftKey, alt: e.altKey, mod: e.metaKey || e.ctrlKey }, { busy: !!turnStatus().busy, text: ta.value, popup: !!(menu && menu.items.length), enter: prefs.enter });
   if (act) { e.preventDefault(); submit(act); }
 });
 ta.addEventListener('blur', () => setTimeout(() => { if (document.activeElement !== ta) setMenu(null); }, 150));

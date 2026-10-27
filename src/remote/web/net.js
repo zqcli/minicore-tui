@@ -11,8 +11,8 @@ export const repaint = () => on.render();
 
 export const tz = () => new Date().getTimezoneOffset();
 export const hostNow = () => Date.now() + S.skew;
-export const st = () => S.state.status;
-export const cur = () => S.state.session || S.state.draft;
+export const turnStatus = () => S.state.status;
+export const viewed = () => S.state.session || S.state.draft;
 // An unconfirmed send that went back to the composer is no longer tracked.
 export const abandon = id => S.intents.delete(id);
 // Ids keep counting so a late reply never matches a new request.

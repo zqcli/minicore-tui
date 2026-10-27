@@ -1,5 +1,5 @@
 import * as MC from './core.js';
-import { HOST, S, fsCall, hostNow, intent, online, st, tz } from './net.js';
+import { HOST, S, fsCall, hostNow, intent, online, turnStatus, tz } from './net.js';
 import { compactNow, confirmSheet, exportSession, openChanges, openContext, openModel, openSettings, seg } from './sheets.js';
 import { $, actions, closeAll, copyText, errBox, fill, findSheet, h, icon, layout, menuRow, part, popModal, pushModal, refreshSheets, rowText, sheet, spin, wide } from './ui.js';
 
@@ -19,7 +19,7 @@ export function syncTick() {
   if (!want && tick) { clearInterval(tick); tick = 0; }
 }
 function onTick() {
-  const el = $('strip').querySelector('.el'), x = st();
+  const el = $('strip').querySelector('.el'), x = turnStatus();
   if (el && x.started_ms) el.textContent = MC.fmtElapsed(hostNow() - x.started_ms);
   if (navShown()) for (const e of $('nav').querySelectorAll('[data-start]')) e.textContent = MC.fmtElapsed(hostNow() - +e.dataset.start);
 }
@@ -183,71 +183,72 @@ export function openInfo() {
 }
 
 // ---- new session ----
-let ns = null;
+// The folder picker of the open "New session" sheet.
+let picker = null;
 export function openNew() {
   const s = S.state;
-  ns = { roots: null, listing: null, sel: s.draft.workspace, hidden: false, err: '', busy: true, mk: false, mkName: '', profile: s.draft.profile, starting: false, last: '' };
-  const me = ns;
+  picker = { roots: null, listing: null, sel: s.draft.workspace, hidden: false, err: '', busy: true, mk: false, mkName: '', profile: s.draft.profile, starting: false, last: '' };
+  const me = picker;
   sheet({
-    key: 'new', cls: 'full', title: 'New session', onClose: () => { if (ns === me) ns = null; }, deps: () => [ns && { ...ns, roots: !!ns.roots }, online(), S.state.profiles],
-    body: renderNew, foot: () => h('button', { class: 'btn primary block', 'data-k': 'start', disabled: !ns.sel || ns.starting || !online(), onclick: () => {
-      if (intent(MC.intents.newSession(ns.sel, ns.profile), a => { if (!ns) return; ns.starting = false; if (a.ok) closeAll(); else { ns.err = MC.errorText(a.error); refreshSheets(); } })) ns.starting = true;
+    key: 'new', cls: 'full', title: 'New session', onClose: () => { if (picker === me) picker = null; }, deps: () => [picker && { ...picker, roots: !!picker.roots }, online(), S.state.profiles],
+    body: renderNew, foot: () => h('button', { class: 'btn primary block', 'data-k': 'start', disabled: !picker.sel || picker.starting || !online(), onclick: () => {
+      if (intent(MC.intents.newSession(picker.sel, picker.profile), a => { if (!picker) return; picker.starting = false; if (a.ok) closeAll(); else { picker.err = MC.errorText(a.error); refreshSheets(); } })) picker.starting = true;
       refreshSheets();
-    } }, ns.starting && spin(), ns.sel ? 'Start in ' + MC.basename(ns.sel) : 'Choose a folder'),
+    } }, picker.starting && spin(), picker.sel ? 'Start in ' + MC.basename(picker.sel) : 'Choose a folder'),
   });
   fsCall(MC.fs.roots(), r => {
-    if (ns !== me) return;
-    ns.busy = false;
-    if (!r.ok) { ns.err = MC.fsError(r); return refreshSheets(); }
-    ns.roots = r.roots;
+    if (picker !== me) return;
+    picker.busy = false;
+    if (!r.ok) { picker.err = MC.fsError(r); return refreshSheets(); }
+    picker.roots = r.roots;
     const w = s.draft.workspace;
     if (w && r.roots.some(x => MC.within(w, x.path))) list(w); else refreshSheets();
   });
 }
 function list(path) {
-  const me = ns, id = ns.last = path + '|' + ns.hidden;
-  ns.busy = true; ns.err = '';
-  fsCall(MC.fs.list(path, ns.hidden), r => {
-    if (ns !== me || ns.last !== id) return;
-    ns.busy = false;
-    if (r.ok) { ns.listing = r.listing; ns.sel = r.listing.path; ns.mk = false; } else ns.err = MC.fsError(r);
+  const me = picker, id = picker.last = path + '|' + picker.hidden;
+  picker.busy = true; picker.err = '';
+  fsCall(MC.fs.list(path, picker.hidden), r => {
+    if (picker !== me || picker.last !== id) return;
+    picker.busy = false;
+    if (r.ok) { picker.listing = r.listing; picker.sel = r.listing.path; picker.mk = false; } else picker.err = MC.fsError(r);
     refreshSheets();
   });
   refreshSheets();
 }
 function mkdir() {
-  const name = ns.mkName.trim(), me = ns;
-  if (!name || !ns.listing) return;
-  ns.busy = true; ns.err = '';
-  fsCall(MC.fs.mkdir(ns.listing.path, name), r => {
-    if (ns !== me) return;
-    ns.busy = false;
-    if (r.ok) { ns.mkName = ''; list(r.created); } else { ns.err = MC.fsError(r); refreshSheets(); }
+  const name = picker.mkName.trim(), me = picker;
+  if (!name || !picker.listing) return;
+  picker.busy = true; picker.err = '';
+  fsCall(MC.fs.mkdir(picker.listing.path, name), r => {
+    if (picker !== me) return;
+    picker.busy = false;
+    if (r.ok) { picker.mkName = ''; list(r.created); } else { picker.err = MC.fsError(r); refreshSheets(); }
   });
   refreshSheets();
 }
 function renderNew() {
-  const s = S.state, L = ns.listing, roots = ns.roots || [], recent = MC.recentWorkspaces(s.sessions);
-  const folderRow = (name, sub, path, nav, ic) => h('button', { class: 'row', 'data-k': (nav ? 'n' : 's') + path, disabled: ns.starting,
-    onclick: () => nav ? list(path) : (ns.sel = path, refreshSheets()) }, icon(ic || 'folder', 'ri'), rowText(name, sub),
-    nav ? icon('chev', 'sm ri') : ns.sel === path && icon('check', 'ck'));
+  const s = S.state, L = picker.listing, roots = picker.roots || [], recent = MC.recentWorkspaces(s.sessions);
+  const folderRow = (name, sub, path, nav, ic) => h('button', { class: 'row', 'data-k': (nav ? 'n' : 's') + path, disabled: picker.starting,
+    onclick: () => nav ? list(path) : (picker.sel = path, refreshSheets()) }, icon(ic || 'folder', 'ri'), rowText(name, sub),
+    nav ? icon('chev', 'sm ri') : picker.sel === path && icon('check', 'ck'));
   const crumbs = L && MC.crumbs(L.path, roots);
   const profiles = s.profiles;
   return [
-    profiles.length > 1 && [h('h3', 'sec2', 'Profile'), seg('Profile', profiles.map(p => [p, p]), ns.profile, p => { ns.profile = p; refreshSheets(); })],
+    profiles.length > 1 && [h('h3', 'sec2', 'Profile'), seg('Profile', profiles.map(p => [p, p]), picker.profile, p => { picker.profile = p; refreshSheets(); })],
     recent.length > 0 && [h('h3', 'sec2', 'Recent workspaces'), h('div', 'list', recent.map(w => folderRow(MC.basename(w), MC.tilde(w), w, false)))],
-    h('h3', 'sec2', h('span', '', 'Browse'), ns.busy && spin('sm')),
-    L && h('nav', { class: 'crumbs', 'aria-label': 'Folder path' }, h('button', { onclick: () => { ns.listing = null; ns.mk = false; refreshSheets(); } }, 'Roots'),
+    h('h3', 'sec2', h('span', '', 'Browse'), picker.busy && spin('sm')),
+    L && h('nav', { class: 'crumbs', 'aria-label': 'Folder path' }, h('button', { onclick: () => { picker.listing = null; picker.mk = false; refreshSheets(); } }, 'Roots'),
       crumbs.map((c, k) => [icon('chev', 'xs'), h('button', { 'aria-current': k === crumbs.length - 1 ? 'location' : null, onclick: () => list(c.path) }, c.name)])),
-    L && h('div', 'tools', h('label', 'sw', h('span', '', 'Show hidden'), h('input', { type: 'checkbox', role: 'switch', checked: ns.hidden, onchange: e => { ns.hidden = e.target.checked; list(L.path); } })),
-      h('button', { class: 'btn ghost sm', 'aria-expanded': String(ns.mk), onclick: () => { ns.mk = !ns.mk; refreshSheets(); if (ns.mk) findSheet('new').el.querySelector('#mkname').focus(); } }, icon('folderplus', 'sm'), 'New folder')),
-    ns.mk && L && h('div', 'mkrow',
-      h('input', { id: 'mkname', class: 'tf', 'data-k': 'mk', value: ns.mkName, placeholder: 'Folder name', 'aria-label': 'New folder name', autocapitalize: 'none', autocomplete: 'off', spellcheck: 'false', enterKeyHint: 'done',
-        oninput: e => { ns.mkName = e.target.value; }, onkeydown: e => { if (e.key === 'Enter') { e.preventDefault(); mkdir(); } } }),
-      h('button', { class: 'btn primary', disabled: ns.busy, onclick: mkdir }, 'Create')),
-    ns.err && errBox(ns.err),
+    L && h('div', 'tools', h('label', 'sw', h('span', '', 'Show hidden'), h('input', { type: 'checkbox', role: 'switch', checked: picker.hidden, onchange: e => { picker.hidden = e.target.checked; list(L.path); } })),
+      h('button', { class: 'btn ghost sm', 'aria-expanded': String(picker.mk), onclick: () => { picker.mk = !picker.mk; refreshSheets(); if (picker.mk) findSheet('new').el.querySelector('#mkname').focus(); } }, icon('folderplus', 'sm'), 'New folder')),
+    picker.mk && L && h('div', 'mkrow',
+      h('input', { id: 'mkname', class: 'tf', 'data-k': 'mk', value: picker.mkName, placeholder: 'Folder name', 'aria-label': 'New folder name', autocapitalize: 'none', autocomplete: 'off', spellcheck: 'false', enterKeyHint: 'done',
+        oninput: e => { picker.mkName = e.target.value; }, onkeydown: e => { if (e.key === 'Enter') { e.preventDefault(); mkdir(); } } }),
+      h('button', { class: 'btn primary', disabled: picker.busy, onclick: mkdir }, 'Create')),
+    picker.err && errBox(picker.err),
     L ? h('div', 'list', L.parent != null && folderRow(MC.basename(L.parent), 'Parent folder', L.parent, true, 'up'), L.entries.map(x => folderRow(x.name, null, x.path, true)),
-      !L.entries.length && !ns.busy && h('div', 'muted', 'No folders here'))
+      !L.entries.length && !picker.busy && h('div', 'muted', 'No folders here'))
       : roots.length > 0 && h('div', 'list', roots.map(r => MC.isDrive(r.path) ? folderRow(r.name, null, r.path, true, 'disk') : folderRow(r.name, MC.tilde(r.path), r.path, true))),
     L && L.truncated && h('div', 'hint', 'Only the first 1000 folders are shown.'),
   ];

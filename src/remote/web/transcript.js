@@ -1,7 +1,7 @@
 import * as MC from './core.js';
 import { mdInc } from './markdown.js';
 import { fillComposer, loadDraft } from './composer.js';
-import { S, hostNow, intent, pendingKind, sending, st, tz } from './net.js';
+import { S, hostNow, intent, pendingKind, sending, turnStatus, tz } from './net.js';
 import { prefs } from './platform.js';
 import { openNew } from './sessions.js';
 import { openChanges, openOutput } from './sheets.js';
@@ -188,7 +188,7 @@ function userActions(b) {
   sheet({
     key: 'uact', cls: 'dialog', head: hid => h('h2', { id: hid }, 'Message', b.at && h('span', 'sub2', MC.stamp(b.at, hostNow(), tz()))),
     body: m => h('div', 'list', menuRow(m, 'copy', 'Copy', () => copyText(b.text)), menuRow(m, 'edit', 'Edit in composer', () => fillComposer(b.text)),
-      menuRow(m, 'retry', 'Send again', () => { if (!sending()) intent(st().busy ? MC.intents.queue(b.text) : MC.intents.submit(b.text)); })),
+      menuRow(m, 'retry', 'Send again', () => { if (!sending()) intent(turnStatus().busy ? MC.intents.queue(b.text) : MC.intents.submit(b.text)); })),
   });
 }
 function turnClock(i) {
@@ -355,42 +355,42 @@ export function markDenied(call, text) {
   if (i >= 0) markDirty([i]);
 }
 // Find in the loaded transcript: matches are highlighted in place (CSS highlights), folds holding one open.
-const fd = { on: false, q: '', ranges: [], k: 0 };
-let findT = 0;
+const finder = { on: false, q: '', ranges: [], k: 0 };
+let findTimer = 0;
 const findPart = part($('findbar'), on => on && findBar());
-function renderFind() { findPart(fd.on && [fd.q, fd.ranges.length, fd.k]); }
+function renderFind() { findPart(finder.on && [finder.q, finder.ranges.length, finder.k]); }
 function openFind() {
-  fd.on = true;
+  finder.on = true;
   renderFind();
   const i = $('findq');
   i.focus(); i.select();
 }
 function closeFind() {
-  fd.on = false; fd.q = ''; fd.ranges = [];
+  finder.on = false; finder.q = ''; finder.ranges = [];
   if (window.CSS && CSS.highlights) { CSS.highlights.delete('find'); CSS.highlights.delete('findc'); }
   renderFind();
 }
 function findBar() {
-  const n = fd.ranges.length;
+  const n = finder.ranges.length;
   return h('div', { class: 'banner find', role: 'search' }, icon('search', 'sm'),
-    h('input', { id: 'findq', type: 'search', class: 'fq', value: fd.q, placeholder: 'Find in session', 'aria-label': 'Find in session', 'data-k': 'findq', autocomplete: 'off', enterKeyHint: 'search',
-      oninput: e => { fd.q = e.target.value; clearTimeout(findT); findT = setTimeout(runFind, 150); },
+    h('input', { id: 'findq', type: 'search', class: 'fq', value: finder.q, placeholder: 'Find in session', 'aria-label': 'Find in session', 'data-k': 'findq', autocomplete: 'off', enterKeyHint: 'search',
+      oninput: e => { finder.q = e.target.value; clearTimeout(findTimer); findTimer = setTimeout(runFind, 150); },
       onkeydown: e => { if (e.key === 'Enter') { e.preventDefault(); findStep(e.shiftKey ? -1 : 1); } else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeFind(); } } }),
-    h('span', { class: 'fc', 'aria-live': 'polite' }, fd.q ? (n ? fd.k + 1 + '/' + n : 'No matches') : ''),
+    h('span', { class: 'fc', 'aria-live': 'polite' }, finder.q ? (n ? finder.k + 1 + '/' + n : 'No matches') : ''),
     h('button', { class: 'ib s', 'aria-label': 'Previous match', disabled: !n, onclick: () => findStep(-1) }, icon('chevu', 'sm')),
     h('button', { class: 'ib s', 'aria-label': 'Next match', disabled: !n, onclick: () => findStep(1) }, icon('chevd', 'sm')),
     h('button', { class: 'ib s', 'aria-label': 'Close find', onclick: closeFind }, icon('x', 'sm')));
 }
 function runFind() {
-  for (const i of MC.findBlocks(S.blocks, fd.q, lo, hi)) {
+  for (const i of MC.findBlocks(S.blocks, finder.q, lo, hi)) {
     const r = roles[i - lo], b = S.blocks[i];
     if (r && r.f) opened.set(r.f.key, true);
     if (r && r.g) opened.set(r.g.key, true);
-    if (b.type === 'tool' && !b.detail.toLowerCase().includes(fd.q.toLowerCase())) opened.set('t' + b.call_id, true);
+    if (b.type === 'tool' && !b.detail.toLowerCase().includes(finder.q.toLowerCase())) opened.set('t' + b.call_id, true);
     dirty.add(i);
   }
   flush();
-  const q = fd.q.toLowerCase(), ranges = [];
+  const q = finder.q.toLowerCase(), ranges = [];
   if (q) {
     const w = document.createTreeWalker(box, NodeFilter.SHOW_TEXT, { acceptNode: t => t.parentElement.closest('[hidden],.tp') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT });
     while (w.nextNode()) {
@@ -398,14 +398,14 @@ function runFind() {
       for (let k = s.indexOf(q); k >= 0; k = s.indexOf(q, k + q.length)) { const r = new Range(); r.setStart(t, k); r.setEnd(t, k + q.length); ranges.push(r); }
     }
   }
-  fd.ranges = ranges; fd.k = Math.max(0, ranges.length - 1);
+  finder.ranges = ranges; finder.k = Math.max(0, ranges.length - 1);
   paintFind();
 }
-function findStep(d) { if (fd.ranges.length) { fd.k = (fd.k + d + fd.ranges.length) % fd.ranges.length; paintFind(); } }
+function findStep(d) { if (finder.ranges.length) { finder.k = (finder.k + d + finder.ranges.length) % finder.ranges.length; paintFind(); } }
 function paintFind() {
-  const r = fd.ranges[fd.k];
+  const r = finder.ranges[finder.k];
   if (window.CSS && CSS.highlights) {
-    CSS.highlights.set('find', new Highlight(...fd.ranges));
+    CSS.highlights.set('find', new Highlight(...finder.ranges));
     if (r) CSS.highlights.set('findc', new Highlight(r)); else CSS.highlights.delete('findc');
   }
   if (r) { const y = r.getBoundingClientRect().top - log.getBoundingClientRect().top; log.scrollTop += y - log.clientHeight / 3; }

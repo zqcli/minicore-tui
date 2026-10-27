@@ -1,5 +1,5 @@
 import * as MC from './core.js';
-import { S, cur, intent, online, pendingKind } from './net.js';
+import { S, intent, online, pendingKind, viewed } from './net.js';
 import { notify, prefs } from './platform.js';
 import { markDenied } from './transcript.js';
 import { $, announce, diffView, findSheet, h, hover, icon, inField, part, set, sheet, spin, toast, topModal } from './ui.js';
@@ -10,8 +10,8 @@ export function syncApproval() {
   const a = S.state.interaction, m = findSheet('appr');
   if (!a) {
     // Answered elsewhere: a denied tool row says so.
-    if (apprId && ap.call) markDenied(ap.call);
-    apprId = null; ap.call = null;
+    if (apprId && reply.call) markDenied(reply.call);
+    apprId = null; reply.call = null;
     if (m) m.close(true);
     renderApprBar();
     return;
@@ -19,18 +19,19 @@ export function syncApproval() {
   if (a.id !== apprId) {
     apprId = a.id; apprAt = Date.now();
     const t = [...S.blocks].reverse().find(b => b.type === 'tool' && b.state === 'pending');
-    ap.call = t ? t.call_id : null;
+    reply.call = t ? t.call_id : null;
     announce(a.kind === 'approval' ? 'Approval needed' : 'Question: ' + (a.prompt || ''));
     notify(a.kind === 'approval' ? 'Approval needed: ' + MC.approvalLine(a) : a.prompt || 'A question is waiting', S.sid);
     if (!m) openApproval(a);
   }
   renderApprBar();
 }
-const ap = { deny: false, reason: '', call: null };
+// The sheet's own state: the denial form being filled in and the tool row the question belongs to.
+const reply = { deny: false, reason: '', call: null };
 function openApproval() {
-  ap.deny = false; ap.reason = '';
+  reply.deny = false; reply.reason = '';
   const m = sheet({
-    key: 'appr', closeIcon: 'chevd', closeLabel: 'Minimize', footCls: 'col', deps: () => [S.state.interaction, pendingKind('answer'), online(), ap.deny],
+    key: 'appr', closeIcon: 'chevd', closeLabel: 'Minimize', footCls: 'col', deps: () => [S.state.interaction, pendingKind('answer'), online(), reply.deny],
     head: hid => {
       const a = S.state.interaction, t = a.kind === 'approval' && MC.approvalTitle(a);
       return h('div', 'ahead', h('div', 'eicon', icon(t ? 'shield' : 'info')), h('div', '',
@@ -42,17 +43,17 @@ function openApproval() {
       if (a.kind !== 'approval') return h('div', 'opts', MC.approvalOptions(a).map(o => h('button', { class: 'btn', 'data-k': 'o' + o.n, disabled: !online() || !!p, onclick: () => answer(o.choice) },
         p && p.spec.choice === o.choice ? spin() : h('b', '', String(o.n)), h('span', '', o.label))));
       const x = MC.approvalBody(a);
-      return [x.cmd && [h('pre', 'cmdbox', '$ ' + x.cmd), h('div', 'where2', 'in ' + MC.tilde(cur().workspace))], x.diff && diffView(x.diff, prefs.wrap), x.text && h('pre', 'cmdbox', x.text)];
+      return [x.cmd && [h('pre', 'cmdbox', '$ ' + x.cmd), h('div', 'where2', 'in ' + MC.tilde(viewed().workspace))], x.diff && diffView(x.diff, prefs.wrap), x.text && h('pre', 'cmdbox', x.text)];
     },
     foot: () => {
       const a = S.state.interaction, p = MC.pending(S, 'answer'), dis = !online() || !!p;
       if (a.kind !== 'approval') return hover.matches && h('div', 'akeys', 'Press 1–' + a.options.length + ' to answer');
       const ans = (o, cls, fn) => h('button', { class: 'btn ' + cls, 'data-k': o.choice, disabled: dis, onclick: fn || (() => answer(o.choice)) }, p && p.spec.choice === o.choice && spin(), o.label);
       const [allow, session, deny] = MC.approvalOptions(a);
-      if (ap.deny) return [h('form', { class: 'reason', onsubmit: e => { e.preventDefault(); answer('deny', ap.reason.trim()); } },
-        h('input', { class: 'tf', id: 'why', 'data-k': 'why', value: ap.reason, placeholder: 'Tell the agent why (optional)', 'aria-label': 'Reason for denying', autocomplete: 'off', enterKeyHint: 'send', oninput: e => { ap.reason = e.target.value; } })),
-        h('div', 'row2', h('button', { class: 'btn', onclick: () => { ap.deny = false; m.refresh(); } }, 'Back'), ans(deny, 'dangerfill', () => answer('deny', ap.reason.trim())))];
-      return [ans(allow, 'primary'), session && ans(session, ''), ans({ ...deny, label: deny.label + '…' }, 'danger', () => { ap.deny = true; m.refresh(); m.el.querySelector('#why').focus(); }),
+      if (reply.deny) return [h('form', { class: 'reason', onsubmit: e => { e.preventDefault(); answer('deny', reply.reason.trim()); } },
+        h('input', { class: 'tf', id: 'why', 'data-k': 'why', value: reply.reason, placeholder: 'Tell the agent why (optional)', 'aria-label': 'Reason for denying', autocomplete: 'off', enterKeyHint: 'send', oninput: e => { reply.reason = e.target.value; } })),
+        h('div', 'row2', h('button', { class: 'btn', onclick: () => { reply.deny = false; m.refresh(); } }, 'Back'), ans(deny, 'dangerfill', () => answer('deny', reply.reason.trim())))];
+      return [ans(allow, 'primary'), session && ans(session, ''), ans({ ...deny, label: deny.label + '…' }, 'danger', () => { reply.deny = true; m.refresh(); m.el.querySelector('#why').focus(); }),
         hover.matches && h('div', 'akeys', 'Y allow · A allow for this session · N deny')];
     },
     onClose: () => renderApprBar(),
@@ -60,7 +61,7 @@ function openApproval() {
 }
 // Only a denial is recorded on its tool row, with the reason: it explains why the tool did not run.
 function answer(choice, message) {
-  const a = S.state.interaction, call = ap.call;
+  const a = S.state.interaction, call = reply.call;
   if (!a || pendingKind('answer')) return;
   intent(MC.intents.answer(a.id, choice, message || undefined), ack => {
     if (!ack.ok) return toast(MC.errorText(ack.error), ack.error === 'stale' ? null : 'error');
