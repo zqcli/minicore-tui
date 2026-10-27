@@ -527,6 +527,8 @@ function place(n, old) {
 function flush() {
   raf = 0;
   if (!S.state) return;
+  // The strip names the running tool from the blocks, which change without a state message.
+  renderStrip();
   // Only the block being written shows the caret.
   const live = MC.liveBlock(S.blocks, S.state.status.busy);
   if (live !== liveIdx) { for (const i of [liveIdx, live]) if (i >= 0) dirty.add(i); liveIdx = live; }
