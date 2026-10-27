@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Confirming an IME candidate with Enter no longer submits the message when
+  Safari reports the key outside composition with key code 229.
 - Finished work folds separately between steering messages, preserving the
   order of instructions and tool calls with per-segment counts and durations.
 - Settings switches use the full row width, with readable descriptions and

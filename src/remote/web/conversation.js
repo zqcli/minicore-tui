@@ -205,7 +205,8 @@ function accept(k) {
   composerInput();
 }
 ta.addEventListener('keydown', e => {
-  if (e.isComposing) return;
+  // Safari can clear isComposing before the candidate-confirming Enter.
+  if (e.isComposing || e.keyCode === 229) return;
   if (menu && menu.items.length && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
     e.preventDefault();
     setMenu({ ...menu, sel: (menu.sel + (e.key === 'ArrowDown' ? 1 : menu.items.length - 1)) % menu.items.length });
