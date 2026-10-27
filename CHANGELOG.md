@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Finished work folds separately between steering messages, preserving the
+  order of instructions and tool calls with per-segment counts and durations.
 - Settings switches use the full row width, with readable descriptions and
   right-aligned controls on phones and desktops.
 

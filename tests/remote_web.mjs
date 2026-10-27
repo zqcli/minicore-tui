@@ -724,16 +724,30 @@ test('a finished turn folds tools and intermediate thinking before the final ans
   const bl = [ask('go'), said('', 'plan'), tool('a', 'bash'), said('checking'), tool('b', 'read', { state: 'failed' }), said(''), { type: 'user', kind: 'steering', text: 'also', at: 0 }, tool('c', 'edit'), said('Done.', 'final thought'), end('t1'),
     ask('next'), tool('d', 'bash'), said('working', '', true)];
   const f = plain(MC.foldTurns(bl, 0, bl.length));
-  assert.equal(f.length, 1);
-  assert.deepEqual(f[0], { key: 'ft1', at: 1, last: 7, hidden: [1, 2, 3, 4, 7], tools: 3, failed: 1, ms: 47000, added: 12, removed: 4 });
-  assert.equal(MC.foldText(f[0]), 'Worked 47.0 s');
+  assert.equal(f.length, 2);
+  assert.deepEqual(f[0], { key: 'ft1:1', at: 1, last: 4, hidden: [1, 2, 3, 4], tools: 2, failed: 1, ms: 0, added: 12, removed: 4 });
+  assert.deepEqual(f[1], { key: 'ft1:7', at: 7, last: 7, hidden: [7], tools: 1, failed: 0, ms: 47000, added: null, removed: null });
+  assert.equal(MC.foldText(f[1]), 'Worked 47.0 s');
   // No answer after the last tool: everything up to the turn end folds.
   const noAnswer = plain(MC.foldTurns([ask('go'), said('first'), tool('a', 'bash'), end('t2', { changes: null })], 0, 4));
   assert.deepEqual(noAnswer[0].hidden, [1, 2]);
   assert.equal(noAnswer[0].added, null);
   // A turn of only an answer has nothing to fold; a window that starts mid-turn folds from its start.
   assert.deepEqual(plain(MC.foldTurns([ask('hi'), said('hello'), end('t3')], 0, 3)), []);
-  assert.deepEqual(plain(MC.foldTurns(bl, 3, 10))[0].hidden, [3, 4, 7]);
+  assert.deepEqual(plain(MC.foldTurns(bl, 3, 10))[0].hidden, [3, 4]);
+});
+
+test('worked segments preserve two steers, counts and timestamp boundaries', () => {
+  const steer = at => ({ type: 'user', kind: 'steering', text: 'change direction', at });
+  const bl = [ask('go'), tool('a', 'bash'), steer(10000), tool('b', 'bash', { state: 'failed' }), steer(30000), tool('c', 'bash'), said('answer'), end('seg')];
+  const folds = MC.foldTurns(bl, 0, bl.length);
+  assert.deepEqual(folds.map(f => [f.hidden, f.tools, f.failed, f.ms]), [[[1], 1, 0, 10000], [[3], 1, 1, 20000], [[5], 1, 0, 17000]]);
+  assert.equal(new Set(folds.map(f => f.key)).size, 3);
+  bl.splice(5, 1);
+  assert.deepEqual(MC.foldTurns(bl, 0, bl.length).map(f => f.hidden), [[1], [3]]);
+  bl[2].at = null;
+  assert.deepEqual(MC.foldTurns(bl, 0, bl.length).map(f => f.ms), [null, null]);
+  assert.equal(MC.foldTurns([ask('go'), tool('a', 'bash'), said('answer'), end('plain')], 0, 4)[0].ms, 47000);
 });
 
 test('consecutive reads and searches group into one row with a count', () => {

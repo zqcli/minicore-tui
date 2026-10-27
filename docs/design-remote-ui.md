@@ -235,9 +235,11 @@ re-renders on every `state`).
   (full-screen output viewer: tail first, wrap toggle, copy, **Load full
   output** via `tool_output`). Failed tools auto-expand their last lines.
   Edits render as diffs (below).
-- **Turn folding**: when a turn ends, its tool rows and intermediate thinking
-  fold into one summary row "Worked 47 s · 5 tools · +12 −4 ›" placed where
-  the turn's work started; the final answer stays visible. Expanding adds a
+- **Turn folding**: when a turn ends, steering messages split its work into
+  segments. Each segment folds its tools and intermediate thinking into a
+  "Worked 47 s · 5 tools ›" row in place, with its own tool and failed counts.
+  Duration uses the bounding prompt, steering and turn-end clocks when known;
+  otherwise it is omitted. The final answer stays visible. Expanding adds a
   trailing "Hide" row; anchoring keeps the tapped row in place. The running
   turn is never folded.
 - **Turn end** line stays (completed / interrupted / failed, duration, clock

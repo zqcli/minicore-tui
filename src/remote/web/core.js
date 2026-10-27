@@ -468,29 +468,37 @@ function groupTools(blocks, from, to) {
   end();
   return out;
 }
-// A finished turn folds its work (tools, thinking, answers before the last tool) into one summary row; messages, compactions,
-// the final answer and the turn-end line stay.
+// Steering messages split finished work so folding never moves steps across a user's instruction.
 function foldTurns(blocks, from, to) {
   const out = [];
-  let start = from;
+  let start = from, promptAt = null;
   for (let i = from; i < to; i++) {
     const b = blocks[i];
-    if ((b.type === 'user' && b.kind !== 'steering') || b.type === 'earlier') { start = i + 1; continue; }
+    if ((b.type === 'user' && b.kind !== 'steering') || b.type === 'earlier') { start = i + 1; promptAt = b.type === 'user' ? b.at : null; continue; }
     if (b.type !== 'turn_end') continue;
-    let fin = i, tools = 0, failed = 0;
+    let fin = i;
     for (let j = i - 1; j >= start && blocks[j].type !== 'tool'; j--) if (blocks[j].type === 'assistant' && blocks[j].text) { fin = j; break; }
-    const hidden = [];
-    for (let j = start; j < fin; j++) {
+    let hidden = [], tools = 0, failed = 0, at = promptAt, segment = start;
+    const finish = until => {
+      if (hidden.length) {
+        const c = b.changes;
+        out.push({ key: 'f' + b.loop_id + ':' + segment, at: hidden[0], last: hidden[hidden.length - 1], hidden, tools, failed,
+          ms: at != null && until != null ? until - at : null,
+          added: c && c.files && segment === start ? c.added : null, removed: c && c.files && segment === start ? c.removed : null });
+      }
+      hidden = []; tools = failed = 0;
+    };
+    for (let j = start; j < i; j++) {
       const x = blocks[j];
-      if (x.type === 'tool') { tools++; if (x.state === 'failed') failed++; }
-      if ((x.type === 'tool' || x.type === 'assistant') && !quiet(x)) hidden.push(j);
+      if (x.type === 'user' && x.kind === 'steering') {
+        finish(x.at); at = x.at; segment = j + 1;
+      } else if (j < fin) {
+        if (x.type === 'tool') { tools++; if (x.state === 'failed') failed++; }
+        if ((x.type === 'tool' || x.type === 'assistant') && !quiet(x)) hidden.push(j);
+      }
     }
-    if (hidden.length) {
-      const c = b.changes;
-      out.push({ key: 'f' + b.loop_id, at: hidden[0], last: hidden[hidden.length - 1], hidden, tools, failed, ms: b.duration_ms,
-        added: c && c.files ? c.added : null, removed: c && c.files ? c.removed : null });
-    }
-    start = i + 1;
+    finish(promptAt != null && b.duration_ms != null ? promptAt + b.duration_ms : null);
+    start = i + 1; promptAt = null;
   }
   return out;
 }
