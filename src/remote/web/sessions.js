@@ -31,7 +31,17 @@ export function buildNav() {
     h('button', { class: 'ib nclose', 'aria-label': 'Close', onclick: closeNav }, icon('x'))),
     h('button', { class: 'btn primary nnew', 'data-focus': true, onclick: () => openNew() }, icon('plus', 'sm'), 'New session'),
     h('label', 'search', icon('search', 'sm'), q), h('div', 'nlist'), h('div', 'nfoot'));
-  listPart = part(nav.querySelector('.nlist'), renderList);
+  const list = nav.querySelector('.nlist');
+  listPart = part(list, renderList);
+  // One listener for every row: data-k is "s<id>" on a row's open button and "m<id>" on its actions.
+  list.addEventListener('click', e => {
+    const b = e.target.closest('[data-k]');
+    if (!b) return;
+    const id = b.dataset.k.slice(1);
+    if (b.dataset.k[0] === 'm') sessionActions(id);
+    else if (b.closest('.srow').classList.contains('cur')) closeNav();
+    else if (!pendingRow && intent(MC.intents.openSession(id))) { pendingRow = id; renderNav(); }
+  });
   footPart = part(nav.querySelector('.nfoot'), f => [h('span', 'cdot' + (f.on ? '' : ' off')), h('span', '', f.text)]);
 }
 let listPart, footPart;
@@ -79,9 +89,8 @@ function sessionRow([id, title, ws, current, status, started, unseen, rel, bad])
   return h('div', 'srow' + (current ? ' cur' : ''), h('button', {
     class: 'sopen', 'data-k': 's' + id, 'aria-current': current ? 'page' : null,
     'aria-label': MC.titled(title) + ', ' + MC.basename(ws) + (status === 'approval' ? ', needs you' : status === 'running' ? ', running' : ''),
-    onclick: () => { if (current) return closeNav(); if (!pendingRow && intent(MC.intents.openSession(id))) { pendingRow = id; renderNav(); } },
   }, shape, rowText(MC.titled(title), [what, ' · ' + MC.basename(ws)]), pendingRow === id && spin('sm')),
-  h('button', { class: 'ib more', 'data-k': 'm' + id, 'aria-label': 'Actions for ' + MC.titled(title), 'aria-haspopup': 'dialog', onclick: () => sessionActions(id) }, icon('more')));
+  h('button', { class: 'ib more', 'data-k': 'm' + id, 'aria-label': 'Actions for ' + MC.titled(title), 'aria-haspopup': 'dialog' }, icon('more')));
 }
 (() => {
   let x0 = null;

@@ -168,9 +168,11 @@ const recentKey = 'minicore.recent.' + HOST;
 let recent = JSON.parse(localStorage.getItem(recentKey) || '[]');
 const popPart = part($('pop'), m => m && (m.items.length ? m.items.map((x, k) => h('button', {
   class: 'opt', role: 'option', id: 'opt' + k, 'aria-selected': String(k === m.sel), tabindex: '-1',
-  onmousedown: e => e.preventDefault(), onclick: () => accept(k),
 }, m.kind === 'cmd' ? [h('span', 'on', '/' + x.name), h('span', 'od', x.description), h('span', 'tag', x.hint || (x.builtin ? '' : 'template'))]
   : [icon('file', 'sm'), h('span', 'od file', x)])) : h('div', 'muted', m.busy ? 'Searching…' : m.kind === 'cmd' ? 'No matching commands' : 'No matching files')));
+// The input keeps its focus through a press on an option.
+$('pop').addEventListener('mousedown', e => { if (e.target.closest('.opt')) e.preventDefault(); });
+$('pop').addEventListener('click', e => { const o = e.target.closest('.opt'); if (o) accept(+o.id.slice(3)); });
 function setMenu(m) {
   menu = m;
   $('pop').hidden = !m;
