@@ -341,33 +341,42 @@ function stamp(ms, now, tz) {
   const d = new Date(ms - tz * 60000);
   return MON[d.getUTCMonth()] + ' ' + d.getUTCDate() + ', ' + clock(ms, tz);
 }
-const DAYS = ['Today', 'Yesterday', 'Previous 7 days', 'Older'];
-function dayGroup(ms, now, tz) {
-  const d = localDay(now, tz) - localDay(ms, tz);
-  return DAYS[d <= 0 ? 0 : d === 1 ? 1 : d <= 7 ? 2 : 3];
-}
 const matchSession = (x, query) => ((x.title || '') + '\n' + x.workspace).toLowerCase().includes((query || '').trim().toLowerCase());
 const busyStatus = st => st === 'running' || st === 'approval' || st === 'compacting';
-const GROUPS = ['Needs you', 'Running', ...DAYS];
-// The drawer: Needs you (longest waiting first), Running (oldest first), then catalog order by day. `frozen` is the order
-// captured on open: rows keep their place and new sessions go to the top of their group.
-function sessionLayout(sessions, now, tz, query, frozen) {
+// The drawer: Needs you (longest waiting first), Running (oldest first), then one group per workspace, the one with the newest
+// session first and each group's sessions newest first. `frozen` is the order captured on open: rows keep their place (and
+// group), and new sessions go to the top of their group.
+function sessionLayout(sessions, query, frozen) {
   const start = x => x.started_ms == null ? Infinity : x.started_ms;
-  const rows = sessions.map((x, k) => {
-    const f = frozen && frozen.get(x.id);
-    if (f) return { x, g: f[0], o: f[1] };
-    const g = x.live && x.status === 'approval' ? 0 : x.live && busyStatus(x.status) ? 1 : 2 + DAYS.indexOf(dayGroup(Date.parse(x.updated_at), now, tz));
-    return { x, g, o: frozen ? k - 1e9 : g < 2 ? start(x) : k, k };
-  });
-  rows.sort((a, b) => a.g - b.g || a.o - b.o || a.k - b.k);
-  const order = new Map(rows.map((r, k) => [r.x.id, [r.g, k]])), groups = [];
+  const rows = sessions.map((x, k) => ({ x, k, g: x.live && x.status === 'approval' ? 0 : x.live && busyStatus(x.status) ? 1 : 2 }));
+  const idle = rows.filter(r => r.g === 2).sort((a, b) => Date.parse(b.x.updated_at) - Date.parse(a.x.updated_at) || a.k - b.k);
+  let n = 0;
+  for (const w of new Set(idle.map(r => r.x.workspace))) for (const r of idle) if (r.x.workspace === w) r.n = n++;
   for (const r of rows) {
-    if (!matchSession(r.x, query)) continue;
-    const label = GROUPS[r.g], g = groups[groups.length - 1];
-    if (g && g.label === label) g.items.push(r.x); else groups.push({ label, items: [r.x] });
+    const f = frozen && frozen.get(r.x.id);
+    if (f) { r.g = f[0]; r.o = f[1]; } else r.o = frozen ? r.k - 1e9 : r.g < 2 ? start(r.x) : r.n;
   }
+  rows.sort((a, b) => a.g - b.g || a.o - b.o || a.k - b.k);
+  const all = [], byWs = new Map(), kind = new Map();
+  for (const r of rows) {
+    kind.set(r.x.id, r.g);
+    let g = r.g < 2 ? all.find(y => y.pinned === r.g) : byWs.get(r.x.workspace);
+    if (!g) {
+      g = r.g < 2 ? { label: PINNED[r.g], pinned: r.g, items: [] } : { label: basename(r.x.workspace), ws: r.x.workspace, items: [] };
+      all.push(g);
+      if (r.g === 2) byWs.set(r.x.workspace, g);
+    }
+    g.items.push(r.x);
+  }
+  const order = new Map(all.flatMap(g => g.items).map((x, k) => [x.id, [kind.get(x.id), k]]));
+  const groups = all.map(g => ({ ...g, items: g.items.filter(x => matchSession(x, query)) })).filter(g => g.items.length);
   return { groups, order: frozen || order };
 }
+// Other sessions that are working or waiting for the user.
+const busyOthers = sessions => sessions.filter(x => x.live && !x.current && busyStatus(x.status));
+const PINNED = ['Needs you', 'Running'], GROUP_ROWS = 5;
+// A workspace group shows its newest rows until opened with "Show N more"; a search shows every match.
+const groupRows = (items, open) => open ? { shown: items, hidden: 0 } : { shown: items.slice(0, GROUP_ROWS), hidden: Math.max(0, items.length - GROUP_ROWS) };
 function fmtElapsed(ms) {
   const s = Math.max(0, Math.floor(ms / 1000)), m = Math.floor(s / 60);
   if (m < 1) return s + 's';
@@ -517,16 +526,35 @@ function turnEnd(b, at, tz) {
 }
 const changesText = c => plural(c.files, 'file') + (c.added != null ? ' +' + c.added : '') + (c.removed != null ? ' −' + c.removed : '');
 const compactionText = b => 'Context compacted' + (b.before != null || b.after != null ? ' · ' + fmtTok(b.before) + ' → ' + fmtTok(b.after) + ' tokens' : '');
-function statusLine(state, blocks, nowHost) {
+function statusLine(state, blocks) {
   const st = state.status, last = blocks[blocks.length - 1];
   const label = st.loading ? 'Opening session…' : st.interrupting ? 'Stopping…' : st.compacting ? 'Compacting context' : st.label || 'Working';
   const tool = !st.interrupting && last && last.type === 'tool' && last.state === 'running' ? last : null;
   return {
     label, detail: !tool ? '' : label.includes(tool.name) ? tool.detail || '' : [tool.name, tool.detail].filter(Boolean).join(' · '),
-    elapsed: (st.busy || st.compacting) && st.started_ms ? fmtElapsed(nowHost - st.started_ms) : '',
-    ctx: state.context_percent != null ? Math.round(state.context_percent) + '% context' : '',
   };
 }
+// The running turn's tool calls for the progress panel (the newest `max`, in order), and its totals line.
+function turnSteps(blocks, max = 30) {
+  let from = blocks.length;
+  while (from > 0 && blocks[from - 1].type !== 'turn_end' && !(blocks[from - 1].type === 'user' && blocks[from - 1].kind !== 'steering')) from--;
+  const all = [], files = new Set();
+  let failed = 0, added = 0, removed = 0;
+  for (let i = from; i < blocks.length; i++) {
+    const b = blocks[i];
+    if (b.type !== 'tool') continue;
+    const f = toolInfo(b);
+    if (b.state === 'failed') failed++;
+    if (f.added != null && (f.added || f.removed)) { files.add(f.target); added += f.added; removed += f.removed; }
+    all.push({ i, verb: f.verb, target: f.target, state: f.run ? 'run' : b.state === 'failed' ? 'failed' : b.state === 'succeeded' ? 'done' : 'stopped' });
+  }
+  const text = [all.length && plural(all.length, 'tool'), failed && failed + ' failed', files.size && plural(files.size, 'file') + ' +' + added + ' −' + removed].filter(Boolean).join(' · ');
+  return { steps: all.slice(-max), earlier: Math.max(0, all.length - max), text };
+}
+// What the composer says before anything is typed; `keys` names Enter and Alt on a device with a keyboard.
+const placeholder = (busy, session, keys) => !busy ? (session ? 'Message MiniCore · / for commands' : 'Describe a task to start')
+  : keys ? keys.send + ' steers · ' + keys.alt + 'Enter queues a follow-up' : 'Type to steer or queue a follow-up';
+const allowedText = allowed => allowed && allowed.length ? 'Allowed for this session: ' + allowed.join(', ') : 'Every tool asks first';
 // Stop shows while a turn runs or a compaction is under way, and stays until the host confirms it stopped.
 const canStop = st => !!(st.busy || st.compacting);
 // The composer's primary button changes face, never place: send when idle, stop while a turn or compaction runs with
@@ -741,9 +769,9 @@ function recentWorkspaces(sessions, max = 6) {
 export {
   V, WINDOW, norm, inline, parseMd, mdInc, backoff, basename, plural, titled, quiet, midTrunc, retireText, mergeReturned, otherDevices, deviceName,
   installOffer, login, hello, intents, queries, fs, createStore, intent, request, query, queryRoom, unqueue, pending, disconnect,
-  sendAgain, unconfirmed, reduce, lockText, unreachable, fsError, errorText, clock, stamp, relTime, dayGroup, sessionLayout,
+  sendAgain, unconfirmed, reduce, lockText, unreachable, fsError, errorText, clock, stamp, relTime, sessionLayout, groupRows, busyOthers,
   fmtElapsed, fmtTok, fmtNum, groupTools, foldTurns, findBlocks, foldText, toolInfo, parseDiff, diffStats, liveBlock, turnEnd,
-  changesText, compactionText, statusLine, canStop, primaryKind, primaryTap, TAP_SLOP, approvalKey, approvalTitle,
+  changesText, compactionText, statusLine, turnSteps, placeholder, allowedText, canStop, primaryKind, primaryTap, TAP_SLOP, approvalKey, approvalTitle,
   approvalOptions, approvalBody, approvalLine, changeStatus, contextView, exportMd, BUILTINS, slashMenu, parseSlash, atToken,
   insertMention, pushRecent, literal, composerKey, queueView, thinkingPreview, splitPath, within, crumbs, tilde, isDrive,
   recentWorkspaces, sessionTransitions, noticeEvent, attentionCount,

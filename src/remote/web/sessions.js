@@ -1,6 +1,6 @@
 import * as MC from './core.js';
 import { HOST, S, ask, fsCall, hostNow, intent, isHalted, isMain, online, signOut, turnStatus, tz, viewed } from './net.js';
-import { $, actions, announce, closeAll, copyText, diffView, errBox, fill, findSheet, h, icon, installApp, installable, layout, menuRow, notify, part, popModal, prefs, pushModal, refreshSheets, rowText, set, setPref, share, sheet, spin, standalone, toast, wide } from './ui.js';
+import { $, actions, announce, apple, closeAll, copyText, diffView, errBox, fill, findSheet, h, hover, icon, installApp, installable, layout, menuRow, notify, part, popModal, prefs, pushModal, refreshSheets, rowText, set, setPref, share, sheet, spin, standalone, toast, wide } from './ui.js';
 
 // ---- sheets ----
 function confirmSheet(o) {
@@ -160,10 +160,17 @@ export function compactNow(done) {
     ok: m => { m.close(true); intent(MC.intents.compact(), a => { if (!a.ok) toast(MC.errorText(a.error), 'error'); else if (done) done(); }); } });
 }
 export function exportSession() { share(S.state.session.title || 'MiniCore session', MC.exportMd(S.state, S.blocks)); }
-const KEYS = [['Esc', 'Close the top sheet, or stop the turn'], ['Enter', 'Send, or steer a running turn (“Enter sends”)'], ['⌘/Ctrl Enter', 'Send, or steer a running turn'], ['⌥/Alt Enter', 'Queue a follow-up while a turn runs'], ['↑ ↓', 'Recent prompts in an empty composer'],
-  ['⌘/Ctrl K', 'Commands and prompts'], ['⌘/Ctrl F', 'Find in session'], ['Alt ↑ ↓', 'Previous or next session'], ['Y A N', 'Allow, allow for session, deny'], ['?', 'This help']];
+const KEYS = [['Esc', 'Close the top sheet or the progress panel, or stop the turn'], ['Enter', 'Send, or steer a running turn (“Enter sends”)'], ['⌘/Ctrl Enter', 'Send, or steer a running turn'], ['⌥/Alt Enter', 'Queue a follow-up while a turn runs'], ['↑ ↓', 'Recent prompts in an empty composer'],
+  ['⌘/Ctrl K', 'Commands and prompts'], ['⌘/Ctrl F', 'Find in session'], ['⌘/Ctrl ⇧ F', 'Search sessions'], ['Alt ↑ ↓', 'Previous or next session'], ['Y A N', 'Allow, allow for session, deny'], ['?', 'This help']];
 export function openHelp() {
   sheet({ key: 'help', cls: 'dialog', title: 'Keyboard shortcuts', body: () => h('dl', 'kv keys', KEYS.map(([k, d]) => [h('dt', '', h('kbd', '', k)), h('dd', '', d)])) });
+}
+
+// What the approval prompts have allowed so far; the host has no other policy to show.
+export function openApprovals() {
+  sheet({ key: 'approvals', cls: 'dialog', title: 'Approvals', deps: () => [S.state.session && S.state.session.allowed],
+    body: () => [h('p', 'hint big', MC.allowedText(S.state.session && S.state.session.allowed)),
+      h('p', 'hint', 'Choose “Allow for this session” on an approval to add a tool here.')] });
 }
 
 // ---- sessions ----
@@ -183,13 +190,15 @@ export function syncTick() {
   if (!want && tick) { clearInterval(tick); tick = 0; }
 }
 function onTick() {
-  const el = $('strip').querySelector('.el'), x = turnStatus();
-  if (el && x.started_ms) el.textContent = MC.fmtElapsed(hostNow() - x.started_ms);
+  const x = turnStatus();
+  if (x.started_ms) for (const el of $('cap').querySelectorAll('.el')) el.textContent = MC.fmtElapsed(hostNow() - x.started_ms);
   if (navShown()) for (const e of $('nav').querySelectorAll('[data-start]')) e.textContent = MC.fmtElapsed(hostNow() - +e.dataset.start);
 }
 // ---- navigation: drawer on phones, sidebar on wide screens ----
 const nav = $('nav'), navModal = { el: nav, close: () => closeNav() };
 let pendingRow = null, query = '', frozen = null, navLook = false;
+// Workspace groups the reader folded (kept across visits) and the ones opened past their first rows (this page only).
+const CLOSED = 'minicore.nav.closed', closedWs = new Set(JSON.parse(localStorage.getItem(CLOSED) || '[]')), moreWs = new Set();
 const navShown = () => wide.matches || nav.classList.contains('on');
 export function buildNav() {
   const q = h('input', { type: 'search', placeholder: 'Search sessions', 'aria-label': 'Search sessions', autocomplete: 'off', enterKeyHint: 'search', oninput: () => { query = q.value; renderNav(); } });
@@ -197,17 +206,20 @@ export function buildNav() {
     h('button', { class: 'ib', 'aria-label': 'Settings', onclick: openSettings }, icon('gear')),
     h('button', { class: 'ib nclose', 'aria-label': 'Close', onclick: closeNav }, icon('x'))),
     h('button', { class: 'btn primary nnew', 'data-focus': true, onclick: () => openNew() }, icon('plus', 'sm'), 'New session'),
-    h('label', 'search', icon('search', 'sm'), q), h('div', 'nlist'), h('div', 'nfoot'));
+    h('label', 'search', icon('search', 'sm'), q, hover.matches && h('kbd', 'kh', apple ? '⌘⇧F' : 'Ctrl+Shift+F')), h('div', 'nlist'), h('div', 'nfoot'));
   const list = nav.querySelector('.nlist');
   listPart = part(list, renderList);
-  // One listener for every row: data-k is "s<id>" on a row's open button and "m<id>" on its actions.
+  // One listener for every row: data-k is "s<id>" on a row's open button, "m<id>" on its actions, "g<path>" on a workspace header
+  // and "x<path>" on its "Show more" (paths are URI-encoded, since the key is also used in a selector).
   list.addEventListener('click', e => {
     const b = e.target.closest('[data-k]');
     if (!b) return;
-    const id = b.dataset.k.slice(1);
-    if (b.dataset.k[0] === 'm') sessionActions(id);
+    const kind = b.dataset.k[0], v = b.dataset.k.slice(1);
+    if (kind === 'g') { const ws = decodeURIComponent(v); if (!closedWs.delete(ws)) closedWs.add(ws); localStorage.setItem(CLOSED, JSON.stringify([...closedWs])); renderNav(); }
+    else if (kind === 'x') { moreWs.add(decodeURIComponent(v)); renderNav(); }
+    else if (kind === 'm') sessionActions(v);
     else if (b.closest('.srow').classList.contains('cur')) closeNav();
-    else if (!pendingRow && intent(MC.intents.openSession(id))) { pendingRow = id; renderNav(); }
+    else if (!pendingRow && intent(MC.intents.openSession(v))) { pendingRow = v; renderNav(); }
   });
   footPart = part(nav.querySelector('.nfoot'), f => [h('span', 'cdot' + (f.on ? '' : ' off')), h('span', '', f.text)]);
 }
@@ -232,9 +244,15 @@ nav.addEventListener('pointerleave', () => { navLook = false; if (!nav.contains(
 nav.addEventListener('focusout', () => setTimeout(() => { if (!navLook && !nav.contains(document.activeElement) && wide.matches) { frozen = null; renderNav(); } }));
 export function renderNav() {
   if (!navShown() || !S.state) return;
-  const s = S.state, lay = MC.sessionLayout(s.sessions, hostNow(), tz(), query, frozen);
+  const s = S.state, lay = MC.sessionLayout(s.sessions, query, frozen), searching = query.trim() !== '';
   if (nav.classList.contains('on') || navLook || nav.contains(document.activeElement)) frozen = lay.order;
-  listPart({ groups: lay.groups.map(g => ({ label: g.label, items: g.items.map(x => [x.id, x.title, x.workspace, x.current, x.live && x.status, x.started_ms, x.unseen, MC.relTime(Date.parse(x.updated_at), hostNow(), tz()), failed.has(x.id)]) })), pendingRow, query: !!query });
+  const row = x => [x.id, x.title, x.workspace, x.current, x.live && x.status, x.started_ms, x.unseen, MC.relTime(Date.parse(x.updated_at), hostNow(), tz()), failed.has(x.id)];
+  listPart({
+    groups: lay.groups.map(g => {
+      const v = MC.groupRows(g.items, g.pinned != null || searching || moreWs.has(g.ws));
+      return { label: g.label, ws: g.ws, pinned: g.pinned != null, closed: !searching && closedWs.has(g.ws), count: g.items.length, hidden: v.hidden, rows: v.shown.map(row) };
+    }), pendingRow, query: !!query,
+  });
   renderNavFoot();
 }
 function renderNavFoot() {
@@ -244,19 +262,24 @@ function renderNavFoot() {
 }
 function renderList(l) {
   if (!l.groups.length) return h('div', 'muted', l.query ? 'No matching sessions' : 'No sessions yet');
-  return l.groups.map(g => [h('div', 'sec' + (g.label === 'Needs you' ? ' warn' : ''), g.label), g.items.map(sessionRow)]);
+  return l.groups.map(g => g.pinned ? [h('div', 'sec' + (g.label === 'Needs you' ? ' warn' : ''), g.label), g.rows.map(r => sessionRow(r, true))] : [
+    h('button', { class: 'sec gh', 'data-k': 'g' + encodeURIComponent(g.ws), title: MC.tilde(g.ws), 'aria-expanded': String(!g.closed) },
+      icon('folder', 'sm'), h('span', 'gn', g.label), g.closed && h('span', 'gc', String(g.count)), icon('chev', 'xs cv')),
+    !g.closed && g.rows.map(r => sessionRow(r, false)),
+    !g.closed && g.hidden > 0 && h('button', { class: 'gmore', 'data-k': 'x' + encodeURIComponent(g.ws) }, 'Show ' + g.hidden + ' more')]);
 }
-function sessionRow([id, title, ws, current, status, started, unseen, rel, bad]) {
+// `pinned` rows (Needs you, Running) name their folder; a workspace group's header already does.
+function sessionRow([id, title, ws, current, status, started, unseen, rel, bad], pinned) {
   const shape = status === 'approval' ? h('span', { class: 'sst warn', title: 'Needs you' }, icon('hand', 'sm'))
     : status === 'running' || status === 'compacting' ? h('span', 'sst', spin('sm'))
     : bad ? h('span', { class: 'sst er', title: 'Last turn failed' }, icon('alert', 'sm'))
     : unseen ? h('span', { class: 'sst', title: 'New result' }, h('i', 'ndot')) : h('span', 'sst');
-  const what = status === 'approval' ? h('span', 'warn', 'Needs you') : status === 'running' ? (started ? h('span', { 'data-start': started }, MC.fmtElapsed(hostNow() - started)) : 'Running')
-    : status === 'compacting' ? 'Compacting' : bad ? h('span', 'er', 'Failed') : unseen ? 'New result' : rel;
-  return h('div', 'srow' + (current ? ' cur' : ''), h('button', {
+  const what = status === 'approval' ? '' : status === 'running' ? (started ? h('span', { 'data-start': started }, MC.fmtElapsed(hostNow() - started)) : 'Running')
+    : status === 'compacting' ? 'Compacting' : bad ? h('span', 'er', 'Failed') : unseen ? 'New' : rel;
+  return h('div', 'srow' + (current ? ' cur' : '') + (pinned ? '' : ' one'), h('button', {
     class: 'sopen', 'data-k': 's' + id, 'aria-current': current ? 'page' : null,
     'aria-label': MC.titled(title) + ', ' + MC.basename(ws) + (status === 'approval' ? ', needs you' : status === 'running' ? ', running' : ''),
-  }, shape, rowText(MC.titled(title), [what, ' · ' + MC.basename(ws)]), pendingRow === id && spin('sm')),
+  }, shape, rowText(MC.titled(title), pinned && MC.basename(ws)), h('span', 'sw', what), pendingRow === id && spin('sm')),
   h('button', { class: 'ib more', 'data-k': 'm' + id, 'aria-label': 'Actions for ' + MC.titled(title), 'aria-haspopup': 'dialog' }, icon('more')));
 }
 (() => {
@@ -417,7 +440,7 @@ function renderNew() {
   ];
 }
 export function stepSession(d) {
-  const list = MC.sessionLayout(S.state.sessions, hostNow(), tz(), '', frozen).groups.flatMap(g => g.items), i = list.findIndex(x => x.current), x = list[i + d];
+  const list = MC.sessionLayout(S.state.sessions, '', frozen).groups.flatMap(g => g.items), i = list.findIndex(x => x.current), x = list[i + d];
   if (x && !pendingRow && intent(MC.intents.openSession(x.id))) pendingRow = x.id;
 }
 export function settle(id) { const was = pendingRow === id; if (was) pendingRow = null; return was; }
