@@ -201,12 +201,12 @@ let pendingRow = null, query = '', frozen = null, navLook = false;
 const CLOSED = 'minicore.nav.closed', closedWs = new Set(JSON.parse(localStorage.getItem(CLOSED) || '[]')), moreWs = new Set();
 const navShown = () => wide.matches || nav.classList.contains('on');
 export function buildNav() {
-  const q = h('input', { type: 'search', placeholder: 'Search sessions', 'aria-label': 'Search sessions', autocomplete: 'off', enterKeyHint: 'search', oninput: () => { query = q.value; renderNav(); } });
+  const q = h('input', { type: 'search', placeholder: hover.matches ? 'Search' : 'Search sessions', 'aria-label': 'Search sessions', autocomplete: 'off', enterKeyHint: 'search', oninput: () => { query = q.value; renderNav(); } });
   fill(nav, h('div', 'nhead', h('img', { src: '/icon.svg', alt: '' }), h('div', '', h('b', '', 'MiniCore'), h('small', '', HOST)),
     h('button', { class: 'ib', 'aria-label': 'Settings', onclick: openSettings }, icon('gear')),
     h('button', { class: 'ib nclose', 'aria-label': 'Close', onclick: closeNav }, icon('x'))),
     h('button', { class: 'btn primary nnew', 'data-focus': true, onclick: () => openNew() }, icon('plus', 'sm'), 'New session'),
-    h('label', 'search', icon('search', 'sm'), q, hover.matches && h('kbd', 'kh', apple ? '⌘⇧F' : 'Ctrl+Shift+F')), h('div', 'nlist'), h('div', 'nfoot'));
+    h('label', 'search', icon('search', 'sm'), q, hover.matches && h('kbd', 'kh', apple ? '⌘⇧F' : 'Ctrl⇧F')), h('div', 'nlist'), h('div', 'nfoot'));
   const list = nav.querySelector('.nlist');
   listPart = part(list, renderList);
   // One listener for every row: data-k is "s<id>" on a row's open button, "m<id>" on its actions, "g<path>" on a workspace header
