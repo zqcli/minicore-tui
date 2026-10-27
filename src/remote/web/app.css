@@ -103,7 +103,7 @@ input.tf:focus{border-color:var(--ac);box-shadow:0 0 0 3px var(--acs)}
 .eicon{width:64px;height:64px;border-radius:20px;display:grid;place-items:center;background:var(--fill);color:var(--tx2);margin-bottom:24px}
 .eicon.warn{background:var(--was);color:var(--wa)}
 .gate-acts{display:flex;flex-direction:column;gap:8px;width:100%;margin-top:32px}
-.screen .spin{width:22px;height:22px;color:var(--tx3);margin-top:24px}
+.col>.spin{width:22px;height:22px;color:var(--tx3);margin-top:24px}
 
 /* app frame */
 /* absolute, not fixed: the drawer inside must stack above the scrim */
@@ -120,7 +120,7 @@ input.tf:focus{border-color:var(--ac);box-shadow:0 0 0 3px var(--acs)}
 #title::after{content:"";position:absolute;inset:-6px 0}
 #sub{max-width:100%;font-size:var(--t12);line-height:1.35;color:var(--tx3)}
 .banner{flex:none;display:flex;align-items:center;gap:8px;min-height:40px;padding:6px calc(var(--sr) + 8px) 6px calc(var(--sl) + 16px);font-size:var(--t14);line-height:1.35;background:var(--fill);color:var(--tx2);animation:fade var(--fast)}
-.banner>span{flex:1;min-width:0}
+.banner>span:not(.spin){flex:1;min-width:0}
 .banner.warn{background:var(--was);color:var(--wa)}
 .banner .btn{min-height:32px}
 #mid{flex:1;min-height:0;position:relative}
