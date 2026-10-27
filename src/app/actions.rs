@@ -180,19 +180,21 @@ impl App {
         if self.session.is_none() {
             self.first_message = Some(text);
             self.create_session();
-        } else if self.is_busy() {
+        } else {
+            if !self.is_busy() {
+                self.scroll = Scroll::Follow;
+            }
             if follow {
                 self.session_mut().push_follow_up(text);
+                self.pump_queue();
             } else {
                 self.steer(text);
             }
-        } else {
-            self.scroll = Scroll::Follow;
-            self.send(text);
         }
     }
 
-    pub(super) fn send(&mut self, text: String) {
+    fn send(&mut self, queued: Queued) {
+        let text = &queued.text;
         let session = self.session_mut();
         // The durable history echoes this prompt, so the turn's region starts
         // before it: reconciling replaces the prompt rather than doubling it.
@@ -205,28 +207,15 @@ impl App {
         self.call(
             protocol::METHOD_TURN_SEND,
             json!({ "text": text }),
-            move |result| SessionOp::Sent(text, result),
+            move |result| SessionOp::Sent(queued, result),
         );
     }
 
     pub(super) fn steer(&mut self, text: String) {
-        let Some(session) = self.session.as_mut() else {
-            self.composer.restore_text(&text);
-            return;
-        };
-        let Some(loop_id) = session.live.as_ref().map(|live| live.turn.loop_id.clone()) else {
-            self.composer.restore_text(&text);
-            return;
-        };
-        session.queue.push(Queued {
-            text: text.clone(),
-            kind: QueuedKind::Steer,
-            at: Some(now_millis()),
-        });
-        let fields = json!({ "loop_id": loop_id, "text": text });
-        self.call(protocol::METHOD_TURN_STEER, fields, move |result| {
-            SessionOp::Steered(text, result)
-        });
+        self.session_mut()
+            .queue
+            .push(Queued::new(text, QueuedKind::Steer));
+        self.pump_queue();
     }
 
     /// Esc on a running turn asks the Agent to cancel it; `turn.wait` ends it.
@@ -523,15 +512,16 @@ impl App {
         );
     }
 
-    /// Alt+↑: the queued follow-ups go back to an empty composer.
+    /// Alt+↑ takes all unsent messages back to an empty composer.
     fn recall_queued(&mut self) {
         if !self.composer.is_empty() {
             self.notice(
                 NoticeLevel::Info,
                 "Clear the draft before recalling a queued message",
             );
-        } else if let Some(text) = self.session.as_mut().and_then(Session::recall_follow_ups) {
+        } else if let Some(text) = self.session.as_mut().and_then(Session::recall_unsent) {
             self.composer.set_text(&text);
+            self.pump_queue();
         }
     }
 
@@ -566,13 +556,41 @@ impl App {
         }
     }
 
-    /// Sends the next queued follow-up once the Agent is free.
-    pub(super) fn flush_queue(&mut self) {
-        if self.is_busy() {
+    /// Dispatches in send order, stopping at a follow-up while a turn is live.
+    pub(super) fn pump_queue(&mut self) {
+        let Some(session) = self.session.as_mut() else {
             return;
-        }
-        if let Some(text) = self.session.as_mut().and_then(Session::take_follow_up) {
-            self.send(text);
+        };
+        if let Some(live) = &session.live {
+            if session.steers_paused {
+                return;
+            }
+            let loop_id = live.turn.loop_id.clone();
+            let mut texts = Vec::new();
+            for queued in &mut session.queue {
+                if queued.kind == QueuedKind::Follow {
+                    break;
+                }
+                if !queued.sent {
+                    queued.sent = true;
+                    queued.at = Some(now_millis());
+                    texts.push(queued.text.clone());
+                }
+            }
+            for text in texts {
+                let loop_id = loop_id.clone();
+                self.call(
+                    protocol::METHOD_TURN_STEER,
+                    json!({"loop_id": loop_id, "text": text}),
+                    move |result| SessionOp::Steered(loop_id, text, result),
+                );
+            }
+        } else if session.next_turn_start.is_none()
+            && !session.compacting()
+            && !session.waiting_for_compaction
+            && let Some(queued) = session.take_next()
+        {
+            self.send(queued);
         }
     }
 

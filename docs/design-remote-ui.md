@@ -40,7 +40,7 @@ own view (its session or draft), as v1 intents do.
 | kind | fields | effect |
 |---|---|---|
 | `compact` | — | `session.compact` for the viewed session; refused while a turn runs or compaction is under way (`busy`), and in a draft (`No session`). `cancel` already stops a compaction. |
-| `unqueue` | `index`, `text` | Removes the queued follow-up `queue[index]` if its text still equals `text` (else `stale`); the text goes back to the requester as `returned`. Steers already sent cannot be taken back (`stale`). |
+| `unqueue` | `index`, `text`, `edit` | Removes an unsent `queue[index]` if its text still equals `text` (else `stale`). With `edit:true`, text returns to the requester as `returned`; `edit:false` deletes without returning text. Sent steers cannot be withdrawn (`stale`). |
 | `answer` | + optional `message` (deny only) | Denies, then steers `message` into the same turn so the agent hears why. A blank `message`, or one beside anything but an approval's `deny`, is `bad_request`. |
 | `submit` / `queue` | text | Text that starts with `/name` naming a prompt template is expanded on the host exactly as the TUI does (`$1`, `$@`, …); `//text` sends `/text`. A built-in command line, and a bare `/word` naming nothing (where the composer warns once), are refused with `unknown_command`; the client handles built-in commands itself and never sends them. |
 
@@ -173,9 +173,10 @@ re-renders on every `state`).
   single press, like the TUI. The primary's `aria-label` follows its face
   (Send, Steer, Stop the turn, Stopping); a change to Stop, Steer or Stopping
   is announced through the `aria-live` region, typing is not.
-- **Steer** sends the text into the running turn (`submit`; the agent reads it
-  after the current step); **Follow-up** sends a follow-up (`queue`; sent when the
-  turn ends). Hardware keys mirror the TUI: Enter (with "Enter sends") or
+- **Steer** queues text for the running turn (`submit`; the agent reads it
+  after the current step). **Follow-up** queues a new turn (`queue`). Dispatch
+  respects send order: a steer behind a follow-up waits until that follow-up
+  starts its turn. Hardware keys mirror the TUI: Enter (with "Enter sends") or
   Cmd/Ctrl+Enter steers while busy and sends when idle; **Alt+Enter**
   (Option+Enter on macOS; browsers report it, so no settings are needed) queues
   while busy with text typed and no `/` or `@` list open (the list keeps Tab and
@@ -193,14 +194,17 @@ re-renders on every `state`).
   with ↑ in an empty composer on hardware keyboards.
 - `enterkeyhint="send"`, `autocapitalize="sentences"`, autocorrect off while
   the text starts with `/` or `@`; drafts persist per session as today.
-- The queue shows above the composer under one caption, "Follow-ups send when
-  this turn ends": follow-ups are pills `↳ Follow-up 1` + text (tap to edit =
-  unqueue into the composer, ✕ to remove = unqueue and drop), steers the agent
-  has not read yet are muted `↗ Steer · waiting for the next step` rows that
-  cannot be removed. Three show at first, then "+N more" expands the rest. A
-  steer's bubble in the transcript keeps its "↗ Steer" label; a follow-up that
-  was sent is an ordinary message. Unconfirmed sends keep their single "Not
-  sent · Send again" card; the composer is not filled twice.
+- The queue above the composer keeps send order under "Sent in order · steers
+  join this turn; follow-ups start the next". Every row shares the same height,
+  padding and radius. Accent-labelled `↗ Steer N` and neutral `↳ Follow-up N`
+  are numbered independently. Unsent rows have pencil **Edit in composer** and
+  **Delete** buttons; edits merge the requester-only `returned` text through
+  the ordinary composer path. Sent steers say "Sent · applies at the next step"
+  and have no buttons because the Agent cannot withdraw them. A steer behind
+  a follow-up waits and stays editable. Three rows show at first, then "+N
+  more" expands the rest. Applied steers keep their transcript label; either
+  kind starting a new turn becomes an ordinary prompt. Unconfirmed sends keep
+  their single "Not sent · Send again" card; the composer is not filled twice.
 
 ### Transcript
 

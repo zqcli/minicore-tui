@@ -114,13 +114,12 @@ fn padded(text: &str, width: u16, style: Style) -> Line<'static> {
     ])
 }
 
-/// Steers first (the Agent applies them first), then follow-ups numbered in send order.
+/// Messages stay in send order, with sent steers marked as no longer editable.
 fn queued_rows(session: &Session, styles: Styles, width: u16) -> Vec<Line<'static>> {
-    let mut queue: Vec<_> = session.queue.iter().collect();
-    queue.sort_by_key(|queued| queued.kind == QueuedKind::Follow);
     let mut follow = 0;
-    let mut rows: Vec<Line<'static>> = queue
-        .into_iter()
+    let mut rows: Vec<Line<'static>> = session
+        .queue
+        .iter()
         .take(QUEUE_ROWS)
         .map(|queued| {
             let label = match queued.kind {
@@ -130,13 +129,16 @@ fn queued_rows(session: &Session, styles: Styles, width: u16) -> Vec<Line<'stati
                     format!("↳ follow-up {follow}")
                 }
             };
-            let room = usize::from(width).saturating_sub(wrap::width(&label) + 4);
+            let sent = if queued.sent { " · sent" } else { "" };
+            let room =
+                usize::from(width).saturating_sub(wrap::width(&label) + wrap::width(sent) + 4);
             let text = wrap::sanitize(&queued.text.replace('\n', " ")).into_owned();
             Line::from(vec![
                 Span::raw(" "),
                 Span::styled(label, styles.meta()),
                 Span::raw("  "),
                 Span::styled(wrap::truncate(&text, room), styles.faint()),
+                Span::styled(sent, styles.faint()),
             ])
         })
         .collect();
@@ -148,7 +150,7 @@ fn queued_rows(session: &Session, styles: Styles, width: u16) -> Vec<Line<'stati
 }
 
 /// The keys that act on the queue now: Enter steers and Alt+Enter queues while a
-/// draft waits, `alt+↑` takes follow-ups back.
+/// draft waits, `alt+↑` takes unsent messages back.
 fn key_hint(app: &App) -> Option<String> {
     let session = app.session.as_ref().filter(|_| !app.has_interaction())?;
     let drafting = !app.composer.is_empty();
@@ -159,11 +161,7 @@ fn key_hint(app: &App) -> Option<String> {
     if drafting && (session.is_busy() || session.compacting()) {
         keys.push("alt+enter follow-up");
     }
-    if session
-        .queue
-        .iter()
-        .any(|queued| queued.kind == QueuedKind::Follow)
-    {
+    if session.queue.iter().any(|queued| !queued.sent) {
         keys.push("alt+↑ edit queued");
     }
     (!keys.is_empty()).then(|| keys.join(" · "))

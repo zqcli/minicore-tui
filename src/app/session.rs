@@ -27,6 +27,8 @@ pub struct Session {
     pub transcript: Transcript,
     pub live: Option<LiveTurn>,
     pub queue: Vec<Queued>,
+    /// A refused steer waits for progress or a turn change before dispatch resumes.
+    pub steers_paused: bool,
     pub usage: UsageTotals,
     pub presentation: Option<SessionPresentation>,
     /// When `presentation` was last asked for, and whether that answer is still due.
@@ -61,7 +63,7 @@ pub struct Session {
     /// Where the next turn's region starts, captured before its prompt block.
     pub next_turn_start: Option<usize>,
     /// A send was refused while post-turn compaction owned the session; the
-    /// text waits as a follow-up until the session is idle.
+    /// message keeps its place until the session is idle.
     pub waiting_for_compaction: bool,
     /// The composer text this session had when it left the foreground.
     pub draft: Option<String>,
@@ -136,12 +138,24 @@ impl LiveTurn {
     }
 }
 
-/// A steer (sent, awaiting apply) or a follow-up (sent after the turn).
+/// A message waiting in send order, possibly already handed to the running turn.
 pub struct Queued {
     pub text: String,
     pub kind: QueuedKind,
+    pub sent: bool,
     /// A steer's send time in Unix milliseconds; it becomes a block when applied.
     pub at: Option<u64>,
+}
+
+impl Queued {
+    pub fn new(text: String, kind: QueuedKind) -> Self {
+        Self {
+            text,
+            kind,
+            sent: false,
+            at: None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -222,6 +236,7 @@ impl Session {
             transcript: Transcript::default(),
             live: None,
             queue: Vec::new(),
+            steers_paused: false,
             usage: UsageTotals::default(),
             presentation: None,
             presentation_asked: None,
@@ -407,10 +422,13 @@ impl Session {
                     };
                 }
             }
-            AgentEvent::SteerProgress { applied_count, .. } => {
-                if let Some(loop_id) = self.live.as_ref().map(|live| live.turn.loop_id.clone()) {
-                    self.apply_steer_progress(&loop_id, applied_count);
-                }
+            AgentEvent::SteerProgress {
+                turn,
+                applied_count,
+                ..
+            } if self.is_live(&turn) => {
+                self.apply_steer_progress(&turn.loop_id, applied_count);
+                self.steers_paused = false;
             }
             AgentEvent::ToolStarted {
                 turn,
@@ -699,78 +717,73 @@ impl Session {
         let steer = self
             .queue
             .iter_mut()
-            .find(|queued| queued.kind == QueuedKind::Steer && queued.text == text);
+            .find(|queued| queued.sent && queued.text == text);
         if let Some(queued) = steer {
             queued.at = Some(accepted);
         }
     }
 
     pub fn push_follow_up(&mut self, text: String) {
-        self.queue.push(Queued {
-            text,
-            kind: QueuedKind::Follow,
-            at: None,
-        });
+        self.queue.push(Queued::new(text, QueuedKind::Follow));
     }
 
-    /// The oldest follow-up, the next one to send.
-    pub fn take_follow_up(&mut self) -> Option<String> {
-        let index = self
-            .queue
-            .iter()
-            .position(|queued| queued.kind == QueuedKind::Follow)?;
-        Some(self.queue.remove(index).text)
+    pub fn take_next(&mut self) -> Option<Queued> {
+        (!self.queue.is_empty()).then(|| self.queue.remove(0))
     }
 
-    /// Every follow-up taken back out of the queue, oldest first, as blank-line separated paragraphs.
-    pub fn recall_follow_ups(&mut self) -> Option<String> {
-        let (follows, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut self.queue)
+    /// Takes back unsent messages in send order, separated by blank lines.
+    pub fn recall_unsent(&mut self) -> Option<String> {
+        let (unsent, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut self.queue)
             .into_iter()
-            .partition(|queued| queued.kind == QueuedKind::Follow);
+            .partition(|queued| !queued.sent);
         self.queue = rest;
-        let texts: Vec<_> = follows.into_iter().map(|queued| queued.text).collect();
+        let texts: Vec<_> = unsent.into_iter().map(|queued| queued.text).collect();
         (!texts.is_empty()).then(|| texts.join("\n\n"))
     }
 
-    /// The Agent discards steers it has not applied; they wait as follow-ups.
+    /// The Agent discards unapplied steers at turn end; their position and kind stay intact.
     pub fn abandon_steers(&mut self) {
         for queued in &mut self.queue {
-            queued.kind = QueuedKind::Follow;
+            queued.sent = false;
         }
         self.applied_steers = 0;
+        self.steers_paused = false;
     }
 
-    /// A refused steer waits for the next turn instead.
-    pub fn demote_last_steer(&mut self) {
-        if let Some(index) = self
+    pub fn refuse_steer(&mut self, text: &str) {
+        if let Some(queued) = self
             .queue
-            .iter()
-            .rposition(|queued| queued.kind == QueuedKind::Steer)
+            .iter_mut()
+            .find(|queued| queued.sent && queued.text == text)
         {
-            let mut queued = self.queue.remove(index);
-            queued.kind = QueuedKind::Follow;
-            self.queue.push(queued);
+            queued.sent = false;
         }
+        self.steers_paused = true;
     }
 
-    /// Steers the Agent applied leave the queue and appear in the transcript,
-    /// in acceptance order.
+    /// Applied steers leave the queue and enter the transcript in send order.
     pub fn apply_steer_progress(&mut self, loop_id: &str, applied_count: u64) {
+        let mut at = self
+            .transcript
+            .blocks()
+            .iter()
+            .rposition(|block| block.loop_id() == Some(loop_id))
+            .map_or(self.transcript.len(), |index| index + 1);
+        // User blocks have no loop id, so keep earlier steers after the same step ahead of this batch.
+        while matches!(
+            self.transcript.blocks().get(at),
+            Some(Block::User {
+                kind: UserKind::Steering,
+                ..
+            })
+        ) {
+            at += 1;
+        }
         while self.applied_steers < applied_count {
-            let Some(index) = self
-                .queue
-                .iter()
-                .position(|queued| queued.kind == QueuedKind::Steer)
-            else {
+            let Some(index) = self.queue.iter().position(|queued| queued.sent) else {
                 break;
             };
             let queued = self.queue.remove(index);
-            let at = self
-                .transcript
-                .blocks()
-                .iter()
-                .rposition(|block| block.loop_id() == Some(loop_id))
-                .map_or(self.transcript.len(), |index| index + 1);
             self.transcript.insert(
                 at,
                 Block::User {
@@ -780,6 +793,7 @@ impl Session {
                 },
             );
             self.applied_steers += 1;
+            at += 1;
         }
     }
 
@@ -1079,6 +1093,7 @@ mod tests {
         session.queue.push(Queued {
             text: text.into(),
             kind,
+            sent: kind == QueuedKind::Steer,
             at: None,
         });
     }
@@ -1107,11 +1122,14 @@ mod tests {
             })
             .collect();
         assert_eq!(steered, ["first", "second"]);
-        assert_eq!(session.take_follow_up().as_deref(), Some("later"));
+        assert_eq!(
+            session.take_next().map(|queued| queued.text).as_deref(),
+            Some("later")
+        );
     }
 
     #[test]
-    fn a_turn_end_turns_unapplied_steers_into_follow_ups() {
+    fn a_turn_end_keeps_unapplied_steers_in_place_as_unsent() {
         let mut session = session();
         session.live = Some(LiveTurn::new(TurnRef::new("s", "l"), 0));
         queue(&mut session, "steer", QueuedKind::Steer);
@@ -1121,7 +1139,10 @@ mod tests {
         .unwrap();
         assert_eq!(session.end_turn(&wait), Some(false));
         assert_eq!(session.end_turn(&wait), None, "the turn ends once");
-        assert_eq!(session.take_follow_up().as_deref(), Some("steer"));
+        let queued = session.take_next().unwrap();
+        assert_eq!(queued.text, "steer");
+        assert_eq!(queued.kind, QueuedKind::Steer);
+        assert!(!queued.sent);
     }
 
     #[test]

@@ -157,7 +157,7 @@ const intents = {
   cancel: () => ({ kind: 'cancel' }),
   answer: (interaction_id, choice, message) => Object.assign({ kind: 'answer', interaction_id, choice }, message && { message }),
   compact: () => ({ kind: 'compact' }),
-  unqueue: (index, text) => ({ kind: 'unqueue', index, text }),
+  unqueue: (index, text, edit) => ({ kind: 'unqueue', index, text, edit }),
   loadOlder: () => ({ kind: 'load_older' }),
   openSession: session_id => ({ kind: 'open_session', session_id }),
   newSession: (workspace, profile) => Object.assign({ kind: 'new_session' }, workspace && { workspace }, profile && { profile }),
@@ -183,7 +183,7 @@ const fs = {
 };
 
 // ---- store and reducer ----
-const createStore = () => ({ state: null, blocks: [], intents: new Map(), fs: new Set(), q: new Set(), drops: [], sid: undefined, nid: 0, skew: 0, device: null, version: '' });
+const createStore = () => ({ state: null, blocks: [], intents: new Map(), fs: new Set(), q: new Set(), sid: undefined, nid: 0, skew: 0, device: null, version: '' });
 const nextId = s => 'c' + ++s.nid;
 const SENDS = { submit: 1, queue: 1 };
 // Records the intent as pending and returns the message to send; it is never sent again by itself.
@@ -196,16 +196,10 @@ function request(s, body) { const id = nextId(s); s.fs.add(id); return { ...body
 // At most MAX_QUERIES are in flight per connection; the caller waits for room.
 const queryRoom = s => s.q.size < MAX_QUERIES;
 function query(s, spec) { const id = nextId(s); s.q.add(id); return { t: 'query', id, ...spec }; }
-// Takes a queued follow-up back; dropped, the returned text is discarded.
-function unqueue(s, index, text, drop) {
-  const msg = intent(s, intents.unqueue(index, text));
-  if (drop) { s.intents.get(msg.id).drop = true; s.drops.push(text); }
-  return msg;
-}
 const pending = (s, kind) => { for (const it of s.intents.values()) if (it.st === 'pending' && (!kind || it.kind === kind)) return it; return null; };
 // A dropped socket leaves pending sends unconfirmed; other intents show in the next snapshot.
 function disconnect(s) {
-  s.fs.clear(); s.q.clear(); s.drops.length = 0;
+  s.fs.clear(); s.q.clear();
   for (const it of [...s.intents.values()]) {
     if (it.st !== 'pending') continue;
     if (it.text != null) it.st = 'unconfirmed'; else s.intents.delete(it.id);
@@ -269,15 +263,9 @@ function reduce(s, msg, nowMs) {
       const it = s.intents.get(msg.id);
       if (!it) return {};
       s.intents.delete(msg.id);
-      if (it.drop && !msg.ok) s.drops.splice(s.drops.indexOf(it.spec.text), 1);
       return { ack: { ...it, ok: msg.ok, error: msg.error } };
     }
-    case 'returned': {
-      const k = s.drops.indexOf(msg.text);
-      if (k < 0) return { returned: msg.text };
-      s.drops.splice(k, 1);
-      return {};
-    }
+    case 'returned': return { returned: msg.text };
     case 'result': return s.q.delete(msg.id) ? { result: msg } : {};
     case 'notice': return { notice: { level: msg.level === 'error' ? 'error' : 'info', text: msg.text } };
     case 'fs': return s.fs.delete(msg.id) ? { fs: msg } : {};
@@ -701,10 +689,8 @@ function composerKey(k, c) {
   return k.mod || (c.enter && !k.shift && !k.alt) ? (c.busy ? 'steer' : 'send') : null;
 }
 function queueView(queue, all, max = 3) {
-  let n = 0;
-  // Steers first, as in the TUI.
-  const items = queue.map((q, index) => ({ kind: q.kind, text: q.text, index, n: q.kind === 'follow' ? ++n : 0 }))
-    .sort((a, b) => (a.kind === 'follow') - (b.kind === 'follow'));
+  const counts = { steer: 0, follow: 0 };
+  const items = queue.map((q, index) => ({ ...q, index, n: ++counts[q.kind] }));
   return { items: all ? items : items.slice(0, max), hidden: all ? 0 : Math.max(0, items.length - max), long: items.length > max };
 }
 
@@ -757,7 +743,7 @@ function recentWorkspaces(sessions, max = 6) {
 
 export {
   V, WINDOW, norm, inline, parseMd, mdInc, backoff, basename, plural, titled, quiet, midTrunc, retireText, mergeReturned, otherDevices, deviceName,
-  installOffer, login, hello, intents, queries, fs, createStore, intent, request, query, queryRoom, unqueue, pending, disconnect,
+  installOffer, login, hello, intents, queries, fs, createStore, intent, request, query, queryRoom, pending, disconnect,
   sendAgain, unconfirmed, reduce, lockText, unreachable, fsError, errorText, clock, stamp, relTime, sessionLayout, groupRows,
   fmtElapsed, fmtTok, fmtNum, groupTools, foldTurns, findBlocks, foldText, toolInfo, parseDiff, diffStats, liveBlock, turnEnd,
   changesText, compactionText, statusLine, placeholder, allowedText, canStop, primaryKind, primaryTap, TAP_SLOP, approvalKey, approvalTitle,

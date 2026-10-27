@@ -10,12 +10,14 @@ the kitty keyboard protocol (and on Windows consoles); `Ctrl+J` always inserts
 a newline.
 
 A steer and a follow-up are different: a steer (`Enter` while busy) goes to the
-running turn and is applied at its next step; a follow-up (`Alt+Enter`) waits
-for the turn to end and starts the next one. The dock above the editor lists
-them, steers first as `↗ steer  <text>`, then `↳ follow-up 1  <text>` numbered
-in send order, three rows and `+N more queued`. A hint row under the Working
-line names the keys that act now: `enter steer · alt+enter follow-up` while a
-draft waits during a turn, and `alt+↑ edit queued` while follow-ups exist.
+running turn at its next step unless an earlier follow-up blocks it. A follow-up
+(`Alt+Enter`) starts the next turn. Messages dispatch in send order: nothing
+jumps ahead of a follow-up. The dock lists `↗ steer  <text>` and numbered
+`↳ follow-up 1  <text>` rows in that same order, three rows and `+N more queued`.
+A dim `sent` marker means the Agent already has that steer and it cannot be
+withdrawn. A hint row under the Working line names the keys that act now:
+`enter steer · alt+enter follow-up` while a draft waits during a turn, and
+`alt+↑ edit queued` while any unsent message exists.
 
 ### Alt+Enter by terminal
 
@@ -46,7 +48,7 @@ dock label before sending.
 | `Ctrl+C` | Copy the editor selection when one exists; otherwise clear the draft, with a second press within 500 ms quitting. |
 | `Ctrl+D` | Quit when the draft is empty; otherwise delete the character after the cursor. |
 | `↑` / `↓` | Move between lines of a multi-line draft; on the first or last line, browse prompt history. The last 100 prompts, paste chips included, are kept in `history.jsonl` in the TUI directory and survive a restart; a prompt over 32 KiB stays in memory only. |
-| `Alt+↑` | Take the queued follow-ups back into an empty draft, separated by blank lines. A steer cannot be taken back. |
+| `Alt+↑` | Take every unsent queued message back into an empty draft, in send order and separated by blank lines. A sent steer cannot be taken back. |
 | `Ctrl+X` | Cut the editor selection when one exists; otherwise copy the last assistant answer, as `/copy` does. |
 | `Ctrl+G` | Edit the draft in `[ui] editor` from `config.toml`, else `$VISUAL`, else `$EDITOR`. |
 | `/` at the start of the draft | Open the command palette. `Enter` runs the highlighted command; with no match it sends the line as a prompt. |

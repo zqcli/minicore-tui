@@ -538,6 +538,7 @@ fn queue(app: &mut App, messages: &[(&str, crate::app::QueuedKind)]) {
         queue.push(crate::app::Queued {
             text: (*text).into(),
             kind: *kind,
+            sent: false,
             at: None,
         });
     }
@@ -552,7 +553,7 @@ fn hint_row(rendered: &str) -> Option<&str> {
 }
 
 #[test]
-fn the_dock_lists_the_steer_then_numbered_follow_ups_with_the_keys() {
+fn the_dock_lists_sent_and_unsent_messages_in_send_order_with_the_keys() {
     use crate::app::QueuedKind::{Follow, Steer};
     let mut app = app();
     conversation(&mut app);
@@ -560,11 +561,12 @@ fn the_dock_lists_the_steer_then_numbered_follow_ups_with_the_keys() {
     queue(
         &mut app,
         &[
-            ("then update the docs", Follow),
             ("focus on the parser first", Steer),
-            ("and the changelog", Follow),
+            ("then update the docs", Follow),
+            ("and the changelog", Steer),
         ],
     );
+    app.session.as_mut().unwrap().queue[0].sent = true;
     app.composer.set_text("one more thing");
     snapshot(
         "tests/snapshots/dock-queue.txt",
@@ -1400,6 +1402,7 @@ fn the_remote_status_screen_shows_the_phone_the_work_the_queue_and_refused_sign_
         session.queue.push(crate::app::Queued {
             text: text.into(),
             kind: crate::app::QueuedKind::Follow,
+            sent: false,
             at: None,
         });
     }

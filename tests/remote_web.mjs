@@ -85,7 +85,7 @@ test('every intent and filesystem request has the contract shape and a bounded u
     [I.answer('choice', 1), { kind: 'answer', interaction_id: 'choice', choice: 1 }],
     [I.answer('approval', 'deny', 'use the helper instead'), { kind: 'answer', interaction_id: 'approval', choice: 'deny', message: 'use the helper instead' }],
     [I.compact(), { kind: 'compact' }],
-    [I.unqueue(1, 'later'), { kind: 'unqueue', index: 1, text: 'later' }],
+    [I.unqueue(1, 'later', true), { kind: 'unqueue', index: 1, text: 'later', edit: true }],
     [I.loadOlder(), { kind: 'load_older' }],
     [I.openSession('ses_one'), { kind: 'open_session', session_id: 'ses_one' }],
     [I.newSession('/work', 'coding'), { kind: 'new_session', workspace: '/work', profile: 'coding' }],
@@ -155,23 +155,17 @@ test('at most four queries are in flight and results are matched to their id onc
   assert.equal(MC.errorText('Open another session first'), 'Open another session first');
 });
 
-test('a removed queue pill drops the text the host returns, an edited one refills the composer', () => {
+test('queue editing and deletion are explicit intents and never suppress other returned text', () => {
   const s = MC.createStore();
-  const drop = MC.unqueue(s, 0, 'later', true);
-  assert.deepEqual(plain(drop), { t: 'intent', id: drop.id, kind: 'unqueue', index: 0, text: 'later' });
-  assert.deepEqual(plain(MC.reduce(s, { t: 'returned', text: 'later' }, 0)), {});
-  assert.deepEqual(plain(MC.reduce(s, { t: 'ack', id: drop.id, ok: true }, 0)).ack.ok, true);
-  MC.unqueue(s, 0, 'edit me', false);
+  const del = MC.intent(s, MC.intents.unqueue(0, 'later', false));
+  assert.deepEqual(plain(del), { t: 'intent', id: del.id, kind: 'unqueue', index: 0, text: 'later', edit: false });
+  assert.equal(MC.reduce(s, { t: 'ack', id: del.id, ok: true }, 0).ack.ok, true);
+  assert.deepEqual(plain(MC.reduce(s, { t: 'returned', text: 'later' }, 0)), { returned: 'later' });
+  const edit = MC.intent(s, MC.intents.unqueue(1, 'edit me', true));
+  assert.equal(edit.edit, true);
   assert.deepEqual(plain(MC.reduce(s, { t: 'returned', text: 'edit me' }, 0)), { returned: 'edit me' });
-  // A refused removal keeps nothing armed: a later identical return refills the composer.
-  const stale = MC.unqueue(s, 3, 'gone', true);
-  MC.reduce(s, { t: 'ack', id: stale.id, ok: false, error: 'stale' }, 0);
-  assert.deepEqual(plain(MC.reduce(s, { t: 'returned', text: 'gone' }, 0)), { returned: 'gone' });
-  // Unqueue is not a send: a dropped connection never offers it again.
-  MC.unqueue(s, 0, 'x', true);
   MC.disconnect(s);
   assert.equal(MC.unconfirmed(s).length, 0);
-  assert.deepEqual(plain(MC.reduce(s, { t: 'returned', text: 'x' }, 0)), { returned: 'x' });
 });
 
 test('filesystem replies are matched to their request id once', () => {
@@ -907,19 +901,20 @@ test('a tap on the primary decides from the live text and ignores double taps on
   assert.equal(tap({ text: 'next' }, 10000, 30), null);
 });
 
-test('the queue shows follow-ups numbered in order, waiting steers, and the first three until expanded', () => {
-  const q = [{ kind: 'steer', text: 's' }, { kind: 'follow', text: 'a' }, { kind: 'follow', text: 'b' }, { kind: 'follow', text: 'c' }, { kind: 'follow', text: 'd' }];
+test('the tray preserves send order and sent flags with separate kind numbering and bounded expansion', () => {
+  const q = [{ kind: 'steer', text: 's', sent: true }, { kind: 'follow', text: 'a', sent: false }, { kind: 'follow', text: 'b', sent: false }, { kind: 'steer', text: 'waiting', sent: false }, { kind: 'follow', text: 'd', sent: false }];
   const v = plain(MC.queueView(q, false));
-  assert.deepEqual(v.items.map(x => [x.kind, x.index, x.n]), [['steer', 0, 0], ['follow', 1, 1], ['follow', 2, 2]]);
+  assert.deepEqual(v.items.map(x => [x.kind, x.index, x.n]), [['steer', 0, 1], ['follow', 1, 1], ['follow', 2, 2]]);
   assert.deepEqual([v.hidden, v.long], [2, true]);
   const all = plain(MC.queueView(q, true));
-  assert.deepEqual(all.items.map(x => x.n), [0, 1, 2, 3, 4]);
+  assert.deepEqual(all.items.map(x => x.n), [1, 1, 2, 2, 3]);
+  assert.deepEqual(all.items.map(x => x.sent), [true, false, false, false, false]);
+  assert.deepEqual(all.items.map(x => x.text), q.map(x => x.text));
   assert.deepEqual([all.hidden, all.long], [0, true]);
   assert.deepEqual(plain(MC.queueView(q.slice(0, 3), false)), { items: plain(MC.queueView(q.slice(0, 3), true)).items, hidden: 0, long: false });
   assert.deepEqual(plain(MC.queueView([], false)), { items: [], hidden: 0, long: false });
-  // A steer sent after a follow-up is still listed first and keeps its wire index.
-  const mixed = plain(MC.queueView([{ kind: 'follow', text: 'a' }, { kind: 'steer', text: 'b' }, { kind: 'follow', text: 'c' }], true));
-  assert.deepEqual(mixed.items.map(x => [x.kind, x.index, x.n]), [['steer', 1, 0], ['follow', 0, 1], ['follow', 2, 2]]);
+  const mixed = plain(MC.queueView([{ kind: 'follow', text: 'a', sent: false }, { kind: 'steer', text: 'b', sent: false }, { kind: 'follow', text: 'c', sent: false }], true));
+  assert.deepEqual(mixed.items.map(x => [x.kind, x.index, x.n]), [['follow', 0, 1], ['steer', 1, 1], ['follow', 2, 2]]);
 });
 
 test('the thinking preview is the newest sentence without Markdown markers', () => {

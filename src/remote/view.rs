@@ -327,7 +327,7 @@ fn state(app: &App, catalog: &Value, view: &PhoneView, loading: bool) -> Value {
             "prompt":interaction.prompt, "options":interaction.options()})
     }));
     let queue: Vec<_> = session.into_iter().flat_map(|s| &s.queue).map(|queued| json!({
-        "kind":match queued.kind { QueuedKind::Steer => "steer", QueuedKind::Follow => "follow" }, "text":queued.text,
+        "kind":match queued.kind { QueuedKind::Steer => "steer", QueuedKind::Follow => "follow" }, "text":queued.text, "sent":queued.sent,
     })).collect();
     let (running, approval) = app.other_counts(current);
     json!({
@@ -530,6 +530,30 @@ mod tests {
         assert!(sync(&mut view, &mut app).is_empty());
         app.session.as_mut().unwrap().presentation = Some(presentation(" "));
         assert!(sync(&mut view, &mut app)[0]["state"]["session"]["branch"].is_null());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn queue_projection_preserves_send_order_and_sent_markers() {
+        let (_fake, mut app) = connected_app();
+        let queue = &mut app.session.as_mut().unwrap().queue;
+        for (text, kind) in [
+            ("sent", QueuedKind::Steer),
+            ("follow", QueuedKind::Follow),
+            ("waiting", QueuedKind::Steer),
+        ] {
+            queue.push(crate::app::Queued::new(text.into(), kind));
+        }
+        queue[0].sent = true;
+        let mut view = View::default();
+        assert_eq!(
+            sync(&mut view, &mut app)[0]["state"]["queue"],
+            json!([
+                {"kind":"steer", "text":"sent", "sent":true},
+                {"kind":"follow", "text":"follow", "sent":false},
+                {"kind":"steer", "text":"waiting", "sent":false}
+            ])
+        );
+        assert!(sync(&mut view, &mut app).is_empty());
     }
 
     #[tokio::test(start_paused = true)]

@@ -38,10 +38,11 @@ pub enum Intent {
     },
     Cancel,
     Compact,
-    /// Takes back the queued follow-up at `index` of `state.queue` while it still reads `text`.
+    /// Removes an unsent message, returning its text only when editing.
     Unqueue {
         index: usize,
         text: String,
+        edit: bool,
     },
     Answer {
         interaction_id: String,

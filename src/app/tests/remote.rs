@@ -366,7 +366,7 @@ async fn compact_runs_for_the_viewed_idle_session_and_is_refused_while_busy_or_i
 }
 
 #[tokio::test(start_paused = true)]
-async fn unqueue_returns_a_matching_follow_up_only_to_its_requester() {
+async fn unqueue_edits_only_unsent_matching_messages_and_returns_only_to_the_requester() {
     let mut h = Harness::opened(display_read(0, 0)).await;
     h.app.remote.url = Some("http://localhost:8765".into());
     let (mut first, _close, admission) = phone(&mut h, 1, "first");
@@ -381,6 +381,7 @@ async fn unqueue_returns_a_matching_follow_up_only_to_its_requester() {
     session.queue.push(crate::app::Queued {
         text: "steered".into(),
         kind: crate::app::QueuedKind::Steer,
+        sent: true,
         at: None,
     });
     session.push_follow_up("one".into());
@@ -388,7 +389,7 @@ async fn unqueue_returns_a_matching_follow_up_only_to_its_requester() {
     for (index, text) in [(0, "steered"), (1, "two"), (3, "one")] {
         request(
             &mut h,
-            json!({"kind":"unqueue", "index":index, "text":text}),
+            json!({"kind":"unqueue", "index":index, "text":text, "edit":true}),
         );
         assert_eq!(
             messages(&mut first),
@@ -399,7 +400,7 @@ async fn unqueue_returns_a_matching_follow_up_only_to_its_requester() {
     request_from(
         &mut h,
         2,
-        json!({"kind":"unqueue", "index":1, "text":"one"}),
+        json!({"kind":"unqueue", "index":1, "text":"one", "edit":true}),
     );
     assert_eq!(
         messages(&mut second),
@@ -410,7 +411,78 @@ async fn unqueue_returns_a_matching_follow_up_only_to_its_requester() {
     );
     assert!(messages(&mut first).is_empty());
     assert_eq!(h.queue(), ["steered", "two"]);
+    h.app
+        .session
+        .as_mut()
+        .unwrap()
+        .queue
+        .push(crate::app::Queued::new(
+            "waiting steer".into(),
+            crate::app::QueuedKind::Steer,
+        ));
+    request_from(
+        &mut h,
+        2,
+        json!({"kind":"unqueue", "index":2, "text":"waiting steer", "edit":true}),
+    );
+    assert_eq!(
+        messages(&mut second),
+        [
+            json!({"t":"returned", "text":"waiting steer"}),
+            json!({"t":"ack", "id":"request", "ok":true})
+        ]
+    );
+    assert!(messages(&mut first).is_empty());
+    request(
+        &mut h,
+        json!({"kind":"unqueue", "index":1, "text":"two", "edit":false}),
+    );
+    assert_eq!(
+        messages(&mut first),
+        [json!({"t":"ack", "id":"request", "ok":true})]
+    );
+    assert!(messages(&mut second).is_empty());
+    assert_eq!(h.queue(), ["steered"]);
     assert!(h.app.composer.is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn deleting_a_follow_up_releases_the_steer_behind_it_without_returning_text() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.fake.script("turn.send", json!({"turn":turn("l1")}));
+    h.fake.script("turn.steer", json!({"ok":true}));
+    h.fake.script_held("turn.wait", waited("l1", completed()));
+    h.submit("start");
+    h.settle().await;
+    h.app.remote.url = Some("http://localhost:8765".into());
+    let (mut output, _close, admission) = phone(&mut h, 1, "phone");
+    assert!(admission.await.unwrap());
+    request(&mut h, json!({"kind":"queue", "text":"blocker"}));
+    request(&mut h, json!({"kind":"submit", "text":"waiting"}));
+    h.settle().await;
+    messages(&mut output);
+    assert!(h.calls("turn.steer").is_empty());
+    request(
+        &mut h,
+        json!({"kind":"unqueue", "index":1, "text":"waiting", "edit":false}),
+    );
+    assert_eq!(
+        messages(&mut output),
+        [json!({"t":"ack", "id":"request", "ok":true})]
+    );
+    request(&mut h, json!({"kind":"submit", "text":"released"}));
+    messages(&mut output);
+    request(
+        &mut h,
+        json!({"kind":"unqueue", "index":0, "text":"blocker", "edit":false}),
+    );
+    assert_eq!(
+        messages(&mut output),
+        [json!({"t":"ack", "id":"request", "ok":true})]
+    );
+    h.settle().await;
+    assert_eq!(h.calls("turn.steer")[0]["text"], "released");
+    assert_eq!(h.queue(), ["released"]);
 }
 
 #[tokio::test(start_paused = true)]
@@ -551,7 +623,10 @@ async fn entering_remote_recalls_followups_and_an_agent_refusal_returns_only_to_
     let (mut output, _close, admission) = phone(&mut h, 1, "phone");
     assert!(admission.await.unwrap());
     let error = crate::protocol::RpcError::new(-1, "refused", "refused");
-    h.op(SessionOp::Sent("remote rejected".into(), Err(error)));
+    h.op(SessionOp::Sent(
+        crate::app::Queued::new("remote rejected".into(), crate::app::QueuedKind::Follow),
+        Err(error),
+    ));
     assert_eq!(
         output.recv().await.unwrap(),
         json!({"t":"returned", "text":"remote rejected"})
@@ -714,12 +789,18 @@ async fn a_refused_text_returns_to_its_session_sender_or_once_it_left_to_viewers
     request_from(&mut h, 2, json!({"kind":"submit", "text":"from second"}));
     h.until(|app| app.is_busy()).await;
     let refused = || crate::protocol::RpcError::new(-1, "refused", "refused");
-    h.op(SessionOp::Sent("from second".into(), Err(refused())));
+    h.op(SessionOp::Sent(
+        crate::app::Queued::new("from second".into(), crate::app::QueuedKind::Follow),
+        Err(refused()),
+    ));
     assert_eq!(received(&mut a), ["notice"]);
     assert_eq!(received(&mut b), ["ack", "returned", "notice"]);
     assert_eq!(received(&mut c), ["notice"]);
     h.app.on_msg(Msg::Remote(RemoteEvent::Disconnected(2)));
-    h.op(SessionOp::Sent("again".into(), Err(refused())));
+    h.op(SessionOp::Sent(
+        crate::app::Queued::new("again".into(), crate::app::QueuedKind::Follow),
+        Err(refused()),
+    ));
     for output in [&mut a, &mut c] {
         let returned = output.try_recv().unwrap();
         assert_eq!(returned, json!({"t":"returned", "text":"again"}));
@@ -1715,7 +1796,7 @@ async fn refused_text_uses_its_session_sender_then_viewers_then_stays_with_the_s
         Msg::Session(
             epoch,
             Box::new(SessionOp::Sent(
-                text.into(),
+                crate::app::Queued::new(text.into(), crate::app::QueuedKind::Follow),
                 Err(crate::protocol::RpcError::new(-1, "refused", "test")),
             )),
         )

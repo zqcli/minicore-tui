@@ -6,9 +6,9 @@
 
    completed in 12s · 2 requests · 1 tool · 2 files changed (+40 −7)
 
-  ↗ steer  focus on the parser first
+  ↗ steer  focus on the parser first · sent
   ↳ follow-up 1  then update the docs
-  ↳ follow-up 2  and the changelog
+  ↗ steer  and the changelog
 
   ⠋ Working (esc to interrupt) · Running bash cargo test --workspace
   enter steer · alt+enter follow-up · alt+↑ edit queued

@@ -6,8 +6,7 @@ use std::time::Duration;
 use serde_json::json;
 
 use super::{
-    Action, Answer, App, LaunchSettings, Msg, NoticeLevel, Overlay, QueuedKind, Session, commands,
-    tasks,
+    Action, Answer, App, LaunchSettings, Msg, NoticeLevel, Overlay, Session, commands, tasks,
 };
 use crate::protocol::{self, Reasoning};
 use crate::remote::{
@@ -64,8 +63,9 @@ impl App {
     }
 
     pub fn enter_remote(&mut self, bound: Bound) {
-        if let Some(text) = self.session.as_mut().and_then(Session::recall_follow_ups) {
+        if let Some(text) = self.session.as_mut().and_then(Session::recall_unsent) {
             self.restore_draft(&text);
+            self.pump_queue();
         }
         for (address, reason) in &bound.skipped {
             let text = format!("Remote: not listening on {address} ({reason})");
@@ -440,19 +440,23 @@ impl App {
                 }
                 self.compact();
             }
-            Intent::Unqueue { index, text } => {
+            Intent::Unqueue { index, text, edit } => {
                 let session = self
                     .session
                     .as_mut()
                     .filter(|session| {
-                        session.queue.get(index).is_some_and(|queued| {
-                            queued.kind == QueuedKind::Follow && queued.text == text
-                        })
+                        session
+                            .queue
+                            .get(index)
+                            .is_some_and(|queued| !queued.sent && queued.text == text)
                     })
                     .ok_or("stale")?;
                 session.queue.remove(index);
-                self.remote
-                    .send(Some(connection), json!({"t":"returned", "text":text}));
+                if edit {
+                    self.remote
+                        .send(Some(connection), json!({"t":"returned", "text":text}));
+                }
+                self.pump_queue();
             }
             Intent::Answer {
                 interaction_id,

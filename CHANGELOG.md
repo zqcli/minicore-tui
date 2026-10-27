@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Queued messages dispatch in send order. Steers behind a follow-up wait until
+  that follow-up starts its turn. Unsent steers and follow-ups can be edited or
+  deleted in the web tray; `Alt+↑` takes all unsent messages back in the TUI.
+  Sent steers are marked and cannot be withdrawn. Refused steers keep their
+  place and wait for Agent progress or turn end before retrying. Applied steers
+  also keep their order in the transcript.
+
 - Confirming an IME candidate with Enter no longer submits the message when
   Safari reports the key outside composition with key code 229.
 - Finished work folds separately between steering messages, preserving the
@@ -42,8 +49,8 @@
   the button. `Esc` stops the turn with one press. `Alt+Enter` (Option+Enter on
   macOS) queues a follow-up and `Enter`/`Cmd+Enter` steers, like the TUI;
   `Tab` is ordinary focus navigation. "Enter sends" now defaults to on for a
-  mouse and keyboard and off on touch devices. Queued follow-ups are numbered
-  and listed after pending steers. Collapsed thinking keeps its newest sentence
+  mouse and keyboard and off on touch devices. Queued messages share one row
+  style and keep their send order, with separate steer and follow-up numbering. Collapsed thinking keeps its newest sentence
   on a line under the header that moves up as the agent thinks. On desktop the
   transcript, composer and title share one centred column beside the sidebar,
   with side panels for changes and output, hover states and thin scrollbars.
