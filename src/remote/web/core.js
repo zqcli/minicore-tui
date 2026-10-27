@@ -476,10 +476,10 @@ function foldTurns(blocks, from, to) {
     if (b.type !== 'turn_end') continue;
     let fin = i;
     for (let j = i - 1; j >= start && blocks[j].type !== 'tool'; j--) if (blocks[j].type === 'assistant' && blocks[j].text) { fin = j; break; }
-    let hidden = [], tools = 0, failed = 0, at = promptAt, segment = start;
+    let hidden = [], tools = 0, failed = 0, at = promptAt, segment = start, steered = false;
     const finish = until => {
       if (hidden.length) {
-        const c = b.changes;
+        const c = !steered && b.changes;
         out.push({ key: 'f' + b.loop_id + ':' + segment, at: hidden[0], last: hidden[hidden.length - 1], hidden, tools, failed,
           ms: at != null && until != null ? until - at : null,
           added: c && c.files && segment === start ? c.added : null, removed: c && c.files && segment === start ? c.removed : null });
@@ -489,7 +489,7 @@ function foldTurns(blocks, from, to) {
     for (let j = start; j < i; j++) {
       const x = blocks[j];
       if (x.type === 'user' && x.kind === 'steering') {
-        finish(x.at); at = x.at; segment = j + 1;
+        steered = true; finish(x.at); at = x.at; segment = j + 1;
       } else if (j < fin) {
         if (x.type === 'tool') { tools++; if (x.state === 'failed') failed++; }
         if ((x.type === 'tool' || x.type === 'assistant') && !quiet(x)) hidden.push(j);

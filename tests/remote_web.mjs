@@ -725,7 +725,7 @@ test('a finished turn folds tools and intermediate thinking before the final ans
     ask('next'), tool('d', 'bash'), said('working', '', true)];
   const f = plain(MC.foldTurns(bl, 0, bl.length));
   assert.equal(f.length, 2);
-  assert.deepEqual(f[0], { key: 'ft1:1', at: 1, last: 4, hidden: [1, 2, 3, 4], tools: 2, failed: 1, ms: 0, added: 12, removed: 4 });
+  assert.deepEqual(f[0], { key: 'ft1:1', at: 1, last: 4, hidden: [1, 2, 3, 4], tools: 2, failed: 1, ms: 0, added: null, removed: null });
   assert.deepEqual(f[1], { key: 'ft1:7', at: 7, last: 7, hidden: [7], tools: 1, failed: 0, ms: 47000, added: null, removed: null });
   assert.equal(MC.foldText(f[1]), 'Worked 47.0 s');
   // No answer after the last tool: everything up to the turn end folds.

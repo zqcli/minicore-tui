@@ -237,7 +237,8 @@ re-renders on every `state`).
   segments. Each segment folds its tools and intermediate thinking into a
   "Worked 47 s · 5 tools ›" row in place, with its own tool and failed counts.
   Duration uses the bounding prompt, steering and turn-end clocks when known;
-  otherwise it is omitted. The final answer stays visible. Expanding adds a
+  otherwise it is omitted. With steering, whole-turn change totals stay on the
+  turn-end line rather than being attributed to one segment. The final answer stays visible. Expanding adds a
   trailing "Hide" row; anchoring keeps the tapped row in place. The running
   turn is never folded.
 - **Turn end** line stays (completed / interrupted / failed, duration, clock
