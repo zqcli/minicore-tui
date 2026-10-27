@@ -3,10 +3,9 @@ import { readFileSync, readdirSync } from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
 import * as core from '../src/remote/web/core.js';
-import * as markdown from '../src/remote/web/markdown.js';
 
 const read = name => readFileSync(new URL(`../src/remote/web/${name}`, import.meta.url), 'utf8');
-const MC = { ...core, ...markdown };
+const MC = core;
 // Round-trip through JSON so values compare against plain objects.
 const plain = v => JSON.parse(JSON.stringify(v));
 
@@ -31,7 +30,7 @@ const blocks = [
 
 test('the pure modules have no DOM, network or timer access', () => {
   // Property access such as the context reply's `window` field is not a global.
-  for (const name of ['core.js', 'markdown.js']) {
+  for (const name of ['core.js']) {
     assert.doesNotMatch(read(name), /(?<!\.)\b(document|window|localStorage|WebSocket|navigator|setTimeout|setInterval)\b/, name);
   }
 });

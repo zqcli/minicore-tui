@@ -1,16 +1,11 @@
 import * as MC from './core.js';
-import { sessionEvent, onNotice, renderAttention, renderBanners } from './attention.js';
-import { syncApproval } from './approval.js';
-import { closePriMenu, openPlus, renderDock, returned, sent, stop, unconfirmedHome, unqueueRefused } from './composer.js';
-import { boot, closed, handshake, isMain, wake } from './connection.js';
-import { S, bind, pump, repaint, turnStatus, viewed } from './net.js';
-import { notify, syncWake } from './platform.js';
-import { buildNav, clearFailed, clearPending, closeNav, openInfo, openLive, openNav, openNew, openSessionMenu, renderNav, settle, stepSession, syncTick } from './sessions.js';
-import { modelSettled, openHelp } from './sheets.js';
-import { followEnd, markDirty, onNewSession, renderEmpty, renderTop, schedule } from './transcript.js';
-import { $, actions, announce, h, inField, reduced, refreshSheets, set, toast, topModal, topPanel } from './ui.js';
+import { closePriMenu, followEnd, markDirty, onNewSession, openPlus, renderDock, renderEmpty, renderTop, resetTranscript, returned, schedule, sent, stop, syncApproval, unconfirmedHome, unqueueRefused } from './conversation.js';
+import { S, bind, boot, handshake, isMain, pump, repaint, turnStatus, viewed, wake } from './net.js';
+import { buildNav, clearFailed, clearPending, closeNav, modelSettled, onNotice, openHelp, openInfo, openLive, openNav, openNew, openSessionMenu, renderAttention, renderBanners, renderNav, sessionEvent, settle, stepSession, syncTick } from './sessions.js';
+import { $, actions, announce, h, inField, keepAwake, notify, reduced, refreshSheets, set, toast, topModal, topPanel } from './ui.js';
 
 let hiddenAt = 0, wasBusy = false;
+const syncWake = () => keepAwake(!!S.state && !!(turnStatus().busy || turnStatus().compacting));
 
 document.addEventListener('mouseover', e => { const b = e.target.closest('button[aria-label]'); if (b && !b.title) b.title = b.getAttribute('aria-label'); });
 
@@ -133,6 +128,7 @@ if (window.visualViewport) {
   visualViewport.addEventListener('scroll', fit);
   fit();
 }
-bind({ message: onMessage, lost: connectionLost, closed, render: renderState });
+bind({ message: onMessage, lost: connectionLost, render: renderState, reset: resetTranscript });
 buildNav();
+actions.syncWake = syncWake;
 boot();

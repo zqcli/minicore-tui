@@ -331,25 +331,19 @@ them; a test fails when a file is missing from the table, the page's
 | `index.html` | Markup only: the icon sprite, screens, the app frame and `<link rel="modulepreload">` for every module |
 | `app.css` | All styles, on the custom properties of `:root` (themes are `[data-theme=dark]` overrides) |
 | `theme.js` | Classic blocking script: sets `data-theme`, the text size and the theme-color metas before the first paint |
-| `core.js`, `markdown.js` | Pure logic, no DOM, network or timers (a test enforces it): messages, the store and reducer, formatting, tool rows, folding, approvals, composer decisions; Markdown token trees |
-| `ui.js` | DOM helpers (`h`, `icon`, `part`, `set`, `keepFocus`), shared rows (`menuRow`, `rowText`, `errBox`), toasts, clipboard, the modal stack and sheets, `actions` |
-| `net.js` | The store `S`, the socket, intents, filesystem requests and queries (correlated by id) |
-| `platform.js` | Preferences, wake lock, notifications, install prompt |
-| `sheets.js` | Settings, model, changes, context, output, help and the confirm dialog |
-| `sessions.js` | The drawer or sidebar, session actions, rename, delete, info and the new-session folder picker |
-| `composer.js` | Status strip, queue, composer, primary button, `/` and `@` lists, draft |
-| `transcript.js` | Blocks, incremental rendering, folding, the mounted window, scroll anchoring, find |
-| `approval.js` | The approval and question sheet, its bar and keys |
-| `connection.js` | The sign-in and status screens and the connection's life: connect, backoff, wake, sign out |
-| `attention.js` | Banners, the app badge and tab title, and what background sessions ask of this device |
+| `core.js` | Pure logic, no DOM, network or timers (a test enforces it): messages, the store and reducer, formatting, tool rows, folding, approvals, composer decisions; Markdown token trees |
+| `ui.js` | The DOM kit (`h`, `icon`, `part`, `set`, `keepFocus`), shared rows (`menuRow`, `rowText`, `errBox`), toasts, clipboard, the modal stack and sheets, `actions`; preferences, wake lock, notifications, the install prompt |
+| `net.js` | The store `S`, the socket, intents, filesystem requests and queries (correlated by id); the sign-in and status screens and the connection's life: connect, backoff, wake, sign out |
+| `sessions.js` | Settings, model, changes, context, output, help and confirm sheets; the drawer or sidebar, session actions, rename, delete, info and the new-session folder picker; banners, the app badge and tab title, and what background sessions ask of this device |
+| `conversation.js` | The composer (status strip, queue, primary button, `/` and `@` lists, draft), the transcript (blocks, incremental rendering, folding, the mounted window, scroll anchoring, find) and the approval and question sheet with its bar and keys |
 | `main.js` | Message dispatch, the top bar, global keys, lifecycle and boot |
 
 Rules:
 
 - State has one owner. The host's state and blocks live in `S` (`net.js`;
   only its reducer writes them). Everything else is private to the module that
-  draws it (the mounted window and folds in `transcript.js`, the lists in
-  `composer.js`, the modal stack in `ui.js`) and is changed through that
+  draws it (the mounted window and folds and the lists in `conversation.js`,
+  the modal stack in `ui.js`) and is changed through that
   module's functions (`markDirty`, `markDenied`, `markFailed`, `abandon`).
 - Modules import downward only and never form a cycle (a test checks it). A
   call that has to go up, such as the composer opening Find, goes through

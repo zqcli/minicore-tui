@@ -1,12 +1,281 @@
 import * as MC from './core.js';
-import { mdInc } from './markdown.js';
-import { fillComposer, loadDraft } from './composer.js';
-import { S, hostNow, intent, pendingKind, sending, turnStatus, tz } from './net.js';
-import { prefs } from './platform.js';
-import { openNew } from './sessions.js';
-import { openChanges, openOutput } from './sheets.js';
-import { $, actions, copyText, diffView, h, hover, icon, keepFocus, kids, menuRow, part, reduced, set, share, sheet, spin } from './ui.js';
+import { HOST, S, abandon, ask, hostNow, intent, online, pendingKind, repaint, send, sending, turnStatus, tz, viewed } from './net.js';
+import { compactNow, exportSession, openChanges, openContext, openHelp, openInfo, openModel, openNav, openNew, openOutput, openSettings, rename } from './sessions.js';
+import { $, actions, announce, copyText, diffView, findSheet, h, hover, icon, inField, keepFocus, kids, menuRow, notify, part, prefs, reduced, set, share, sheet, spin, toast, topModal, wide } from './ui.js';
 
+// ---- composer ----
+// "Enter sends" is stored once chosen; until then the pointer default follows the device.
+const apple = /Mac|iPhone|iPad/.test(navigator.userAgent), ALT = apple ? '⌥' : 'Alt+', tips = () => prefs.enter ? 'Enter' : (apple ? '⌘' : 'Ctrl+') + 'Enter';
+// ---- dock: status strip, queue, composer ----
+const ta = $('ta');
+const stripPart = part($('strip'), x => [spin(), h('div', 'stx', h('div', 'st1', h('b', '', x.label), x.started && h('span', 'el', MC.fmtElapsed(hostNow() - x.started)), x.detail && h('span', 'mono', x.detail))),
+  x.ctx && h('button', { class: 'ctxb' + (x.hi ? ' hi' : ''), 'aria-label': x.ctx + ' of context used', onclick: () => openContext() }, x.ctx)]);
+function renderStrip() {
+  const s = turnStatus(), on = !!(s.busy || s.compacting || s.loading);
+  set($('strip'), 'hidden', !on);
+  if (!on) return;
+  const x = MC.statusLine(S.state, S.blocks, hostNow());
+  stripPart({
+    label: x.label, detail: x.detail, started: (s.busy || s.compacting) && s.started_ms, ctx: S.state.context_percent != null ? Math.round(S.state.context_percent) + '%' : '',
+    hi: S.state.context_percent >= 80,
+  });
+}
+export function stop() { if (MC.canStop(turnStatus()) && !turnStatus().interrupting && !pendingKind('cancel')) intent(MC.intents.cancel()); }
+const trayPart = part($('tray'), t => [
+  t.lost.map(([id, text]) => h('div', { class: 'lost', role: 'alert' }, icon('warn', 'sm'),
+    h('div', '', h('div', '', 'Not sent · it may or may not have arrived'), h('div', 'lt', text)),
+    h('button', { class: 'btn sm', 'data-k': 'again' + id, disabled: !t.on, onclick: () => { send(MC.sendAgain(S, id)); repaint(); } }, icon('retry', 'xs'), 'Send again'),
+    h('button', { class: 'ib s', 'aria-label': 'Edit instead', onclick: () => { abandon(id); fillComposer(MC.mergeReturned(ta.value, text)); repaint(); } }, icon('edit', 'sm')))),
+  t.q.follows && h('div', 'qcap', 'Follow-ups send when this turn ends'),
+  t.q.items.map(q => q.kind === 'steer' ? h('div', 'qp steer', icon('steer', 'xs'), h('span', 'qk', 'Steer · waiting for the next step'), h('span', 'qt', q.text))
+    : h('div', 'qp', icon('follow', 'xs'), h('span', 'qk', 'Follow-up ' + q.n), h('button', { class: 'qt', 'data-k': 'q' + q.index, disabled: !t.on, 'aria-label': 'Edit follow-up ' + q.n + ': ' + q.text, onclick: () => unqueue(q, false) }, q.text),
+      h('button', { class: 'ib', disabled: !t.on, 'aria-label': 'Remove follow-up ' + q.n, onclick: () => unqueue(q, true) }, icon('x', 'sm')))),
+  t.q.long && h('button', { class: 'qmore', 'data-k': 'qmore', 'aria-expanded': String(qAll), onclick: () => { qAll = !qAll; renderTray(); } }, t.q.hidden ? '+' + t.q.hidden + ' more' : 'Show less'),
+]);
+let qAll = false;
+// A queued follow-up comes back from the host: into the composer to edit it, or dropped.
+const edits = new Set();
+export const unqueueRefused = text => edits.delete(text);
+function unqueue(q, drop) {
+  if (!online()) return;
+  if (!drop) edits.add(q.text);
+  send(MC.unqueue(S, q.index, q.text, drop));
+  repaint();
+}
+function renderTray() {
+  const q = MC.queueView(S.state.queue, qAll);
+  trayPart({ lost: MC.unconfirmed(S).map(it => [it.id, it.text]), q: { ...q, follows: S.state.queue.some(x => x.kind === 'follow') }, on: online() });
+}
+// The bottom row of the composer: + and the draft's folder and profile on the left, then the slot (the model as plain text,
+// or Follow-up while a turn runs with text typed) and the primary button, which keeps its place and changes face.
+const PRIMARY = {
+  send: { icon: 'up', label: 'Send' }, steer: { icon: 'steer', label: 'Steer' },
+  stop: { icon: 'stop', label: 'Stop the turn' }, stopping: { icon: null, label: 'Stopping' },
+};
+let primary = '', stopAt = 0, press = null;
+const composerState = () => {
+  const s = turnStatus(), lock = sending();
+  return { busy: !!s.busy, compacting: !!s.compacting, text: ta.value, stopping: MC.canStop(s) && (!!s.interrupting || pendingKind('cancel')), lock };
+};
+const chipsPart = part($('chips'), c => [h('div', 'cl',
+  h('button', { class: 'chip icon', 'data-k': 'plus', 'aria-label': 'Commands, prompts and files', 'aria-haspopup': 'dialog', onclick: openPlus }, icon('plus', 'sm')),
+  c.draft && h('button', { class: 'chip', 'data-k': 'folder', 'aria-label': 'Folder ' + c.draft.folder + ', change', onclick: () => openNew() }, icon('folder', 'xs'), h('span', '', c.draft.folder)),
+  c.draft && c.draft.profiles && h('button', { class: 'chip', 'data-k': 'profile', 'aria-label': 'Profile ' + c.draft.profile + ', change', onclick: openProfile }, h('span', '', c.draft.profile || 'Profile'))),
+  c.followUp
+    ? h('button', { class: 'tbtn acc', 'data-k': 'follow', title: c.tips && 'Queue as follow-up · ' + ALT + 'Enter', 'aria-label': 'Queue as a follow-up', disabled: c.disabled, onclick: () => submit('queue') }, icon('follow', 'sm'), 'Follow-up')
+    : h('button', { class: 'tbtn', 'data-k': 'model', 'aria-label': 'Model ' + c.model + ', change', onclick: openModel }, h('span', '', c.modelShort), c.level && h('span', 'rz', '· ' + c.level), icon('chevd', 'xs')),
+  h('button', { id: 'pri', class: 'pri ' + c.kind, type: 'button', 'data-k': 'pri', title: c.tip, 'aria-label': PRIMARY[c.kind].label, disabled: c.disabled,
+    onpointerdown: priDown, onpointermove: priMove, onpointerup: priEnd, onpointercancel: priEnd, oncontextmenu: priMenu, onclick: priTap },
+    c.kind === 'stopping' ? spin() : icon(PRIMARY[c.kind].icon)),
+]);
+function renderChips() {
+  const s = turnStatus(), c = viewed(), d = S.state.draft, cs = composerState(), kind = MC.primaryKind(cs), typed = cs.text.trim() !== '';
+  set(ta, 'readOnly', cs.lock);
+  set(ta, 'placeholder', s.busy ? (hover.matches ? tips() + ' to steer · ' + ALT + 'Enter to queue' : 'Steer, or queue a follow-up…') : S.state.session ? 'Message MiniCore · / for commands' : 'Describe a task to start');
+  if (kind !== primary) {
+    if (kind !== 'steer') closePriMenu();
+    if (kind === 'stop') stopAt = Date.now();
+    // Only the turn-related faces are announced, so typing does not chatter.
+    if (kind !== 'send' && primary !== '') announce(PRIMARY[kind].label);
+    primary = kind;
+  }
+  const tip = !hover.matches ? null : kind === 'send' ? 'Send · ' + tips() : kind === 'stop' ? 'Stop the turn · Esc'
+    : kind === 'steer' ? 'Steer · ' + tips() + ' · right-click for more' : null;
+  chipsPart({
+    kind, tip, tips: hover.matches && tips(), followUp: cs.busy && typed && kind === 'steer', draft: !S.state.session && { folder: MC.basename(d.workspace), profile: d.profile, profiles: S.state.profiles.length > 1 },
+    model: c.model || '', modelShort: c.model ? MC.midTrunc(c.model, wide.matches ? 28 : 16) : 'Model', level: c.reasoning,
+    disabled: cs.lock || !online() || kind === 'stopping' || (kind === 'send' && !typed),
+  });
+}
+// A tap on the primary asks MC what it means from the live text. A long press or right click opens the menu while text is
+// typed during a turn, which is where Stop is otherwise out of reach.
+function priDown(e) {
+  press = { x: e.clientX, y: e.clientY, moved: 0, fired: false, timer: 0 };
+  if (e.pointerType !== 'mouse') press.timer = setTimeout(() => { press.fired = true; openPriMenu(); }, 450);
+}
+function priMove(e) {
+  if (!press) return;
+  press.moved = Math.max(press.moved, Math.hypot(e.clientX - press.x, e.clientY - press.y));
+  if (press.moved > MC.TAP_SLOP) clearTimeout(press.timer);
+}
+function priEnd() { if (press) clearTimeout(press.timer); }
+function priMenu(e) { e.preventDefault(); openPriMenu(); }
+function priTap(e) {
+  const p = press;
+  press = null;
+  if (p && p.fired) return;
+  const act = MC.primaryTap({ ...composerState(), stopAt: primary === 'stop' ? stopAt : Date.now() }, Date.now(), p && e.detail ? p.moved : 0);
+  if (act === 'stop') stop(); else if (act) submit(act);
+}
+function openPriMenu() {
+  if ($('pmenu') || MC.primaryKind(composerState()) !== 'steer') return;
+  const item = (ic, label, key, fn) => h('button', { class: 'pm', role: 'menuitem', onclick: () => { closePriMenu(); fn(); } }, icon(ic, 'sm'), h('span', '', label), h('span', 'pk', key));
+  $('comp').append(h('div', { id: 'pmenu', role: 'menu', 'aria-label': 'Turn actions' },
+    item('steer', 'Steer now', tips(), () => submit('steer')), item('follow', 'Queue as follow-up', ALT + 'Enter', () => submit('queue')), item('stop', 'Stop the turn', 'Esc', stop)));
+  $('pmenu').firstChild.focus({ preventScroll: true });
+}
+export function closePriMenu() { const m = $('pmenu'); if (m) m.remove(); }
+document.addEventListener('pointerdown', e => { if (!e.target.closest('#pmenu')) closePriMenu(); }, true);
+export function renderDock() { renderStrip(); renderTray(); renderChips(); }
+function grow() {
+  ta.style.height = 'auto';
+  ta.style.height = ta.scrollHeight + 'px';
+}
+const draftKey = () => 'minicore.draft.' + (S.sid || 'new');
+function composerInput() {
+  grow(); renderChips(); updateMenu();
+  const lit = MC.literal(ta.value);
+  ta.setAttribute('autocorrect', lit ? 'off' : 'on');
+  ta.spellcheck = !lit;
+  if (ta.value) localStorage.setItem(draftKey(), ta.value); else localStorage.removeItem(draftKey());
+}
+export function loadDraft() { if (!sending()) { ta.value = localStorage.getItem(draftKey()) || ''; composerInput(); } }
+export function fillComposer(text) { ta.value = text; recall = -1; composerInput(); ta.focus(); ta.setSelectionRange(text.length, text.length); }
+function submit(kind) {
+  const text = ta.value;
+  if (!text.trim() || sending()) return;
+  const c = MC.parseSlash(text, S.state.commands);
+  if (c && c.builtin) { ta.value = ''; composerInput(); return builtin(c); }
+  if (c && c.unknown) return toast('Unknown command /' + c.unknown, 'error');
+  if (!online()) return;
+  intent(kind === 'queue' ? MC.intents.queue(text) : MC.intents.submit(text));
+  setMenu(null);
+}
+function builtin(c) {
+  const s = S.state.session, need = () => { toast('Send a first message to start the session'); };
+  switch (c.builtin) {
+    case 'new': return openNew();
+    case 'model': return openModel();
+    case 'rename': return !s ? need() : c.arg ? intent(MC.intents.renameSession(s.id, c.arg)) : rename(s.id);
+    case 'compact': return !s ? need() : compactNow();
+    case 'context': return !s ? need() : openContext();
+    case 'changes': return !s ? need() : openChanges();
+    case 'export': return !s ? need() : exportSession();
+    case 'find': return actions.find();
+    case 'session': return openInfo();
+    case 'sessions': return openNav();
+    case 'copy': { const b = [...S.blocks].reverse().find(x => x.type === 'assistant' && x.text); return b ? copyText(b.text) : toast('No answer to copy yet'); }
+    case 'settings': return openSettings();
+    case 'help': return openHelp();
+  }
+}
+ta.addEventListener('input', () => { recall = -1; composerInput(); });
+ta.addEventListener('click', updateMenu);
+
+// The / command and @ file list above the composer; keyboard and touch navigable.
+let menu = null, filesT = 0, recall = -1;
+const recentKey = 'minicore.recent.' + HOST;
+let recent = JSON.parse(localStorage.getItem(recentKey) || '[]');
+const popPart = part($('pop'), m => m && (m.items.length ? m.items.map((x, k) => h('button', {
+  class: 'opt', role: 'option', id: 'opt' + k, 'aria-selected': String(k === m.sel), tabindex: '-1',
+}, m.kind === 'cmd' ? [h('span', 'on', '/' + x.name), h('span', 'od', x.description), h('span', 'tag', x.hint || (x.builtin ? '' : 'template'))]
+  : [icon('file', 'sm'), h('span', 'od file', x)])) : h('div', 'muted', m.busy ? 'Searching…' : m.kind === 'cmd' ? 'No matching commands' : 'No matching files')));
+// The input keeps its focus through a press on an option.
+$('pop').addEventListener('mousedown', e => { if (e.target.closest('.opt')) e.preventDefault(); });
+$('pop').addEventListener('click', e => { const o = e.target.closest('.opt'); if (o) accept(+o.id.slice(3)); });
+function setMenu(m) {
+  menu = m;
+  $('pop').hidden = !m;
+  ta.setAttribute('aria-expanded', String(!!m));
+  if (m && m.items.length) ta.setAttribute('aria-activedescendant', 'opt' + m.sel); else ta.removeAttribute('aria-activedescendant');
+  popPart(m && { kind: m.kind, items: m.items, sel: m.sel, busy: m.busy });
+  const o = m && $('opt' + m.sel);
+  if (o) o.scrollIntoView({ block: 'nearest' });
+}
+function updateMenu() {
+  if (!S.state) return;
+  const text = ta.value, cmds = MC.slashMenu(text, S.state.commands);
+  if (cmds) return setMenu({ kind: 'cmd', items: cmds, sel: 0 });
+  const tok = ta.selectionStart === ta.selectionEnd && MC.atToken(text, ta.selectionStart);
+  if (!tok || !S.state.session) return setMenu(null);
+  if (menu && menu.kind === 'file' && menu.tok.query === tok.query) { menu.tok = tok; return; }
+  setMenu({ kind: 'file', items: menu && menu.kind === 'file' ? menu.items : [], sel: 0, tok, busy: true });
+  clearTimeout(filesT);
+  filesT = setTimeout(() => ask(MC.queries.files(tok.query), r => {
+    if (!menu || menu.kind !== 'file' || menu.tok.query !== tok.query) return;
+    setMenu({ ...menu, items: r.ok ? r.data.paths : [], busy: false, sel: 0 });
+    if (!r.ok) toast(MC.errorText(r.error), 'error');
+  }), 150);
+}
+function accept(k) {
+  const m = menu, x = m.items[k];
+  if (m.kind === 'file') {
+    const r = MC.insertMention(ta.value, m.tok, x);
+    ta.value = r.text; ta.setSelectionRange(r.caret, r.caret);
+  } else if (x.builtin && x.name !== 'rename') { ta.value = ''; setMenu(null); composerInput(); return builtin({ builtin: x.name, arg: '' }); }
+  else ta.value = '/' + x.name + ' ';
+  ta.focus();
+  composerInput();
+}
+ta.addEventListener('keydown', e => {
+  if (e.isComposing) return;
+  if (menu && menu.items.length && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+    e.preventDefault();
+    setMenu({ ...menu, sel: (menu.sel + (e.key === 'ArrowDown' ? 1 : menu.items.length - 1)) % menu.items.length });
+    return;
+  }
+  if (menu && menu.items.length && (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey && !e.metaKey && !e.ctrlKey))) { e.preventDefault(); accept(menu.sel); return; }
+  if (menu && e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setMenu(null); return; }
+  // Hardware keyboards walk the recent prompts with ↑/↓ from an empty composer.
+  if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && !e.altKey && !e.metaKey && !e.ctrlKey && !e.shiftKey && (ta.value === '' || ta.value === recent[recall])) {
+    const k = recall + (e.key === 'ArrowUp' ? 1 : -1);
+    if (k >= recent.length || (k < 0 && recall < 0)) return;
+    e.preventDefault();
+    recall = k;
+    ta.value = k < 0 ? '' : recent[k];
+    composerInput();
+    return;
+  }
+  const act = MC.composerKey({ key: e.key, shift: e.shiftKey, alt: e.altKey, mod: e.metaKey || e.ctrlKey }, { busy: !!turnStatus().busy, text: ta.value, popup: !!(menu && menu.items.length), enter: prefs.enter });
+  if (act) { e.preventDefault(); submit(act); }
+});
+ta.addEventListener('blur', () => setTimeout(() => { if (document.activeElement !== ta) setMenu(null); }, 150));
+function remember(text) { recent = MC.pushRecent(recent, text); localStorage.setItem(recentKey, JSON.stringify(recent)); }
+export function openPlus() {
+  sheet({
+    key: 'plus', title: 'Add to your message', deps: () => [S.state.commands, recent.slice(0, 8), !!S.state.session],
+    body: m => {
+      const cmds = S.state.commands.map(c => ({ ...c, builtin: false })).concat(MC.BUILTINS);
+      return [S.state.session && [h('h3', 'sec2', 'Insert'), h('div', 'list', menuRow(m, 'at', 'File', insertAt, { sub: 'Mention a file in this workspace as @path' }))],
+        recent.length > 0 && [h('h3', 'sec2', 'Recent prompts'), h('div', 'list', recent.slice(0, 8).map(t => menuRow(m, 'history', t.length > 120 ? t.slice(0, 120) + '…' : t, () => fillComposer(t))))],
+        h('h3', 'sec2', 'Commands'), h('div', 'list', cmds.map(c => menuRow(m, c.builtin ? 'term' : 'sparkle', '/' + c.name + (c.hint ? ' ' + c.hint : ''),
+          () => { setMenu({ kind: 'cmd', items: [c], sel: 0 }); accept(0); }, { sub: c.description, mono: true })))];
+    },
+  });
+}
+function insertAt() {
+  const p = ta.selectionStart, v = ta.value, pre = p > 0 && !/\s$/.test(v.slice(0, p)) ? ' @' : '@';
+  ta.value = v.slice(0, p) + pre + v.slice(p);
+  ta.focus();
+  ta.setSelectionRange(p + pre.length, p + pre.length);
+  composerInput();
+}
+function openProfile() {
+  const d = S.state.draft;
+  const m = sheet({
+    key: 'profile', cls: 'dialog', title: 'Profile', deps: () => [S.state.draft.profile, S.state.profiles],
+    body: () => h('div', { class: 'list', role: 'radiogroup', 'aria-label': 'Profile' }, S.state.profiles.map(p => h('button', {
+      class: 'row flat', role: 'radio', 'aria-checked': String(p === S.state.draft.profile),
+      onclick: () => { if (p !== S.state.draft.profile) intent(MC.intents.newSession(d.workspace, p)); m.close(); },
+    }, h('span', 'rt', h('span', 'rm', p)), p === S.state.draft.profile && icon('check', 'ck')))),
+  });
+}
+
+
+// Back from the host: an acknowledged send leaves the editor, a returned message comes back into it.
+export function sent(text) { remember(text); ta.value = MC.retireText(ta.value, text); composerInput(); }
+export function returned(text) {
+  const mine = edits.delete(text);
+  fillComposer(MC.mergeReturned(ta.value, text));
+  if (!mine) toast('Message returned to the composer');
+}
+// An unconfirmed send lives in its card only, so it is never in two places to send twice.
+export function unconfirmedHome() {
+  for (const it of MC.unconfirmed(S)) ta.value = MC.retireText(ta.value, it.text);
+  edits.clear();
+}
+
+// ---- transcript ----
 // ---- transcript ----
 // `opened` holds the rows the reader opened or closed by key; a key not in it starts as `startsOpen` says.
 const log = $('log'), box = $('blocks'), nodes = [], dirty = new Set(), opened = new Map(), thinkTimes = new Map();
@@ -152,7 +421,7 @@ function asstNode(b, i) {
   return n;
 }
 function updateAsst(n, b) {
-  const a = n._asst, m = a.md, r = mdInc(m.cache, b.text);
+  const a = n._asst, m = a.md, r = MC.mdInc(m.cache, b.text);
   n.hidden = MC.quiet(b);
   thinkUpdate(a, b);
   m.cache = r.cache;
@@ -414,3 +683,82 @@ function paintFind() {
 export function followEnd() { if (stick && pinned) log.scrollTop = log.scrollHeight; }
 actions.find = openFind;
 actions.redraw = redrawAll;
+
+// ---- approval ----
+// ---- approvals and questions ----
+let apprId = null, apprAt = 0, lastKey = 0;
+export function syncApproval() {
+  const a = S.state.interaction, m = findSheet('appr');
+  if (!a) {
+    // Answered elsewhere: a denied tool row says so.
+    if (apprId && reply.call) markDenied(reply.call);
+    apprId = null; reply.call = null;
+    if (m) m.close(true);
+    renderApprBar();
+    return;
+  }
+  if (a.id !== apprId) {
+    apprId = a.id; apprAt = Date.now();
+    const t = [...S.blocks].reverse().find(b => b.type === 'tool' && b.state === 'pending');
+    reply.call = t ? t.call_id : null;
+    announce(a.kind === 'approval' ? 'Approval needed' : 'Question: ' + (a.prompt || ''));
+    notify(a.kind === 'approval' ? 'Approval needed: ' + MC.approvalLine(a) : a.prompt || 'A question is waiting', S.sid);
+    if (!m) openApproval(a);
+  }
+  renderApprBar();
+}
+// The sheet's own state: the denial form being filled in and the tool row the question belongs to.
+const reply = { deny: false, reason: '', call: null };
+function openApproval() {
+  reply.deny = false; reply.reason = '';
+  const m = sheet({
+    key: 'appr', closeIcon: 'chevd', closeLabel: 'Minimize', footCls: 'col', deps: () => [S.state.interaction, pendingKind('answer'), online(), reply.deny],
+    head: hid => {
+      const a = S.state.interaction, t = a.kind === 'approval' && MC.approvalTitle(a);
+      return h('div', 'ahead', h('div', 'eicon', icon(t ? 'shield' : 'info')), h('div', '',
+        h('h2', { id: hid, tabindex: '-1', 'data-focus': true }, t ? [t.text, t.code ? [' ', h('code', '', t.code)] : ''] : a.prompt || 'Question'),
+        t && a.prompt && h('p', '', a.prompt)));
+    },
+    body: () => {
+      const a = S.state.interaction, p = MC.pending(S, 'answer');
+      if (a.kind !== 'approval') return h('div', 'opts', MC.approvalOptions(a).map(o => h('button', { class: 'btn', 'data-k': 'o' + o.n, disabled: !online() || !!p, onclick: () => answer(o.choice) },
+        p && p.spec.choice === o.choice ? spin() : h('b', '', String(o.n)), h('span', '', o.label))));
+      const x = MC.approvalBody(a);
+      return [x.cmd && [h('pre', 'cmdbox', '$ ' + x.cmd), h('div', 'where2', 'in ' + MC.tilde(viewed().workspace))], x.diff && diffView(x.diff, prefs.wrap), x.text && h('pre', 'cmdbox', x.text)];
+    },
+    foot: () => {
+      const a = S.state.interaction, p = MC.pending(S, 'answer'), dis = !online() || !!p;
+      if (a.kind !== 'approval') return hover.matches && h('div', 'akeys', 'Press 1–' + a.options.length + ' to answer');
+      const ans = (o, cls, fn) => h('button', { class: 'btn ' + cls, 'data-k': o.choice, disabled: dis, onclick: fn || (() => answer(o.choice)) }, p && p.spec.choice === o.choice && spin(), o.label);
+      const [allow, session, deny] = MC.approvalOptions(a);
+      if (reply.deny) return [h('form', { class: 'reason', onsubmit: e => { e.preventDefault(); answer('deny', reply.reason.trim()); } },
+        h('input', { class: 'tf', id: 'why', 'data-k': 'why', value: reply.reason, placeholder: 'Tell the agent why (optional)', 'aria-label': 'Reason for denying', autocomplete: 'off', enterKeyHint: 'send', oninput: e => { reply.reason = e.target.value; } })),
+        h('div', 'row2', h('button', { class: 'btn', onclick: () => { reply.deny = false; m.refresh(); } }, 'Back'), ans(deny, 'dangerfill', () => answer('deny', reply.reason.trim())))];
+      return [ans(allow, 'primary'), session && ans(session, ''), ans({ ...deny, label: deny.label + '…' }, 'danger', () => { reply.deny = true; m.refresh(); m.el.querySelector('#why').focus(); }),
+        hover.matches && h('div', 'akeys', 'Y allow · A allow for this session · N deny')];
+    },
+    onClose: () => renderApprBar(),
+  });
+}
+// Only a denial is recorded on its tool row, with the reason: it explains why the tool did not run.
+function answer(choice, message) {
+  const a = S.state.interaction, call = reply.call;
+  if (!a || pendingKind('answer')) return;
+  intent(MC.intents.answer(a.id, choice, message || undefined), ack => {
+    if (!ack.ok) return toast(MC.errorText(ack.error), ack.error === 'stale' ? null : 'error');
+    if (call && choice === 'deny') markDenied(call, 'Denied' + (message ? ': “' + message + '”' : ''));
+  });
+}
+const apprPart = part($('apprbar'), b => b && [icon('hand', 'sm'), h('span', '', b), h('button', { class: 'btn sm', onclick: () => openApproval() }, 'Review')]);
+function renderApprBar() {
+  const a = S.state && S.state.interaction, show = !!a && !findSheet('appr');
+  set($('apprbar'), 'hidden', !show);
+  apprPart(show ? (a.kind === 'approval' ? 'Approval needed · ' + MC.approvalLine(a) : 'Question · ' + (a.prompt || '')) : null);
+}
+document.addEventListener('keydown', e => {
+  const m = topModal(), a = S.state && S.state.interaction, armedFrom = Math.max(apprAt, lastKey);
+  lastKey = Date.now();
+  if (!a || !m || m.key !== 'appr' || e.repeat) return;
+  const c = MC.approvalKey(a, e.key, e.ctrlKey || e.metaKey || e.altKey, armedFrom, lastKey, inField(e.target));
+  if (c != null) { e.preventDefault(); answer(c); }
+}, true);
