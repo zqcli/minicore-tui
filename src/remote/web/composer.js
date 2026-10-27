@@ -1,5 +1,5 @@
 import * as MC from './core.js';
-import { HOST, S, ask, cur, hostNow, intent, online, pendingKind, repaint, send, sending, st } from './net.js';
+import { HOST, S, abandon, ask, cur, hostNow, intent, online, pendingKind, repaint, send, sending, st } from './net.js';
 import { prefs } from './platform.js';
 import { openInfo, openNav, openNew, rename } from './sessions.js';
 import { compactNow, exportSession, openChanges, openContext, openHelp, openModel, openSettings } from './sheets.js';
@@ -26,7 +26,7 @@ const trayPart = part($('tray'), t => [
   t.lost.map(([id, text]) => h('div', { class: 'lost', role: 'alert' }, icon('warn', 'sm'),
     h('div', '', h('div', '', 'Not sent · it may or may not have arrived'), h('div', 'lt', text)),
     h('button', { class: 'btn sm', 'data-k': 'again' + id, disabled: !t.on, onclick: () => { send(MC.sendAgain(S, id)); repaint(); } }, icon('retry', 'xs'), 'Send again'),
-    h('button', { class: 'ib s', 'aria-label': 'Edit instead', onclick: () => { S.intents.delete(id); fillComposer(MC.mergeReturned(ta.value, text)); repaint(); } }, icon('edit', 'sm')))),
+    h('button', { class: 'ib s', 'aria-label': 'Edit instead', onclick: () => { abandon(id); fillComposer(MC.mergeReturned(ta.value, text)); repaint(); } }, icon('edit', 'sm')))),
   t.q.follows && h('div', 'qcap', 'Follow-ups send when this turn ends'),
   t.q.items.map(q => q.kind === 'steer' ? h('div', 'qp steer', icon('steer', 'xs'), h('span', 'qk', 'Steer · waiting for the next step'), h('span', 'qt', q.text))
     : h('div', 'qp', icon('follow', 'xs'), h('span', 'qk', 'Follow-up ' + q.n), h('button', { class: 'qt', 'data-k': 'q' + q.index, disabled: !t.on, 'aria-label': 'Edit follow-up ' + q.n + ': ' + q.text, onclick: () => unqueue(q, false) }, q.text),
@@ -35,7 +35,8 @@ const trayPart = part($('tray'), t => [
 ]);
 let qAll = false;
 // A queued follow-up comes back from the host: into the composer to edit it, or dropped.
-export const edits = new Set();
+const edits = new Set();
+export const unqueueRefused = text => edits.delete(text);
 function unqueue(q, drop) {
   if (!online()) return;
   if (!drop) edits.add(q.text);

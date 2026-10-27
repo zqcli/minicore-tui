@@ -1,7 +1,7 @@
 import * as MC from './core.js';
 import { S, cur, intent, online, pendingKind } from './net.js';
 import { notify, prefs } from './platform.js';
-import { decided, markCall } from './transcript.js';
+import { markDenied } from './transcript.js';
 import { $, announce, diffView, findSheet, h, hover, icon, inField, part, set, sheet, spin, toast, topModal } from './ui.js';
 
 // ---- approvals and questions ----
@@ -10,7 +10,7 @@ export function syncApproval() {
   const a = S.state.interaction, m = findSheet('appr');
   if (!a) {
     // Answered elsewhere: a denied tool row says so.
-    if (apprId && ap.call && !decided.has(ap.call)) { decided.set(ap.call, { you: false }); markCall(ap.call); }
+    if (apprId && ap.call) markDenied(ap.call);
     apprId = null; ap.call = null;
     if (m) m.close(true);
     renderApprBar();
@@ -64,7 +64,7 @@ function answer(choice, message) {
   if (!a || pendingKind('answer')) return;
   intent(MC.intents.answer(a.id, choice, message || undefined), ack => {
     if (!ack.ok) return toast(MC.errorText(ack.error), ack.error === 'stale' ? null : 'error');
-    if (call && choice === 'deny') { decided.set(call, { you: true, text: 'Denied' + (message ? ': “' + message + '”' : '') }); markCall(call); }
+    if (call && choice === 'deny') markDenied(call, 'Denied' + (message ? ': “' + message + '”' : ''));
   });
 }
 const apprPart = part($('apprbar'), b => b && [icon('hand', 'sm'), h('span', '', b), h('button', { class: 'btn sm', onclick: () => openApproval() }, 'Review')]);

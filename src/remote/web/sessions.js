@@ -1,9 +1,12 @@
 import * as MC from './core.js';
 import { HOST, S, fsCall, hostNow, intent, online, st, tz } from './net.js';
 import { compactNow, confirmSheet, exportSession, openChanges, openContext, openModel, openSettings, seg } from './sheets.js';
-import { $, actions, closeAll, copyText, errBox, fill, findSheet, h, icon, layout, menuRow, part, popModal, pushModal, refreshSheets, rowText, sheet, spin, stack, wide } from './ui.js';
+import { $, actions, closeAll, copyText, errBox, fill, findSheet, h, icon, layout, menuRow, part, popModal, pushModal, refreshSheets, rowText, sheet, spin, wide } from './ui.js';
 
-export const failed = new Set();
+// Sessions whose last turn failed, until the reader opens them.
+const failed = new Set();
+export function markFailed(id) { failed.add(id); renderNav(); }
+export function clearFailed() { for (const id of failed) if (S.state.sessions.some(x => x.id === id && x.current)) failed.delete(id); }
 
 export const openLive = id => { if (intent(MC.intents.openSession(id))) pendingRow = id; };
 // ---- state ----
@@ -21,7 +24,7 @@ function onTick() {
   if (navShown()) for (const e of $('nav').querySelectorAll('[data-start]')) e.textContent = MC.fmtElapsed(hostNow() - +e.dataset.start);
 }
 // ---- navigation: drawer on phones, sidebar on wide screens ----
-const nav = $('nav');
+const nav = $('nav'), navModal = { el: nav, close: () => closeNav() };
 let pendingRow = null, query = '', frozen = null, navLook = false;
 const navShown = () => wide.matches || nav.classList.contains('on');
 export function buildNav() {
@@ -49,13 +52,13 @@ export function openNav() {
   if (wide.matches) return nav.querySelector('input').focus();
   frozen = null;
   nav.classList.add('on');
-  pushModal({ el: nav, close: closeNav });
+  pushModal(navModal);
   renderNav(); syncTick();
 }
 export function closeNav() {
   if (!nav.classList.contains('on')) return;
   nav.classList.remove('on');
-  popModal(stack.find(m => m.el === nav));
+  popModal(navModal);
   frozen = null;
   syncTick();
 }
@@ -70,7 +73,7 @@ export function renderNav() {
   listPart({ groups: lay.groups.map(g => ({ label: g.label, items: g.items.map(x => [x.id, x.title, x.workspace, x.current, x.live && x.status, x.started_ms, x.unseen, MC.relTime(Date.parse(x.updated_at), hostNow(), tz()), failed.has(x.id)]) })), pendingRow, query: !!query });
   renderNavFoot();
 }
-export function renderNavFoot() {
+function renderNavFoot() {
   if (!footPart || !S.state) return;
   const n = online() ? MC.otherDevices(S.state.devices, S.device).length : 0;
   footPart({ on: online(), text: online() ? (S.device || 'This device') + (n ? ' · ' + MC.plural(n, 'other device') : '') : 'Reconnecting…' });

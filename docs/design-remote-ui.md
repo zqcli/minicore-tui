@@ -332,7 +332,7 @@ them; a test fails when a file is missing from the table, the page's
 | `app.css` | All styles, on the custom properties of `:root` (themes are `[data-theme=dark]` overrides) |
 | `theme.js` | Classic blocking script: sets `data-theme`, the text size and the theme-color metas before the first paint |
 | `core.js`, `markdown.js` | Pure logic, no DOM, network or timers (a test enforces it): messages, the store and reducer, formatting, tool rows, folding, approvals, composer decisions; Markdown token trees |
-| `ui.js` | DOM helpers (`h`, `icon`, `part`), toasts, clipboard, the modal stack and sheets, `actions` |
+| `ui.js` | DOM helpers (`h`, `icon`, `part`, `set`, `keepFocus`), shared rows (`menuRow`, `rowText`, `errBox`), toasts, clipboard, the modal stack and sheets, `actions` |
 | `net.js` | The store `S`, the socket, intents, filesystem requests and queries (correlated by id) |
 | `platform.js` | Preferences, wake lock, notifications, install prompt |
 | `sheets.js` | Settings, model, changes, context, output, help and the confirm dialog |
@@ -340,7 +340,9 @@ them; a test fails when a file is missing from the table, the page's
 | `composer.js` | Status strip, queue, composer, primary button, `/` and `@` lists, draft |
 | `transcript.js` | Blocks, incremental rendering, folding, the mounted window, scroll anchoring, find |
 | `approval.js` | The approval and question sheet, its bar and keys |
-| `main.js` | Boot: sign-in and connection screens, message dispatch, top bar, banners, attention, global keys, lifecycle |
+| `connection.js` | The sign-in and status screens and the connection's life: connect, backoff, wake, sign out |
+| `attention.js` | Banners, the app badge and tab title, and what background sessions ask of this device |
+| `main.js` | Message dispatch, the top bar, global keys, lifecycle and boot |
 
 Rules:
 
@@ -348,13 +350,15 @@ Rules:
   only its reducer writes them). Everything else is private to the module that
   draws it (the mounted window and folds in `transcript.js`, the lists in
   `composer.js`, the modal stack in `ui.js`) and is changed through that
-  module's functions.
+  module's functions (`markDirty`, `markDenied`, `markFailed`, `abandon`).
 - Modules import downward only and never form a cycle (a test checks it). A
   call that has to go up, such as the composer opening Find, goes through
   `actions`, which the defining module fills in.
 - Rendering is incremental: a `part` re-renders its region only when its input
   changed, and the transcript renders only blocks marked dirty, appending to
   an open assistant block instead of rebuilding it.
+  Renders that run on every state or frame write only what changed (`part`,
+  `set`), and lists of rows share one delegated listener keyed by `data-k`.
 - Nothing is inline: styles come from classes, scripts from files.
 
 ## Kept from v1

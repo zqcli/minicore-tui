@@ -345,8 +345,15 @@ export function renderEmpty() {
 log.addEventListener('scroll', () => { stick = atBottom(); if (stick && pinned) newOut(false); }, { passive: true });
 $('newout').addEventListener('click', toLatest);
 
-export const decided = new Map();
-export function markCall(call) { const i = S.blocks.findIndex(b => b.type === 'tool' && b.call_id === call); if (i >= 0) { dirty.add(i); schedule(); } }
+export function markDirty(indexes) { for (const i of indexes) dirty.add(i); schedule(); }
+// A denied tool row says who denied it: this device with the reason it gave, or, without `text`, another one.
+const decided = new Map();
+export function markDenied(call, text) {
+  if (text == null && decided.has(call)) return;
+  decided.set(call, text == null ? { you: false } : { you: true, text });
+  const i = S.blocks.findIndex(b => b.type === 'tool' && b.call_id === call);
+  if (i >= 0) markDirty([i]);
+}
 // Find in the loaded transcript: matches are highlighted in place (CSS highlights), folds holding one open.
 const fd = { on: false, q: '', ranges: [], k: 0 };
 let findT = 0;
@@ -407,5 +414,3 @@ function paintFind() {
 export function followEnd() { if (stick && pinned) log.scrollTop = log.scrollHeight; }
 actions.find = openFind;
 actions.redraw = redrawAll;
-
-export { dirty };

@@ -13,6 +13,10 @@ export const tz = () => new Date().getTimezoneOffset();
 export const hostNow = () => Date.now() + S.skew;
 export const st = () => S.state.status;
 export const cur = () => S.state.session || S.state.draft;
+// An unconfirmed send that went back to the composer is no longer tracked.
+export const abandon = id => S.intents.delete(id);
+// Ids keep counting so a late reply never matches a new request.
+export const resetStore = () => Object.assign(S, MC.createStore(), { nid: S.nid });
 export const online = () => ready && ws && ws.readyState === 1;
 export function send(msg) { ws.send(JSON.stringify(msg)); }
 export function hangUp() {
@@ -43,8 +47,7 @@ function lost() {
 // `own` handles the ack where the request was made (a dialog shows its own error).
 export function intent(spec, own) {
   if (!online()) { toast('Not connected', 'error'); return false; }
-  const msg = MC.intent(S, spec);
-  if (own) S.intents.get(msg.id).spec.own = own;
+  const msg = MC.intent(S, spec, own);
   send(msg);
   repaint();
   return true;

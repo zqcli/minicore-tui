@@ -97,7 +97,7 @@ export const announce = text => { $('live').textContent = text; };
 
 // ---- modal manager: the drawer and every sheet ----
 // Focus moves in and back, everything below is inert, Esc and swipe down close.
-export const stack = [];
+const stack = [];
 export function pushModal(m) {
   m.opener = document.activeElement;
   stack.push(m);
@@ -125,6 +125,7 @@ export function layout() {
   document.documentElement.classList.toggle('haspanel', stack.some(m => m.panel));
 }
 export const topModal = () => stack.filter(m => !m.panel).pop();
+export const topPanel = () => stack.find(m => m.panel);
 export function closeAll() { for (const m of [...stack].reverse()) m.close(); }
 $('scrim').addEventListener('click', () => { const m = topModal(); if (m) m.close(); });
 

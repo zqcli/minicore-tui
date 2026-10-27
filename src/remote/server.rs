@@ -76,6 +76,8 @@ const FILES: &[(&str, &str, &[u8])] = files![
     ("/composer.js", JS, "composer.js"),
     ("/transcript.js", JS, "transcript.js"),
     ("/approval.js", JS, "approval.js"),
+    ("/attention.js", JS, "attention.js"),
+    ("/connection.js", JS, "connection.js"),
     ("/sw.js", JS, "sw.js"),
     (
         "/manifest.webmanifest",

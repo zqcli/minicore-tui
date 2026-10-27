@@ -73,9 +73,9 @@ const createStore = () => ({ state: null, blocks: [], intents: new Map(), fs: ne
 const nextId = s => 'c' + ++s.nid;
 const SENDS = { submit: 1, queue: 1 };
 // Records the intent as pending and returns the message to send; it is never sent again by itself.
-function intent(s, spec) {
+function intent(s, spec, own) {
   const id = nextId(s);
-  s.intents.set(id, { id, spec, kind: spec.kind, text: SENDS[spec.kind] ? spec.text : undefined, st: 'pending' });
+  s.intents.set(id, { id, spec, own, kind: spec.kind, text: SENDS[spec.kind] ? spec.text : undefined, st: 'pending' });
   return { t: 'intent', id, ...spec };
 }
 function request(s, body) { const id = nextId(s); s.fs.add(id); return { ...body, id }; }

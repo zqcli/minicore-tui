@@ -125,6 +125,16 @@ test('every intent and filesystem request has the contract shape and a bounded u
   assert.equal(ids.size, cases.length + fs.length + qs.length);
 });
 
+test('an ack hands back the handler the intent was made with, and the handler never goes over the wire', () => {
+  const s = MC.createStore(), own = () => {};
+  const msg = MC.intent(s, MC.intents.renameSession('ses_1', 'New title'), own);
+  assert.equal(JSON.stringify(msg), JSON.stringify({ t: 'intent', id: msg.id, kind: 'rename_session', session_id: 'ses_1', title: 'New title' }));
+  const fx = MC.reduce(s, { t: 'ack', id: msg.id, ok: false, error: 'busy' }, 0);
+  assert.equal(fx.ack.own, own);
+  assert.equal(fx.ack.error, 'busy');
+  assert.equal(s.intents.size, 0);
+});
+
 test('at most four queries are in flight and results are matched to their id once', () => {
   const s = MC.createStore(), sent = [];
   while (MC.queryRoom(s)) sent.push(MC.query(s, MC.queries.changes()));

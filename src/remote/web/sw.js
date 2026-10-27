@@ -4,7 +4,7 @@
 const CACHE = 'minicore-7';
 const SHELL = [
   '/', '/app.css', '/theme.js', '/main.js', '/core.js', '/markdown.js', '/ui.js', '/net.js', '/platform.js', '/sheets.js', '/sessions.js',
-  '/composer.js', '/transcript.js', '/approval.js', '/manifest.webmanifest', '/icon.svg', '/icon-192.png', '/icon-512.png', '/icon-maskable.png',
+  '/composer.js', '/transcript.js', '/approval.js', '/attention.js', '/connection.js', '/manifest.webmanifest', '/icon.svg', '/icon-192.png', '/icon-512.png', '/icon-maskable.png',
   '/apple-touch-icon.png',
 ];
 
