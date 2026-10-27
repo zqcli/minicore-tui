@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Built-in backend: Agent 0.8.1 with Runtime 0.8.0, pinned by tag (0.8.0 before).
+  A failed turn now carries what the provider said: its HTTP status, error code
+  and type, and the full message.
 - Web client, a calmer turn: a progress capsule floats at the top of the
   transcript while a turn runs (`Thinking 41s · bash cargo test…`) and opens
   into the turn's steps, status with Stop, and other busy sessions; the status
