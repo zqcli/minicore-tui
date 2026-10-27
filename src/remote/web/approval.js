@@ -2,7 +2,7 @@ import * as MC from './core.js';
 import { S, cur, intent, online, pendingKind } from './net.js';
 import { notify, prefs } from './platform.js';
 import { decided, markCall } from './transcript.js';
-import { $, announce, diffView, findSheet, h, hover, icon, inField, part, sheet, spin, toast, topModal } from './ui.js';
+import { $, announce, diffView, findSheet, h, hover, icon, inField, part, set, sheet, spin, toast, topModal } from './ui.js';
 
 // ---- approvals and questions ----
 let apprId = null, apprAt = 0, lastKey = 0;
@@ -70,7 +70,7 @@ function answer(choice, message) {
 const apprPart = part($('apprbar'), b => b && [icon('hand', 'sm'), h('span', '', b), h('button', { class: 'btn sm', onclick: () => openApproval() }, 'Review')]);
 function renderApprBar() {
   const a = S.state && S.state.interaction, show = !!a && !findSheet('appr');
-  $('apprbar').hidden = !show;
+  set($('apprbar'), 'hidden', !show);
   apprPart(show ? (a.kind === 'approval' ? 'Approval needed · ' + MC.approvalLine(a) : 'Question · ' + (a.prompt || '')) : null);
 }
 document.addEventListener('keydown', e => {

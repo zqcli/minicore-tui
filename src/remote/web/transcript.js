@@ -5,7 +5,7 @@ import { S, hostNow, intent, pendingKind, sending, st, tz } from './net.js';
 import { prefs } from './platform.js';
 import { openNew } from './sessions.js';
 import { openChanges, openOutput } from './sheets.js';
-import { $, actions, copyText, diffView, fill, h, hover, icon, keepFocus, kids, menuRow, part, reduced, share, sheet, spin } from './ui.js';
+import { $, actions, copyText, diffView, h, hover, icon, keepFocus, kids, menuRow, part, reduced, set, share, sheet, spin } from './ui.js';
 
 // ---- transcript ----
 // `opened` holds the rows the reader opened or closed by key; a key not in it starts as `startsOpen` says.
@@ -304,7 +304,7 @@ function flush() {
   if (!pinned) newOut(true);
   anchor = null;
 }
-function newOut(on) { $('newout').hidden = !on; }
+function newOut(on) { set($('newout'), 'hidden', !on); }
 function loadEarlierBtn(label) {
   const busy = pendingKind('load_older');
   return h('button', { class: 'pill', disabled: busy, 'data-k': 'earlier', onclick: e => loadEarlier(e.currentTarget) }, busy ? spin('sm') : icon('history', 'sm'), busy ? 'Loading…' : 'Load earlier' + (label ? ' · ' + label : ''));
@@ -325,9 +325,10 @@ function toLatest() {
   log.scrollTo({ top: log.scrollHeight, behavior: reduced.matches || !was ? 'auto' : 'smooth' });
   newOut(false);
 }
+const topPart = part($('top'), x => x && loadEarlierBtn(x[0]));
 export function renderTop() {
   const first = S.blocks[lo], older = lo > 0 || (S.state.older && !(first && first.type === 'earlier'));
-  fill($('top'), older && loadEarlierBtn(lo > 0 ? MC.plural(lo, 'block') : ''));
+  topPart(older && [lo > 0 ? MC.plural(lo, 'block') : '', pendingKind('load_older')]);
 }
 const SUGG = [['Explain this project', 'Structure, entry points and how it fits together'], ['Run the tests and fix failures', 'Find what breaks and repair it'],
   ['Review my uncommitted changes', 'Spot bugs and risky edits'], ['Find TODOs', 'List open TODO and FIXME notes']];
@@ -338,7 +339,7 @@ const emptyPart = part($('empty'), e => e.loading ? h('div', 'loadrow', spin(), 
   h('div', 'sugg', SUGG.map(([t, d]) => h('button', { onclick: () => fillComposer(t) }, t, h('small', '', d))))]);
 export function renderEmpty() {
   const s = S.state, e = $('empty');
-  e.hidden = S.blocks.length > 0;
+  set(e, 'hidden', S.blocks.length > 0);
   if (!e.hidden) emptyPart({ loading: s.status.loading, session: !!s.session, ws: s.draft.workspace });
 }
 log.addEventListener('scroll', () => { stick = atBottom(); if (stick && pinned) newOut(false); }, { passive: true });

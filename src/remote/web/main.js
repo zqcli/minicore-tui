@@ -6,7 +6,7 @@ import { notify, syncWake } from './platform.js';
 import { buildNav, clearPending, closeNav, failed, openInfo, openLive, openNav, openNew, openSessionMenu, renderNav, renderNavFoot, settle, stepSession, syncTick } from './sessions.js';
 import { modelSettled, openHelp } from './sheets.js';
 import { dirty, followEnd, onNewSession, renderEmpty, renderTop, resetTranscript, schedule } from './transcript.js';
-import { $, actions, announce, closeAll, fill, h, icon, inField, part, reduced, refreshSheets, spin, stack, toast, topModal } from './ui.js';
+import { $, actions, announce, closeAll, fill, h, icon, inField, part, reduced, refreshSheets, set, spin, stack, toast, topModal } from './ui.js';
 
 let halted = false, attempt = 0, retryT = 0, how = 'hello', hiddenAt = 0, wasBusy = false;
 const teardown = () => { clearTimeout(retryT); hangUp(); };
@@ -175,15 +175,15 @@ function connectionLost() {
 // ---- top bar and banners ----
 function renderBar() {
   const s = S.state, c = cur(), badge = s.background.approval;
-  $('title').textContent = s.session ? MC.titled(s.session.title) : 'New session';
-  $('sub').textContent = [MC.basename(c.workspace), s.session && s.session.branch].filter(Boolean).join(' · ');
+  set($('title'), 'textContent', s.session ? MC.titled(s.session.title) : 'New session');
+  set($('sub'), 'textContent', [MC.basename(c.workspace), s.session && s.session.branch].filter(Boolean).join(' · '));
   const m = $('menu'), old = m.querySelector('.dotn');
   if (badge && (!old || old.textContent !== String(badge))) {
     const d = h('span', 'dotn' + (old && +old.textContent < badge ? ' pop' : ''), String(badge));
     if (old) old.replaceWith(d); else m.append(d);
   } else if (!badge && old) old.remove();
   m.setAttribute('aria-label', badge ? 'Sessions, ' + MC.plural(badge, 'session') + ' need you' : 'Sessions');
-  $('moreb').disabled = !s.session;
+  set($('moreb'), 'disabled', !s.session);
 }
 const bannersPart = part($('banners'), b => [
   b.attn && h('div', { class: 'banner warn', role: 'status' }, icon('hand', 'sm'), h('span', '', '“' + b.attn.title + '” ' + (b.attn.kind === 'choice' ? 'has a question' : 'needs approval')),
@@ -222,7 +222,7 @@ let badgeN = -1;
 function renderAttention() {
   const s = S.state, n = screen === 'main' && s ? MC.attentionCount(s) : 0;
   const t = s && s.session ? MC.titled(s.session.title) : 'MiniCore';
-  document.title = (n ? '(' + n + ') ' : '') + (t === 'MiniCore' ? t : t + ' · MiniCore');
+  set(document, 'title', (n ? '(' + n + ') ' : '') + (t === 'MiniCore' ? t : t + ' · MiniCore'));
   if (n !== badgeN && navigator.setAppBadge) { badgeN = n; (n ? navigator.setAppBadge(n) : navigator.clearAppBadge()).catch(() => {}); }
 }
 function attention(e) {
@@ -292,12 +292,13 @@ addEventListener('offline', renderConn);
 if ('serviceWorker' in navigator && isSecureContext) navigator.serviceWorker.register('/sw.js');
 if (window.visualViewport) {
   // iOS keeps the layout viewport under the keyboard; sheets are lifted by the part it covers.
+  // Panning fires scroll events without a change, and every write to these properties restyles the whole page.
+  let height = -1, lifted = -1;
   const fit = () => {
     if (window.scrollY) scrollTo(0, 0);
     const root = document.documentElement, kb = Math.max(0, Math.round(innerHeight - visualViewport.height - visualViewport.offsetTop));
-    root.style.setProperty('--h', visualViewport.height + 'px');
-    root.style.setProperty('--kb', kb + 'px');
-    root.classList.toggle('kb', kb > 80);
+    if (visualViewport.height !== height) root.style.setProperty('--h', (height = visualViewport.height) + 'px');
+    if (kb !== lifted) { root.style.setProperty('--kb', (lifted = kb) + 'px'); root.classList.toggle('kb', kb > 80); }
     followEnd();
   };
   visualViewport.addEventListener('resize', fit);

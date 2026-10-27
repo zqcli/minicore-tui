@@ -29,6 +29,8 @@ export function icon(name, cls) {
   return s;
 }
 export const fill = (n, ...k) => n.replaceChildren(...kids(k));
+// Renders run on every state or frame; writing the value a property already has still costs a style pass.
+export const set = (el, prop, value) => { if (el[prop] !== value) el[prop] = value; };
 export const spin = cls => h('span', 'spin' + (cls ? ' ' + cls : ''));
 const mq = q => matchMedia(q);
 export const wide = mq('(min-width: 900px)'), hover = mq('(hover: hover)'), reduced = mq('(prefers-reduced-motion: reduce)');

@@ -3,7 +3,7 @@ import { HOST, S, ask, cur, hostNow, intent, online, pendingKind, repaint, send,
 import { prefs } from './platform.js';
 import { openInfo, openNav, openNew, rename } from './sessions.js';
 import { compactNow, exportSession, openChanges, openContext, openHelp, openModel, openSettings } from './sheets.js';
-import { $, actions, announce, copyText, h, hover, icon, menuRow, part, sheet, spin, toast, wide } from './ui.js';
+import { $, actions, announce, copyText, h, hover, icon, menuRow, part, set, sheet, spin, toast, wide } from './ui.js';
 
 // "Enter sends" is stored once chosen; until then the pointer default follows the device.
 const apple = /Mac|iPhone|iPad/.test(navigator.userAgent), ALT = apple ? '⌥' : 'Alt+', tips = () => prefs.enter ? 'Enter' : (apple ? '⌘' : 'Ctrl+') + 'Enter';
@@ -13,7 +13,7 @@ const stripPart = part($('strip'), x => [spin(), h('div', 'stx', h('div', 'st1',
   x.ctx && h('button', { class: 'ctxb' + (x.hi ? ' hi' : ''), 'aria-label': x.ctx + ' of context used', onclick: () => openContext() }, x.ctx)]);
 function renderStrip() {
   const s = st(), on = !!(s.busy || s.compacting || s.loading);
-  $('strip').hidden = !on;
+  set($('strip'), 'hidden', !on);
   if (!on) return;
   const x = MC.statusLine(S.state, S.blocks, hostNow());
   stripPart({
@@ -70,8 +70,8 @@ const chipsPart = part($('chips'), c => [h('div', 'cl',
 ]);
 function renderChips() {
   const s = st(), c = cur(), d = S.state.draft, cs = composerState(), kind = MC.primaryKind(cs), typed = cs.text.trim() !== '';
-  ta.readOnly = cs.lock;
-  ta.placeholder = s.busy ? (hover.matches ? tips() + ' to steer · ' + ALT + 'Enter to queue' : 'Steer, or queue a follow-up…') : S.state.session ? 'Message MiniCore · / for commands' : 'Describe a task to start';
+  set(ta, 'readOnly', cs.lock);
+  set(ta, 'placeholder', s.busy ? (hover.matches ? tips() + ' to steer · ' + ALT + 'Enter to queue' : 'Steer, or queue a follow-up…') : S.state.session ? 'Message MiniCore · / for commands' : 'Describe a task to start');
   if (kind !== primary) {
     if (kind !== 'steer') closePriMenu();
     if (kind === 'stop') stopAt = Date.now();
