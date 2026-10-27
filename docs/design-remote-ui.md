@@ -128,16 +128,17 @@ re-renders on every `state`).
 ### Composer
 
 - Two-row card at the bottom: auto-growing textarea (max 40 % of the visual
-  viewport), then a bottom row at least 44 px tall: **+** (sheet: prompt
+  viewport), then a 36 px toolbar on hover devices or 40 px on touch: **+** (sheet: prompt
   templates and commands, recent prompts, insert `@file`), a **shield**
   (`Approvals`: a small sheet naming the tools allowed for the session, or
   "Every tool asks first"; a dot on the shield when any is allowed), the
   **context chip** (`23%`, warning colour from 80 %, opens the Context sheet)
   and, in a draft, the **folder** and **profile** chips on the left; on the right the **slot** and
-  the **primary button**. The primary is a 40 px round button that keeps its
-  place and only changes face; the slot is a plain text button (no fill or
-  border at rest, a subtle fill on hover, focus and press; at least 40 px
-  tall):
+  the **primary button**. Icons are 18 px in transparent 32 px boxes with
+  40 px touch hit areas. Context is plain 13 px text; the model and Follow-up
+  are 13 px on desktop and 14 px on phones. Hover, focus and press add a subtle
+  fill with 8 px corners. The primary is a 32 px circle on hover devices or
+  36 px on touch, with a 16 px icon, keeping its place as its face changes:
 
   | State | Primary | Slot |
   |---|---|---|
@@ -317,11 +318,12 @@ host arrives without TUI key hints.
   error/deny, green = success/add.
 - Contrast: all text ≥ 4.5:1 (fix `--tx3` in both themes, success text, accent
   on tinted backgrounds).
-- Touch targets ≥ 44 × 44 px with 8 px between destructive and primary.
+- Touch targets are at least 44 × 44 px outside the compact composer toolbar,
+  whose controls keep at least 40 × 40 px hit areas.
 - Motion: 120–180 ms for small state changes, 220–280 ms for sheets and the
   drawer, `cubic-bezier(.2,.8,.2,1)`; no per-token animation;
   `prefers-reduced-motion` turns shimmer and slides into fades.
-- Text size setting scales rem-based type; inputs stay ≥ 16 px.
+- Text size setting scales rem-based type; the message textarea is 15 px.
 
 ### Accessibility
 
