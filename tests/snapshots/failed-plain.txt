@@ -1,0 +1,18 @@
+ ▎ Summarise the changes
+ ▎
+
+   failed · timed out · 47s · 2 tools
+   The provider did not answer in time. Send "continue" to try again.
+
+ ▎
+ ▎ Summarise the changes
+ ▎
+
+   failed · output limit reached · 47s · 2 tools
+   The reply hit the output token limit. Send "continue" for the rest.
+
+ ▎
+ ▎
+ ▎
+ ▎
+ ▸ minicore-tui · gpt 6 luna · max · 0m

@@ -371,23 +371,14 @@ test('breadcrumbs preserve Unix drive and UNC paths and start at the root', () =
   assert.deepEqual(plain(MC.crumbs('C:\\a', [{ path: 'C:\\', name: 'C:' }])).map(c => c.path), ['C:\\', 'C:\\a']);
 });
 
-test('sessions group by the local calendar day of host-adjusted time', () => {
+test('times are relative to the host clock in the host-adjusted local day', () => {
   const tz = -480; // UTC+8
   const now = Date.parse('2026-10-25T01:00:00Z'); // 09:00 local
-  const at = iso => ({ id: iso, title: iso, workspace: '/w', updated_at: iso, current: false });
-  const sessions = [at('2026-10-24T17:00:00Z'), at('2026-10-24T15:30:00Z'), at('2026-10-20T00:00:00Z'), at('2026-09-01T00:00:00Z')];
-  assert.deepEqual(plain(MC.sessionLayout(sessions, now, tz, '').groups).map(g => [g.label, g.items.length]),
-    [['Today', 1], ['Yesterday', 1], ['Previous 7 days', 1], ['Older', 1]]);
-  // In UTC the first two are both yesterday; a 3 s host offset moves nothing across a day here.
-  assert.deepEqual(plain(MC.sessionLayout(sessions, now, 0, '').groups).map(g => g.label), ['Yesterday', 'Previous 7 days', 'Older']);
-  // The host clock offset decides: the phone is a day behind but the host says it is the next day.
-  const skew = 86400000;
-  assert.equal(MC.dayGroup(Date.parse('2026-10-25T00:30:00Z'), now - 86400000 + skew, tz), 'Today');
   assert.equal(MC.relTime(now - 30000, now, tz), 'now');
   assert.equal(MC.relTime(now - 5 * 60000, now, tz), '5m');
   assert.equal(MC.relTime(now - 3 * 3600000, now, tz), '3h');
+  assert.equal(MC.relTime(Date.parse('2026-10-20T00:00:00Z'), now, tz), '5d');
   assert.equal(MC.relTime(Date.parse('2026-09-01T00:00:00Z'), now, tz), 'Sep 1');
-  assert.deepEqual(plain(MC.sessionLayout([{ ...sessions[0], title: 'Fix parser' }, sessions[1]], now, tz, 'PARSER').groups).map(g => g.items[0].title), ['Fix parser']);
 });
 
 test('elapsed status line and summaries read like the TUI', () => {
@@ -404,12 +395,11 @@ test('elapsed status line and summaries read like the TUI', () => {
   assert.equal(stopped.ok, false);
   assert.equal(MC.compactionText(blocks[4]), 'Context compacted · 32.1k → 2.7k tokens');
   const running = { ...blocks[2], state: 'running', detail: 'cargo test' };
-  const line = plain(MC.statusLine(state, [blocks[0], running], state.status.started_ms + 12000));
-  assert.deepEqual(line, { label: 'Thinking', detail: 'bash · cargo test', elapsed: '12s', ctx: '42% context' });
-  const stopping = plain(MC.statusLine({ ...state, status: { ...state.status, interrupting: true } }, [running], state.status.started_ms));
+  const line = plain(MC.statusLine(state, [blocks[0], running]));
+  assert.deepEqual(line, { label: 'Thinking', detail: 'bash · cargo test' });
+  const stopping = plain(MC.statusLine({ ...state, status: { ...state.status, interrupting: true } }, [running]));
   assert.equal(stopping.label, 'Stopping…');
   assert.equal(stopping.detail, '');
-  assert.equal(MC.statusLine({ ...state, status: { ...state.status, busy: false, started_ms: null } }, [], 0).elapsed, '');
   // Stop is offered while a turn runs or a compaction is under way, and only then.
   assert.equal(MC.canStop(state.status), true);
   assert.equal(MC.canStop({ ...state.status, busy: false, compacting: true }), true);
@@ -469,38 +459,52 @@ test('install help is the browser prompt when offered, the Share hint on iOS unt
 });
 
 const live = (id, status, extra = {}) => ({ id, title: id, workspace: '/w', updated_at: '2026-10-25T00:00:00Z', current: false, live: true, status, started_ms: null, unseen: false, ...extra });
-const idle = id => ({ id, title: id, workspace: '/w', updated_at: '2026-10-24T00:00:00Z', current: false, live: false });
+const idle = (id, extra = {}) => ({ id, title: id, workspace: '/w', updated_at: '2026-10-24T00:00:00Z', current: false, live: false, ...extra });
 
-test('the session list puts sessions that need you first, then running ones, then days', () => {
-  const now = Date.parse('2026-10-25T12:00:00Z');
+test('the session list puts sessions that need you first, then running ones, then one group per workspace by newest session', () => {
   const sessions = [
-    idle('old'),
+    idle('old', { workspace: '/home/me/docs', updated_at: '2026-10-01T00:00:00Z' }),
     live('late', 'running', { started_ms: 3000 }),
-    live('fg', 'idle', { current: true }),
+    live('fg', 'idle', { current: true, workspace: '/home/me/app' }),
     live('ask', 'approval', { started_ms: 5000 }),
     live('early', 'running', { started_ms: 1000 }),
     live('pack', 'compacting'),
-    live('done', 'idle', { unseen: true }),
+    live('done', 'idle', { unseen: true, workspace: '/home/me/app', updated_at: '2026-10-25T01:00:00Z' }),
+    idle('mid', { workspace: '/home/me/docs', updated_at: '2026-10-25T00:30:00Z' }),
   ];
-  const g = plain(MC.sessionLayout(sessions, now, 0, '').groups);
-  assert.deepEqual(g.map(x => [x.label, x.items.map(y => y.id)]), [
-    ['Needs you', ['ask']], ['Running', ['early', 'late', 'pack']], ['Today', ['fg', 'done']], ['Yesterday', ['old']]]);
-  // Sessions from a server without live fields are only grouped by day; the query filters by title or workspace.
-  assert.deepEqual(plain(MC.sessionLayout(state.sessions, now, 0, '').groups).map(x => x.label), ['Older']);
-  assert.deepEqual(plain(MC.sessionLayout(sessions, now, 0, 'ear').groups).map(x => x.items.map(y => y.id)), [['early']]);
+  const g = plain(MC.sessionLayout(sessions, '').groups);
+  assert.deepEqual(g.map(x => [x.label, x.ws, x.items.map(y => y.id)]), [
+    ['Needs you', undefined, ['ask']], ['Running', undefined, ['early', 'late', 'pack']],
+    ['app', '/home/me/app', ['done', 'fg']], ['docs', '/home/me/docs', ['mid', 'old']]]);
+  // A group's name is the folder's name, also for Windows paths; a search shows the groups that hold a match.
+  assert.deepEqual(plain(MC.sessionLayout([idle('a', { workspace: 'C:\\work\\app' }), idle('b', { workspace: 'D:\\' })], '').groups).map(x => x.label), ['app', 'D:']);
+  assert.deepEqual(plain(MC.sessionLayout(sessions, 'ear').groups).map(x => x.items.map(y => y.id)), [['early']]);
+  assert.deepEqual(plain(MC.sessionLayout(sessions, 'DOCS').groups).map(x => x.items.map(y => y.id)), [['mid', 'old']]);
+  // Sessions from a server without live fields are only grouped by workspace.
+  assert.deepEqual(plain(MC.sessionLayout(state.sessions, '').groups).map(x => x.label), ['work']);
+});
+
+test('a workspace group shows five sessions and "Show N more" opens the rest', () => {
+  const items = Array.from({ length: 8 }, (_, k) => idle('s' + k));
+  assert.deepEqual(plain(MC.groupRows(items, false)), { shown: items.slice(0, 5), hidden: 3 });
+  assert.deepEqual(plain(MC.groupRows(items, true)), { shown: items, hidden: 0 });
+  assert.deepEqual(plain(MC.groupRows(items.slice(0, 5), false)), { shown: items.slice(0, 5), hidden: 0 });
 });
 
 test('an open session list keeps its order while statuses change and puts new sessions on top of their group', () => {
-  const now = Date.parse('2026-10-25T12:00:00Z');
-  const first = MC.sessionLayout([live('a', 'running', { started_ms: 1 }), live('b', 'approval'), idle('c')], now, 0, '');
+  const first = MC.sessionLayout([live('a', 'running', { started_ms: 1 }), live('b', 'approval'), idle('c')], '');
   const frozen = first.order;
   // b's approval is answered and a starts waiting; c is gone; d is new and needs you.
-  const later = MC.sessionLayout([live('d', 'approval'), live('a', 'approval', { started_ms: 1 }), live('b', 'running', { started_ms: 2 })], now, 0, '', frozen);
+  const later = MC.sessionLayout([live('d', 'approval'), live('a', 'approval', { started_ms: 1 }), live('b', 'running', { started_ms: 2 })], '', frozen);
   assert.equal(later.order, frozen);
   assert.deepEqual(plain(later.groups).map(x => [x.label, x.items.map(y => y.id)]), [['Needs you', ['d', 'b']], ['Running', ['a']]]);
   // Opened again: sorted afresh.
-  const again = MC.sessionLayout([live('d', 'approval'), live('a', 'approval', { started_ms: 1 }), live('b', 'running', { started_ms: 2 })], now, 0, '');
+  const again = MC.sessionLayout([live('d', 'approval'), live('a', 'approval', { started_ms: 1 }), live('b', 'running', { started_ms: 2 })], '');
   assert.deepEqual(plain(again.groups).map(x => [x.label, x.items.map(y => y.id)]), [['Needs you', ['a', 'd']], ['Running', ['b']]]);
+  // A new session tops its workspace group (which moves up with it) while the others keep their places.
+  const before = MC.sessionLayout([idle('e', { workspace: '/other' }), idle('c')], '').order;
+  const settled = MC.sessionLayout([idle('n', { updated_at: '2026-10-25T05:00:00Z' }), idle('c'), idle('e', { workspace: '/other' })], '', before);
+  assert.deepEqual(plain(settled.groups).map(x => [x.label, x.items.map(y => y.id)]), [['w', ['n', 'c']], ['other', ['e']]]);
 });
 
 test('attention counts other sessions that need you plus this view, and notices name their session', () => {
@@ -509,6 +513,7 @@ test('attention counts other sessions that need you plus this view, and notices 
   assert.deepEqual({ ...MC.noticeEvent('"Fix parser" needs approval · ctrl+r') }, { label: 'Fix parser', kind: 'approval' });
   assert.deepEqual({ ...MC.noticeEvent('"Fix parser" finished in 3m 12s') }, { label: 'Fix parser', kind: 'finished' });
   assert.deepEqual({ ...MC.noticeEvent('"Say "hi"" failed in 4s') }, { label: 'Say "hi"', kind: 'failed' });
+  assert.deepEqual({ ...MC.noticeEvent('"Fix parser" failed · rate limited (429)') }, { label: 'Fix parser', kind: 'failed' });
   assert.equal(MC.noticeEvent('"Fix parser": model error'), null);
   assert.equal(MC.noticeEvent('Session renamed'), null);
 });
@@ -779,6 +784,66 @@ test('the context view reads the reply as a bar with markers and rows for the pa
   assert.deepEqual(v.rows, [['History', '38.5k tokens'], ['Compacts at', '160.0k → 60.0k'], ['Covers', '14 turns · 212 items · 58 kept'], ['Last compaction', 'Manual · completed · 182.4k → 9.1k']]);
   const bare = plain(MC.contextView({ tokens: 10, window: 100, percent: 10, history_tokens: null, trigger_tokens: null, target_tokens: null, coverage: null, last_compaction: null, failure: 'model refused', compacting: true }));
   assert.deepEqual([bare.rows, bare.trigger, bare.failure, bare.compacting], [[], null, 'model refused', true]);
+});
+
+const step = (id, extra = {}) => ({ type: 'tool', call_id: id, name: 'bash', detail: 'cargo ' + id, input: null, input_lines: null, state: 'succeeded', exit_code: 0, duration_ms: 20, output: [], output_dropped: 0, output_lines: 0, truncated: false, ...extra });
+
+test('the progress panel lists the running turn\'s tool calls with their state and a totals line', () => {
+  const diff = '--- a/x\n+++ b/x\n@@ -1,1 +1,2 @@\n a\n+b\n';
+  const turn = [
+    { type: 'turn_end', loop_id: 'old', outcome: 'completed' }, step('before'),
+    { type: 'user', kind: 'prompt', text: 'go' },
+    step('build'), step('test', { state: 'failed', exit_code: 1 }), step('stop', { state: 'denied' }),
+    { type: 'assistant', loop_id: 'l', request: 1, reasoning: '', text: 'hmm', streaming: false },
+    step('x', { name: 'edit', detail: 'src/a.rs', input: diff }), step('y', { name: 'edit', detail: 'src/a.rs', input: diff }),
+    step('now', { state: 'running', exit_code: null }),
+  ];
+  const t = plain(MC.turnSteps(turn));
+  assert.deepEqual(t.steps.map(x => [x.i, x.state]), [[3, 'done'], [4, 'failed'], [5, 'stopped'], [7, 'done'], [8, 'done'], [9, 'run']]);
+  assert.deepEqual([t.steps[0].verb, t.steps[0].target, t.steps[5].verb], ['Ran', 'cargo build', 'Running']);
+  assert.equal(t.text, '6 tools · 1 failed · 1 file +2 −0');
+  // A steering message does not start a new turn; only the newest steps are listed.
+  const steered = [{ type: 'user', kind: 'prompt', text: 'a' }, step('a1'), { type: 'user', kind: 'steering', text: 'b' }, step('a2'), step('a3')];
+  assert.deepEqual(plain(MC.turnSteps(steered, 2)), { steps: [{ i: 3, verb: 'Ran', target: 'cargo a2', state: 'done' }, { i: 4, verb: 'Ran', target: 'cargo a3', state: 'done' }], earlier: 1, text: '3 tools' });
+  assert.deepEqual(plain(MC.turnSteps([{ type: 'user', kind: 'prompt', text: 'a' }])), { steps: [], earlier: 0, text: '' });
+});
+
+test('the composer says what typing does: idle, running with a keyboard, running on touch', () => {
+  assert.equal(MC.placeholder(false, true, null), 'Message MiniCore · / for commands');
+  assert.equal(MC.placeholder(false, false, null), 'Describe a task to start');
+  assert.equal(MC.placeholder(true, true, { send: 'Enter', alt: '⌥' }), 'Enter steers · ⌥Enter queues a follow-up');
+  assert.equal(MC.placeholder(true, true, { send: 'Ctrl+Enter', alt: 'Alt+' }), 'Ctrl+Enter steers · Alt+Enter queues a follow-up');
+  assert.equal(MC.placeholder(true, true, false), 'Type to steer or queue a follow-up');
+});
+
+test('approvals name the tools allowed for the session, and busy sessions are the other live ones', () => {
+  assert.equal(MC.allowedText(['bash', 'edit']), 'Allowed for this session: bash, edit');
+  assert.equal(MC.allowedText([]), 'Every tool asks first');
+  assert.equal(MC.allowedText(undefined), 'Every tool asks first');
+  const others = [live('a', 'running'), live('b', 'approval'), live('c', 'idle'), live('d', 'running', { current: true }), idle('e')];
+  assert.deepEqual(MC.busyOthers(others).map(x => x.id), ['a', 'b']);
+});
+
+test('a failed turn shows the host\'s title, the provider identifiers, the hint and the message', () => {
+  const failure = { title: 'rate limited', hint: 'Wait a moment.', status: 429, code: 'rate_limit_exceeded', type: 'requests', message: 'Too many\nrequests', action: null };
+  const end = { ...blocks[3], outcome: 'failed', failure };
+  const t = plain(MC.turnEnd(end, null, 0));
+  assert.deepEqual(t.parts, ['Rate limited', '7.8 s', '12 tokens']);
+  assert.equal(t.ok, false);
+  assert.deepEqual(t.failure, { title: 'Rate limited', ids: '429 · rate_limit_exceeded/requests', hint: 'Wait a moment.', message: 'Too many\nrequests', multiline: false, action: null });
+  const ids = f => plain(MC.turnEnd({ ...end, failure: { title: 'x', hint: '', ...f } }, null, 0)).failure.ids;
+  assert.equal(ids({ code: 'limit', type: 'limit' }), 'limit');
+  assert.equal(ids({ status: 504 }), '504');
+  assert.equal(ids({ type: 'invalid' }), 'invalid');
+  assert.equal(ids({}), '');
+  // Only more than three lines of message get the toggle before the page has measured anything.
+  const long = plain(MC.turnEnd({ ...end, failure: { ...failure, message: 'a\nb\nc\nd', action: 'compact' } }, null, 0)).failure;
+  assert.deepEqual([long.multiline, long.action], [true, 'compact']);
+  // A host without failure details still says Failed.
+  const old = plain(MC.turnEnd({ ...blocks[3], outcome: 'failed' }, null, 0));
+  assert.deepEqual([old.parts[0], old.failure], ['Failed', undefined]);
+  const md = MC.exportMd(state, [end]);
+  assert.match(md, /_Rate limited · 429 · rate_limit_exceeded\/requests · 7\.8 s · 12 tokens_\n\n> Too many\n> requests\n$/);
 });
 
 test('changed files map their status to a badge and the transcript exports as Markdown', () => {

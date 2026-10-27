@@ -118,7 +118,7 @@ pub struct App {
   `"<label>" needs approval · ctrl+r`.
 - **Turn ended** in a background session: set `unseen` unless a phone views it; notice
   `"<label>" finished in 3m12s` (the turn-end line's duration format; or the
-  outcome words it uses, such as `interrupted` or `failed · model error`); the
+  outcome words it uses, such as `interrupted` or `failed · rate limited (429)`); the
   long-turn bell rule applies.
 - **Footer**: when any background session is running, waiting for approval or
   compacting, a segment `2 running · 1 needs approval` (only the non-zero

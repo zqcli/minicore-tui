@@ -405,6 +405,9 @@ The `(+a −b)` counts of the turn-end line are not in `changes.list`; they come
 from paging `changes.diff` for each of the first 100 records. The turn-end line
 of an old turn is rebuilt from its turn record when history is loaded, without
 the duration and the counts, which are not stored; its only hint is `/diff`.
+A failed turn's line is followed by `protocol::Failure`'s hint (one table shared
+with the phone's `turn_end.failure`) and, when the provider sent one, its
+message behind a quote rail; `Ctrl+O` shows all of it instead of three rows.
 When the record carries `interrupted` (the display-only partial reply of a
 request a cancel cut short, not a history item), it becomes an assistant block
 of that request just before the line, so a reopened session shows the reply the
@@ -522,7 +525,8 @@ the history length.
 - **Selection.** A row the UI adds around content (hints, timestamps,
   spacers) and a span after content (a card's duration) carry `rails::chrome`,
   a style that changes nothing on screen. `rails::content_cells` gives the cells
-  past the rail and its pad, so highlight and copy take only content.
+  past the rail, its pad and a leading chrome span (a quote rail), so highlight
+  and copy take only content.
 - **Scroll anchoring.** `Scroll` is `Follow` (stick to the bottom) or
   `Anchor { block, offset }`. Folding or unfolding a block pins the view's top
   (`App::pin_view`), so blocks open and close downward. Any upward scroll turns the position into an

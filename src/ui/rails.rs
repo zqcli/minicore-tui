@@ -78,8 +78,8 @@ fn is_chrome(style: Style) -> bool {
 }
 
 /// The cells of `line` a selection covers: none on a chrome row, otherwise
-/// from past the rail and its pad or indent to the last visible character
-/// before any chrome span.
+/// from past the rail, its pad or indent and a leading chrome span to the last
+/// visible character before the next chrome span.
 pub fn content_cells(line: &Line) -> Range<u16> {
     if is_chrome(line.style) {
         return 0..0;
@@ -95,6 +95,13 @@ pub fn content_cells(line: &Line) -> Range<u16> {
     if let [first, rest @ ..] = spans
         && !first.content.is_empty()
         && first.content.trim().is_empty()
+    {
+        start += wrap::width(&first.content);
+        spans = rest;
+    }
+    // A quote rail leads the content it frames.
+    if let [first, rest @ ..] = spans
+        && is_chrome(first.style)
     {
         start += wrap::width(&first.content);
         spans = rest;
@@ -170,5 +177,10 @@ mod tests {
             20,
         );
         assert_eq!(content_cells(&titled), 2..6);
+        let quoted = indent(
+            Line::from(vec![chrome_span(Span::raw("│ ")), Span::raw("quoted")]),
+            2,
+        );
+        assert_eq!(content_cells(&quoted), 4..10);
     }
 }

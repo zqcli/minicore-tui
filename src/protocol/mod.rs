@@ -4,6 +4,7 @@
 
 pub mod changes;
 pub mod event;
+pub mod failure;
 pub mod read;
 pub mod stamp;
 pub mod tool;
@@ -17,6 +18,7 @@ use serde_json::Value;
 
 pub use changes::{ChangeKind, ChangeList};
 pub use event::AgentEvent;
+pub use failure::Failure;
 pub use read::{
     ChunkAssembler, ChunkOutcome, DisplayProjection, RawHistoryItem, ReadChunk, ReadCursor,
     ReadSessionResult, RuntimeAssistantItem, RuntimeAssistantPart, RuntimeItem, RuntimeToolResult,
@@ -702,8 +704,8 @@ impl LoopOutcome {
         matches!(self, Self::Completed)
     }
 
-    /// How the turn ended, in words: `interrupted`, `failed · model error:
-    /// provider unavailable`.
+    /// How the turn ended, in words: `interrupted`, `failed · provider
+    /// unavailable`.
     pub fn label(&self) -> String {
         match self {
             Self::Completed => "completed".into(),
@@ -715,25 +717,31 @@ impl LoopOutcome {
                 CancelReason::Unknown => "cancelled".into(),
             },
             Self::Failed { kind, model_error } => {
-                let reason = match kind.as_str() {
-                    "model" => "model error".to_owned(),
-                    "prompt" => "prompt error".to_owned(),
-                    "output_limit" => "output limit reached".to_owned(),
-                    "refused" => "the model refused".to_owned(),
-                    "policy" => "blocked by policy".to_owned(),
-                    "interaction" => "interaction failed".to_owned(),
-                    "max_tool_rounds" => "too many tool rounds".to_owned(),
-                    "internal" | "" => "internal error".to_owned(),
-                    other => other.replace('_', " "),
-                };
-                match model_error {
-                    Some(error) if !error.kind.is_empty() => {
-                        format!("failed · {reason}: {}", error.kind.replace('_', " "))
-                    }
-                    _ => format!("failed · {reason}"),
-                }
+                format!(
+                    "failed · {}",
+                    Failure::new(kind, model_error.as_ref()).title
+                )
             }
             Self::Unknown => "unknown outcome".into(),
+        }
+    }
+
+    /// The friendly account of a failed turn.
+    pub fn failure(&self) -> Option<Failure> {
+        match self {
+            Self::Failed { kind, model_error } => Some(Failure::new(kind, model_error.as_ref())),
+            _ => None,
+        }
+    }
+
+    /// What the provider reported for a failed model call.
+    pub fn provider(&self) -> Option<&ProviderError> {
+        match self {
+            Self::Failed {
+                model_error: Some(error),
+                ..
+            } => error.provider.as_deref(),
+            _ => None,
         }
     }
 }
@@ -752,6 +760,53 @@ pub enum CancelReason {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct ModelError {
     pub kind: String,
+    pub delivery: Option<Delivery>,
+    pub retry_after_millis: Option<u64>,
+    // Boxed so a turn-end block stays small.
+    pub provider: Option<Box<ProviderError>>,
+}
+
+/// How far the request got before the call failed.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Delivery {
+    NotStarted,
+    Started,
+    #[serde(other)]
+    Unknown,
+}
+
+/// The provider's own account of a failure; the field names are also the
+/// phone's `failure` keys.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ProviderError {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+impl ProviderError {
+    /// `429 rate_limit_exceeded/requests`: the status, the code, and the type
+    /// when it adds to the code.
+    pub fn identifiers(&self) -> Option<String> {
+        let name = match (&self.code, &self.kind) {
+            (Some(code), Some(kind)) if code != kind => Some(format!("{code}/{kind}")),
+            (Some(name), _) | (None, Some(name)) => Some(name.clone()),
+            (None, None) => None,
+        };
+        let parts: Vec<String> = self
+            .status
+            .map(|s| s.to_string())
+            .into_iter()
+            .chain(name)
+            .collect();
+        (!parts.is_empty()).then(|| parts.join(" "))
+    }
 }
 
 /// The authoritative `turn.wait` result.
@@ -816,6 +871,85 @@ mod tests {
         .unwrap();
         assert_eq!(future.outcome, LoopOutcome::Unknown);
         assert_eq!(future.tool_rounds, None);
+    }
+
+    fn failed(model_error: Value) -> LoopOutcome {
+        serde_json::from_value(
+            json!({"type": "failed", "kind": "model", "model_error": model_error}),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_model_error_carries_the_provider_account_when_the_agent_sends_it() {
+        let outcome = failed(json!({"kind": "rate_limited", "delivery": "not_started",
+            "retryable": true, "retry_after_millis": 12000,
+            "provider": {"status": 429, "code": "rate_limit_exceeded", "type": "requests",
+                "message": "Rate limit reached\nfor gpt"}}));
+        let LoopOutcome::Failed {
+            model_error: Some(error),
+            ..
+        } = &outcome
+        else {
+            panic!("expected a model error");
+        };
+        assert_eq!(error.delivery, Some(Delivery::NotStarted));
+        assert_eq!(error.retry_after_millis, Some(12000));
+        let provider = outcome.provider().unwrap();
+        assert_eq!(
+            provider.message.as_deref(),
+            Some("Rate limit reached\nfor gpt")
+        );
+        assert_eq!(
+            provider.identifiers().as_deref(),
+            Some("429 rate_limit_exceeded/requests")
+        );
+    }
+
+    #[test]
+    fn a_model_error_without_provider_fields_still_parses() {
+        // Records written before the Agent reported providers carry only a kind.
+        let old = failed(json!({"kind": "timeout"}));
+        assert_eq!(old.provider(), None);
+        assert_eq!(old.label(), "failed · timed out");
+        let sparse = failed(json!({"kind": "timeout", "retry_after_millis": null,
+            "delivery": "someday", "provider": {"status": 504}}));
+        assert_eq!(
+            sparse.provider().unwrap().identifiers().as_deref(),
+            Some("504")
+        );
+        let LoopOutcome::Failed {
+            model_error: Some(error),
+            ..
+        } = sparse
+        else {
+            panic!("expected a model error");
+        };
+        assert_eq!(error.delivery, Some(Delivery::Unknown));
+        assert_eq!(error.retry_after_millis, None);
+    }
+
+    #[test]
+    fn identifiers_show_the_type_only_when_it_adds_to_the_code() {
+        let ids = |status, code: Option<&str>, kind: Option<&str>| {
+            ProviderError {
+                status,
+                code: code.map(Into::into),
+                kind: kind.map(Into::into),
+                message: None,
+            }
+            .identifiers()
+        };
+        assert_eq!(
+            ids(Some(429), Some("limit"), Some("limit")).as_deref(),
+            Some("429 limit")
+        );
+        assert_eq!(ids(None, Some("limit"), None).as_deref(), Some("limit"));
+        assert_eq!(
+            ids(Some(400), None, Some("invalid")).as_deref(),
+            Some("400 invalid")
+        );
+        assert_eq!(ids(None, None, None), None);
     }
 
     #[test]

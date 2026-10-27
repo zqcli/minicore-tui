@@ -371,9 +371,19 @@ pub fn block(block: &Block) -> Value {
             usage,
             changes,
         } => {
-            json!({"type":"turn_end", "loop_id":loop_id, "outcome":json!(outcome)["type"], "duration_ms":duration.map(|d| d.as_millis() as u64), "requests":requests, "tools":tools,
+            let mut turn = json!({"type":"turn_end", "loop_id":loop_id, "outcome":json!(outcome)["type"], "duration_ms":duration.map(|d| d.as_millis() as u64), "requests":requests, "tools":tools,
             "usage":{"input":usage.input_tokens.unwrap_or(0), "output":usage.output_tokens.unwrap_or(0), "cached":usage.cache_read_tokens.unwrap_or(0)},
-            "changes":changes.map(|changes| json!({"files":changes.files, "added":changes.lines.map(|l| l.0), "removed":changes.lines.map(|l| l.1)}))})
+            "changes":changes.map(|changes| json!({"files":changes.files, "added":changes.lines.map(|l| l.0), "removed":changes.lines.map(|l| l.1)}))});
+            if let Some(failure) = outcome.failure() {
+                let mut value = outcome
+                    .provider()
+                    .map_or_else(|| json!({}), |provider| json!(provider));
+                value["title"] = failure.title.into();
+                value["hint"] = failure.hint.into();
+                value["action"] = failure.action.into();
+                turn["failure"] = value;
+            }
+            turn
         }
         Block::Compaction {
             before,
@@ -396,6 +406,41 @@ mod tests {
         Catalog::refresh(app);
         let shared = Shared::new(app, PhoneView::foreground(app), false);
         view.sync(app.session.as_ref(), &shared)
+    }
+
+    fn turn_end(outcome: Value) -> Value {
+        block(&Block::TurnEnd {
+            loop_id: "l1".into(),
+            outcome: serde_json::from_value(outcome).unwrap(),
+            duration: None,
+            requests: 1,
+            tools: 0,
+            usage: Default::default(),
+            changes: None,
+        })
+    }
+
+    #[test]
+    fn a_failed_turn_end_carries_the_failure_the_phone_shows() {
+        let end = turn_end(json!({"type": "failed", "kind": "model", "model_error": {
+            "kind": "context_overflow", "provider": {"status": 400, "code": "context_length",
+            "message": "too long"}}}));
+        assert_eq!(end["outcome"], "failed");
+        assert_eq!(
+            end["failure"],
+            json!({"title": "context full", "status": 400, "code": "context_length",
+                "message": "too long", "action": "compact",
+                "hint": "The conversation no longer fits the model's context. Run /compact, then continue."})
+        );
+        let bare = turn_end(json!({"type": "failed", "kind": "output_limit"}));
+        assert_eq!(bare["failure"]["title"], "output limit reached");
+        assert_eq!(bare["failure"]["action"], Value::Null);
+        assert!(bare["failure"].get("status").is_none());
+        assert!(
+            turn_end(json!({"type": "completed"}))
+                .get("failure")
+                .is_none()
+        );
     }
 
     fn connected_app() -> (crate::testing::FakeAgent, App) {

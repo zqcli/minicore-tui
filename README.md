@@ -16,7 +16,7 @@ file is the whole program. Version 0.4 is a rewrite of the v0.3 frontend; see
   inserts a newline. `Alt+Enter` needs the terminal to pass Alt (on macOS, Option
   as Meta or Esc+); see [docs/keybindings.md](docs/keybindings.md).
 
-Built-in backend: Agent 0.8.0, which links Runtime 0.8.0; `Cargo.toml` pins the
+Built-in backend: Agent 0.8.1, which links Runtime 0.8.0; `Cargo.toml` pins the
 Agent by its release tag and `Cargo.lock` fixes both. An
 external Agent can still be named with `--agent`. At startup the TUI requires
 Protocol v1 and these Agent capabilities, and refuses an Agent that lacks one: `session.read`, `session.read.display`, `session.context`,
@@ -120,7 +120,7 @@ history is `history.jsonl` in the TUI directory.
 
 ```text
 
- minicore-tui v0.7.0-fix1                             (welcome header)
+ minicore-tui v0.7.1                                  (welcome header)
 
  esc interrupt · ctrl+c clear · / commands · @ files · ctrl+o expand · ctrl+r sessions
 
@@ -164,7 +164,11 @@ without a report. The TUI never estimates it.
   head for other tools. Any row of an expanded card collapses it on click;
   dragging over its output selects without collapsing.
 - **Turn end** is one dim line: outcome, duration, requests, tools and, when files
-  changed, `N files changed (+a −b)`. A failed or cancelled turn shows its reason.
+  changed, `N files changed (+a −b)`. A cancelled turn shows its reason. A failed
+  turn names the cause in plain words with the provider's status and code
+  (`failed · rate limited · 429 rate_limit_exceeded`), then what to do about it,
+  then the provider's own message behind a `│` rail, three lines until `Ctrl+O`
+  opens it whole; a selection copies the message only.
   The reply an interrupt cut short stays above that line, also after the
   session is reopened.
 - **Sessions.** None exists until the first message: the first `Enter` creates

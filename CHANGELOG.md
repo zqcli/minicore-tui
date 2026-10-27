@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- Built-in backend: Agent 0.8.1 with Runtime 0.8.0, pinned by tag (0.8.0 before).
+  A failed turn now carries what the provider said: its HTTP status, error code
+  and type, and the full message.
+- Web client, a calmer turn: a progress capsule floats at the top of the
+  transcript while a turn runs (`Thinking 41s · bash cargo test…`) and opens
+  into the turn's steps, status with Stop, and other busy sessions; the status
+  row above the composer is gone. The composer toolbar gains an Approvals shield
+  (the tools allowed for the session) and the context share, and its
+  placeholder says what typing does while a turn runs. Finished steps of the
+  running turn recede while the running one stays bright. The session list
+  groups sessions by workspace under Needs you and Running, with folding,
+  "Show N more" and `Ctrl/⌘+Shift+F` to search.
+- A failed turn now says what went wrong: the TUI and the web client show the
+  provider's HTTP status and code, a plain explanation with what to do next, and
+  the provider's own message (three lines, opened whole with `Ctrl+O` in the TUI
+  or "Show full message" and copied with Copy in the web client). The web card
+  offers Compact now or Switch model where that is the fix.
 - Reloading the web client over a slow link is faster: every file carries an
   `ETag` and the browser revalidates it, so an unchanged page costs a few small
   `304` replies instead of the whole download. The page also runs under a

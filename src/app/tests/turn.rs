@@ -103,6 +103,35 @@ async fn a_turn_streams_tool_facts_and_ends_on_its_wait() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_failed_turn_shows_the_providers_status_the_hint_and_its_message() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.fake.script("turn.send", json!({"turn": turn("l1")}));
+    h.fake.script_held(
+        "turn.wait",
+        waited(
+            "l1",
+            json!({"type": "failed", "kind": "model", "model_error": {
+                "kind": "rate_limited", "delivery": "not_started", "retry_after_millis": 12000,
+                "provider": {"status": 429, "code": "rate_limit_exceeded", "type": "requests",
+                             "message": "Rate limit reached for gpt-6 in organization org-1"}}}),
+        ),
+    );
+    h.submit("go");
+    h.until(|app| app.is_busy()).await;
+    h.fake.release("turn.wait");
+    h.until(|app| !app.is_busy()).await;
+    h.settle().await;
+    let screen = h.screen(100, 20);
+    for expected in [
+        "failed · rate limited · 429 rate_limit_exceeded/requests",
+        "then send \"continue\". Retry after 12 s.",
+        "│ Rate limit reached for gpt-6 in organization org-1",
+    ] {
+        assert!(screen.contains(expected), "{expected}\n{screen}");
+    }
+}
+
+#[tokio::test(start_paused = true)]
 async fn a_tick_keeps_tool_cards_cached_until_a_tool_event_changes_them() {
     let mut h = Harness::opened(display_read(0, 0)).await;
     h.fake.script("turn.send", json!({"turn": turn("l1")}));

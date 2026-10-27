@@ -102,10 +102,16 @@ re-renders on every `state`).
   Delete). The rename pencil goes away.
 - **Drawer** (phone) / **persistent sidebar** (≥ 900 px): header (logo, host,
   ⚙ settings), New session, search, then groups **Needs you** (approval or
-  question), **Running**, then Today / Yesterday / Previous 7 days / Older.
-  Status by shape and colour: amber hand = needs you, spinner + elapsed =
-  running, red ! = failed last turn, dot = new result. The order never changes
-  while the drawer is open (rows update in place); it re-sorts when reopened.
+  question), **Running**, then one group per workspace (folder icon, the
+  folder's name, the full path in its tooltip), the group with the newest
+  session first and each group's sessions newest first with the relative time
+  on the right. A group folds with its header (remembered per workspace path
+  in `localStorage`), shows five rows and then "Show N more", and a search
+  shows every match in every group with a match. Status by shape and colour:
+  amber hand = needs you, spinner + elapsed = running, red ! = failed last
+  turn, dot = new result. The order never changes while the drawer is open
+  (rows update in place); it re-sorts when reopened. ⌘/Ctrl+Shift+F focuses
+  the search (a hint shows on hover devices; ⌘/Ctrl+K stays the command list).
   Footer is one line: connection dot + device name, other devices count.
 - **Settings** (full-screen sheet): Appearance (System/Light/Dark), text size
   (4 steps), wrap code by default, show thinking expanded, Enter sends (for
@@ -123,8 +129,11 @@ re-renders on every `state`).
 
 - Two-row card at the bottom: auto-growing textarea (max 40 % of the visual
   viewport), then a bottom row at least 44 px tall: **+** (sheet: prompt
-  templates and commands, recent prompts, insert `@file`) and, in a draft, the
-  **folder** and **profile** chips on the left; on the right the **slot** and
+  templates and commands, recent prompts, insert `@file`), a **shield**
+  (`Approvals`: a small sheet naming the tools allowed for the session, or
+  "Every tool asks first"; a dot on the shield when any is allowed), the
+  **context chip** (`23%`, warning colour from 80 %, opens the Context sheet)
+  and, in a draft, the **folder** and **profile** chips on the left; on the right the **slot** and
   the **primary button**. The primary is a 40 px round button that keeps its
   place and only changes face; the slot is a plain text button (no fill or
   border at rest, a subtle fill on hover, focus and press; at least 40 px
@@ -165,8 +174,10 @@ re-renders on every `state`).
   (Option+Enter on macOS; browsers report it, so no settings are needed) queues
   while busy with text typed and no `/` or `@` list open (the list keeps Tab and
   Enter for completion). Tab is plain browser focus navigation, Shift+Enter adds
-  a line. The placeholder and button tooltips say so ("Enter to steer ·
-  ⌥Enter to queue", Alt+Enter off Apple platforms).
+  a line. The placeholder says what typing does: "Message MiniCore · / for
+  commands" when idle, "Enter steers · ⌥Enter queues a follow-up" while a turn
+  runs (Alt+Enter off Apple platforms, Ctrl+Enter without "Enter sends"), and
+  "Type to steer or queue a follow-up" on a device without a keyboard.
 - `/` at the start opens a filtered command list: built-ins handled by the
   client (`/new`, `/model`, `/rename`, `/compact`, `/context`, `/changes`,
   `/export`, `/settings`) and `state.commands` templates (sent as text, the
@@ -204,6 +215,19 @@ re-renders on every `state`).
   box that follows the end only while the reader is at it), collapsing returns
   to the one line, and the choice survives the turn ending. The "show thinking
   expanded" setting opens it by default.
+- **Progress capsule**: while a turn runs, a compaction runs or a session
+  opens, one line floats at the top of the transcript's column (it overlays, so
+  the scroll position never moves; under the bar and banners): spinner, label,
+  elapsed time and the running tool, middle-cut (`Thinking 41s · bash cargo
+  test…`). Tap, Enter or Space opens it into a panel with **This turn** (the
+  turn's tool calls: finished ones dim with a check or a red ✗, the running one
+  primary with a spinner; a totals line `5 tools · 1 failed · 2 files +12 −4`;
+  a step scrolls the transcript to its row and flashes it), **Status**
+  (elapsed, context, a Stop button with the primary's guards) and **Other
+  sessions** (busy or waiting ones, each opening that session). Esc, a tap
+  outside or its header closes the panel; it fades away when the turn ends.
+  While a turn runs, finished tool rows of the turn in progress use the
+  secondary text tone and the running row the primary one.
 - **Tools**: one-line rows: state icon · past-tense verb · muted mono target ·
   right-aligned meta (duration, `+12 −4`, exit code). Consecutive reads and
   searches group ("Read 6 files ›"). Tap expands inline: command, the **end**
@@ -217,7 +241,12 @@ re-renders on every `state`).
   trailing "Hide" row; anchoring keeps the tapped row in place. The running
   turn is never folded.
 - **Turn end** line stays (completed / interrupted / failed, duration, clock
-  time, tokens from `usage`); tapping "+12 −4" opens Changes.
+  time, tokens from `usage`); tapping "+12 −4" opens Changes. A failed turn is
+  a card built from `turn_end.failure`: a warn icon, the title, the provider's
+  `status · code` in mono, duration and time; the hint below; the provider's
+  message in a tinted quote box clamped to three lines (a "Show full message"
+  toggle where it overflows, and Copy); and a Compact now or Switch model button
+  when `failure.action` names one.
 - **Diffs** (tool rows, approvals, Changes): per-file header, line numbers,
   add/remove tints, wrap on by default on phones, horizontal scroll per hunk
   when off.
@@ -254,7 +283,7 @@ re-renders on every `state`).
 - **Changes sheet** (⋯ → Changes, turn-end `+n −m`, `/changes`): branch,
   totals, file list with status and counts; tap a file for its diff (`diff`
   query). Pull to refresh.
-- **Context sheet** (⋯ → Context, the `% context` in the status strip):
+- **Context sheet** (⋯ → Context, the context chip in the composer):
   breakdown bars from `context`, and **Compact now** (confirm).
 - **Session info** (tap the title): title, id (copy), workspace, branch,
   profile, the tools allowed for this session (when any), model, created/updated, usage totals, other devices viewing it.
@@ -303,7 +332,7 @@ host arrives without TUI key hints.
 ### Accessibility
 
 `aria-live="polite"` region announcing turn start/end, approvals and errors
-(state changes, not tokens); the status strip is updated in place, not
+(state changes, not tokens); the progress capsule is updated in place, not
 recreated; landmarks and a real heading for the session title; labelled icon
 buttons; status never by colour alone.
 
@@ -316,9 +345,9 @@ share one column (780 px, 860 px from 1700 px) centred beside the sidebar, with
 the title left-aligned to it. Desktop pointers get hover states, tooltips from
 the buttons' labels and thin themed scrollbars; tables wider than the column
 scroll instead of breaking words. Shortcuts:
-Esc close the top sheet or menu, else stop the turn, Cmd/Ctrl+K command list,
+Esc close the top sheet, menu or progress panel, else stop the turn, Cmd/Ctrl+K command list,
 Cmd/Ctrl+Enter send or steer (Enter does when the setting is on; Alt+Enter queues),
-Cmd/Ctrl+F find, Alt+↑/↓ previous/next session, `?` shortcut help.
+Cmd/Ctrl+F find, Cmd/Ctrl+Shift+F search sessions, Alt+↑/↓ previous/next session, `?` shortcut help.
 
 ## Code layout
 
@@ -335,7 +364,7 @@ them; a test fails when a file is missing from the table, the page's
 | `ui.js` | The DOM kit (`h`, `icon`, `part`, `set`, `keepFocus`), shared rows (`menuRow`, `rowText`, `errBox`), toasts, clipboard, the modal stack and sheets, `actions`; preferences, wake lock, notifications, the install prompt |
 | `net.js` | The store `S`, the socket, intents, filesystem requests and queries (correlated by id); the sign-in and status screens and the connection's life: connect, backoff, wake, sign out |
 | `sessions.js` | Settings, model, changes, context, output, help and confirm sheets; the drawer or sidebar, session actions, rename, delete, info and the new-session folder picker; banners, the app badge and tab title, and what background sessions ask of this device |
-| `conversation.js` | The composer (status strip, queue, primary button, `/` and `@` lists, draft), the transcript (blocks, incremental rendering, folding, the mounted window, scroll anchoring, find) and the approval and question sheet with its bar and keys |
+| `conversation.js` | The composer (progress capsule, queue, primary button, `/` and `@` lists, draft), the transcript (blocks, incremental rendering, folding, the mounted window, scroll anchoring, find) and the approval and question sheet with its bar and keys |
 | `main.js` | Message dispatch, the top bar, global keys, lifecycle and boot |
 
 Rules:

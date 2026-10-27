@@ -4,6 +4,7 @@ const NS = 'http://www.w3.org/2000/svg';
 export const actions = {};
 
 const $ = id => document.getElementById(id);
+export const apple = /Mac|iPhone|iPad/.test(navigator.userAgent);
 export const kids = k => k.flat(Infinity).filter(x => typeof x === 'string' ? x !== '' : x instanceof Node);
 export function h(tag, p, ...c) {
   const n = document.createElement(tag);

@@ -138,7 +138,10 @@ impl App {
                 )
             }
             (true, None) => "finished".to_owned(),
-            (false, _) => outcome.label(),
+            (false, _) => match outcome.provider().and_then(|provider| provider.status) {
+                Some(status) => format!("{} ({status})", outcome.label()),
+                None => outcome.label(),
+            },
         };
         let long = duration.is_some_and(|duration| duration >= crate::title::LONG_TURN);
         self.ring |= long;

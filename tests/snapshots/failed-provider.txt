@@ -1,0 +1,16 @@
+ ▎
+ ▎ Summarise the changes
+ ▎
+
+   failed · rate limited · 429 rate_limit_exceeded/requests · 47s · 2 tools
+   The provider is limiting requests. Wait a moment, then send "continue".
+   Retry after 12 s.
+   │ Rate limit reached for gpt-6-luna in organization org-7Zq on tokens per
+   │ min (TPM): Limit 30000, Used 29250, Requested 4012.
+   │ Please try again in 8.524s. Visit… · ctrl+o full message
+
+ ▎
+ ▎
+ ▎
+ ▎
+ ▸ minicore-tui · gpt 6 luna · max · 0m

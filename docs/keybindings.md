@@ -117,7 +117,7 @@ shows `2 running · 1 needs approval` while any background session works. Comman
 | `Ctrl+L` | Model picker. |
 | `Ctrl+P` / `Shift+Ctrl+P` | Switch to the next or previous model in the catalog (`Shift+Ctrl+P` needs the kitty keyboard protocol; other terminals send `Ctrl+P` for both). |
 | `Shift+Tab` | Switch to the next reasoning level the model supports. |
-| `Ctrl+O` | Expand or collapse all tool cards, thinking and compaction summaries. The top of the view stays put, so blocks open and close downward. |
+| `Ctrl+O` | Expand or collapse all tool cards, thinking, compaction summaries and a failed turn's provider message. The top of the view stays put, so blocks open and close downward. |
 | `Ctrl+T` | Collapse thinking to one `Thinking...` row, or show it again; the top of the view stays put. |
 | `Ctrl+F` | Find in the transcript. |
 | `F1` | Help view. |
