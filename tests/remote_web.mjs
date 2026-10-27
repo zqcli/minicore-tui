@@ -20,7 +20,7 @@ const state = {
   status: { label: 'Thinking', busy: true, started_ms: 1761300000000, interrupting: false, compacting: false, loading: false },
   usage: { input: 10, output: 2, cached: 1 }, context_percent: 41.5,
   interaction: { id: 'approval', kind: 'approval', tool: 'bash', detail: 'pwd', input: 'pwd', prompt: 'Allow?', options: ['Allow once', 'Deny', 'Allow bash this session'] },
-  queue: [{ kind: 'steer', text: 'now' }, { kind: 'follow', text: 'later' }], older: true,
+  queue: [{ kind: 'steer', text: 'now', sent: true }, { kind: 'follow', text: 'later', sent: false }], older: true,
   sessions: [{ id: 'ses_one', title: 'One', workspace: '/work', updated_at: '2026-01-01T00:00:00Z', current: true }],
   models: [{ id: 'model', reasoning: ['low', 'high'] }], profiles: ['coding'],
 };
