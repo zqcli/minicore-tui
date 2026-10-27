@@ -372,8 +372,6 @@ function sessionLayout(sessions, query, frozen) {
   const groups = all.map(g => ({ ...g, items: g.items.filter(x => matchSession(x, query)) })).filter(g => g.items.length);
   return { groups, order: frozen || order };
 }
-// Other sessions that are working or waiting for the user.
-const busyOthers = sessions => sessions.filter(x => x.live && !x.current && busyStatus(x.status));
 const PINNED = ['Needs you', 'Running'], GROUP_ROWS = 5;
 // A workspace group shows its newest rows until opened with "Show N more"; a search shows every match.
 const groupRows = (items, open) => open ? { shown: items, hidden: 0 } : { shown: items.slice(0, GROUP_ROWS), hidden: Math.max(0, items.length - GROUP_ROWS) };
@@ -541,23 +539,6 @@ function statusLine(state, blocks) {
   return {
     label, detail: !tool ? '' : label.includes(tool.name) ? tool.detail || '' : [tool.name, tool.detail].filter(Boolean).join(' · '),
   };
-}
-// The running turn's tool calls for the progress panel (the newest `max`, in order), and its totals line.
-function turnSteps(blocks, max = 30) {
-  let from = blocks.length;
-  while (from > 0 && blocks[from - 1].type !== 'turn_end' && !(blocks[from - 1].type === 'user' && blocks[from - 1].kind !== 'steering')) from--;
-  const all = [], files = new Set();
-  let failed = 0, added = 0, removed = 0;
-  for (let i = from; i < blocks.length; i++) {
-    const b = blocks[i];
-    if (b.type !== 'tool') continue;
-    const f = toolInfo(b);
-    if (b.state === 'failed') failed++;
-    if (f.added != null && (f.added || f.removed)) { files.add(f.target); added += f.added; removed += f.removed; }
-    all.push({ i, verb: f.verb, target: f.target, state: f.run ? 'run' : b.state === 'failed' ? 'failed' : b.state === 'succeeded' ? 'done' : 'stopped' });
-  }
-  const text = [all.length && plural(all.length, 'tool'), failed && failed + ' failed', files.size && plural(files.size, 'file') + ' +' + added + ' −' + removed].filter(Boolean).join(' · ');
-  return { steps: all.slice(-max), earlier: Math.max(0, all.length - max), text };
 }
 // What the composer says before anything is typed; `keys` names Enter and Alt on a device with a keyboard.
 const placeholder = (busy, session, keys) => !busy ? (session ? 'Message MiniCore · / for commands' : 'Describe a task to start')
@@ -777,9 +758,9 @@ function recentWorkspaces(sessions, max = 6) {
 export {
   V, WINDOW, norm, inline, parseMd, mdInc, backoff, basename, plural, titled, quiet, midTrunc, retireText, mergeReturned, otherDevices, deviceName,
   installOffer, login, hello, intents, queries, fs, createStore, intent, request, query, queryRoom, unqueue, pending, disconnect,
-  sendAgain, unconfirmed, reduce, lockText, unreachable, fsError, errorText, clock, stamp, relTime, sessionLayout, groupRows, busyOthers,
+  sendAgain, unconfirmed, reduce, lockText, unreachable, fsError, errorText, clock, stamp, relTime, sessionLayout, groupRows,
   fmtElapsed, fmtTok, fmtNum, groupTools, foldTurns, findBlocks, foldText, toolInfo, parseDiff, diffStats, liveBlock, turnEnd,
-  changesText, compactionText, statusLine, turnSteps, placeholder, allowedText, canStop, primaryKind, primaryTap, TAP_SLOP, approvalKey, approvalTitle,
+  changesText, compactionText, statusLine, placeholder, allowedText, canStop, primaryKind, primaryTap, TAP_SLOP, approvalKey, approvalTitle,
   approvalOptions, approvalBody, approvalLine, changeStatus, contextView, exportMd, BUILTINS, slashMenu, parseSlash, atToken,
   insertMention, pushRecent, literal, composerKey, queueView, thinkingPreview, splitPath, within, crumbs, tilde, isDrive,
   recentWorkspaces, sessionTransitions, noticeEvent, attentionCount,

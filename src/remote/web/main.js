@@ -1,5 +1,5 @@
 import * as MC from './core.js';
-import { closeCap, closePriMenu, followEnd, openFind, markDirty, onNewSession, openPlus, renderDock, renderEmpty, renderTop, resetTranscript, returned, schedule, sent, stop, syncApproval, unconfirmedHome, unqueueRefused } from './conversation.js';
+import { closePriMenu, followEnd, openFind, markDirty, onNewSession, openPlus, renderDock, renderEmpty, renderTop, resetTranscript, returned, schedule, sent, stop, syncApproval, unconfirmedHome, unqueueRefused } from './conversation.js';
 import { S, bind, boot, handshake, isMain, pump, repaint, turnStatus, viewed, wake } from './net.js';
 import { buildNav, clearFailed, clearPending, closeNav, modelSettled, onNotice, openHelp, openInfo, openLive, openNav, openNew, openSessionMenu, renderAttention, renderBanners, renderNav, sessionEvent, settle, stepSession, syncTick } from './sessions.js';
 import { $, actions, announce, h, inField, keepAwake, notify, reduced, refreshSheets, set, toast, topModal, topPanel } from './ui.js';
@@ -89,7 +89,6 @@ document.addEventListener('keydown', e => {
     if (m) { e.preventDefault(); m.close(); return; }
     const p = topPanel();
     if (p) { e.preventDefault(); p.close(); return; }
-    if (closeCap()) { e.preventDefault(); return; }
     if (MC.canStop(turnStatus())) { e.preventDefault(); stop(); }
     return;
   }

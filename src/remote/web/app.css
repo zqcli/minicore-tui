@@ -357,39 +357,11 @@ html.kb #dock{padding-bottom:6px}
 .chip.ctx{font-variant-numeric:tabular-nums}
 .chip.ctx.hi{color:var(--wa)}
 .sdot{position:absolute;top:6px;right:6px;width:7px;height:7px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 2px var(--fill)}
-/* progress capsule: floats over the top of the transcript */
-#cap{position:absolute;top:8px;bottom:8px;left:0;right:0;z-index:3;display:flex;align-items:flex-start;justify-content:center;padding:0 calc(var(--sr) + 16px) 0 calc(var(--sl) + 16px);pointer-events:none;animation:rise var(--fast) var(--ease)}
-#cap.out{animation:fade var(--fast) var(--ease) reverse forwards}
-.cap{pointer-events:auto;display:flex;flex-direction:column;min-width:0;max-width:min(100%,var(--col));max-height:100%;border:1px solid var(--line2);border-radius:22px;background:var(--sf);box-shadow:var(--sh);overflow:hidden}
-.cap.open{width:100%;border-radius:var(--r3)}
-.caph{display:flex;align-items:center;gap:8px;min-height:44px;min-width:0;padding:0 12px 0 14px;font-size:var(--t14);width:100%}
-.caph .spin{color:var(--ac);flex:none}
-.caph b{font-weight:600;white-space:nowrap}
-.caph .el,.crow .el{font-size:var(--t13);color:var(--tx3);font-variant-numeric:tabular-nums;flex:none}
-.caph .mono::before{content:"· "}
-.caph .mono{flex:1 1 auto;min-width:0;font-size:var(--t12);color:var(--tx3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.caph .cv{flex:none;margin-left:auto;color:var(--tx3);transition:transform var(--fast)}
-.cap.open .caph .cv{transform:rotate(-90deg)}
-.capb{overflow-y:auto;overscroll-behavior:contain;padding:0 8px 10px;border-top:1px solid var(--line)}
-.cs{display:flex;flex-direction:column;padding:4px 0}
-.cs h3{margin:8px 6px 2px;font-size:var(--t12);font-weight:600;color:var(--tx3);text-transform:uppercase;letter-spacing:.04em}
-.cs .ct,.cs .hint{margin:0 6px 2px;font-size:var(--t13);color:var(--tx3)}
-.cstep,.crow{display:flex;align-items:center;gap:10px;width:100%;min-height:36px;padding:2px 6px;border-radius:var(--r1);font-size:var(--t14);color:var(--tx);text-align:left}
-.cstep .si{width:16px;display:grid;place-items:center;flex:none}
-.cstep .si.wa{color:var(--wac)}
-.cstep .vb{flex:none;font-weight:500}
-.cstep .tg{flex:1;min-width:0;font:var(--t13)/1.35 var(--mono);color:var(--tx3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.cstep.other .vb{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.cstep.other .tg{flex:none;font:inherit;font-size:var(--t13)}
-.cstep.done,.cstep.stopped{color:var(--tx3)}
-.cstep.failed{color:var(--er)}
-.cstep.run .si{color:var(--ac)}
-.crow{justify-content:space-between;color:var(--tx2)}
-.crow.hi{color:var(--wa)}
-button.crow{cursor:pointer}
-.stopb{align-self:flex-start;margin:6px 6px 2px}
-.b.flash{animation:flash 1.4s var(--ease);border-radius:var(--r1)}
-@keyframes flash{from{background:var(--acs)}}
+#strip{display:flex;align-items:center;gap:8px;min-height:32px;padding:0 6px 4px;font-size:var(--t14)}
+#strip .spin{color:var(--ac)}
+#strip b{font-weight:600;white-space:nowrap}
+#strip .el{flex:none;font-size:var(--t13);color:var(--tx3);font-variant-numeric:tabular-nums}
+#strip .mono{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--t12);color:var(--tx3)}
 /* the turn in progress: finished steps recede, the running one stays primary */
 .b.live .tr,.b.live .tr .vb{color:var(--tx3)}
 .b.live .tr.run,.b.live .tr.run .vb{color:var(--tx)}

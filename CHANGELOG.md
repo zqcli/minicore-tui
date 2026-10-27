@@ -10,11 +10,9 @@
 - Built-in backend: Agent 0.8.1 with Runtime 0.8.0, pinned by tag (0.8.0 before).
   A failed turn now carries what the provider said: its HTTP status, error code
   and type, and the full message.
-- Web client, a calmer turn: a progress capsule floats at the top of the
-  transcript while a turn runs (`Thinking 41s · bash cargo test…`) and opens
-  into the turn's steps, status with Stop, and other busy sessions; the status
-  row above the composer is gone. The composer toolbar gains an Approvals shield
-  (the tools allowed for the session) and the context share, and its
+- Web client: the status strip above the composer follows the running tool.
+  The composer toolbar gains an Approvals shield (the tools allowed for the
+  session) and the context share, and its
   placeholder says what typing does while a turn runs. Finished steps of the
   running turn recede while the running one stays bright. The session list
   groups sessions by workspace under Needs you and Running, with folding,

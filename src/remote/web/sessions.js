@@ -160,7 +160,7 @@ export function compactNow(done) {
     ok: m => { m.close(true); intent(MC.intents.compact(), a => { if (!a.ok) toast(MC.errorText(a.error), 'error'); else if (done) done(); }); } });
 }
 export function exportSession() { share(S.state.session.title || 'MiniCore session', MC.exportMd(S.state, S.blocks)); }
-const KEYS = [['Esc', 'Close the top sheet or the progress panel, or stop the turn'], ['Enter', 'Send, or steer a running turn (“Enter sends”)'], ['⌘/Ctrl Enter', 'Send, or steer a running turn'], ['⌥/Alt Enter', 'Queue a follow-up while a turn runs'], ['↑ ↓', 'Recent prompts in an empty composer'],
+const KEYS = [['Esc', 'Close the top sheet or stop the turn'], ['Enter', 'Send, or steer a running turn (“Enter sends”)'], ['⌘/Ctrl Enter', 'Send, or steer a running turn'], ['⌥/Alt Enter', 'Queue a follow-up while a turn runs'], ['↑ ↓', 'Recent prompts in an empty composer'],
   ['⌘/Ctrl K', 'Commands and prompts'], ['⌘/Ctrl F', 'Find in session'], ['⌘/Ctrl ⇧ F', 'Search sessions'], ['Alt ↑ ↓', 'Previous or next session'], ['Y A N', 'Allow, allow for session, deny'], ['?', 'This help']];
 export function openHelp() {
   sheet({ key: 'help', cls: 'dialog', title: 'Keyboard shortcuts', body: () => h('dl', 'kv keys', KEYS.map(([k, d]) => [h('dt', '', h('kbd', '', k)), h('dd', '', d)])) });
@@ -191,7 +191,7 @@ export function syncTick() {
 }
 function onTick() {
   const x = turnStatus();
-  if (x.started_ms) for (const el of $('cap').querySelectorAll('.el')) el.textContent = MC.fmtElapsed(hostNow() - x.started_ms);
+  if (x.started_ms) for (const el of $('strip').querySelectorAll('.el')) el.textContent = MC.fmtElapsed(hostNow() - x.started_ms);
   if (navShown()) for (const e of $('nav').querySelectorAll('[data-start]')) e.textContent = MC.fmtElapsed(hostNow() - +e.dataset.start);
 }
 // ---- navigation: drawer on phones, sidebar on wide screens ----

@@ -215,19 +215,11 @@ re-renders on every `state`).
   box that follows the end only while the reader is at it), collapsing returns
   to the one line, and the choice survives the turn ending. The "show thinking
   expanded" setting opens it by default.
-- **Progress capsule**: while a turn runs, a compaction runs or a session
-  opens, one line floats at the top of the transcript's column (it overlays, so
-  the scroll position never moves; under the bar and banners): spinner, label,
-  elapsed time and the running tool, middle-cut (`Thinking 41s · bash cargo
-  test…`). Tap, Enter or Space opens it into a panel with **This turn** (the
-  turn's tool calls: finished ones dim with a check or a red ✗, the running one
-  primary with a spinner; a totals line `5 tools · 1 failed · 2 files +12 −4`;
-  a step scrolls the transcript to its row and flashes it), **Status**
-  (elapsed, context, a Stop button with the primary's guards) and **Other
-  sessions** (busy or waiting ones, each opening that session). Esc, a tap
-  outside or its header closes the panel; it fades away when the turn ends.
-  While a turn runs, finished tool rows of the turn in progress use the
-  secondary text tone and the running row the primary one.
+- **Status strip**: directly above the composer, a spinner, label, elapsed
+  time and running tool detail show while a turn, compaction or session opening
+  is active. Tool detail follows transcript updates even without a state
+  change. Context appears only in the composer toolbar. Finished tool rows of
+  the running turn use the secondary text tone and the running row the primary.
 - **Tools**: one-line rows: state icon · past-tense verb · muted mono target ·
   right-aligned meta (duration, `+12 −4`, exit code). Consecutive reads and
   searches group ("Read 6 files ›"). Tap expands inline: command, the **end**
@@ -334,7 +326,7 @@ host arrives without TUI key hints.
 ### Accessibility
 
 `aria-live="polite"` region announcing turn start/end, approvals and errors
-(state changes, not tokens); the progress capsule is updated in place, not
+(state changes, not tokens); the status strip is updated in place, not
 recreated; landmarks and a real heading for the session title; labelled icon
 buttons; status never by colour alone.
 
@@ -347,7 +339,7 @@ share one column (780 px, 860 px from 1700 px) centred beside the sidebar, with
 the title left-aligned to it. Desktop pointers get hover states, tooltips from
 the buttons' labels and thin themed scrollbars; tables wider than the column
 scroll instead of breaking words. Shortcuts:
-Esc close the top sheet, menu or progress panel, else stop the turn, Cmd/Ctrl+K command list,
+Esc close the top sheet or menu, else stop the turn, Cmd/Ctrl+K command list,
 Cmd/Ctrl+Enter send or steer (Enter does when the setting is on; Alt+Enter queues),
 Cmd/Ctrl+F find, Cmd/Ctrl+Shift+F search sessions, Alt+↑/↓ previous/next session, `?` shortcut help.
 
@@ -366,7 +358,7 @@ them; a test fails when a file is missing from the table, the page's
 | `ui.js` | The DOM kit (`h`, `icon`, `part`, `set`, `keepFocus`), shared rows (`menuRow`, `rowText`, `errBox`), toasts, clipboard, the modal stack and sheets, `actions`; preferences, wake lock, notifications, the install prompt |
 | `net.js` | The store `S`, the socket, intents, filesystem requests and queries (correlated by id); the sign-in and status screens and the connection's life: connect, backoff, wake, sign out |
 | `sessions.js` | Settings, model, changes, context, output, help and confirm sheets; the drawer or sidebar, session actions, rename, delete, info and the new-session folder picker; banners, the app badge and tab title, and what background sessions ask of this device |
-| `conversation.js` | The composer (progress capsule, queue, primary button, `/` and `@` lists, draft), the transcript (blocks, incremental rendering, folding, the mounted window, scroll anchoring, find) and the approval and question sheet with its bar and keys |
+| `conversation.js` | The composer (status strip, queue, primary button, `/` and `@` lists, draft), the transcript (blocks, incremental rendering, folding, the mounted window, scroll anchoring, find) and the approval and question sheet with its bar and keys |
 | `main.js` | Message dispatch, the top bar, global keys, lifecycle and boot |
 
 Rules:

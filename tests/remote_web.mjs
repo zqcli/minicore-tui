@@ -805,28 +805,6 @@ test('the context view reads the reply as a bar with markers and rows for the pa
   assert.deepEqual([bare.rows, bare.trigger, bare.failure, bare.compacting], [[], null, 'model refused', true]);
 });
 
-const step = (id, extra = {}) => ({ type: 'tool', call_id: id, name: 'bash', detail: 'cargo ' + id, input: null, input_lines: null, state: 'succeeded', exit_code: 0, duration_ms: 20, output: [], output_dropped: 0, output_lines: 0, truncated: false, ...extra });
-
-test('the progress panel lists the running turn\'s tool calls with their state and a totals line', () => {
-  const diff = '--- a/x\n+++ b/x\n@@ -1,1 +1,2 @@\n a\n+b\n';
-  const turn = [
-    { type: 'turn_end', loop_id: 'old', outcome: 'completed' }, step('before'),
-    { type: 'user', kind: 'prompt', text: 'go' },
-    step('build'), step('test', { state: 'failed', exit_code: 1 }), step('stop', { state: 'denied' }),
-    { type: 'assistant', loop_id: 'l', request: 1, reasoning: '', text: 'hmm', streaming: false },
-    step('x', { name: 'edit', detail: 'src/a.rs', input: diff }), step('y', { name: 'edit', detail: 'src/a.rs', input: diff }),
-    step('now', { state: 'running', exit_code: null }),
-  ];
-  const t = plain(MC.turnSteps(turn));
-  assert.deepEqual(t.steps.map(x => [x.i, x.state]), [[3, 'done'], [4, 'failed'], [5, 'stopped'], [7, 'done'], [8, 'done'], [9, 'run']]);
-  assert.deepEqual([t.steps[0].verb, t.steps[0].target, t.steps[5].verb], ['Ran', 'cargo build', 'Running']);
-  assert.equal(t.text, '6 tools · 1 failed · 1 file +2 −0');
-  // A steering message does not start a new turn; only the newest steps are listed.
-  const steered = [{ type: 'user', kind: 'prompt', text: 'a' }, step('a1'), { type: 'user', kind: 'steering', text: 'b' }, step('a2'), step('a3')];
-  assert.deepEqual(plain(MC.turnSteps(steered, 2)), { steps: [{ i: 3, verb: 'Ran', target: 'cargo a2', state: 'done' }, { i: 4, verb: 'Ran', target: 'cargo a3', state: 'done' }], earlier: 1, text: '3 tools' });
-  assert.deepEqual(plain(MC.turnSteps([{ type: 'user', kind: 'prompt', text: 'a' }])), { steps: [], earlier: 0, text: '' });
-});
-
 test('the composer says what typing does: idle, running with a keyboard, running on touch', () => {
   assert.equal(MC.placeholder(false, true, null), 'Message MiniCore · / for commands');
   assert.equal(MC.placeholder(false, false, null), 'Describe a task to start');
@@ -835,12 +813,10 @@ test('the composer says what typing does: idle, running with a keyboard, running
   assert.equal(MC.placeholder(true, true, false), 'Type to steer or queue a follow-up');
 });
 
-test('approvals name the tools allowed for the session, and busy sessions are the other live ones', () => {
+test('approvals name the tools allowed for the session', () => {
   assert.equal(MC.allowedText(['bash', 'edit']), 'Allowed for this session: bash, edit');
   assert.equal(MC.allowedText([]), 'Every tool asks first');
   assert.equal(MC.allowedText(undefined), 'Every tool asks first');
-  const others = [live('a', 'running'), live('b', 'approval'), live('c', 'idle'), live('d', 'running', { current: true }), idle('e')];
-  assert.deepEqual(MC.busyOthers(others).map(x => x.id), ['a', 'b']);
 });
 
 test('a failed turn shows the host\'s title, the provider identifiers, the hint and the message', () => {
