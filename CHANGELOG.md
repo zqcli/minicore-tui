@@ -65,21 +65,18 @@
   again by `/remote on`, so a renewed certificate needs only `/remote off` and
   `/remote on`. A LAN or public bind with TLS no longer needs
   `allow_insecure`.
-- The web client loads over slow links: the page is sent gzipped (129 KB becomes
-  37 KB), and a reply is no longer cut off after 10 seconds while
-  it is still arriving, which behind Cloudflare showed as error 520.
+- The web client loads over slow links: its files are sent gzipped, and a reply
+  is no longer cut off after 10 seconds while it is still arriving, which
+  behind Cloudflare showed as error 520.
 - The phone client is redesigned. Sessions that need you are listed first with
   a badge on the menu button; finished turns fold their tool steps into one
   "Worked 47 s · 5 tools · +12 −4" row; tool steps are one-line rows whose
   full output can be opened and loaded in full; thinking shows a "Thinking…"
   header with its newest sentence on one line (then "Thought for 12 s"), and
-  opens to the full text. The composer has a model chip, `/` for commands and prompt templates
-  (expanded on the computer like in the TUI), `@` for workspace files and
-  recent prompts. While a turn runs, typed text goes out with an explicit
-  **Steer** or **Queue** button (Enter or Cmd/Ctrl+Enter steers, Tab or
-  Alt+Enter queues), and queued follow-ups and steers still waiting show above
-  the composer; follow-ups can be edited or removed. Stop is a separate
-  button that is always visible while a turn runs (Esc on a keyboard).
+  opens to the full text. The composer has `/` for commands and prompt
+  templates (expanded on the computer like in the TUI) and `@` for workspace
+  files and recent prompts; queued follow-ups and steers still waiting show
+  above the composer, and follow-ups can be edited or removed.
   Approvals say what they ask ("Run command", "Edit src/x.rs") with a rendered
   diff, never approve by focus or a stray key, and Deny can tell the agent why.
   A session menu opens Changes (the Git diff per file), Context with Compact
