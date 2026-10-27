@@ -279,7 +279,7 @@ function sessionRow([id, title, ws, current, status, started, unseen, rel, bad],
   return h('div', 'srow' + (current ? ' cur' : '') + (pinned ? '' : ' one'), h('button', {
     class: 'sopen', 'data-k': 's' + id, 'aria-current': current ? 'page' : null,
     'aria-label': MC.titled(title) + ', ' + MC.basename(ws) + (status === 'approval' ? ', needs you' : status === 'running' ? ', running' : ''),
-  }, shape, rowText(MC.titled(title), pinned && MC.basename(ws)), h('span', 'sw', what), pendingRow === id && spin('sm')),
+  }, shape, rowText(MC.titled(title), pinned && MC.basename(ws)), h('span', 'stime', what), pendingRow === id && spin('sm')),
   h('button', { class: 'ib more', 'data-k': 'm' + id, 'aria-label': 'Actions for ' + MC.titled(title), 'aria-haspopup': 'dialog' }, icon('more')));
 }
 (() => {

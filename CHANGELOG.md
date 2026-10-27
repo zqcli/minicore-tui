@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Settings switches use the full row width, with readable descriptions and
+  right-aligned controls on phones and desktops.
+
 - Built-in backend: Agent 0.8.1 with Runtime 0.8.0, pinned by tag (0.8.0 before).
   A failed turn now carries what the provider said: its HTTP status, error code
   and type, and the full message.

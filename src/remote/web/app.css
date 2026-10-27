@@ -170,8 +170,8 @@ input.tf:focus{border-color:var(--ac);box-shadow:0 0 0 3px var(--acs)}
 .rs .warn{color:var(--wa);font-weight:600}
 .rs .er{color:var(--er);font-weight:600}
 .srow .more{color:var(--tx3)}
-.sw{flex:none;max-width:40%;font-size:var(--t13);color:var(--tx3);font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.sw .warn{color:var(--wa);font-weight:600}.sw .er{color:var(--er);font-weight:600}
+.stime{flex:none;max-width:40%;font-size:var(--t13);color:var(--tx3);font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.stime .warn{color:var(--wa);font-weight:600}.stime .er{color:var(--er);font-weight:600}
 .sec.gh{width:100%;min-height:44px;padding-bottom:0;margin-top:8px;border-radius:var(--r1);text-align:left}
 .sec.gh:first-child{margin-top:0}
 .gh .gn{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

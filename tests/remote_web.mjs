@@ -5,6 +5,11 @@ import vm from 'node:vm';
 import * as core from '../src/remote/web/core.js';
 
 const read = name => readFileSync(new URL(`../src/remote/web/${name}`, import.meta.url), 'utf8');
+
+test('session timestamps do not inherit settings switch layout', () => {
+  assert.match(read('sessions.js'), /h\('span', 'stime', what\)/);
+  assert.doesNotMatch(read('app.css'), /\.sw\{[^}]*max-width/);
+});
 const MC = core;
 // Round-trip through JSON so values compare against plain objects.
 const plain = v => JSON.parse(JSON.stringify(v));
