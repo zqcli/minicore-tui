@@ -361,7 +361,6 @@ impl App {
             }
             Msg::Deleted(id, result) => self.with_notice_for(&id, |app| {
                 if app.ok(result).is_some() {
-                    app.notice(NoticeLevel::Info, "Session deleted");
                     app.forget_phone_session(&id);
                     app.sessions.retain(|session| session.session_id != id);
                     app.background

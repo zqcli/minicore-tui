@@ -22,7 +22,8 @@ the v2 additions below.
   one-line rows and fold away when a turn ends; approvals, failures and
   sessions that need you stand out by shape and colour.
 - **Safe by construction.** Nothing approves by focus or a stray key; Stop is
-  always one tap away while anything runs; destructive actions confirm.
+  always reachable while anything runs, takes the send button's place, and is
+  guarded against double taps and scrolls; destructive actions confirm.
 - **Fewer boxes, clear type.** Flat assistant text, tinted user bubbles, ruled
   tool rows, cards only for approvals and summaries.
 - **Phone first, then iPad and desktop**, which get a persistent sidebar and
@@ -38,17 +39,24 @@ own view (its session or draft), as v1 intents do.
 
 | kind | fields | effect |
 |---|---|---|
-| `compact` | — | `session.compact` for the viewed session; refused while a turn runs or compaction is under way (`busy`). `cancel` already stops a compaction. |
-| `unqueue` | `index`, `text` | Removes the queued follow-up `queue[index]` if its text still equals `text` (else `stale`); the text goes back to the requester as `returned`. Steers already sent cannot be taken back. |
-| `answer` | + optional `message` (deny only) | Denies, then steers `message` into the same turn so the agent hears why. |
-| `submit` / `queue` | text | Text that starts with `/name` naming a prompt template is expanded on the host exactly as the TUI does (`$1`, `$@`, …). Another `/word` the TUI would treat as a command is refused with `unknown_command`; the client handles built-in commands itself and never sends them. |
+| `compact` | — | `session.compact` for the viewed session; refused while a turn runs or compaction is under way (`busy`), and in a draft (`No session`). `cancel` already stops a compaction. |
+| `unqueue` | `index`, `text` | Removes the queued follow-up `queue[index]` if its text still equals `text` (else `stale`); the text goes back to the requester as `returned`. Steers already sent cannot be taken back (`stale`). |
+| `answer` | + optional `message` (deny only) | Denies, then steers `message` into the same turn so the agent hears why. A blank `message`, or one beside anything but an approval's `deny`, is `bad_request`. |
+| `submit` / `queue` | text | Text that starts with `/name` naming a prompt template is expanded on the host exactly as the TUI does (`$1`, `$@`, …); `//text` sends `/text`. A built-in command line, and a bare `/word` naming nothing (where the composer warns once), are refused with `unknown_command`; the client handles built-in commands itself and never sends them. |
 
 ### Queries (`{"t":"query","id","kind",...}` → `{"t":"result","id","ok":true,"data":{...}}` or `{"t":"result","id","ok":false,"error":"..."}`)
 
 Relays of existing Agent RPC for the viewed session, answered only to the
 requester. At most 4 queries in flight per connection (more → `busy`); each is
 bounded as listed. A query whose session left the device's view still
-answers (the client ignores stale replies by id).
+answers (the client ignores stale replies by id). A draft answers
+`No session`. The exact `data` shapes are in `docs/design-remote.md`
+("Queries"); they differ from this table in two places: `context` carries the
+`/context` figures (`tokens`, `window`, `percent`, `budget`, `history_tokens`,
+`trigger_tokens`, `target_tokens`, coverage, last compaction), because the
+Agent reports no per-category breakdown, and `changes` rows have no line
+counts (each needs a `changes.diff`); `diff` returns `added` and `removed`
+instead. `diff` of a path not in the list is `stale`.
 
 | kind | fields | Agent RPC | `data` (bounded) |
 |---|---|---|---|
@@ -72,17 +80,18 @@ answers (the client ignores stale replies by id).
 
 A running tool block whose new output only adds lines at the end is sent as
 `{"i":n,"append":{"output":[...lines]}}` instead of the whole block, like
-assistant text. When the bounded tail drops lines from its start, or anything
+assistant text. The first string continues the last output line (the line
+still being written), the rest are new lines. When the bounded tail drops lines from its start, or anything
 else changes, the full `block` is sent. The finished block is always sent once
 in full.
 
-## Client (`src/remote/web/index.html`, `sw.js`, `manifest.webmanifest`)
+## Client (`src/remote/web/`)
 
-Single self-contained file, no build step, no external requests (CSP stays).
-`<script id="core">` stays the pure, tested `globalThis.MC` module and grows;
-DOM code is reorganised into small components that update only when their
-inputs change (no whole-region re-renders on every `state`). Budget: at most
-60 KB gzip for `index.html`.
+Plain files, no build step, no external requests, no inline script or style
+(the CSP forbids them; see [Code layout](#code-layout)). `core.js` stays the
+pure, tested logic module and grows; DOM code is reorganised into small
+components that update only when their inputs change (no whole-region
+re-renders on every `state`).
 
 ### Layout and navigation
 
@@ -100,7 +109,8 @@ inputs change (no whole-region re-renders on every `state`). Budget: at most
   Footer is one line: connection dot + device name, other devices count.
 - **Settings** (full-screen sheet): Appearance (System/Light/Dark), text size
   (4 steps), wrap code by default, show thinking expanded, Enter sends (for
-  hardware keyboards; default off on touch), keep screen awake while a turn
+  hardware keyboards; on by default for a fine pointer with hover, off on touch,
+  and stored only once chosen), keep screen awake while a turn
   runs (Wake Lock), notifications while this page is open (Notification API
   through the service worker, only where supported, asked on first use),
   connected devices with what each views, host and version (`welcome.version`),
@@ -112,17 +122,51 @@ inputs change (no whole-region re-renders on every `state`). Budget: at most
 ### Composer
 
 - Two-row card at the bottom: auto-growing textarea (max 40 % of the visual
-  viewport), then a chip row: **+** (sheet: prompt templates and commands,
-  recent prompts, insert `@file`), **model · effort** chip (one chip, middle
-  truncated, opens the model sheet), in a draft also **profile** and
-  **folder** chips; on the right the **send** button.
-- **Stop** is a separate, always visible button while a turn runs or
-  compaction is under way (in the status strip above the composer, ≥ 44 px),
-  never in the send position. Esc stops on hardware keyboards.
-- While busy with text typed, a small **Steer / Queue** toggle chip sits in the
-  chip row (always present while busy, so nothing jumps); microcopy under the
-  status explains: "Steer: the agent reads it after the current step" /
-  "Queue: sends when this turn ends".
+  viewport), then a bottom row at least 44 px tall: **+** (sheet: prompt
+  templates and commands, recent prompts, insert `@file`) and, in a draft, the
+  **folder** and **profile** chips on the left; on the right the **slot** and
+  the **primary button**. The primary is a 40 px round button that keeps its
+  place and only changes face; the slot is a plain text button (no fill or
+  border at rest, a subtle fill on hover, focus and press; at least 40 px
+  tall):
+
+  | State | Primary | Slot |
+  |---|---|---|
+  | idle, empty | ↑ Send, disabled | model · effort ⌄ |
+  | idle, text | ↑ Send (accent) | model · effort ⌄ |
+  | working, empty | ■ Stop (neutral: `--tx` fill, `--bg` icon) | model · effort ⌄ |
+  | working, text | ↗ Steer (accent) | ↳ Follow-up (accent text button) |
+  | stopping | spinner, disabled | model · effort ⌄ |
+
+  A compaction counts as working with nothing typed: the primary is Stop and
+  cancels it. The model text is middle-truncated (16 characters on a phone, 28
+  on a wide screen) and opens the model sheet. Hover devices get tooltips with
+  the shortcuts.
+- **Stop** is the primary button while a turn runs and nothing is typed, and
+  stops at once: no arming step. It is guarded against accidents by logic in
+  `MC.primaryTap`:
+  - The action comes from the live textarea value at the moment of the tap, so
+    typing then tapping steers and never stops.
+  - A tap within 600 ms after the primary turned into Stop is ignored (the
+    second half of a double tap on Send, as the composer empties and the turn
+    starts or the steer is acknowledged).
+  - A pointer gesture that travelled more than 10 px is a scroll, not a tap.
+  With text typed during a turn, Stop stays reachable: a long press (450 ms) on
+  the primary, or a right click or the context-menu key, opens a small menu
+  above it: ↗ Steer now · Enter, ↳ Queue as follow-up · ⌥/Alt+Enter, ■ Stop
+  the turn · Esc. **Esc** (no sheet, list or menu open) stops the turn with a
+  single press, like the TUI. The primary's `aria-label` follows its face
+  (Send, Steer, Stop the turn, Stopping); a change to Stop, Steer or Stopping
+  is announced through the `aria-live` region, typing is not.
+- **Steer** sends the text into the running turn (`submit`; the agent reads it
+  after the current step); **Follow-up** sends a follow-up (`queue`; sent when the
+  turn ends). Hardware keys mirror the TUI: Enter (with "Enter sends") or
+  Cmd/Ctrl+Enter steers while busy and sends when idle; **Alt+Enter**
+  (Option+Enter on macOS; browsers report it, so no settings are needed) queues
+  while busy with text typed and no `/` or `@` list open (the list keeps Tab and
+  Enter for completion). Tab is plain browser focus navigation, Shift+Enter adds
+  a line. The placeholder and button tooltips say so ("Enter to steer ·
+  ⌥Enter to queue", Alt+Enter off Apple platforms).
 - `/` at the start opens a filtered command list: built-ins handled by the
   client (`/new`, `/model`, `/rename`, `/compact`, `/context`, `/changes`,
   `/export`, `/settings`) and `state.commands` templates (sent as text, the
@@ -132,9 +176,14 @@ inputs change (no whole-region re-renders on every `state`). Budget: at most
   with ↑ in an empty composer on hardware keyboards.
 - `enterkeyhint="send"`, `autocapitalize="sentences"`, autocorrect off while
   the text starts with `/` or `@`; drafts persist per session as today.
-- Queued follow-ups are pills above the composer: tap to edit (unqueue into
-  the composer), ✕ to remove (unqueue and drop). Unconfirmed sends keep their
-  single "Not sent · Send again" card; the composer is not filled twice.
+- The queue shows above the composer under one caption, "Follow-ups send when
+  this turn ends": follow-ups are pills `↳ Follow-up 1` + text (tap to edit =
+  unqueue into the composer, ✕ to remove = unqueue and drop), steers the agent
+  has not read yet are muted `↗ Steer · waiting for the next step` rows that
+  cannot be removed. Three show at first, then "+N more" expands the rest. A
+  steer's bubble in the transcript keeps its "↗ Steer" label; a follow-up that
+  was sent is an ordinary message. Unconfirmed sends keep their single "Not
+  sent · Send again" card; the composer is not filled twice.
 
 ### Transcript
 
@@ -144,9 +193,17 @@ inputs change (no whole-region re-renders on every `state`). Budget: at most
   (finished top-level blocks are kept; only the open tail is re-parsed). Only
   the block being written shows the caret. Actions under a finished answer:
   Copy, Share (Web Share API where available), and time.
-- **Thinking**: a muted "Thinking…" line with a shimmer and the live text
-  capped to 3 lines with a fade; when done "Thought ›" (with duration when the
-  client watched it live), expandable; "show thinking expanded" setting.
+- **Thinking**: collapsed but alive. A muted "Thinking…" header with a shimmer
+  and, under it, one line (fixed height, ellipsis at the end) with the newest
+  sentence of the reasoning; when a new sentence starts the line slides up
+  (≤ 200 ms, none with reduced motion), and text within a sentence only
+  updates it in place. When done the header reads "Thought for 12 s ›" (the
+  duration when the client watched it live) and the last line stays under it.
+  Tapping the header or the line expands the full text and back, also while the
+  agent is still thinking: the open text grows in place (capped to a scrolling
+  box that follows the end only while the reader is at it), collapsing returns
+  to the one line, and the choice survives the turn ending. The "show thinking
+  expanded" setting opens it by default.
 - **Tools**: one-line rows: state icon · past-tense verb · muted mono target ·
   right-aligned meta (duration, `+12 −4`, exit code). Consecutive reads and
   searches group ("Read 6 files ›"). Tap expands inline: command, the **end**
@@ -187,8 +244,10 @@ inputs change (no whole-region re-renders on every `state`). Budget: at most
   needed · Review") to read the transcript, and is re-opened from it.
 - Choice questions: numbered options, neutral styling (no option is primary
   unless the host marks one).
-- The decision stays visible in the transcript on the tool row (allowed /
-  denied, by this device or another).
+- A denial stays on the tool row with its reason (by this device, or "Denied
+  on another device"). Allowed tools show nothing extra: the row's own state
+  says what happened, and a tool allowed for the session is answered by the host
+  without any message.
 
 ### Changes, context, session info
 
@@ -198,9 +257,23 @@ inputs change (no whole-region re-renders on every `state`). Budget: at most
 - **Context sheet** (⋯ → Context, the `% context` in the status strip):
   breakdown bars from `context`, and **Compact now** (confirm).
 - **Session info** (tap the title): title, id (copy), workspace, branch,
-  profile, model, created/updated, usage totals, other devices viewing it.
+  profile, the tools allowed for this session (when any), model, created/updated, usage totals, other devices viewing it.
 - **Export/Share**: the loaded transcript as Markdown through Web Share, else
   copied.
+
+### Notices
+
+The same four rules as the TUI (`docs/architecture.md`). Nothing announces what
+the user just did and can see: Copy turns its own button into a check for a
+moment (a "Copied" toast only where no button is left, such as a menu row or
+`/copy`), and renames, deletions and model changes show in the title, list and
+chips. A tool allowed for the session runs without any message, and the session
+info lists it. Toasts stay for what the user did not cause or needs to act on:
+a background approval or finished turn, a returned message, a refused action,
+errors (sticky until dismissed), a command or action that cannot run and why.
+While offline the send and queue controls are disabled and the banner is the
+single signal; other controls toast "Not connected" once. Notice text from the
+host arrives without TUI key hints.
 
 ### Background sessions and attention
 
@@ -237,10 +310,50 @@ buttons; status never by colour alone.
 ### iPad and desktop
 
 ≥ 900 px: persistent sidebar + transcript; sheets become centred dialogs or a
-right-hand panel (Changes, output viewer, context) at ≥ 1200 px. Shortcuts:
-Esc stop (or close the top sheet), Cmd/Ctrl+K command list, Cmd/Ctrl+Enter
-send (Enter sends when the setting is on), Cmd/Ctrl+F find, Alt+↑/↓ previous/
-next session, `?` shortcut help.
+right-hand panel (Changes, output viewer, context) at ≥ 1200 px, 30 % of the
+width between 440 and 600 px. The transcript, the composer and the top bar
+share one column (780 px, 860 px from 1700 px) centred beside the sidebar, with
+the title left-aligned to it. Desktop pointers get hover states, tooltips from
+the buttons' labels and thin themed scrollbars; tables wider than the column
+scroll instead of breaking words. Shortcuts:
+Esc close the top sheet or menu, else stop the turn, Cmd/Ctrl+K command list,
+Cmd/Ctrl+Enter send or steer (Enter does when the setting is on; Alt+Enter queues),
+Cmd/Ctrl+F find, Alt+↑/↓ previous/next session, `?` shortcut help.
+
+## Code layout
+
+Every file is served as it is in the repository (`src/remote/server.rs` embeds
+them; a test fails when a file is missing from the table, the page's
+`modulepreload` list, or the service worker's precache).
+
+| File | Responsibility |
+|---|---|
+| `index.html` | Markup only: the icon sprite, screens, the app frame and `<link rel="modulepreload">` for every module |
+| `app.css` | All styles, on the custom properties of `:root` (themes are `[data-theme=dark]` overrides) |
+| `theme.js` | Classic blocking script: sets `data-theme`, the text size and the theme-color metas before the first paint |
+| `core.js` | Pure logic, no DOM, network or timers (a test enforces it): messages, the store and reducer, formatting, tool rows, folding, approvals, composer decisions; Markdown token trees |
+| `ui.js` | The DOM kit (`h`, `icon`, `part`, `set`, `keepFocus`), shared rows (`menuRow`, `rowText`, `errBox`), toasts, clipboard, the modal stack and sheets, `actions`; preferences, wake lock, notifications, the install prompt |
+| `net.js` | The store `S`, the socket, intents, filesystem requests and queries (correlated by id); the sign-in and status screens and the connection's life: connect, backoff, wake, sign out |
+| `sessions.js` | Settings, model, changes, context, output, help and confirm sheets; the drawer or sidebar, session actions, rename, delete, info and the new-session folder picker; banners, the app badge and tab title, and what background sessions ask of this device |
+| `conversation.js` | The composer (status strip, queue, primary button, `/` and `@` lists, draft), the transcript (blocks, incremental rendering, folding, the mounted window, scroll anchoring, find) and the approval and question sheet with its bar and keys |
+| `main.js` | Message dispatch, the top bar, global keys, lifecycle and boot |
+
+Rules:
+
+- State has one owner. The host's state and blocks live in `S` (`net.js`;
+  only its reducer writes them). Everything else is private to the module that
+  draws it (the mounted window and folds and the lists in `conversation.js`,
+  the modal stack in `ui.js`) and is changed through that
+  module's functions (`markDirty`, `markDenied`, `markFailed`, `abandon`).
+- Modules import downward only and never form a cycle (a test checks it). A
+  call that has to go up, such as the composer opening Find, goes through
+  `actions`, which the defining module fills in.
+- Rendering is incremental: a `part` re-renders its region only when its input
+  changed, and the transcript renders only blocks marked dirty, appending to
+  an open assistant block instead of rebuilding it.
+  Renders that run on every state or frame write only what changed (`part`,
+  `set`), and lists of rows share one delegated listener keyed by `data-k`.
+- Nothing is inline: styles come from classes, scripts from files.
 
 ## Kept from v1
 
@@ -249,6 +362,11 @@ wake on visibility/pageshow/focus/online, unconfirmed sends never resent
 automatically), host clock offset, the iOS keyboard handling (`--h`, `--kb`),
 safe areas, the PWA (manifest, service worker, install row, theme-color sync),
 per-device views, live background sessions, the folder picker and new folder.
+The folder picker reads paths the way the host writes them: Unix, Windows drive
+roots (`C:\`, `D:\work`, `/` accepted as the same separator, compared without
+case) and UNC shares. The Roots crumb is always there so switching drives is
+one tap, the Roots view marks drives with a disk icon, and `~` stands for
+`C:\Users\name` too.
 
 ## Not in scope
 
@@ -266,6 +384,9 @@ free-text answers to choice questions, reading file contents.
   view, bounds, `stale`/`busy`, template expansion, deny with message, tool
   output append).
 - Headless Edge and Playwright WebKit runs against the mock and the real
-  binary: every screen in light/dark at 390×844, 360×640 and 1024×768, no
-  console errors, the audit's B1/B2/M1 repros pass, streaming cost stays flat
+  binary: every screen in light/dark at 390×844, 360×640 and 1024×768 (and
+  desktop windows from 800×900 to 2560×1440 and 125 %/150 % zoom), the session
+  list reachable at every width (sidebar from 900 px, the menu button's drawer
+  below, resizing across 900 px both ways without a stuck state or lost scroll),
+  no console errors, the audit's B1/B2/M1 repros pass, streaming cost stays flat
   with answer length.

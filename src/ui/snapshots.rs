@@ -501,6 +501,20 @@ fn an_open_overlay_is_not_drawn_over_the_composer() {
 }
 
 #[test]
+fn the_session_view_lists_the_tools_allowed_for_the_session_only_when_there_are_some() {
+    let mut app = app();
+    app.overlay = Overlay::SessionInfo { items: Some(4) };
+    assert!(!render(&mut app, 80, 24).contains("allowed"));
+    app.session
+        .as_mut()
+        .unwrap()
+        .allowed_tools
+        .extend(["edit".to_owned(), "bash".to_owned()]);
+    let screen = render(&mut app, 80, 24);
+    assert!(screen.contains("allowed   bash, edit"), "{screen}");
+}
+
+#[test]
 fn a_view_dims_the_composer_and_keys_typed_in_it_do_not_edit_the_draft() {
     let mut app = app();
     app.overlay = Overlay::Help { scroll: 0 };
@@ -518,53 +532,90 @@ fn a_view_dims_the_composer_and_keys_typed_in_it_do_not_edit_the_draft() {
     assert!(!rendered.contains("view open"), "{rendered}");
 }
 
-#[test]
-fn a_queued_steer_is_shown_above_the_composer() {
-    let mut app = app();
-    app.session
-        .as_mut()
-        .expect("session")
-        .queue
-        .push(crate::app::Queued {
-            text: "focus on the parser first".into(),
-            kind: crate::app::QueuedKind::Steer,
+fn queue(app: &mut App, messages: &[(&str, crate::app::QueuedKind)]) {
+    let queue = &mut app.session.as_mut().expect("session").queue;
+    for (text, kind) in messages {
+        queue.push(crate::app::Queued {
+            text: (*text).into(),
+            kind: *kind,
             at: None,
         });
-    let rendered = render(&mut app, 60, 12);
-    assert!(
-        rendered.contains("Steering: focus on the parser first"),
-        "{rendered}"
+    }
+}
+
+/// The dock's key hint row, trimmed.
+fn hint_row(rendered: &str) -> Option<&str> {
+    rendered
+        .lines()
+        .find(|line| line.contains("steer ·") || line.contains("edit queued"))
+        .map(str::trim)
+}
+
+#[test]
+fn the_dock_lists_the_steer_then_numbered_follow_ups_with_the_keys() {
+    use crate::app::QueuedKind::{Follow, Steer};
+    let mut app = app();
+    conversation(&mut app);
+    running_bash(&mut app);
+    queue(
+        &mut app,
+        &[
+            ("then update the docs", Follow),
+            ("focus on the parser first", Steer),
+            ("and the changelog", Follow),
+        ],
+    );
+    app.composer.set_text("one more thing");
+    snapshot(
+        "tests/snapshots/dock-queue.txt",
+        include_str!("../../tests/snapshots/dock-queue.txt"),
+        render(&mut app, 70, 20),
     );
 }
 
 #[test]
-fn steering_is_listed_before_follow_ups_with_the_recall_hint() {
+fn the_dock_hint_follows_what_the_keys_can_do() {
+    use crate::app::QueuedKind::Follow;
     let mut app = app();
-    let queue = &mut app.session.as_mut().expect("session").queue;
-    for (text, kind) in [
-        ("later", crate::app::QueuedKind::Follow),
-        ("now", crate::app::QueuedKind::Steer),
-    ] {
-        queue.push(crate::app::Queued {
-            text: text.into(),
-            kind,
-            at: None,
-        });
-    }
-    let rendered = render(&mut app, 60, 12);
-    let rows: Vec<&str> = rendered
-        .lines()
-        .filter(|line| {
-            line.contains("Steering") || line.contains("Follow-up") || line.contains('↳')
-        })
-        .collect();
+    assert_eq!(hint_row(&render(&mut app, 70, 12)), None, "idle");
+
+    running_bash(&mut app);
     assert_eq!(
-        rows,
-        [
-            "  Steering: now",
-            "  Follow-up: later",
-            "  ↳ alt+up to edit the queued follow-ups"
-        ],
+        hint_row(&render(&mut app, 70, 12)),
+        None,
+        "no draft, no queue"
+    );
+
+    app.composer.set_text("draft");
+    assert_eq!(
+        hint_row(&render(&mut app, 70, 12)),
+        Some("enter steer · alt+enter follow-up")
+    );
+
+    queue(&mut app, &[("later", Follow)]);
+    assert_eq!(
+        hint_row(&render(&mut app, 70, 12)),
+        Some("enter steer · alt+enter follow-up · alt+↑ edit queued")
+    );
+
+    app.composer.clear();
+    assert_eq!(
+        hint_row(&render(&mut app, 70, 12)),
+        Some("alt+↑ edit queued")
+    );
+}
+
+#[test]
+fn a_long_queued_message_is_cut_to_the_dock_width() {
+    use crate::app::QueuedKind::Follow;
+    let mut app = app();
+    queue(
+        &mut app,
+        &[("a very long follow-up message that cannot fit", Follow)],
+    );
+    let rendered = render(&mut app, 30, 12);
+    assert!(
+        rendered.contains("↳ follow-up 1  a very long…"),
         "{rendered}"
     );
 }
@@ -1203,6 +1254,7 @@ fn admit(app: &mut App, name: &str, at: &str) {
         view: crate::remote::PhoneView::foreground(app),
         projection: Default::default(),
         connected_at: at.parse().expect("time"),
+        queries: 0,
     });
 }
 

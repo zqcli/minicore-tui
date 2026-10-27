@@ -294,7 +294,7 @@ async fn a_steering_message_shows_the_time_the_agent_accepted_it() {
         h.sent_at("also the tests"),
         unix_millis("2026-10-20T21:39:30Z")
     );
-    assert!(h.screen(60, 14).contains("21:39 · 10/20/2026 · ↳ steering"));
+    assert!(h.screen(60, 14).contains("21:39 · 10/20/2026 · ↗ steering"));
 }
 
 #[tokio::test(start_paused = true)]
@@ -309,7 +309,7 @@ async fn a_steer_leaves_the_queue_only_when_the_agent_applies_it() {
 
     h.submit("also the tests");
     assert_eq!(h.queue(), ["also the tests"]);
-    assert!(h.screen(60, 12).contains("Steering: also the tests"));
+    assert!(h.screen(60, 12).contains("↗ steer  also the tests"));
 
     h.emit(
         "steer_progress",
@@ -360,7 +360,12 @@ async fn running_card() -> Harness {
 #[tokio::test(start_paused = true)]
 async fn rows_added_to_the_dock_never_cover_the_running_card() {
     for pinned in [false, true] {
-        for shown in ["Steering: more", "Follow-up: later", "boom", "Allow bash?"] {
+        for shown in [
+            "↗ steer  more",
+            "↳ follow-up 1  later",
+            "boom",
+            "Allow bash?",
+        ] {
             let mut h = running_card().await;
             assert!(h.screen(80, 20).contains("▎ $ sleep 40"));
             if pinned {
@@ -369,8 +374,8 @@ async fn rows_added_to_the_dock_never_cover_the_running_card() {
                 h.app.scroll = Scroll::Anchor { block, offset };
             }
             match shown {
-                "Steering: more" => h.submit("more"),
-                "Follow-up: later" => {
+                "↗ steer  more" => h.submit("more"),
+                "↳ follow-up 1  later" => {
                     h.app.composer.set_text("later");
                     h.key(KeyCode::Enter, KeyModifiers::ALT);
                 }
@@ -421,7 +426,7 @@ async fn queued_follow_ups_are_sent_one_per_turn_oldest_first() {
         h.key(KeyCode::Enter, KeyModifiers::ALT);
     }
     assert_eq!(h.queue(), ["first", "second"]);
-    assert!(h.screen(60, 12).contains("Follow-up: first"));
+    assert!(h.screen(60, 12).contains("↳ follow-up 1  first"));
 
     h.settle().await;
     assert_eq!(h.sends(), ["start", "first", "second"]);

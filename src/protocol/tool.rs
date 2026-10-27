@@ -98,6 +98,17 @@ pub struct ToolReadResult {
     pub execution: Option<ToolExecution>,
 }
 
+/// One `tool.output` page; offsets are UTF-8 byte offsets for the `output` stream.
+#[derive(Clone, Debug, Deserialize)]
+pub struct ToolOutputPage {
+    /// Where `data` starts, past any bytes the Agent no longer retains.
+    pub base_offset: u64,
+    pub next_offset: u64,
+    pub eof: bool,
+    pub truncated: bool,
+    pub data: String,
+}
+
 /// Summary of one tool call as carried by the history display projection.
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct ToolSummary {

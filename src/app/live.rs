@@ -142,24 +142,25 @@ impl App {
         };
         let long = duration.is_some_and(|duration| duration >= crate::title::LONG_TURN);
         self.ring |= long;
-        self.attention_notice(&id, format!("\"{label}\" {text}"));
+        self.attention_notice(&id, format!("\"{label}\" {text}"), "");
     }
 
     /// A background approval rings and names the session to switch to.
     pub(super) fn background_approval(&mut self) {
         self.ring = true;
         let id = self.session.as_ref().unwrap().info.session_id.clone();
-        let text = format!("\"{}\" needs approval · ctrl+r", self.session_label());
-        self.attention_notice(&id, text);
+        let text = format!("\"{}\" needs approval", self.session_label());
+        self.attention_notice(&id, text, " · ctrl+r");
     }
 
-    fn attention_notice(&mut self, id: &str, text: String) {
+    /// Tells the TUI (with its key `hint`) and the phones not viewing `id`.
+    fn attention_notice(&mut self, id: &str, text: String, hint: &str) {
         self.remote.send_viewers(
             id,
             false,
             serde_json::json!({"t":"notice", "level":"info", "text":text}),
         );
-        self.push_notice(NoticeLevel::Info, text);
+        self.push_notice(NoticeLevel::Info, format!("{text}{hint}"));
     }
 
     /// Why session `id` cannot be deleted now: it is on screen, or still

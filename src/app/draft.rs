@@ -82,7 +82,6 @@ impl App {
             }
             self.update_session(fields);
         } else {
-            self.notice(NoticeLevel::Info, format!("New session: model {id}"));
             if let Some(level) = self.reasoning_for(&id) {
                 self.launch.reasoning = Some(level);
             }
@@ -117,8 +116,6 @@ impl App {
         if self.session.is_some() {
             self.update_session(json!({ "reasoning": level }));
         } else {
-            let text = format!("New session: reasoning {}", level.label());
-            self.notice(NoticeLevel::Info, text);
             self.launch.reasoning = Some(level);
         }
     }

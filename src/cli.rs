@@ -14,8 +14,7 @@ Usage: minicore-tui [OPTIONS]
 
 Options:
   --home <DIR>           TUI directory: config.toml, models.toml, prompt/, session/
-                         [default: $MINICORE_HOME, else the executable's directory,
-                         or its parent when that is named bin]
+                         [default: $MINICORE_HOME, else the executable's directory]
   --agent <BIN>          run this external minicore-agent instead of the built-in
                          one [default: [agent] binary in config.toml, if set]
   --agent-config <FILE>  use this Agent config as is; skips config.toml, models.toml

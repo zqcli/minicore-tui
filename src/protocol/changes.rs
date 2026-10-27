@@ -3,12 +3,14 @@
 
 use std::collections::HashSet;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct ChangeList {
     pub records: Vec<ChangeRecord>,
+    /// Set when more records follow this page.
+    pub next_cursor: Option<Value>,
     pub warnings: Vec<String>,
 }
 
@@ -29,7 +31,7 @@ pub struct ChangeRecord {
     pub details_available: bool,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ChangeKind {
     Added,

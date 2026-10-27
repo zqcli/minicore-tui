@@ -1,5 +1,6 @@
 //! Semantic state and revision-indexed transcript updates for each phone.
 
+use std::hash::{Hash, Hasher};
 use std::path::Path;
 
 use serde_json::{Value, json};
@@ -9,7 +10,7 @@ use super::{PhoneView, fs};
 use crate::app::session::context_percent;
 use crate::app::{App, InteractionKind, LiveStatus, QueuedKind, Session};
 use crate::protocol::read::UserKind;
-use crate::transcript::{Block, RequestKey, ToolState};
+use crate::transcript::{Block, RequestKey, ToolCall, ToolState};
 
 /// What one connection was last sent.
 #[derive(Default)]
@@ -87,10 +88,38 @@ impl Shared {
     }
 }
 
-struct Streaming {
-    key: RequestKey,
-    text: usize,
-    reasoning: usize,
+/// What a live block was last sent as, so only what it gained is sent next.
+enum Streaming {
+    Assistant {
+        key: RequestKey,
+        text: usize,
+        reasoning: usize,
+    },
+    /// A running tool: a hash of everything but its output, then the output's
+    /// dropped count, line count and open last line's length.
+    Tool {
+        facts: u64,
+        dropped: usize,
+        lines: usize,
+        open: usize,
+    },
+}
+
+fn facts(call: &ToolCall) -> u64 {
+    let mut hasher = std::hash::DefaultHasher::new();
+    (
+        &call.key,
+        &call.name,
+        &call.detail,
+        &call.expanded_input,
+        call.input_lines,
+        call.exit_code,
+        call.duration,
+        call.output_lines,
+        call.truncated,
+    )
+        .hash(&mut hasher);
+    hasher.finish()
 }
 
 impl Streaming {
@@ -102,40 +131,74 @@ impl Streaming {
                 reasoning,
                 streaming: true,
                 ..
-            } => Some(Self {
+            } => Some(Self::Assistant {
                 key: key.clone(),
                 text: text.len(),
                 reasoning: reasoning.len(),
+            }),
+            Block::Tool(call) if call.state == ToolState::Running => Some(Self::Tool {
+                facts: facts(call),
+                dropped: call.output_dropped,
+                lines: call.output.len(),
+                open: call.output.last()?.len(),
             }),
             _ => None,
         }
     }
 
     fn append(&self, block: &Block) -> Option<Value> {
-        let Block::Assistant {
-            key,
-            text,
-            reasoning,
-            streaming: true,
-            ..
-        } = block
-        else {
-            return None;
-        };
-        if *key != self.key {
-            return None;
+        match (self, block) {
+            (
+                Self::Assistant {
+                    key: sent,
+                    text: sent_text,
+                    reasoning: sent_reasoning,
+                },
+                Block::Assistant {
+                    key,
+                    text,
+                    reasoning,
+                    streaming: true,
+                    ..
+                },
+            ) if key == sent => {
+                // Live deltas only append; durable replacements always have streaming=false.
+                let text = text.get(*sent_text..)?;
+                let reasoning = reasoning.get(*sent_reasoning..)?;
+                let mut append = json!({});
+                if !text.is_empty() {
+                    append["text"] = json!(text);
+                }
+                if !reasoning.is_empty() {
+                    append["reasoning"] = json!(reasoning);
+                }
+                Some(append)
+            }
+            (
+                Self::Tool {
+                    facts: sent,
+                    dropped,
+                    lines,
+                    open,
+                },
+                Block::Tool(call),
+            ) if call.state == ToolState::Running
+                && call.output_dropped == *dropped
+                && facts(call) == *sent =>
+            {
+                // Live output only grows its open last line and adds lines after it.
+                let (last, added) = call.output.get(lines - 1..)?.split_first()?;
+                let grown = last.get(*open..)?;
+                if grown.is_empty() && added.is_empty() {
+                    return Some(json!({}));
+                }
+                let output: Vec<&str> = std::iter::once(grown)
+                    .chain(added.iter().map(String::as_str))
+                    .collect();
+                Some(json!({"output": output}))
+            }
+            _ => None,
         }
-        // Live deltas only append; durable replacements always have streaming=false.
-        let text = text.get(self.text..)?;
-        let reasoning = reasoning.get(self.reasoning..)?;
-        let mut append = json!({});
-        if !text.is_empty() {
-            append["text"] = json!(text);
-        }
-        if !reasoning.is_empty() {
-            append["reasoning"] = json!(reasoning);
-        }
-        Some(append)
     }
 }
 
@@ -200,7 +263,8 @@ fn catalog(app: &App) -> Value {
         .collect();
     json!({"sessions":sessions,
         "models":app.models.iter().map(|model| json!({"id":model.id, "reasoning":model.supported_reasoning})).collect::<Vec<_>>(),
-        "profiles":app.profiles.iter().map(|profile| &profile.id).collect::<Vec<_>>()})
+        "profiles":app.profiles.iter().map(|profile| &profile.id).collect::<Vec<_>>(),
+        "commands":app.templates.iter().map(|template| json!({"name":template.name, "description":template.description, "hint":template.hint})).collect::<Vec<_>>()})
 }
 
 fn state(app: &App, catalog: &Value, view: &PhoneView, loading: bool) -> Value {
@@ -267,7 +331,7 @@ fn state(app: &App, catalog: &Value, view: &PhoneView, loading: bool) -> Value {
     })).collect();
     let (running, approval) = app.other_counts(current);
     json!({
-        "session":session.map(|s| json!({"id":s.info.session_id, "title":crate::app::overlay::session_label(&s.info, session), "workspace":fs::display(Path::new(&s.info.workspace)), "profile":s.info.profile, "model":s.info.model, "reasoning":s.info.reasoning})),
+        "session":session.map(|s| json!({"id":s.info.session_id, "title":crate::app::overlay::session_label(&s.info, session), "workspace":fs::display(Path::new(&s.info.workspace)), "profile":s.info.profile, "model":s.info.model, "reasoning":s.info.reasoning, "branch":s.branch(), "allowed":s.allowed_tools})),
         "draft":{"workspace":fs::display(workspace), "profile":profile, "model":model, "reasoning":reasoning},
         "status":{"label":session.and_then(Session::status_label), "busy":session.is_some_and(Session::is_busy), "started_ms":live.map(|live| live.started_ms), "interrupting":live.is_some_and(|live| live.interrupting), "compacting":session.is_some_and(Session::compacting), "loading":loading},
         "usage":{"input":session.map_or(0, |s| s.usage.input), "output":session.map_or(0, |s| s.usage.output), "cached":session.map_or(0, |s| s.usage.cached)},
@@ -275,7 +339,7 @@ fn state(app: &App, catalog: &Value, view: &PhoneView, loading: bool) -> Value {
         "older":session.is_some_and(|s| s.loaded_from > 0), "sessions":sessions,
         "background":{"running":running, "approval":approval},
         "devices":app.remote.phones.iter().map(|phone| json!({"name":phone.connection.device.name, "session":phone.view.session_id()})).collect::<Vec<_>>(),
-        "models":catalog["models"], "profiles":catalog["profiles"]
+        "models":catalog["models"], "profiles":catalog["profiles"], "commands":catalog["commands"]
     })
 }
 
@@ -395,6 +459,52 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
+    async fn templates_and_the_footer_branch_are_in_the_state_and_only_a_change_sends_it() {
+        let (_fake, mut app) = connected_app();
+        app.templates = vec![
+            crate::app::templates::Template::parse("fix".into(), "Fix $1"),
+            crate::app::templates::Template::parse(
+                "review".into(),
+                "---\ndescription: Review staged changes\nargument-hint: [focus]\n---\nReview",
+            ),
+        ];
+        let mut view = View::default();
+        let state = sync(&mut view, &mut app)[0]["state"].clone();
+        assert_eq!(
+            state["commands"],
+            json!([{"name":"fix", "description":"Fix $1", "hint":""},
+                   {"name":"review", "description":"Review staged changes", "hint":"[focus]"}])
+        );
+        assert!(state["session"]["branch"].is_null());
+        let presentation = |branch: &str| {
+            serde_json::from_value(json!({"session_id":"s1", "git_branch":branch})).unwrap()
+        };
+        app.session.as_mut().unwrap().presentation = Some(presentation("feat/ui2"));
+        let changed = sync(&mut view, &mut app);
+        assert_eq!(changed[0]["state"]["session"]["branch"], "feat/ui2");
+        assert!(sync(&mut view, &mut app).is_empty());
+        app.session.as_mut().unwrap().presentation = Some(presentation(" "));
+        assert!(sync(&mut view, &mut app)[0]["state"]["session"]["branch"].is_null());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_tools_allowed_for_the_session_are_in_the_state_sorted() {
+        let (_fake, mut app) = connected_app();
+        let mut view = View::default();
+        assert_eq!(
+            sync(&mut view, &mut app)[0]["state"]["session"]["allowed"],
+            json!([])
+        );
+        assert!(sync(&mut view, &mut app).is_empty());
+        let allowed = &mut app.session.as_mut().unwrap().allowed_tools;
+        allowed.extend(["edit".to_owned(), "bash".to_owned()]);
+        assert_eq!(
+            sync(&mut view, &mut app)[0]["state"]["session"]["allowed"],
+            json!(["bash", "edit"])
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn streaming_sends_only_suffixes_then_one_full_finished_block() {
         let (_fake, mut app) = connected_app();
         let key = RequestKey {
@@ -454,6 +564,63 @@ mod tests {
         let messages = sync(&mut view, &mut app);
         assert_eq!(messages[0]["upserts"][0]["block"]["text"], "hello world");
         assert_eq!(messages[0]["upserts"][0]["block"]["streaming"], false);
+        assert!(sync(&mut view, &mut app).is_empty());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn running_tool_output_sends_only_what_it_gained_then_one_full_finished_block() {
+        let (_fake, mut app) = connected_app();
+        let mut call = ToolCall::new(
+            crate::protocol::ToolRef {
+                session_id: "s1".into(),
+                loop_id: "loop".into(),
+                request_index: 0,
+                tool_call_id: "call".into(),
+            },
+            "bash",
+        );
+        call.state = ToolState::Running;
+        call.push_output("one\ntw");
+        let session = app.session.as_mut().unwrap();
+        session.transcript.push(Block::Tool(Box::new(call)));
+        let mut view = View::default();
+        assert_eq!(sync(&mut view, &mut app)[0]["t"], "snapshot");
+        fn tool(app: &mut App) -> &mut ToolCall {
+            match app.session.as_mut().unwrap().transcript.block_mut(0) {
+                Some(Block::Tool(call)) => call,
+                _ => unreachable!("the tool block"),
+            }
+        }
+        let appended = |output: Value| {
+            vec![json!({"t":"blocks", "len":1, "upserts":[{"i":0, "append":{"output":output}}]})]
+        };
+        tool(&mut app).push_output("o\nthree\n");
+        assert_eq!(
+            sync(&mut view, &mut app),
+            appended(json!(["o", "three", ""]))
+        );
+        tool(&mut app).expanded = Some(true);
+        assert!(sync(&mut view, &mut app).is_empty(), "a fold sends nothing");
+        tool(&mut app).push_output("four");
+        assert_eq!(sync(&mut view, &mut app), appended(json!(["four"])));
+
+        let full = |messages: Vec<Value>| messages[0]["upserts"][0]["block"].clone();
+        let call = tool(&mut app);
+        call.output.remove(0);
+        call.output_dropped += 1;
+        let block = full(sync(&mut view, &mut app));
+        assert_eq!(block["output"], json!(["two", "three", "four"]));
+        assert_eq!(block["output_dropped"], 1);
+        tool(&mut app).push_output("\n");
+        assert_eq!(sync(&mut view, &mut app), appended(json!(["", ""])));
+        tool(&mut app).detail = "$ ./run".into();
+        assert_eq!(full(sync(&mut view, &mut app))["detail"], "$ ./run");
+        let call = tool(&mut app);
+        call.push_output("five");
+        call.state = ToolState::Succeeded;
+        let block = full(sync(&mut view, &mut app));
+        assert_eq!(block["state"], "succeeded");
+        assert_eq!(block["output"], json!(["two", "three", "four", "five"]));
         assert!(sync(&mut view, &mut app).is_empty());
     }
 

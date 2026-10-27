@@ -240,9 +240,9 @@ async fn the_model_and_reasoning_picked_in_the_draft_reach_session_create() {
 
     h.action(Action::CycleModel { forward: true });
     h.action(Action::SetReasoning(Reasoning::High));
-    assert_eq!(
-        h.notices(),
-        ["New session: model luna", "New session: reasoning high"]
+    assert!(
+        h.notices().is_empty(),
+        "the footer shows the draft's settings"
     );
     let screen = h.screen(80, 12);
     assert!(screen.contains("luna · high"), "{screen}");

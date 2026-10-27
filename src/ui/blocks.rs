@@ -152,7 +152,7 @@ fn user(
     let mut meta = Vec::new();
     meta.extend(at.and_then(|at| stamp_label(at, local_zone())));
     if kind == UserKind::Steering {
-        meta.push("↳ steering".to_owned());
+        meta.push("↗ steering".to_owned());
     }
     if !meta.is_empty() {
         lines.push(chrome(row(padded(vec![Span::styled(
@@ -814,7 +814,7 @@ mod tests {
             at: None,
         };
         let body = text(&render(&block, styles(), 40, fold()));
-        assert_eq!(body[2], "▎ ↳ steering");
+        assert_eq!(body[2], "▎ ↗ steering");
     }
 
     fn sent(stamp: &str) -> Option<u64> {
@@ -850,7 +850,7 @@ mod tests {
         let steer = render(&card(UserKind::Steering, at), styles(), 40, fold());
         assert_eq!(
             steer[2].to_string().trim_end(),
-            "▎ 21:38 · 10/20/2026 · ↳ steering"
+            "▎ 21:38 · 10/20/2026 · ↗ steering"
         );
     }
 

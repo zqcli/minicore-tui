@@ -5,13 +5,16 @@ use std::time::Duration;
 
 use serde_json::json;
 
-use super::{Action, Answer, App, LaunchSettings, Msg, NoticeLevel, Overlay, Session, tasks};
+use super::{
+    Action, Answer, App, LaunchSettings, Msg, NoticeLevel, Overlay, QueuedKind, Session, commands,
+    tasks,
+};
 use crate::protocol::{self, Reasoning};
 use crate::remote::{
     Bound, DraftSettings, NoticeTarget, Phone, PhoneView, RemoteEvent,
     auth::Auth,
-    fs, view, whole_seconds,
-    wire::{self, Choice, Intent},
+    fs, query, view, whole_seconds,
+    wire::{self, Choice, Intent, Query},
 };
 
 pub const REMOTE_FLASH: &str = "Remote control is on · /remote off to take back";
@@ -203,6 +206,7 @@ impl App {
                     view,
                     projection: view::View::default(),
                     connected_at: jiff::Timestamp::now(),
+                    queries: 0,
                 });
             }
             RemoteEvent::LoginRefused { locked } => {
@@ -214,7 +218,26 @@ impl App {
                     }
                     None => "Remote: wrong password".to_owned(),
                 };
+                // A sign-in attempt concerns every connected phone.
+                self.remote.notice_target = NoticeTarget::All;
                 self.notice(NoticeLevel::Info, text);
+                self.remote.notice_target = NoticeTarget::Local;
+            }
+            RemoteEvent::Query {
+                connection,
+                id,
+                query,
+            } => self.phone_query(connection, id, query),
+            RemoteEvent::Answered {
+                connection,
+                id,
+                result,
+            } => {
+                if let Some(phone) = self.phone_mut(connection) {
+                    phone.queries -= 1;
+                    self.remote
+                        .send(Some(connection), wire::result(&id, result));
+                }
             }
             RemoteEvent::Disconnected(id) => {
                 self.remote.phones.retain(|phone| phone.connection.id != id);
@@ -233,11 +256,55 @@ impl App {
                 {
                     self.remote.notice_target = NoticeTarget::Phone(connection);
                     let result = self.phone_intent(connection, intent);
-                    self.remote.notice_target = NoticeTarget::All;
+                    self.remote.notice_target = NoticeTarget::Local;
                     self.remote.send(Some(connection), wire::ack(&id, result));
                 }
                 let _ = done.send(());
             }
+        }
+    }
+
+    fn phone_mut(&mut self, connection: u64) -> Option<&mut Phone> {
+        self.remote
+            .phones
+            .iter_mut()
+            .find(|phone| phone.connection.id == connection)
+    }
+
+    /// Starts a query for the phone's own view without focusing it: reads move no foreground.
+    fn phone_query(&mut self, connection: u64, id: String, query: Query) {
+        let Some(phone) = self
+            .remote
+            .phones
+            .iter()
+            .find(|phone| phone.connection.id == connection)
+        else {
+            return;
+        };
+        let started = if phone.queries == query::IN_FLIGHT {
+            Err("busy".to_owned())
+        } else {
+            let session = phone
+                .view
+                .session_id()
+                .map(|id| self.live(id).expect("a phone views a live session"));
+            query::start(self.client.clone(), session, query)
+        };
+        match started {
+            Ok(work) => {
+                self.phone_mut(connection).unwrap().queries += 1;
+                self.spawn_msg(async move {
+                    let result = work.await;
+                    Msg::Remote(RemoteEvent::Answered {
+                        connection,
+                        id,
+                        result,
+                    })
+                });
+            }
+            Err(error) => self
+                .remote
+                .send(Some(connection), wire::result(&id, Err(error))),
         }
     }
 
@@ -366,9 +433,31 @@ impl App {
                     self.escape();
                 }
             }
+            Intent::Compact => {
+                let session = self.session.as_ref().ok_or("No session")?;
+                if session.is_busy() || session.compacting() {
+                    return Err("busy".into());
+                }
+                self.compact();
+            }
+            Intent::Unqueue { index, text } => {
+                let session = self
+                    .session
+                    .as_mut()
+                    .filter(|session| {
+                        session.queue.get(index).is_some_and(|queued| {
+                            queued.kind == QueuedKind::Follow && queued.text == text
+                        })
+                    })
+                    .ok_or("stale")?;
+                session.queue.remove(index);
+                self.remote
+                    .send(Some(connection), json!({"t":"returned", "text":text}));
+            }
             Intent::Answer {
                 interaction_id,
                 choice,
+                message,
             } => {
                 let interaction = self
                     .session
@@ -390,7 +479,16 @@ impl App {
                     }
                     _ => return Err("bad_request".into()),
                 };
+                if message
+                    .as_ref()
+                    .is_some_and(|message| answer != Answer::Deny || message.trim().is_empty())
+                {
+                    return Err("bad_request".into());
+                }
                 self.answer(answer);
+                if let Some(message) = message {
+                    self.steer(message.trim_end().to_owned());
+                }
             }
             Intent::LoadOlder => {
                 if self.session.is_none() {
@@ -497,7 +595,16 @@ impl App {
         Ok(())
     }
 
+    /// Phone text read as the composer reads Enter; the client runs built-in commands itself.
     fn remote_text(&mut self, connection: u64, text: String, follow: bool) -> Result<(), String> {
+        let command = commands::parse(&text).and_then(|(name, arg)| commands::execute(name, arg));
+        if command.is_some() {
+            return Err("unknown_command".into());
+        }
+        let text = match self.prompt_text(&text).map_err(|_| "unknown_command")? {
+            Some(rewritten) => rewritten,
+            None => text,
+        };
         if text.trim().is_empty() {
             return Err("Remote text is empty".into());
         }

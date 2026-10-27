@@ -88,7 +88,7 @@ jobs:
         run: |
           version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
           name="minicore-tui-$version-${{ matrix.target }}"
-          # The package is a TUI directory: bin/ beside the files a first run writes.
+          # The executable sits in bin/; the TUI directory is chosen with --home or MINICORE_HOME.
           mkdir -p "$name/bin" "$name/docs"
           cp "target/${{ matrix.target }}/release/minicore-tui$EXE" "$name/bin/"
           cp README.md CHANGELOG.md "$name/"

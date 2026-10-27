@@ -14,9 +14,9 @@ Resolved in this order:
 
 1. `--home DIR`
 2. `$MINICORE_HOME`
-3. the directory of the running executable, or its parent when that directory is
-   named `bin`. A release bundle (`bin/minicore-tui`, the Agent built in) is
-   therefore self-contained, with no flag or variable.
+3. the directory of the running executable. A release bundle runs as
+   `bin/minicore-tui`, so without a flag or variable its files would be written
+   inside `bin/`; give it `--home DIR` or `MINICORE_HOME`.
 
 On Linux the executable path is the resolved one, so a symlink in `bin/` leads
 to the symlink's target directory; use `--home` or `MINICORE_HOME` there.
@@ -31,7 +31,6 @@ to the symlink's target directory; use `--home` or `MINICORE_HOME` there.
   session/                   the Agent's data_dir: all sessions and Agent stores
     agent.toml               generated Agent config (mode 0600), rewritten each start
   history.jsonl              prompt history (↑ in the composer)
-  bin/minicore-tui           the executable in a release bundle, Agent included
 ```
 
 `history.jsonl` stays outside `session/` on purpose: it belongs to the composer,
@@ -182,6 +181,7 @@ instead of being ignored.
 bind = ["127.0.0.1:8765", "[::1]:8765"] # default; one address or a list, numeric IP and port
 # url = "https://host.example:8765" # optional address used by the phone
 roots = ["~"]                    # default: HOME on Unix, USERPROFILE on Windows
+# roots = ['C:\', 'D:\']          # Windows: whole drives (single quotes keep the backslash)
 allow_insecure = false            # needed for a non-loopback bind without TLS
 tls = false                       # serve HTTPS and WSS with the certificate below
 # tls_cert = "~/certs/fullchain.pem" # PEM chain, leaf first
@@ -213,6 +213,11 @@ phone's directory picker and session selection, not the Agent's tools.
 The picker lists only directories under these roots (up to 1000 per listing),
 optionally including hidden names, and can create a single child directory.
 It cannot read file contents, upload, delete or move entries.
+On Windows a root may be a whole drive: `roots = ['C:\', 'D:\']`. In TOML use
+single quotes, because `"C:\"` is an invalid escape in a basic string (`"C:\\"`
+works too). `C:`, `C:/` and lowercase spellings mean the drive root `C:\`, never
+the current directory of drive C. The picker's Roots level then lists each drive
+as `C:\`, and the phone switches between them there.
 Errors name `config.toml`, the line and the `[remote]` key.
 
 Start with `--remote` or `/remote on`; the transcript area then shows the
@@ -273,11 +278,12 @@ Cloudflare serves the hostname over HTTPS, so the phone gets `https://` and
   the tunnel's **Origin Server Name** (`originServerName`) set to a name in the
   certificate, or **No TLS Verify** (`noTLSVerify`).
 
-Responses carry `Cache-Control: no-store, no-transform`, so Cloudflare does
+Responses carry `Cache-Control: no-cache, no-transform`, so Cloudflare does
 not rewrite the page (email obfuscation, Rocket Loader, injected scripts) and
-no zone setting needs changing. The server gzips the page itself, and a slow
-hop between Cloudflare and the computer only makes the first load slower: a
-reply is cut off only when it stops moving for 10 seconds. The server pings the phone every 20 seconds,
+no zone setting needs changing. The server gzips the page itself and gives
+every file an `ETag`, so a slow hop between Cloudflare and the computer only
+makes the first load slower: a reload revalidates each file with a small `304`,
+and a reply is cut off only when it stops moving for 10 seconds. The server pings the phone every 20 seconds,
 which keeps an idle connection open through Cloudflare.
 
 ### On the phone's home screen

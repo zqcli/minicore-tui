@@ -59,6 +59,17 @@ fn expand(value: &str, home: Option<&Path>) -> Option<PathBuf> {
     }
 }
 
+/// `C:`, `c:/` or `C:\\` as the drive root `C:\`. A bare `C:` would otherwise
+/// canonicalize to drive C's current directory.
+fn drive_root(value: &str) -> Option<PathBuf> {
+    let bytes = value.as_bytes();
+    let drive = bytes
+        .first()
+        .filter(|letter| letter.is_ascii_alphabetic())?;
+    (bytes.get(1) == Some(&b':') && value[2..].chars().all(|c| matches!(c, '/' | '\\')))
+        .then(|| PathBuf::from(format!("{}:\\", drive.to_ascii_uppercase() as char)))
+}
+
 impl RemoteSection {
     pub(super) fn build(&self, source: &Source) -> Result<Remote, ConfigError> {
         let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
@@ -138,7 +149,10 @@ impl RemoteSection {
         }
         let paths = roots
             .iter()
-            .map(|value| expanded("roots", roots_span.clone(), value))
+            .map(|value| match drive_root(value).filter(|_| cfg!(windows)) {
+                Some(drive) => Ok(drive),
+                None => expanded("roots", roots_span.clone(), value),
+            })
             .collect::<Result<Vec<_>, ConfigError>>()?;
         let roots = paths
             .into_iter()
@@ -368,6 +382,31 @@ mod tests {
                     .starts_with("config.toml:2: [remote] roots:")
             );
         }
+    }
+
+    #[test]
+    fn every_spelling_of_a_drive_becomes_its_root_and_other_paths_stay() {
+        for value in ["C:", "c:", "C:/", "c:\\", "C:\\\\", "d:/\\"] {
+            let root = drive_root(value).unwrap();
+            let letter = value[..1].to_ascii_uppercase();
+            assert_eq!(root, PathBuf::from(format!("{letter}:\\")), "{value}");
+        }
+        for value in ["", "C", "~", "/", "C:\\Users", "C:/work", "CD:", "1:", "é:"] {
+            assert_eq!(drive_root(value), None, "{value}");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_drive_root_is_a_root_whatever_the_current_directory_of_that_drive() {
+        let home = tempfile::tempdir().unwrap();
+        let drive = std::env::var("SystemDrive").unwrap();
+        let expected = Path::new(&format!("{drive}\\")).canonicalize().unwrap();
+        for spelling in [drive.clone(), drive.to_lowercase(), format!("{drive}/")] {
+            let config = build(&format!("roots = ['{spelling}']"), home.path()).unwrap();
+            assert_eq!(config.roots, std::slice::from_ref(&expected), "{spelling}");
+        }
+        assert_eq!(expected.parent(), None);
     }
 
     #[test]

@@ -2,6 +2,55 @@
 
 ## Unreleased
 
+- Reloading the web client over a slow link is faster: every file carries an
+  `ETag` and the browser revalidates it, so an unchanged page costs a few small
+  `304` replies instead of the whole download. The page also runs under a
+  stricter Content-Security-Policy that no longer allows inline scripts or
+  styles.
+- In the web client the composer's round button keeps its place and changes
+  face: ↑ Send, ■ Stop while a turn runs and nothing is typed, ↗ Steer when text
+  is typed during a turn, next to a plain-text **Follow-up** button. The model
+  is a plain text button on the right of the composer. Stop takes effect at once;
+  it ignores a tap right after it appeared (a double tap on Send) and scrolls,
+  and with text typed it is in a menu opened by a long press or right click on
+  the button. `Esc` stops the turn with one press. `Alt+Enter` (Option+Enter on
+  macOS) queues a follow-up and `Enter`/`Cmd+Enter` steers, like the TUI;
+  `Tab` is ordinary focus navigation. "Enter sends" now defaults to on for a
+  mouse and keyboard and off on touch devices. Queued follow-ups are numbered
+  and listed after pending steers. Collapsed thinking keeps its newest sentence
+  on a line under the header that moves up as the agent thinks. On desktop the
+  transcript, composer and title share one centred column beside the sidebar,
+  with side panels for changes and output, hover states and thin scrollbars.
+- Fewer messages: a tool you allowed for the session no longer raises
+  `Allowed bash for this session` on every call (the TUI and the web client stay
+  silent; `/session` and the web session info list the allowed tools), and the
+  web tool row shows no "Allowed" line, only a denial with its reason.
+  "Session renamed", "Session deleted", "New session: model …" and "Compaction
+  cancelled" are gone or a brief flash, since the title, list and footer already
+  show them. The TUI's own hints (`Press Ctrl+C again to quit`, unknown
+  commands) no longer reach phones, and phones get background-attention text
+  without the TUI's `ctrl+r`. Copy in the web client turns its button into a
+  check instead of a toast.
+- In the web client the thinking block can be expanded while the agent is still
+  thinking: the text grows in place and collapsing returns to the one-line
+  preview.
+- On Windows the phone's folder picker can browse whole drives: list them in
+  `[remote] roots`, for example `roots = ['C:\', 'D:\']` (single quotes in TOML),
+  and the picker's Roots level switches between them. `C:`, `C:/` and `c:\` all
+  mean the drive root, not the current directory of that drive.
+- The TUI directory is `--home`, else `$MINICORE_HOME`, else the executable's
+  directory: a directory named `bin` is no longer replaced by its parent. A
+  bundle that runs `bin/minicore-tui` now needs `--home <dir>` or
+  `MINICORE_HOME`; otherwise it reads and writes its files inside `bin/`.
+- `Alt+Enter` queues a follow-up while a turn runs; `Ctrl+Enter` does the same
+  in terminals that report it (kitty-protocol terminals, Windows consoles).
+  `Enter` steers, so check the dock label where neither key
+  reaches the app; `docs/keybindings.md` lists the setup for macOS terminals and
+  Windows Terminal. The dock tells the two apart: `↗ steer  …` rows, then
+  `↳ follow-up 1  …` numbered in send order, and a hint row (`enter steer ·
+  alt+enter follow-up`, `alt+↑ edit queued`) names the keys that act now.
+- Steering messages in the transcript are marked `↗ steering`, the arrow the
+  dock and the web client use for steers; `↳` now means a follow-up.
 - Remote mode listens on the IPv6 loopback too: the default `bind` is
   `127.0.0.1:8765` and `[::1]:8765`, so `http://localhost:8765` works however
   `localhost` resolves. `[remote] bind` takes one address or a list, such as
@@ -16,9 +65,26 @@
   again by `/remote on`, so a renewed certificate needs only `/remote off` and
   `/remote on`. A LAN or public bind with TLS no longer needs
   `allow_insecure`.
-- The web client loads over slow links: the page is sent gzipped (129 KB becomes
-  37 KB), and a reply is no longer cut off after 10 seconds while
-  it is still arriving, which behind Cloudflare showed as error 520.
+- The web client loads over slow links: its files are sent gzipped, and a reply
+  is no longer cut off after 10 seconds while it is still arriving, which
+  behind Cloudflare showed as error 520.
+- The phone client is redesigned. Sessions that need you are listed first with
+  a badge on the menu button; finished turns fold their tool steps into one
+  "Worked 47 s · 5 tools · +12 −4" row; tool steps are one-line rows whose
+  full output can be opened and loaded in full; thinking shows a "Thinking…"
+  header with its newest sentence on one line (then "Thought for 12 s"), and
+  opens to the full text. The composer has `/` for commands and prompt
+  templates (expanded on the computer like in the TUI) and `@` for workspace
+  files and recent prompts; queued follow-ups and steers still waiting show
+  above the composer, and follow-ups can be edited or removed.
+  Approvals say what they ask ("Run command", "Edit src/x.rs") with a rendered
+  diff, never approve by focus or a stray key, and Deny can tell the agent why.
+  A session menu opens Changes (the Git diff per file), Context with Compact
+  now, session info, find in session and export. Settings hold appearance, text
+  size, code wrap, Enter sends, keep screen awake and notifications while the
+  page is in the background. iPad and desktop get a sidebar and keyboard
+  shortcuts (`?`). The phone protocol is now version 2: reload open phone pages
+  after updating.
 
 ## 0.6.0 — 2026-10-25
 

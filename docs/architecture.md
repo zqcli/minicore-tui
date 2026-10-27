@@ -27,8 +27,10 @@ src/
                 scaffold (first-run starters)
   remote/       phone protocol, listener, authentication and semantic projection:
                 mod (mode, listeners, connection, events), auth, server, tls
-                (certificate loading), wire, view, fs (host directories); web/
-                holds embedded client assets
+                (certificate loading), wire, view, fs (host directories), query
+                (Agent reads relayed for one phone's view); web/
+                holds the embedded client: plain files and ES modules, no
+                build step (layout in design-remote-ui.md)
   rpc.rs        Agent child process and JSON-RPC Client
   protocol/     serde DTOs and constants only: methods, error codes, required
                 capabilities, read sizes (mod); event; read (history items, chunk
@@ -94,7 +96,7 @@ the rows move, and the hit areas of the editor and of the open view. What `app` 
 ## Configuration
 
 All local state sits in one *TUI directory* (`--home`, `$MINICORE_HOME`, else the
-executable's directory or its parent named `bin`): `config.toml`, `models.toml`,
+executable's directory): `config.toml`, `models.toml`,
 `prompt/SYSTEM_PROMPT.md`, `prompt/commands/`, `session/` (the Agent's
 `data_dir`), `history.jsonl`. `config::prepare` runs before the terminal is
 touched:
@@ -155,7 +157,7 @@ enum Msg {
     Notice(NoticeLevel, String),
     DraftEdited(Option<String>),
     Flash(String),                          // `Copied!` over the transcript
-    Remote(RemoteEvent),                    // listener admission, intents, disconnects
+    Remote(RemoteEvent),                    // listener admission, intents, queries, disconnects
 }
 ```
 
@@ -192,7 +194,7 @@ list holds no empty sessions. While `app.session` is `None`:
 
 - `App::launch` holds the settings the next session takes: the command-line
   flags, then what `/model`, `/reasoning`, `Ctrl+L`, `Ctrl+P`, `Shift+Tab` and
-  `/new <profile>` set, which confirm with a notice instead of `session.update`.
+  `/new <profile>` set, which the footer shows instead of `session.update`.
   The footer resolves them with the profile's defaults (`profile.list`; the
   Agent's default profile comes from `config.toml` and is unknown for a raw
   `--agent-config`) through `App::model_id` and `App::reasoning`.
@@ -258,15 +260,32 @@ global first text and composer cannot be stolen; another device receives
 `Another device is opening a session`.
 
 Remote text uses the same submit/send paths without changing local composer
-text or history. Each session keeps its last text-sending connection;
+text or history, and the composer's line rules (`App::prompt_text`): templates
+expand, built-in commands are refused.
+
+Phone queries (`remote::query`) are Agent reads for the phone's own view that
+do not focus it: the reducer checks the view and the per-phone limit of four in
+flight, then a spawned task calls the Agent and posts `RemoteEvent::Answered`,
+which frees the slot and answers the connection if it is still admitted. Each session keeps its last text-sending connection;
 `restore_draft` sends `returned` there if connected, else to its viewers, else
 keeps it in `Session::returned` until local control returns. A scoped
 `Remote::notice_target` routes synchronous notices to the requester and async
 session notices to its viewers plain and to other devices with the session
 label. Foreground results/events and `with_background` set that scope;
 open/rename/delete results retain their session id too. Labels are resolved only
-when a notice is emitted, not on every event. App-wide notices go to all,
-background attention only to non-viewers, and acks only to the requester.
+when a notice is emitted, not on every event. A notice raised by the TUI's own
+keys stays in the TUI (`NoticeTarget::Local`, the default); only a refused
+sign-in goes to all phones, background attention to non-viewers (with text
+free of TUI key hints), and acks only to the requester.
+
+Notices follow four rules. What the user just caused and can see (a title, a
+list row, the footer, a chip) gets no message, or at most the TUI flash. What
+the user pre-authorized (a tool allowed for the session) is answered silently;
+`/session` and `state.session.allowed` list those tools. What the user did not
+cause and may need to act on (a background approval or finished turn, a refused
+or returned message, a connection problem, an error) is a notice, errors until
+dismissed. A decision is recorded only where it explains something: a denial
+stays on its tool row. Each event reaches each surface once.
 Deleting any viewed session is refused. A successful in-flight deletion also
 resets views that opened its target meanwhile to default drafts, so every
 session view still names a live session; a remote open reply for a target
@@ -287,10 +306,12 @@ viewed session epoch change sends a snapshot; otherwise it sends
 revision-indexed block upserts and state only when the serialized value differs
 from what that phone was last sent. Current-session marks, interaction, usage,
 queue and background counts are per-view; catalogs and device locations are
-shared. A phone whose queue overflows is dropped alone. Streaming assistants use
-append-only suffix updates until they finish, when one full block is sent.
-The tracker keeps viewed revisions, streaming keys and byte lengths, and the
-last serialized state; it is not an event log. Catalogs are cached by generation,
+shared. A phone whose queue overflows is dropped alone. Streaming assistants and
+running tools whose output only grew use append-only updates until they finish
+(or, for a tool, until its tail drops lines or another field changes), when one
+full block is sent. The tracker keeps viewed revisions, streaming keys, byte and
+line counts (a hash of a running tool's other fields), and the last serialized
+state; it is not an event log. Catalogs are cached by generation,
 so unchanged frames never rebuild or sort the full session catalog. `LiveTurn::started_ms` is captured once so elapsed
 time belongs to the client. The footer and projection share the pure
 `app::session::context_percent` calculation. The projection never imports UI code.
@@ -393,7 +414,7 @@ unknown, and the line then shows only `N files changed`, never a zero.
 
 Steering: `Enter` while busy queues a `Steer` entry and calls `turn.steer`;
 `steer_progress` moves applied steers into the transcript. Refused or unapplied
-steers become follow-ups, which `Alt+Enter` also queues locally and `Alt+↑` takes
+steers become follow-ups, which `Alt+Enter` (or `Ctrl+Enter`) also queues locally and `Alt+↑` takes
 back into an empty draft, all of them, joined by blank lines. The first prompt
 of an untitled session becomes its title through `session.rename`.
 
@@ -582,7 +603,9 @@ layout cache, config, CLI). `src/app/tests` drives a real `App` through
 `testing::FakeAgent` over an in-memory pipe with paused time. `ui/snapshots.rs`
 compares `TestBackend` frames with `tests/snapshots/*.txt` (`UPDATE_SNAPSHOTS=1`
 rewrites them); `tests/fixtures/agent-events.jsonl` feeds the event decoder test.
-`node --test tests/remote_web.mjs` exercises the embedded client's protocol handlers
-and path helpers without browser rendering or a network. Socket tests exercise
-the actual listener and embedded HTML with in-process clients on loopback port 0.
+`node --test tests/remote_web.mjs` imports the client's pure modules (`core.js`,
+`markdown.js`) and runs `theme.js` in a sandbox, so protocol handlers, Markdown
+and path helpers are tested without browser rendering or a network. Socket tests
+exercise the actual listener and the embedded files with in-process clients on
+loopback port 0.
 Real-model runs are manual.

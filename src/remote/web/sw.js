@@ -1,8 +1,11 @@
 'use strict';
 // Network first, so the next online load always uses what the host serves now; the cache only opens the app while
 // the host is unreachable. The WebSocket and other origins are never touched.
-const CACHE = 'minicore-1';
-const SHELL = ['/', '/manifest.webmanifest', '/icon.svg', '/icon-192.png', '/icon-512.png', '/icon-maskable.png', '/apple-touch-icon.png'];
+const CACHE = 'minicore-8';
+const SHELL = [
+  '/', '/app.css', '/theme.js', '/main.js', '/core.js', '/ui.js', '/net.js', '/sessions.js', '/conversation.js', '/manifest.webmanifest', '/icon.svg',
+  '/icon-192.png', '/icon-512.png', '/icon-maskable.png', '/apple-touch-icon.png',
+];
 
 addEventListener('install', e => {
   skipWaiting();
@@ -26,4 +29,15 @@ addEventListener('fetch', e => {
     if (r.status < 500) return r;
     return cached().then(c => c || r);
   }, () => cached().then(c => c || Response.error())));
+});
+// A notification tap focuses the app (opening it if needed) and asks it to show that session.
+addEventListener('notificationclick', e => {
+  e.notification.close();
+  const id = e.notification.data && e.notification.data.session;
+  e.waitUntil(clients.matchAll({ type: 'window' }).then(list => {
+    const c = list[0];
+    if (!c) return clients.openWindow('/');
+    c.postMessage({ open: id });
+    return c.focus();
+  }));
 });

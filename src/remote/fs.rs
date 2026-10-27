@@ -436,6 +436,34 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
+    fn a_drive_root_is_named_and_shown_as_the_drive_and_has_no_parent() {
+        let drive = format!("{}\\", std::env::var("SystemDrive").unwrap());
+        let root = fs::canonicalize(&drive).unwrap();
+        let roots = [root.clone()];
+        assert_eq!(
+            super::roots(&roots),
+            [Root {
+                path: drive.clone(),
+                name: drive.clone()
+            }]
+        );
+        let listing = list(&roots, &drive, false).unwrap();
+        assert_eq!(
+            (listing.path.as_str(), listing.parent),
+            (drive.as_str(), None)
+        );
+        let child = listing
+            .entries
+            .first()
+            .expect("a directory on the system drive");
+        assert_eq!(
+            list(&roots, &child.path, false).unwrap().parent,
+            Some(drive)
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
     fn windows_accepts_both_verbatim_and_display_paths() {
         let temp = tempdir().unwrap();
         let root = fs::canonicalize(temp.path()).unwrap();

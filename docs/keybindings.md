@@ -5,21 +5,48 @@ goes to the frontmost surface, in this order: the fatal screen, an open picker
 or view, a pending approval prompt, then the composer and transcript. Any key
 press clears the notices.
 
-`Shift+Enter` and `Alt+Enter` are distinct keys only in terminals that support
-the kitty keyboard protocol; `Ctrl+J` always inserts a newline.
+`Shift+Enter` and `Ctrl+Enter` are distinct keys only in terminals that support
+the kitty keyboard protocol (and on Windows consoles); `Ctrl+J` always inserts
+a newline.
+
+A steer and a follow-up are different: a steer (`Enter` while busy) goes to the
+running turn and is applied at its next step; a follow-up (`Alt+Enter`) waits
+for the turn to end and starts the next one. The dock above the editor lists
+them, steers first as `↗ steer  <text>`, then `↳ follow-up 1  <text>` numbered
+in send order, three rows and `+N more queued`. A hint row under the Working
+line names the keys that act now: `enter steer · alt+enter follow-up` while a
+draft waits during a turn, and `alt+↑ edit queued` while follow-ups exist.
+
+### Alt+Enter by terminal
+
+`Alt+Enter` queues a follow-up; `Ctrl+Enter` does the same where the terminal
+reports it. If neither reaches the TUI, `Enter` steers instead, so check the
+dock label before sending.
+
+- Linux (GNOME Terminal and other VTE terminals, Konsole, xterm, Alacritty,
+  kitty, WezTerm, foot) and tmux: `Alt+Enter` works as it is.
+- macOS: Option is not Alt by default. Terminal.app: Settings → Profiles →
+  Keyboard → "Use Option as Meta key". iTerm2: Settings → Profiles → Keys →
+  Left Option key → "Esc+". Ghostty: `macos-option-as-alt = true`. kitty:
+  `macos_option_as_alt yes`. WezTerm works by default. Or use `Ctrl+Enter` in a
+  kitty-protocol terminal.
+- Windows Terminal: `Alt+Enter` toggles full screen by default. Use
+  `Ctrl+Enter`, or free the key with `{ "command": "unbound", "keys": "alt+enter" }`
+  in the `actions` list of `settings.json`. The legacy console host (conhost)
+  also takes `Alt+Enter` for full screen; use `Ctrl+Enter` there.
 
 ## Composer
 
 | Key | Action |
 |---|---|
 | `Enter` | Send when the session is idle; steer the running turn when it is busy. A draft whose first word names a command (`/model`, `/rename x`) or a prompt template runs it. A bare `/word` that names nothing (`/modle`) is not sent: a notice offers the nearest command, and a second `Enter` (or a leading `//`, which sends the rest) sends it as text. Any other draft, `/usr/bin/env is broken` and `/usr/bin` included, is a prompt. |
-| `Alt+Enter` | Queue the draft as a follow-up while a turn runs; send it when idle. |
+| `Alt+Enter`, `Ctrl+Enter` | While a turn runs or a compaction is under way, queue the draft as a follow-up: it is sent when the session is idle, one per turn, oldest first. When idle it sends the draft. With no draft it does nothing. See the terminal notes above; where a terminal reports `Ctrl+Enter` as `Enter`, it steers. |
 | `Shift+Enter`, `Ctrl+J` | Newline. |
 | `Esc` | Close an open picker or view first; in the editor, cancel an active selection before interrupting a turn, cancelling a compaction or clearing the draft. |
 | `Ctrl+C` | Copy the editor selection when one exists; otherwise clear the draft, with a second press within 500 ms quitting. |
 | `Ctrl+D` | Quit when the draft is empty; otherwise delete the character after the cursor. |
 | `↑` / `↓` | Move between lines of a multi-line draft; on the first or last line, browse prompt history. The last 100 prompts, paste chips included, are kept in `history.jsonl` in the TUI directory and survive a restart; a prompt over 32 KiB stays in memory only. |
-| `Alt+↑` | Take the queued follow-ups back into an empty draft, separated by blank lines. |
+| `Alt+↑` | Take the queued follow-ups back into an empty draft, separated by blank lines. A steer cannot be taken back. |
 | `Ctrl+X` | Cut the editor selection when one exists; otherwise copy the last assistant answer, as `/copy` does. |
 | `Ctrl+G` | Edit the draft in `[ui] editor` from `config.toml`, else `$VISUAL`, else `$EDITOR`. |
 | `/` at the start of the draft | Open the command palette. `Enter` runs the highlighted command; with no match it sends the line as a prompt. |
@@ -129,7 +156,7 @@ counter.
 |---|---|
 | Command list | The text after `/` stays in the composer and filters the commands fuzzily, best match first. `Enter` runs the highlighted command with the argument typed after its name; `Tab` completes `/name ` without running. After `/model `, `/new `, `/reasoning ` or `/theme ` the list offers that command's arguments (model ids, profiles, levels) and `Enter` runs the command with the highlighted one. Prompt templates are listed with their description. `Esc` closes the list and leaves the draft as it is; deleting the `/` closes it too. |
 | Sessions | Type to filter by title. `Enter` opens the session. `Ctrl+N` renames the selected one (`Enter` saves, `Esc` cancels; an empty title clears it). `Ctrl+D` twice deletes the selected one; the open session cannot be deleted. Sessions of this workspace come first, newest first. Each row ends with its last activity; the open one says `current`, one from another workspace names it, and a title shared with another row adds the short id. |
-| Session (`/session`) | Id, title, workspace, profile, model, history items and token totals. `Enter` or `c` copies the id. |
+| Session (`/session`) | Id, title, workspace, profile, model, history items, token totals and the tools allowed for the session (when there are any). `Enter` or `c` copies the id. |
 | Context (`/context`) | Show context usage. `r` re-reads the report (it also reads on open); `c` copies it; `Esc` closes. |
 | Model | Type to filter by id. `Enter` switches to the highlighted model; the current one is marked `✓`. |
 | Reasoning | `Enter` applies the highlighted level; the current one is marked `✓`. |
@@ -168,7 +195,7 @@ the name.
 | `/sessions`, `/resume` | Open the sessions picker. Live sessions come first, each row starting with its state: `running 2m`, `needs approval`, `compacting` or `new` (a turn ended unseen). Opening a live one switches at once; a session that is still working cannot be deleted (`Stop "<title>" first: open it and press Esc`). |
 | `/rename <title>` | Rename the current session (an empty title is an error). |
 | `/model [id]` | Switch to the model (an exact id or a unique fuzzy match), or open the picker. When the model does not support the current reasoning level, the switch also moves to the nearest level it supports (the higher one on a tie) and a notice names it. `Ctrl+P` and `Ctrl+L` do the same, and a draft adjusts the level its session will start with. |
-| `/session` | Show the open session's id, workspace, profile, model, item count and token totals. |
+| `/session` | Show the open session's id, workspace, profile, model, item count, token totals and the tools allowed for the session. |
 | `/reasoning [level]` | Set the level directly, or open the picker when no valid level is given. |
 | `/compact` | Run manual compaction; refused while a turn runs. |
 | `/diff` | Show the workspace's live Git working-tree changes, including untracked files. |

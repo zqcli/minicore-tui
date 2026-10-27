@@ -2,6 +2,7 @@
 
 pub mod auth;
 pub mod fs;
+pub mod query;
 pub mod server;
 pub mod tls;
 pub mod view;
@@ -191,6 +192,8 @@ pub struct Phone {
     pub view: PhoneView,
     pub projection: view::View,
     pub connected_at: jiff::Timestamp,
+    /// Queries waiting on the Agent, at most `query::IN_FLIGHT`.
+    pub queries: u8,
 }
 
 impl Phone {
@@ -202,9 +205,11 @@ impl Phone {
     }
 }
 
+/// Who a notice reaches: the TUI alone unless a phone's intent or a session caused it.
 #[derive(Default)]
 pub enum NoticeTarget {
     #[default]
+    Local,
     All,
     Phone(u64),
     Session(String),
@@ -244,6 +249,9 @@ impl Remote {
     }
 
     pub fn notice(&mut self, level: NoticeLevel, text: &str, label: Option<&str>) {
+        if matches!(self.notice_target, NoticeTarget::Local) {
+            return;
+        }
         self.phones.retain(|phone| {
             let text = match &self.notice_target {
                 NoticeTarget::Phone(id) if phone.connection.id != *id => return true,
@@ -387,6 +395,17 @@ pub enum RemoteEvent {
         id: String,
         intent: wire::Intent,
         done: oneshot::Sender<()>,
+    },
+    Query {
+        connection: u64,
+        id: String,
+        query: wire::Query,
+    },
+    /// The Agent's reply to a query, for its connection if that is still admitted.
+    Answered {
+        connection: u64,
+        id: String,
+        result: Result<Value, String>,
     },
     Disconnected(u64),
     /// A wrong password; `locked` is the pause it started or ran into.

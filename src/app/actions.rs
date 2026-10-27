@@ -21,7 +21,7 @@ const CONTEXT_EVERY: std::time::Duration = std::time::Duration::from_secs(2);
 pub enum Action {
     /// Enter: send when idle, steer when a turn runs.
     Submit,
-    /// Alt+Enter: queue a follow-up.
+    /// Alt+Enter or Ctrl+Enter: queue a follow-up.
     QueueFollowUp,
     OpenSession(String),
     NewSession,
@@ -161,7 +161,7 @@ impl App {
         self.submit_composer(false);
     }
 
-    /// Alt+Enter: queue a follow-up; when idle it just sends.
+    /// Alt+Enter or Ctrl+Enter: queue a follow-up; when idle it just sends.
     fn submit_follow_up(&mut self) {
         self.submit_composer(true);
     }
@@ -209,7 +209,7 @@ impl App {
         );
     }
 
-    fn steer(&mut self, text: String) {
+    pub(super) fn steer(&mut self, text: String) {
         let Some(session) = self.session.as_mut() else {
             self.composer.restore_text(&text);
             return;
@@ -330,7 +330,7 @@ impl App {
         self.set_model(self.models[next].id.clone());
     }
 
-    fn compact(&mut self) {
+    pub(super) fn compact(&mut self) {
         let Some(session) = self.session.as_mut() else {
             return;
         };
@@ -422,7 +422,7 @@ impl App {
         self.call(protocol::METHOD_INTERACTION_ANSWER, fields, SessionOp::Done);
     }
 
-    /// A new approval: answered at once for a tool allowed for the session,
+    /// A new approval: answered silently for a tool allowed for the session,
     /// else its card is read for the input it would run, which an `edit`
     /// card only has once it has run.
     pub(super) fn on_approval_requested(&mut self) {
@@ -434,12 +434,7 @@ impl App {
         };
         let approval = matches!(interaction.kind, InteractionKind::Approval);
         if approval && session.allowed_tools.contains(&interaction.tool_name) {
-            let tool = interaction.tool_name.clone();
             self.answer(Answer::Allow);
-            self.notice(
-                NoticeLevel::Info,
-                format!("Allowed {tool} for this session"),
-            );
             return;
         }
         let card = session

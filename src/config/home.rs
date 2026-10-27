@@ -1,4 +1,3 @@
-use std::ffi::OsStr;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -7,8 +6,7 @@ use std::path::{Path, PathBuf};
 pub struct Home(pub(super) PathBuf);
 
 impl Home {
-    /// `--home`, else `$MINICORE_HOME`, else the directory of the running
-    /// executable (its parent when that is named `bin`).
+    /// `--home`, else `$MINICORE_HOME`, else the directory of the running executable.
     pub fn resolve(flag: Option<&Path>) -> Result<Self, String> {
         let env = std::env::var_os("MINICORE_HOME").filter(|value| !value.is_empty());
         let exe = std::env::current_exe().map_err(|error| {
@@ -21,17 +19,7 @@ impl Home {
     }
 
     fn pick(flag: Option<&Path>, env: Option<&Path>, exe: &Path) -> io::Result<Self> {
-        let dir = match flag.or(env) {
-            Some(dir) => dir,
-            None => {
-                let dir = exe.parent().unwrap_or(exe);
-                if dir.file_name() == Some(OsStr::new("bin")) {
-                    dir.parent().unwrap_or(dir)
-                } else {
-                    dir
-                }
-            }
-        };
+        let dir = flag.or(env).unwrap_or_else(|| exe.parent().unwrap_or(exe));
         std::path::absolute(dir).map(Self)
     }
 
@@ -102,20 +90,7 @@ mod tests {
         let exe = "/opt/mct/bin/minicore-tui";
         assert_eq!(pick(Some("/a"), Some("/b"), exe), absolute("/a"));
         assert_eq!(pick(None, Some("/b"), exe), absolute("/b"));
-        assert_eq!(pick(None, None, exe), absolute("/opt/mct"));
-    }
-
-    #[test]
-    fn only_a_bin_directory_is_replaced_by_its_parent() {
-        assert_eq!(
-            pick(None, None, "/opt/mct/minicore-tui"),
-            absolute("/opt/mct")
-        );
-        assert_eq!(
-            pick(None, None, "/opt/bin/mct/minicore-tui"),
-            absolute("/opt/bin/mct")
-        );
-        assert_eq!(pick(None, None, "/bin/minicore-tui"), absolute("/"));
+        assert_eq!(pick(None, None, exe), absolute("/opt/mct/bin"));
     }
 
     #[test]

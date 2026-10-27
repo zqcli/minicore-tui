@@ -1,9 +1,9 @@
-//! Phone protocol v1 input and reply envelopes.
+//! Phone protocol v2 input and reply envelopes.
 
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-pub const VERSION: u64 = 1;
+pub const VERSION: u64 = 2;
 
 #[derive(Deserialize)]
 #[serde(tag = "t", rename_all = "snake_case")]
@@ -37,9 +37,17 @@ pub enum Intent {
         text: String,
     },
     Cancel,
+    Compact,
+    /// Takes back the queued follow-up at `index` of `state.queue` while it still reads `text`.
+    Unqueue {
+        index: usize,
+        text: String,
+    },
     Answer {
         interaction_id: String,
         choice: Choice,
+        /// Steered into the same turn after a deny, so the agent hears why.
+        message: Option<String>,
     },
     LoadOlder,
     OpenSession {
@@ -62,6 +70,17 @@ pub enum Intent {
     DeleteSession {
         session_id: String,
     },
+}
+
+/// A read relayed to the Agent for the requester's view, answered by `result`.
+#[derive(Debug, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Query {
+    Context,
+    Changes,
+    Diff { path: String },
+    ToolOutput { call_id: String, offset: u64 },
+    Files { query: String },
 }
 
 #[derive(Debug, Deserialize)]
@@ -93,6 +112,13 @@ pub fn ack(id: &str, result: Result<(), String>) -> Value {
     }
 }
 
+pub fn result(id: &str, result: Result<Value, String>) -> Value {
+    match result {
+        Ok(data) => json!({"t": "result", "id": id, "ok": true, "data": data}),
+        Err(error) => json!({"t": "result", "id": id, "ok": false, "error": error}),
+    }
+}
+
 pub fn bad_request(value: &Value) -> Value {
     let id = value
         .get("id")
@@ -100,12 +126,10 @@ pub fn bad_request(value: &Value) -> Value {
         .filter(|id| id.len() <= 64)
         .unwrap_or("");
     let mut reply = ack(id, Err("bad_request".into()));
-    if value
-        .get("t")
-        .and_then(Value::as_str)
-        .is_some_and(|t| t.starts_with("fs_"))
-    {
-        reply["t"] = json!("fs");
+    match value.get("t").and_then(Value::as_str) {
+        Some(t) if t.starts_with("fs_") => reply["t"] = json!("fs"),
+        Some("query") => reply["t"] = json!("result"),
+        _ => {}
     }
     reply
 }
@@ -142,5 +166,26 @@ mod tests {
         }
         let id = "x".repeat(64);
         assert_eq!(bad_request(&json!({"t":"intent", "id":id}))["id"], id);
+    }
+
+    #[test]
+    fn a_bad_query_is_answered_as_a_failed_result() {
+        for query in [
+            json!({"t":"query", "id":"q1", "kind":"unknown"}),
+            json!({"t":"query", "id":"q1", "kind":"diff"}),
+            json!({"t":"query", "id":"q1", "kind":"tool_output", "call_id":"c"}),
+        ] {
+            assert!(Query::deserialize(&query).is_err(), "{query}");
+            assert_eq!(
+                bad_request(&query),
+                json!({"t":"result", "id":"q1", "ok":false, "error":"bad_request"})
+            );
+        }
+        let query =
+            json!({"t":"query", "id":"q2", "kind":"tool_output", "call_id":"c", "offset":7});
+        assert!(matches!(
+            Query::deserialize(&query).unwrap(),
+            Query::ToolOutput { call_id, offset: 7 } if call_id == "c"
+        ));
     }
 }

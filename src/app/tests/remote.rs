@@ -91,7 +91,7 @@ async fn a_real_phone_signs_in_submits_through_the_agent_and_receives_the_user_b
             .unwrap();
         socket
             .send(Message::Text(
-                json!({"t":"login", "v":1, "password":password, "device":"test phone"})
+                json!({"t":"login", "v":crate::remote::wire::VERSION, "password":password, "device":"test phone"})
                     .to_string()
                     .into(),
             ))
@@ -194,6 +194,223 @@ async fn answers_validate_prompt_kind_and_index_before_consuming_the_interaction
             }
         }
     }
+}
+
+/// A running turn `l1` in the foreground waiting on an approval or a choice.
+fn pending(h: &mut Harness, approval: bool) {
+    let session = h.app.session.as_mut().unwrap();
+    session.live = Some(crate::app::LiveTurn::new(
+        crate::protocol::TurnRef::new("s1", "l1"),
+        0,
+    ));
+    session.interaction = Some(crate::app::PendingInteraction {
+        turn: crate::protocol::TurnRef::new("s1", "l1"),
+        interaction_id: "interaction".into(),
+        tool_call_id: "call".into(),
+        tool_name: "bash".into(),
+        prompt: "choose".into(),
+        kind: if approval {
+            crate::app::InteractionKind::Approval
+        } else {
+            crate::app::InteractionKind::Choice(vec!["one".into(), "two".into()])
+        },
+        selected: 0,
+    });
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_deny_with_a_message_answers_first_then_steers_the_reason_into_the_same_turn() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.app.remote.url = Some("http://localhost:8765".into());
+    let (mut output, _closing, admission) = phone(&mut h, 1, "phone");
+    assert!(admission.await.unwrap());
+    pending(&mut h, true);
+    request(
+        &mut h,
+        json!({"kind":"answer", "interaction_id":"interaction", "choice":"deny", "message":"Use the staging bucket  "}),
+    );
+    assert_eq!(output.recv().await.unwrap()["ok"], true);
+    h.settle().await;
+    let methods: Vec<String> = h
+        .fake
+        .methods()
+        .into_iter()
+        .filter(|method| method == "interaction.answer" || method == "turn.steer")
+        .collect();
+    assert_eq!(methods, ["interaction.answer", "turn.steer"]);
+    assert_eq!(
+        h.calls("interaction.answer")[0]["answer"],
+        json!({"type":"approval", "decision":"deny"})
+    );
+    let steer = &h.calls("turn.steer")[0];
+    assert_eq!(
+        (&steer["loop_id"], &steer["text"]),
+        (&json!("l1"), &json!("Use the staging bucket"))
+    );
+
+    // A plain answer steers nothing; a message beside anything but a deny is refused untouched.
+    pending(&mut h, true);
+    request(
+        &mut h,
+        json!({"kind":"answer", "interaction_id":"interaction", "choice":"deny"}),
+    );
+    assert_eq!(output.recv().await.unwrap()["ok"], true);
+    for (approval, choice, message) in [
+        (true, json!("allow"), "why"),
+        (true, json!("allow_session"), "why"),
+        (true, json!("deny"), "  "),
+        (false, json!(1), "why"),
+    ] {
+        pending(&mut h, approval);
+        request(
+            &mut h,
+            json!({"kind":"answer", "interaction_id":"interaction", "choice":choice, "message":message}),
+        );
+        assert_eq!(output.recv().await.unwrap()["error"], "bad_request");
+        assert!(h.app.has_interaction());
+    }
+    h.settle().await;
+    assert_eq!(h.calls("interaction.answer").len(), 2);
+    assert_eq!(h.calls("turn.steer").len(), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn phone_text_expands_templates_refuses_commands_and_keeps_other_slashes_as_the_composer_does()
+ {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.fake.script("turn.send", json!({"turn":turn("l1")}));
+    h.fake.script_held("turn.wait", waited("l1", completed()));
+    h.app.templates = vec![crate::app::templates::Template::parse(
+        "review".into(),
+        "---\ndescription: Review a file\n---\nReview $1 for ${2:-bugs}; all: $@\n",
+    )];
+    h.app.remote.url = Some("http://localhost:8765".into());
+    let (mut output, _closing, admission) = phone(&mut h, 1, "phone");
+    assert!(admission.await.unwrap());
+    request(&mut h, json!({"kind":"submit", "text":"/review lib.rs"}));
+    assert_eq!(output.recv().await.unwrap()["ok"], true);
+    h.until(|app| app.is_busy()).await;
+    assert_eq!(h.sends(), ["Review lib.rs for bugs; all: lib.rs"]);
+    let mut queued = Vec::new();
+    for (text, sent) in [
+        (
+            "/review parser.rs 'edge cases'",
+            Some("Review parser.rs for edge cases; all: parser.rs edge cases"),
+        ),
+        ("//review x", Some("/review x")),
+        (
+            "/usr/bin is where it lives",
+            Some("/usr/bin is where it lives"),
+        ),
+        (
+            "fix src/main.rs then /review",
+            Some("fix src/main.rs then /review"),
+        ),
+        ("/reveiw the parser", Some("/reveiw the parser")),
+        ("/9lives", Some("/9lives")),
+        ("/ hello", Some("/ hello")),
+        ("/compact", None),
+        ("/model mock", None),
+        ("/rename", None),
+        ("/reveiw", None),
+        ("  /foo-bar  ", None),
+    ] {
+        request(&mut h, json!({"kind":"queue", "text":text}));
+        let ack = output.recv().await.unwrap();
+        match sent {
+            Some(sent) => {
+                assert_eq!(ack["ok"], true, "{text}");
+                queued.push(sent);
+            }
+            None => assert_eq!(ack["error"], "unknown_command", "{text}"),
+        }
+    }
+    assert_eq!(h.queue(), queued);
+    assert!(h.notices().is_empty(), "{:?}", h.notices());
+    assert_eq!(h.sends().len(), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn compact_runs_for_the_viewed_idle_session_and_is_refused_while_busy_or_in_a_draft() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.app.remote.url = Some("http://localhost:8765".into());
+    let (mut output, _closing, admission) = phone(&mut h, 1, "phone");
+    assert!(admission.await.unwrap());
+    let progress = || {
+        serde_json::from_value(json!({"operation_id":"auto-1", "phase":"summarizing", "covered_item_count":0, "retained_item_count":0})).unwrap()
+    };
+    for (live, compacting) in [(true, false), (false, true)] {
+        let session = h.app.session.as_mut().unwrap();
+        session.live =
+            live.then(|| crate::app::LiveTurn::new(crate::protocol::TurnRef::new("s1", "l1"), 0));
+        session.compaction = compacting.then(progress);
+        request(&mut h, json!({"kind":"compact"}));
+        assert_eq!(output.recv().await.unwrap()["error"], "busy");
+    }
+    h.app.session.as_mut().unwrap().compaction = None;
+    request(&mut h, json!({"kind":"compact"}));
+    assert_eq!(output.recv().await.unwrap()["ok"], true);
+    h.settle().await;
+    let calls = h.calls("session.compact");
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0]["session_id"], "s1");
+
+    let mut draft = Harness::new();
+    draft.app.remote.url = Some("http://localhost:8765".into());
+    let (mut output, _closing, admission) = phone(&mut draft, 1, "phone");
+    assert!(admission.await.unwrap());
+    request(&mut draft, json!({"kind":"compact"}));
+    assert_eq!(output.recv().await.unwrap()["error"], "No session");
+    draft.settle().await;
+    assert!(draft.calls("session.compact").is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn unqueue_returns_a_matching_follow_up_only_to_its_requester() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.app.remote.url = Some("http://localhost:8765".into());
+    let (mut first, _close, admission) = phone(&mut h, 1, "first");
+    assert!(admission.await.unwrap());
+    let (mut second, _close2, admission) = phone(&mut h, 2, "second");
+    assert!(admission.await.unwrap());
+    let session = h.app.session.as_mut().unwrap();
+    session.live = Some(crate::app::LiveTurn::new(
+        crate::protocol::TurnRef::new("s1", "l1"),
+        0,
+    ));
+    session.queue.push(crate::app::Queued {
+        text: "steered".into(),
+        kind: crate::app::QueuedKind::Steer,
+        at: None,
+    });
+    session.push_follow_up("one".into());
+    session.push_follow_up("two".into());
+    for (index, text) in [(0, "steered"), (1, "two"), (3, "one")] {
+        request(
+            &mut h,
+            json!({"kind":"unqueue", "index":index, "text":text}),
+        );
+        assert_eq!(
+            messages(&mut first),
+            [json!({"t":"ack", "id":"request", "ok":false, "error":"stale"})]
+        );
+    }
+    assert_eq!(h.queue(), ["steered", "one", "two"]);
+    request_from(
+        &mut h,
+        2,
+        json!({"kind":"unqueue", "index":1, "text":"one"}),
+    );
+    assert_eq!(
+        messages(&mut second),
+        [
+            json!({"t":"returned", "text":"one"}),
+            json!({"t":"ack", "id":"request", "ok":true})
+        ]
+    );
+    assert!(messages(&mut first).is_empty());
+    assert_eq!(h.queue(), ["steered", "two"]);
+    assert!(h.app.composer.is_empty());
 }
 
 #[tokio::test(start_paused = true)]
@@ -437,7 +654,7 @@ async fn every_phone_gets_its_snapshot_then_the_changes_and_sees_who_is_connecte
 }
 
 #[tokio::test(start_paused = true)]
-async fn an_intent_is_acked_only_to_its_sender_and_notices_reach_every_phone() {
+async fn an_intent_is_acked_only_to_its_sender_and_only_a_sign_in_attempt_reaches_every_phone() {
     let mut h = Harness::opened(display_read(0, 0)).await;
     h.app.remote.url = Some("http://localhost:8765".into());
     let (mut a, _close, admission) = phone(&mut h, 1, "first");
@@ -447,9 +664,39 @@ async fn an_intent_is_acked_only_to_its_sender_and_notices_reach_every_phone() {
     request_from(&mut h, 2, json!({"kind":"cancel"}));
     assert_eq!(received(&mut a), Vec::<Value>::new());
     assert_eq!(received(&mut b), ["ack"]);
-    h.app.notice(crate::app::NoticeLevel::Info, "for everyone");
+    h.app.notice(crate::app::NoticeLevel::Info, "TUI only");
+    assert_eq!(received(&mut a), Vec::<Value>::new());
+    h.app
+        .on_msg(Msg::Remote(RemoteEvent::LoginRefused { locked: None }));
     assert_eq!(received(&mut a), ["notice"]);
     assert_eq!(received(&mut b), ["notice"]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_tool_allowed_for_the_session_is_answered_without_telling_the_phone() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.fake.script("interaction.answer", json!({"ok": true}));
+    h.app.remote.url = Some("http://localhost:8765".into());
+    let (mut a, _close, admission) = phone(&mut h, 1, "first");
+    assert!(admission.await.unwrap());
+    received(&mut a);
+    h.app
+        .session
+        .as_mut()
+        .unwrap()
+        .allowed_tools
+        .insert("bash".into());
+    h.emit(
+        "interaction_requested",
+        json!({"turn": turn("l1"), "interaction": {
+            "interaction_id": "i1", "tool_call_id": "c1", "tool_name": "bash",
+            "kind": {"type": "approval", "data": {"prompt": "Allow bash?"}}}}),
+    )
+    .await;
+    h.settle().await;
+    assert_eq!(h.calls("interaction.answer").len(), 1);
+    assert!(h.notices().is_empty());
+    assert!(!received(&mut a).contains(&json!("notice")));
 }
 
 #[tokio::test(start_paused = true)]
@@ -850,7 +1097,7 @@ async fn a_phone_deletes_another_session_and_it_leaves_the_list() {
     let sessions = synced_sessions(&mut h, &mut output).expect("a new state");
     assert!(listed(&sessions, "s2").is_none());
     assert!(listed(&sessions, "s1").is_some());
-    assert!(h.notices().contains(&"Session deleted".to_owned()));
+    assert!(h.notices().is_empty());
 }
 
 #[tokio::test(start_paused = true)]
@@ -1441,14 +1688,14 @@ async fn notices_follow_the_intent_or_session_and_attention_excludes_its_viewers
     );
     assert_eq!(
         b.try_recv().unwrap()["text"],
-        "\"First\" needs approval · ctrl+r"
+        "\"First\" needs approval",
+        "the phone's text carries no TUI key hint"
     );
     h.app.on_msg(Msg::Notice(
         crate::app::NoticeLevel::Info,
-        "app wide".into(),
+        "tui only".into(),
     ));
-    assert_eq!(a.try_recv().unwrap()["text"], "app wide");
-    assert_eq!(b.try_recv().unwrap()["text"], "app wide");
+    assert!(messages(&mut a).is_empty() && messages(&mut b).is_empty());
 }
 
 #[tokio::test(start_paused = true)]
@@ -1715,4 +1962,249 @@ async fn a_late_open_result_cannot_bring_back_a_session_deleted_by_another_devic
     h.app.sync_remote();
     assert_eq!(projected(&mut a)["session"]["id"], "s1");
     assert_eq!(projected(&mut b)["session"]["id"], "s2");
+}
+
+fn query_from(h: &mut Harness, connection: u64, id: &str, query: Value) {
+    h.app.on_msg(Msg::Remote(RemoteEvent::Query {
+        connection,
+        id: id.into(),
+        query: serde_json::from_value(query).unwrap(),
+    }));
+}
+
+/// The `result` messages waiting in `output`, without their `t`.
+fn results(output: &mut mpsc::Receiver<Value>) -> Vec<Value> {
+    messages(output)
+        .into_iter()
+        .filter(|message| message["t"] == "result")
+        .map(|mut message| {
+            message.as_object_mut().unwrap().remove("t");
+            message
+        })
+        .collect()
+}
+
+fn live_mut<'a>(h: &'a mut Harness, id: &str) -> &'a mut crate::app::Session {
+    let app = &mut h.app;
+    app.session
+        .iter_mut()
+        .chain(app.background.iter_mut())
+        .find(|session| session.info.session_id == id)
+        .unwrap()
+}
+
+#[tokio::test(start_paused = true)]
+async fn context_and_files_queries_read_the_requesting_devices_session_and_map_the_reply() {
+    let (mut h, mut a, mut b) = separate_views().await;
+    h.fake.script(
+        "session.context@s2",
+        json!({"session_id":"s2", "current_operation":null,
+               "coverage":{"covered_loop_count":6, "covered_item_count":12, "retained_item_count":3},
+               "last_result":{"operation_id":"auto-1", "origin":"automatic", "status":"compacted",
+                              "before_tokens":4200, "after_tokens":900},
+               "budget":{"estimated_history_tokens":370, "input_budget_tokens":40000,
+                         "trigger_tokens":32000, "target_tokens":16000},
+               "automatic":{"current":null, "last":null}, "last_prepare_failure":null}),
+    );
+    h.fake.script(
+        "workspace.files@s1",
+        json!({"entries":[{"path":"src/main.rs", "kind":"file", "size":1}, {"path":"src", "kind":"directory"}],
+               "truncated":true, "scan_complete":false}),
+    );
+    live_mut(&mut h, "s2").presentation = Some(
+        serde_json::from_value(json!({"session_id":"s2",
+        "context":{"tokens":18000, "window":64000, "percent":28.1, "kind":"reported"}}))
+        .unwrap(),
+    );
+    messages(&mut a);
+    messages(&mut b);
+    query_from(&mut h, 2, "c", json!({"kind":"context"}));
+    query_from(&mut h, 1, "f", json!({"kind":"files", "query":"main"}));
+    h.settle().await;
+    assert_eq!(
+        h.calls("session.context").last().unwrap()["session_id"],
+        "s2"
+    );
+    assert_eq!(
+        results(&mut b),
+        [json!({"id":"c", "ok":true, "data":{
+            "tokens":18000, "window":64000, "percent":45.0, "budget":40000, "history_tokens":370,
+            "trigger_tokens":32000, "target_tokens":16000, "compacting":false,
+            "coverage":{"turns":6, "items":12, "kept":3},
+            "last_compaction":{"origin":"automatic", "status":"compacted", "before":4200, "after":900},
+            "failure":null}})]
+    );
+    assert_eq!(
+        h.calls("workspace.files").last().unwrap(),
+        &json!({"session_id":"s1", "recursive":true, "query":"main", "limit":50, "max_bytes":262_144})
+    );
+    assert_eq!(
+        results(&mut a),
+        [json!({"id":"f", "ok":true, "data":{"paths":["src/main.rs"], "truncated":true}})]
+    );
+
+    let mut draft = Harness::new();
+    draft.app.remote.url = Some("http://localhost:8765".into());
+    let (mut output, _closing, admission) = phone(&mut draft, 1, "phone");
+    assert!(admission.await.unwrap());
+    query_from(&mut draft, 1, "draft", json!({"kind":"context"}));
+    assert_eq!(
+        results(&mut output),
+        [json!({"id":"draft", "ok":false, "error":"No session"})]
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn changes_and_diff_queries_list_the_workspace_like_the_diff_view_and_refuse_unlisted_paths()
+{
+    let (mut h, mut a, _b) = separate_views().await;
+    h.fake.script(
+        "changes.list@s1",
+        json!({"records":[
+            {"change_ref":"workspace:a", "path":"src/a.rs", "kind":"modified", "details_available":true},
+            {"change_ref":"workspace:b", "path":"new.txt", "kind":"added", "details_available":true},
+            {"change_ref":"workspace:c", "path":"src/a.rs", "kind":"modified", "details_available":true}],
+            "next_cursor":{"offset":3}, "total":4, "warnings":[]}),
+    );
+    h.fake.script(
+        "changes.diff@s1",
+        json!({"hunks":[{"old_start":0, "old_count":1, "new_start":0, "new_count":2, "lines":[
+                {"kind":"removed", "old_index":0, "text":"old\n", "line_complete":true},
+                {"kind":"added", "new_index":0, "text":"new\n", "line_complete":true},
+                {"kind":"added", "new_index":1, "text":"more\n", "line_complete":true}]}],
+               "next_cursor":null, "complete":true, "binary":false, "availability":"available",
+               "stale":false, "truncated":false}),
+    );
+    live_mut(&mut h, "s1").presentation = Some(
+        serde_json::from_value(json!({"session_id":"s1", "git_branch":"feat/parser"})).unwrap(),
+    );
+    messages(&mut a);
+    query_from(&mut h, 1, "changes", json!({"kind":"changes"}));
+    h.settle().await;
+    let lists = h.calls("changes.list");
+    assert_eq!(
+        lists.last().unwrap(),
+        &json!({"session_id":"s1", "scope":"workspace", "limit":200, "max_bytes":262_144})
+    );
+    assert_eq!(
+        results(&mut a),
+        [
+            json!({"id":"changes", "ok":true, "data":{"branch":"feat/parser", "files":[
+            {"path":"src/a.rs", "status":"modified"}, {"path":"new.txt", "status":"added"}],
+            "truncated":true}})
+        ]
+    );
+    query_from(&mut h, 1, "diff", json!({"kind":"diff", "path":"new.txt"}));
+    query_from(
+        &mut h,
+        1,
+        "gone",
+        json!({"kind":"diff", "path":"README.md"}),
+    );
+    h.settle().await;
+    assert_eq!(h.calls("changes.list").len(), lists.len() + 2);
+    let diffs = h.calls("changes.diff");
+    assert_eq!(diffs.len(), 1);
+    assert_eq!(
+        (&diffs[0]["session_id"], &diffs[0]["change_ref"]),
+        (&json!("s1"), &json!("workspace:b"))
+    );
+    let mut answers = results(&mut a);
+    answers.sort_by_key(|answer| answer["id"].as_str().unwrap().to_owned());
+    assert_eq!(
+        answers,
+        [
+            json!({"id":"diff", "ok":true, "data":{"path":"new.txt", "added":2, "removed":1, "truncated":false,
+                "lines":["@@ -1,1 +1,2 @@", "-old", "+new", "+more"]}}),
+            json!({"id":"gone", "ok":false, "error":"stale"}),
+        ]
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn tool_output_pages_a_call_of_the_viewed_transcript_and_another_sessions_call_is_stale() {
+    let (mut h, mut a, mut b) = separate_views().await;
+    let call = crate::transcript::ToolCall::new(
+        crate::protocol::ToolRef {
+            session_id: "s1".into(),
+            loop_id: "loop-s1".into(),
+            request_index: 2,
+            tool_call_id: "call-1".into(),
+        },
+        "bash",
+    );
+    live_mut(&mut h, "s1")
+        .transcript
+        .push(crate::transcript::Block::Tool(Box::new(call)));
+    h.fake.script(
+        "tool.output",
+        json!({"tool_ref":{"session_id":"s1", "loop_id":"loop-s1", "request_index":2, "tool_call_id":"call-1"},
+               "stream":"output", "encoding":"utf8", "base_offset":10, "next_offset":25, "observed_end":40,
+               "eof":false, "truncated":false, "availability":"available", "data":"hello output\n"}),
+    );
+    messages(&mut a);
+    messages(&mut b);
+    query_from(
+        &mut h,
+        1,
+        "out",
+        json!({"kind":"tool_output", "call_id":"call-1", "offset":10}),
+    );
+    query_from(
+        &mut h,
+        2,
+        "other",
+        json!({"kind":"tool_output", "call_id":"call-1", "offset":0}),
+    );
+    h.settle().await;
+    assert_eq!(
+        h.calls("tool.output"),
+        [
+            json!({"session_id":"s1", "loop_id":"loop-s1", "request_index":2, "tool_call_id":"call-1",
+                "stream":"output", "offset":10, "max_bytes":65_536})
+        ]
+    );
+    assert_eq!(
+        results(&mut a),
+        [
+            json!({"id":"out", "ok":true, "data":{"text":"hello output\n", "offset":10, "next_offset":25,
+                "eof":false, "truncated":false}})
+        ]
+    );
+    assert_eq!(
+        results(&mut b),
+        [json!({"id":"other", "ok":false, "error":"stale"})]
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_fifth_query_in_flight_is_busy_and_a_reply_after_the_phone_left_is_dropped() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.app.remote.url = Some("http://localhost:8765".into());
+    let (mut first, _close, admission) = phone(&mut h, 1, "first");
+    assert!(admission.await.unwrap());
+    let (mut second, _close2, admission) = phone(&mut h, 2, "second");
+    assert!(admission.await.unwrap());
+    h.fake
+        .script_held("session.context", json!({"session_id":"s1"}));
+    for id in ["1", "2", "3", "4", "5"] {
+        query_from(&mut h, 1, id, json!({"kind":"context"}));
+    }
+    query_from(&mut h, 2, "left", json!({"kind":"context"}));
+    h.settle().await;
+    assert_eq!(
+        results(&mut first),
+        [json!({"id":"5", "ok":false, "error":"busy"})]
+    );
+    h.app.on_msg(Msg::Remote(RemoteEvent::Disconnected(2)));
+    h.fake.release("session.context");
+    h.settle().await;
+    let answered = results(&mut first);
+    assert_eq!(answered.len(), 4);
+    assert!(answered.iter().all(|answer| answer["ok"] == true));
+    assert!(results(&mut second).is_empty());
+    assert_eq!(h.app.remote.phones[0].queries, 0);
+    query_from(&mut h, 1, "again", json!({"kind":"context"}));
+    h.settle().await;
+    assert_eq!(results(&mut first)[0]["ok"], true);
 }

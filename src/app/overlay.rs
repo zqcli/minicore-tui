@@ -433,7 +433,6 @@ impl App {
             session.info = info.clone();
         }
         self.merge_catalog_info(info);
-        self.notice(NoticeLevel::Info, "Session renamed");
     }
 
     /// The `@token` that ends at the cursor, without its `@`.
@@ -477,19 +476,15 @@ impl App {
 
     /// Asks for the workspace files the `@` picker offers.
     fn list_files(&self) {
-        let fields = json!({"recursive": true, "query": "", "limit": 500, "max_bytes": 262_144});
         self.call(
             protocol::METHOD_WORKSPACE_FILES,
-            fields,
-            |result: Result<FilesPage, _>| {
-                SessionOp::Files(result.map(|page| {
-                    page.entries
-                        .into_iter()
-                        .filter(|entry| entry.kind == protocol::FileKind::File)
-                        .map(|entry| entry.path)
-                        .collect()
-                }))
-            },
+            files_params("", 500),
+            |result: Result<FilesPage, _>| SessionOp::Files(result.map(FilesPage::files)),
         );
     }
+}
+
+/// `workspace.files` over the whole workspace for paths matching `query`.
+pub fn files_params(query: &str, limit: usize) -> serde_json::Value {
+    json!({"recursive": true, "query": query, "limit": limit, "max_bytes": 262_144})
 }

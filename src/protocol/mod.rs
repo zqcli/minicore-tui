@@ -23,8 +23,8 @@ pub use read::{
     RuntimeUserItem, SnapshotPin, TurnResultPage,
 };
 pub use tool::{
-    ToolDisplay, ToolExecution, ToolExecutionState, ToolInvocation, ToolReadResult, ToolRef,
-    ToolSubject, ToolSummary,
+    ToolDisplay, ToolExecution, ToolExecutionState, ToolInvocation, ToolOutputPage, ToolReadResult,
+    ToolRef, ToolSubject, ToolSummary,
 };
 pub use workspace::{FileEntry, FileKind, FilesPage};
 
@@ -54,6 +54,7 @@ pub const METHOD_TURN_CANCEL: &str = "turn.cancel";
 pub const METHOD_TURN_WAIT: &str = "turn.wait";
 pub const METHOD_TURN_RESULT: &str = "turn.result";
 pub const METHOD_TOOL_READ: &str = "tool.read";
+pub const METHOD_TOOL_OUTPUT: &str = "tool.output";
 pub const METHOD_WORKSPACE_FILES: &str = "workspace.files";
 pub const METHOD_WORKSPACE_STATUS: &str = "workspace.status";
 pub const METHOD_CHANGES_LIST: &str = "changes.list";
@@ -605,7 +606,7 @@ pub struct ContextBudget {
     pub target_tokens: Option<u64>,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum CompactStatus {
     Compacted,

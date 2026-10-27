@@ -12,8 +12,9 @@ file is the whole program. Version 0.4 is a rewrite of the v0.3 frontend; see
 - current stable Rust (edition 2024) to build; no older toolchain is tested;
 - a terminal with an alternate screen, raw mode and bracketed paste. Mouse
   reporting is used for the wheel, clicks and selection. `Shift+Enter` and
-  `Alt+Enter` need a terminal with the kitty keyboard protocol; `Ctrl+J` always
-  inserts a newline.
+  `Ctrl+Enter` need a terminal with the kitty keyboard protocol; `Ctrl+J` always
+  inserts a newline. `Alt+Enter` needs the terminal to pass Alt (on macOS, Option
+  as Meta or Esc+); see [docs/keybindings.md](docs/keybindings.md).
 
 Built-in backend: Agent 0.8.0, which links Runtime 0.8.0; `Cargo.toml` pins the
 Agent by its release tag and `Cargo.lock` fixes both. An
@@ -31,8 +32,7 @@ target/release/minicore-tui --workspace ./project   # first run writes starter f
 ```
 
 Everything lives in one *TUI directory*: `--home`, else `$MINICORE_HOME`, else
-the directory of the executable (its parent when that is named `bin`, so a
-bundle with `bin/minicore-tui` needs nothing set).
+the directory of the executable.
 Providers and models are in `models.toml`, profiles and preferences in
 `config.toml`, the system prompt in `prompt/SYSTEM_PROMPT.md`, and every session
 in `session/`. On the first run the TUI writes commented starters, says what to
@@ -49,17 +49,17 @@ starts with. A draft typed meanwhile is kept. Full reference: [docs/configuratio
 
 Prebuilt packages: every CI run uploads one per platform (Linux x86_64, macOS
 arm64 and x86_64, Windows x86_64) as a workflow artifact,
-`minicore-tui-<version>-<target>`. Each is a TUI directory with
-`bin/minicore-tui` (`.exe` on Windows), the Agent included; `BUILD.txt` names
-the three revisions. Unpack it anywhere and run
-`bin/minicore-tui` from the project directory. On macOS a downloaded binary may
-need `xattr -d com.apple.quarantine bin/*` first.
+`minicore-tui-<version>-<target>`. Each holds `bin/minicore-tui` (`.exe` on
+Windows), the Agent included, and `BUILD.txt` naming the three revisions. Unpack
+it anywhere and run `bin/minicore-tui --home <DIR>` (or set `MINICORE_HOME`) from
+the project directory; without either, the TUI directory is `bin/` itself. On
+macOS a downloaded binary may need `xattr -d com.apple.quarantine bin/*` first.
 
 ### Options
 
 | Option | Meaning |
 |---|---|
-| `--home <DIR>` | The TUI directory. Default: `$MINICORE_HOME`, else the executable's directory (its parent when named `bin`). |
+| `--home <DIR>` | The TUI directory. Default: `$MINICORE_HOME`, else the executable's directory. |
 | `--agent <BIN>` | Run this external Agent executable instead of the built-in one. Default: `[agent] binary` in `config.toml`, if set. |
 | `--agent-config <FILE>` | Use this Agent config as is; no composition, no `models.toml`. For tests and advanced use. Replaces `--config`. |
 | `--workspace <DIR>` | Workspace of a new session. Default: the current directory. |
@@ -128,7 +128,7 @@ history is `history.jsonl` in the TUI directory.
 
  transcript (scrollable, 1-column gutter, ▎ rails)
  …
- Follow-up: also update the README
+ ↳ follow-up 1  also update the README
  ⠋ Working (esc to interrupt) · Thinking · 1m12s · request 7 · 12 tools
 
  ▎ editor band (4–12 rows; the / and @ lists open inside it)
@@ -138,7 +138,8 @@ history is `history.jsonl` in the TUI directory.
 The look follows pi-rail-ui. While something is in flight a Working line sits
 above the editor with the phase (`Thinking`, `Running <tool> <detail>`,
 `Waiting for approval`, `Compacting context`, …), elapsed time, request and
-tool counts. Queued messages show as `Steering:` / `Follow-up:` rows above it.
+tool counts. Queued messages show as `↗ steer` / `↳ follow-up N` rows above it, with a hint
+for the keys that act on them.
 The latest notice is a railed line in the band: info fades after 5 seconds,
 errors stay until the next key press.
 
@@ -175,8 +176,8 @@ without a report. The TUI never estimates it.
   commands that read a session (`/compact`, `/context`, `/diff`,
   `/rename`, `/export`, `/copy`, `/session`) and the `@` file picker say
   `No session yet: send a message first`.
-- **Steering and queue.** `Enter` while a turn runs steers it; `Alt+Enter` queues
-  a follow-up sent after the turn; `Alt+↑` takes the queued follow-ups back.
+- **Steering and queue.** `Enter` while a turn runs steers it; `Alt+Enter` (or `Ctrl+Enter`)
+  queues a follow-up sent after the turn; `Alt+↑` takes the queued follow-ups back.
   `Esc` interrupts. A message sent while a compaction after a turn is
   running waits in the queue and is sent when the session is idle.
 - **Compaction** shows as a status phase and leaves a `[compaction]` box with

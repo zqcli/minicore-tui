@@ -120,6 +120,20 @@ impl super::App {
             .find(|template| template.name == name)?;
         Some(template.expand(arg))
     }
+
+    /// The rewrite of a line no built-in command claims: `//` escapes a leading
+    /// slash and a template expands; `Err` names a bare `/word` that is neither.
+    pub fn prompt_text<'a>(&self, text: &'a str) -> Result<Option<String>, &'a str> {
+        if let Some(escaped) = text.strip_prefix('/').filter(|rest| rest.starts_with('/')) {
+            return Ok(Some(escaped.to_owned()));
+        }
+        if let Some(expanded) =
+            parse(text).and_then(|(name, argument)| self.expand_template(name, argument))
+        {
+            return Ok(Some(expanded));
+        }
+        bare_word(text).map_or(Ok(None), Err)
+    }
 }
 
 /// Splits `/name arg`; `None` when the input is not a command line.

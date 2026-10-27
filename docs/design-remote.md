@@ -11,8 +11,9 @@ document disagree after the feature lands, the code wins and this file is fixed.
 ## Decisions
 
 - **Intents in, projection out.** The phone never sends Agent RPC. It sends a
-  closed set of intents that the reducer executes like local actions, and it
-  receives a projection of its own session or draft built from `App` state:
+  closed set of intents that the reducer executes like local actions and a
+  closed set of queries the host relays as bounded Agent reads for its own view,
+  and it receives a projection of its own session or draft built from `App` state:
   a snapshot on connect or view change, then changed blocks (by block revision) and state
   changes. Turn lifecycle, reconciliation, approvals, follow-ups and titles stay
   in the Rust reducer only.
@@ -51,9 +52,9 @@ document disagree after the feature lands, the code wins and this file is fixed.
   that it reconnects with a remembered token.
 - **Best effort.** No event log, no replay, no automatic resend. Reconnecting
   gives a fresh snapshot.
-- **Web client first.** The TUI serves a single-file web client that installs
+- **Web client first.** The TUI serves a web client (plain files, no build step) that installs
   as a home-screen app and opens offline from a service worker cache.
-  The protocol below is versioned (`v: 1`) and is the interface a future native
+  The protocol below is versioned (`v: 2`) and is the interface a future native
   or Flutter client uses too, so it carries semantic data, never rendered rows.
 - **Optional TLS with a user certificate.** Default bind is loopback on both
   families. `tls = true` serves HTTPS and WSS with a PEM certificate and key the
@@ -213,7 +214,11 @@ renewed certificate; files are not watched. The default URL then starts with
 Each connection's request head (max 8 KiB, 10 s) is read up to its blank line;
 plain TCP and TLS streams go through the same handler:
 
-- `GET /` → the web client (`text/html; charset=utf-8`).
+- `GET /` → the web client's page (`text/html; charset=utf-8`): markup only.
+- `GET /app.css` → its styles (`text/css`); `GET /theme.js` → the small classic
+  script that sets the theme before the first paint; `GET /main.js` and the
+  ES modules it imports (`core.js`, `ui.js`, `net.js`, … `text/javascript`),
+  all listed with `modulepreload` in the page so they load in parallel.
 - `GET /sw.js` → the service worker (`text/javascript`).
 - `GET /manifest.webmanifest` → the app manifest (`application/manifest+json`).
 - `GET /icon.svg`, `/icon-192.png`, `/icon-512.png`, `/icon-maskable.png`
@@ -226,21 +231,38 @@ plain TCP and TLS streams go through the same handler:
 - Anything else → `404`. Only `GET`. Paths are matched without their query
   string, so `/?source=pwa` is the page and `/ws?x` the socket.
 
-Every HTTP response carries `Cache-Control: no-store, no-transform`, `X-Content-Type-Options: nosniff`,
+Every HTTP response carries `X-Content-Type-Options: nosniff`,
 `Referrer-Policy: no-referrer` and
-`Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:`.
-`no-transform` stops proxies such as Cloudflare from rewriting the page (email
-obfuscation, Rocket Loader, injected beacons) or recompressing it, so the
-server compresses itself: the page, service worker, manifest and SVG icon go
-out gzipped (made once, on first request) to clients whose `Accept-Encoding`
-allows gzip, with `Vary: Accept-Encoding`; PNGs are sent as they are. A reply
-is written in 4 KiB pieces and dropped only when one piece makes no progress
-for 10 s, so a slow proxy hop can take minutes without being cut off. `'self'`
-covers the service worker and the manifest through `default-src`, and the
-same-host `ws:` and `wss:` socket in current browsers (WebKit since 2022).
+`Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'`.
+The client has no inline script, `<style>` or `style=` attribute, so nothing
+inline is allowed. `'self'` covers the service worker and the manifest through
+`default-src`, and the same-host `ws:` and `wss:` socket in current browsers
+(WebKit since 2022).
+
+The client's files carry `Cache-Control: no-cache, no-transform` and a strong
+`ETag`: the first 16 hex digits of the SHA-256 of the embedded bytes, computed
+once. A request whose `If-None-Match` lists that validator (a `W/` prefix is
+accepted) gets `304 Not Modified` with the headers and no body, so reloading
+over a slow link costs one small round trip per file instead of the files. The
+gzipped copy is another representation and has its own validator (`"<hash>-gzip"`).
+The socket's upgrade reply and the `403` and `404` replies carry
+`Cache-Control: no-store, no-transform`. `no-transform` stops proxies such as
+Cloudflare from rewriting the page (email obfuscation, Rocket Loader, injected
+beacons) or recompressing it, so the server compresses itself: the page, service
+worker, manifest and SVG icon go out gzipped (made once, on first request) to
+clients whose `Accept-Encoding` allows gzip, with `Vary: Accept-Encoding`; PNGs are
+sent as they are. A reply is written in 4 KiB pieces and dropped only when one
+piece makes no progress for 10 s, so a slow proxy hop can take minutes without
+being cut off. A connection stays open for the next request (HTTP/1.1
+keep-alive): requests are answered in turn until one carries `Connection: close`,
+is not a `GET` or comes over HTTP/1.0 (that reply says `Connection: close` and
+ends the connection), or the client sends nothing for 10 s. A socket upgrade may
+follow plain requests on the same connection. So a first load reuses a browser's
+few connections instead of opening a TCP (and TLS) handshake per file; the 32
+unauthenticated connections the server admits still cover the worst case.
 
 The service worker (`sw.js`, secure contexts only: `https://` or `localhost`)
-precaches the page, manifest and icons, and answers same-origin `GET`s network
+precaches every client file except itself, and answers same-origin `GET`s network
 first: a successful response refreshes the cache, while a network failure or an
 error status (a tunnel's error page while the computer sleeps) serves the cached
 copy. The next online load therefore always runs what the TUI serves; a client
@@ -294,7 +316,7 @@ Process exit allows at most 500 ms for the connection task to flush and close.
   `bye remote_off` and nothing is stored. The web client keeps the token in `localStorage` (`minicore.token`)
   and later signs in with `hello`. The server compares SHA-256 hashes.
 
-## Protocol v1
+## Protocol v2
 
 ### Handshake
 
@@ -304,15 +326,15 @@ names are `bad_request` and do not count as a wrong password.
 Client's first message, one of:
 
 ```json
-{"t":"login","v":1,"password":"k7mq-x2pa-n9dt","device":"iPhone Safari"}
-{"t":"hello","v":1,"token":"<base64url>"}
+{"t":"login","v":2,"password":"k7mq-x2pa-n9dt","device":"iPhone Safari"}
+{"t":"hello","v":2,"token":"<base64url>"}
 ```
 
 Server answers, in order:
 
 ```json
 {"t":"authorized","token":"<base64url>"}                  // only after a login
-{"t":"welcome","v":1,"version":"0.6.0","device":"iPhone Safari","now_ms":1761300003000}
+{"t":"welcome","v":2,"version":"0.6.0","device":"iPhone Safari","now_ms":1761300003000}
 {"t":"snapshot","state":{...},"blocks":[...]}
 ```
 
@@ -327,7 +349,7 @@ On failure, the server sends one error and closes:
 `wrong_password`: the login password is wrong. `locked`: sign-in is paused; the
 error carries `"retry_after":<whole seconds, rounded up>`. `unauthorized`: the
 `hello` token is unknown (signed out); the client forgets it and asks for the
-password. `version`: `v` is not 1. Another connected device never refuses a
+password. `version`: `v` is not 2 (a v1 client must reload). Another connected device never refuses a
 sign-in.
 
 ### Client → server (after the handshake)
@@ -337,6 +359,9 @@ sign-in.
 {"t":"intent","id":"c18","kind":"queue","text":"..."}
 {"t":"intent","id":"c19","kind":"cancel"}
 {"t":"intent","id":"c20","kind":"answer","interaction_id":"...","choice":"allow"}
+{"t":"intent","id":"c31","kind":"answer","interaction_id":"...","choice":"deny","message":"Use the staging bucket"}
+{"t":"intent","id":"c32","kind":"compact"}
+{"t":"intent","id":"c33","kind":"unqueue","index":1,"text":"run the tests too"}
 {"t":"intent","id":"c21","kind":"load_older"}
 {"t":"intent","id":"c22","kind":"open_session","session_id":"ses_..."}
 {"t":"intent","id":"c23","kind":"new_session","workspace":"/Users/me/Develops/app","profile":"coding"}
@@ -347,10 +372,15 @@ sign-in.
 {"t":"fs_roots","id":"c26"}
 {"t":"fs_list","id":"c27","path":"/Users/me/Develops","hidden":false}
 {"t":"fs_mkdir","id":"c28","parent":"/Users/me/Develops","name":"new-app"}
+{"t":"query","id":"q1","kind":"context"}
+{"t":"query","id":"q2","kind":"changes"}
+{"t":"query","id":"q3","kind":"diff","path":"src/parser.rs"}
+{"t":"query","id":"q4","kind":"tool_output","call_id":"call_...","offset":0}
+{"t":"query","id":"q5","kind":"files","query":"pars"}
 ```
 
 `id` is a client string of at most 64 bytes, echoed in the answer. Unknown `t`
-or `kind`, or missing fields, answer `ack`/`fs` with `ok:false` and
+or `kind`, or missing fields, answer `ack`/`fs`/`result` with `ok:false` and
 `error:"bad_request"`; the connection stays open. An invalid or oversized `id`
 is returned as the empty string, never echoed without its 64-byte bound.
 
@@ -359,15 +389,17 @@ dispatched it, or refused it):
 
 | kind | Behaviour | Refused when |
 |---|---|---|
-| `submit` | In this device's draft: create one in its workspace with its launch settings and this first message. Idle session: send. Running: steer. Only the creating device changes view on adoption. | empty text; pending-open/create rules below |
+| `submit` | In this device's draft: create one in its workspace with its launch settings and this first message. Idle session: send. Running: steer. Only the creating device changes view on adoption. The text is read as the composer reads Enter (below). | a built-in command or a bare unknown `/word` (`"unknown_command"`); empty text, also after expansion; pending-open/create rules below |
 | `queue` | In this device's running session: queue a follow-up. Otherwise as `submit`. | as `submit` |
 | `cancel` | Interrupt the running turn, else cancel a running compaction, else nothing. | pending-create rule below |
-| `answer` | Approvals accept only `"allow"`, `"allow_session"`, or `"deny"`; choice prompts accept only an in-range row index. Goes through the local answer path, so session allowance is remembered. | no pending interaction or id differs (`"stale"`); wrong answer kind or index (`"bad_request"`), leaving the interaction untouched; pending-create rule below |
+| `compact` | `/compact`'s path: `session.compact` for this device's session. | a draft (`"No session"`); a running turn or a compaction under way (`"busy"`); pending-create rule below |
+| `unqueue` | Removes the queued follow-up at `index` of `state.queue` and sends its text back as `returned` to the requester only (never to the local composer). | the entry is not a follow-up (steers already sent cannot be taken back), is missing, or its text differs from `text`, and in a draft (`"stale"`); pending-create rule below |
+| `answer` | Approvals accept only `"allow"`, `"allow_session"`, or `"deny"`; choice prompts accept only an in-range row index. Goes through the local answer path, so session allowance is remembered. An optional `message` with `"deny"` is steered (`turn.steer`, as a running turn's Enter does, trailing whitespace trimmed) into the same turn right after `interaction.answer`, so the agent hears why. | no pending interaction or id differs (`"stale"`); wrong answer kind or index, or a `message` that is blank or beside anything but an approval's `"deny"` (`"bad_request"`), leaving the interaction untouched; pending-create rule below |
 | `load_older` | Load an older history page into this device's session transcript. | no session; pending-create rule below |
 | `open_session` | Change only this device's view: a live session switches at once (no `session.open`), another is opened and assigned on adoption. | unknown id; workspace outside `roots`; pending-open/create rules below |
 | `new_session` | Change only this device's view to a draft in `workspace` (default: its viewed workspace), with optional `profile` and that profile's/default settings; the next `submit` creates it. No empty session is created. | workspace relative, outside `roots`, missing or not a directory; unknown profile; pending-open/create rules below |
 | `set_model` / `set_reasoning` | As `/model` and `/reasoning`: a session update persists for that session; a draft changes only this device's launch settings. Draft notices go only to this device. | unknown model or level; pending-create rule below |
-| `rename_session` | Rename any listed session through the sessions picker's rename path (`session.rename` with its id); the title is trimmed, and an empty title clears it so the label falls back to the first prompt or short id. The catalog, the live session and the phones' states follow; the notice `Session renamed` is forwarded. | unknown id; workspace outside `roots`; title over 200 characters or containing control characters; pending-create rule below |
+| `rename_session` | Rename any listed session through the sessions picker's rename path (`session.rename` with its id); the title is trimmed, and an empty title clears it so the label falls back to the first prompt or short id. The catalog, the live session and the phones' states follow; no notice is sent, the new title is the confirmation. | unknown id; workspace outside `roots`; title over 200 characters or containing control characters; pending-create rule below |
 | `delete_session` | Delete permanently through the local path (`session.close` when loaded, then `session.delete`); it leaves the catalog and the lists. The phone confirms before sending. | unknown id; workspace outside `roots`; viewed by the requester (`"Open another session before deleting this one"`) or another device (`Open on "<device name>"`); the existing foreground or working-live-session refusal; pending-create rule below |
 
 `loading_session` remains global. While an open is pending, another non-live
@@ -390,7 +422,17 @@ live session even if it became the foreground meanwhile. If a non-live open
 reply arrives after its target was deleted, it is discarded with the notice
 `Session deleted while opening`; the device keeps its previous view.
 
-`submit` and `queue` trim trailing whitespace like local sends.
+`submit` and `queue` read the text with the composer's rules and code
+(`commands::parse`/`execute`, `App::prompt_text`): a line whose first word
+names a built-in command (`/compact`, `/model x`, `/rename`, also without its
+argument) is refused with `unknown_command`, since the client runs those
+itself; `/name args` naming a prompt template is expanded on the host (`$1`,
+`$@`, `$ARGUMENTS`, `${1:-default}`, quoted arguments); `//text` sends `/text`;
+a bare `/word` naming nothing (`/reveiw`) is refused with `unknown_command`,
+where the composer warns once. Anything else is sent unchanged: a path
+(`/usr/bin is…`), `/word` followed by other text (`/reveiw the parser`), a slash
+later in the text, `/9lives`, `/ hello`. Then trailing whitespace is trimmed
+like local sends.
 A refused `submit` or `queue` text is never put into the local composer. When the
 Agent later refuses a send (the path that calls `restore_draft` today) while a
 phone is connected, the text goes back as `returned` (see the routing below).
@@ -400,6 +442,67 @@ from a connection that is no longer admitted (replaced, dropped, or from a
 stopped listener) are ignored. Two devices answering the same approval: the
 first answer wins, the second gets `ack` with `error:"stale"` and the client
 says `Already answered` while the next `state` closes its sheet.
+
+### Queries
+
+A query relays one bounded Agent read for the requesting device's own view (its
+session; a draft answers `"No session"`) and is answered only to that
+connection as `result`, once the Agent replies. Queries do not focus the view,
+so they never move the TUI foreground, and the pending-open/create rules do
+not apply to them. The reducer counts each connection's queries waiting on the
+Agent: a fifth one is answered `"busy"` at once, and each reply frees its slot,
+also when its connection has gone (the reply is then dropped). A query whose
+session left the device's view still answers; the client ignores stale
+replies by id. Agent errors are passed on as their message.
+
+```json
+{"t":"result","id":"q1","ok":true,"data":{...}}
+{"t":"result","id":"q1","ok":false,"error":"busy"|"stale"|"No session"|"bad_request"|"<Agent message>"}
+```
+
+| kind | fields | Agent RPC | refused when |
+|---|---|---|---|
+| `context` | — | `session.context` | — |
+| `changes` | — | `changes.list` with `/diff`'s parameters (`scope:"workspace"`, `limit:200`, `max_bytes:262144`) | — |
+| `diff` | `path` | that same `changes.list`, then `changes.diff` (paged to the end, as the diff view reads) for every record of `path` | `path` is not in the list (`"stale"`) |
+| `tool_output` | `call_id`, `offset` (UTF-8 byte offset) | `tool.output` with the call's full identity from the viewed transcript, `stream:"output"`, `max_bytes:65536` | no tool block with that `call_id` in the viewed transcript (`"stale"`, before any RPC) |
+| `files` | `query` | `workspace.files` with the `@` list's parameters (`recursive:true`, `max_bytes:262144`) and `query`, `limit:50` | — |
+
+`data` per kind:
+
+```json
+// context: the figures the /context view shows. tokens/window/percent: the
+// last request's report (session.presentation; percent of the input budget,
+// else of the window, as the footer); the rest from session.context.
+{"tokens":31200|null,"window":64000|null,"percent":78.0|null,"budget":40000|null,
+ "history_tokens":370|null,"trigger_tokens":32000|null,"target_tokens":16000|null,
+ "compacting":false,"coverage":{"turns":6,"items":12,"kept":3}|null,
+ "last_compaction":{"origin":"automatic"|"manual"|null,
+                    "status":"compacted"|"noop"|"failed"|"unknown_write"|"unknown",
+                    "before":4200|null,"after":900|null}|null,
+ "failure":"context_uncompressible"|null}
+// changes: one row per path in list order; branch = state.session.branch;
+// truncated = more records follow (next_cursor).
+{"branch":"main"|null,"files":[{"path":"src/a.rs",
+  "status":"added"|"modified"|"deleted"|"renamed"|"conflict"|"unknown"}],"truncated":false}
+// diff: the diff view's rows without the line-number gutter: "@@ -a,b +c,d @@",
+// "+text", "-text", " text", "" between records, and notes ("── change 1 of 2 ──",
+// "No differences.", "Binary file: the diff is not shown.", "… the diff continues").
+// added/removed count lines as the diff view's file column; truncated: cut at
+// 256 KiB of line text or truncated by the Agent.
+{"path":"src/a.rs","lines":["@@ -1,1 +1,2 @@","-old","+new","+more"],"added":2,"removed":1,"truncated":false}
+// tool_output: one page; offset is where text starts (past bytes the Agent no
+// longer keeps); continue with next_offset until eof.
+{"text":"...","offset":0,"next_offset":65536,"eof":false,"truncated":false}
+// files: regular files only, workspace-relative, at most 50; truncated: the
+// Agent's page is partial, more may match.
+{"paths":["src/main.rs"],"truncated":false}
+```
+
+The Agent reports no per-category token breakdown, so `context` carries the
+`/context` figures instead. `changes` lists no line counts: they need one
+`changes.diff` per file, which the `diff` query of the opened file returns
+(`added`, `removed`).
 
 ### Server → client
 
@@ -415,6 +518,7 @@ says `Already answered` while the next `state` closes its sheet.
 {"t":"fs","id":"c27","ok":true,"listing":Listing}
 {"t":"fs","id":"c28","ok":true,"created":"/Users/me/Develops/new-app"}
 {"t":"fs","id":"c27","ok":false,"error":"outside_roots","message":"..."}
+{"t":"result","id":"q1","ok":true,"data":{...}}
 {"t":"bye","reason":"remote_off"|"tui_exit"|"replaced"|"signed_out"}
 ```
 
@@ -426,8 +530,9 @@ Routing, with several devices connected:
 | Synchronous intent `notice` | Only the requesting connection |
 | Asynchronous session `notice` | Plain text to devices viewing that session; `"<label>": text` to other devices |
 | Background-attention `notice` (approval or turn end) | Only devices not viewing that session, with its session label |
-| App-wide `notice` (remote, password, config) | Every connection |
-| `ack`, `fs` | Only the connection that sent the request |
+| Sign-in attempt `notice` (wrong password, sign-in paused) | Every connection |
+| Any other TUI notice (key hints, local refusals, `/remote` status, config) | The TUI only |
+| `ack`, `fs`, `result` | Only the connection that sent the request |
 | `returned` | The connection that last sent `submit`/`queue` **to that session**, if connected; otherwise devices viewing it; otherwise kept in `Session::returned` for local control |
 | `bye` | `replaced`: only the older connection of that device; `remote_off`, `tui_exit`, `signed_out`: every connection |
 
@@ -443,6 +548,7 @@ local composer during remote focus changes and is restored on local return.
 ```json
 {"i":40,"block":Block}
 {"i":41,"append":{"text":"new suffix","reasoning":"new thinking suffix"}}
+{"i":42,"append":{"output":["rest of the open line","next line",""]}}
 ```
 
 `block` replaces the whole block. `append` concatenates each supplied string to
@@ -452,6 +558,16 @@ at that index on this connection and the current block are both streaming
 assistants with the same `loop_id` and `request`, and neither text length has
 shrunk. Live assistant content is append-only. New, moved, replaced, or finished
 blocks use the full `block` form; when streaming ends the full block is sent once.
+A running tool's `append.output` continues its `output` the way the TUI's card
+grows: the first string is concatenated to the client's last output line (the
+line still being written, possibly `""`), every further string is pushed as a
+new line. The server sends it only when the last block sent at that index and
+the current one are both `running` tools whose `output_dropped` and every other
+field (call identity, name, detail, input, exit code, duration, line count,
+`truncated`) are unchanged; the tracker keeps a hash of those fields and the
+output's line count and last-line length, never the output. When the bounded
+tail drops lines from its start, anything else changes, or the tool finishes,
+the full `block` is sent; the finished block is always sent once in full.
 Snapshots always contain full blocks and replace everything. `app.notice`
 uses the routing above; local background notices keep their label prefix.
 
@@ -460,7 +576,8 @@ uses the routing above; local background notices keep their label prefix.
 ```json
 {
   "session": null | {"id":"ses_...","title":"Fix parser","workspace":"/abs","profile":"coding",
-                     "model":"gpt-6-luna","reasoning":"high"},
+                     "model":"gpt-6-luna","reasoning":"high","branch":"main"|null,
+                     "allowed":["bash","edit"]},
   "draft": {"workspace":"/abs","profile":"coding"|null,"model":"..."|null,"reasoning":"..."|null},
   "status": {"label":"Thinking"|null,"busy":false,"started_ms":1761300000000|null,
              "interrupting":false,"compacting":false,"loading":false},
@@ -476,7 +593,8 @@ uses the routing above; local background notices keep their label prefix.
   "background": {"running":1,"approval":0},
   "devices": [{"name":"iPhone Safari","session":"ses_..."},{"name":"Mac Edge","session":null}],
   "models": [{"id":"gpt-6-luna","reasoning":["low","medium","high"]}],
-  "profiles": ["coding","ask"]
+  "profiles": ["coding","ask"],
+  "commands": [{"name":"review","description":"Review staged changes","hint":"[focus]"}]
 }
 ```
 
@@ -497,6 +615,16 @@ uses the routing above; local background notices keep their label prefix.
   shared. `unseen` clears when any device opens the session, and a turn ending
   in a session any device views does not mark it unseen; the foreground also
   stays seen as before.
+- `session.allowed` is the sorted list of tool names the user allowed for this
+  session (`allow_session`); their approvals are answered without a notice.
+  It is `[]` when there are none.
+- `session.branch` is the Git branch the footer shows for that session
+  (`Session::branch`: the last `session.presentation` after a
+  `workspace.status`, blank names dropped), or `null`. A draft has no session
+  and the TUI knows no branch for it.
+- `commands` are the prompt templates (`prompt/commands/*.md`): name, the
+  description line and the `argument-hint`, sorted by name, shared by every
+  device and built with the cached catalog. Sending `/name args` expands one.
 - `older`: an older page can be loaded. `sessions`: the catalog filtered to
   workspaces under `roots`, newest first, at most 50. `context_percent` is the
   footer's figure, never an estimate. The pure calculation lives in
@@ -543,8 +671,8 @@ Assistant `text` is raw Markdown; clients render it.
 - The catalog portions of `State` are cached by the catalog generation, which
   changes on catalog assignment, merge or deletion (and listener generation for
   configured roots). Current-session marks are applied without rebuilding or
-  sorting catalogs. The tracker keeps streaming keys and byte lengths, not copies
-  of assistant content.
+  sorting catalogs. The tracker keeps streaming keys, byte and line counts, not copies
+  of assistant text or tool output.
 - `State` is built, serialized and compared with the last one sent; only a
   difference sends `state`. Elapsed time is computed by the client from
   `started_ms`, so a running turn does not send a `state` every frame.
@@ -561,7 +689,8 @@ authorized may finish; it is not rolled back.
 
 Operations:
 
-- `roots`: the configured roots, with `name` = last path component.
+- `roots`: the configured roots, with `name` = last path component; a root with
+  none (`/`, a Windows drive `C:\`) is named like its path.
 - `list(path, hidden)`: `path` is canonicalized and must be under a root
   (`Path::starts_with` on canonical paths). Returns only directories (symlinks
   whose canonical target is a directory under a root; the entry `path` is that
@@ -581,7 +710,9 @@ Operations:
 - Errors: `outside_roots`, `not_found`, `not_a_directory`, `invalid_name`,
   `exists`, `io` (message has the OS error).
 - On Windows returned paths drop the `\\?\` verbatim prefix; both forms are
-  accepted as input.
+  accepted as input. A drive root is `C:\` (`name` and `path`), its listing has
+  `parent: null`, and `mkdir` works directly in it. A `roots` entry `C:`, `C:/`
+  or `C:\` is normalized to `C:\` before canonicalization.
 - Root checks for sessions compare `SessionInfo::workspace` (the Agent stores it
   canonical) with the canonical roots by `Path::starts_with`, without file IO.
   `new_session` canonicalizes its `workspace` once.
@@ -611,7 +742,8 @@ workspace.
 | `src/remote/wire.rs` | Serde types of every message above |
 | `src/remote/view.rs` | `State`/`Block` projection from `&App`, the shared catalog cache and the per-connection diff tracker |
 | `src/remote/fs.rs` | Host directory functions |
-| `src/remote/web/` | `index.html` (the whole client: HTML, CSS, JS), `sw.js`, `manifest.webmanifest` and the icons, embedded with `include_bytes!` |
+| `src/remote/query.rs` | Query relays: the Agent reads per kind and the `data` mapping, run off the reducer |
+| `src/remote/web/` | The client: `index.html`, `app.css`, `theme.js`, the ES modules, `sw.js`, `manifest.webmanifest` and the icons, embedded with `include_bytes!` (layout in [design-remote-ui.md](design-remote-ui.md#code-layout)) |
 | `src/app/remote.rs` | `App` side: `/remote` commands, mode changes, local gating, intents, `sync_remote` |
 | `src/ui/views/remote.rs` | The remote status screen; composer placeholder and footer mark live with the composer and footer |
 
@@ -628,10 +760,13 @@ gains no new branch beyond calling `sync_remote` once per iteration.
 | HTTP reply | dropped after 10 s without progress |
 | WebSocket message in | 1 MiB |
 | First message | 10 s |
-| Unauthenticated connections | 8 |
+| Unauthenticated connections | 32 |
 | Outbound queue per connection | 512 messages, then the connection is dropped |
 | Ping / idle close | 20 s / 60 s |
 | Directory entries per listing | 1000 |
+| Queries waiting on the Agent per connection | 4, then `busy` |
+| `diff` text / `tool_output` page / `files` names | 256 KiB / 64 KiB / 50 |
+| `changes` records listed | 200 (one `changes.list` page) |
 | Sessions in `State` | 50 |
 | Wrong passwords | 5 in a row → 30 s pause, doubling per further 5, at most 15 min |
 | Remembered phones | 20 (so at most 20 devices connected, one connection each) |

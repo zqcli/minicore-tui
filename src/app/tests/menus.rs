@@ -350,7 +350,10 @@ async fn allowing_a_tool_for_the_session_answers_its_later_approvals_itself() {
         "bash is answered without the sheet"
     );
     assert_eq!(answers(&h)[1], ("i2".to_owned(), "allow_once".to_owned()));
-    assert_eq!(h.notices(), ["Allowed bash for this session"]);
+    assert!(
+        h.notices().is_empty(),
+        "a granted tool is not announced again"
+    );
     assert!(
         h.screen(100, 24).contains("allow bash"),
         "the footer says so"
