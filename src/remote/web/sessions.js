@@ -1,9 +1,9 @@
 import * as MC from './core.js';
-import { HOST, S, ask, fsCall, hostNow, intent, isHalted, isMain, online, turnStatus, tz, viewed } from './net.js';
+import { HOST, S, ask, fsCall, hostNow, intent, isHalted, isMain, online, signOut, turnStatus, tz, viewed } from './net.js';
 import { $, actions, announce, closeAll, copyText, diffView, errBox, fill, findSheet, h, icon, installApp, installable, layout, menuRow, notify, part, popModal, prefs, pushModal, refreshSheets, rowText, set, setPref, share, sheet, spin, standalone, toast, wide } from './ui.js';
 
 // ---- sheets ----
-export function confirmSheet(o) {
+function confirmSheet(o) {
   const m = sheet({
     key: 'confirm', cls: 'dialog', title: o.title, deps: () => [o.busy, o.err, online()],
     body: () => [o.text && h('p', 'hint big', o.text), o.err && errBox(o.err, 'mt12')],
@@ -14,7 +14,7 @@ export function confirmSheet(o) {
 }
 
 const SIZES = [['Small', .9], ['Default', 1], ['Large', 1.1], ['Larger', 1.2]];
-export function seg(label, items, value, set) {
+function seg(label, items, value, set) {
   return h('div', { class: 'seg', role: 'radiogroup', 'aria-label': label }, items.map(([l, v]) => h('button', { role: 'radio', 'data-k': label + l, 'aria-checked': String(v === value), onclick: () => set(v) }, l)));
 }
 function switchRow(label, sub, on, set, disabled) {
@@ -47,7 +47,7 @@ export function openSettings() {
           inst === 'prompt' && h('button', { class: 'row flat', onclick: installApp }, icon('down', 'ri'), rowText('Install app', 'Open MiniCore from your home screen')),
           inst === 'ios' && h('div', 'row flat', icon('share', 'ri'), rowText('Install app', 'Share → Add to Home Screen'),
             h('button', { class: 'ib s', 'aria-label': 'Dismiss', onclick: () => { localStorage.setItem('minicore.installHint', '1'); refreshSheets(); } }, icon('x', 'sm')))),
-        h('div', 'mt24', h('button', { class: 'btn block danger', onclick: () => confirmSheet({ title: 'Sign out of this device?', text: 'You will need the password shown on your computer to connect again.', label: 'Sign out', danger: true, ok: m => { m.close(true); actions.signOut(); } }) }, icon('logout', 'sm'), 'Sign out')),
+        h('div', 'mt24', h('button', { class: 'btn block danger', onclick: () => confirmSheet({ title: 'Sign out of this device?', text: 'You will need the password shown on your computer to connect again.', label: 'Sign out', danger: true, ok: m => { m.close(true); signOut(); } }) }, icon('logout', 'sm'), 'Sign out')),
       ];
     },
   });
@@ -169,7 +169,7 @@ export function openHelp() {
 // ---- sessions ----
 // Sessions whose last turn failed, until the reader opens them.
 const failed = new Set();
-export function markFailed(id) { failed.add(id); renderNav(); }
+function markFailed(id) { failed.add(id); renderNav(); }
 export function clearFailed() { for (const id of failed) if (S.state.sessions.some(x => x.id === id && x.current)) failed.delete(id); }
 
 export const openLive = id => { if (intent(MC.intents.openSession(id))) pendingRow = id; };
@@ -347,7 +347,6 @@ export function openInfo() {
 }
 
 // ---- new session ----
-// The folder picker of the open "New session" sheet.
 let picker = null;
 export function openNew() {
   const s = S.state;
@@ -421,12 +420,10 @@ export function stepSession(d) {
   const list = MC.sessionLayout(S.state.sessions, hostNow(), tz(), '', frozen).groups.flatMap(g => g.items), i = list.findIndex(x => x.current), x = list[i + d];
   if (x && !pendingRow && intent(MC.intents.openSession(x.id))) pendingRow = x.id;
 }
-// Whether `id` was the row being opened, now answered.
 export function settle(id) { const was = pendingRow === id; if (was) pendingRow = null; return was; }
 export const clearPending = () => { pendingRow = null; };
 
 // ---- attention ----
-// Banners, the app badge and tab title, and what a background session asks of this device.
 const recentAttn = new Map(), dismissed = new Set();
 const bannersPart = part($('banners'), b => [
   b.attn && h('div', { class: 'banner warn', role: 'status' }, icon('hand', 'sm'), h('span', '', '“' + b.attn.title + '” ' + (b.attn.kind === 'choice' ? 'has a question' : 'needs approval')),

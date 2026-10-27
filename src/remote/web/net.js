@@ -17,13 +17,13 @@ export const viewed = () => S.state.session || S.state.draft;
 // An unconfirmed send that went back to the composer is no longer tracked.
 export const abandon = id => S.intents.delete(id);
 // Ids keep counting so a late reply never matches a new request.
-export const resetStore = () => Object.assign(S, MC.createStore(), { nid: S.nid });
+const resetStore = () => Object.assign(S, MC.createStore(), { nid: S.nid });
 export const online = () => ready && ws && ws.readyState === 1;
 export function send(msg) { ws.send(JSON.stringify(msg)); }
-export function hangUp() {
+function hangUp() {
   if (ws) { const s = ws; ws = null; s.onclose = s.onmessage = null; s.close(); lost(); }
 }
-export function open(first) {
+function open(first) {
   const s = ws = new WebSocket((location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + HOST + '/ws');
   s.onopen = () => s.send(JSON.stringify(first()));
   s.onmessage = e => {
@@ -35,7 +35,7 @@ export function open(first) {
   };
   s.onclose = () => { if (ws === s) { ws = null; lost(); closed(); } };
 }
-export const socketGone = () => !ws || ws.readyState > 1;
+const socketGone = () => !ws || ws.readyState > 1;
 function lost() {
   ready = false;
   MC.disconnect(S);
@@ -79,7 +79,6 @@ function failQueries() {
 }
 
 // ---- connection ----
-// The sign-in and status screens and the connection's life: connect, retry with backoff, wake, sign out.
 let halted = false, attempt = 0, retryT = 0, how = 'hello', screen = '';
 export const isHalted = () => halted;
 export const isMain = () => screen === 'main';
@@ -172,7 +171,7 @@ $('pweye').addEventListener('click', () => {
   b.setAttribute('aria-label', vis ? 'Hide password' : 'Show password');
   b.firstChild.firstChild.setAttribute('href', vis ? '#i-eyeoff' : '#i-eye');
 });
-function signOut() {
+export function signOut() {
   localStorage.removeItem(KEY);
   halted = true;
   teardown();
@@ -220,4 +219,3 @@ export function handshake(fx) {
 export function boot() {
   if (localStorage.getItem(KEY)) { connecting(); connect(); } else signinScreen();
 }
-actions.signOut = signOut;

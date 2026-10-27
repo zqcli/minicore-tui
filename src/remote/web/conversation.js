@@ -33,7 +33,6 @@ const trayPart = part($('tray'), t => [
   t.q.long && h('button', { class: 'qmore', 'data-k': 'qmore', 'aria-expanded': String(qAll), onclick: () => { qAll = !qAll; renderTray(); } }, t.q.hidden ? '+' + t.q.hidden + ' more' : 'Show less'),
 ]);
 let qAll = false;
-// A queued follow-up comes back from the host: into the composer to edit it, or dropped.
 const edits = new Set();
 export const unqueueRefused = text => edits.delete(text);
 function unqueue(q, drop) {
@@ -129,8 +128,8 @@ function composerInput() {
   ta.spellcheck = !lit;
   if (ta.value) localStorage.setItem(draftKey(), ta.value); else localStorage.removeItem(draftKey());
 }
-export function loadDraft() { if (!sending()) { ta.value = localStorage.getItem(draftKey()) || ''; composerInput(); } }
-export function fillComposer(text) { ta.value = text; recall = -1; composerInput(); ta.focus(); ta.setSelectionRange(text.length, text.length); }
+function loadDraft() { if (!sending()) { ta.value = localStorage.getItem(draftKey()) || ''; composerInput(); } }
+function fillComposer(text) { ta.value = text; recall = -1; composerInput(); ta.focus(); ta.setSelectionRange(text.length, text.length); }
 function submit(kind) {
   const text = ta.value;
   if (!text.trim() || sending()) return;
@@ -151,7 +150,7 @@ function builtin(c) {
     case 'context': return !s ? need() : openContext();
     case 'changes': return !s ? need() : openChanges();
     case 'export': return !s ? need() : exportSession();
-    case 'find': return actions.find();
+    case 'find': return openFind();
     case 'session': return openInfo();
     case 'sessions': return openNav();
     case 'copy': { const b = [...S.blocks].reverse().find(x => x.type === 'assistant' && x.text); return b ? copyText(b.text) : toast('No answer to copy yet'); }
@@ -162,7 +161,6 @@ function builtin(c) {
 ta.addEventListener('input', () => { recall = -1; composerInput(); });
 ta.addEventListener('click', updateMenu);
 
-// The / command and @ file list above the composer; keyboard and touch navigable.
 let menu = null, filesT = 0, recall = -1;
 const recentKey = 'minicore.recent.' + HOST;
 let recent = JSON.parse(localStorage.getItem(recentKey) || '[]');
@@ -262,7 +260,6 @@ function openProfile() {
 }
 
 
-// Back from the host: an acknowledged send leaves the editor, a returned message comes back into it.
 export function sent(text) { remember(text); ta.value = MC.retireText(ta.value, text); composerInput(); }
 export function returned(text) {
   const mine = edits.delete(text);
@@ -275,7 +272,6 @@ export function unconfirmedHome() {
   edits.clear();
 }
 
-// ---- transcript ----
 // ---- transcript ----
 // `opened` holds the rows the reader opened or closed by key; a key not in it starts as `startsOpen` says.
 const log = $('log'), box = $('blocks'), nodes = [], dirty = new Set(), opened = new Map(), thinkTimes = new Map();
@@ -578,7 +574,6 @@ function loadEarlierBtn(label) {
   const busy = pendingKind('load_older');
   return h('button', { class: 'pill', disabled: busy, 'data-k': 'earlier', onclick: e => loadEarlier(e.currentTarget) }, busy ? spin('sm') : icon('history', 'sm'), busy ? 'Loading…' : 'Load earlier' + (label ? ' · ' + label : ''));
 }
-// Mount more of what this page has, else ask the host for an older page.
 function loadEarlier(el) {
   if (lo > 0) {
     win += MC.WINDOW;
@@ -617,7 +612,7 @@ $('newout').addEventListener('click', toLatest);
 export function markDirty(indexes) { for (const i of indexes) dirty.add(i); schedule(); }
 // A denied tool row says who denied it: this device with the reason it gave, or, without `text`, another one.
 const decided = new Map();
-export function markDenied(call, text) {
+function markDenied(call, text) {
   if (text == null && decided.has(call)) return;
   decided.set(call, text == null ? { you: false } : { you: true, text });
   const i = S.blocks.findIndex(b => b.type === 'tool' && b.call_id === call);
@@ -628,7 +623,7 @@ const finder = { on: false, q: '', ranges: [], k: 0 };
 let findTimer = 0;
 const findPart = part($('findbar'), on => on && findBar());
 function renderFind() { findPart(finder.on && [finder.q, finder.ranges.length, finder.k]); }
-function openFind() {
+export function openFind() {
   finder.on = true;
   renderFind();
   const i = $('findq');
@@ -684,7 +679,6 @@ export function followEnd() { if (stick && pinned) log.scrollTop = log.scrollHei
 actions.find = openFind;
 actions.redraw = redrawAll;
 
-// ---- approval ----
 // ---- approvals and questions ----
 let apprId = null, apprAt = 0, lastKey = 0;
 export function syncApproval() {

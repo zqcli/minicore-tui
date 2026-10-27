@@ -33,7 +33,6 @@ function inline(s) {
 }
 const cells = l => l.trim().replace(/^\|/, '').replace(/\|$/, '').replace(/\\\|/g, '\0').split('|').map(x => x.trim().replace(/\0/g, '|'));
 const TSEP = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
-// Flat items with indentation become nested lists.
 function nest(items, k, ind) {
   const list = { t: 'list', ord: items[k].ord != null, start: items[k].ord || 1, items: [] };
   while (k < items.length && items[k].ind >= ind) {
@@ -44,7 +43,6 @@ function nest(items, k, ind) {
   }
   return { list, k };
 }
-// Top-level blocks of `lines`; `cps` collects [line, blocks so far] at possible block starts.
 function parseLines(lines, cps) {
   const out = [], LI = /^(\s*)([-*+]|\d{1,9}[.)])\s+(.*)/;
   let para = [], i = 0, m;
@@ -117,7 +115,6 @@ function mdInc(c, src) {
 
 
 // ---- core ----
-// Pure client logic: no DOM, no network, no timers. Everything the UI needs to decide, format or send.
 
 const V = 2, WINDOW = 300, MAX_QUERIES = 4;
 const backoff = n => Math.min(15000, 1000 * 2 ** n);
@@ -136,7 +133,6 @@ function retireText(editor, sent) {
   return editor;
 }
 const mergeReturned = (cur, text) => cur ? cur + '\n' + text : text;
-// The other connected devices: the state's list without one entry of this device's name.
 function otherDevices(devices, me) {
   const rest = devices.slice(), i = rest.findIndex(d => d.name === me);
   if (i >= 0) rest.splice(i, 1);
@@ -249,7 +245,6 @@ function applyBlocks(blocks, len, upserts) {
   return out;
 }
 
-// Applies one server message; returns what changed for the UI.
 function reduce(s, msg, nowMs) {
   switch (msg.t) {
     case 'authorized': return { token: msg.token };
@@ -490,7 +485,6 @@ function foldTurns(blocks, from, to) {
   }
   return out;
 }
-// Blocks in [from, to) whose text matches, case-insensitively: messages, answers, thinking, tool targets and output.
 function findBlocks(blocks, q, from, to) {
   const n = q.toLowerCase(), out = [];
   for (let i = from; i < to && n; i++) {
@@ -502,7 +496,6 @@ function findBlocks(blocks, q, from, to) {
 }
 const foldText = f => 'Worked' + (f.ms != null ? ' ' + fmtDur(f.ms) : '');
 const OUTCOME = { completed: 'Completed', cancelled: 'Stopped', interrupted: 'Stopped', failed: 'Failed' };
-// The turn-end line: outcome, duration, clock time and tokens; the changes are a separate tappable part.
 function turnEnd(b, at, tz) {
   const u = b.usage, tok = u && u.input + u.output;
   return {
@@ -514,7 +507,6 @@ function turnEnd(b, at, tz) {
 }
 const changesText = c => plural(c.files, 'file') + (c.added != null ? ' +' + c.added : '') + (c.removed != null ? ' −' + c.removed : '');
 const compactionText = b => 'Context compacted' + (b.before != null || b.after != null ? ' · ' + fmtTok(b.before) + ' → ' + fmtTok(b.after) + ' tokens' : '');
-// The live line above the composer; nowHost is phone time plus the host offset.
 function statusLine(state, blocks, nowHost) {
   const st = state.status, last = blocks[blocks.length - 1];
   const label = st.loading ? 'Opening session…' : st.interrupting ? 'Stopping…' : st.compacting ? 'Compacting context' : st.label || 'Working';
@@ -546,7 +538,6 @@ const liveBlock = (blocks, busy) => {
 };
 
 // ---- approvals ----
-// What is asked: "Run command", "Edit `src/x.rs`", "Edit 3 files".
 function approvalTitle(a) {
   const k = toolKind(a.tool), files = k === 'edit' && a.input ? parseDiff(a.input) : [];
   if (k === 'cmd') return { text: 'Run command' };
@@ -609,7 +600,6 @@ function within(p, root) {
   const a = pkey(p), b = pkey(root);
   return a === b || a.startsWith(b + '\\');
 }
-// Breadcrumbs from the innermost root that holds `path`, named like the root.
 function crumbs(path, roots) {
   const all = splitPath(path), root = roots.filter(r => within(path, r.path)).sort((a, b) => b.path.length - a.path.length)[0];
   if (!root) return all;
@@ -620,7 +610,6 @@ function crumbs(path, roots) {
 const tilde = p => (p || '').replace(/^(?:\/(?:Users|home)\/[^/]+|[A-Za-z]:[\\/]Users[\\/][^\\/]+)(?=[\\/]|$)/i, '~');
 
 // ---- attention ----
-// Background sessions that started waiting for approval or finished unseen between two session lists.
 function sessionTransitions(prev, next) {
   const out = [], before = new Map(prev.map(x => [x.id, x]));
   for (const x of next) {
@@ -631,16 +620,13 @@ function sessionTransitions(prev, next) {
   }
   return out;
 }
-// Label and outcome of a forwarded background notice.
 function noticeEvent(text) {
   const m = /^"(.+)" (needs approval|finished|failed|interrupted|cancelled|stopped)\b/.exec(text);
   return m ? { label: m[1], kind: m[2] === 'needs approval' ? 'approval' : m[2] === 'failed' ? 'failed' : 'finished' } : null;
 }
-// Sessions that need this device: other sessions waiting on an approval or question, plus this one's own.
 const attentionCount = state => state.background.approval + (state.interaction ? 1 : 0);
 
 // ---- composer ----
-// Commands the client handles itself; they are never sent as text.
 const BUILTINS = [
   ['new', 'Start a new session'], ['model', 'Choose the model and reasoning'], ['rename', 'Rename this session', '[title]'],
   ['compact', 'Compact the context now'], ['context', 'Show what fills the context'], ['changes', 'Show the changed files'],
@@ -665,7 +651,6 @@ function parseSlash(text, commands) {
   if (commands.some(c => c.name === m[1])) return { template: m[1], arg };
   return !arg && /^[\w-]+$/.test(m[1]) ? { unknown: m[1] } : null;
 }
-// The "@word" being typed at the caret, if any.
 function atToken(text, caret) {
   const m = /(^|\s)@([^\s@]*)$/.exec(text.slice(0, caret));
   if (!m) return null;
@@ -676,7 +661,6 @@ function insertMention(text, tok, path) {
   const ins = '@' + path + ' ', rest = text.slice(tok.end).replace(/^ /, '');
   return { text: text.slice(0, tok.start) + ins + rest, caret: tok.start + ins.length };
 }
-// Recent prompts, newest first, without repeats.
 const pushRecent = (list, text, max = 50) => [text, ...list.filter(x => x !== text)].slice(0, max);
 // Commands and paths are not prose: no autocorrect while the text starts with one.
 const literal = text => /^[/@]/.test(text);
@@ -689,7 +673,6 @@ function composerKey(k, c) {
   if (k.alt && !k.mod) return c.busy && typed ? 'queue' : null;
   return k.mod || (c.enter && !k.shift && !k.alt) ? (c.busy ? 'steer' : 'send') : null;
 }
-// The queue above the composer: numbered follow-ups and unread steers; the first `max` show until all are asked for.
 function queueView(queue, all, max = 3) {
   let n = 0;
   // Steers first, as in the TUI.
@@ -723,7 +706,6 @@ function contextView(d) {
     failure: d.failure || '', compacting: !!d.compacting,
   };
 }
-// The loaded transcript as Markdown: messages, answers, one line per tool and the turn-end lines.
 function exportMd(state, blocks) {
   const s = state.session, out = ['# ' + titled(s.title), '', '`' + s.workspace + '`' + (s.model ? ' · ' + s.model : ''), ''];
   for (const b of blocks) {

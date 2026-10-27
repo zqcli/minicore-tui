@@ -4,7 +4,6 @@ const NS = 'http://www.w3.org/2000/svg';
 export const actions = {};
 
 const $ = id => document.getElementById(id);
-// Children are nodes and non-empty strings only: 0, false and null never render.
 export const kids = k => k.flat(Infinity).filter(x => typeof x === 'string' ? x !== '' : x instanceof Node);
 export function h(tag, p, ...c) {
   const n = document.createElement(tag);
@@ -25,6 +24,7 @@ export function h(tag, p, ...c) {
 export function icon(name, cls) {
   const s = document.createElementNS(NS, 'svg'), u = document.createElementNS(NS, 'use');
   s.setAttribute('class', 'ic' + (cls ? ' ' + cls : ''));
+  s.setAttribute('viewBox', '0 0 24 24');
   s.setAttribute('aria-hidden', 'true');
   u.setAttribute('href', '#i-' + name);
   s.append(u);
@@ -56,7 +56,6 @@ export function keepFocus(host, change, into = host) {
 const swap = (host, nodes) => keepFocus(host, () => fill(host, nodes));
 export const errBox = (text, cls, alert = true) => h('div', { class: 'serr' + (cls ? ' ' + cls : ''), role: alert && 'alert' }, icon('warn', 'sm'), h('span', '', text));
 export const rowText = (label, sub, mono) => h('span', 'rt', h('span', 'rm' + (mono ? ' mono' : ''), label), sub && h('span', 'rs', sub));
-// A row of a menu sheet: it closes the sheet first, then acts.
 export const menuRow = (m, name, label, fn, o = {}) => h('button', { class: 'row flat' + (o.cls ? ' ' + o.cls : ''), disabled: o.disabled, 'data-focus': o.focus, onclick: () => { m.close(true); fn(); } },
   icon(name, 'ri'), rowText(label, o.sub, o.mono));
 
@@ -98,7 +97,6 @@ export function toast(text, level, act) {
 export const announce = text => { $('live').textContent = text; };
 
 // ---- modal manager: the drawer and every sheet ----
-// Focus moves in and back, everything below is inert, Esc and swipe down close.
 const stack = [];
 export function pushModal(m) {
   m.opener = document.activeElement;

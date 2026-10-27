@@ -1,5 +1,5 @@
 import * as MC from './core.js';
-import { closePriMenu, followEnd, markDirty, onNewSession, openPlus, renderDock, renderEmpty, renderTop, resetTranscript, returned, schedule, sent, stop, syncApproval, unconfirmedHome, unqueueRefused } from './conversation.js';
+import { closePriMenu, followEnd, openFind, markDirty, onNewSession, openPlus, renderDock, renderEmpty, renderTop, resetTranscript, returned, schedule, sent, stop, syncApproval, unconfirmedHome, unqueueRefused } from './conversation.js';
 import { S, bind, boot, handshake, isMain, pump, repaint, turnStatus, viewed, wake } from './net.js';
 import { buildNav, clearFailed, clearPending, closeNav, modelSettled, onNotice, openHelp, openInfo, openLive, openNav, openNew, openSessionMenu, renderAttention, renderBanners, renderNav, sessionEvent, settle, stepSession, syncTick } from './sessions.js';
 import { $, actions, announce, h, inField, keepAwake, notify, reduced, refreshSheets, set, toast, topModal, topPanel } from './ui.js';
@@ -94,7 +94,7 @@ document.addEventListener('keydown', e => {
   }
   const mod = e.metaKey || e.ctrlKey, k = e.key.toLowerCase();
   if (!m && mod && k === 'k') { e.preventDefault(); openPlus(); return; }
-  if (!m && mod && k === 'f' && S.state.session) { e.preventDefault(); actions.find(); return; }
+  if (!m && mod && k === 'f' && S.state.session) { e.preventDefault(); openFind(); return; }
   if (!m && e.altKey && (k === 'arrowup' || k === 'arrowdown')) { e.preventDefault(); stepSession(k === 'arrowup' ? -1 : 1); return; }
   if (!m && e.key === '?' && !inField(e.target)) { e.preventDefault(); openHelp(); return; }
   if (!m || e.key !== 'Tab') return;
