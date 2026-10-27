@@ -1,8 +1,12 @@
 'use strict';
 // Network first, so the next online load always uses what the host serves now; the cache only opens the app while
 // the host is unreachable. The WebSocket and other origins are never touched.
-const CACHE = 'minicore-6';
-const SHELL = ['/', '/manifest.webmanifest', '/icon.svg', '/icon-192.png', '/icon-512.png', '/icon-maskable.png', '/apple-touch-icon.png'];
+const CACHE = 'minicore-7';
+const SHELL = [
+  '/', '/app.css', '/theme.js', '/main.js', '/core.js', '/markdown.js', '/ui.js', '/net.js', '/platform.js', '/sheets.js', '/sessions.js',
+  '/composer.js', '/transcript.js', '/approval.js', '/manifest.webmanifest', '/icon.svg', '/icon-192.png', '/icon-512.png', '/icon-maskable.png',
+  '/apple-touch-icon.png',
+];
 
 addEventListener('install', e => {
   skipWaiting();

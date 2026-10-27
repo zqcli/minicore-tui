@@ -1,19 +1,14 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
+import * as core from '../src/remote/web/core.js';
+import * as markdown from '../src/remote/web/markdown.js';
 
-const html = readFileSync(new URL('../src/remote/web/index.html', import.meta.url), 'utf8');
-const core = html.match(/<script id="core">([\s\S]*?)<\/script>/)[1];
-
-// Only the pure core runs here: no DOM, no network, no timers in its context.
-function load() {
-  const context = vm.createContext({});
-  vm.runInContext(core, context);
-  // Round-trip through JSON so values compare against plain objects from this realm.
-  const MC = context.MC;
-  return { MC, plain: v => JSON.parse(JSON.stringify(v)) };
-}
+const read = name => readFileSync(new URL(`../src/remote/web/${name}`, import.meta.url), 'utf8');
+const MC = { ...core, ...markdown };
+// Round-trip through JSON so values compare against plain objects.
+const plain = v => JSON.parse(JSON.stringify(v));
 
 const state = {
   session: { id: 'ses_one', title: 'One', workspace: '/work', profile: 'coding', model: 'model', reasoning: 'high' },
@@ -34,13 +29,29 @@ const blocks = [
   { type: 'earlier', hidden_items: 12 },
 ];
 
-test('the core script has no DOM or network access', () => {
+test('the pure modules have no DOM, network or timer access', () => {
   // Property access such as the context reply's `window` field is not a global.
-  assert.doesNotMatch(core, /(?<!\.)\b(document|window|localStorage|WebSocket|navigator|setTimeout|setInterval)\b/);
+  for (const name of ['core.js', 'markdown.js']) {
+    assert.doesNotMatch(read(name), /(?<!\.)\b(document|window|localStorage|WebSocket|navigator|setTimeout|setInterval)\b/, name);
+  }
+});
+
+test('the page preloads every module and the modules import each other without a cycle', () => {
+  const files = readdirSync(new URL('../src/remote/web/', import.meta.url)).filter(f => f.endsWith('.js') && f !== 'sw.js' && f !== 'theme.js');
+  const html = read('index.html');
+  const imports = Object.fromEntries(files.map(f => [f, [...read(f).matchAll(/from '\.\/(\w+\.js)'/g)].map(m => m[1])]));
+  for (const f of files) {
+    assert.ok(html.includes(`<link rel="modulepreload" href="/${f}">`), `${f} is not preloaded`);
+    for (const dep of imports[f]) assert.ok(files.includes(dep), `${f} imports ${dep}, which does not exist`);
+  }
+  const walk = (f, path) => {
+    assert.ok(!path.includes(f), `import cycle: ${[...path, f].join(' → ')}`);
+    for (const dep of imports[f]) walk(dep, [...path, f]);
+  };
+  files.forEach(f => walk(f, []));
 });
 
 test('login and hello follow the handshake contract with a bounded device name', () => {
-  const { MC, plain } = load();
   assert.deepEqual(plain(MC.login('k7mq-x2pa-n9dt', 'iPhone Safari')), { t: 'login', v: 2, password: 'k7mq-x2pa-n9dt', device: 'iPhone Safari' });
   assert.deepEqual(plain(MC.hello('tok')), { t: 'hello', v: 2, token: 'tok' });
   const ua = {
@@ -59,7 +70,6 @@ test('login and hello follow the handshake contract with a bounded device name',
 });
 
 test('every intent and filesystem request has the contract shape and a bounded unique id', () => {
-  const { MC, plain } = load();
   const s = MC.createStore(), I = MC.intents;
   const cases = [
     [I.submit('send'), { kind: 'submit', text: 'send' }],
@@ -116,7 +126,6 @@ test('every intent and filesystem request has the contract shape and a bounded u
 });
 
 test('at most four queries are in flight and results are matched to their id once', () => {
-  const { MC, plain } = load();
   const s = MC.createStore(), sent = [];
   while (MC.queryRoom(s)) sent.push(MC.query(s, MC.queries.changes()));
   assert.equal(sent.length, 4);
@@ -133,7 +142,6 @@ test('at most four queries are in flight and results are matched to their id onc
 });
 
 test('a removed queue pill drops the text the host returns, an edited one refills the composer', () => {
-  const { MC, plain } = load();
   const s = MC.createStore();
   const drop = MC.unqueue(s, 0, 'later', true);
   assert.deepEqual(plain(drop), { t: 'intent', id: drop.id, kind: 'unqueue', index: 0, text: 'later' });
@@ -153,7 +161,6 @@ test('a removed queue pill drops the text the host returns, an edited one refill
 });
 
 test('filesystem replies are matched to their request id once', () => {
-  const { MC, plain } = load();
   const s = MC.createStore(), req = MC.request(s, MC.fs.roots());
   const reply = { t: 'fs', id: req.id, ok: true, roots: [{ path: '/work', name: 'work' }] };
   assert.deepEqual(plain(MC.reduce(s, reply, 0).fs), reply);
@@ -162,7 +169,6 @@ test('filesystem replies are matched to their request id once', () => {
 });
 
 test('snapshot blocks with append and len truncation and state keep protocol fields', () => {
-  const { MC, plain } = load();
   const s = MC.createStore();
   const fx = MC.reduce(s, { t: 'snapshot', state: structuredClone(state), blocks: structuredClone(blocks) }, 0);
   assert.equal(fx.newSession, true);
@@ -203,7 +209,6 @@ test('snapshot blocks with append and len truncation and state keep protocol fie
 });
 
 test('welcome sets the host clock offset and handshake messages map to screens', () => {
-  const { MC, plain } = load();
   const s = MC.createStore();
   assert.deepEqual(plain(MC.reduce(s, { t: 'authorized', token: 'tok' }, 0)), { token: 'tok' });
   MC.reduce(s, { t: 'welcome', v: 2, version: '0.7.0', device: 'iPhone Safari', now_ms: 1761300003000 }, 1761300000000);
@@ -241,7 +246,6 @@ test('welcome sets the host clock offset and handshake messages map to screens',
 });
 
 test('a dropped connection leaves sends unconfirmed and never resends them', () => {
-  const { MC, plain } = load();
   const s = MC.createStore();
   const sent = MC.intent(s, MC.intents.submit('hello'));
   MC.intent(s, MC.intents.cancel());
@@ -272,7 +276,6 @@ test('a dropped connection leaves sends unconfirmed and never resends them', () 
 });
 
 test('retireText removes only the acked text and keeps returned or newly typed text', () => {
-  const { MC } = load();
   assert.equal(MC.retireText('draft', 'draft'), '');
   assert.equal(MC.retireText('draft\nreturned', 'draft'), 'returned');
   assert.equal(MC.retireText('returned\ndraft', 'draft'), 'returned');
@@ -284,7 +287,6 @@ test('retireText removes only the acked text and keeps returned or newly typed t
 });
 
 test('other devices read per-device views and drop just one entry of this device name', () => {
-  const { MC, plain } = load();
   const devices = [
     { name: 'iPhone Safari', session: 'x' },
     { name: 'Mac Edge', session: 'y' },
@@ -300,7 +302,6 @@ test('other devices read per-device views and drop just one entry of this device
 });
 
 test('markdown tokens keep HTML and unsafe links as plain text', () => {
-  const { MC, plain } = load();
   const texts = [];
   const walk = v => {
     if (Array.isArray(v)) return v.forEach(walk);
@@ -332,7 +333,6 @@ test('markdown tokens keep HTML and unsafe links as plain text', () => {
 });
 
 test('markdown parses headings nested lists code tables and quotes', () => {
-  const { MC, plain } = load();
   const tree = plain(MC.parseMd('# Title\n\n- a\n  - b\n- c\n\n3. x\n4. y\n\n```rust\nfn main() {}\n```\n\n| A | B |\n|:--|--:|\n| 1 | **2** |\n\n> quote'));
   assert.deepEqual(tree.map(t => t.t), ['h', 'list', 'list', 'code', 'table', 'quote']);
   assert.equal(tree[1].ord, false);
@@ -347,7 +347,6 @@ test('markdown parses headings nested lists code tables and quotes', () => {
 });
 
 test('breadcrumbs preserve Unix drive and UNC paths and start at the root', () => {
-  const { MC, plain } = load();
   for (const path of ['/work/app', 'C:\\work\\app', '\\\\server\\share\\app']) assert.equal(plain(MC.splitPath(path)).at(-1).path, path);
   assert.deepEqual(plain(MC.splitPath('/work/app')).map(c => c.path), ['/', '/work', '/work/app']);
   assert.deepEqual(plain(MC.splitPath('C:\\work\\app')).map(c => c.path), ['C:\\', 'C:\\work', 'C:\\work\\app']);
@@ -364,7 +363,6 @@ test('breadcrumbs preserve Unix drive and UNC paths and start at the root', () =
 });
 
 test('sessions group by the local calendar day of host-adjusted time', () => {
-  const { MC, plain } = load();
   const tz = -480; // UTC+8
   const now = Date.parse('2026-10-25T01:00:00Z'); // 09:00 local
   const at = iso => ({ id: iso, title: iso, workspace: '/w', updated_at: iso, current: false });
@@ -384,7 +382,6 @@ test('sessions group by the local calendar day of host-adjusted time', () => {
 });
 
 test('elapsed status line and summaries read like the TUI', () => {
-  const { MC, plain } = load();
   assert.equal(MC.fmtElapsed(12000), '12s');
   assert.equal(MC.fmtElapsed(65000), '1m 05s');
   assert.equal(MC.fmtElapsed(3725000), '1h 02m');
@@ -414,7 +411,6 @@ test('elapsed status line and summaries read like the TUI', () => {
 });
 
 test('rename keeps the title exactly, including an empty one that clears it', () => {
-  const { MC, plain } = load();
   const s = MC.createStore();
   for (const title of ['', '  spaced  ', 'Ünïcödé — 修复解析器 🚀', 'x'.repeat(200)]) {
     const msg = plain(MC.intent(s, MC.intents.renameSession('ses_one', title)));
@@ -429,20 +425,29 @@ test('rename keeps the title exactly, including an empty one that clears it', ()
   assert.equal(MC.unconfirmed(s).length, 0);
 });
 
-test('the appearance choice overrides the OS scheme and System follows it', () => {
-  const { MC } = load();
-  assert.equal(MC.theme('light', true), 'light');
-  assert.equal(MC.theme('dark', false), 'dark');
-  assert.equal(MC.theme('system', true), 'dark');
-  assert.equal(MC.theme('system', false), 'light');
-  for (const stored of [null, '', 'auto', 'DARK']) {
-    assert.equal(MC.theme(stored, true), 'dark');
-    assert.equal(MC.theme(stored, false), 'light');
+test('the appearance choice overrides the OS scheme, System follows it, and the bar colours and text size follow along', () => {
+  const run = (stored, dark) => {
+    const root = { dataset: {}, style: { props: {}, setProperty(k, v) { this.props[k] = v; } } }, metas = { tc: {}, tcd: {} };
+    const context = vm.createContext({
+      localStorage: { getItem: () => stored },
+      matchMedia: () => ({ matches: dark, addEventListener() {} }),
+      document: { documentElement: root, getElementById: id => metas[id] },
+    });
+    vm.runInContext(read('theme.js'), context);
+    return { theme: root.dataset.theme, size: root.style.props['--ts'], bars: [metas.tc.content, metas.tcd.content] };
+  };
+  const light = '#ffffff', dark = '#0e0e10';
+  assert.deepEqual(run('{"theme":"light"}', true), { theme: 'light', size: 1, bars: [light, light] });
+  assert.deepEqual(run('{"theme":"dark","text":1.2}', false), { theme: 'dark', size: 1.2, bars: [dark, dark] });
+  assert.deepEqual(run('{"theme":"system"}', true), { theme: 'dark', size: 1, bars: [light, dark] });
+  assert.deepEqual(run('{"theme":"system"}', false), { theme: 'light', size: 1, bars: [light, dark] });
+  for (const stored of [null, '{}', '{"theme":"auto"}', '{"theme":"DARK"}']) {
+    assert.equal(run(stored, true).theme, 'dark');
+    assert.equal(run(stored, false).theme, 'light');
   }
 });
 
 test('install help is the browser prompt when offered, the Share hint on iOS until dismissed, and nothing once installed', () => {
-  const { MC } = load();
   const iphone = MC.deviceName('Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) Version/18.0 Mobile/15E148 Safari/604.1');
   const ipad = MC.deviceName('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Version/18.0 Safari/605.1.15', 5);
   const android = MC.deviceName('Mozilla/5.0 (Linux; Android 15) Chrome/140.0 Mobile Safari/537.36');
@@ -458,7 +463,6 @@ const live = (id, status, extra = {}) => ({ id, title: id, workspace: '/w', upda
 const idle = id => ({ id, title: id, workspace: '/w', updated_at: '2026-10-24T00:00:00Z', current: false, live: false });
 
 test('the session list puts sessions that need you first, then running ones, then days', () => {
-  const { MC, plain } = load();
   const now = Date.parse('2026-10-25T12:00:00Z');
   const sessions = [
     idle('old'),
@@ -478,7 +482,6 @@ test('the session list puts sessions that need you first, then running ones, the
 });
 
 test('an open session list keeps its order while statuses change and puts new sessions on top of their group', () => {
-  const { MC, plain } = load();
   const now = Date.parse('2026-10-25T12:00:00Z');
   const first = MC.sessionLayout([live('a', 'running', { started_ms: 1 }), live('b', 'approval'), idle('c')], now, 0, '');
   const frozen = first.order;
@@ -492,7 +495,6 @@ test('an open session list keeps its order while statuses change and puts new se
 });
 
 test('attention counts other sessions that need you plus this view, and notices name their session', () => {
-  const { MC } = load();
   assert.equal(MC.attentionCount({ ...state, background: { running: 2, approval: 1 } }), 2);
   assert.equal(MC.attentionCount({ ...state, interaction: null, background: { running: 2, approval: 0 } }), 0);
   assert.deepEqual({ ...MC.noticeEvent('"Fix parser" needs approval · ctrl+r') }, { label: 'Fix parser', kind: 'approval' });
@@ -503,7 +505,6 @@ test('attention counts other sessions that need you plus this view, and notices 
 });
 
 test('state transitions report background approvals and unseen finishes once', () => {
-  const { MC, plain } = load();
   const ev = (a, b) => plain(MC.sessionTransitions(a, b));
   const before = [live('a', 'running', { started_ms: 1 }), live('b', 'running', { started_ms: 2 }), live('fg', 'running', { current: true }), idle('c')];
   const after = [live('a', 'approval', { started_ms: 1 }), live('b', 'idle', { unseen: true }), live('fg', 'approval', { current: true }), idle('c')];
@@ -520,7 +521,6 @@ test('state transitions report background approvals and unseen finishes once', (
 });
 
 test('snapshots and states carry session transition events against the previous state', () => {
-  const { MC, plain } = load();
   const s = MC.createStore();
   const withSessions = sessions => structuredClone({ ...state, sessions, background: { running: 1, approval: 0 } });
   assert.deepEqual(plain(MC.reduce(s, { t: 'snapshot', state: withSessions([live('a', 'running')]), blocks: [] }, 0).events), []);
@@ -530,7 +530,6 @@ test('snapshots and states carry session transition events against the previous 
 });
 
 test('device locations do not switch this client and attention excludes its own current session', () => {
-  const { MC, plain } = load();
   const s = MC.createStore();
   const view = (other, status) => structuredClone({
     ...state, session: { ...state.session, id: 'mine' },
@@ -546,7 +545,6 @@ test('device locations do not switch this client and attention excludes its own 
 });
 
 test('only the streaming tail of a busy transcript is the block being written', () => {
-  const { MC } = load();
   const said = (text, streaming = true) => ({ type: 'assistant', loop_id: 'l', request: 1, reasoning: '', text, streaming });
   const tool = { type: 'tool', call_id: 'c', name: 'bash', detail: 'ls', state: 'succeeded' };
   // The TUI keeps every assistant block of the running turn streaming; only the tail is still being written.
@@ -561,7 +559,6 @@ test('only the streaming tail of a busy transcript is the block being written', 
 });
 
 test('tool rows read as a past-tense verb, a target and meta, present tense while running', () => {
-  const { MC, plain } = load();
   const t = (name, extra) => plain(MC.toolInfo({ ...blocks[2], name, ...extra }));
   assert.deepEqual(t('bash', { detail: 'cargo test', duration_ms: 1200 }), { kind: 'cmd', run: false, verb: 'Ran', target: 'cargo test', dur: '1.2 s', exit: '', added: null, removed: null, note: '' });
   assert.equal(t('bash', { state: 'running' }).verb, 'Running');
@@ -577,7 +574,6 @@ test('tool rows read as a past-tense verb, a target and meta, present tense whil
 });
 
 test('diffs parse git hunks with line numbers and apply_patch envelopes without them', () => {
-  const { MC, plain } = load();
   const git = plain(MC.parseDiff('diff --git a/src/a.rs b/src/a.rs\nindex 1..2 100644\n--- a/src/a.rs\n+++ b/src/a.rs\n@@ -10,3 +10,4 @@ fn main\n ctx\n-old\n+new\n+more\n ctx2\ndiff --git a/b.md b/b.md\n--- /dev/null\n+++ b/b.md\n@@ -0,0 +1 @@\n+# B'));
   assert.deepEqual(git.map(f => [f.path, f.added, f.removed]), [['src/a.rs', 2, 1], ['b.md', 1, 0]]);
   assert.deepEqual(git[0].hunks[0].lines.map(l => [l.t, l.s, l.a, l.b]), [['ctx', 'ctx', 10, 10], ['del', 'old', 11, null], ['add', 'new', null, 11], ['add', 'more', null, 12], ['ctx', 'ctx2', 12, 13]]);
@@ -593,7 +589,6 @@ test('diffs parse git hunks with line numbers and apply_patch envelopes without 
 });
 
 test('approval keys answer only once armed, never from a text field or with a modifier', () => {
-  const { MC } = load();
   const appr = state.interaction, choice = { ...appr, kind: 'choice', options: ['GitHub', 'GitLab'] };
   assert.equal(MC.approvalKey(appr, 'y', false, 1000, 1600, false), 'allow');
   assert.equal(MC.approvalKey(appr, 'A', false, 1000, 1600, false), 'allow_session');
@@ -610,7 +605,6 @@ test('approval keys answer only once armed, never from a text field or with a mo
 });
 
 test('timestamps read as a clock today and carry the day otherwise', () => {
-  const { MC } = load();
   const tz = -480, now = Date.parse('2026-10-25T06:00:00Z');
   assert.equal(MC.stamp(Date.parse('2026-10-25T01:05:00Z'), now, tz), '09:05');
   assert.equal(MC.stamp(Date.parse('2026-10-24T01:05:00Z'), now, tz), 'Yesterday 09:05');
@@ -624,7 +618,6 @@ test('timestamps read as a clock today and carry the day otherwise', () => {
 const commands = [{ name: 'fix-tests', description: 'Run the tests and fix failures', hint: '[path]' }, { name: 'review', description: 'Review', hint: '' }];
 
 test('the slash list filters by name with prefix matches first and templates before built-ins', () => {
-  const { MC, plain } = load();
   const names = text => plain(MC.slashMenu(text, commands)).map(c => c.name);
   assert.deepEqual(names('/').slice(0, 3), ['fix-tests', 'review', 'new']);
   assert.ok(names('/').includes('settings'));
@@ -640,7 +633,6 @@ test('the slash list filters by name with prefix matches first and templates bef
 });
 
 test('a slash line is a built-in run here, a template sent as text, or refused as unknown', () => {
-  const { MC, plain } = load();
   assert.deepEqual(plain(MC.parseSlash('/compact', commands)), { builtin: 'compact', arg: '' });
   assert.deepEqual(plain(MC.parseSlash('  /rename Fix the parser  ', commands)), { builtin: 'rename', arg: 'Fix the parser' });
   assert.deepEqual(plain(MC.parseSlash('/diff', commands)), { builtin: 'changes', arg: '' });
@@ -655,7 +647,6 @@ test('a slash line is a built-in run here, a template sent as text, or refused a
 });
 
 test('an @ mention is found at the caret and replaced by the chosen path', () => {
-  const { MC, plain } = load();
   assert.deepEqual(plain(MC.atToken('see @par', 8)), { start: 4, end: 8, query: 'par' });
   assert.deepEqual(plain(MC.atToken('@', 1)), { start: 0, end: 1, query: '' });
   // The caret inside the word: the whole word is replaced.
@@ -667,7 +658,6 @@ test('an @ mention is found at the caret and replaced by the chosen path', () =>
 });
 
 test('recent prompts keep the newest first without repeats and at most fifty', () => {
-  const { MC, plain } = load();
   let list = [];
   for (const t of ['a', 'b', 'a', 'c']) list = MC.pushRecent(list, t);
   assert.deepEqual(plain(list), ['c', 'a', 'b']);
@@ -684,7 +674,6 @@ const SAMPLES = [
 ];
 
 test('incremental markdown equals a full parse for random splits and keeps finished blocks', () => {
-  const { MC, plain } = load();
   let seed = 7;
   const rnd = n => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed % n; };
   for (const doc of SAMPLES) {
@@ -713,7 +702,6 @@ const ask = text => ({ type: 'user', kind: 'prompt', text, at: 0 });
 const end = (loop_id, extra = {}) => ({ type: 'turn_end', loop_id, outcome: 'completed', duration_ms: 47000, requests: 2, tools: 3, usage: { input: 0, output: 0, cached: 0 }, changes: { files: 1, added: 12, removed: 4 }, ...extra });
 
 test('a finished turn folds tools and intermediate thinking before the final answer; the running turn does not', () => {
-  const { MC, plain } = load();
   const bl = [ask('go'), said('', 'plan'), tool('a', 'bash'), said('checking'), tool('b', 'read', { state: 'failed' }), said(''), { type: 'user', kind: 'steering', text: 'also', at: 0 }, tool('c', 'edit'), said('Done.', 'final thought'), end('t1'),
     ask('next'), tool('d', 'bash'), said('working', '', true)];
   const f = plain(MC.foldTurns(bl, 0, bl.length));
@@ -730,7 +718,6 @@ test('a finished turn folds tools and intermediate thinking before the final ans
 });
 
 test('consecutive reads and searches group into one row with a count', () => {
-  const { MC, plain } = load();
   const bl = [tool('a', 'read'), said(''), tool('b', 'read'), tool('c', 'grep'), tool('d', 'bash'), tool('e', 'read'), tool('f', 'glob'), said('x'), tool('g', 'read'), tool('h', 'read', { state: 'running' }), tool('i', 'grep'), tool('j', 'grep')];
   const g = plain(MC.groupTools(bl, 0, 9));
   assert.deepEqual(g.map(x => [x.key, x.members, x.label]), [['ga', [0, 2, 3], 'Explored 2 files · 1 search'], ['ge', [5, 6], 'Explored 1 file · 1 search']]);
@@ -740,7 +727,6 @@ test('consecutive reads and searches group into one row with a count', () => {
 });
 
 test('find matches messages, answers, thinking, tool targets and output case-insensitively', () => {
-  const { MC, plain } = load();
   const bl = [ask('Fix the Parser'), said('The parser is fixed', 'think about PARSER'), tool('a', 'bash', { detail: 'cargo test', output: ['parser ok'] }), end('t')];
   assert.deepEqual(plain(MC.findBlocks(bl, 'parser', 0, 4)), [0, 1, 2]);
   assert.deepEqual(plain(MC.findBlocks(bl, 'cargo', 1, 4)), [2]);
@@ -748,7 +734,6 @@ test('find matches messages, answers, thinking, tool targets and output case-ins
 });
 
 test('approvals are titled by what is asked and show the command, diff or content first', () => {
-  const { MC, plain } = load();
   const a = (tool, detail, input) => ({ id: 'x', kind: 'approval', tool, detail, input, prompt: '', options: ['Allow once', 'Deny', 'Allow ' + tool + ' this session'] });
   assert.deepEqual(plain(MC.approvalTitle(a('bash', 'cargo test', 'cargo test'))), { text: 'Run command' });
   const patch = '*** Begin Patch\n*** Update File: src/x.rs\n@@\n-a\n+b\n*** End Patch';
@@ -765,14 +750,12 @@ test('approvals are titled by what is asked and show the command, diff or conten
 });
 
 test('approval buttons use the host labels, allow first and deny last; choices are numbered', () => {
-  const { MC, plain } = load();
   assert.deepEqual(plain(MC.approvalOptions(state.interaction)), [
     { choice: 'allow', label: 'Allow once' }, { choice: 'allow_session', label: 'Allow bash this session' }, { choice: 'deny', label: 'Deny' }]);
   assert.deepEqual(plain(MC.approvalOptions({ kind: 'choice', options: ['GitHub', 'GitLab'] })), [{ choice: 0, label: 'GitHub', n: 1 }, { choice: 1, label: 'GitLab', n: 2 }]);
 });
 
 test('the context view reads the reply as a bar with markers and rows for the parts present', () => {
-  const { MC, plain } = load();
   const full = { tokens: 46800, window: 200000, percent: 23.4, budget: 180000, history_tokens: 38500, trigger_tokens: 160000, target_tokens: 60000, compacting: false,
     coverage: { turns: 14, items: 212, kept: 58 }, last_compaction: { origin: 'manual', status: 'completed', before: 182400, after: 9100 }, failure: null };
   const v = plain(MC.contextView(full));
@@ -783,14 +766,12 @@ test('the context view reads the reply as a bar with markers and rows for the pa
 });
 
 test('changed files map their status to a badge and the transcript exports as Markdown', () => {
-  const { MC, plain } = load();
   assert.deepEqual(plain(['added', 'modified', 'deleted', 'renamed', 'conflict', 'unknown', 'other'].map(MC.changeStatus)).map(x => x[0]).join(''), 'AMDR!??');
   const md = MC.exportMd(state, [blocks[0], { ...blocks[1], streaming: false }, blocks[2], blocks[3], blocks[4]]);
   assert.equal(md, '# One\n\n`/work` · model\n\n**You (steer):** now\n\n**hello**\n\n- Ran `pwd`\n\n_Completed · 7.8 s · 12 tokens_\n\n_Context compacted · 32.1k → 2.7k tokens_\n');
 });
 
 test('composer keys: Enter and Cmd/Ctrl+Enter steer or send, Alt+Enter queues, Tab and Shift+Enter are left alone', () => {
-  const { MC } = load();
   const base = { key: 'Enter', shift: false, alt: false, mod: false };
   const ctx = { busy: true, text: 'next', popup: false, enter: true };
   // [name, key, expected as [busy, idle] for "Enter sends" on, then off]
@@ -820,7 +801,6 @@ test('composer keys: Enter and Cmd/Ctrl+Enter steer or send, Alt+Enter queues, T
 });
 
 test('the primary button is send when idle, stop while working with nothing typed, steer with text typed during a turn', () => {
-  const { MC } = load();
   const face = (busy, compacting, text, stopping = false) => MC.primaryKind({ busy, compacting, text, stopping });
   // [busy, compacting, text, stopping] -> face
   const table = [
@@ -833,7 +813,6 @@ test('the primary button is send when idle, stop while working with nothing type
 });
 
 test('a tap on the primary decides from the live text and ignores double taps on Send and scrolls', () => {
-  const { MC } = load();
   const tap = (c, now = 10000, moved = 0) => MC.primaryTap({ busy: true, compacting: false, text: '', stopping: false, stopAt: 0, ...c }, now, moved);
   assert.equal(tap({}), 'stop');
   assert.equal(tap({ compacting: true, busy: false }), 'stop');
@@ -853,7 +832,6 @@ test('a tap on the primary decides from the live text and ignores double taps on
 });
 
 test('the queue shows follow-ups numbered in order, waiting steers, and the first three until expanded', () => {
-  const { MC, plain } = load();
   const q = [{ kind: 'steer', text: 's' }, { kind: 'follow', text: 'a' }, { kind: 'follow', text: 'b' }, { kind: 'follow', text: 'c' }, { kind: 'follow', text: 'd' }];
   const v = plain(MC.queueView(q, false));
   assert.deepEqual(v.items.map(x => [x.kind, x.index, x.n]), [['steer', 0, 0], ['follow', 1, 1], ['follow', 2, 2]]);
@@ -869,7 +847,6 @@ test('the queue shows follow-ups numbered in order, waiting steers, and the firs
 });
 
 test('the thinking preview is the newest sentence without Markdown markers', () => {
-  const { MC } = load();
   const p = MC.thinkingPreview;
   assert.equal(p(''), '');
   assert.equal(p('Check the parser'), 'Check the parser');
@@ -891,7 +868,6 @@ test('the thinking preview is the newest sentence without Markdown markers', () 
 });
 
 test('Windows paths split into drive, folder and UNC crumbs and accept either separator', () => {
-  const { MC, plain } = load();
   const parts = path => plain(MC.splitPath(path)).map(c => [c.name, c.path]);
   assert.deepEqual(parts('C:\\'), [['C:', 'C:\\']]);
   assert.deepEqual(parts('C:\\Users\\x'), [['C:', 'C:\\'], ['Users', 'C:\\Users'], ['x', 'C:\\Users\\x']]);
@@ -913,7 +889,6 @@ test('Windows paths split into drive, folder and UNC crumbs and accept either se
 });
 
 test('Windows paths compare by folder and without case, and never match another drive or a longer name', () => {
-  const { MC } = load();
   assert.equal(MC.within('C:\\', 'C:\\'), true);
   assert.equal(MC.within('C:\\Users\\x', 'C:\\'), true);
   assert.equal(MC.within('C:\\Users\\x', 'C:\\Users'), true);
@@ -931,7 +906,6 @@ test('Windows paths compare by folder and without case, and never match another 
 });
 
 test('crumbs start at the drive root or share root that holds the folder, one tap from Roots', () => {
-  const { MC, plain } = load();
   const roots = [{ path: 'C:\\', name: 'C:' }, { path: 'D:\\', name: 'D:' }, { path: 'D:\\work', name: 'work' }];
   const c = (path, r = roots) => plain(MC.crumbs(path, r)).map(x => [x.name, x.path]);
   assert.deepEqual(c('C:\\'), [['C:', 'C:\\']]);
@@ -945,7 +919,6 @@ test('crumbs start at the drive root or share root that holds the folder, one ta
 });
 
 test('home folders read as ~ on Windows too, and recent workspaces on other drives keep their path', () => {
-  const { MC, plain } = load();
   assert.equal(MC.tilde('C:\\Users\\me\\work\\app'), '~\\work\\app');
   assert.equal(MC.tilde('c:\\users\\me'), '~');
   assert.equal(MC.tilde('C:/Users/me/work'), '~/work');

@@ -52,7 +52,7 @@ document disagree after the feature lands, the code wins and this file is fixed.
   that it reconnects with a remembered token.
 - **Best effort.** No event log, no replay, no automatic resend. Reconnecting
   gives a fresh snapshot.
-- **Web client first.** The TUI serves a single-file web client that installs
+- **Web client first.** The TUI serves a web client (plain files, no build step) that installs
   as a home-screen app and opens offline from a service worker cache.
   The protocol below is versioned (`v: 2`) and is the interface a future native
   or Flutter client uses too, so it carries semantic data, never rendered rows.
@@ -214,7 +214,11 @@ renewed certificate; files are not watched. The default URL then starts with
 Each connection's request head (max 8 KiB, 10 s) is read up to its blank line;
 plain TCP and TLS streams go through the same handler:
 
-- `GET /` → the web client (`text/html; charset=utf-8`).
+- `GET /` → the web client's page (`text/html; charset=utf-8`): markup only.
+- `GET /app.css` → its styles (`text/css`); `GET /theme.js` → the small classic
+  script that sets the theme before the first paint; `GET /main.js` and the
+  ES modules it imports (`core.js`, `ui.js`, `net.js`, … `text/javascript`),
+  all listed with `modulepreload` in the page so they load in parallel.
 - `GET /sw.js` → the service worker (`text/javascript`).
 - `GET /manifest.webmanifest` → the app manifest (`application/manifest+json`).
 - `GET /icon.svg`, `/icon-192.png`, `/icon-512.png`, `/icon-maskable.png`
@@ -229,9 +233,11 @@ plain TCP and TLS streams go through the same handler:
 
 Every HTTP response carries `X-Content-Type-Options: nosniff`,
 `Referrer-Policy: no-referrer` and
-`Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:`.
-`'self'` covers the service worker and the manifest through `default-src`, and the
-same-host `ws:` and `wss:` socket in current browsers (WebKit since 2022).
+`Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'`.
+The client has no inline script, `<style>` or `style=` attribute, so nothing
+inline is allowed. `'self'` covers the service worker and the manifest through
+`default-src`, and the same-host `ws:` and `wss:` socket in current browsers
+(WebKit since 2022).
 
 The client's files carry `Cache-Control: no-cache, no-transform` and a strong
 `ETag`: the first 16 hex digits of the SHA-256 of the embedded bytes, computed
@@ -252,7 +258,7 @@ request, so the 32 unauthenticated connections the server admits cover a first
 load that fetches every file at once.
 
 The service worker (`sw.js`, secure contexts only: `https://` or `localhost`)
-precaches the page, manifest and icons, and answers same-origin `GET`s network
+precaches every client file except itself, and answers same-origin `GET`s network
 first: a successful response refreshes the cache, while a network failure or an
 error status (a tunnel's error page while the computer sleeps) serves the cached
 copy. The next online load therefore always runs what the TUI serves; a client
@@ -733,7 +739,7 @@ workspace.
 | `src/remote/view.rs` | `State`/`Block` projection from `&App`, the shared catalog cache and the per-connection diff tracker |
 | `src/remote/fs.rs` | Host directory functions |
 | `src/remote/query.rs` | Query relays: the Agent reads per kind and the `data` mapping, run off the reducer |
-| `src/remote/web/` | `index.html` (the whole client: HTML, CSS, JS), `sw.js`, `manifest.webmanifest` and the icons, embedded with `include_bytes!` |
+| `src/remote/web/` | The client: `index.html`, `app.css`, `theme.js`, the ES modules, `sw.js`, `manifest.webmanifest` and the icons, embedded with `include_bytes!` (layout in [design-remote-ui.md](design-remote-ui.md#code-layout)) |
 | `src/app/remote.rs` | `App` side: `/remote` commands, mode changes, local gating, intents, `sync_remote` |
 | `src/ui/views/remote.rs` | The remote status screen; composer placeholder and footer mark live with the composer and footer |
 

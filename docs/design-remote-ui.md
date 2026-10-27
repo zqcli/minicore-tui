@@ -85,13 +85,13 @@ still being written), the rest are new lines. When the bounded tail drops lines 
 else changes, the full `block` is sent. The finished block is always sent once
 in full.
 
-## Client (`src/remote/web/index.html`, `sw.js`, `manifest.webmanifest`)
+## Client (`src/remote/web/`)
 
-Single self-contained file, no build step, no external requests (CSP stays).
-`<script id="core">` stays the pure, tested `globalThis.MC` module and grows;
-DOM code is reorganised into small components that update only when their
-inputs change (no whole-region re-renders on every `state`). Budget: at most
-60 KB gzip for `index.html`.
+Plain files, no build step, no external requests, no inline script or style
+(the CSP forbids them; see [Code layout](#code-layout)). `core.js` stays the
+pure, tested logic module and grows; DOM code is reorganised into small
+components that update only when their inputs change (no whole-region
+re-renders on every `state`).
 
 ### Layout and navigation
 
@@ -319,6 +319,43 @@ scroll instead of breaking words. Shortcuts:
 Esc close the top sheet or menu, else stop the turn, Cmd/Ctrl+K command list,
 Cmd/Ctrl+Enter send or steer (Enter does when the setting is on; Alt+Enter queues),
 Cmd/Ctrl+F find, Alt+↑/↓ previous/next session, `?` shortcut help.
+
+## Code layout
+
+Every file is served as it is in the repository (`src/remote/server.rs` embeds
+them; a test fails when a file is missing from the table, the page's
+`modulepreload` list, or the service worker's precache).
+
+| File | Responsibility |
+|---|---|
+| `index.html` | Markup only: the icon sprite, screens, the app frame and `<link rel="modulepreload">` for every module |
+| `app.css` | All styles, on the custom properties of `:root` (themes are `[data-theme=dark]` overrides) |
+| `theme.js` | Classic blocking script: sets `data-theme`, the text size and the theme-color metas before the first paint |
+| `core.js`, `markdown.js` | Pure logic, no DOM, network or timers (a test enforces it): messages, the store and reducer, formatting, tool rows, folding, approvals, composer decisions; Markdown token trees |
+| `ui.js` | DOM helpers (`h`, `icon`, `part`), toasts, clipboard, the modal stack and sheets, `actions` |
+| `net.js` | The store `S`, the socket, intents, filesystem requests and queries (correlated by id) |
+| `platform.js` | Preferences, wake lock, notifications, install prompt |
+| `sheets.js` | Settings, model, changes, context, output, help and the confirm dialog |
+| `sessions.js` | The drawer or sidebar, session actions, rename, delete, info and the new-session folder picker |
+| `composer.js` | Status strip, queue, composer, primary button, `/` and `@` lists, draft |
+| `transcript.js` | Blocks, incremental rendering, folding, the mounted window, scroll anchoring, find |
+| `approval.js` | The approval and question sheet, its bar and keys |
+| `main.js` | Boot: sign-in and connection screens, message dispatch, top bar, banners, attention, global keys, lifecycle |
+
+Rules:
+
+- State has one owner. The host's state and blocks live in `S` (`net.js`;
+  only its reducer writes them). Everything else is private to the module that
+  draws it (the mounted window and folds in `transcript.js`, the lists in
+  `composer.js`, the modal stack in `ui.js`) and is changed through that
+  module's functions.
+- Modules import downward only and never form a cycle (a test checks it). A
+  call that has to go up, such as the composer opening Find, goes through
+  `actions`, which the defining module fills in.
+- Rendering is incremental: a `part` re-renders its region only when its input
+  changed, and the transcript renders only blocks marked dirty, appending to
+  an open assistant block instead of rebuilding it.
+- Nothing is inline: styles come from classes, scripts from files.
 
 ## Kept from v1
 

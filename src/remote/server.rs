@@ -37,7 +37,8 @@ const HEAD_LIMIT: usize = 8192;
 const FIRST: Duration = Duration::from_secs(10);
 const PING: Duration = Duration::from_secs(20);
 const IDLE: Duration = Duration::from_secs(60);
-pub const CSP: &str = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:";
+pub const CSP: &str =
+    "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'";
 const HEADERS: [(&str, &str); 3] = [
     ("X-Content-Type-Options", "nosniff"),
     ("Referrer-Policy", "no-referrer"),
@@ -51,6 +52,7 @@ const REVALIDATE: &str = "Cache-Control: no-cache, no-transform\r\n";
 const CHUNK: usize = 4096;
 const HTML: &str = "text/html; charset=utf-8";
 const JS: &str = "text/javascript; charset=utf-8";
+const CSS: &str = "text/css; charset=utf-8";
 const PNG: &str = "image/png";
 
 macro_rules! files {
@@ -61,6 +63,19 @@ macro_rules! files {
 /// The web client's files: path, MIME type and body.
 const FILES: &[(&str, &str, &[u8])] = files![
     ("/", HTML, "index.html"),
+    ("/app.css", CSS, "app.css"),
+    ("/theme.js", JS, "theme.js"),
+    ("/main.js", JS, "main.js"),
+    ("/core.js", JS, "core.js"),
+    ("/markdown.js", JS, "markdown.js"),
+    ("/ui.js", JS, "ui.js"),
+    ("/net.js", JS, "net.js"),
+    ("/platform.js", JS, "platform.js"),
+    ("/sheets.js", JS, "sheets.js"),
+    ("/sessions.js", JS, "sessions.js"),
+    ("/composer.js", JS, "composer.js"),
+    ("/transcript.js", JS, "transcript.js"),
+    ("/approval.js", JS, "approval.js"),
     ("/sw.js", JS, "sw.js"),
     (
         "/manifest.webmanifest",
@@ -714,7 +729,7 @@ mod tests {
             assert!(reply.contains(CSP));
             if status == "200 OK" {
                 assert!(reply.ends_with(include_str!("web/index.html")));
-                assert!(reply.contains("minicore.token"));
+                assert!(reply.contains(r#"<script type="module" src="/main.js">"#));
             }
         }
         task.abort();
@@ -848,6 +863,17 @@ mod tests {
             assert!(reply.starts_with(b"HTTP/1.1 200 OK"));
         }
         task.abort();
+    }
+
+    #[test]
+    fn the_policy_forbids_inline_code_because_the_page_has_none() {
+        assert!(!CSP.contains("unsafe-inline"));
+        let page = include_str!("web/index.html");
+        assert!(!page.contains("<style") && !page.contains(" style="));
+        for script in page.split("<script").skip(1) {
+            let tag = &script[..script.find('>').unwrap()];
+            assert!(tag.contains(" src="), "an inline script: <script{tag}>");
+        }
     }
 
     #[test]
