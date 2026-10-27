@@ -217,7 +217,12 @@ re-renders on every `state`).
   trailing "Hide" row; anchoring keeps the tapped row in place. The running
   turn is never folded.
 - **Turn end** line stays (completed / interrupted / failed, duration, clock
-  time, tokens from `usage`); tapping "+12 −4" opens Changes.
+  time, tokens from `usage`); tapping "+12 −4" opens Changes. A failed turn is
+  a card built from `turn_end.failure`: a warn icon, the title, the provider's
+  `status · code` in mono, duration and time; the hint below; the provider's
+  message in a tinted quote box clamped to three lines (a "Show full message"
+  toggle where it overflows, and Copy); and a Compact now or Switch model button
+  when `failure.action` names one.
 - **Diffs** (tool rows, approvals, Changes): per-file header, line numbers,
   add/remove tints, wrap on by default on phones, horizontal scroll per hunk
   when off.

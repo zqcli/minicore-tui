@@ -496,13 +496,23 @@ function findBlocks(blocks, q, from, to) {
 }
 const foldText = f => 'Worked' + (f.ms != null ? ' ' + fmtDur(f.ms) : '');
 const OUTCOME = { completed: 'Completed', cancelled: 'Stopped', interrupted: 'Stopped', failed: 'Failed' };
+// A failed turn as the host explains it: the title and hint are the TUI's words; `ids` is the provider's status and code
+// (the type only when it adds to the code).
+function failureView(f) {
+  const name = f.code && f.type && f.code !== f.type ? f.code + '/' + f.type : f.code || f.type;
+  return {
+    title: cap(f.title), ids: [f.status, name].filter(x => x != null && x !== '').join(' · '), hint: f.hint, message: f.message || '',
+    multiline: !!f.message && f.message.split('\n').length > 3, action: f.action || null,
+  };
+}
 function turnEnd(b, at, tz) {
-  const u = b.usage, tok = u && u.input + u.output;
+  const u = b.usage, tok = u && u.input + u.output, failure = b.failure && failureView(b.failure);
   return {
     ok: b.outcome === 'completed',
-    parts: [OUTCOME[b.outcome] || cap(String(b.outcome).replace(/_/g, ' ')), b.duration_ms != null && fmtDur(b.duration_ms),
+    parts: [failure ? failure.title : OUTCOME[b.outcome] || cap(String(b.outcome).replace(/_/g, ' ')), b.duration_ms != null && fmtDur(b.duration_ms),
       at != null && clock(at, tz), tok > 0 && fmtTok(tok) + ' tokens'].filter(Boolean),
     changes: b.changes && b.changes.files > 0 ? b.changes : null,
+    failure,
   };
 }
 const changesText = c => plural(c.files, 'file') + (c.added != null ? ' +' + c.added : '') + (c.removed != null ? ' −' + c.removed : '');
@@ -712,7 +722,11 @@ function exportMd(state, blocks) {
     if (b.type === 'user') out.push(b.kind === 'steering' ? '**You (steer):** ' + b.text : '## You\n\n' + b.text, '');
     else if (b.type === 'assistant' && b.text) out.push(b.text, '');
     else if (b.type === 'tool') { const f = toolInfo(b); out.push('- ' + f.verb + ' `' + f.target + '`' + (f.exit ? ' (' + f.exit + ')' : f.note ? ' (' + f.note + ')' : ''), ''); }
-    else if (b.type === 'turn_end') out.push('_' + turnEnd(b, null, 0).parts.join(' · ') + '_', '');
+    else if (b.type === 'turn_end') {
+      const t = turnEnd(b, null, 0), f = t.failure, parts = f && f.ids ? [t.parts[0], f.ids, ...t.parts.slice(1)] : t.parts;
+      out.push('_' + parts.join(' · ') + '_', '');
+      if (f && f.message) out.push(f.message.split('\n').map(l => ('> ' + l).trimEnd()).join('\n'), '');
+    }
     else if (b.type === 'compaction') out.push('_' + compactionText(b) + '_', '');
   }
   return out.join('\n').replace(/\n{3,}/g, '\n\n').trim() + '\n';

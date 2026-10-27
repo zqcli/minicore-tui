@@ -509,6 +509,7 @@ test('attention counts other sessions that need you plus this view, and notices 
   assert.deepEqual({ ...MC.noticeEvent('"Fix parser" needs approval · ctrl+r') }, { label: 'Fix parser', kind: 'approval' });
   assert.deepEqual({ ...MC.noticeEvent('"Fix parser" finished in 3m 12s') }, { label: 'Fix parser', kind: 'finished' });
   assert.deepEqual({ ...MC.noticeEvent('"Say "hi"" failed in 4s') }, { label: 'Say "hi"', kind: 'failed' });
+  assert.deepEqual({ ...MC.noticeEvent('"Fix parser" failed · rate limited (429)') }, { label: 'Fix parser', kind: 'failed' });
   assert.equal(MC.noticeEvent('"Fix parser": model error'), null);
   assert.equal(MC.noticeEvent('Session renamed'), null);
 });
@@ -779,6 +780,28 @@ test('the context view reads the reply as a bar with markers and rows for the pa
   assert.deepEqual(v.rows, [['History', '38.5k tokens'], ['Compacts at', '160.0k → 60.0k'], ['Covers', '14 turns · 212 items · 58 kept'], ['Last compaction', 'Manual · completed · 182.4k → 9.1k']]);
   const bare = plain(MC.contextView({ tokens: 10, window: 100, percent: 10, history_tokens: null, trigger_tokens: null, target_tokens: null, coverage: null, last_compaction: null, failure: 'model refused', compacting: true }));
   assert.deepEqual([bare.rows, bare.trigger, bare.failure, bare.compacting], [[], null, 'model refused', true]);
+});
+
+test('a failed turn shows the host\'s title, the provider identifiers, the hint and the message', () => {
+  const failure = { title: 'rate limited', hint: 'Wait a moment.', status: 429, code: 'rate_limit_exceeded', type: 'requests', message: 'Too many\nrequests', action: null };
+  const end = { ...blocks[3], outcome: 'failed', failure };
+  const t = plain(MC.turnEnd(end, null, 0));
+  assert.deepEqual(t.parts, ['Rate limited', '7.8 s', '12 tokens']);
+  assert.equal(t.ok, false);
+  assert.deepEqual(t.failure, { title: 'Rate limited', ids: '429 · rate_limit_exceeded/requests', hint: 'Wait a moment.', message: 'Too many\nrequests', multiline: false, action: null });
+  const ids = f => plain(MC.turnEnd({ ...end, failure: { title: 'x', hint: '', ...f } }, null, 0)).failure.ids;
+  assert.equal(ids({ code: 'limit', type: 'limit' }), 'limit');
+  assert.equal(ids({ status: 504 }), '504');
+  assert.equal(ids({ type: 'invalid' }), 'invalid');
+  assert.equal(ids({}), '');
+  // Only more than three lines of message get the toggle before the page has measured anything.
+  const long = plain(MC.turnEnd({ ...end, failure: { ...failure, message: 'a\nb\nc\nd', action: 'compact' } }, null, 0)).failure;
+  assert.deepEqual([long.multiline, long.action], [true, 'compact']);
+  // A host without failure details still says Failed.
+  const old = plain(MC.turnEnd({ ...blocks[3], outcome: 'failed' }, null, 0));
+  assert.deepEqual([old.parts[0], old.failure], ['Failed', undefined]);
+  const md = MC.exportMd(state, [end]);
+  assert.match(md, /_Rate limited · 429 · rate_limit_exceeded\/requests · 7\.8 s · 12 tokens_\n\n> Too many\n> requests\n$/);
 });
 
 test('changed files map their status to a badge and the transcript exports as Markdown', () => {

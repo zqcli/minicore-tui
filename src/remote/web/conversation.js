@@ -465,15 +465,26 @@ function turnClock(i) {
   }
   return null;
 }
+// The failed turn's header with what the host said under it: the hint, the provider's own message clamped to three lines
+// (its toggle shows when the text overflows, see `place`) and the button that helps.
+function failureNode(head, f, i) {
+  const k = 'e' + i, o = isOpen(k), copy = f.message && h('button', { class: 'fbtn', onclick: () => copyText(f.message, copy) }, icon('copy', 'xs'), 'Copy');
+  const act = f.action && h('button', { class: 'btn sm', onclick: f.action === 'compact' ? () => compactNow() : openModel }, f.action === 'compact' ? 'Compact now' : 'Switch model');
+  return h('div', 'fail', head, f.hint && h('p', 'fhint', f.hint),
+    f.message && h('blockquote', 'fmsg' + (o ? '' : ' clip'), h('div', 'fmt', f.message)),
+    (f.message || act) && h('div', 'facts', f.message && h('button', { class: 'more2', 'data-k': k, hidden: !(o || f.multiline), 'aria-expanded': String(o) }, o ? 'Show less' : 'Show full message'), copy, act));
+}
 function blockNode(b, i) {
   switch (b.type) {
     case 'user': return userNode(b, i);
     case 'assistant': return asstNode(b, i);
     case 'tool': return toolNode(b);
     case 'turn_end': {
-      const t = MC.turnEnd(b, turnClock(i), tz());
-      return h('div', 'te' + (t.ok ? '' : ' bad'), icon(t.ok ? 'check' : 'warn', 'xs'), h('span', 'oc', t.parts[0]), t.parts.slice(1).map(p => h('span', '', '· ' + p)),
+      const t = MC.turnEnd(b, turnClock(i), tz()), f = t.failure;
+      const head = h('div', 'te' + (t.ok ? '' : ' bad'), icon(t.ok ? 'check' : 'warn', 'xs'), h('span', 'oc', t.parts[0]), f && f.ids && h('span', 'fid', f.ids),
+        t.parts.slice(1).map(p => h('span', '', '· ' + p)),
         t.changes && h('button', { class: 'chg', 'aria-label': 'Changes: ' + MC.changesText(t.changes), onclick: () => openChanges() }, icon('diff', 'xs'), MC.changesText(t.changes), icon('chev', 'xs')));
+      return f ? failureNode(head, f, i) : head;
     }
     case 'compaction': {
       const k = 'c' + i, o = isOpen(k);
@@ -523,6 +534,7 @@ function relayout() {
 function place(n, old) {
   if (old) keepFocus(old, () => old.replaceWith(n), n);
   for (const p of n.querySelectorAll('pre.out')) p.scrollTop = p.scrollHeight;
+  for (const q of n.querySelectorAll('.fmsg.clip .fmt')) if (q.scrollHeight > q.clientHeight + 1) n.querySelector('.more2').hidden = false;
 }
 function flush() {
   raf = 0;

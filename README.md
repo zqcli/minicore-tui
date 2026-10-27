@@ -164,7 +164,11 @@ without a report. The TUI never estimates it.
   head for other tools. Any row of an expanded card collapses it on click;
   dragging over its output selects without collapsing.
 - **Turn end** is one dim line: outcome, duration, requests, tools and, when files
-  changed, `N files changed (+a −b)`. A failed or cancelled turn shows its reason.
+  changed, `N files changed (+a −b)`. A cancelled turn shows its reason. A failed
+  turn names the cause in plain words with the provider's status and code
+  (`failed · rate limited · 429 rate_limit_exceeded`), then what to do about it,
+  then the provider's own message behind a `│` rail, three lines until `Ctrl+O`
+  opens it whole; a selection copies the message only.
   The reply an interrupt cut short stays above that line, also after the
   session is reopened.
 - **Sessions.** None exists until the first message: the first `Enter` creates

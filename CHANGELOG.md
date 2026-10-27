@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- A failed turn now says what went wrong: the TUI and the web client show the
+  provider's HTTP status and code, a plain explanation with what to do next, and
+  the provider's own message (three lines, opened whole with `Ctrl+O` in the TUI
+  or "Show full message" and copied with Copy in the web client). The web card
+  offers Compact now or Switch model where that is the fix.
 - Reloading the web client over a slow link is faster: every file carries an
   `ETag` and the browser revalidates it, so an unchanged page costs a few small
   `304` replies instead of the whole download. The page also runs under a

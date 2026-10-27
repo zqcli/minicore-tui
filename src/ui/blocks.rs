@@ -93,7 +93,20 @@ pub fn render(block: &Block, styles: Styles, width: u16, fold: Fold) -> Vec<Line
             {
                 spans.push(Span::styled(next, styles.dim()));
             }
-            vec![chrome(indent(Line::from(spans), INSET))]
+            let mut lines = vec![chrome(indent(Line::from(spans), INSET))];
+            if let Some(failure) = outcome.failure() {
+                if !failure.hint.is_empty() {
+                    lines.extend(
+                        wrap::wrap_line(&failure.hint, text_width(width))
+                            .into_iter()
+                            .map(|row| chrome(indent(Line::styled(row, styles.dim()), INSET))),
+                    );
+                }
+                if let Some(message) = outcome.provider().and_then(|p| p.message.as_deref()) {
+                    lines.extend(quote(message, styles, width, fold.expanded));
+                }
+            }
+            lines
         }
         Block::Compaction {
             operation_id: _,
@@ -638,8 +651,43 @@ pub fn format_duration(duration: std::time::Duration) -> String {
     }
 }
 
+const QUOTE_RAIL: &str = "│ ";
+const QUOTE_MORE: &str = " · ctrl+o full message";
+/// Rows of a provider message shown before its expand hint.
+const QUOTE_ROWS: usize = 3;
+
+/// The provider's message behind a quote rail. The rail and the hint are chrome,
+/// so a selection takes the message alone.
+fn quote(message: &str, styles: Styles, width: usize, expanded: bool) -> Vec<Line<'static>> {
+    let room = text_width(width) - wrap::width(QUOTE_RAIL);
+    // A tab is the one control character the Agent leaves in.
+    let rows = wrap::wrap(wrap::sanitize(message.trim()).as_ref(), room);
+    let cut = !expanded && rows.len() > QUOTE_ROWS;
+    let shown = if cut { QUOTE_ROWS } else { rows.len() };
+    rows.into_iter()
+        .take(shown)
+        .enumerate()
+        .map(|(index, row)| {
+            let mut spans = vec![chrome_span(Span::styled(QUOTE_RAIL, styles.faint()))];
+            if cut && index == shown - 1 {
+                let more = match room > 2 * wrap::width(QUOTE_MORE) {
+                    true => format!("…{QUOTE_MORE}"),
+                    false => "…".to_owned(),
+                };
+                let end = wrap::char_breaks(&row, room - wrap::width(&more))[0].end;
+                spans.push(Span::styled(row[..end].to_owned(), styles.text()));
+                spans.push(chrome_span(Span::styled(more, styles.dim())));
+            } else {
+                spans.push(Span::styled(row, styles.text()));
+            }
+            indent(Line::from(spans), INSET)
+        })
+        .collect()
+}
+
 /// `completed in 3m07s · 12 requests · 11 tools · 3 files changed (+40 −7)`;
-/// a turn that did not complete leads with its reason instead.
+/// a turn that did not complete leads with its reason and the provider's
+/// identifiers instead.
 pub fn turn_end_line(
     outcome: &crate::protocol::LoopOutcome,
     duration: Option<std::time::Duration>,
@@ -654,6 +702,11 @@ pub fn turn_end_line(
         (true, None) => parts.push("completed".into()),
         (false, duration) => {
             parts.push(outcome.label());
+            parts.extend(
+                outcome
+                    .provider()
+                    .and_then(|provider| provider.identifiers()),
+            );
             parts.extend(duration.map(format_duration));
         }
     }
@@ -1516,6 +1569,13 @@ mod tests {
             Block::Tool(Box::new(call())),
             Block::Tool(Box::new(open)),
             compaction_block(Some("summary")),
+            ended(
+                serde_json::from_value(serde_json::json!({"type": "failed", "kind": "model",
+                    "model_error": {"kind": "rate_limited", "provider": {"status": 429,
+                    "message": "a very long message without any break opportunity\nsecond\nthird\nfourth"}}}))
+                .unwrap(),
+                0,
+            ),
         ] {
             for width in 3..12 {
                 for line in render(&block, styles(), width, fold()) {
@@ -1533,12 +1593,13 @@ mod tests {
     fn turn_end_lines_read_as_sentences() {
         let failed: crate::protocol::LoopOutcome = serde_json::from_value(serde_json::json!({
             "type": "failed", "kind": "model", "model_error": {"kind": "provider_unavailable",
-            "delivery": "none", "retryable": false}
+            "delivery": "unknown", "retryable": false,
+            "provider": {"status": 503, "code": "overloaded", "type": "overloaded"}}
         }))
         .unwrap();
         assert_eq!(
             turn_end_line(&failed, Some(Duration::from_millis(20)), 1, 0, None),
-            "failed · model error: provider unavailable · 0.0s"
+            "failed · provider unavailable · 503 overloaded · 0.0s"
         );
         let changes = crate::transcript::ChangeSummary {
             files: 1,

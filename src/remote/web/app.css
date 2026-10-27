@@ -315,6 +315,14 @@ pre.view.wrap{white-space:pre-wrap;overflow-wrap:anywhere}
 .te .oc{font-weight:600;color:var(--tx2)}
 .te .chg{display:inline-flex;align-items:center;gap:2px;color:var(--ac);font-weight:500;min-height:32px;position:relative;margin-left:4px}
 .te .chg::after{content:"";position:absolute;inset:-6px -4px}
+.fail{display:flex;flex-direction:column;gap:2px}
+.te .fid{font:var(--t12)/1.4 var(--mono);padding:0 6px;border-radius:4px;background:var(--fill)}
+.fhint{font-size:var(--t14);line-height:1.5;color:var(--tx2);padding:0 2px}
+.fmsg{margin:4px 0 0;padding:8px 12px;background:var(--fill);border-left:3px solid var(--wac);border-radius:0 var(--r1) var(--r1) 0;font-size:var(--t14);line-height:1.5;color:var(--tx);white-space:pre-wrap;overflow-wrap:anywhere}
+.fmsg.clip .fmt{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;line-clamp:3;overflow:hidden}
+.facts{display:flex;flex-wrap:wrap;align-items:center;gap:0 12px;margin-top:2px}
+.facts .btn{margin:4px 0 4px auto}
+.fbtn{display:inline-flex;align-items:center;gap:4px;min-height:36px;font-size:var(--t13);font-weight:600;color:var(--tx3)}
 .cmpx{display:flex;flex-direction:column;border-top:1px dashed var(--line2);padding-top:4px}
 .cmpx .tr .vb{font-weight:500}
 .cmpx .rsn{margin-bottom:6px}

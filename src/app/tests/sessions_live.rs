@@ -20,6 +20,11 @@ fn waited_in(session: &str, loop_id: &str) -> Value {
 /// `s1` ("First") open with turn `l1` running; the Agent can open `s2`
 /// ("Second") and run turn `l2` in it.
 async fn running_first() -> Harness {
+    running_first_ending(completed()).await
+}
+
+/// `running_first` where the first session's turn ends with `outcome`.
+async fn running_first_ending(outcome: Value) -> Harness {
     let mut h = Harness::opened(display_read(0, 0)).await;
     let mut first = session_info("s1");
     first["title"] = json!("First");
@@ -27,7 +32,10 @@ async fn running_first() -> Harness {
         .script("session.rename@s1", json!({"session": first}));
     h.fake
         .script("turn.send@s1", json!({"turn": turn_in("s1", "l1")}));
-    h.fake.script_held("turn.wait@s1", waited_in("s1", "l1"));
+    h.fake.script_held(
+        "turn.wait@s1",
+        json!({"turn": turn_in("s1", "l1"), "outcome": outcome}),
+    );
     let mut second = session_info("s2");
     second["title"] = json!("Second");
     h.fake.script("session.open@s2", json!({"session": second}));
@@ -158,6 +166,24 @@ async fn a_background_turn_ends_there_sends_its_follow_up_and_is_marked_new() {
     assert_eq!(h.app.session.as_ref().unwrap().info.session_id, "s2");
     show(&mut h, "s1").await;
     assert!(!h.app.session.as_ref().unwrap().unseen);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_background_turn_that_failed_names_the_reason_and_the_provider_status() {
+    let mut h = running_first_ending(json!({"type": "failed", "kind": "model",
+        "model_error": {"kind": "rate_limited", "provider": {"status": 429}}}))
+    .await;
+    show(&mut h, "s2").await;
+    h.fake.release("turn.wait@s1");
+    h.until(|app| app.live("s1").is_some_and(|s| s.unseen))
+        .await;
+    h.settle().await;
+    assert!(
+        h.notices()
+            .contains(&"\"First\" failed · rate limited (429)".to_owned()),
+        "{:?}",
+        h.notices()
+    );
 }
 
 fn approval_for(session: &str, id: &str) -> Value {

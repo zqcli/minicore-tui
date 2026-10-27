@@ -833,6 +833,97 @@ fn collapsing_a_card_while_following_leaves_no_blank_rows_under_the_content() {
     assert!(!collapsed.contains("Jump to latest"), "{collapsed}");
 }
 
+/// A prompt and its turn end, which `outcome` made a failure.
+fn failed_turn(app: &mut App, outcome: serde_json::Value) {
+    let transcript = &mut app.session.as_mut().expect("session").transcript;
+    transcript.push(Block::User {
+        text: "Summarise the changes".into(),
+        kind: UserKind::Prompt,
+        at: None,
+    });
+    transcript.push(Block::TurnEnd {
+        loop_id: "loop_1".into(),
+        outcome: serde_json::from_value(outcome).expect("outcome"),
+        duration: Some(std::time::Duration::from_secs(47)),
+        requests: 1,
+        tools: 2,
+        usage: Default::default(),
+        changes: None,
+    });
+}
+
+fn rate_limited() -> serde_json::Value {
+    serde_json::json!({"type": "failed", "kind": "model", "model_error": {
+        "kind": "rate_limited", "delivery": "not_started", "retry_after_millis": 12000,
+        "provider": {"status": 429, "code": "rate_limit_exceeded", "type": "requests",
+            "message": "Rate limit reached for gpt-6-luna in organization org-7Zq on tokens per min (TPM): Limit 30000, Used 29250, Requested 4012.\nPlease try again in 8.524s. Visit https://platform.example/account/rate-limits to learn more."}}})
+}
+
+#[test]
+fn a_failed_turn_names_the_provider_status_the_hint_and_clips_a_long_message() {
+    let mut app = app();
+    failed_turn(&mut app, rate_limited());
+    snapshot(
+        "tests/snapshots/failed-provider.txt",
+        include_str!("../../tests/snapshots/failed-provider.txt"),
+        render(&mut app, 80, 16),
+    );
+}
+
+#[test]
+fn ctrl_o_opens_the_whole_provider_message_and_closes_it_again() {
+    let mut app = app();
+    failed_turn(&mut app, rate_limited());
+    app.tools_expanded = true;
+    let open = render(&mut app, 80, 16);
+    snapshot(
+        "tests/snapshots/failed-provider-expanded.txt",
+        include_str!("../../tests/snapshots/failed-provider-expanded.txt"),
+        open,
+    );
+    app.tools_expanded = false;
+    let shut = render(&mut app, 80, 16);
+    assert!(shut.contains("full message"), "{shut}");
+    assert!(!shut.contains("to learn more"), "{shut}");
+}
+
+#[test]
+fn a_failure_without_provider_details_shows_its_hint_and_nothing_quoted() {
+    let mut app = app();
+    failed_turn(
+        &mut app,
+        serde_json::json!({"type": "failed", "kind": "model", "model_error": {"kind": "timeout"}}),
+    );
+    failed_turn(
+        &mut app,
+        serde_json::json!({"type": "failed", "kind": "output_limit"}),
+    );
+    snapshot(
+        "tests/snapshots/failed-plain.txt",
+        include_str!("../../tests/snapshots/failed-plain.txt"),
+        render(&mut app, 80, 18),
+    );
+}
+
+#[test]
+fn a_drag_over_a_failed_turn_takes_the_message_without_rails_hints_or_ellipsis() {
+    let mut app = app();
+    failed_turn(&mut app, rate_limited());
+    let screen = render(&mut app, 80, 16);
+    let first = row_of(&screen, "   failed");
+    let drag = crate::app::selection::Drag {
+        from: (0, first),
+        to: (79, first + 6),
+    };
+    let text = app.selected_text(drag).expect("text");
+    assert_eq!(
+        text,
+        "Rate limit reached for gpt-6-luna in organization org-7Zq on tokens per\n\
+         min (TPM): Limit 30000, Used 29250, Requested 4012.\n\
+         Please try again in 8.524s. Visit"
+    );
+}
+
 #[test]
 fn clicking_a_turn_end_line_opens_the_git_diff() {
     let mut fixture = app();

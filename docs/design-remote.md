@@ -645,6 +645,22 @@ uses the routing above; local background notices keep their label prefix.
 {"type":"earlier","hidden_items":12}
 ```
 
+A failed turn's `turn_end` also carries the host's account of it, so clients
+need no table of their own (additive; protocol v2 is unchanged, and a client
+without it shows `Failed`):
+
+```json
+"failure":{"title":"rate limited","hint":"The provider is limiting requests. Wait a moment, then send \"continue\". Retry after 12 s.",
+ "status":429,"code":"rate_limit_exceeded","type":"requests","message":"Rate limit reached for ...","action":"compact"|"model"|null}
+```
+
+`title` is lowercase (clients capitalise it) and `hint` is the TUI's wording
+with the retry, delivery and provider-processing remarks appended. `status`,
+`code`, `type` and `message` are the provider's own and are left out when the
+provider sent none; the message is plain text, at most 16 KiB. `action` names
+the command that helps: `compact` for a full context, `model` when another
+model may; clients offer it as a button.
+
 Enum values (`kind`, `outcome`) use the names the Agent protocol already uses.
 A user block uses `kind:"steering"`; the pending queue uses `kind:"steer"`.
 Assistant `text` is raw Markdown; clients render it.

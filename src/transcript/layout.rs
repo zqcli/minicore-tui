@@ -50,6 +50,10 @@ impl Uses {
                 expanded: true,
                 show_reasoning: false,
             },
+            Block::TurnEnd { outcome, .. } => Self {
+                expanded: outcome.provider().is_some_and(|p| p.message.is_some()),
+                show_reasoning: false,
+            },
             _ => Self {
                 expanded: false,
                 show_reasoning: false,
