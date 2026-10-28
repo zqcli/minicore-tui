@@ -25,7 +25,7 @@ Options:
   --profile <ID>         profile for a new session
   --model <ID>           model for a new session
   --reasoning <LEVEL>    auto|disabled|low|medium|high|xhigh|max|ultra
-  --remote              start remote control before opening the terminal
+  --remote               start remote control before opening the terminal
   --theme <THEME>        dark|light
   -h, --help             print this help
   -V, --version          print the version
@@ -122,6 +122,16 @@ impl Args {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_help_starts_every_option_description_in_one_column() {
+        for line in USAGE.lines().filter(|line| line.starts_with("  -")) {
+            assert!(
+                line[..25].ends_with(' ') && !line[25..].starts_with(' '),
+                "{line}"
+            );
+        }
+    }
 
     #[test]
     fn parses_every_documented_option() {
