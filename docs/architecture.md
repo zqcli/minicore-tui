@@ -367,11 +367,9 @@ hints.
    place a wait is registered and does nothing while a turn is live, so a turn
    adopted from `turn_started` or `session.state` is never waited on twice.
    Opening a session reads `session.state` once its tail is installed, so a turn
-   still running in the Agent is adopted and waited on. On
-   `session_busy` (a post-turn compaction that is really running) the prompt block is removed, the text
-   becomes a queued follow-up, the status line says `Waiting for compaction`, and
-   `session.state` is polled every 700 ms until the session accepts a turn. Any
-   other refusal puts the text back in the draft.
+   still running in the Agent is adopted and waited on. A refusal removes the
+   prompt block and puts the text back in the draft; the Agent never refuses a
+   send because of the previous turn's compaction, which runs only at turn start.
 2. **Events** (`output_delta`, `tool_*`, `request_started`, `steer_progress`,
    `session_state`, `interaction_*`) update the live turn's blocks by key, so
    order does not matter. Deltas and tool starts for a loop that is not live are

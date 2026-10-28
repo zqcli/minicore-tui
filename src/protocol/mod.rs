@@ -492,13 +492,6 @@ pub struct SessionState {
     pub compaction: Option<CompactionProgress>,
 }
 
-impl SessionState {
-    /// A session accepts a new turn only when it is idle and not compacting.
-    pub fn accepts_turn(&self) -> bool {
-        self.status == SessionStatus::Idle && self.compaction.is_none()
-    }
-}
-
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct LoopState {
     pub loop_id: String,
@@ -848,7 +841,6 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(state.status, SessionStatus::Unknown);
-        assert!(!state.accepts_turn());
     }
 
     #[test]

@@ -1,7 +1,5 @@
 //! Applying the results of async operations and the Agent's events.
 
-use serde_json::json;
-
 use super::tasks::{self, History, Window};
 use super::{App, LiveTurn, NoticeLevel, Overlay, Queued, Scroll, Session, SessionOp, find};
 use crate::protocol::stamp::unix_millis;
@@ -257,19 +255,11 @@ impl App {
         let Some(state) = self.ok(result) else {
             return;
         };
-        let idle = state.accepts_turn();
         let session = self.session_mut();
         let was_compacting = session.compaction.is_some();
         session.compaction = state.compaction;
         if was_compacting && session.compaction.is_none() {
             self.refresh_context();
-        }
-        if idle {
-            self.session_mut().waiting_for_compaction = false;
-        } else if self.session_mut().waiting_for_compaction {
-            // Post-turn compaction still owns the session: keep asking until
-            // it settles, or the queue never flushes.
-            self.retry_when_idle();
         }
         // A loop this process did not start has no `turn.wait` of its own.
         if let Some(active) = state.active_loop {
@@ -308,15 +298,6 @@ impl App {
                     self.rename(&title);
                 }
             }
-            // Post-turn compaction owns the session: the turn was refused, not
-            // sent, so the message keeps its place until the Agent is idle.
-            Err(error) if error.is_busy() => {
-                let session = self.session_mut();
-                session.waiting_for_compaction = true;
-                session.unsend_prompt(text);
-                session.queue.insert(0, queued);
-                self.retry_when_idle();
-            }
             // The text never reached the Agent; it returns to the draft.
             Err(error) => {
                 self.session_mut().unsend_prompt(text);
@@ -324,15 +305,6 @@ impl App {
                 self.error(error);
             }
         }
-    }
-
-    fn retry_when_idle(&mut self) {
-        let client = self.client.clone();
-        let params = json!({ "session_id": self.session_mut().info.session_id });
-        self.spawn(async move {
-            tokio::time::sleep(super::BUSY_RETRY).await;
-            SessionOp::State(client.call(protocol::METHOD_SESSION_STATE, &params).await)
-        });
     }
 
     fn on_waited(&mut self, result: Result<TurnWaitResult, RpcError>) {

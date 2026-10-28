@@ -587,7 +587,6 @@ impl App {
             }
         } else if session.next_turn_start.is_none()
             && !session.compacting()
-            && !session.waiting_for_compaction
             && let Some(queued) = session.take_next()
         {
             self.send(queued);

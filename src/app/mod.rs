@@ -261,7 +261,7 @@ pub const NOTICE_TTL: Duration = Duration::from_secs(5);
 pub const FLASH_TTL: Duration = Duration::from_secs(1);
 /// Presses this close together on one word make a double or triple click.
 pub const DOUBLE_CLICK: Duration = Duration::from_millis(500);
-/// Delay before asking again whether post-turn compaction finished.
+/// Delay before asking the Agent again after a busy or full-queue refusal.
 pub const BUSY_RETRY: Duration = Duration::from_millis(700);
 
 impl App {

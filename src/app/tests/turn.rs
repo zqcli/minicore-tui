@@ -223,14 +223,9 @@ async fn turn_end_releases_refused_steers_as_the_next_prompt_in_order() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn pending_prompt_and_compaction_refusal_keep_newer_messages_behind_it() {
+async fn a_pending_prompt_keeps_newer_messages_behind_it() {
     let mut h = Harness::opened(display_read(0, 0)).await;
-    h.fake.script_sequence(
-        "turn.send",
-        vec![refusal(-32003, "session_busy"), json!({"turn":turn("B")})],
-    );
-    h.fake
-        .script_held("session.state", json!({"session_id":"s1", "status":"idle"}));
+    h.fake.script_held("turn.send", json!({"turn": turn("B")}));
     h.submit("first");
     h.submit("second");
     assert_eq!(
@@ -244,12 +239,11 @@ async fn pending_prompt_and_compaction_refusal_keep_newer_messages_behind_it() {
         ["first"],
         "a pending send blocks the next prompt"
     );
-    assert_eq!(h.queue(), ["first", "second"]);
     h.fake.script("turn.steer", json!({"ok":true}));
     h.fake.script_held("turn.wait", waited("B", completed()));
-    h.fake.release("session.state");
+    h.fake.release("turn.send");
     h.settle().await;
-    assert_eq!(h.sends(), ["first", "first"]);
+    assert_eq!(h.sends(), ["first"]);
     assert_eq!(h.calls("turn.steer")[0]["text"], "second");
 }
 
@@ -730,39 +724,6 @@ async fn queued_follow_ups_are_sent_one_per_turn_oldest_first() {
     assert_eq!(h.sends(), ["start", "first", "second"]);
     assert!(h.queue().is_empty());
     assert_eq!(turn_ends(&h), ["l1", "l2", "l3"]);
-}
-
-#[tokio::test(start_paused = true)]
-async fn a_busy_refusal_queues_the_text_and_sends_it_once_when_idle() {
-    let mut h = Harness::opened(display_read(0, 0)).await;
-    h.fake.script_sequence(
-        "turn.send",
-        vec![refusal(-32003, "session_busy"), json!({"turn": turn("l2")})],
-    );
-    h.fake.script("turn.wait", waited("l2", completed()));
-    h.fake.script_sequence(
-        "session.state",
-        vec![
-            json!({"session_id": "s1", "status": "busy",
-                   "compaction": {"operation_id": "auto-l1", "phase": "summarizing",
-                                  "covered_item_count": 4, "retained_item_count": 1}}),
-            json!({"session_id": "s1", "status": "idle"}),
-        ],
-    );
-    h.submit("the important text");
-    h.until(|app| app.status_label() == Some("Waiting for compaction"))
-        .await;
-    assert!(
-        h.texts().is_empty(),
-        "a refused prompt is not shown as sent"
-    );
-    assert_eq!(h.queue(), ["the important text"]);
-
-    h.settle().await;
-    assert_eq!(h.sends(), ["the important text", "the important text"]);
-    assert_eq!(h.texts(), ["the important text"]);
-    assert!(h.queue().is_empty());
-    assert_eq!(h.app.status_label(), None);
 }
 
 #[tokio::test(start_paused = true)]

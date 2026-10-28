@@ -62,9 +62,6 @@ pub struct Session {
     pub reconcile_from: Vec<(String, usize)>,
     /// Where the next turn's region starts, captured before its prompt block.
     pub next_turn_start: Option<usize>,
-    /// A send was refused while post-turn compaction owned the session; the
-    /// message keeps its place until the session is idle.
-    pub waiting_for_compaction: bool,
     /// The composer text this session had when it left the foreground.
     pub draft: Option<String>,
     /// Refused texts awaiting local control because no remote recipient received them.
@@ -256,7 +253,6 @@ impl Session {
             applied_steers: 0,
             reconcile_from: Vec::new(),
             next_turn_start: None,
-            waiting_for_compaction: false,
             draft: None,
             returned: Vec::new(),
             last_sender: None,
@@ -285,17 +281,14 @@ impl Session {
         } else if self.interaction.is_some() {
             Some("Waiting for approval")
         } else {
-            self.phase_label().or_else(|| {
-                self.waiting_for_compaction
-                    .then_some("Waiting for compaction")
-            })
+            self.phase_label()
         }
     }
 
     pub fn live_status(&self) -> LiveStatus {
         if self.interaction.is_some() {
             LiveStatus::Approval
-        } else if self.compaction.is_some() || self.waiting_for_compaction {
+        } else if self.compaction.is_some() {
             LiveStatus::Compacting
         } else if self.is_busy() {
             LiveStatus::Running

@@ -188,12 +188,6 @@ fn working_line(app: &App, styles: Styles, width: u16) -> Option<Line<'static>> 
         "Interrupting…"
     } else if live.is_some() {
         "Working (esc to interrupt)"
-    } else if app
-        .session
-        .as_ref()
-        .is_some_and(|session| session.waiting_for_compaction)
-    {
-        "Waiting for compaction…"
     } else {
         return None;
     };
