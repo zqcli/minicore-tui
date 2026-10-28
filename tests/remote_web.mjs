@@ -524,6 +524,17 @@ test('pinned sessions form one group after Needs you, newest pin first, and appe
   assert.deepEqual(groups(['d', 'c'], '', frozen), [['Needs you', ['ask']], ['Pinned', ['d', 'c']], ['Running', ['b']], ['w', ['a']]]);
 });
 
+test('a session is recent while resident and idle with its last turn under 30 minutes old, and its label says when', () => {
+  const now = Date.parse('2026-10-25T01:00:00Z'), at = min => new Date(now - min * 60000).toISOString();
+  assert.equal(MC.recent(live('a', 'idle', { updated_at: at(3) }), now), true);
+  assert.equal(MC.recent(live('a', 'idle', { updated_at: at(29.9) }), now), true);
+  assert.equal(MC.recent(live('a', 'idle', { updated_at: at(30) }), now), false);
+  assert.equal(MC.recent(live('a', 'running', { updated_at: at(1) }), now), false);
+  assert.equal(MC.recent(idle('a', { updated_at: at(1) }), now), false);
+  assert.equal(MC.finishedText('now'), 'finished just now');
+  assert.equal(MC.finishedText('3m'), 'finished 3m ago');
+});
+
 test('pins of sessions the catalog dropped are forgotten, unless a full catalog may hide them', () => {
   const some = [idle('a'), idle('b')];
   assert.deepEqual(plain(MC.prunePins(['x', 'b', 'a'], some)), ['b', 'a']);

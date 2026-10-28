@@ -330,7 +330,7 @@ function stamp(ms, now, tz) {
   return MON[d.getUTCMonth()] + ' ' + d.getUTCDate() + ', ' + clock(ms, tz);
 }
 const busyStatus = st => st === 'running' || st === 'approval' || st === 'compacting';
-const PINNED_KEY = '*pinned', CATALOG_MAX = 50;
+const PINNED_KEY = '*pinned', CATALOG_MAX = 50, RECENT_MS = 30 * 60000;
 // The drawer: Needs you (longest waiting first), the reader's Pinned sessions (newest pin first), Running (oldest first), then
 // one group per workspace, the one with the newest session first and each group's sessions newest first. `pins` lists the pinned
 // ids, newest pin first. `frozen` is the order captured on open: rows keep their place (and group), and new sessions go to the
@@ -367,6 +367,9 @@ function sessionLayout(sessions, query, frozen, pins = []) {
   return { groups, order: frozen || order };
 }
 const LEVELS = ['Needs you', 'Pinned', 'Running'], GROUP_ROWS = 5;
+// A session that is resident, idle and finished a turn within the last half hour; `now` is the host clock.
+const recent = (x, now) => x.live && x.status === 'idle' && now - Date.parse(x.updated_at) < RECENT_MS;
+const finishedText = rel => 'finished ' + (rel === 'now' ? 'just now' : rel + ' ago');
 // The pins that are still in the catalog. A catalog at its cap may not list every session, so then nothing is dropped.
 const prunePins = (pins, sessions) => {
   if (sessions.length >= CATALOG_MAX) return pins;
@@ -759,7 +762,7 @@ function recentWorkspaces(sessions, max = 6) {
 export {
   V, WINDOW, inline, parseMd, mdInc, backoff, basename, plural, titled, quiet, midTrunc, retireText, mergeReturned, otherDevices, deviceName,
   installOffer, login, hello, intents, queries, fs, createStore, intent, request, query, queryRoom, pending, disconnect,
-  sendAgain, unconfirmed, reduce, lockText, unreachable, fsError, errorText, stamp, relTime, sessionLayout, groupRows, PINNED_KEY, prunePins,
+  sendAgain, unconfirmed, reduce, lockText, unreachable, fsError, errorText, stamp, relTime, sessionLayout, groupRows, PINNED_KEY, recent, finishedText, prunePins,
   fmtElapsed, fmtTok, fmtNum, groupTools, foldTurns, findBlocks, foldText, toolInfo, parseDiff, diffStats, liveBlock, turnEnd,
   changesText, compactionText, statusLine, placeholder, allowedText, canStop, primaryKind, primaryTap, TAP_SLOP, approvalKey, approvalTitle,
   approvalOptions, approvalBody, approvalLine, changeStatus, contextView, exportMd, slashMenu, parseSlash, atToken,

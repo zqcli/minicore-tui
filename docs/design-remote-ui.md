@@ -114,7 +114,7 @@ re-renders on every `state`).
   "Show N more", and a search shows every match in every group with a match,
   Pinned included. Status by shape and colour:
   amber hand = needs you, spinner = running, red ! = failed last
-  turn, dot = new result. Rows are single-line, 36 px on hover devices and
+  turn, blue dot = new result, green dot = recent (below). Rows are single-line, 36 px on hover devices and
   44 px on touch, with 14/15 px titles and a 16 px status column. Workspace
   headers are 32 px tall. Hover or keyboard focus replaces the relative time
   with the actions button in the same slot; touch keeps a compact actions
@@ -132,6 +132,13 @@ re-renders on every `state`).
   keeps its own working set. A pin whose session left the catalog is dropped when
   the state arrives, unless the catalog holds the host's cap of 50 and may hide
   it. The TUI's session picker has no pins.
+- **Recent mark**: a session that is resident in the TUI, idle and whose last
+  turn ended less than 30 minutes ago, outside Needs you, Pinned and the open
+  session, shows a green dot in the status column (below unseen's blue dot, red
+  failed and the spinner) and a stronger time; its row label and the dot's
+  tooltip say "finished 3m ago". It is worked out when the list renders from the
+  host clock, with no timer, so it lapses at the next state message after the
+  half hour.
 - **Settings** (full-screen sheet): Appearance (System/Light/Dark), text size
   (4 steps), wrap code by default, show thinking expanded, Enter sends (for
   hardware keyboards; on by default for a fine pointer with hover, off on touch,

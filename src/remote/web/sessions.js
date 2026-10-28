@@ -259,11 +259,12 @@ export function renderNav() {
   if (s.sessions !== pinsSeen) { pinsSeen = s.sessions; const kept = MC.prunePins(pins, s.sessions); if (kept !== pins) { pins = kept; savePins(); } }
   const lay = MC.sessionLayout(s.sessions, query, frozen, pins), searching = query.trim() !== '', now = hostNow();
   if (nav.classList.contains('on') || navLook || nav.contains(document.activeElement)) frozen = lay.order;
-  const row = x => [x.id, x.title, x.workspace, x.current, x.live && x.status, x.unseen, MC.relTime(Date.parse(x.updated_at), now, tz()), failed.has(x.id)];
+  // Only a workspace group marks recent sessions, and not the open one: the others already stand out and that one is in front.
+  const row = recent => x => [x.id, x.title, x.workspace, x.current, x.live && x.status, x.unseen, MC.relTime(Date.parse(x.updated_at), now, tz()), failed.has(x.id), recent && !x.current && MC.recent(x, now)];
   listPart({
     groups: lay.groups.map(g => {
       const v = MC.groupRows(g.items, g.level < 3 || searching || moreWs.has(g.ws));
-      return { label: g.label, ws: g.ws, level: g.level, closed: !searching && closedWs.has(g.ws), count: g.items.length, hidden: v.hidden, rows: v.shown.map(row) };
+      return { label: g.label, ws: g.ws, level: g.level, closed: !searching && closedWs.has(g.ws), count: g.items.length, hidden: v.hidden, rows: v.shown.map(row(g.level === 3)) };
     }), pendingRow, query: !!query,
   });
   renderNavFoot();
@@ -282,15 +283,16 @@ function renderList(l) {
     !g.closed && g.hidden > 0 && h('button', { class: 'gmore', 'data-k': 'x' + encodeURIComponent(g.ws) }, 'Show ' + g.hidden + ' more')]);
 }
 // Rows of Needs you and Running show no time; the ones in Pinned have no folder header, so theirs is in the tooltip.
-function sessionRow([id, title, ws, current, status, unseen, rel, bad], pinned, inPins) {
+function sessionRow([id, title, ws, current, status, unseen, rel, bad, recent], pinned, inPins) {
   const shape = status === 'approval' ? h('span', { class: 'sst warn', title: 'Needs you' }, icon('hand', 'sm'))
     : status === 'running' || status === 'compacting' ? h('span', 'sst', spin('sm'))
     : bad ? h('span', { class: 'sst er', title: 'Last turn failed' }, icon('alert', 'sm'))
-    : unseen ? h('span', { class: 'sst', title: 'New result' }, h('i', 'ndot')) : h('span', 'sst');
+    : unseen ? h('span', { class: 'sst', title: 'New result' }, h('i', 'ndot'))
+    : recent ? h('span', { class: 'sst', title: MC.finishedText(rel) }, h('i', 'rdot')) : h('span', 'sst');
   return h('div', 'srow' + (current ? ' cur' : ''), h('button', {
     class: 'sopen', 'data-k': 's' + id, 'aria-current': current ? 'page' : null, title: inPins ? MC.tilde(ws) : null,
-    'aria-label': MC.titled(title) + ', ' + MC.basename(ws) + (status === 'approval' ? ', needs you' : status === 'running' ? ', running' : ''),
-  }, pendingRow === id ? h('span', 'sst', spin('sm')) : shape, rowText(MC.titled(title)), h('span', 'stime' + (pinned ? ' workspace' : ''), rel)),
+    'aria-label': MC.titled(title) + ', ' + MC.basename(ws) + (status === 'approval' ? ', needs you' : status === 'running' ? ', running' : recent ? ', ' + MC.finishedText(rel) : ''),
+  }, pendingRow === id ? h('span', 'sst', spin('sm')) : shape, rowText(MC.titled(title)), h('span', 'stime' + (pinned ? ' workspace' : '') + (recent ? ' recent' : ''), rel)),
   h('button', { class: 'ib more', 'data-k': 'm' + id, 'aria-label': 'Actions for ' + MC.titled(title), 'aria-haspopup': 'dialog' }, icon('more')));
 }
 (() => {
