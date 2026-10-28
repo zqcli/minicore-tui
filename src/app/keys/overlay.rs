@@ -175,12 +175,7 @@ impl App {
     }
 
     fn on_overlay_accept(&mut self) -> Option<Action> {
-        if self.remote.active()
-            && matches!(
-                self.overlay,
-                Overlay::Sessions { .. } | Overlay::Models { .. } | Overlay::Reasoning { .. }
-            )
-        {
+        if self.remote.active() && matches!(self.overlay, Overlay::Sessions { .. }) {
             self.remote_flash();
             return None;
         }

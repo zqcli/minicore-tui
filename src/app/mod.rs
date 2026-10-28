@@ -375,12 +375,10 @@ impl App {
             }),
             Msg::Renamed(id, result) => self.with_notice_for(&id, |app| app.on_renamed(result)),
             Msg::Session(epoch, op) => {
-                if self
-                    .session
-                    .as_ref()
-                    .is_some_and(|session| session.epoch == epoch)
+                if let Some(session) = self.session.as_ref()
+                    && session.epoch == epoch
                 {
-                    let id = self.session.as_ref().unwrap().info.session_id.clone();
+                    let id = session.info.session_id.clone();
                     self.with_notice_for(&id, |app| app.on_op(*op));
                 } else if let Some(index) = self
                     .background

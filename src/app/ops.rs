@@ -257,7 +257,7 @@ impl App {
             return;
         };
         let session = self.session_mut();
-        let was_compacting = session.compaction.is_some();
+        let was_compacting = session.compacting();
         session.compaction = state.compaction;
         if was_compacting && session.compaction.is_none() {
             self.refresh_context();
@@ -283,7 +283,6 @@ impl App {
         let mut live = LiveTurn::new(turn.clone(), start);
         live.usage_base = session.usage.clone();
         session.live = Some(live);
-        session.steers_paused = false;
         self.spawn(tasks::wait_turn(self.client.clone(), turn));
     }
 
@@ -364,25 +363,27 @@ impl App {
         {
             return;
         }
-        if result.is_err() {
-            self.session_mut().refuse_steer(&text);
-        }
         match result {
             Ok(steer) => {
                 if let Some(at) = steer.accepted_at.as_deref().and_then(unix_millis) {
                     self.session_mut().stamp_steer(&text, at);
                 }
             }
-            Err(error) if error.code == protocol::TURN_NOT_FOUND => {
-                self.notice(NoticeLevel::Info, "Turn already ended; queued as next");
+            Err(error) => {
+                self.session_mut().refuse_steer(&text);
+                match error.code {
+                    protocol::TURN_NOT_FOUND => {
+                        self.notice(NoticeLevel::Info, "Turn already ended; queued as next");
+                    }
+                    protocol::STEER_QUEUE_FULL => {
+                        self.notice(
+                            NoticeLevel::Error,
+                            "Steer queue is full; queued for the next turn",
+                        );
+                    }
+                    _ => self.error(error),
+                }
             }
-            Err(error) if error.code == protocol::STEER_QUEUE_FULL => {
-                self.notice(
-                    NoticeLevel::Error,
-                    "Steer queue is full; queued for the next turn",
-                );
-            }
-            Err(error) => self.error(error),
         }
     }
 
@@ -435,15 +436,15 @@ impl App {
         let Some(meta) = event.meta() else {
             return;
         };
-        let foreground = self
+        let id = meta.session_id.clone();
+        if self
             .session
             .as_ref()
-            .is_some_and(|session| session.info.session_id == meta.session_id);
-        if !foreground && let Some(index) = self.live_index(&meta.session_id) {
-            self.with_background(index, |app| app.on_agent_event(event));
-        } else if foreground {
-            let id = meta.session_id.clone();
+            .is_some_and(|session| session.info.session_id == id)
+        {
             self.with_notice_for(&id, |app| app.apply_agent_event(event));
+        } else if let Some(index) = self.live_index(&id) {
+            self.with_background(index, |app| app.apply_agent_event(event));
         } else if let AgentEvent::SessionOpened { session, .. } = event {
             self.merge_catalog_info(*session);
         }
@@ -451,7 +452,7 @@ impl App {
 
     fn apply_agent_event(&mut self, event: AgentEvent) {
         let session = self.session_mut();
-        let was_compacting = session.compaction.is_some();
+        let was_compacting = session.compacting();
         let usage = matches!(event, AgentEvent::RequestUsage { .. });
         let requested = matches!(event, AgentEvent::InteractionRequested { .. });
         let queue_changed = matches!(

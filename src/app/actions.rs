@@ -87,8 +87,8 @@ impl App {
             return;
         }
         match action {
-            Action::Submit => self.submit(),
-            Action::QueueFollowUp => self.submit_follow_up(),
+            Action::Submit => self.submit_composer(false),
+            Action::QueueFollowUp => self.submit_composer(true),
             Action::OpenSession(id) => self.open_session(id),
             Action::NewSession => self.new_draft(None),
             Action::NewSessionWith(profile) if self.profiles.iter().any(|p| p.id == profile) => {
@@ -154,17 +154,6 @@ impl App {
             Action::Quit => self.request_quit(),
             Action::Remote(command) => self.remote_command(&command),
         }
-    }
-
-    /// Enter: send when idle, steer when a turn is running. Without a session
-    /// the draft's text starts one.
-    fn submit(&mut self) {
-        self.submit_composer(false);
-    }
-
-    /// Alt+Enter or Ctrl+Enter: queue a follow-up; when idle it just sends.
-    fn submit_follow_up(&mut self) {
-        self.submit_composer(true);
     }
 
     fn submit_composer(&mut self, follow: bool) {
@@ -524,7 +513,6 @@ impl App {
             );
         } else if let Some(text) = self.session.as_mut().and_then(Session::recall_unsent) {
             self.composer.set_text(&text);
-            self.pump_queue();
         }
     }
 

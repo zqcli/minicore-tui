@@ -291,7 +291,7 @@ impl Session {
     pub fn live_status(&self) -> LiveStatus {
         if self.interaction.is_some() {
             LiveStatus::Approval
-        } else if self.compaction.is_some() {
+        } else if self.compacting() {
             LiveStatus::Compacting
         } else if self.is_busy() {
             LiveStatus::Running

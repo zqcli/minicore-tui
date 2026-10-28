@@ -230,6 +230,19 @@ impl App {
         self.sync_completion(true, true);
     }
 
+    /// Whether this device may run `executed`; a refusal flashes and the draft stays.
+    pub(super) fn permitted(&mut self, executed: &Executed) -> bool {
+        let allowed = match executed {
+            Executed::Action(action) => self.local_allowed(action),
+            Executed::Panel(panel) => self.local_panel_allowed(panel),
+            Executed::Noop => true,
+        };
+        if !allowed {
+            self.remote_flash();
+        }
+        allowed
+    }
+
     /// A draft is a command only when its first word names one; anything else
     /// starting with `/` (a path, say) is a prompt.
     fn submit_or_command(&mut self) -> Option<Action> {
@@ -237,19 +250,12 @@ impl App {
         let executed =
             commands::parse(&text).and_then(|(name, argument)| commands::execute(name, argument));
         match executed {
+            Some(executed) if !self.permitted(&executed) => None,
             Some(Executed::Action(action)) => {
-                if !self.local_allowed(&action) {
-                    self.remote_flash();
-                    return None;
-                }
                 self.composer.clear();
                 Some(action)
             }
             Some(Executed::Panel(panel)) => {
-                if !self.local_panel_allowed(&panel) {
-                    self.remote_flash();
-                    return None;
-                }
                 self.composer.clear();
                 self.open_panel(panel);
                 None
