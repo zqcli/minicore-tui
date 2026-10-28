@@ -17,17 +17,13 @@ pub struct Snapshot<'a> {
     pub workspace: &'a str,
     pub title: Option<&'a str>,
     pub approval: bool,
-    /// How long the running turn has run; `None` when idle.
-    pub busy_for: Option<Duration>,
-    /// A background session asks for the bell.
+    pub busy: bool,
     pub ring: bool,
 }
 
 pub struct Notifier {
     pub bell: bool,
     title: Option<String>,
-    last_busy: Option<Duration>,
-    approval_rung: bool,
 }
 
 impl Default for Notifier {
@@ -35,8 +31,6 @@ impl Default for Notifier {
         Self {
             bell: true,
             title: None,
-            last_busy: None,
-            approval_rung: false,
         }
     }
 }
@@ -48,7 +42,7 @@ impl Notifier {
     }
 
     /// The bytes for the terminal now: the title when it changed, the bell
-    /// when a long turn just ended or just asked for approval.
+    /// when the snapshot rings.
     pub fn update(&mut self, snapshot: &Snapshot) -> String {
         let mut out = String::new();
         let title = title(snapshot);
@@ -59,26 +53,19 @@ impl Notifier {
             out.push_str(&format!("\x1b]0;{title}\x07"));
             self.title = Some(title);
         }
-        let ended =
-            self.last_busy.is_some_and(|busy| busy >= LONG_TURN) && snapshot.busy_for.is_none();
-        let asked = snapshot.approval
-            && !self.approval_rung
-            && snapshot.busy_for.is_some_and(|busy| busy >= LONG_TURN);
-        if self.bell && (ended || asked || snapshot.ring) {
+        if self.bell && snapshot.ring {
             out.push('\x07');
         }
-        self.last_busy = snapshot.busy_for;
-        self.approval_rung = snapshot.approval;
         out
     }
 }
 
 /// `workspace · title · state`.
 fn title(snapshot: &Snapshot) -> String {
-    let state = match (snapshot.approval, snapshot.busy_for) {
+    let state = match (snapshot.approval, snapshot.busy) {
         (true, _) => "approval",
-        (false, Some(_)) => "working",
-        (false, None) => "idle",
+        (false, true) => "working",
+        (false, false) => "idle",
     };
     let mut parts = vec![snapshot.workspace];
     parts.extend(snapshot.title);
@@ -91,41 +78,29 @@ fn title(snapshot: &Snapshot) -> String {
 mod tests {
     use super::*;
 
-    /// The bells in `out`, not counting the terminator of a title sequence.
-    fn bells(out: &str) -> usize {
-        let mut rest = out;
-        let mut count = 0;
-        while let Some(at) = rest.find("\x1b]0;") {
-            count += rest[..at].matches('\x07').count();
-            let title = &rest[at..];
-            rest = &title[title.find('\x07').map_or(title.len(), |end| end + 1)..];
-        }
-        count + rest.matches('\x07').count()
-    }
-
-    fn snapshot(busy: Option<u64>, approval: bool) -> Snapshot<'static> {
+    fn snapshot(busy: bool, approval: bool, ring: bool) -> Snapshot<'static> {
         Snapshot {
             workspace: "proj",
             title: Some("Fix parser"),
             approval,
-            busy_for: busy.map(Duration::from_secs),
-            ring: false,
+            busy,
+            ring,
         }
     }
 
     #[test]
     fn the_title_is_written_on_change_only() {
         let mut notifier = Notifier::default();
-        let first = notifier.update(&snapshot(None, false));
+        let first = notifier.update(&snapshot(false, false, false));
         assert_eq!(first, "\x1b[22;0t\x1b]0;proj · Fix parser · idle\x07");
-        assert_eq!(notifier.update(&snapshot(None, false)), "");
+        assert_eq!(notifier.update(&snapshot(false, false, false)), "");
         assert_eq!(
-            notifier.update(&snapshot(Some(1), false)),
+            notifier.update(&snapshot(true, false, false)),
             "\x1b]0;proj · Fix parser · working\x07"
         );
-        assert_eq!(notifier.update(&snapshot(Some(2), false)), "");
+        assert_eq!(notifier.update(&snapshot(true, false, false)), "");
         assert_eq!(
-            notifier.update(&snapshot(Some(3), true)),
+            notifier.update(&snapshot(true, true, false)),
             "\x1b]0;proj · Fix parser · approval\x07"
         );
     }
@@ -137,7 +112,7 @@ mod tests {
             workspace: "pro\x07j\nx",
             title: None,
             approval: false,
-            busy_for: None,
+            busy: false,
             ring: false,
         });
         assert!(out.ends_with("\x1b]0;pro␇j x · idle\x07"), "{out:?}");
@@ -145,31 +120,11 @@ mod tests {
     }
 
     #[test]
-    fn a_long_turn_rings_when_it_ends_and_a_short_one_does_not() {
+    fn the_bell_rings_once_per_request() {
         let mut notifier = Notifier::default();
-        notifier.update(&snapshot(Some(30), false));
-        assert_eq!(bells(&notifier.update(&snapshot(None, false))), 1);
-        assert_eq!(bells(&notifier.update(&snapshot(None, false))), 0);
-
-        notifier.update(&snapshot(Some(4), false));
-        assert_eq!(bells(&notifier.update(&snapshot(None, false))), 0);
-    }
-
-    #[test]
-    fn a_long_turn_rings_once_when_an_approval_appears() {
-        let mut notifier = Notifier::default();
-        notifier.update(&snapshot(Some(12), false));
-        assert_eq!(bells(&notifier.update(&snapshot(Some(13), true))), 1);
-        assert_eq!(bells(&notifier.update(&snapshot(Some(14), true))), 0);
-        // The turn ends after the approval: that is a second, separate ring.
-        assert_eq!(bells(&notifier.update(&snapshot(None, false))), 1);
-    }
-
-    #[test]
-    fn a_young_turn_does_not_ring_for_an_approval() {
-        let mut notifier = Notifier::default();
-        notifier.update(&snapshot(Some(2), false));
-        assert_eq!(bells(&notifier.update(&snapshot(Some(3), true))), 0);
+        notifier.update(&snapshot(false, false, false));
+        assert_eq!(notifier.update(&snapshot(false, false, true)), "\x07");
+        assert_eq!(notifier.update(&snapshot(false, false, false)), "");
     }
 
     #[test]
@@ -178,9 +133,12 @@ mod tests {
             bell: false,
             ..Notifier::default()
         };
-        notifier.update(&snapshot(Some(30), false));
-        let out = notifier.update(&snapshot(None, false));
+        let out = notifier.update(&snapshot(false, false, true));
         assert!(out.contains("idle"));
-        assert_eq!(bells(&out), 0);
+        assert_eq!(
+            out.matches('\x07').count(),
+            1,
+            "only the title's terminator"
+        );
     }
 }

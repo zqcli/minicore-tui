@@ -143,8 +143,6 @@ impl App {
                 None => outcome.label(),
             },
         };
-        let long = duration.is_some_and(|duration| duration >= crate::title::LONG_TURN);
-        self.ring |= long;
         self.attention_notice(&id, format!("\"{label}\" {text}"), "");
     }
 

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- The bell no longer rings when you leave a session whose turn is still running,
+  and it rings for a long turn's approval even while another session waits for
+  one.
 - Web client: pin sessions to the top of the session list (a collapsible Pinned
   group, "Pin to top" in a session's ⋯ menu; pins stay on the device), and
   sessions that finished a turn in the last 30 minutes get a green dot and a

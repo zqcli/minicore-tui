@@ -249,6 +249,7 @@ text, as pi does.
 
 The window title is `workspace · session title · idle|working|approval`, written
 only when it changes. The terminal bell rings when a turn that ran more than
-10 s ends, or asks for approval; `bell = false` under `[ui]` in `config.toml` turns it off.
+10 s ends or asks for approval, in any session, and when a background session
+asks for approval; leaving a running session does not ring. `bell = false` under `[ui]` in `config.toml` turns it off.
 Quitting restores the title and prints `Resume: minicore-tui --session <id>` for
 a session with history.

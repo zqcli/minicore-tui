@@ -11,6 +11,7 @@ use super::{
 use crate::config::ThemeKind;
 use crate::protocol::stamp::now_millis;
 use crate::protocol::{self, CompactionPhase, CompactionProgress, Reasoning, SessionResult};
+use crate::title::LONG_TURN;
 use crate::transcript::Block;
 use crate::ui::theme::{Palette, Styles};
 
@@ -439,6 +440,8 @@ impl App {
         }
         if self.background_op {
             self.background_approval();
+        } else {
+            self.ring |= self.busy_elapsed() >= Some(LONG_TURN);
         }
     }
 

@@ -235,6 +235,12 @@ impl Harness {
             .collect()
     }
 
+    /// The bells in the terminal bytes now, not counting a title sequence's terminator.
+    pub fn bells(&mut self) -> usize {
+        let bytes = self.app.terminal_bytes();
+        bytes.matches('\x07').count() - bytes.matches("\x1b]0;").count()
+    }
+
     pub fn is_busy(&self) -> bool {
         self.app.is_busy()
     }

@@ -83,7 +83,7 @@ pub enum LiveStatus {
 
 pub struct LiveTurn {
     pub turn: TurnRef,
-    pub started: Instant,
+    pub started: tokio::time::Instant,
     pub started_ms: u64,
     pub requests: u32,
     pub phase: Phase,
@@ -120,7 +120,7 @@ impl LiveTurn {
     pub fn new(turn: TurnRef, start: usize) -> Self {
         Self {
             turn,
-            started: Instant::now(),
+            started: tokio::time::Instant::now(),
             started_ms: crate::protocol::stamp::now_millis(),
             requests: 1,
             phase: Phase::Thinking,

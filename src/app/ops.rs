@@ -7,6 +7,7 @@ use crate::protocol::{
     self, AgentEvent, CompactStatus, CompactionResult, RpcError, SessionInfo, SessionState,
     SteerResult, TurnRef, TurnSendResult, TurnWaitResult,
 };
+use crate::title::LONG_TURN;
 use crate::transcript::{Block, ChangeSummary};
 
 /// Pages read on open to reach the latest answer behind a compaction summary.
@@ -326,9 +327,11 @@ impl App {
                 }
             }
         };
+        let busy = self.busy_elapsed();
         let Some(reconcile) = self.session_mut().end_turn(&wait) else {
             return;
         };
+        self.ring |= busy >= Some(LONG_TURN);
         self.stamp_activity();
         if self.background_op {
             self.background_turn_ended();

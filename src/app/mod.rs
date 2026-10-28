@@ -188,7 +188,7 @@ pub struct App {
     pub background_op: bool,
     /// The draft's composer text while a session is on screen.
     pub draft_text: String,
-    /// A background approval or a long background turn asks for the bell.
+    /// A long turn ended or asked for approval, or a background session asked.
     pub ring: bool,
     pub sessions: Vec<SessionInfo>,
     pub catalog_generation: u64,

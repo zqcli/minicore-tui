@@ -1,12 +1,15 @@
 //! Sessions left for another keep running in the background and come back as
 //! they were.
 
+use std::time::Duration;
+
 use crossterm::event::KeyCode;
 use serde_json::{Value, json};
 
 use super::harness::*;
 use super::remote::{config, phone, request, synced_state};
 use crate::app::{Action, LiveStatus, Msg, Overlay, Scroll, Session, SessionOp};
+use crate::title::LONG_TURN;
 use crate::transcript::Block;
 
 fn turn_in(session: &str, loop_id: &str) -> Value {
@@ -243,6 +246,72 @@ async fn a_background_approval_notifies_and_is_answered_only_once_shown() {
         h.notices()
     );
     assert_eq!(h.app.session.as_ref().unwrap().info.session_id, "s2");
+}
+
+#[tokio::test(start_paused = true)]
+async fn switching_away_from_a_long_turn_is_silent_and_its_end_rings_once() {
+    let mut h = running_first().await;
+    tokio::time::advance(LONG_TURN).await;
+    h.bells();
+    show(&mut h, "s2").await;
+    assert_eq!(h.bells(), 0, "nothing ended");
+    h.fake.release("turn.wait@s1");
+    h.until(|app| app.live("s1").is_some_and(|s| s.unseen))
+        .await;
+    assert_eq!(h.bells(), 1);
+    assert_eq!(h.bells(), 0);
+}
+
+/// The bells when the foreground turn of `running_first` ends `run` later.
+async fn bells_when_the_foreground_turn_ends_after(run: Duration) -> usize {
+    let mut h = running_first().await;
+    tokio::time::advance(run).await;
+    h.bells();
+    h.fake.release("turn.wait@s1");
+    h.until(|app| !app.is_busy()).await;
+    h.bells()
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_foreground_turn_rings_when_it_ends_only_after_a_long_run() {
+    assert_eq!(
+        bells_when_the_foreground_turn_ends_after(LONG_TURN).await,
+        1
+    );
+    assert_eq!(
+        bells_when_the_foreground_turn_ends_after(Duration::ZERO).await,
+        0
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_long_turn_asking_for_approval_rings_while_a_background_approval_waits() {
+    let mut h = running_first().await;
+    show(&mut h, "s2").await;
+    h.submit("work in two");
+    h.until(|app| app.is_busy()).await;
+    h.emit("interaction_requested", approval_for("s1", "i1"))
+        .await;
+    h.settle().await;
+    assert_eq!(h.bells(), 1, "the background approval rings");
+
+    tokio::time::advance(LONG_TURN).await;
+    let mut asked = approval_for("s2", "i2");
+    asked["turn"] = turn_in("s2", "l2");
+    asked["meta"] = json!({"session_id": "s2", "dropped_before": 0});
+    h.emit("interaction_requested", asked).await;
+    h.settle().await;
+    assert_eq!(h.bells(), 1, "the foreground approval rings too");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_young_turn_asking_for_approval_does_not_ring() {
+    let mut h = running_first().await;
+    h.emit("interaction_requested", approval_for("s1", "i1"))
+        .await;
+    h.settle().await;
+    assert!(h.app.has_interaction());
+    assert_eq!(h.bells(), 0);
 }
 
 #[tokio::test(start_paused = true)]
