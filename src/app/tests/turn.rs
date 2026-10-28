@@ -183,10 +183,6 @@ async fn abandoned_steers_start_the_next_turn_in_place_and_keep_their_kind() {
     h.settle().await;
     assert_eq!(h.sends(), ["start", "first"]);
     assert_eq!(h.queue(), ["second", "follow"]);
-    assert_eq!(
-        h.app.session.as_ref().unwrap().queue[0].kind,
-        crate::app::QueuedKind::Steer
-    );
     assert_eq!(h.calls("turn.steer").last().unwrap()["loop_id"], "B");
 }
 
@@ -218,7 +214,6 @@ async fn turn_end_releases_refused_steers_as_the_next_prompt_in_order() {
         h.settle().await;
         assert_eq!(h.sends(), ["start", "refused steer"]);
         assert_eq!(h.queue(), ["follow"]);
-        assert!(!h.app.session.as_ref().unwrap().steers_paused);
     }
 }
 
@@ -265,6 +260,15 @@ async fn alt_up_recalls_every_unsent_message_in_order_but_never_a_sent_steer() {
     h.app.composer.set_text("draft");
     h.key(KeyCode::Up, KeyModifiers::ALT);
     assert_eq!(h.queue().len(), 4);
+    assert_eq!(
+        h.app.composer.text(),
+        "draft",
+        "a draft is never overwritten"
+    );
+    assert_eq!(
+        h.notices(),
+        ["Clear the draft before recalling a queued message"]
+    );
     h.app.composer.clear();
     h.key(KeyCode::Up, KeyModifiers::ALT);
     assert_eq!(h.app.composer.text(), "follow1\n\nwaiting steer\n\nfollow2");

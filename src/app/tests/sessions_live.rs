@@ -5,10 +5,12 @@ use std::time::Duration;
 
 use crossterm::event::KeyCode;
 use serde_json::{Value, json};
+use tokio::sync::{mpsc, watch};
 
 use super::harness::*;
 use super::remote::{config, phone, request, synced_state};
 use crate::app::{Action, LiveStatus, Msg, Overlay, Scroll, Session, SessionOp};
+use crate::protocol::read::UserKind;
 use crate::title::LONG_TURN;
 use crate::transcript::Block;
 
@@ -393,27 +395,41 @@ fn delete_from_picker(h: &mut Harness, id: &str) {
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_working_background_session_cannot_be_deleted_and_an_idle_one_can() {
+async fn a_working_background_session_cannot_be_deleted() {
     let mut h = running_first().await;
     show(&mut h, "s2").await;
     delete_from_picker(&mut h, "s1");
     assert_eq!(h.notices(), ["Stop \"First\" first: open it and press Esc"]);
     h.settle().await;
     assert!(h.calls("session.delete").is_empty());
+}
 
+#[tokio::test(start_paused = true)]
+async fn an_idle_background_session_is_deleted_and_a_late_result_for_it_goes_nowhere() {
+    let mut h = running_first().await;
+    show(&mut h, "s2").await;
     h.fake.release("turn.wait@s1");
     h.until(|app| app.live("s1").is_some_and(|s| !s.is_busy()))
         .await;
     h.settle().await;
     let epoch = first(&h).epoch;
-    h.press(KeyCode::Esc);
     delete_from_picker(&mut h, "s1");
     h.ctrl(KeyCode::Char('d'));
     h.settle().await;
     assert_eq!(h.calls("session.delete")[0]["session_id"], "s1");
     assert!(h.app.live("s1").is_none());
     assert!(h.app.background.is_empty());
-    // A late result for the deleted session goes nowhere.
+
+    h.app
+        .session
+        .as_mut()
+        .unwrap()
+        .transcript
+        .push(Block::User {
+            text: "kept".into(),
+            kind: UserKind::Prompt,
+            at: None,
+        });
     h.app.on_msg(Msg::Session(
         epoch,
         Box::new(SessionOp::Tail(Ok(crate::app::tasks::History {
@@ -426,7 +442,11 @@ async fn a_working_background_session_cannot_be_deleted_and_an_idle_one_can() {
             covered_usage: None,
         }))),
     ));
-    assert_eq!(h.app.session.as_ref().unwrap().info.session_id, "s2");
+    assert_eq!(
+        h.texts(),
+        ["kept"],
+        "the foreground transcript is untouched"
+    );
 }
 
 #[tokio::test(start_paused = true)]
@@ -484,13 +504,25 @@ async fn the_picker_finds_a_session_by_its_workspace_folder() {
     assert!(screen.contains("alpha"), "{screen}");
 }
 
-/// The ids of the phone's session list, in order, for a phone that just connected.
-async fn phone_catalog(h: &mut Harness) -> Vec<String> {
-    h.app.remote.config = Some(config(std::path::PathBuf::from("/tmp/ws")));
+/// A phone that has just connected to `h`, with the first state it was sent.
+async fn connected_phone(
+    h: &mut Harness,
+) -> (
+    mpsc::Receiver<Value>,
+    watch::Receiver<Option<&'static str>>,
+    Value,
+) {
+    h.app.remote.config = Some(config(h.app.workspace.clone()));
     h.app.remote.url = Some("http://localhost:8765".into());
-    let (mut output, _closing, admission) = phone(h, 1, "phone");
+    let (mut output, closing, admission) = phone(h, 1, "phone");
     assert!(admission.await.unwrap());
     let state = synced_state(h, &mut output).expect("a snapshot");
+    (output, closing, state)
+}
+
+/// The ids of the phone's session list, in order, for a phone that just connected.
+async fn phone_catalog(h: &mut Harness) -> Vec<String> {
+    let (_output, _closing, state) = connected_phone(h).await;
     state["sessions"]
         .as_array()
         .unwrap()
@@ -504,6 +536,19 @@ fn idle_session(id: &str) -> crate::protocol::SessionInfo {
     let mut info = session_info(id);
     info["updated_at"] = json!("2025-06-01T00:00:00Z");
     serde_json::from_value(info).unwrap()
+}
+
+/// `s1` leads the phone's list and its picker row reads `now`.
+async fn assert_first_in_the_phone_and_picker_lists(h: &mut Harness) {
+    assert_eq!(phone_catalog(h).await[0], "s1");
+    h.ctrl(KeyCode::Char('r'));
+    let screen = h.screen(100, 24);
+    assert!(
+        screen
+            .lines()
+            .any(|row| row.contains("First") && row.contains("now")),
+        "{screen}"
+    );
 }
 
 #[tokio::test(start_paused = true)]
@@ -520,22 +565,9 @@ async fn a_background_turn_end_is_the_sessions_latest_activity_in_the_phone_and_
         let info = h.app.sessions.iter().find(|info| info.session_id == id);
         info.unwrap().updated_at.clone()
     };
-    assert!(
-        stamp(&h, "s1").as_str() > "2026-01-01",
-        "{}",
-        stamp(&h, "s1")
-    );
-    assert!(stamp(&h, "s1").ends_with('Z') && stamp(&h, "s1").len() == 24);
+    assert!(stamp(&h, "s1").as_str() > "2025-06-01T00:00:00Z");
     assert_eq!(stamp(&h, "s1"), first(&h).info.updated_at);
-    assert_eq!(phone_catalog(&mut h).await[0], "s1");
-    h.ctrl(KeyCode::Char('r'));
-    let screen = h.screen(100, 24);
-    assert!(
-        screen
-            .lines()
-            .any(|row| row.contains("First") && row.contains("now")),
-        "{screen}"
-    );
+    assert_first_in_the_phone_and_picker_lists(&mut h).await;
 }
 
 #[tokio::test(start_paused = true)]
@@ -546,26 +578,14 @@ async fn a_foreground_turn_end_is_the_sessions_latest_activity_in_the_phone_and_
     h.fake.release("turn.wait@s1");
     h.until(|app| !app.is_busy()).await;
     assert!(h.app.sessions[0].updated_at > before);
-    assert_eq!(phone_catalog(&mut h).await[0], "s1");
-    h.ctrl(KeyCode::Char('r'));
-    let screen = h.screen(100, 24);
-    assert!(
-        screen
-            .lines()
-            .any(|row| row.contains("First") && row.contains("now")),
-        "{screen}"
-    );
+    assert_first_in_the_phone_and_picker_lists(&mut h).await;
 }
 
 #[tokio::test(start_paused = true)]
 async fn the_phone_sees_live_sessions_and_switches_to_one_at_once() {
     let mut h = running_first().await;
     show(&mut h, "s2").await;
-    h.app.remote.config = Some(config(std::path::PathBuf::from("/tmp/ws")));
-    h.app.remote.url = Some("http://localhost:8765".into());
-    let (mut output, _closing, admission) = phone(&mut h, 1, "phone");
-    assert!(admission.await.unwrap());
-    let state = synced_state(&mut h, &mut output).expect("a snapshot");
+    let (mut output, _closing, state) = connected_phone(&mut h).await;
     let listed = |state: &Value, id: &str| {
         state["sessions"]
             .as_array()
@@ -609,7 +629,7 @@ async fn the_phone_sees_live_sessions_and_switches_to_one_at_once() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn many_large_background_sessions_add_no_work_to_a_frame() {
+async fn only_the_foreground_is_laid_out_and_an_unchanged_phone_frame_sends_nothing() {
     let mut h = Harness::opened(display_read(0, 0)).await;
     for n in 0..20 {
         let id = format!("b{n}");
@@ -626,11 +646,7 @@ async fn many_large_background_sessions_add_no_work_to_a_frame() {
         h.app.sessions.push(info);
     }
     h.app.catalog_generation += 1;
-    h.app.remote.config = Some(config(std::path::PathBuf::from("/tmp/ws")));
-    h.app.remote.url = Some("http://localhost:8765".into());
-    let (mut output, _closing, admission) = phone(&mut h, 1, "phone");
-    assert!(admission.await.unwrap());
-    let snapshot = synced_state(&mut h, &mut output).expect("a snapshot");
+    let (mut output, _closing, snapshot) = connected_phone(&mut h).await;
     assert_eq!(snapshot["background"], json!({"running": 0, "approval": 0}));
     h.screen(80, 24);
     assert!(

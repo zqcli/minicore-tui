@@ -256,7 +256,8 @@ async fn an_earlier_automatic_compaction_is_not_added_when_the_session_opens() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn the_end_of_a_compaction_the_state_reported_adds_its_marker_and_names_the_phase() {
+async fn a_compaction_seen_through_session_state_shows_its_phase_and_leaves_a_marker_when_it_ends()
+{
     let mut h = Harness::opened(display_read(0, 0)).await;
     let state = |compaction: serde_json::Value| json!({"state": {"session_id": "s1", "status": "idle", "compaction": compaction}});
     let working = json!({"operation_id": "tui-1", "phase": "merging",
@@ -301,7 +302,7 @@ async fn esc_cancels_the_compaction_that_owns_the_session() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_failed_automatic_compaction_is_reported_once() {
+async fn a_failed_automatic_compaction_is_reported_once_and_a_cancelled_one_not_at_all() {
     let mut h = Harness::opened(display_read(0, 0)).await;
     let failed = automatic_context(
         json!(null),

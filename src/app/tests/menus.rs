@@ -563,9 +563,9 @@ async fn a_session_is_renamed_from_the_picker_without_opening_it() {
     let screen = h.screen(100, 30);
     assert!(screen.contains("Renamed"), "{screen}");
     assert!(matches!(h.app.overlay, Overlay::Sessions { .. }));
-    let resident = h.app.session.as_ref().unwrap();
+    let foreground = h.app.session.as_ref().unwrap();
     assert_eq!(
-        resident.info.title.as_deref(),
+        foreground.info.title.as_deref(),
         Some("Same title"),
         "s1 is untouched"
     );

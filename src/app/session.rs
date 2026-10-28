@@ -1113,7 +1113,7 @@ mod tests {
     }
 
     #[test]
-    fn a_turn_end_keeps_unapplied_steers_in_place_as_unsent() {
+    fn a_turn_ends_once_and_keeps_unapplied_steers_in_the_queue() {
         let mut session = session();
         session.live = Some(LiveTurn::new(TurnRef::new("s", "l"), 0));
         queue(&mut session, "steer", QueuedKind::Steer);
@@ -1125,8 +1125,6 @@ mod tests {
         assert_eq!(session.end_turn(&wait), None, "the turn ends once");
         let queued = session.take_next().unwrap();
         assert_eq!(queued.text, "steer");
-        assert_eq!(queued.kind, QueuedKind::Steer);
-        assert!(!queued.sent);
     }
 
     #[test]

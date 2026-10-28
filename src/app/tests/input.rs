@@ -173,7 +173,7 @@ async fn the_transcript_scrolls_while_a_prompt_waits() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn follow_ups_queue_behind_a_running_turn_and_alt_up_recalls_them_in_order() {
+async fn shift_enter_adds_a_line_and_alt_enter_queues_follow_ups_behind_a_running_turn() {
     let mut h = Harness::opened(display_read(0, 0)).await;
     h.fake.script("turn.send", json!({"turn": turn("l1")}));
     h.fake.script_held("turn.wait", waited("l1", completed()));
@@ -191,24 +191,6 @@ async fn follow_ups_queue_behind_a_running_turn_and_alt_up_recalls_them_in_order
         h.key(KeyCode::Enter, KeyModifiers::ALT);
     }
     assert_eq!(h.queue(), ["one", "two"]);
-
-    h.app.composer.set_text("half");
-    h.key(KeyCode::Up, KeyModifiers::ALT);
-    assert_eq!(
-        h.app.composer.text(),
-        "half",
-        "a draft is never overwritten"
-    );
-    assert_eq!(h.queue(), ["one", "two"]);
-    assert_eq!(
-        h.notices(),
-        ["Clear the draft before recalling a queued message"]
-    );
-
-    h.ctrl(KeyCode::Char('c'));
-    h.key(KeyCode::Up, KeyModifiers::ALT);
-    assert_eq!(h.app.composer.text(), "one\n\ntwo");
-    assert!(h.queue().is_empty());
 }
 
 #[tokio::test(start_paused = true)]
@@ -274,19 +256,31 @@ async fn tab_with_a_completion_list_open_completes() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn alt_enter_queues_during_a_compaction() {
+async fn a_follow_up_waits_in_the_queue_while_a_compaction_runs() {
     let mut h = Harness::opened(display_read(0, 0)).await;
+    h.fake.script("turn.send", json!({"turn": turn("l1")}));
+    h.fake.script_held("turn.wait", waited("l1", completed()));
     h.emit(
         "session_state",
         json!({"state": {"session_id": "s1", "status": "idle",
-                         "compaction": {"operation_id": "auto-l1", "phase": "summarizing",
+                         "compaction": {"operation_id": "auto-boundary-l1-1", "phase": "summarizing",
                                         "covered_item_count": 8, "retained_item_count": 2}}}),
     )
     .await;
     h.until(|app| app.compacting()).await;
-    h.type_text("later");
-    let key = crossterm::event::KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT);
-    assert_eq!(h.app.on_key(key), Some(crate::app::Action::QueueFollowUp));
+    h.app.composer.set_text("later");
+    h.action(crate::app::Action::QueueFollowUp);
+    h.settle().await;
+    assert_eq!(h.queue(), ["later"]);
+    assert!(h.sends().is_empty());
+
+    h.emit(
+        "session_state",
+        json!({"state": {"session_id": "s1", "status": "idle"}}),
+    )
+    .await;
+    h.settle().await;
+    assert_eq!(h.sends(), ["later"]);
 }
 
 #[tokio::test(start_paused = true)]
