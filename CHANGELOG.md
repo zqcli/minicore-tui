@@ -5,7 +5,9 @@
 - Web client: pin sessions to the top of the session list (a collapsible Pinned
   group, "Pin to top" in a session's ⋯ menu; pins stay on the device), and
   sessions that finished a turn in the last 30 minutes get a green dot and a
-  stronger time. A session that just ran now leads its workspace group.
+  stronger time. A session that just ran now leads its workspace group. The
+  open list holds its order, except that a session that starts waiting for
+  approval moves to Needs you at once, so a folded group never hides it.
 - A session's time in the session picker and on the phone is its last activity:
   it advances when a turn finishes, in the foreground or the background, instead
   of staying at the time the session was opened.

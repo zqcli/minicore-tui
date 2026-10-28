@@ -347,7 +347,9 @@ function sessionLayout(sessions, query, frozen, pins = []) {
   for (const list of wsRows.values()) for (const r of list) r.rank = rank++;
   for (const r of rows) {
     const f = frozen && frozen.get(r.x.id);
-    if (f) { r.level = f[0]; r.order = f[1]; } else r.order = frozen ? r.index - 1e9 : r.level === 1 ? pinAt.get(r.x.id) : r.level < 3 ? (r.x.started_ms == null ? Infinity : r.x.started_ms) : r.rank;
+    // A session that starts waiting on the user leaves its held place for the top of Needs you, which never folds, and stays there.
+    if (f && r.level === 0 && f[0] !== 0) frozen.set(r.x.id, [0, r.order = r.index - 1e9]);
+    else if (f) { r.level = f[0]; r.order = f[1]; } else r.order = frozen ? r.index - 1e9 : r.level === 1 ? pinAt.get(r.x.id) : r.level < 3 ? (r.x.started_ms == null ? Infinity : r.x.started_ms) : r.rank;
   }
   rows.sort((a, b) => a.level - b.level || a.order - b.order || a.index - b.index);
   const all = [], byWs = new Map(), levels = new Map();

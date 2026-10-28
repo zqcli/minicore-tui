@@ -121,7 +121,9 @@ re-renders on every `state`).
   button visible. Pinned rows omit workspace subtitles rather than taking
   another line. The order never changes while the drawer is open
   (rows update in place); it re-sorts when reopened, except that pinning or
-  unpinning moves the row at once. ⌘/Ctrl+Shift+F focuses
+  unpinning moves the row at once, and a session that starts waiting on the
+  user moves to the top of Needs you (which never folds), so a folded Pinned
+  or workspace group cannot hide it; it stays there until the list re-sorts. ⌘/Ctrl+Shift+F focuses
   the search (a hint shows on hover devices; ⌘/Ctrl+K stays the command list).
   Footer is one line: connection dot + device name, other devices count.
 - **Pins**: "Pin to top" or "Unpin" in a row's ⋯ menu and in the session menu
