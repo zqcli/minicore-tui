@@ -411,12 +411,12 @@ function thinkText(n, text, live) {
   if (live && was && !to.startsWith(was) && !reduced.matches) { n._text = h('span', 'up', to); el.replaceWith(n._text); }
   else el.textContent = to;
 }
-function thinkUpdate(a, b) {
-  const k = 'r' + b.loop_id + ':' + b.request, thinking = a.live && !b.text, o = isOpen(k, b), sig = b.reasoning ? k + thinking + o : '';
-  if (sig === a.thinkSig) return sig && thinkText(a.think, b.reasoning, thinking);
-  a.thinkSig = sig;
+function thinkUpdate(asst, b) {
+  const k = 'r' + b.loop_id + ':' + b.request, thinking = asst.live && !b.text, o = isOpen(k, b), sig = b.reasoning ? k + thinking + o : '';
+  if (sig === asst.thinkSig) return sig && thinkText(asst.think, b.reasoning, thinking);
+  asst.thinkSig = sig;
   const n = sig ? thinkNode(b, k, thinking, o) : h('div');
-  keepFocus(a.think, () => a.think.replaceWith(a.think = n), n);
+  keepFocus(asst.think, () => asst.think.replaceWith(asst.think = n), n);
   if (thinking && o) n._text.scrollTop = n._text.scrollHeight;
 }
 function asstNode(b, i) {
@@ -428,19 +428,19 @@ function asstNode(b, i) {
   return n;
 }
 function updateAsst(n, b) {
-  const a = n._asst, m = a.md, r = MC.mdInc(m.cache, b.text);
+  const asst = n._asst, m = asst.md, r = MC.mdInc(m.cache, b.text);
   n.hidden = MC.quiet(b);
-  thinkUpdate(a, b);
+  thinkUpdate(asst, b);
   m.cache = r.cache;
   let k = 0;
   while (k < m.toks.length && k < r.blocks.length && m.toks[k] === r.blocks[k]) k++;
   for (let j = m.els.length - 1; j >= k; j--) m.els[j].remove();
   m.els.length = m.toks.length = k;
-  const old = a.body.querySelector('.caret');
+  const old = asst.body.querySelector('.caret');
   if (old) old.remove();
-  for (let j = k; j < r.blocks.length; j++) { const e = mdToNode(r.blocks[j]); a.body.append(e); m.els.push(e); m.toks.push(r.blocks[j]); }
-  a.body.hidden = !b.text;
-  if (a.live && b.text) caretInto(a.body);
+  for (let j = k; j < r.blocks.length; j++) { const e = mdToNode(r.blocks[j]); asst.body.append(e); m.els.push(e); m.toks.push(r.blocks[j]); }
+  asst.body.hidden = !b.text;
+  if (asst.live && b.text) caretInto(asst.body);
 }
 function answerActs(b, i) {
   const c = h('button', { class: 'ib', 'aria-label': 'Copy answer', onclick: () => copyText(b.text, c) }, icon('copy', 'sm'));
@@ -508,20 +508,20 @@ function blockNode(b, i) {
 }
 function renderBlock(b, i) {
   const n = blockNode(b, i), r = roles[i - lo];
-  let w = n;
+  let wrap = n;
   if (r) {
-    const f = r.f, g = r.g, fo = f && !isOpen(f.key), go = g && isOpen(g.key);
-    const rows = [f && i === f.at && foldRow(f, !fo), g && i === g.head && !fo && groupRow(g, go)];
-    w = h('div', n.className, rows, n, f && !fo && i === f.last && h('button', { class: 'tr fold', 'data-k': f.key + 'h', 'data-tg': f.key },
+    const f = r.fold, g = r.group, folded = f && !isOpen(f.key), groupOpen = g && isOpen(g.key);
+    const rows = [f && i === f.at && foldRow(f, !folded), g && i === g.head && !folded && groupRow(g, groupOpen)];
+    wrap = h('div', n.className, rows, n, f && !folded && i === f.last && h('button', { class: 'tr fold', 'data-k': f.key + 'h', 'data-tg': f.key },
       h('span', 'si', icon('chevu', 'sm')), h('span', 'vb', 'Hide')));
     n.className = '';
-    n.hidden = n.hidden || !!fo || !!(g && !go);
-    w.hidden = n.hidden && !kids(rows).length && !(f && !fo && i === f.last);
+    n.hidden = n.hidden || !!folded || !!(g && !groupOpen);
+    wrap.hidden = n.hidden && !kids(rows).length && !(f && !folded && i === f.last);
   }
-  w.classList.add('b');
-  if (i >= liveFrom) w.classList.add('live');
-  w.dataset.i = i;
-  return w;
+  wrap.classList.add('b');
+  if (i >= liveFrom) wrap.classList.add('live');
+  wrap.dataset.i = i;
+  return wrap;
 }
 function foldRow(f, open) {
   return h('button', { class: 'tr fold', 'data-k': f.key, 'aria-expanded': String(open) },
@@ -537,16 +537,29 @@ function groupRow(g, open) {
 let roles = [], roleSigs = [];
 function relayout() {
   const bl = S.blocks, next = [];
-  for (const f of MC.foldTurns(bl, lo, hi)) for (const j of f.hidden) (next[j - lo] = next[j - lo] || {}).f = f;
-  for (const g of MC.groupTools(bl, lo, hi)) for (const j of g.members) (next[j - lo] = next[j - lo] || {}).g = g;
-  const ns = next.map(r => r && JSON.stringify([r.f && [r.f.key, r.f.at, r.f.last, isOpen(r.f.key), r.f.tools, r.f.failed], r.g && [r.g.key, r.g.head, r.g.label, r.g.run, isOpen(r.g.key), r.g.members.length]]));
-  for (let k = 0; k < Math.max(ns.length, roleSigs.length); k++) if (ns[k] !== roleSigs[k]) dirty.add(lo + k);
-  roles = next; roleSigs = ns;
+  for (const f of MC.foldTurns(bl, lo, hi)) for (const j of f.hidden) (next[j - lo] = next[j - lo] || {}).fold = f;
+  for (const g of MC.groupTools(bl, lo, hi)) for (const j of g.members) (next[j - lo] = next[j - lo] || {}).group = g;
+  const sigs = next.map(({ fold: f, group: g }) => JSON.stringify([f && [f.key, f.at, f.last, isOpen(f.key), f.tools, f.failed], g && [g.key, g.head, g.label, g.run, isOpen(g.key), g.members.length]]));
+  for (let k = 0; k < Math.max(sigs.length, roleSigs.length); k++) if (sigs[k] !== roleSigs[k]) dirty.add(lo + k);
+  roles = next; roleSigs = sigs;
 }
 function place(n, old) {
   if (old) keepFocus(old, () => old.replaceWith(n), n);
   for (const p of n.querySelectorAll('pre.out')) p.scrollTop = p.scrollHeight;
   for (const q of n.querySelectorAll('.fmsg.clip .fmt')) if (q.scrollHeight > q.clientHeight + 1) n.querySelector('.more2').hidden = false;
+}
+// Moves the mounted window to [newLo, newHi): blocks that left it unmount, older blocks that entered render at the top.
+function mountWindow(newLo, newHi) {
+  while (lo + nodes.length > newHi) nodes.pop().remove();
+  while (lo < newLo && nodes.length) { nodes.shift().remove(); lo++; }
+  if (!nodes.length) lo = newLo;
+  if (lo > newLo) {
+    const fr = document.createDocumentFragment(), add = [];
+    for (let k = newLo; k < lo; k++) { const x = renderBlock(S.blocks[k], k); add.push(x); fr.append(x); dirty.delete(k); }
+    nodes.unshift(...add); box.prepend(fr); lo = newLo;
+    for (const x of add) place(x);
+  }
+  hi = newHi;
 }
 function flush() {
   raf = 0;
@@ -563,16 +576,7 @@ function flush() {
   const serverPrepend = n > prevHi && dirty.has(0) && prevHi > 0;
   // The mounted window [lo, hi): the newest `win` blocks while pinned to the end.
   const newHi = pinned ? n : Math.min(hi, n), newLo = Math.max(0, newHi - win);
-  while (lo + nodes.length > newHi) nodes.pop().remove();
-  while (lo < newLo && nodes.length) { nodes.shift().remove(); lo++; }
-  if (!nodes.length) lo = newLo;
-  if (lo > newLo) {
-    const fr = document.createDocumentFragment(), add = [];
-    for (let k = newLo; k < lo; k++) { const x = renderBlock(bl[k], k); add.push(x); fr.append(x); dirty.delete(k); }
-    nodes.unshift(...add); box.prepend(fr); lo = newLo;
-    for (const x of add) place(x);
-  }
-  hi = newHi;
+  mountWindow(newLo, newHi);
   if (lo !== lo0) roleSigs = [];
   relayout();
   for (let i = lo; i < hi; i++) {
@@ -675,8 +679,8 @@ function findBar() {
 function runFind() {
   for (const i of MC.findBlocks(S.blocks, finder.q, lo, hi)) {
     const r = roles[i - lo], b = S.blocks[i];
-    if (r && r.f) opened.set(r.f.key, true);
-    if (r && r.g) opened.set(r.g.key, true);
+    if (r && r.fold) opened.set(r.fold.key, true);
+    if (r && r.group) opened.set(r.group.key, true);
     if (b.type === 'tool' && !b.detail.toLowerCase().includes(finder.q.toLowerCase())) opened.set('t' + b.call_id, true);
     dirty.add(i);
   }
