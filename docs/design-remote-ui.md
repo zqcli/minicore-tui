@@ -401,6 +401,11 @@ safe areas, the PWA (manifest, service worker, install row, theme-color sync),
 per-device views, live background sessions, the folder picker and new folder.
 The keyboard handling ignores pinch zoom: while the visual viewport is scaled
 above 1 it leaves `--h` and `--kb` alone, so zooming never resizes the app.
+The phone drawer and the scrim are positioned in the page, not fixed: iOS
+Safari tints the status bar from a fixed element on the top edge, and with the
+scrim fixed it painted grey over the drawer. The drawer surface reaches the top
+edge, with its content below the top safe area and its footer above the home
+indicator.
 The folder picker reads paths the way the host writes them: Unix, Windows drive
 roots (`C:\`, `D:\work`, `/` accepted as the same separator, compared without
 case) and UNC shares. The Roots crumb is always there so switching drives is

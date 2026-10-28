@@ -139,7 +139,9 @@ input.tf:focus{border-color:var(--ac);box-shadow:0 0 0 3px var(--acs)}
 .toast .ib{width:36px;height:36px;color:inherit}
 
 /* navigation: drawer on phones, sidebar from 900 px */
-#nav{position:fixed;z-index:20;top:0;bottom:0;left:0;width:min(86vw,340px);height:var(--h,100dvh);display:flex;flex-direction:column;background:var(--bg);padding:var(--st) 0 0 var(--sl);box-shadow:var(--sh);transform:translateX(-102%);visibility:hidden;transition:transform var(--slow) var(--ease),visibility 0s var(--slow)}
+/* The drawer and scrim are not fixed: iOS Safari tints the status bar from a fixed element on the top edge, which kept
+   the scrim's grey over the drawer; with none there it shows the page itself. */
+#nav{position:absolute;z-index:20;top:0;bottom:0;left:0;width:min(86vw,340px);display:flex;flex-direction:column;background:var(--bg);padding:var(--st) 0 0 var(--sl);box-shadow:var(--sh);transform:translateX(-102%);visibility:hidden;transition:transform var(--slow) var(--ease),visibility 0s var(--slow)}
 #nav.on{transform:none;visibility:visible;transition:transform var(--slow) var(--ease),visibility 0s}
 .nhead{display:flex;align-items:center;gap:10px;padding:10px 6px 6px 16px}
 .nhead img{width:30px;height:30px;border-radius:8px}
@@ -179,9 +181,10 @@ input.tf:focus{border-color:var(--ac);box-shadow:0 0 0 3px var(--acs)}
 .gh[aria-expanded=true] .cv{transform:rotate(90deg)}
 .gmore{display:block;width:100%;height:32px;padding:0 10px 0 34px;font-size:var(--t13);font-weight:600;color:var(--ac);border-radius:var(--r1)}
 .nfoot{display:flex;align-items:center;gap:8px;min-height:44px;padding:4px 16px calc(var(--sb) + 4px);border-top:1px solid var(--line);font-size:var(--t13);color:var(--tx3)}
+html.kb .nfoot{padding-bottom:4px}
 .cdot{width:8px;height:8px;border-radius:50%;background:var(--ok);flex:none}
 .cdot.off{background:var(--wac)}
-#scrim{position:fixed;inset:0;z-index:19;background:var(--scrim);opacity:0;visibility:hidden;transition:opacity var(--slow),visibility 0s var(--slow)}
+#scrim{position:absolute;inset:0;z-index:19;background:var(--scrim);opacity:0;visibility:hidden;transition:opacity var(--slow),visibility 0s var(--slow)}
 #scrim.on{opacity:1;visibility:visible;transition:opacity var(--slow)}
 
 /* sheets: bottom sheets on phones, dialogs or a side panel on wide screens */
