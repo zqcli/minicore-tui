@@ -479,6 +479,8 @@ test('the session list puts sessions that need you first, then running ones, the
   assert.deepEqual(plain(MC.sessionLayout([idle('a', { workspace: 'C:\\work\\app' }), idle('b', { workspace: 'D:\\' })], '').groups).map(x => x.label), ['app', 'D:']);
   assert.deepEqual(plain(MC.sessionLayout(sessions, 'ear').groups).map(x => x.items.map(y => y.id)), [['early']]);
   assert.deepEqual(plain(MC.sessionLayout(sessions, 'DOCS').groups).map(x => x.items.map(y => y.id)), [['mid', 'old']]);
+  // A blank search is no search: every group, in the same order.
+  assert.deepEqual(plain(MC.sessionLayout(sessions, '  ').groups), g);
   // Sessions from a server without live fields are only grouped by workspace.
   assert.deepEqual(plain(MC.sessionLayout(state.sessions, '').groups).map(x => x.label), ['work']);
 });

@@ -329,35 +329,38 @@ function stamp(ms, now, tz) {
   const d = new Date(ms - tz * 60000);
   return MON[d.getUTCMonth()] + ' ' + d.getUTCDate() + ', ' + clock(ms, tz);
 }
-const matchSession = (x, query) => ((x.title || '') + '\n' + x.workspace).toLowerCase().includes((query || '').trim().toLowerCase());
 const busyStatus = st => st === 'running' || st === 'approval' || st === 'compacting';
 // The drawer: Needs you (longest waiting first), Running (oldest first), then one group per workspace, the one with the newest
 // session first and each group's sessions newest first. `frozen` is the order captured on open: rows keep their place (and
-// group), and new sessions go to the top of their group.
+// group), and new sessions go to the top of their group. Runs on every state while the list shows, so each date parses once.
 function sessionLayout(sessions, query, frozen) {
-  const start = x => x.started_ms == null ? Infinity : x.started_ms;
-  const rows = sessions.map((x, k) => ({ x, k, g: x.live && x.status === 'approval' ? 0 : x.live && busyStatus(x.status) ? 1 : 2 }));
-  const idle = rows.filter(r => r.g === 2).sort((a, b) => Date.parse(b.x.updated_at) - Date.parse(a.x.updated_at) || a.k - b.k);
-  let n = 0;
-  for (const w of new Set(idle.map(r => r.x.workspace))) for (const r of idle) if (r.x.workspace === w) r.n = n++;
+  const rows = sessions.map((x, index) => ({ x, index, pin: x.live && x.status === 'approval' ? 0 : x.live && busyStatus(x.status) ? 1 : 2, at: Date.parse(x.updated_at) }));
+  const wsRows = new Map();
+  for (const r of rows.filter(r => r.pin === 2).sort((a, b) => b.at - a.at || a.index - b.index)) {
+    if (!wsRows.has(r.x.workspace)) wsRows.set(r.x.workspace, []);
+    wsRows.get(r.x.workspace).push(r);
+  }
+  let rank = 0;
+  for (const list of wsRows.values()) for (const r of list) r.rank = rank++;
   for (const r of rows) {
     const f = frozen && frozen.get(r.x.id);
-    if (f) { r.g = f[0]; r.o = f[1]; } else r.o = frozen ? r.k - 1e9 : r.g < 2 ? start(r.x) : r.n;
+    if (f) { r.pin = f[0]; r.order = f[1]; } else r.order = frozen ? r.index - 1e9 : r.pin < 2 ? (r.x.started_ms == null ? Infinity : r.x.started_ms) : r.rank;
   }
-  rows.sort((a, b) => a.g - b.g || a.o - b.o || a.k - b.k);
-  const all = [], byWs = new Map(), kind = new Map();
+  rows.sort((a, b) => a.pin - b.pin || a.order - b.order || a.index - b.index);
+  const all = [], byWs = new Map(), pins = new Map();
   for (const r of rows) {
-    kind.set(r.x.id, r.g);
-    let g = r.g < 2 ? all.find(y => y.pinned === r.g) : byWs.get(r.x.workspace);
+    pins.set(r.x.id, r.pin);
+    let g = r.pin < 2 ? all.find(y => y.pinned === r.pin) : byWs.get(r.x.workspace);
     if (!g) {
-      g = r.g < 2 ? { label: PINNED[r.g], pinned: r.g, items: [] } : { label: basename(r.x.workspace), ws: r.x.workspace, items: [] };
+      g = r.pin < 2 ? { label: PINNED[r.pin], pinned: r.pin, items: [] } : { label: basename(r.x.workspace), ws: r.x.workspace, items: [] };
       all.push(g);
-      if (r.g === 2) byWs.set(r.x.workspace, g);
+      if (r.pin === 2) byWs.set(r.x.workspace, g);
     }
     g.items.push(r.x);
   }
-  const order = new Map(all.flatMap(g => g.items).map((x, k) => [x.id, [kind.get(x.id), k]]));
-  const groups = all.map(g => ({ ...g, items: g.items.filter(x => matchSession(x, query)) })).filter(g => g.items.length);
+  const order = new Map(all.flatMap(g => g.items).map((x, k) => [x.id, [pins.get(x.id), k]]));
+  const q = (query || '').trim().toLowerCase();
+  const groups = !q ? all : all.map(g => ({ ...g, items: g.items.filter(x => ((x.title || '') + '\n' + x.workspace).toLowerCase().includes(q)) })).filter(g => g.items.length);
   return { groups, order: frozen || order };
 }
 const PINNED = ['Needs you', 'Running'], GROUP_ROWS = 5;
