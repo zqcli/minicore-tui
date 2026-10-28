@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- The sessions picker marks a background session whose last turn failed and that
+  you have not opened since as `failed` (in the failure colour) instead of `new`.
 - An approval or choice prompt takes its answer keys (`y`, `a`, `n`, `Enter`) only
   after half a second, and any other key pressed meanwhile restarts the wait, so
   text you were typing when it appeared cannot answer it. `Esc` and `↑` / `↓` act

@@ -8,7 +8,8 @@ use crate::app::overlay::{self, matching_models, session_label, short_session_id
 use crate::app::picker;
 use crate::app::session::InteractionKind;
 use crate::app::{App, LiveStatus, Overlay, Session};
-use crate::protocol::{ModelInfo, Reasoning, SessionInfo};
+use crate::protocol::{LoopOutcome, ModelInfo, Reasoning, SessionInfo};
+use crate::transcript::Block;
 
 use super::panel::{Kind, Row, Sheet, Tone, body_lines, truncate};
 use super::theme::Styles;
@@ -164,14 +165,15 @@ fn sessions_sheet(app: &App, rows: &[SessionInfo], state: &SessionsState, styles
         .zip(&labels)
         .map(|(info, label)| {
             let current = resident == Some(info.session_id.as_str());
+            let live = app.live(&info.session_id);
             let context = RowContext {
-                state: app.live(&info.session_id).and_then(live_state),
+                state: live.and_then(live_state),
                 current,
                 other_workspace: info.workspace != workspace,
                 duplicate: labels.iter().filter(|other| *other == label).count() > 1,
             };
             let row = session_row(info, label.clone(), &context, now);
-            if armed == Some(info.session_id.as_str()) {
+            if armed == Some(info.session_id.as_str()) || live.is_some_and(failed_unseen) {
                 row.tone(Tone::Failure)
             } else {
                 row
@@ -440,9 +442,22 @@ fn live_state(session: &Session) -> Option<String> {
         }
         LiveStatus::Approval => "needs approval".to_owned(),
         LiveStatus::Compacting => "compacting".to_owned(),
+        LiveStatus::Idle if failed_unseen(session) => "failed".to_owned(),
         LiveStatus::Idle if session.unseen => "new".to_owned(),
         LiveStatus::Idle => return None,
     })
+}
+
+/// A background turn ended in failure and the session was not opened since.
+fn failed_unseen(session: &Session) -> bool {
+    session.unseen
+        && matches!(
+            session.transcript.blocks().last(),
+            Some(Block::TurnEnd {
+                outcome: LoopOutcome::Failed { .. },
+                ..
+            })
+        )
 }
 
 /// What sets one sessions-picker row apart from the others.

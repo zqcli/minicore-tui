@@ -1617,14 +1617,29 @@ fn the_sessions_picker_shows_what_live_sessions_are_doing() {
     });
     let mut done = Session::new(catalog("ses_done", "Write the docs"), 4);
     done.unseen = true;
+    let mut failed = Session::new(catalog("ses_failed", "Fix the flaky test"), 5);
+    failed.unseen = true;
+    failed.transcript.push(Block::TurnEnd {
+        loop_id: "loop_1".into(),
+        outcome: LoopOutcome::Failed {
+            kind: "model".into(),
+            model_error: None,
+        },
+        duration: None,
+        requests: 1,
+        tools: 0,
+        usage: Default::default(),
+        changes: None,
+    });
     app.sessions = vec![
         catalog("ses_old", "An old session"),
         done.info.clone(),
+        failed.info.clone(),
         asking.info.clone(),
         running.info.clone(),
         info(),
     ];
-    app.background = vec![running, asking, done];
+    app.background = vec![running, asking, done, failed];
     app.open_panel(crate::app::Panel::Sessions);
     snapshot(
         "tests/snapshots/sessions-picker-live.txt",
