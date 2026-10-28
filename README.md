@@ -16,7 +16,7 @@ file is the whole program. Version 0.4 is a rewrite of the v0.3 frontend; see
   inserts a newline. `Alt+Enter` needs the terminal to pass Alt (on macOS, Option
   as Meta or Esc+); see [docs/keybindings.md](docs/keybindings.md).
 
-Built-in backend: Agent 0.8.1, which links Runtime 0.8.0; `Cargo.toml` pins the
+Built-in backend: Agent 0.8.2, which links Runtime 0.8.0; `Cargo.toml` pins the
 Agent by its release tag and `Cargo.lock` fixes both. An
 external Agent can still be named with `--agent`. At startup the TUI requires
 Protocol v1 and these Agent capabilities, and refuses an Agent that lacks one: `session.read`, `session.read.display`, `session.context`,

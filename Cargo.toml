@@ -18,7 +18,7 @@ sha2 = "0.10"
 socket2 = "0.6"
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
 # The Agent is built in and runs as this executable's `agent` subcommand.
-minicore-agent = { git = "https://github.com/zqcli/minicore-agent", tag = "v0.8.1", version = "0.8.1" }
+minicore-agent = { git = "https://github.com/zqcli/minicore-agent", tag = "v0.8.2", version = "0.8.2" }
 jiff = { version = "0.2", default-features = false, features = ["std", "tz-system", "tzdb-zoneinfo", "tzdb-concatenated", "tzdb-bundle-platform"] }
 pulldown-cmark = { version = "0.13", default-features = false }
 ratatui = { version = "0.30", default-features = false, features = ["crossterm"] }

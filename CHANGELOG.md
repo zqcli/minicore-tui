@@ -23,9 +23,12 @@
 - Settings switches use the full row width, with readable descriptions and
   right-aligned controls on phones and desktops.
 
-- Built-in backend: Agent 0.8.1 with Runtime 0.8.0, pinned by tag (0.8.0 before).
+- Built-in backend: Agent 0.8.2 with Runtime 0.8.0, pinned by tag (0.8.0 before).
   A failed turn now carries what the provider said: its HTTP status, error code
-  and type, and the full message.
+  and type, and the full message. Automatic compaction is decided only before a
+  turn starts, from the context the provider last reported, so restarting no
+  longer compacts a session early; nothing is compacted automatically when a
+  turn ends.
 - Workspace-grouped session lists use denser single-line rows with more room
   for titles; desktop row actions replace the time on hover or keyboard focus.
 - The composer uses a lighter, compact toolbar: transparent icon and context
