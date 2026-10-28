@@ -571,7 +571,7 @@ pub struct SessionContext {
     pub last_prepare_failure: Option<String>,
 }
 
-/// The latest automatic compactions between requests, which have no event.
+/// The latest compactions at the start of a turn, which have no event.
 #[derive(Clone, Debug, Deserialize)]
 pub struct AutomaticView {
     pub current: Option<AutomaticObservation>,
@@ -614,7 +614,6 @@ pub enum CompactStatus {
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct CompactionResult {
-    pub origin: Option<String>,
     pub operation_id: String,
     pub status: CompactStatus,
     pub before_tokens: Option<u64>,

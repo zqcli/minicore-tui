@@ -344,7 +344,7 @@ impl App {
             let changes = tasks::turn_changes(client, turn.session_id, turn.loop_id.clone()).await;
             SessionOp::Changes(turn.loop_id, changes)
         });
-        // An automatic compaction has no response of its own: `session.context`
+        // A turn-start compaction has no response of its own: `session.context`
         // is where it is reported, and the footer's figure moved too. The turn
         // may also have switched branches.
         self.refresh_branch();

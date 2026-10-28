@@ -795,10 +795,10 @@ test('approval buttons use the host labels, allow first and deny last; choices a
 
 test('the context view reads the reply as a bar with markers and rows for the parts present', () => {
   const full = { tokens: 46800, window: 200000, percent: 23.4, budget: 180000, history_tokens: 38500, trigger_tokens: 160000, target_tokens: 60000, compacting: false,
-    coverage: { turns: 14, items: 212, kept: 58 }, last_compaction: { origin: 'manual', status: 'completed', before: 182400, after: 9100 }, failure: null };
+    coverage: { turns: 14, items: 212, kept: 58 }, last_compaction: { status: 'completed', before: 182400, after: 9100 }, failure: null };
   const v = plain(MC.contextView(full));
   assert.deepEqual([v.percent, v.used, v.trigger, v.target, v.failure], [23.4, '46.8k of 200.0k tokens', 80, 30, '']);
-  assert.deepEqual(v.rows, [['History', '38.5k tokens'], ['Compacts at', '160.0k → 60.0k'], ['Covers', '14 turns · 212 items · 58 kept'], ['Last compaction', 'Manual · completed · 182.4k → 9.1k']]);
+  assert.deepEqual(v.rows, [['History', '38.5k tokens'], ['Compacts at', '160.0k → 60.0k'], ['Covers', '14 turns · 212 items · 58 kept'], ['Last compaction', 'completed · 182.4k → 9.1k']]);
   const bare = plain(MC.contextView({ tokens: 10, window: 100, percent: 10, history_tokens: null, trigger_tokens: null, target_tokens: null, coverage: null, last_compaction: null, failure: 'model refused', compacting: true }));
   assert.deepEqual([bare.rows, bare.trigger, bare.failure, bare.compacting], [[], null, 'model refused', true]);
 });

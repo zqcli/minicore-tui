@@ -720,7 +720,7 @@ function contextView(d) {
       d.history_tokens != null && ['History', fmtTok(d.history_tokens) + ' tokens'],
       d.trigger_tokens != null && ['Compacts at', fmtTok(d.trigger_tokens) + (d.target_tokens != null ? ' → ' + fmtTok(d.target_tokens) : '')],
       c && ['Covers', plural(c.turns, 'turn') + ' · ' + plural(c.items, 'item') + ' · ' + c.kept + ' kept'],
-      l && ['Last compaction', cap(l.origin) + ' · ' + l.status + (l.before != null ? ' · ' + fmtTok(l.before) + ' → ' + fmtTok(l.after) : '')],
+      l && ['Last compaction', l.status + (l.before != null ? ' · ' + fmtTok(l.before) + ' → ' + fmtTok(l.after) : '')],
     ].filter(Boolean),
     failure: d.failure || '', compacting: !!d.compacting,
   };

@@ -11,6 +11,9 @@
 - A message is never held back by a compaction that follows the previous turn: the
   Agent compacts only before a turn starts, so the "Waiting for compaction"
   state is gone and a refused message returns to the composer.
+- The context view and the phone's context sheet list the last compaction without
+  an "(automatic)" or "(manual)" origin, and the turn-start one reads "Last
+  automatic compaction"; a turn-start compaction that failed is reported once.
 - Web client: when the next approval replaces an open one, its sheet starts
   fresh instead of keeping the deny form and reason typed for the previous one.
 - iPhone: tapping the composer no longer zooms the page in and leaves it

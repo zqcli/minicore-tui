@@ -477,8 +477,7 @@ replies by id. Agent errors are passed on as their message.
 {"tokens":31200|null,"window":64000|null,"percent":78.0|null,"budget":40000|null,
  "history_tokens":370|null,"trigger_tokens":32000|null,"target_tokens":16000|null,
  "compacting":false,"coverage":{"turns":6,"items":12,"kept":3}|null,
- "last_compaction":{"origin":"automatic"|"manual"|null,
-                    "status":"compacted"|"noop"|"failed"|"unknown_write"|"unknown",
+ "last_compaction":{"status":"compacted"|"noop"|"failed"|"unknown_write"|"unknown",
                     "before":4200|null,"after":900|null}|null,
  "failure":"context_uncompressible"|null}
 // changes: one row per path in list order; branch = state.session.branch;

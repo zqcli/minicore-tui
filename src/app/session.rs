@@ -37,10 +37,8 @@ pub struct Session {
     pub context: Option<SessionContext>,
     /// When `session.context` was last asked for while a turn ran.
     pub context_asked: Option<tokio::time::Instant>,
-    /// The latest automatic compaction `session.context` reported.
+    /// The latest turn-start compaction attempt `session.context` reported.
     auto_seen: Option<String>,
-    /// The latest failed automatic compaction operation `session.context` reported.
-    failure_seen: Option<String>,
     pub compaction: Option<CompactionProgress>,
     /// Coverage of the current summary from `session.context`; a summary
     /// replayed from history carries none of its own.
@@ -241,7 +239,6 @@ impl Session {
             context: None,
             context_asked: None,
             auto_seen: None,
-            failure_seen: None,
             compaction: None,
             summary_coverage: None,
             interaction: None,
@@ -909,8 +906,8 @@ impl Session {
     }
 
     /// Takes a `session.context` report: compaction progress, the last result
-    /// as a marker, and the coverage of the current summary. Returns the reason
-    /// of an automatic compaction that failed since the previous report.
+    /// as a marker, and the coverage of the current summary. Returns the outcome
+    /// of a turn-start compaction that failed since the previous report.
     pub fn apply_context(&mut self, context: SessionContext) -> Option<String> {
         let automatic = context.automatic.as_ref();
         // A compaction between two requests has no event or operation of its own.
@@ -923,26 +920,29 @@ impl Session {
                 retained_item_count: 0,
             })
         });
-        // The first report only sets the baseline: an earlier compaction is
+        // The first report only sets the baseline: an earlier attempt is
         // already in the history that was read.
+        let mut failure = None;
         if let Some(last) = automatic.and_then(|view| view.last.as_ref())
             && self.auto_seen.replace(last.operation_id.clone()).as_ref()
                 != Some(&last.operation_id)
-            && last.outcome == "compacted"
             && self.context.is_some()
         {
-            let result = CompactionResult {
-                origin: Some("automatic".into()),
-                operation_id: last.operation_id.clone(),
-                status: CompactStatus::Compacted,
-                before_tokens: last.before_tokens,
-                after_tokens: last.after_tokens,
-                covered_loop_count: None,
-                covered_item_count: None,
-                retained_item_count: None,
-                failure_kind: None,
-            };
-            self.push_compaction(&result, None);
+            if last.outcome == "compacted" {
+                let result = CompactionResult {
+                    operation_id: last.operation_id.clone(),
+                    status: CompactStatus::Compacted,
+                    before_tokens: last.before_tokens,
+                    after_tokens: last.after_tokens,
+                    covered_loop_count: None,
+                    covered_item_count: None,
+                    retained_item_count: None,
+                    failure_kind: None,
+                };
+                self.push_compaction(&result, None);
+            } else if !last.outcome.starts_with("compacted") && last.outcome != "cancelled" {
+                failure = Some(last.outcome.clone());
+            }
         }
         let coverage = context
             .coverage
@@ -955,24 +955,6 @@ impl Session {
         if let Some(coverage) = coverage {
             self.cover_replayed_compaction(coverage);
         }
-        let failure = context.last_result.as_ref().filter(|last| {
-            last.origin.as_deref() == Some("automatic")
-                && last.status == CompactStatus::Failed
-                && last.failure_kind.as_deref() != Some("cancelled")
-        });
-        let failure = failure
-            .filter(|last| {
-                self.failure_seen
-                    .replace(last.operation_id.clone())
-                    .as_ref()
-                    != Some(&last.operation_id)
-                    && self.context.is_some()
-            })
-            .map(|last| {
-                last.failure_kind
-                    .clone()
-                    .unwrap_or_else(|| "no progress".into())
-            });
         self.context = Some(context);
         failure
     }

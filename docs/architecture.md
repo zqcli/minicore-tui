@@ -466,17 +466,18 @@ history.
 Agent has no completed event, so the one-line marker comes from the
 `session.compact` result of a compaction the TUI started, or from `last_result`
 in a `session.context` read (on open, after each turn, when a compaction ends,
-when the Context sheet opens). A compaction between two requests of a turn
-reaches neither: it is only in `session.context.automatic.current` and `.last`,
+when the Context sheet opens). A compaction at the start of a turn (before its
+first request) reaches neither: it is only in `session.context.automatic.current`
+and `.last`,
 so the context is read every 2 s while a turn runs (`watch_context`, on the
 tick), and a `last` that differs from the one the first read of the session
 reported becomes a marker. All carry
 an operation id and `push_compaction` skips one it already shows. `Esc` outside
 a turn sends `session.compact.cancel` for the operation shown; inside a turn it
 interrupts the turn, which ends the compaction too.
-A `last_result` of a failed automatic compaction becomes one error notice. The
-Agent's post-turn check is silent unless it compacts, so only a real compaction
-shows as one; a send never triggers a compaction first.
+An `automatic.last` that failed (neither compacted nor cancelled) becomes one
+error notice. The Agent's turn-start check is silent unless it compacts, so only
+a real compaction shows as a marker; a send never triggers a compaction first.
 The footer's `ctx` is the reported tokens over `budget.input_budget_tokens`
 (over the model window when the Agent reports no budget).
 Loaded blocks are never removed. A summary replayed from history is a block of
