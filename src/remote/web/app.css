@@ -356,7 +356,7 @@ pre.view.wrap{white-space:pre-wrap;overflow-wrap:anywhere}
 #dock{flex:none;position:relative;z-index:4;padding:6px calc(var(--sr) + 10px) calc(max(var(--sb),8px) + 2px) calc(var(--sl) + 10px);background:var(--bg)}
 html.kb #dock{padding-bottom:6px}
 #dock>*{max-width:var(--col);margin-left:auto;margin-right:auto}
-#jump{position:absolute;left:50%;bottom:calc(100% + 8px);transform:translateX(-50%);width:36px;padding:0;justify-content:center;box-shadow:var(--sh);background:var(--sf);color:var(--tx);z-index:5;animation:rise var(--fast) var(--ease)}
+#jump{position:absolute;left:50%;bottom:calc(100% + 8px);transform:translateX(-50%);width:36px;padding:0;justify-content:center;box-shadow:var(--sh),inset 0 0 0 1px var(--line2);background:var(--sf);color:var(--tx);z-index:5;animation:rise var(--fast) var(--ease)}
 #jump::after{inset:-4px}
 #jump span{display:none}
 #jump.new{width:auto;padding:0 14px}
