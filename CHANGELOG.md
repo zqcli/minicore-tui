@@ -5,6 +5,9 @@
 - Web client: the conversation is denser and follows one rhythm. Tool and
   thinking rows are 32 px (36 px on touch) with 2 px between them, 12 px
   separates text, tools and steering inside a turn, and 24 px separates turns.
+- Web client: a round ↓ button above the composer jumps to the latest message
+  whenever you are scrolled well above the bottom, and becomes the "New output"
+  pill when output arrived meanwhile. `End` does the same outside text fields.
 - Web client: when the next approval replaces an open one, its sheet starts
   fresh instead of keeping the deny form and reason typed for the previous one.
 - iPhone: tapping the composer no longer zooms the page in and leaves it

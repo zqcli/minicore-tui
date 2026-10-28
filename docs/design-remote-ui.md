@@ -257,9 +257,22 @@ re-renders on every `state`).
   when off.
 - **Code blocks**: language label, Copy, Wrap; tables scroll with an edge
   shadow; nothing clips without a hint.
-- **Scroll**: auto-follow only near the bottom; otherwise a "↓ New output" pill
-  above the composer. Older history keeps the existing paging, with one
-  consistent "Load earlier" control; the mounted window is capped at both ends.
+- **Scroll**: auto-follow only near the bottom. One control, `#jump`, centred
+  above the dock, leads back to the latest content (End does the same when focus
+  is not in a text field):
+
+  | State | Shows when | Face |
+  |---|---|---|
+  | hidden | the reader is within 80 px of the bottom with every newer block mounted, and has not scrolled up by more than min(screen height, 200 px) since | — |
+  | at rest | the reader is more than min(screen height, 200 px) above the bottom, or newer blocks are unmounted | 36 px round ↓ button, `aria-label` "Jump to latest" |
+  | new output | output arrived since the reader left the bottom | the "↓ New output" pill |
+
+  Showing needs that distance and hiding needs the bottom, so a view settling
+  near one line does not flicker; the control is touched only when its state
+  changes, never per scroll event. A click jumps at once (remounting newer blocks
+  that were unmounted) and hides it. Older history keeps the existing paging,
+  with one consistent "Load earlier" control; the mounted window is capped at
+  both ends.
 - **Search in session** (⋯ → Find, or Cmd/Ctrl+F): highlights matches in loaded
   blocks, next/previous.
 
@@ -375,7 +388,8 @@ the buttons' labels and thin themed scrollbars; tables wider than the column
 scroll instead of breaking words. Shortcuts:
 Esc close the top sheet or menu, else stop the turn, Cmd/Ctrl+K command list,
 Cmd/Ctrl+Enter send or steer (Enter does when the setting is on; Alt+Enter queues),
-Cmd/Ctrl+F find, Cmd/Ctrl+Shift+F search sessions, Alt+↑/↓ previous/next session, `?` shortcut help.
+Cmd/Ctrl+F find, Cmd/Ctrl+Shift+F search sessions, Alt+↑/↓ previous/next session, End jump to the
+latest message (outside text fields), `?` shortcut help.
 
 ## Code layout
 
