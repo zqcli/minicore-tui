@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use serde::de::DeserializeOwned;
 
 use compose::AgentFile;
-pub use home::Home;
+pub use home::{Home, home_dir};
 pub use remote::{Remote, Tls};
 pub use settings::{Settings, ThemeKind, Ui, editor_command, save_theme};
 

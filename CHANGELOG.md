@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- On Windows the welcome header and the remote status screen write the home folder
+  as `~`, as on other systems.
 - The sessions picker marks a background session whose last turn failed and that
   you have not opened since as `failed` (in the failure colour) instead of `new`.
 - An approval or choice prompt takes its answer keys (`y`, `a`, `n`, `Enter`) only
