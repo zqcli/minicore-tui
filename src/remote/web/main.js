@@ -119,6 +119,8 @@ if (window.visualViewport) {
   // Panning fires scroll events without a change, and every write to these properties restyles the whole page.
   let height = -1, lifted = -1;
   const fit = () => {
+    // A pinch zoom shrinks the visual viewport as the keyboard does; the layout keeps its size until the zoom is back at 1.
+    if (visualViewport.scale > 1.01) return;
     if (window.scrollY) scrollTo(0, 0);
     const root = document.documentElement, kb = Math.max(0, Math.round(innerHeight - visualViewport.height - visualViewport.offsetTop));
     if (visualViewport.height !== height) root.style.setProperty('--h', (height = visualViewport.height) + 'px');
