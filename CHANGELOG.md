@@ -4,6 +4,8 @@
 
 - A provider's error code or type can no longer reorder or restyle the failed
   turn's line in the transcript.
+- With `--agent-config`, an empty `config.toml` is an error again instead of being
+  ignored; a missing one still means defaults.
 - The sessions picker finds an untitled background session by a word of its first
   prompt and Ctrl+D names it that way, and the filter also matches the
   workspace folder name.

@@ -518,6 +518,19 @@ fn remote_validation_applies_to_composed_and_raw_launches() {
 }
 
 #[test]
+fn an_empty_config_toml_is_an_error_for_a_raw_launch_but_a_missing_one_is_not() {
+    let (_dir, home) = temp_home("", MODELS);
+    let request = Request {
+        agent_config: Some(Path::new("agent.toml")),
+        ..Request::default()
+    };
+    let error = prepare(&home, &request, &|_| true).err().unwrap();
+    assert!(error.contains("default_profile"), "{error}");
+    std::fs::remove_file(home.config_file()).unwrap();
+    assert!(prepare(&home, &request, &|_| true).is_ok());
+}
+
+#[test]
 fn an_explicit_editor_wins_over_the_environment() {
     let configured = vec!["ed".to_owned(), "-s".to_owned()];
     assert_eq!(editor_command(&configured), Some(configured));
