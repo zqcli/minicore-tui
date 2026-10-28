@@ -446,6 +446,44 @@ async fn the_picker_lists_live_sessions_first() {
     assert!(screen.contains("running 0m"), "{screen}");
 }
 
+#[tokio::test(start_paused = true)]
+async fn an_untitled_background_session_is_found_and_named_by_its_first_prompt() {
+    let mut h = Harness::opened(page(1, 0, vec![user(0, "l0", "refactor the parser")])).await;
+    h.fake
+        .script("session.open@s2", json!({"session": session_info("s2")}));
+    h.fake.script("session.read@s2", display_read(0, 0));
+    show(&mut h, "s2").await;
+    h.ctrl(KeyCode::Char('r'));
+    h.type_text("parser");
+    let screen = h.screen(100, 24);
+    assert!(screen.contains("1 of 2"), "{screen}");
+    assert!(screen.contains("refactor the parser"), "{screen}");
+    h.ctrl(KeyCode::Char('d'));
+    assert_eq!(
+        h.notices(),
+        ["Press Ctrl+D again to delete \"refactor the parser\" permanently"]
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_picker_finds_a_session_by_its_workspace_folder() {
+    let mut h = Harness::new();
+    let mut elsewhere = session_info("s_alpha");
+    elsewhere["title"] = json!("alpha");
+    elsewhere["workspace"] = json!(std::path::Path::new("elsewhere").join("billing"));
+    elsewhere["loaded"] = json!(false);
+    h.fake.script(
+        "session.list",
+        json!({"sessions": [session_info("s1"), elsewhere]}),
+    );
+    h.open().await;
+    h.ctrl(KeyCode::Char('r'));
+    h.type_text("billing");
+    let screen = h.screen(100, 24);
+    assert!(screen.contains("1 of 2"), "{screen}");
+    assert!(screen.contains("alpha"), "{screen}");
+}
+
 /// The ids of the phone's session list, in order, for a phone that just connected.
 async fn phone_catalog(h: &mut Harness) -> Vec<String> {
     h.app.remote.config = Some(config(std::path::PathBuf::from("/tmp/ws")));

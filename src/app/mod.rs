@@ -366,16 +366,10 @@ impl App {
                     app.background
                         .retain(|session| session.info.session_id != id);
                     app.catalog_generation += 1;
-                    if let Overlay::Sessions {
-                        rows,
-                        filter,
-                        selected,
-                        ..
-                    } = &mut app.overlay
-                    {
+                    if let Overlay::Sessions { rows, .. } = &mut app.overlay {
                         rows.retain(|session| session.session_id != id);
-                        let shown = overlay::filtered_sessions(rows, filter, app.session.as_ref());
-                        *selected = (*selected).min(shown.len().saturating_sub(1));
+                        // A zero step keeps the selection on a row that is still there.
+                        app.overlay_move(0);
                     }
                 }
             }),

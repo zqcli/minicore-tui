@@ -1,6 +1,9 @@
 //! The one picker or view that owns input at a time. Its state lives in the
 //! variant, so closing it drops everything it held.
 
+use std::borrow::Cow;
+use std::path::Path;
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde_json::json;
 
@@ -118,20 +121,24 @@ pub fn matching_models<'a>(models: &'a [ModelInfo], filter: &str) -> Vec<&'a Mod
         .collect()
 }
 
-/// A session's name in the picker: its title, else (for the resident session)
+/// A session's name in the picker: its title, else (for a live session `live`)
 /// its first prompt, else its short id.
-pub fn session_label(info: &SessionInfo, resident: Option<&Session>) -> String {
+pub fn session_label(info: &SessionInfo, live: Option<&Session>) -> String {
     let title = info
         .title
         .as_deref()
         .filter(|title| !title.trim().is_empty());
     title
         .map(str::to_owned)
-        .or_else(|| {
-            let resident = resident.filter(|session| session.info.session_id == info.session_id)?;
-            auto_title(resident.first_prompt()?)
-        })
+        .or_else(|| auto_title(live?.first_prompt()?))
         .unwrap_or_else(|| short_session_id(&info.session_id).to_owned())
+}
+
+/// The folder a session's workspace ends in.
+pub fn workspace_name(info: &SessionInfo) -> Option<Cow<'_, str>> {
+    Path::new(&info.workspace)
+        .file_name()
+        .map(|name| name.to_string_lossy())
 }
 
 /// `ses_8ca3c4cf...` → `ses_8ca3c4`, enough to tell sessions apart in a row.
@@ -144,19 +151,42 @@ pub fn short_session_id(session_id: &str) -> &str {
     &session_id[..session_id.len() - body.len() + cut]
 }
 
-/// The picker rows whose label fuzzy-matches `filter`, in order.
-pub fn filtered_sessions<'a>(
-    rows: &'a [SessionInfo],
-    filter: &str,
-    resident: Option<&Session>,
-) -> Vec<&'a SessionInfo> {
-    let filter = filter.trim();
-    rows.iter()
-        .filter(|info| filter.is_empty() || fuzzy_match(&session_label(info, resident), filter))
-        .collect()
-}
-
 impl App {
+    /// The name the picker shows for `info`.
+    pub fn session_title(&self, info: &SessionInfo) -> String {
+        session_label(info, self.live(&info.session_id))
+    }
+
+    /// The picker rows whose name or workspace folder fuzzy-matches `filter`, in order.
+    pub fn filtered_sessions<'a>(
+        &self,
+        rows: &'a [SessionInfo],
+        filter: &str,
+    ) -> Vec<&'a SessionInfo> {
+        let filter = filter.trim();
+        rows.iter()
+            .filter(|info| {
+                filter.is_empty()
+                    || fuzzy_match(&self.session_title(info), filter)
+                    || workspace_name(info).is_some_and(|name| fuzzy_match(&name, filter))
+            })
+            .collect()
+    }
+
+    /// The row the open sessions picker has selected.
+    pub(super) fn selected_session(&self) -> Option<&SessionInfo> {
+        let Overlay::Sessions {
+            rows,
+            filter,
+            selected,
+            ..
+        } = &self.overlay
+        else {
+            return None;
+        };
+        self.filtered_sessions(rows, filter).get(*selected).copied()
+    }
+
     /// The reasoning levels the current model supports, in Agent order.
     pub fn reasoning_levels(&self) -> Vec<protocol::Reasoning> {
         let id = self.model_id();
@@ -346,28 +376,18 @@ impl App {
             self.remote_flash();
             return;
         }
-        let Overlay::Sessions {
-            rows,
-            filter,
-            selected,
-            renaming,
-            ..
-        } = &mut self.overlay
-        else {
+        let Some(info) = self.selected_session() else {
             return;
         };
-        let shown = filtered_sessions(rows, filter, self.session.as_ref());
-        if let Some(info) = shown.get(*selected) {
-            *renaming = Some(info.title.clone().unwrap_or_default());
+        let title = info.title.clone().unwrap_or_default();
+        if let Overlay::Sessions { renaming, .. } = &mut self.overlay {
+            *renaming = Some(title);
         }
     }
 
     /// Keys while a title is being typed in the sessions picker.
     pub(super) fn on_rename_key(&mut self, key: KeyEvent) {
         let Overlay::Sessions {
-            rows,
-            filter,
-            selected,
             renaming: Some(title),
             ..
         } = &mut self.overlay
@@ -377,8 +397,7 @@ impl App {
         match key.code {
             KeyCode::Enter => {
                 let title = std::mem::take(title);
-                let shown = filtered_sessions(rows, filter, self.session.as_ref());
-                let id = shown.get(*selected).map(|info| info.session_id.clone());
+                let id = self.selected_session().map(|info| info.session_id.clone());
                 if let Overlay::Sessions { renaming, .. } = &mut self.overlay {
                     *renaming = None;
                 }

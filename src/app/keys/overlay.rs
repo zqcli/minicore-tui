@@ -2,7 +2,7 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::app::overlay::{filtered_sessions, matching_models, session_label};
+use crate::app::overlay::matching_models;
 use crate::app::picker;
 use crate::app::{Action, App, NoticeLevel, Overlay, find};
 
@@ -64,26 +64,13 @@ impl App {
             self.remote_flash();
             return;
         }
-        let Overlay::Sessions {
-            rows,
-            filter,
-            selected,
-            armed,
-            ..
-        } = &self.overlay
-        else {
-            return;
-        };
-        let resident = self.session.as_ref();
-        let Some(info) = filtered_sessions(rows, filter, resident)
-            .get(*selected)
-            .copied()
-        else {
+        let Some(info) = self.selected_session() else {
             return;
         };
         let id = info.session_id.clone();
-        let label = session_label(info, resident);
-        let again = armed.as_deref() == Some(id.as_str());
+        let label = self.session_title(info);
+        let again =
+            matches!(&self.overlay, Overlay::Sessions { armed: Some(armed), .. } if *armed == id);
         if let Some(refusal) = self.delete_refusal(&id) {
             self.notice(NoticeLevel::Error, refusal);
             return;
@@ -117,9 +104,7 @@ impl App {
     pub fn overlay_move(&mut self, delta: isize) {
         let len = match &self.overlay {
             Overlay::Palette { .. } | Overlay::Files { .. } => self.completion_len(),
-            Overlay::Sessions { rows, filter, .. } => {
-                filtered_sessions(rows, filter, self.session.as_ref()).len()
-            }
+            Overlay::Sessions { rows, filter, .. } => self.filtered_sessions(rows, filter).len(),
             Overlay::Models { filter, .. } => matching_models(&self.models, filter).len(),
             Overlay::Reasoning { .. } => self.reasoning_levels().len(),
             Overlay::Diff(diff) => diff.files.len(),
@@ -205,7 +190,8 @@ impl App {
                 filter,
                 rows,
                 ..
-            } => filtered_sessions(&rows, &filter, self.session.as_ref())
+            } => self
+                .filtered_sessions(&rows, &filter)
                 .get(selected)
                 .map(|info| Action::OpenSession(info.session_id.clone())),
             find @ Overlay::Find { .. } => {

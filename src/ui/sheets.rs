@@ -4,9 +4,7 @@
 
 use ratatui::text::{Line, Span};
 
-use crate::app::overlay::{
-    self, filtered_sessions, matching_models, session_label, short_session_id,
-};
+use crate::app::overlay::{self, matching_models, session_label, short_session_id, workspace_name};
 use crate::app::picker;
 use crate::app::session::InteractionKind;
 use crate::app::{App, LiveStatus, Overlay, Session};
@@ -144,20 +142,17 @@ fn sessions_sheet(app: &App, rows: &[SessionInfo], state: &SessionsState, styles
         .duration_since(std::time::UNIX_EPOCH)
         .map(|elapsed| elapsed.as_secs())
         .unwrap_or(0);
-    let shown = filtered_sessions(rows, filter, app.session.as_ref());
+    let shown = app.filtered_sessions(rows, filter);
     if let Some(title) = renaming {
         let target = shown
             .get(selected)
-            .map(|info| session_label(info, app.session.as_ref()))
+            .map(|info| app.session_title(info))
             .unwrap_or_default();
         return Sheet::new("Rename Session", "enter save · esc cancel")
             .status(target)
             .search(title);
     }
-    let labels: Vec<String> = shown
-        .iter()
-        .map(|info| session_label(info, app.live(&info.session_id)))
-        .collect();
+    let labels: Vec<String> = shown.iter().map(|info| app.session_title(info)).collect();
     let workspace = app.workspace.to_string_lossy();
     let status = if shown.len() == rows.len() {
         count(rows.len(), "session")
@@ -470,9 +465,9 @@ fn session_row(info: &SessionInfo, label: String, context: &RowContext, now_seco
         parts.push("current".to_owned());
     }
     if context.other_workspace
-        && let Some(name) = std::path::Path::new(&info.workspace).file_name()
+        && let Some(name) = workspace_name(info)
     {
-        parts.push(name.to_string_lossy().into_owned());
+        parts.push(name.into_owned());
     }
     if context.duplicate {
         parts.push(short_session_id(&info.session_id).to_owned());

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- The sessions picker finds an untitled background session by a word of its first
+  prompt and Ctrl+D names it that way, and the filter also matches the
+  workspace folder name.
 - The bell no longer rings when you leave a session whose turn is still running,
   and it rings for a long turn's approval even while another session waits for
   one.
