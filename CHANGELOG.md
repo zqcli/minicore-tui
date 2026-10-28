@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Web client: when the next approval replaces an open one, its sheet starts
+  fresh instead of keeping the deny form and reason typed for the previous one.
 - iPhone: tapping the composer no longer zooms the page in and leaves it
   zoomed; the composer sits on the keyboard and returns to the bottom when the
   keyboard closes, and a pinch zoom no longer resizes the app.

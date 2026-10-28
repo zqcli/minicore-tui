@@ -728,7 +728,8 @@ export function syncApproval() {
     reply.call = t ? t.call_id : null;
     announce(a.kind === 'approval' ? 'Approval needed' : 'Question: ' + (a.prompt || ''));
     notify(a.kind === 'approval' ? 'Approval needed: ' + MC.approvalLine(a) : a.prompt || 'A question is waiting', S.sid);
-    if (!m) openApproval(a);
+    // The host can replace the interaction while its sheet is open: the next one never inherits a deny reason.
+    if (m) { reply.deny = false; reply.reason = ''; } else openApproval();
   }
   renderApprBar();
 }
