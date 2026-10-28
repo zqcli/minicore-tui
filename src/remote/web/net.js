@@ -15,12 +15,10 @@ export const hostNow = () => Date.now() + S.skew;
 export const stampAt = ms => MC.stamp(ms, hostNow(), tz());
 export const turnStatus = () => S.state.status;
 export const viewed = () => S.state.session || S.state.draft;
-// An unconfirmed send that went back to the composer is no longer tracked.
-export const abandon = id => S.intents.delete(id);
 // Ids keep counting so a late reply never matches a new request.
 const resetStore = () => Object.assign(S, MC.createStore(), { nid: S.nid });
 export const online = () => ready && ws && ws.readyState === 1;
-export function send(msg) { ws.send(JSON.stringify(msg)); }
+function send(msg) { ws.send(JSON.stringify(msg)); }
 function hangUp() {
   if (ws) { const s = ws; ws = null; s.onclose = s.onmessage = null; s.close(); lost(); }
 }
@@ -54,6 +52,9 @@ export function intent(spec, own) {
   repaint();
   return true;
 }
+// An unconfirmed send, sent again as a new intent or taken back into the composer, where it is no longer tracked.
+export function resend(id) { send(MC.sendAgain(S, id)); repaint(); }
+export function takeBack(id) { const text = S.intents.get(id).text; S.intents.delete(id); return text; }
 export const pendingKind = k => !!MC.pending(S, k);
 export const sending = () => pendingKind('submit') || pendingKind('queue');
 const fsWait = new Map();

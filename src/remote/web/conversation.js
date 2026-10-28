@@ -1,5 +1,5 @@
 import * as MC from './core.js';
-import { HOST, S, abandon, ask, hostNow, intent, online, pendingKind, repaint, send, sending, stampAt, turnStatus, tz, viewed } from './net.js';
+import { HOST, S, ask, hostNow, intent, online, pendingKind, repaint, resend, sending, stampAt, takeBack, turnStatus, tz, viewed } from './net.js';
 import { compactNow, exportSession, openApprovals, openChanges, openContext, openHelp, openInfo, openModel, openNav, openNew, openOutput, openSettings, rename } from './sessions.js';
 import { $, actions, announce, apple, copyButton, copyText, diffView, findSheet, h, hover, icon, inField, keepFocus, kids, loading, menuRow, notify, part, prefs, reduced, set, share, sheet, spin, toast, topModal, wide } from './ui.js';
 
@@ -44,11 +44,8 @@ $('tray').addEventListener('click', e => {
       if (edit) edits.add(text);
       intent(MC.intents.unqueue(+row.dataset.index, text, edit));
     }
-  } else if (k.startsWith('again')) { send(MC.sendAgain(S, k.slice(5))); repaint(); }
-  else if (k.startsWith('edit')) {
-    const id = k.slice(4), text = S.intents.get(id).text;
-    abandon(id); fillComposer(MC.mergeReturned(ta.value, text)); repaint();
-  }
+  } else if (k.startsWith('again')) resend(k.slice(5));
+  else if (k.startsWith('edit')) { fillComposer(MC.mergeReturned(ta.value, takeBack(k.slice(4)))); repaint(); }
 });
 function renderTray() {
   const q = MC.queueView(S.state.queue, qAll);
