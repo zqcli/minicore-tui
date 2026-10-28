@@ -120,7 +120,7 @@ history is `history.jsonl` in the TUI directory.
 
 ```text
 
- minicore-tui v0.7.4                                  (welcome header)
+ minicore-tui v0.7.5                                  (welcome header)
 
  esc interrupt · ctrl+c clear · / commands · @ files · ctrl+o expand · ctrl+r sessions
 

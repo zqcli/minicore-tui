@@ -334,7 +334,7 @@ Server answers, in order:
 
 ```json
 {"t":"authorized","token":"<base64url>"}                  // only after a login
-{"t":"welcome","v":2,"version":"0.7.4","device":"iPhone Safari","now_ms":1761300003000}
+{"t":"welcome","v":2,"version":"0.7.5","device":"iPhone Safari","now_ms":1761300003000}
 {"t":"snapshot","state":{...},"blocks":[...]}
 ```
 
