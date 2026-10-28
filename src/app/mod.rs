@@ -99,10 +99,10 @@ pub enum SessionOp {
     WorkspaceStatus(Result<Value, RpcError>),
     Context(Result<SessionContext, RpcError>),
     /// The send answer, with the text so a refusal can hand it back.
-    Sent(String, Result<TurnSendResult, RpcError>),
+    Sent(Queued, Result<TurnSendResult, RpcError>),
     Waited(Result<TurnWaitResult, RpcError>),
-    /// The steer answer, with the text that finds the queued steer it stamps.
-    Steered(String, Result<SteerResult, RpcError>),
+    /// The loop and text keep late steer results from changing another turn's queue.
+    Steered(String, String, Result<SteerResult, RpcError>),
     /// An answer of which only a failure matters.
     Done(Result<Value, RpcError>),
     Compacted(Result<CompactionResult, RpcError>),

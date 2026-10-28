@@ -244,7 +244,7 @@ and the sign-in pause countdown refreshes with the next frame.
 explicit allowlist for viewing, copying/exporting, draft editing, theme changes,
 queue recall, quit and remote commands. Command completion checks before clearing
 the draft. Approval sheets neither render nor take the local keyboard; Esc can
-still interrupt. Entering remote recalls queued follow-ups into the composer.
+still interrupt. Entering remote recalls all unsent queued messages into the composer.
 Each `Phone` owns a `PhoneView`: a live session id or draft workspace and launch
 settings, copied from the foreground on admission. Before an intent one helper
 focuses that view through the ordinary live switch or draft path; the phones
@@ -381,7 +381,7 @@ hints.
    for the stored outcome; with none stored it waits again; only if that read
    fails too does the turn end as `Unknown` with an error notice. `end_turn` then
    closes streaming blocks, adds usage to the totals, appends the turn-end block
-   and turns unapplied steers into follow-ups. If the outcome is not `completed`
+   and marks unapplied steers unsent without changing their order or kind. If the outcome is not `completed`
    or the turn had a gap, its durable items are read with `turn.result` (paged,
    chunk-assembled) and **reconciled**: they replace the blocks the turn streamed,
    up to its turn-end line and no further, so a follow-up already sent stays
@@ -392,7 +392,7 @@ hints.
    replaces the streamed one in place; the streamed text stays only when the
    Agent sent none. In every case `changes.list` for the turn fills the change
    summary, `session.presentation` and `session.context` are refreshed, and the
-   next follow-up is sent.
+   queue is pumped in send order.
 4. **`turn_finished`** only changes the phase text. A wait answer for another
    loop leaves the live turn running.
 5. **Interrupt.** `Esc` sends `turn.cancel` once; the status line shows
@@ -415,10 +415,18 @@ interrupt left on screen. A record without
 details, or with a binary, truncated, stale or unreadable diff, makes the total
 unknown, and the line then shows only `N files changed`, never a zero.
 
-Steering: `Enter` while busy queues a `Steer` entry and calls `turn.steer`;
-`steer_progress` moves applied steers into the transcript. Refused or unapplied
-steers become follow-ups, which `Alt+Enter` (or `Ctrl+Enter`) also queues locally and `Alt+↑` takes
-back into an empty draft, all of them, joined by blank lines. The first prompt
+Steering: `Session::queue` preserves send order. Each entry has its kind and a
+`sent` flag, true only for a steer handed to the Agent and awaiting application.
+`pump_queue` dispatches unsent steers up to the first follow-up while a turn is
+live. When idle, the front item of either kind starts the next turn; steers
+behind it can then join that turn. A pending send or compaction blocks another
+prompt. `steer_progress` moves applied sent steers into the transcript.
+A refusal clears that steer's `sent` flag in place and pauses steer dispatch
+until progress for the live turn or a turn change; there is no retry timer.
+Turn end marks all unapplied steers unsent, preserving their kind and position.
+`Alt+Enter` (or `Ctrl+Enter`) queues a follow-up; `Alt+↑` takes every unsent
+item back into an empty draft, in order, joined by blank lines. Phones can edit
+or delete any unsent item, but the Agent has no withdrawal API for sent steers. The first prompt
 of an untitled session becomes its title through `session.rename`.
 
 ## History

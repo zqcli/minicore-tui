@@ -1176,8 +1176,8 @@ checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
 name = "minicore-agent"
-version = "0.8.1"
-source = "git+https://github.com/zqcli/minicore-agent?tag=v0.8.1#c6d3fd5669c2ebbb7e3289a4efbe0c9edefa1cea"
+version = "0.8.2"
+source = "git+https://github.com/zqcli/minicore-agent?tag=v0.8.2#f337b2be9dbea30a2caa4e4a4145293458dd081f"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -1219,7 +1219,7 @@ dependencies = [
 
 [[package]]
 name = "minicore-tui"
-version = "0.7.1"
+version = "0.7.3"
 dependencies = [
  "base64 0.22.1",
  "clipboard-win",

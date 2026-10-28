@@ -90,7 +90,7 @@ async fn an_approval_prompt_owns_the_keys_and_answers_over_the_wire() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn follow_ups_queue_behind_a_running_turn_and_alt_up_recalls_the_newest() {
+async fn follow_ups_queue_behind_a_running_turn_and_alt_up_recalls_them_in_order() {
     let mut h = Harness::opened(display_read(0, 0)).await;
     h.fake.script("turn.send", json!({"turn": turn("l1")}));
     h.fake.script_held("turn.wait", waited("l1", completed()));
@@ -154,7 +154,15 @@ async fn alt_enter_and_ctrl_enter_queue_follow_ups_while_enter_steers() {
     h.type_text("now");
     h.press(KeyCode::Enter);
     h.settle().await;
-    assert_eq!(h.calls("turn.steer").len(), 1);
+    assert!(
+        h.calls("turn.steer").is_empty(),
+        "the steer waits behind both follow-ups"
+    );
+    assert_eq!(h.queue(), ["by alt enter", "by ctrl enter", "now"]);
+    assert_eq!(
+        h.app.session.as_ref().unwrap().queue[2].kind,
+        crate::app::QueuedKind::Steer
+    );
 }
 
 #[tokio::test(start_paused = true)]

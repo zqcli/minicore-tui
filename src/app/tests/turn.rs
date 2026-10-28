@@ -9,6 +9,275 @@ use crate::protocol::read::UserKind;
 use crate::protocol::stamp::{now_millis, unix_millis};
 use crate::transcript::{Block, ChangeSummary, ToolState};
 
+#[tokio::test(start_paused = true)]
+async fn five_messages_dispatch_in_send_order_across_three_turns() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.fake.script_sequence(
+        "turn.send",
+        ["A", "B", "C"].map(|id| json!({"turn": turn(id)})).to_vec(),
+    );
+    h.fake.script("turn.steer", json!({"ok": true}));
+    h.fake.script_held("turn.wait", waited("A", completed()));
+    h.submit("start");
+    h.settle().await;
+    h.submit("steer1");
+    h.submit("steer2");
+    for text in ["follow1", "follow2"] {
+        h.app.composer.set_text(text);
+        h.action(Action::QueueFollowUp);
+    }
+    h.submit("steer3");
+    h.settle().await;
+    assert_eq!(
+        h.queue(),
+        ["steer1", "steer2", "follow1", "follow2", "steer3"]
+    );
+    assert_eq!(
+        h.calls("turn.steer")
+            .iter()
+            .map(|p| p["text"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["steer1", "steer2"]
+    );
+    assert_eq!(
+        h.app
+            .session
+            .as_ref()
+            .unwrap()
+            .queue
+            .iter()
+            .map(|q| q.sent)
+            .collect::<Vec<_>>(),
+        [true, true, false, false, false]
+    );
+    h.emit(
+        "steer_progress",
+        json!({"turn": turn("A"), "applied_count": 2}),
+    )
+    .await;
+    h.settle().await;
+    h.fake.release("turn.wait");
+    h.fake.script_held("turn.wait", waited("B", completed()));
+    h.settle().await;
+    assert_eq!(h.sends(), ["start", "follow1"]);
+    assert_eq!(h.queue(), ["follow2", "steer3"]);
+    assert_eq!(h.calls("turn.steer").len(), 2);
+    h.fake.release("turn.wait");
+    h.fake.script_held("turn.wait", waited("C", completed()));
+    h.settle().await;
+    assert_eq!(h.sends(), ["start", "follow1", "follow2"]);
+    let steers = h.calls("turn.steer");
+    assert_eq!(
+        steers
+            .iter()
+            .map(|p| (p["loop_id"].as_str().unwrap(), p["text"].as_str().unwrap()))
+            .collect::<Vec<_>>(),
+        [("A", "steer1"), ("A", "steer2"), ("C", "steer3")]
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn applied_steers_stay_in_send_order_after_a_live_assistant_block() {
+    for counts in [vec![2], vec![1, 2]] {
+        let mut h = Harness::opened(display_read(0, 0)).await;
+        h.fake.script("turn.send", json!({"turn":turn("A")}));
+        h.fake.script("turn.steer", json!({"ok":true}));
+        h.fake.script_held("turn.wait", waited("A", completed()));
+        h.submit("start");
+        h.settle().await;
+        h.emit(
+            "output_delta",
+            json!({"turn":turn("A"), "request_index":0, "channel":"text", "delta":"working"}),
+        )
+        .await;
+        h.settle().await;
+        h.submit("first");
+        h.submit("second");
+        h.settle().await;
+        for count in counts {
+            h.emit(
+                "steer_progress",
+                json!({"turn":turn("A"), "applied_count":count}),
+            )
+            .await;
+            h.settle().await;
+        }
+        assert_eq!(h.texts(), ["start", "working", "first", "second"]);
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_refused_steer_keeps_its_place_and_dispatch_waits_for_progress() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.fake.script("turn.send", json!({"turn": turn("A")}));
+    h.fake.script_held("turn.wait", waited("A", completed()));
+    h.fake.script_sequence(
+        "turn.steer",
+        vec![
+            json!({"ok": true}),
+            refusal(-32016, "steer_queue_full"),
+            json!({"ok": true}),
+        ],
+    );
+    h.submit("start");
+    h.settle().await;
+    h.submit("accepted");
+    h.submit("retry");
+    h.settle().await;
+    h.submit("later");
+    h.app.composer.set_text("follow");
+    h.action(Action::QueueFollowUp);
+    h.settle().await;
+    assert_eq!(
+        h.calls("turn.steer").len(),
+        2,
+        "a refusal pauses new dispatch too"
+    );
+    assert_eq!(h.queue(), ["accepted", "retry", "later", "follow"]);
+    assert!(!h.app.session.as_ref().unwrap().queue[1].sent);
+    h.emit(
+        "steer_progress",
+        json!({"turn": turn("old"), "applied_count": 1}),
+    )
+    .await;
+    h.settle().await;
+    assert_eq!(
+        h.calls("turn.steer").len(),
+        2,
+        "stale progress cannot release the pause"
+    );
+    h.emit(
+        "steer_progress",
+        json!({"turn": turn("A"), "applied_count": 1}),
+    )
+    .await;
+    h.settle().await;
+    assert_eq!(
+        h.calls("turn.steer")
+            .iter()
+            .map(|p| p["text"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["accepted", "retry", "retry", "later"]
+    );
+    assert_eq!(h.queue(), ["retry", "later", "follow"]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn abandoned_steers_start_the_next_turn_in_place_and_keep_their_kind() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.fake.script_sequence(
+        "turn.send",
+        ["A", "B"].map(|id| json!({"turn": turn(id)})).to_vec(),
+    );
+    h.fake.script("turn.steer", json!({"ok": true}));
+    h.fake.script_held("turn.wait", waited("A", completed()));
+    h.submit("start");
+    h.settle().await;
+    h.submit("first");
+    h.submit("second");
+    h.app.composer.set_text("follow");
+    h.action(Action::QueueFollowUp);
+    h.settle().await;
+    h.fake.release("turn.wait");
+    h.fake.script_held("turn.wait", waited("B", completed()));
+    h.settle().await;
+    assert_eq!(h.sends(), ["start", "first"]);
+    assert_eq!(h.queue(), ["second", "follow"]);
+    assert_eq!(
+        h.app.session.as_ref().unwrap().queue[0].kind,
+        crate::app::QueuedKind::Steer
+    );
+    assert_eq!(h.calls("turn.steer").last().unwrap()["loop_id"], "B");
+}
+
+#[tokio::test(start_paused = true)]
+async fn turn_end_releases_refused_steers_as_the_next_prompt_in_order() {
+    for code in [
+        crate::protocol::STEER_QUEUE_FULL,
+        crate::protocol::TURN_NOT_FOUND,
+    ] {
+        let mut h = Harness::opened(display_read(0, 0)).await;
+        h.fake.script_sequence(
+            "turn.send",
+            ["A", "B"].map(|id| json!({"turn":turn(id)})).to_vec(),
+        );
+        h.fake
+            .script_error("turn.steer", code, "refused", "refused");
+        h.fake.script_held("turn.wait", waited("A", completed()));
+        h.submit("start");
+        h.settle().await;
+        h.submit("refused steer");
+        h.settle().await;
+        h.app.composer.set_text("follow");
+        h.action(Action::QueueFollowUp);
+        h.settle().await;
+        assert_eq!(h.calls("turn.steer").len(), 1);
+        assert_eq!(h.queue(), ["refused steer", "follow"]);
+        h.fake.release("turn.wait");
+        h.fake.script_held("turn.wait", waited("B", completed()));
+        h.settle().await;
+        assert_eq!(h.sends(), ["start", "refused steer"]);
+        assert_eq!(h.queue(), ["follow"]);
+        assert!(!h.app.session.as_ref().unwrap().steers_paused);
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn pending_prompt_and_compaction_refusal_keep_newer_messages_behind_it() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.fake.script_sequence(
+        "turn.send",
+        vec![refusal(-32003, "session_busy"), json!({"turn":turn("B")})],
+    );
+    h.fake
+        .script_held("session.state", json!({"session_id":"s1", "status":"idle"}));
+    h.submit("first");
+    h.submit("second");
+    assert_eq!(
+        h.queue(),
+        ["second"],
+        "a pending prompt cannot be overtaken"
+    );
+    h.settle().await;
+    assert_eq!(
+        h.sends(),
+        ["first"],
+        "a pending send blocks the next prompt"
+    );
+    assert_eq!(h.queue(), ["first", "second"]);
+    h.fake.script("turn.steer", json!({"ok":true}));
+    h.fake.script_held("turn.wait", waited("B", completed()));
+    h.fake.release("session.state");
+    h.settle().await;
+    assert_eq!(h.sends(), ["first", "first"]);
+    assert_eq!(h.calls("turn.steer")[0]["text"], "second");
+}
+
+#[tokio::test(start_paused = true)]
+async fn alt_up_recalls_every_unsent_message_in_order_but_never_a_sent_steer() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.fake.script("turn.send", json!({"turn": turn("A")}));
+    h.fake.script("turn.steer", json!({"ok": true}));
+    h.fake.script_held("turn.wait", waited("A", completed()));
+    h.submit("start");
+    h.settle().await;
+    h.submit("sent");
+    h.app.composer.set_text("follow1");
+    h.action(Action::QueueFollowUp);
+    h.submit("waiting steer");
+    h.app.composer.set_text("follow2");
+    h.action(Action::QueueFollowUp);
+    h.settle().await;
+    h.app.composer.set_text("draft");
+    h.key(KeyCode::Up, KeyModifiers::ALT);
+    assert_eq!(h.queue().len(), 4);
+    h.app.composer.clear();
+    h.key(KeyCode::Up, KeyModifiers::ALT);
+    assert_eq!(h.app.composer.text(), "follow1\n\nwaiting steer\n\nfollow2");
+    assert_eq!(h.queue(), ["sent"]);
+    assert_eq!(h.calls("turn.steer").len(), 1);
+}
+
 fn turn_ends(h: &Harness) -> Vec<String> {
     h.blocks()
         .iter()

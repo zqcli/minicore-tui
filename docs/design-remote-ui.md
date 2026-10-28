@@ -40,7 +40,7 @@ own view (its session or draft), as v1 intents do.
 | kind | fields | effect |
 |---|---|---|
 | `compact` | — | `session.compact` for the viewed session; refused while a turn runs or compaction is under way (`busy`), and in a draft (`No session`). `cancel` already stops a compaction. |
-| `unqueue` | `index`, `text` | Removes the queued follow-up `queue[index]` if its text still equals `text` (else `stale`); the text goes back to the requester as `returned`. Steers already sent cannot be taken back (`stale`). |
+| `unqueue` | `index`, `text`, `edit` | Removes an unsent `queue[index]` if its text still equals `text` (else `stale`). With `edit:true`, text returns to the requester as `returned`; `edit:false` deletes without returning text. Sent steers cannot be withdrawn (`stale`). |
 | `answer` | + optional `message` (deny only) | Denies, then steers `message` into the same turn so the agent hears why. A blank `message`, or one beside anything but an approval's `deny`, is `bad_request`. |
 | `submit` / `queue` | text | Text that starts with `/name` naming a prompt template is expanded on the host exactly as the TUI does (`$1`, `$@`, …); `//text` sends `/text`. A built-in command line, and a bare `/word` naming nothing (where the composer warns once), are refused with `unknown_command`; the client handles built-in commands itself and never sends them. |
 
@@ -108,8 +108,13 @@ re-renders on every `state`).
   on the right. A group folds with its header (remembered per workspace path
   in `localStorage`), shows five rows and then "Show N more", and a search
   shows every match in every group with a match. Status by shape and colour:
-  amber hand = needs you, spinner + elapsed = running, red ! = failed last
-  turn, dot = new result. The order never changes while the drawer is open
+  amber hand = needs you, spinner = running, red ! = failed last
+  turn, dot = new result. Rows are single-line, 36 px on hover devices and
+  44 px on touch, with 14/15 px titles and a 16 px status column. Workspace
+  headers are 32 px tall. Hover or keyboard focus replaces the relative time
+  with the actions button in the same slot; touch keeps a compact actions
+  button visible. Pinned rows omit workspace subtitles rather than taking
+  another line. The order never changes while the drawer is open
   (rows update in place); it re-sorts when reopened. ⌘/Ctrl+Shift+F focuses
   the search (a hint shows on hover devices; ⌘/Ctrl+K stays the command list).
   Footer is one line: connection dot + device name, other devices count.
@@ -128,16 +133,17 @@ re-renders on every `state`).
 ### Composer
 
 - Two-row card at the bottom: auto-growing textarea (max 40 % of the visual
-  viewport), then a bottom row at least 44 px tall: **+** (sheet: prompt
+  viewport), then a 36 px toolbar on hover devices or 40 px on touch: **+** (sheet: prompt
   templates and commands, recent prompts, insert `@file`), a **shield**
   (`Approvals`: a small sheet naming the tools allowed for the session, or
   "Every tool asks first"; a dot on the shield when any is allowed), the
   **context chip** (`23%`, warning colour from 80 %, opens the Context sheet)
   and, in a draft, the **folder** and **profile** chips on the left; on the right the **slot** and
-  the **primary button**. The primary is a 40 px round button that keeps its
-  place and only changes face; the slot is a plain text button (no fill or
-  border at rest, a subtle fill on hover, focus and press; at least 40 px
-  tall):
+  the **primary button**. Icons are 18 px in transparent 32 px boxes with
+  40 px touch hit areas. Context is plain 13 px text; the model and Follow-up
+  are 13 px on desktop and 14 px on phones. Hover, focus and press add a subtle
+  fill with 8 px corners. The primary is a 32 px circle on hover devices or
+  36 px on touch, with a 16 px icon, keeping its place as its face changes:
 
   | State | Primary | Slot |
   |---|---|---|
@@ -167,9 +173,10 @@ re-renders on every `state`).
   single press, like the TUI. The primary's `aria-label` follows its face
   (Send, Steer, Stop the turn, Stopping); a change to Stop, Steer or Stopping
   is announced through the `aria-live` region, typing is not.
-- **Steer** sends the text into the running turn (`submit`; the agent reads it
-  after the current step); **Follow-up** sends a follow-up (`queue`; sent when the
-  turn ends). Hardware keys mirror the TUI: Enter (with "Enter sends") or
+- **Steer** queues text for the running turn (`submit`; the agent reads it
+  after the current step). **Follow-up** queues a new turn (`queue`). Dispatch
+  respects send order: a steer behind a follow-up waits until that follow-up
+  starts its turn. Hardware keys mirror the TUI: Enter (with "Enter sends") or
   Cmd/Ctrl+Enter steers while busy and sends when idle; **Alt+Enter**
   (Option+Enter on macOS; browsers report it, so no settings are needed) queues
   while busy with text typed and no `/` or `@` list open (the list keeps Tab and
@@ -187,14 +194,17 @@ re-renders on every `state`).
   with ↑ in an empty composer on hardware keyboards.
 - `enterkeyhint="send"`, `autocapitalize="sentences"`, autocorrect off while
   the text starts with `/` or `@`; drafts persist per session as today.
-- The queue shows above the composer under one caption, "Follow-ups send when
-  this turn ends": follow-ups are pills `↳ Follow-up 1` + text (tap to edit =
-  unqueue into the composer, ✕ to remove = unqueue and drop), steers the agent
-  has not read yet are muted `↗ Steer · waiting for the next step` rows that
-  cannot be removed. Three show at first, then "+N more" expands the rest. A
-  steer's bubble in the transcript keeps its "↗ Steer" label; a follow-up that
-  was sent is an ordinary message. Unconfirmed sends keep their single "Not
-  sent · Send again" card; the composer is not filled twice.
+- The queue above the composer keeps send order under "Sent in order · steers
+  join this turn; follow-ups start the next". Every row shares the same height,
+  padding and radius. Accent-labelled `↗ Steer N` and neutral `↳ Follow-up N`
+  are numbered independently. Unsent rows have pencil **Edit in composer** and
+  **Delete** buttons; edits merge the requester-only `returned` text through
+  the ordinary composer path. Sent steers say "Sent · applies at the next step"
+  and have no buttons because the Agent cannot withdraw them. A steer behind
+  a follow-up waits and stays editable. Three rows show at first, then "+N
+  more" expands the rest. Applied steers keep their transcript label; either
+  kind starting a new turn becomes an ordinary prompt. Unconfirmed sends keep
+  their single "Not sent · Send again" card; the composer is not filled twice.
 
 ### Transcript
 
@@ -215,19 +225,11 @@ re-renders on every `state`).
   box that follows the end only while the reader is at it), collapsing returns
   to the one line, and the choice survives the turn ending. The "show thinking
   expanded" setting opens it by default.
-- **Progress capsule**: while a turn runs, a compaction runs or a session
-  opens, one line floats at the top of the transcript's column (it overlays, so
-  the scroll position never moves; under the bar and banners): spinner, label,
-  elapsed time and the running tool, middle-cut (`Thinking 41s · bash cargo
-  test…`). Tap, Enter or Space opens it into a panel with **This turn** (the
-  turn's tool calls: finished ones dim with a check or a red ✗, the running one
-  primary with a spinner; a totals line `5 tools · 1 failed · 2 files +12 −4`;
-  a step scrolls the transcript to its row and flashes it), **Status**
-  (elapsed, context, a Stop button with the primary's guards) and **Other
-  sessions** (busy or waiting ones, each opening that session). Esc, a tap
-  outside or its header closes the panel; it fades away when the turn ends.
-  While a turn runs, finished tool rows of the turn in progress use the
-  secondary text tone and the running row the primary one.
+- **Status strip**: directly above the composer, a spinner, label, elapsed
+  time and running tool detail show while a turn, compaction or session opening
+  is active. Tool detail follows transcript updates even without a state
+  change. Context appears only in the composer toolbar. Finished tool rows of
+  the running turn use the secondary text tone and the running row the primary.
 - **Tools**: one-line rows: state icon · past-tense verb · muted mono target ·
   right-aligned meta (duration, `+12 −4`, exit code). Consecutive reads and
   searches group ("Read 6 files ›"). Tap expands inline: command, the **end**
@@ -235,9 +237,12 @@ re-renders on every `state`).
   (full-screen output viewer: tail first, wrap toggle, copy, **Load full
   output** via `tool_output`). Failed tools auto-expand their last lines.
   Edits render as diffs (below).
-- **Turn folding**: when a turn ends, its tool rows and intermediate thinking
-  fold into one summary row "Worked 47 s · 5 tools · +12 −4 ›" placed where
-  the turn's work started; the final answer stays visible. Expanding adds a
+- **Turn folding**: when a turn ends, steering messages split its work into
+  segments. Each segment folds its tools and intermediate thinking into a
+  "Worked 47 s · 5 tools ›" row in place, with its own tool and failed counts.
+  Duration uses the bounding prompt, steering and turn-end clocks when known;
+  otherwise it is omitted. With steering, whole-turn change totals stay on the
+  turn-end line rather than being attributed to one segment. The final answer stays visible. Expanding adds a
   trailing "Hide" row; anchoring keeps the tapped row in place. The running
   turn is never folded.
 - **Turn end** line stays (completed / interrupted / failed, duration, clock
@@ -323,16 +328,19 @@ host arrives without TUI key hints.
   error/deny, green = success/add.
 - Contrast: all text ≥ 4.5:1 (fix `--tx3` in both themes, success text, accent
   on tinted backgrounds).
-- Touch targets ≥ 44 × 44 px with 8 px between destructive and primary.
+- Touch targets are at least 44 × 44 px outside the compact composer toolbar,
+  whose controls keep at least 40 × 40 px hit areas.
 - Motion: 120–180 ms for small state changes, 220–280 ms for sheets and the
   drawer, `cubic-bezier(.2,.8,.2,1)`; no per-token animation;
   `prefers-reduced-motion` turns shimmer and slides into fades.
-- Text size setting scales rem-based type; inputs stay ≥ 16 px.
+- Text size setting scales rem-based type. Text fields are at least 16 px on
+  touch devices, because iOS Safari zooms into a smaller focused field and keeps
+  the zoom; the message textarea is 15 px only with a fine pointer and hover.
 
 ### Accessibility
 
 `aria-live="polite"` region announcing turn start/end, approvals and errors
-(state changes, not tokens); the progress capsule is updated in place, not
+(state changes, not tokens); the status strip is updated in place, not
 recreated; landmarks and a real heading for the session title; labelled icon
 buttons; status never by colour alone.
 
@@ -345,7 +353,7 @@ share one column (780 px, 860 px from 1700 px) centred beside the sidebar, with
 the title left-aligned to it. Desktop pointers get hover states, tooltips from
 the buttons' labels and thin themed scrollbars; tables wider than the column
 scroll instead of breaking words. Shortcuts:
-Esc close the top sheet, menu or progress panel, else stop the turn, Cmd/Ctrl+K command list,
+Esc close the top sheet or menu, else stop the turn, Cmd/Ctrl+K command list,
 Cmd/Ctrl+Enter send or steer (Enter does when the setting is on; Alt+Enter queues),
 Cmd/Ctrl+F find, Cmd/Ctrl+Shift+F search sessions, Alt+↑/↓ previous/next session, `?` shortcut help.
 
@@ -364,7 +372,7 @@ them; a test fails when a file is missing from the table, the page's
 | `ui.js` | The DOM kit (`h`, `icon`, `part`, `set`, `keepFocus`), shared rows (`menuRow`, `rowText`, `errBox`), toasts, clipboard, the modal stack and sheets, `actions`; preferences, wake lock, notifications, the install prompt |
 | `net.js` | The store `S`, the socket, intents, filesystem requests and queries (correlated by id); the sign-in and status screens and the connection's life: connect, backoff, wake, sign out |
 | `sessions.js` | Settings, model, changes, context, output, help and confirm sheets; the drawer or sidebar, session actions, rename, delete, info and the new-session folder picker; banners, the app badge and tab title, and what background sessions ask of this device |
-| `conversation.js` | The composer (progress capsule, queue, primary button, `/` and `@` lists, draft), the transcript (blocks, incremental rendering, folding, the mounted window, scroll anchoring, find) and the approval and question sheet with its bar and keys |
+| `conversation.js` | The composer (status strip, queue, primary button, `/` and `@` lists, draft), the transcript (blocks, incremental rendering, folding, the mounted window, scroll anchoring, find) and the approval and question sheet with its bar and keys |
 | `main.js` | Message dispatch, the top bar, global keys, lifecycle and boot |
 
 Rules:
@@ -391,6 +399,13 @@ wake on visibility/pageshow/focus/online, unconfirmed sends never resent
 automatically), host clock offset, the iOS keyboard handling (`--h`, `--kb`),
 safe areas, the PWA (manifest, service worker, install row, theme-color sync),
 per-device views, live background sessions, the folder picker and new folder.
+The keyboard handling ignores pinch zoom: while the visual viewport is scaled
+above 1 it leaves `--h` and `--kb` alone, so zooming never resizes the app.
+The phone drawer and the scrim are positioned in the page, not fixed: iOS
+Safari tints the status bar from a fixed element on the top edge, and with the
+scrim fixed it painted grey over the drawer. The drawer surface reaches the top
+edge, with its content below the top safe area and its footer above the home
+indicator.
 The folder picker reads paths the way the host writes them: Unix, Windows drive
 roots (`C:\`, `D:\work`, `/` accepted as the same separator, compared without
 case) and UNC shares. The Roots crumb is always there so switching drives is

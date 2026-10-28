@@ -66,7 +66,7 @@ pub struct App {
 - **Running reducer code for a background session**: `App::with_background(index, f)`
   swaps that session into `App::session`, sets `App::background_op = true`,
   runs `f` (the existing `on_op`, event handling, `start_turn`, `end_turn`,
-  `flush_queue`, `on_approval_requested`, …), then swaps back and clears the
+  `pump_queue`, `on_approval_requested`, …), then swaps back and clears the
   flag. `App::scroll` is swapped with the session's own `scroll` around it, so
   a page prepended in the background keeps that session's anchor and the
   foreground's is never touched; the layout cache is not used by reducer code.

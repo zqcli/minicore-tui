@@ -1,90 +1,55 @@
 import * as MC from './core.js';
-import { HOST, S, abandon, ask, hostNow, intent, online, pendingKind, repaint, send, sending, turnStatus, tz, viewed } from './net.js';
-import { compactNow, exportSession, openApprovals, openChanges, openContext, openHelp, openInfo, openLive, openModel, openNav, openNew, openOutput, openSettings, rename } from './sessions.js';
-import { $, actions, announce, apple, copyText, diffView, findSheet, h, hover, icon, inField, keepFocus, kids, menuRow, notify, part, prefs, reduced, set, share, sheet, spin, toast, topModal, wide } from './ui.js';
+import { HOST, S, ask, hostNow, intent, online, pendingKind, repaint, resend, sending, stampAt, takeBack, turnStatus, tz, viewed } from './net.js';
+import { compactNow, exportSession, openApprovals, openChanges, openContext, openHelp, openInfo, openModel, openNav, openNew, openOutput, openSettings, rename } from './sessions.js';
+import { $, actions, announce, apple, copyButton, copyText, diffView, findSheet, h, hover, icon, inField, keepFocus, kids, loading, menuRow, notify, part, prefs, reduced, set, share, sheet, spin, toast, topModal, wide } from './ui.js';
 
 // ---- composer ----
 // "Enter sends" is stored once chosen; until then the pointer default follows the device.
 const ALT = apple ? '⌥' : 'Alt+', tips = () => prefs.enter ? 'Enter' : (apple ? '⌘' : 'Ctrl+') + 'Enter';
-// ---- dock: queue and composer; progress capsule ----
+// ---- dock: status strip, queue and composer ----
 const ta = $('ta');
-// A turn in progress (or a compaction, or a session opening) floats over the top of the transcript as one line. It opens into
-// the turn's steps, its status and the other sessions that are busy; it overlays, so the transcript keeps its scroll position.
-const cap = $('cap');
-let capOpen = false;
-const stepIcon = st => st === 'run' ? spin('sm') : icon(st === 'done' ? 'check' : st === 'failed' ? 'x' : 'slash', 'sm');
-const capPart = part(cap, c => h('div', 'cap' + (c.open ? ' open' : ''),
-  h('button', { class: 'caph', 'data-k': 'cap', 'aria-expanded': String(c.open), 'aria-controls': 'capb' }, spin('sm'), h('b', '', c.label), c.started && h('span', 'el', MC.fmtElapsed(hostNow() - c.started)),
-    c.detail && h('span', 'mono', MC.midTrunc(c.detail, wide.matches ? 60 : 30)), icon('chev', 'xs cv')),
-  c.open && h('div', { id: 'capb', class: 'capb' },
-    c.steps.length > 0 && h('section', 'cs', h('h3', '', 'This turn'), h('p', 'ct', c.text),
-      c.earlier > 0 && h('div', 'hint', c.earlier + ' earlier steps'),
-      c.steps.map(x => h('button', { class: 'cstep ' + x.state, 'data-k': 'j' + x.i }, h('span', 'si', stepIcon(x.state)), h('span', 'vb', x.verb), h('span', 'tg', MC.midTrunc(x.target, wide.matches ? 70 : 34))))),
-    h('section', 'cs', h('h3', '', 'Status'),
-      c.started && h('div', 'crow', h('span', '', 'Elapsed'), h('span', 'el', MC.fmtElapsed(hostNow() - c.started))),
-      c.ctx && h('button', { class: 'crow' + (c.hi ? ' hi' : ''), 'data-k': 'ctx' }, h('span', '', 'Context'), h('span', '', c.ctx + ' used')),
-      c.stop && h('button', { class: 'btn sm stopb', 'data-k': 'stop', disabled: c.stopping }, c.stopping ? [spin('sm'), 'Stopping…'] : [icon('stop', 'xs'), 'Stop the turn'])),
-    c.others.length > 0 && h('section', 'cs', h('h3', '', 'Other sessions'),
-      c.others.map(o => h('button', { class: 'cstep other', 'data-k': 'o' + o.id }, h('span', 'si ' + (o.status === 'approval' ? 'wa' : ''), o.status === 'approval' ? icon('hand', 'sm') : spin('sm')), h('span', 'vb', MC.titled(o.title)), h('span', 'tg', o.status === 'approval' ? 'Needs you' : 'Running')))))));
-export function closeCap() {
-  if (!capOpen) return false;
-  capOpen = false;
-  renderCap();
-  return true;
-}
-function renderCap() {
+const stripPart = part($('strip'), x => [spin('sm'), h('b', '', x.label),
+  x.started != null && h('span', 'el', MC.fmtElapsed(hostNow() - x.started)),
+  x.detail && h('span', 'mono', x.detail)]);
+function renderStrip() {
   const s = turnStatus(), on = !!(s.busy || s.compacting || s.loading);
-  if (!on) {
-    capOpen = false;
-    if (!cap.hidden) cap.classList.add('out');
-    return;
-  }
-  cap.classList.remove('out');
-  set(cap, 'hidden', false);
-  const x = MC.statusLine(S.state, S.blocks), t = capOpen && MC.turnSteps(S.blocks), pct = S.state.context_percent;
-  capPart({
-    label: x.label, detail: x.detail, started: (s.busy || s.compacting) && s.started_ms, open: capOpen, ...(t && {
-      steps: t.steps, earlier: t.earlier, text: t.text, ctx: pct != null ? Math.round(pct) + '%' : '', hi: pct >= 80, stop: MC.canStop(s), stopping: composerState().stopping,
-      others: MC.busyOthers(S.state.sessions).map(o => ({ id: o.id, title: o.title, status: o.status })),
-    }),
-  });
+  set($('strip'), 'hidden', !on);
+  if (on) stripPart({ ...MC.statusLine(S.state, S.blocks), started: s.started_ms });
 }
-cap.addEventListener('animationend', e => { if (e.target === cap && cap.classList.contains('out')) { cap.hidden = true; cap.classList.remove('out'); } });
-cap.addEventListener('click', e => {
-  const b = e.target.closest('[data-k]'), k = b && b.dataset.k;
-  if (!k) return;
-  if (k === 'stop') return stop();
-  capOpen = k === 'cap' && !capOpen;
-  renderCap();
-  if (k === 'ctx') openContext();
-  else if (k[0] === 'j') revealBlock(+k.slice(1));
-  else if (k[0] === 'o') openLive(k.slice(1));
-});
-document.addEventListener('pointerdown', e => { if (capOpen && !e.target.closest('#cap')) closeCap(); }, true);
 export function stop() { if (MC.canStop(turnStatus()) && !turnStatus().interrupting && !pendingKind('cancel')) intent(MC.intents.cancel()); }
 const trayPart = part($('tray'), t => [
   t.lost.map(([id, text]) => h('div', { class: 'lost', role: 'alert' }, icon('warn', 'sm'),
     h('div', '', h('div', '', 'Not sent · it may or may not have arrived'), h('div', 'lt', text)),
-    h('button', { class: 'btn sm', 'data-k': 'again' + id, disabled: !t.on, onclick: () => { send(MC.sendAgain(S, id)); repaint(); } }, icon('retry', 'xs'), 'Send again'),
-    h('button', { class: 'ib s', 'aria-label': 'Edit instead', onclick: () => { abandon(id); fillComposer(MC.mergeReturned(ta.value, text)); repaint(); } }, icon('edit', 'sm')))),
-  t.q.follows && h('div', 'qcap', 'Follow-ups send when this turn ends'),
-  t.q.items.map(q => q.kind === 'steer' ? h('div', 'qp steer', icon('steer', 'xs'), h('span', 'qk', 'Steer · waiting for the next step'), h('span', 'qt', q.text))
-    : h('div', 'qp', icon('follow', 'xs'), h('span', 'qk', 'Follow-up ' + q.n), h('button', { class: 'qt', 'data-k': 'q' + q.index, disabled: !t.on, 'aria-label': 'Edit follow-up ' + q.n + ': ' + q.text, onclick: () => unqueue(q, false) }, q.text),
-      h('button', { class: 'ib', disabled: !t.on, 'aria-label': 'Remove follow-up ' + q.n, onclick: () => unqueue(q, true) }, icon('x', 'sm')))),
-  t.q.long && h('button', { class: 'qmore', 'data-k': 'qmore', 'aria-expanded': String(qAll), onclick: () => { qAll = !qAll; renderTray(); } }, t.q.hidden ? '+' + t.q.hidden + ' more' : 'Show less'),
+    h('button', { class: 'btn sm', 'data-k': 'again' + id, disabled: !t.on }, icon('retry', 'xs'), 'Send again'),
+    h('button', { class: 'ib s', 'aria-label': 'Edit instead', 'data-k': 'edit' + id }, icon('edit', 'sm')))),
+  t.q.items.length > 0 && h('div', 'qcap', 'Sent in order · steers join this turn; follow-ups start the next'),
+  t.q.items.map(q => h('div', { class: 'qp ' + q.kind, 'data-index': q.index, 'data-text': q.text },
+    h('div', 'qbody', h('div', 'qhead', h('span', 'qk', icon(q.kind, 'xs'), (q.kind === 'steer' ? 'Steer ' : 'Follow-up ') + q.n),
+      q.sent && h('span', 'qsent', 'Sent · applies at the next step')), h('span', 'qt', q.text)),
+    !q.sent && [h('button', { class: 'ib', 'data-k': 'qedit', disabled: !t.on, 'aria-label': 'Edit in composer', title: 'Edit in composer' }, icon('edit', 'sm')),
+      h('button', { class: 'ib', 'data-k': 'qdelete', disabled: !t.on, 'aria-label': 'Delete', title: 'Delete' }, icon('x', 'sm'))])),
+  t.q.long && h('button', { class: 'qmore', 'data-k': 'qmore', 'aria-expanded': String(qAll) }, t.q.hidden ? '+' + t.q.hidden + ' more' : 'Show less'),
 ]);
 let qAll = false;
 const edits = new Set();
 export const unqueueRefused = text => edits.delete(text);
-function unqueue(q, drop) {
-  if (!online()) return;
-  if (!drop) edits.add(q.text);
-  send(MC.unqueue(S, q.index, q.text, drop));
-  repaint();
-}
+$('tray').addEventListener('click', e => {
+  const button = e.target.closest('[data-k]');
+  if (!button) return;
+  const k = button.dataset.k;
+  if (k === 'qmore') { qAll = !qAll; renderTray(); }
+  else if (k === 'qedit' || k === 'qdelete') {
+    const row = button.closest('.qp'), edit = k === 'qedit', text = row.dataset.text;
+    if (online()) {
+      if (edit) edits.add(text);
+      intent(MC.intents.unqueue(+row.dataset.index, text, edit));
+    }
+  } else if (k.startsWith('again')) resend(k.slice(5));
+  else if (k.startsWith('edit')) { fillComposer(MC.mergeReturned(ta.value, takeBack(k.slice(4)))); repaint(); }
+});
 function renderTray() {
   const q = MC.queueView(S.state.queue, qAll);
-  trayPart({ lost: MC.unconfirmed(S).map(it => [it.id, it.text]), q: { ...q, follows: S.state.queue.some(x => x.kind === 'follow') }, on: online() });
+  trayPart({ lost: MC.unconfirmed(S).map(it => [it.id, it.text]), q, on: online() });
 }
 // The bottom row of the composer: + and the draft's folder and profile on the left, then the slot (the model as plain text,
 // or Follow-up while a turn runs with text typed) and the primary button, which keeps its place and changes face.
@@ -159,7 +124,7 @@ function openPriMenu() {
 }
 export function closePriMenu() { const m = $('pmenu'); if (m) m.remove(); }
 document.addEventListener('pointerdown', e => { if (!e.target.closest('#pmenu')) closePriMenu(); }, true);
-export function renderDock() { renderCap(); renderTray(); renderChips(); }
+export function renderDock() { renderStrip(); renderTray(); renderChips(); }
 function grow() {
   ta.style.height = 'auto';
   ta.style.height = ta.scrollHeight + 'px';
@@ -250,7 +215,8 @@ function accept(k) {
   composerInput();
 }
 ta.addEventListener('keydown', e => {
-  if (e.isComposing) return;
+  // Safari can clear isComposing before the candidate-confirming Enter.
+  if (e.isComposing || e.keyCode === 229) return;
   if (menu && menu.items.length && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
     e.preventDefault();
     setMenu({ ...menu, sel: (menu.sel + (e.key === 'ArrowDown' ? 1 : menu.items.length - 1)) % menu.items.length });
@@ -277,7 +243,7 @@ export function openPlus() {
   sheet({
     key: 'plus', title: 'Add to your message', deps: () => [S.state.commands, recent.slice(0, 8), !!S.state.session],
     body: m => {
-      const cmds = S.state.commands.map(c => ({ ...c, builtin: false })).concat(MC.BUILTINS);
+      const cmds = MC.commandList(S.state.commands);
       return [S.state.session && [h('h3', 'sec2', 'Insert'), h('div', 'list', menuRow(m, 'at', 'File', insertAt, { sub: 'Mention a file in this workspace as @path' }))],
         recent.length > 0 && [h('h3', 'sec2', 'Recent prompts'), h('div', 'list', recent.slice(0, 8).map(t => menuRow(m, 'history', t.length > 120 ? t.slice(0, 120) + '…' : t, () => fillComposer(t))))],
         h('h3', 'sec2', 'Commands'), h('div', 'list', cmds.map(c => menuRow(m, c.builtin ? 'term' : 'sparkle', '/' + c.name + (c.hint ? ' ' + c.hint : ''),
@@ -333,24 +299,6 @@ export function resetTranscript() { nodes.forEach(n => n.remove()); nodes.length
 function redrawAll() { for (let i = lo; i < hi; i++) dirty.add(i); schedule(); }
 // The element with data-k `k` keeps its place on screen through the next flush.
 function anchorTo(el, k) { anchor = { k: k || (el && el.dataset.k), y: el ? el.getBoundingClientRect().top : 0 }; }
-// The capsule's step list scrolls to a block and flashes it: a group that hides it opens, and a block past the mounted window
-// brings the transcript to its end first. It runs after the next flush, which has mounted the block.
-let reveal = null;
-function revealBlock(i) {
-  const g = roles[i - lo] && roles[i - lo].g;
-  if (g) opened.set(g.key, true);
-  if (i >= hi) toLatest();
-  reveal = () => {
-    const w = nodes[i - lo];
-    if (!w || w.hidden) return;
-    w.scrollIntoView({ block: 'center', behavior: reduced.matches ? 'auto' : 'smooth' });
-    w.classList.remove('flash');
-    void w.offsetWidth;
-    w.classList.add('flash');
-  };
-  schedule();
-}
-box.addEventListener('animationend', e => e.target.classList.remove('flash'));
 // One listener opens and closes every row. data-tg names the key when the button's data-k is not it ("Hide" closes its fold);
 // the thinking preview acts as its button.
 box.addEventListener('click', e => {
@@ -394,8 +342,7 @@ function wrapButton(box) {
 }
 function codeBlock(lang, text) {
   const n = h('div', 'cb' + (prefs.wrap ? ' wrap' : ''));
-  const c = h('button', { 'aria-label': 'Copy code', onclick: () => copyText(text, c) }, icon('copy', 'xs'), 'Copy');
-  n.append(h('div', 'cbh', h('span', '', lang), wrapButton(n), c), h('pre', '', h('code', '', text)));
+  n.append(h('div', 'cbh', h('span', '', lang), wrapButton(n), copyButton(text, 'Copy', { 'aria-label': 'Copy code' })), h('pre', '', h('code', '', text)));
   return n;
 }
 function caretInto(body) {
@@ -417,18 +364,17 @@ function toolMeta(f) {
 }
 const TAIL = 20;
 function toolBody(b, f) {
-  const out = b.output || [], tail = out.slice(-TAIL), earlier = (b.output_dropped || 0) + out.length - tail.length;
+  const out = b.output, tail = out.slice(-TAIL), earlier = b.output_dropped + out.length - tail.length;
   const input = b.input || '', files = f.kind === 'edit' && input ? MC.parseDiff(input) : [];
-  const total = b.output_lines != null ? b.output_lines : out.length + (b.output_dropped || 0);
+  const total = b.output_lines != null ? b.output_lines : out.length + b.output_dropped;
   const shown = tail.length > 0 || earlier > 0, pre = shown && h('pre', { class: 'out' + (prefs.wrap ? ' wrap' : ''), tabindex: '0' }, tail.join('\n'));
-  const copy = shown && h('button', { onclick: () => copyText(out.join('\n'), copy) }, icon('copy', 'xs'), 'Copy');
   return h('div', 'tb',
     f.kind === 'cmd' && h('pre', 'cmd', '$ ' + (input || b.detail)),
     files.length > 0 ? diffView(files, prefs.wrap) : f.kind === 'write' && input && h('pre', '', input.split('\n').slice(0, 400).join('\n')),
     shown && [
       h('div', 'lbl', h('span', '', 'Output'), earlier > 0 && h('span', '', 'last ' + tail.length + ' of ' + MC.fmtNum(total) + ' lines')),
       pre,
-      h('div', 'tbar', wrapButton(pre), copy, h('button', { onclick: () => openOutput(b) }, icon('open', 'xs'), 'Open'), b.truncated && h('span', 'hint', 'Output truncated'))],
+      h('div', 'tbar', wrapButton(pre), copyButton(out.join('\n')), h('button', { onclick: () => openOutput(b) }, icon('open', 'xs'), 'Open'), b.truncated && h('span', 'hint', 'Output truncated'))],
     !shown && !files.length && f.kind !== 'cmd' && h('div', 'hint', f.run ? 'Running…' : 'No output'),
     !shown && f.kind === 'cmd' && !f.run && h('div', 'hint', 'No output'));
 }
@@ -461,15 +407,16 @@ function thinkText(n, text, live) {
     if (end) el.scrollTop = el.scrollHeight;
     return;
   }
-  el.textContent = to;
-  if (live && !n._open && was && !to.startsWith(was) && !reduced.matches) { el.classList.remove('up'); void el.offsetWidth; el.classList.add('up'); }
+  // A new sentence slides in: a fresh span starts the animation without the forced layout that restarting a class needs.
+  if (live && was && !to.startsWith(was) && !reduced.matches) { n._text = h('span', 'up', to); el.replaceWith(n._text); }
+  else el.textContent = to;
 }
-function thinkUpdate(a, b) {
-  const k = 'r' + b.loop_id + ':' + b.request, thinking = a.live && !b.text, o = isOpen(k, b), sig = b.reasoning ? k + thinking + o : '';
-  if (sig === a.thinkSig) return sig && thinkText(a.think, b.reasoning, thinking);
-  a.thinkSig = sig;
+function thinkUpdate(asst, b) {
+  const k = 'r' + b.loop_id + ':' + b.request, thinking = asst.live && !b.text, o = isOpen(k, b), sig = b.reasoning ? k + thinking + o : '';
+  if (sig === asst.thinkSig) return sig && thinkText(asst.think, b.reasoning, thinking);
+  asst.thinkSig = sig;
   const n = sig ? thinkNode(b, k, thinking, o) : h('div');
-  keepFocus(a.think, () => a.think.replaceWith(a.think = n), n);
+  keepFocus(asst.think, () => asst.think.replaceWith(asst.think = n), n);
   if (thinking && o) n._text.scrollTop = n._text.scrollHeight;
 }
 function asstNode(b, i) {
@@ -481,19 +428,19 @@ function asstNode(b, i) {
   return n;
 }
 function updateAsst(n, b) {
-  const a = n._asst, m = a.md, r = MC.mdInc(m.cache, b.text);
+  const asst = n._asst, m = asst.md, r = MC.mdInc(m.cache, b.text);
   n.hidden = MC.quiet(b);
-  thinkUpdate(a, b);
+  thinkUpdate(asst, b);
   m.cache = r.cache;
   let k = 0;
   while (k < m.toks.length && k < r.blocks.length && m.toks[k] === r.blocks[k]) k++;
   for (let j = m.els.length - 1; j >= k; j--) m.els[j].remove();
   m.els.length = m.toks.length = k;
-  const old = a.body.querySelector('.caret');
+  const old = asst.body.querySelector('.caret');
   if (old) old.remove();
-  for (let j = k; j < r.blocks.length; j++) { const e = mdToNode(r.blocks[j]); a.body.append(e); m.els.push(e); m.toks.push(r.blocks[j]); }
-  a.body.hidden = !b.text;
-  if (a.live && b.text) caretInto(a.body);
+  for (let j = k; j < r.blocks.length; j++) { const e = mdToNode(r.blocks[j]); asst.body.append(e); m.els.push(e); m.toks.push(r.blocks[j]); }
+  asst.body.hidden = !b.text;
+  if (asst.live && b.text) caretInto(asst.body);
 }
 function answerActs(b, i) {
   const c = h('button', { class: 'ib', 'aria-label': 'Copy answer', onclick: () => copyText(b.text, c) }, icon('copy', 'sm'));
@@ -501,7 +448,7 @@ function answerActs(b, i) {
   let j = i + 1;
   while (j < S.blocks.length && S.blocks[j].type !== 'turn_end' && S.blocks[j].type !== 'user') j++;
   const at = S.blocks[j] && S.blocks[j].type === 'turn_end' && turnClock(j);
-  return h('div', 'acts', c, s, at && h('time', '', MC.stamp(at, hostNow(), tz())));
+  return h('div', 'acts', c, s, at && h('time', '', stampAt(at)));
 }
 function userNode(b, i) {
   const k = 'u' + i, lines = b.text.split('\n').length, long = lines > 12 || b.text.length > 900, o = isOpen(k);
@@ -509,13 +456,13 @@ function userNode(b, i) {
   const n = h('div', 'u', b.kind === 'steering' && h('div', 'ulbl', icon('steer', 'xs'), 'Steer'),
     h('div', { class: 'bubble' + (long && !o ? ' clip' : '') }, b.text),
     h('div', 'acts', long && h('button', { class: 'more2', 'data-k': k }, o ? 'Show less' : 'Show more'),
-      b.at && h('time', '', MC.stamp(b.at, hostNow(), tz())), more));
+      b.at && h('time', '', stampAt(b.at)), more));
   n.addEventListener('contextmenu', e => { if (!hover.matches) { e.preventDefault(); userActions(b); } });
   return n;
 }
 function userActions(b) {
   sheet({
-    key: 'uact', cls: 'dialog', head: hid => h('h2', { id: hid }, 'Message', b.at && h('span', 'sub2', MC.stamp(b.at, hostNow(), tz()))),
+    key: 'uact', cls: 'dialog', title: 'Message', sub: b.at && stampAt(b.at),
     body: m => h('div', 'list', menuRow(m, 'copy', 'Copy', () => copyText(b.text)), menuRow(m, 'edit', 'Edit in composer', () => fillComposer(b.text)),
       menuRow(m, 'retry', 'Send again', () => { if (!sending()) intent(turnStatus().busy ? MC.intents.queue(b.text) : MC.intents.submit(b.text)); })),
   });
@@ -532,7 +479,7 @@ function turnClock(i) {
 // The failed turn's header with what the host said under it: the hint, the provider's own message clamped to three lines
 // (its toggle shows when the text overflows, see `place`) and the button that helps.
 function failureNode(head, f, i) {
-  const k = 'e' + i, o = isOpen(k), copy = f.message && h('button', { class: 'fbtn', onclick: () => copyText(f.message, copy) }, icon('copy', 'xs'), 'Copy');
+  const k = 'e' + i, o = isOpen(k), copy = f.message && copyButton(f.message, 'Copy', { class: 'fbtn' });
   const act = f.action && h('button', { class: 'btn sm', onclick: f.action === 'compact' ? () => compactNow() : openModel }, f.action === 'compact' ? 'Compact now' : 'Switch model');
   return h('div', 'fail', head, f.hint && h('p', 'fhint', f.hint),
     f.message && h('blockquote', 'fmsg' + (o ? '' : ' clip'), h('div', 'fmt', f.message)),
@@ -561,20 +508,20 @@ function blockNode(b, i) {
 }
 function renderBlock(b, i) {
   const n = blockNode(b, i), r = roles[i - lo];
-  let w = n;
+  let wrap = n;
   if (r) {
-    const f = r.f, g = r.g, fo = f && !isOpen(f.key), go = g && isOpen(g.key);
-    const rows = [f && i === f.at && foldRow(f, !fo), g && i === g.head && !fo && groupRow(g, go)];
-    w = h('div', n.className, rows, n, f && !fo && i === f.last && h('button', { class: 'tr fold', 'data-k': f.key + 'h', 'data-tg': f.key },
+    const f = r.fold, g = r.group, folded = f && !isOpen(f.key), groupOpen = g && isOpen(g.key);
+    const rows = [f && i === f.at && foldRow(f, !folded), g && i === g.head && !folded && groupRow(g, groupOpen)];
+    wrap = h('div', n.className, rows, n, f && !folded && i === f.last && h('button', { class: 'tr fold', 'data-k': f.key + 'h', 'data-tg': f.key },
       h('span', 'si', icon('chevu', 'sm')), h('span', 'vb', 'Hide')));
     n.className = '';
-    n.hidden = n.hidden || !!fo || !!(g && !go);
-    w.hidden = n.hidden && !kids(rows).length && !(f && !fo && i === f.last);
+    n.hidden = n.hidden || !!folded || !!(g && !groupOpen);
+    wrap.hidden = n.hidden && !kids(rows).length && !(f && !folded && i === f.last);
   }
-  w.classList.add('b');
-  if (i >= liveFrom) w.classList.add('live');
-  w.dataset.i = i;
-  return w;
+  wrap.classList.add('b');
+  if (i >= liveFrom) wrap.classList.add('live');
+  wrap.dataset.i = i;
+  return wrap;
 }
 function foldRow(f, open) {
   return h('button', { class: 'tr fold', 'data-k': f.key, 'aria-expanded': String(open) },
@@ -590,22 +537,35 @@ function groupRow(g, open) {
 let roles = [], roleSigs = [];
 function relayout() {
   const bl = S.blocks, next = [];
-  for (const f of MC.foldTurns(bl, lo, hi)) for (const j of f.hidden) (next[j - lo] = next[j - lo] || {}).f = f;
-  for (const g of MC.groupTools(bl, lo, hi)) for (const j of g.members) (next[j - lo] = next[j - lo] || {}).g = g;
-  const ns = next.map(r => r && JSON.stringify([r.f && [r.f.key, r.f.at, r.f.last, isOpen(r.f.key), r.f.tools, r.f.failed], r.g && [r.g.key, r.g.head, r.g.label, r.g.run, isOpen(r.g.key), r.g.members.length]]));
-  for (let k = 0; k < Math.max(ns.length, roleSigs.length); k++) if (ns[k] !== roleSigs[k]) dirty.add(lo + k);
-  roles = next; roleSigs = ns;
+  for (const f of MC.foldTurns(bl, lo, hi)) for (const j of f.hidden) (next[j - lo] = next[j - lo] || {}).fold = f;
+  for (const g of MC.groupTools(bl, lo, hi)) for (const j of g.members) (next[j - lo] = next[j - lo] || {}).group = g;
+  const sigs = next.map(({ fold: f, group: g }) => JSON.stringify([f && [f.key, f.at, f.last, isOpen(f.key), f.tools, f.failed], g && [g.key, g.head, g.label, g.run, isOpen(g.key), g.members.length]]));
+  for (let k = 0; k < Math.max(sigs.length, roleSigs.length); k++) if (sigs[k] !== roleSigs[k]) dirty.add(lo + k);
+  roles = next; roleSigs = sigs;
 }
 function place(n, old) {
   if (old) keepFocus(old, () => old.replaceWith(n), n);
   for (const p of n.querySelectorAll('pre.out')) p.scrollTop = p.scrollHeight;
   for (const q of n.querySelectorAll('.fmsg.clip .fmt')) if (q.scrollHeight > q.clientHeight + 1) n.querySelector('.more2').hidden = false;
 }
+// Moves the mounted window to [newLo, newHi): blocks that left it unmount, older blocks that entered render at the top.
+function mountWindow(newLo, newHi) {
+  while (lo + nodes.length > newHi) nodes.pop().remove();
+  while (lo < newLo && nodes.length) { nodes.shift().remove(); lo++; }
+  if (!nodes.length) lo = newLo;
+  if (lo > newLo) {
+    const fr = document.createDocumentFragment(), add = [];
+    for (let k = newLo; k < lo; k++) { const x = renderBlock(S.blocks[k], k); add.push(x); fr.append(x); dirty.delete(k); }
+    nodes.unshift(...add); box.prepend(fr); lo = newLo;
+    for (const x of add) place(x);
+  }
+  hi = newHi;
+}
 function flush() {
   raf = 0;
   if (!S.state) return;
-  // The capsule names the running tool from the blocks, which change without a state message.
-  renderCap();
+  // Tool progress can change without a state message.
+  renderStrip();
   // Only the block being written shows the caret.
   const live = MC.liveBlock(S.blocks, S.state.status.busy);
   if (live !== liveIdx) { for (const i of [liveIdx, live]) if (i >= 0) dirty.add(i); liveIdx = live; }
@@ -616,16 +576,7 @@ function flush() {
   const serverPrepend = n > prevHi && dirty.has(0) && prevHi > 0;
   // The mounted window [lo, hi): the newest `win` blocks while pinned to the end.
   const newHi = pinned ? n : Math.min(hi, n), newLo = Math.max(0, newHi - win);
-  while (lo + nodes.length > newHi) nodes.pop().remove();
-  while (lo < newLo && nodes.length) { nodes.shift().remove(); lo++; }
-  if (!nodes.length) lo = newLo;
-  if (lo > newLo) {
-    const fr = document.createDocumentFragment(), add = [];
-    for (let k = newLo; k < lo; k++) { const x = renderBlock(bl[k], k); add.push(x); fr.append(x); dirty.delete(k); }
-    nodes.unshift(...add); box.prepend(fr); lo = newLo;
-    for (const x of add) place(x);
-  }
-  hi = newHi;
+  mountWindow(newLo, newHi);
   if (lo !== lo0) roleSigs = [];
   relayout();
   for (let i = lo; i < hi; i++) {
@@ -648,7 +599,6 @@ function flush() {
   // Newer blocks are unmounted while reading far back: the pill leads back to them.
   if (!pinned) newOut(true);
   anchor = null;
-  if (reveal) { const go = reveal; reveal = null; go(); }
 }
 function newOut(on) { set($('newout'), 'hidden', !on); }
 function loadEarlierBtn(label) {
@@ -677,7 +627,7 @@ export function renderTop() {
 }
 const SUGG = [['Explain this project', 'Structure, entry points and how it fits together'], ['Run the tests and fix failures', 'Find what breaks and repair it'],
   ['Review my uncommitted changes', 'Spot bugs and risky edits'], ['Find TODOs', 'List open TODO and FIXME notes']];
-const emptyPart = part($('empty'), e => e.loading ? h('div', 'loadrow', spin(), 'Opening session…') : e.session ? h('div', 'muted', 'No messages yet.') : [
+const emptyPart = part($('empty'), e => e.loading ? loading('Opening session…') : e.session ? h('div', 'muted', 'No messages yet.') : [
   h('img', { class: 'appicon', src: '/icon.svg', alt: '' }), h('h2', '', 'What should we work on?'),
   h('button', { class: 'where', 'aria-label': 'Change folder, ' + e.ws, onclick: () => openNew() }, icon('folder', 'sm'), h('span', '', MC.basename(e.ws)), icon('chevd', 'xs')),
   h('div', 'hint mt6', MC.tilde(e.ws)),
@@ -729,8 +679,8 @@ function findBar() {
 function runFind() {
   for (const i of MC.findBlocks(S.blocks, finder.q, lo, hi)) {
     const r = roles[i - lo], b = S.blocks[i];
-    if (r && r.f) opened.set(r.f.key, true);
-    if (r && r.g) opened.set(r.g.key, true);
+    if (r && r.fold) opened.set(r.fold.key, true);
+    if (r && r.group) opened.set(r.group.key, true);
     if (b.type === 'tool' && !b.detail.toLowerCase().includes(finder.q.toLowerCase())) opened.set('t' + b.call_id, true);
     dirty.add(i);
   }
@@ -778,7 +728,8 @@ export function syncApproval() {
     reply.call = t ? t.call_id : null;
     announce(a.kind === 'approval' ? 'Approval needed' : 'Question: ' + (a.prompt || ''));
     notify(a.kind === 'approval' ? 'Approval needed: ' + MC.approvalLine(a) : a.prompt || 'A question is waiting', S.sid);
-    if (!m) openApproval(a);
+    // The host can replace the interaction while its sheet is open: the next one never inherits a deny reason.
+    if (m) { reply.deny = false; reply.reason = ''; } else openApproval();
   }
   renderApprBar();
 }

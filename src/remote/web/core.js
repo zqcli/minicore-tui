@@ -157,7 +157,7 @@ const intents = {
   cancel: () => ({ kind: 'cancel' }),
   answer: (interaction_id, choice, message) => Object.assign({ kind: 'answer', interaction_id, choice }, message && { message }),
   compact: () => ({ kind: 'compact' }),
-  unqueue: (index, text) => ({ kind: 'unqueue', index, text }),
+  unqueue: (index, text, edit) => ({ kind: 'unqueue', index, text, edit }),
   loadOlder: () => ({ kind: 'load_older' }),
   openSession: session_id => ({ kind: 'open_session', session_id }),
   newSession: (workspace, profile) => Object.assign({ kind: 'new_session' }, workspace && { workspace }, profile && { profile }),
@@ -183,7 +183,7 @@ const fs = {
 };
 
 // ---- store and reducer ----
-const createStore = () => ({ state: null, blocks: [], intents: new Map(), fs: new Set(), q: new Set(), drops: [], sid: undefined, nid: 0, skew: 0, device: null, version: '' });
+const createStore = () => ({ state: null, blocks: [], intents: new Map(), fs: new Set(), q: new Set(), sid: undefined, nid: 0, skew: 0, device: null, version: '' });
 const nextId = s => 'c' + ++s.nid;
 const SENDS = { submit: 1, queue: 1 };
 // Records the intent as pending and returns the message to send; it is never sent again by itself.
@@ -196,16 +196,10 @@ function request(s, body) { const id = nextId(s); s.fs.add(id); return { ...body
 // At most MAX_QUERIES are in flight per connection; the caller waits for room.
 const queryRoom = s => s.q.size < MAX_QUERIES;
 function query(s, spec) { const id = nextId(s); s.q.add(id); return { t: 'query', id, ...spec }; }
-// Takes a queued follow-up back; dropped, the returned text is discarded.
-function unqueue(s, index, text, drop) {
-  const msg = intent(s, intents.unqueue(index, text));
-  if (drop) { s.intents.get(msg.id).drop = true; s.drops.push(text); }
-  return msg;
-}
 const pending = (s, kind) => { for (const it of s.intents.values()) if (it.st === 'pending' && (!kind || it.kind === kind)) return it; return null; };
 // A dropped socket leaves pending sends unconfirmed; other intents show in the next snapshot.
 function disconnect(s) {
-  s.fs.clear(); s.q.clear(); s.drops.length = 0;
+  s.fs.clear(); s.q.clear();
   for (const it of [...s.intents.values()]) {
     if (it.st !== 'pending') continue;
     if (it.text != null) it.st = 'unconfirmed'; else s.intents.delete(it.id);
@@ -269,15 +263,9 @@ function reduce(s, msg, nowMs) {
       const it = s.intents.get(msg.id);
       if (!it) return {};
       s.intents.delete(msg.id);
-      if (it.drop && !msg.ok) s.drops.splice(s.drops.indexOf(it.spec.text), 1);
       return { ack: { ...it, ok: msg.ok, error: msg.error } };
     }
-    case 'returned': {
-      const k = s.drops.indexOf(msg.text);
-      if (k < 0) return { returned: msg.text };
-      s.drops.splice(k, 1);
-      return {};
-    }
+    case 'returned': return { returned: msg.text };
     case 'result': return s.q.delete(msg.id) ? { result: msg } : {};
     case 'notice': return { notice: { level: msg.level === 'error' ? 'error' : 'info', text: msg.text } };
     case 'fs': return s.fs.delete(msg.id) ? { fs: msg } : {};
@@ -341,39 +329,40 @@ function stamp(ms, now, tz) {
   const d = new Date(ms - tz * 60000);
   return MON[d.getUTCMonth()] + ' ' + d.getUTCDate() + ', ' + clock(ms, tz);
 }
-const matchSession = (x, query) => ((x.title || '') + '\n' + x.workspace).toLowerCase().includes((query || '').trim().toLowerCase());
 const busyStatus = st => st === 'running' || st === 'approval' || st === 'compacting';
 // The drawer: Needs you (longest waiting first), Running (oldest first), then one group per workspace, the one with the newest
 // session first and each group's sessions newest first. `frozen` is the order captured on open: rows keep their place (and
-// group), and new sessions go to the top of their group.
+// group), and new sessions go to the top of their group. Runs on every state while the list shows, so each date parses once.
 function sessionLayout(sessions, query, frozen) {
-  const start = x => x.started_ms == null ? Infinity : x.started_ms;
-  const rows = sessions.map((x, k) => ({ x, k, g: x.live && x.status === 'approval' ? 0 : x.live && busyStatus(x.status) ? 1 : 2 }));
-  const idle = rows.filter(r => r.g === 2).sort((a, b) => Date.parse(b.x.updated_at) - Date.parse(a.x.updated_at) || a.k - b.k);
-  let n = 0;
-  for (const w of new Set(idle.map(r => r.x.workspace))) for (const r of idle) if (r.x.workspace === w) r.n = n++;
+  const rows = sessions.map((x, index) => ({ x, index, pin: x.live && x.status === 'approval' ? 0 : x.live && busyStatus(x.status) ? 1 : 2, at: Date.parse(x.updated_at) }));
+  const wsRows = new Map();
+  for (const r of rows.filter(r => r.pin === 2).sort((a, b) => b.at - a.at || a.index - b.index)) {
+    if (!wsRows.has(r.x.workspace)) wsRows.set(r.x.workspace, []);
+    wsRows.get(r.x.workspace).push(r);
+  }
+  let rank = 0;
+  for (const list of wsRows.values()) for (const r of list) r.rank = rank++;
   for (const r of rows) {
     const f = frozen && frozen.get(r.x.id);
-    if (f) { r.g = f[0]; r.o = f[1]; } else r.o = frozen ? r.k - 1e9 : r.g < 2 ? start(r.x) : r.n;
+    if (f) { r.pin = f[0]; r.order = f[1]; } else r.order = frozen ? r.index - 1e9 : r.pin < 2 ? (r.x.started_ms == null ? Infinity : r.x.started_ms) : r.rank;
   }
-  rows.sort((a, b) => a.g - b.g || a.o - b.o || a.k - b.k);
-  const all = [], byWs = new Map(), kind = new Map();
+  rows.sort((a, b) => a.pin - b.pin || a.order - b.order || a.index - b.index);
+  const all = [], byWs = new Map(), pins = new Map();
   for (const r of rows) {
-    kind.set(r.x.id, r.g);
-    let g = r.g < 2 ? all.find(y => y.pinned === r.g) : byWs.get(r.x.workspace);
+    pins.set(r.x.id, r.pin);
+    let g = r.pin < 2 ? all.find(y => y.pinned === r.pin) : byWs.get(r.x.workspace);
     if (!g) {
-      g = r.g < 2 ? { label: PINNED[r.g], pinned: r.g, items: [] } : { label: basename(r.x.workspace), ws: r.x.workspace, items: [] };
+      g = r.pin < 2 ? { label: PINNED[r.pin], pinned: r.pin, items: [] } : { label: basename(r.x.workspace), ws: r.x.workspace, items: [] };
       all.push(g);
-      if (r.g === 2) byWs.set(r.x.workspace, g);
+      if (r.pin === 2) byWs.set(r.x.workspace, g);
     }
     g.items.push(r.x);
   }
-  const order = new Map(all.flatMap(g => g.items).map((x, k) => [x.id, [kind.get(x.id), k]]));
-  const groups = all.map(g => ({ ...g, items: g.items.filter(x => matchSession(x, query)) })).filter(g => g.items.length);
+  const order = new Map(all.flatMap(g => g.items).map((x, k) => [x.id, [pins.get(x.id), k]]));
+  const q = (query || '').trim().toLowerCase();
+  const groups = !q ? all : all.map(g => ({ ...g, items: g.items.filter(x => ((x.title || '') + '\n' + x.workspace).toLowerCase().includes(q)) })).filter(g => g.items.length);
   return { groups, order: frozen || order };
 }
-// Other sessions that are working or waiting for the user.
-const busyOthers = sessions => sessions.filter(x => x.live && !x.current && busyStatus(x.status));
 const PINNED = ['Needs you', 'Running'], GROUP_ROWS = 5;
 // A workspace group shows its newest rows until opened with "Show N more"; a search shows every match.
 const groupRows = (items, open) => open ? { shown: items, hidden: 0 } : { shown: items.slice(0, GROUP_ROWS), hidden: Math.max(0, items.length - GROUP_ROWS) };
@@ -468,29 +457,37 @@ function groupTools(blocks, from, to) {
   end();
   return out;
 }
-// A finished turn folds its work (tools, thinking, answers before the last tool) into one summary row; messages, compactions,
-// the final answer and the turn-end line stay.
+// Steering messages split finished work so folding never moves steps across a user's instruction.
 function foldTurns(blocks, from, to) {
   const out = [];
-  let start = from;
+  let start = from, promptAt = null;
   for (let i = from; i < to; i++) {
     const b = blocks[i];
-    if ((b.type === 'user' && b.kind !== 'steering') || b.type === 'earlier') { start = i + 1; continue; }
+    if ((b.type === 'user' && b.kind !== 'steering') || b.type === 'earlier') { start = i + 1; promptAt = b.type === 'user' ? b.at : null; continue; }
     if (b.type !== 'turn_end') continue;
-    let fin = i, tools = 0, failed = 0;
+    let fin = i;
     for (let j = i - 1; j >= start && blocks[j].type !== 'tool'; j--) if (blocks[j].type === 'assistant' && blocks[j].text) { fin = j; break; }
-    const hidden = [];
-    for (let j = start; j < fin; j++) {
+    let hidden = [], tools = 0, failed = 0, at = promptAt, segment = start, steered = false;
+    const finish = until => {
+      if (hidden.length) {
+        const c = !steered && b.changes;
+        out.push({ key: 'f' + b.loop_id + ':' + segment, at: hidden[0], last: hidden[hidden.length - 1], hidden, tools, failed,
+          ms: at != null && until != null ? until - at : null,
+          added: c && c.files && segment === start ? c.added : null, removed: c && c.files && segment === start ? c.removed : null });
+      }
+      hidden = []; tools = failed = 0;
+    };
+    for (let j = start; j < i; j++) {
       const x = blocks[j];
-      if (x.type === 'tool') { tools++; if (x.state === 'failed') failed++; }
-      if ((x.type === 'tool' || x.type === 'assistant') && !quiet(x)) hidden.push(j);
+      if (x.type === 'user' && x.kind === 'steering') {
+        steered = true; finish(x.at); at = x.at; segment = j + 1;
+      } else if (j < fin) {
+        if (x.type === 'tool') { tools++; if (x.state === 'failed') failed++; }
+        if ((x.type === 'tool' || x.type === 'assistant') && !quiet(x)) hidden.push(j);
+      }
     }
-    if (hidden.length) {
-      const c = b.changes;
-      out.push({ key: 'f' + b.loop_id, at: hidden[0], last: hidden[hidden.length - 1], hidden, tools, failed, ms: b.duration_ms,
-        added: c && c.files ? c.added : null, removed: c && c.files ? c.removed : null });
-    }
-    start = i + 1;
+    finish(promptAt != null && b.duration_ms != null ? promptAt + b.duration_ms : null);
+    start = i + 1; promptAt = null;
   }
   return out;
 }
@@ -533,23 +530,6 @@ function statusLine(state, blocks) {
   return {
     label, detail: !tool ? '' : label.includes(tool.name) ? tool.detail || '' : [tool.name, tool.detail].filter(Boolean).join(' · '),
   };
-}
-// The running turn's tool calls for the progress panel (the newest `max`, in order), and its totals line.
-function turnSteps(blocks, max = 30) {
-  let from = blocks.length;
-  while (from > 0 && blocks[from - 1].type !== 'turn_end' && !(blocks[from - 1].type === 'user' && blocks[from - 1].kind !== 'steering')) from--;
-  const all = [], files = new Set();
-  let failed = 0, added = 0, removed = 0;
-  for (let i = from; i < blocks.length; i++) {
-    const b = blocks[i];
-    if (b.type !== 'tool') continue;
-    const f = toolInfo(b);
-    if (b.state === 'failed') failed++;
-    if (f.added != null && (f.added || f.removed)) { files.add(f.target); added += f.added; removed += f.removed; }
-    all.push({ i, verb: f.verb, target: f.target, state: f.run ? 'run' : b.state === 'failed' ? 'failed' : b.state === 'succeeded' ? 'done' : 'stopped' });
-  }
-  const text = [all.length && plural(all.length, 'tool'), failed && failed + ' failed', files.size && plural(files.size, 'file') + ' +' + added + ' −' + removed].filter(Boolean).join(' · ');
-  return { steps: all.slice(-max), earlier: Math.max(0, all.length - max), text };
 }
 // What the composer says before anything is typed; `keys` names Enter and Alt on a device with a keyboard.
 const placeholder = (busy, session, keys) => !busy ? (session ? 'Message MiniCore · / for commands' : 'Describe a task to start')
@@ -601,7 +581,8 @@ function approvalOptions(a) {
 function approvalBody(a) {
   const k = toolKind(a.tool), input = a.input || '';
   if (k === 'cmd') return { cmd: input || a.detail };
-  if (k === 'edit' && parseDiff(input).length) return { diff: parseDiff(input) };
+  const diff = k === 'edit' ? parseDiff(input) : [];
+  if (diff.length) return { diff };
   if (k === 'write' && input) {
     const lines = input.split('\n');
     return { diff: [{ path: a.detail, op: 'add', added: lines.length, removed: 0, hunks: [{ head: '', lines: lines.map((s, i) => ({ t: 'add', s, a: null, b: i + 1 })) }] }] };
@@ -672,11 +653,13 @@ const BUILTINS = [
   ['sessions', 'Open the session list'], ['copy', 'Copy the last answer'], ['settings', 'Open settings'], ['help', 'Keyboard shortcuts'],
 ].map(([name, description, hint]) => ({ name, description, hint: hint || '', builtin: true }));
 const ALIAS = { diff: 'changes', resume: 'sessions', reasoning: 'model' };
+// Every command the composer offers: the host's templates, then the built-ins the client runs itself.
+const commandList = commands => commands.map(c => ({ ...c, builtin: false })).concat(BUILTINS);
 // The command list while the composer holds only "/word": prefix matches first, templates before built-ins.
 function slashMenu(text, commands) {
   const m = /^\/(\S*)$/.exec(text);
   if (!m) return null;
-  const q = m[1].toLowerCase(), all = commands.map(c => ({ ...c, builtin: false })).concat(BUILTINS);
+  const q = m[1].toLowerCase(), all = commandList(commands);
   const hit = all.filter(c => c.name.toLowerCase().includes(q));
   return hit.filter(c => c.name.toLowerCase().startsWith(q)).concat(hit.filter(c => !c.name.toLowerCase().startsWith(q)));
 }
@@ -712,10 +695,8 @@ function composerKey(k, c) {
   return k.mod || (c.enter && !k.shift && !k.alt) ? (c.busy ? 'steer' : 'send') : null;
 }
 function queueView(queue, all, max = 3) {
-  let n = 0;
-  // Steers first, as in the TUI.
-  const items = queue.map((q, index) => ({ kind: q.kind, text: q.text, index, n: q.kind === 'follow' ? ++n : 0 }))
-    .sort((a, b) => (a.kind === 'follow') - (b.kind === 'follow'));
+  const counts = { steer: 0, follow: 0 };
+  const items = queue.map((q, index) => ({ ...q, index, n: ++counts[q.kind] }));
   return { items: all ? items : items.slice(0, max), hidden: all ? 0 : Math.max(0, items.length - max), long: items.length > max };
 }
 
@@ -767,12 +748,12 @@ function recentWorkspaces(sessions, max = 6) {
 }
 
 export {
-  V, WINDOW, norm, inline, parseMd, mdInc, backoff, basename, plural, titled, quiet, midTrunc, retireText, mergeReturned, otherDevices, deviceName,
-  installOffer, login, hello, intents, queries, fs, createStore, intent, request, query, queryRoom, unqueue, pending, disconnect,
-  sendAgain, unconfirmed, reduce, lockText, unreachable, fsError, errorText, clock, stamp, relTime, sessionLayout, groupRows, busyOthers,
+  V, WINDOW, inline, parseMd, mdInc, backoff, basename, plural, titled, quiet, midTrunc, retireText, mergeReturned, otherDevices, deviceName,
+  installOffer, login, hello, intents, queries, fs, createStore, intent, request, query, queryRoom, pending, disconnect,
+  sendAgain, unconfirmed, reduce, lockText, unreachable, fsError, errorText, stamp, relTime, sessionLayout, groupRows,
   fmtElapsed, fmtTok, fmtNum, groupTools, foldTurns, findBlocks, foldText, toolInfo, parseDiff, diffStats, liveBlock, turnEnd,
-  changesText, compactionText, statusLine, turnSteps, placeholder, allowedText, canStop, primaryKind, primaryTap, TAP_SLOP, approvalKey, approvalTitle,
-  approvalOptions, approvalBody, approvalLine, changeStatus, contextView, exportMd, BUILTINS, slashMenu, parseSlash, atToken,
-  insertMention, pushRecent, literal, composerKey, queueView, thinkingPreview, splitPath, within, crumbs, tilde, isDrive,
+  changesText, compactionText, statusLine, placeholder, allowedText, canStop, primaryKind, primaryTap, TAP_SLOP, approvalKey, approvalTitle,
+  approvalOptions, approvalBody, approvalLine, changeStatus, contextView, exportMd, slashMenu, parseSlash, atToken,
+  insertMention, pushRecent, literal, composerKey, commandList, queueView, thinkingPreview, splitPath, within, crumbs, tilde, isDrive,
   recentWorkspaces, sessionTransitions, noticeEvent, attentionCount,
 };

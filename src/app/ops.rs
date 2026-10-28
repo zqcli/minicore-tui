@@ -3,7 +3,7 @@
 use serde_json::json;
 
 use super::tasks::{self, History, Window};
-use super::{App, LiveTurn, NoticeLevel, Overlay, Scroll, Session, SessionOp, find};
+use super::{App, LiveTurn, NoticeLevel, Overlay, Queued, Scroll, Session, SessionOp, find};
 use crate::protocol::stamp::unix_millis;
 use crate::protocol::{
     self, AgentEvent, CompactStatus, CompactionResult, RpcError, SessionInfo, SessionState,
@@ -55,7 +55,7 @@ impl App {
             }
             SessionOp::Sent(text, result) => self.on_sent(text, result),
             SessionOp::Waited(result) => self.on_waited(result),
-            SessionOp::Steered(text, result) => self.on_steered(text, result),
+            SessionOp::Steered(loop_id, text, result) => self.on_steered(&loop_id, text, result),
             SessionOp::Done(result) => {
                 self.ok(result);
             }
@@ -93,6 +93,7 @@ impl App {
             SessionOp::ChangeFiles(result) => self.on_change_files(result),
             SessionOp::DiffFile(query, result) => self.on_diff_file(query, result),
         }
+        self.pump_queue();
     }
 
     /// Adopts a session and assigns its remote creator or opener's view without moving other devices.
@@ -153,7 +154,7 @@ impl App {
         // through `session.update`, so a flag is never silently dropped.
         let launch = std::mem::take(&mut self.launch);
         match first {
-            Some(text) => self.send(text),
+            Some(text) => self.submit_text(text, false),
             None if launch.model.is_some() || launch.reasoning.is_some() => {
                 self.update_session(launch.fields(false));
             }
@@ -265,7 +266,6 @@ impl App {
         }
         if idle {
             self.session_mut().waiting_for_compaction = false;
-            self.flush_queue();
         } else if self.session_mut().waiting_for_compaction {
             // Post-turn compaction still owns the session: keep asking until
             // it settles, or the queue never flushes.
@@ -292,14 +292,16 @@ impl App {
         let mut live = LiveTurn::new(turn.clone(), start);
         live.usage_base = session.usage.clone();
         session.live = Some(live);
+        session.steers_paused = false;
         self.spawn(tasks::wait_turn(self.client.clone(), turn));
     }
 
-    fn on_sent(&mut self, text: String, result: Result<TurnSendResult, RpcError>) {
+    fn on_sent(&mut self, queued: Queued, result: Result<TurnSendResult, RpcError>) {
+        let text = &queued.text;
         match result {
             Ok(sent) => {
                 if let Some(at) = sent.accepted_at.as_deref().and_then(unix_millis) {
-                    self.session_mut().stamp_prompt(&text, at);
+                    self.session_mut().stamp_prompt(text, at);
                 }
                 self.start_turn(sent.turn);
                 if let Some(title) = self.session.as_ref().and_then(Session::auto_title) {
@@ -307,18 +309,18 @@ impl App {
                 }
             }
             // Post-turn compaction owns the session: the turn was refused, not
-            // sent, so the text waits as a follow-up until the Agent is idle.
+            // sent, so the message keeps its place until the Agent is idle.
             Err(error) if error.is_busy() => {
                 let session = self.session_mut();
                 session.waiting_for_compaction = true;
-                session.unsend_prompt(&text);
-                session.push_follow_up(text);
+                session.unsend_prompt(text);
+                session.queue.insert(0, queued);
                 self.retry_when_idle();
             }
             // The text never reached the Agent; it returns to the draft.
             Err(error) => {
-                self.session_mut().unsend_prompt(&text);
-                self.restore_draft(&text);
+                self.session_mut().unsend_prompt(text);
+                self.restore_draft(text);
                 self.error(error);
             }
         }
@@ -375,10 +377,20 @@ impl App {
         // may also have switched branches.
         self.refresh_branch();
         self.refresh_context();
-        self.flush_queue();
     }
 
-    fn on_steered(&mut self, text: String, result: Result<SteerResult, RpcError>) {
+    fn on_steered(&mut self, loop_id: &str, text: String, result: Result<SteerResult, RpcError>) {
+        if !self
+            .session_mut()
+            .live
+            .as_ref()
+            .is_some_and(|live| live.turn.loop_id == loop_id)
+        {
+            return;
+        }
+        if result.is_err() {
+            self.session_mut().refuse_steer(&text);
+        }
         match result {
             Ok(steer) => {
                 if let Some(at) = steer.accepted_at.as_deref().and_then(unix_millis) {
@@ -386,11 +398,9 @@ impl App {
                 }
             }
             Err(error) if error.code == protocol::TURN_NOT_FOUND => {
-                self.session_mut().abandon_steers();
                 self.notice(NoticeLevel::Info, "Turn already ended; queued as next");
             }
             Err(error) if error.code == protocol::STEER_QUEUE_FULL => {
-                self.session_mut().demote_last_steer();
                 self.notice(
                     NoticeLevel::Error,
                     "Steer queue is full; queued for the next turn",
@@ -468,6 +478,10 @@ impl App {
         let was_compacting = session.compaction.is_some();
         let usage = matches!(event, AgentEvent::RequestUsage { .. });
         let requested = matches!(event, AgentEvent::InteractionRequested { .. });
+        let queue_changed = matches!(
+            event,
+            AgentEvent::SteerProgress { .. } | AgentEvent::TurnStarted { .. }
+        );
         let started = session.apply_event(event);
         let compaction_ended = was_compacting && session.compaction.is_none();
         if let Some(turn) = started {
@@ -484,6 +498,9 @@ impl App {
         // The context report holds the finished compaction's marker.
         if compaction_ended {
             self.refresh_context();
+        }
+        if queue_changed || compaction_ended {
+            self.pump_queue();
         }
     }
 

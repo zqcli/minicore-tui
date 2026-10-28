@@ -1,6 +1,6 @@
 import * as MC from './core.js';
-import { HOST, S, ask, fsCall, hostNow, intent, isHalted, isMain, online, signOut, turnStatus, tz, viewed } from './net.js';
-import { $, actions, announce, apple, closeAll, copyText, diffView, errBox, fill, findSheet, h, hover, icon, installApp, installable, layout, menuRow, notify, part, popModal, prefs, pushModal, refreshSheets, rowText, set, setPref, share, sheet, spin, standalone, toast, wide } from './ui.js';
+import { HOST, S, ask, fsCall, hostNow, intent, isHalted, isMain, online, signOut, stampAt, turnStatus, tz, viewed } from './net.js';
+import { $, actions, announce, apple, closeAll, copyButton, copyText, diffView, errBox, fill, findSheet, h, hover, icon, installApp, installable, layout, loading, menuRow, notify, part, popModal, prefs, pushModal, refreshSheets, rowText, set, setPref, share, sheet, spin, standalone, toast, wide } from './ui.js';
 
 // ---- sheets ----
 function confirmSheet(o) {
@@ -90,8 +90,8 @@ export function openChanges() {
     body: () => {
       if (c.err) return errBox(c.err);
       if (c.path) return c.diff ? [h('div', 'tbar', h('button', { 'aria-pressed': String(c.wrap), onclick: () => { c.wrap = !c.wrap; m.refresh(); } }, icon('wrap', 'xs'), 'Wrap'),
-        c.diff.truncated && h('span', 'hint', 'Diff truncated')), diffView(MC.parseDiff(c.diff.lines.join('\n')).map(f => ({ ...f, path: f.path || c.path })), c.wrap)] : h('div', 'loadrow', spin(), 'Loading diff…');
-      if (!c.files) return h('div', 'loadrow', spin(), 'Loading changes…');
+        c.diff.truncated && h('span', 'hint', 'Diff truncated')), diffView(MC.parseDiff(c.diff.lines.join('\n')).map(f => ({ ...f, path: f.path || c.path })), c.wrap)] : loading('Loading diff…');
+      if (!c.files) return loading('Loading changes…');
       if (!c.files.length) return h('div', 'muted', 'No changes in this workspace');
       return [h('div', 'list', c.files.map(f => { const [l, cls] = MC.changeStatus(f.status), dir = f.path.slice(0, -MC.basename(f.path).length);
         return h('button', { class: 'row flat', 'data-k': f.path, 'aria-label': f.status + ' ' + f.path, onclick: () => file(f.path) }, h('span', 'st ' + cls, l),
@@ -115,7 +115,7 @@ export function openContext() {
     key: 'context', side: true, title: 'Context', deps: () => [c, turnStatus().busy, turnStatus().compacting, online()],
     body: () => {
       if (c.err) return errBox(c.err);
-      if (!c.d) return h('div', 'loadrow', spin(), 'Loading…');
+      if (!c.d) return loading('Loading…');
       const x = MC.contextView(c.d);
       return [h('div', 'cbar', h('b', '', Math.round(x.percent) + '%'), h('span', '', x.used)),
         h('div', { class: 'meter', role: 'meter', 'aria-valuenow': String(Math.round(x.percent)), 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-label': 'Context used' },
@@ -137,7 +137,7 @@ export function openOutput(b) {
     body: () => [o.err && errBox(o.err), o.capped && h('p', 'hint', 'Showing the first 4 MB.'),
       h('pre', { class: 'out view' + (o.wrap ? ' wrap' : ''), tabindex: '0' }, o.text)],
     foot: () => [h('button', { class: 'btn sm', 'aria-pressed': String(o.wrap), onclick: () => { o.wrap = !o.wrap; m.refresh(); } }, icon('wrap', 'xs'), 'Wrap'),
-      h('button', { class: 'btn sm', onclick: e => copyText(o.text, e.currentTarget) }, icon('copy', 'xs'), 'Copy'),
+      copyButton(o.text, 'Copy', { class: 'btn sm' }),
       !o.full && h('button', { class: 'btn sm primary', 'data-k': 'full', disabled: o.loading, onclick: () => loadFull(b, o, m) }, o.loading && spin('sm'), o.loading ? 'Loading…' : 'Load full output')],
     after: body => { if (o.shown !== o.text.length) { o.shown = o.text.length; requestAnimationFrame(() => { body.scrollTop = body.scrollHeight; }); } },
   });
@@ -160,7 +160,7 @@ export function compactNow(done) {
     ok: m => { m.close(true); intent(MC.intents.compact(), a => { if (!a.ok) toast(MC.errorText(a.error), 'error'); else if (done) done(); }); } });
 }
 export function exportSession() { share(S.state.session.title || 'MiniCore session', MC.exportMd(S.state, S.blocks)); }
-const KEYS = [['Esc', 'Close the top sheet or the progress panel, or stop the turn'], ['Enter', 'Send, or steer a running turn (“Enter sends”)'], ['⌘/Ctrl Enter', 'Send, or steer a running turn'], ['⌥/Alt Enter', 'Queue a follow-up while a turn runs'], ['↑ ↓', 'Recent prompts in an empty composer'],
+const KEYS = [['Esc', 'Close the top sheet or stop the turn'], ['Enter', 'Send, or steer a running turn (“Enter sends”)'], ['⌘/Ctrl Enter', 'Send, or steer a running turn'], ['⌥/Alt Enter', 'Queue a follow-up while a turn runs'], ['↑ ↓', 'Recent prompts in an empty composer'],
   ['⌘/Ctrl K', 'Commands and prompts'], ['⌘/Ctrl F', 'Find in session'], ['⌘/Ctrl ⇧ F', 'Search sessions'], ['Alt ↑ ↓', 'Previous or next session'], ['Y A N', 'Allow, allow for session, deny'], ['?', 'This help']];
 export function openHelp() {
   sheet({ key: 'help', cls: 'dialog', title: 'Keyboard shortcuts', body: () => h('dl', 'kv keys', KEYS.map(([k, d]) => [h('dt', '', h('kbd', '', k)), h('dd', '', d)])) });
@@ -182,17 +182,16 @@ export function clearFailed() { for (const id of failed) if (S.state.sessions.so
 export const openLive = id => { if (intent(MC.intents.openSession(id))) pendingRow = id; };
 // ---- state ----
 let tick = 0;
-// One 1 s timer, only while this view's turn runs or a visible session list shows a running session's elapsed time.
+// Only active work in this view needs elapsed-time updates.
 export function syncTick() {
   const s = S.state, x = s && s.status;
-  const want = !!s && (!!(x.started_ms && (x.busy || x.compacting)) || (navShown() && s.sessions.some(y => y.live && y.status === 'running' && y.started_ms)));
+  const want = !!s && !!(x.started_ms && (x.busy || x.compacting));
   if (want && !tick) tick = setInterval(onTick, 1000);
   if (!want && tick) { clearInterval(tick); tick = 0; }
 }
 function onTick() {
   const x = turnStatus();
-  if (x.started_ms) for (const el of $('cap').querySelectorAll('.el')) el.textContent = MC.fmtElapsed(hostNow() - x.started_ms);
-  if (navShown()) for (const e of $('nav').querySelectorAll('[data-start]')) e.textContent = MC.fmtElapsed(hostNow() - +e.dataset.start);
+  if (x.started_ms) for (const el of $('strip').querySelectorAll('.el')) el.textContent = MC.fmtElapsed(hostNow() - x.started_ms);
 }
 // ---- navigation: drawer on phones, sidebar on wide screens ----
 const nav = $('nav'), navModal = { el: nav, close: () => closeNav() };
@@ -246,7 +245,7 @@ export function renderNav() {
   if (!navShown() || !S.state) return;
   const s = S.state, lay = MC.sessionLayout(s.sessions, query, frozen), searching = query.trim() !== '';
   if (nav.classList.contains('on') || navLook || nav.contains(document.activeElement)) frozen = lay.order;
-  const row = x => [x.id, x.title, x.workspace, x.current, x.live && x.status, x.started_ms, x.unseen, MC.relTime(Date.parse(x.updated_at), hostNow(), tz()), failed.has(x.id)];
+  const row = x => [x.id, x.title, x.workspace, x.current, x.live && x.status, x.unseen, MC.relTime(Date.parse(x.updated_at), hostNow(), tz()), failed.has(x.id)];
   listPart({
     groups: lay.groups.map(g => {
       const v = MC.groupRows(g.items, g.pinned != null || searching || moreWs.has(g.ws));
@@ -269,17 +268,16 @@ function renderList(l) {
     !g.closed && g.hidden > 0 && h('button', { class: 'gmore', 'data-k': 'x' + encodeURIComponent(g.ws) }, 'Show ' + g.hidden + ' more')]);
 }
 // `pinned` rows (Needs you, Running) name their folder; a workspace group's header already does.
-function sessionRow([id, title, ws, current, status, started, unseen, rel, bad], pinned) {
+function sessionRow([id, title, ws, current, status, unseen, rel, bad], pinned) {
   const shape = status === 'approval' ? h('span', { class: 'sst warn', title: 'Needs you' }, icon('hand', 'sm'))
     : status === 'running' || status === 'compacting' ? h('span', 'sst', spin('sm'))
     : bad ? h('span', { class: 'sst er', title: 'Last turn failed' }, icon('alert', 'sm'))
     : unseen ? h('span', { class: 'sst', title: 'New result' }, h('i', 'ndot')) : h('span', 'sst');
-  const what = status === 'approval' ? '' : status === 'running' ? (started ? h('span', { 'data-start': started }, MC.fmtElapsed(hostNow() - started)) : 'Running')
-    : status === 'compacting' ? 'Compacting' : bad ? h('span', 'er', 'Failed') : unseen ? 'New' : rel;
-  return h('div', 'srow' + (current ? ' cur' : '') + (pinned ? '' : ' one'), h('button', {
+  const what = pinned ? MC.basename(ws) : rel;
+  return h('div', 'srow' + (current ? ' cur' : ''), h('button', {
     class: 'sopen', 'data-k': 's' + id, 'aria-current': current ? 'page' : null,
     'aria-label': MC.titled(title) + ', ' + MC.basename(ws) + (status === 'approval' ? ', needs you' : status === 'running' ? ', running' : ''),
-  }, shape, rowText(MC.titled(title), pinned && MC.basename(ws)), h('span', 'sw', what), pendingRow === id && spin('sm')),
+  }, pendingRow === id ? h('span', 'sst', spin('sm')) : shape, rowText(MC.titled(title)), h('span', 'stime' + (pinned ? ' workspace' : ''), what)),
   h('button', { class: 'ib more', 'data-k': 'm' + id, 'aria-label': 'Actions for ' + MC.titled(title), 'aria-haspopup': 'dialog' }, icon('more')));
 }
 (() => {
@@ -293,7 +291,7 @@ wide.addEventListener('change', () => { if (wide.matches) closeNav(); layout(); 
 function sessionActions(id) {
   const x = S.state.sessions.find(y => y.id === id), current = x.current;
   sheet({
-    key: 'actions', cls: 'dialog', head: hid => h('h2', { id: hid }, MC.titled(x.title), h('span', 'sub2', MC.tilde(x.workspace))),
+    key: 'actions', cls: 'dialog', title: MC.titled(x.title), sub: MC.tilde(x.workspace),
     body: m => h('div', 'list',
       !current && menuRow(m, 'open', 'Open', () => openLive(id), { focus: true }),
       menuRow(m, 'edit', 'Rename', () => rename(id), { focus: current }),
@@ -342,7 +340,7 @@ function remove(id) {
 export function openSessionMenu() {
   const s = S.state.session;
   sheet({
-    key: 'menu', cls: 'dialog', head: hid => h('h2', { id: hid }, MC.titled(s.title), h('span', 'sub2', MC.tilde(s.workspace))),
+    key: 'menu', cls: 'dialog', title: MC.titled(s.title), sub: MC.tilde(s.workspace),
     body: m => h('div', 'list',
       menuRow(m, 'edit', 'Rename', () => rename(s.id)), menuRow(m, 'diff', 'Changes', openChanges), menuRow(m, 'gauge', 'Context', openContext),
       menuRow(m, 'layers', 'Compact now', () => compactNow()), menuRow(m, 'search', 'Find in session', () => actions.find()), menuRow(m, 'info', 'Session info', openInfo),
@@ -361,10 +359,10 @@ export function openInfo() {
       const kv = (k, v) => v && [h('dt', '', k), h('dd', '', v)];
       return [h('h3', 'stitle', MC.titled(x.title)),
         h('dl', 'kv', kv('Session', h('span', 'mono', x.id)), kv('Workspace', MC.tilde(x.workspace)), kv('Branch', x.branch), kv('Profile', x.profile), kv('Allowed for this session', x.allowed.join(', ')),
-          kv('Model', [x.model, x.reasoning].filter(Boolean).join(' · ')), kv('Updated', cat && MC.stamp(Date.parse(cat.updated_at), hostNow(), tz())),
+          kv('Model', [x.model, x.reasoning].filter(Boolean).join(' · ')), kv('Updated', cat && stampAt(Date.parse(cat.updated_at))),
           kv('Usage', (u.input || u.output) ? MC.fmtTok(u.input) + ' in · ' + MC.fmtTok(u.output) + ' out' + (u.cached ? ' · ' + MC.fmtTok(u.cached) + ' cached' : '') : ''),
           kv('Context', S.state.context_percent != null ? Math.round(S.state.context_percent) + '% used' : ''), kv('Also viewing', others.join(', '))),
-        h('div', 'sacts', h('button', { class: 'btn sm', onclick: e => copyText(x.id, e.currentTarget) }, icon('copy', 'xs'), 'Copy id'))];
+        h('div', 'sacts', copyButton(x.id, 'Copy id', { class: 'btn sm' }))];
     },
   });
 }

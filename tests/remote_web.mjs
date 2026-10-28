@@ -5,6 +5,11 @@ import vm from 'node:vm';
 import * as core from '../src/remote/web/core.js';
 
 const read = name => readFileSync(new URL(`../src/remote/web/${name}`, import.meta.url), 'utf8');
+
+test('session timestamps do not inherit settings switch layout', () => {
+  assert.match(read('sessions.js'), /h\('span', 'stime'/);
+  assert.doesNotMatch(read('app.css'), /\.sw\{[^}]*max-width/);
+});
 const MC = core;
 // Round-trip through JSON so values compare against plain objects.
 const plain = v => JSON.parse(JSON.stringify(v));
@@ -15,7 +20,7 @@ const state = {
   status: { label: 'Thinking', busy: true, started_ms: 1761300000000, interrupting: false, compacting: false, loading: false },
   usage: { input: 10, output: 2, cached: 1 }, context_percent: 41.5,
   interaction: { id: 'approval', kind: 'approval', tool: 'bash', detail: 'pwd', input: 'pwd', prompt: 'Allow?', options: ['Allow once', 'Deny', 'Allow bash this session'] },
-  queue: [{ kind: 'steer', text: 'now' }, { kind: 'follow', text: 'later' }], older: true,
+  queue: [{ kind: 'steer', text: 'now', sent: true }, { kind: 'follow', text: 'later', sent: false }], older: true,
   sessions: [{ id: 'ses_one', title: 'One', workspace: '/work', updated_at: '2026-01-01T00:00:00Z', current: true }],
   models: [{ id: 'model', reasoning: ['low', 'high'] }], profiles: ['coding'],
 };
@@ -80,7 +85,7 @@ test('every intent and filesystem request has the contract shape and a bounded u
     [I.answer('choice', 1), { kind: 'answer', interaction_id: 'choice', choice: 1 }],
     [I.answer('approval', 'deny', 'use the helper instead'), { kind: 'answer', interaction_id: 'approval', choice: 'deny', message: 'use the helper instead' }],
     [I.compact(), { kind: 'compact' }],
-    [I.unqueue(1, 'later'), { kind: 'unqueue', index: 1, text: 'later' }],
+    [I.unqueue(1, 'later', true), { kind: 'unqueue', index: 1, text: 'later', edit: true }],
     [I.loadOlder(), { kind: 'load_older' }],
     [I.openSession('ses_one'), { kind: 'open_session', session_id: 'ses_one' }],
     [I.newSession('/work', 'coding'), { kind: 'new_session', workspace: '/work', profile: 'coding' }],
@@ -150,23 +155,17 @@ test('at most four queries are in flight and results are matched to their id onc
   assert.equal(MC.errorText('Open another session first'), 'Open another session first');
 });
 
-test('a removed queue pill drops the text the host returns, an edited one refills the composer', () => {
+test('queue editing and deletion are explicit intents and never suppress other returned text', () => {
   const s = MC.createStore();
-  const drop = MC.unqueue(s, 0, 'later', true);
-  assert.deepEqual(plain(drop), { t: 'intent', id: drop.id, kind: 'unqueue', index: 0, text: 'later' });
-  assert.deepEqual(plain(MC.reduce(s, { t: 'returned', text: 'later' }, 0)), {});
-  assert.deepEqual(plain(MC.reduce(s, { t: 'ack', id: drop.id, ok: true }, 0)).ack.ok, true);
-  MC.unqueue(s, 0, 'edit me', false);
+  const del = MC.intent(s, MC.intents.unqueue(0, 'later', false));
+  assert.deepEqual(plain(del), { t: 'intent', id: del.id, kind: 'unqueue', index: 0, text: 'later', edit: false });
+  assert.equal(MC.reduce(s, { t: 'ack', id: del.id, ok: true }, 0).ack.ok, true);
+  assert.deepEqual(plain(MC.reduce(s, { t: 'returned', text: 'later' }, 0)), { returned: 'later' });
+  const edit = MC.intent(s, MC.intents.unqueue(1, 'edit me', true));
+  assert.equal(edit.edit, true);
   assert.deepEqual(plain(MC.reduce(s, { t: 'returned', text: 'edit me' }, 0)), { returned: 'edit me' });
-  // A refused removal keeps nothing armed: a later identical return refills the composer.
-  const stale = MC.unqueue(s, 3, 'gone', true);
-  MC.reduce(s, { t: 'ack', id: stale.id, ok: false, error: 'stale' }, 0);
-  assert.deepEqual(plain(MC.reduce(s, { t: 'returned', text: 'gone' }, 0)), { returned: 'gone' });
-  // Unqueue is not a send: a dropped connection never offers it again.
-  MC.unqueue(s, 0, 'x', true);
   MC.disconnect(s);
   assert.equal(MC.unconfirmed(s).length, 0);
-  assert.deepEqual(plain(MC.reduce(s, { t: 'returned', text: 'x' }, 0)), { returned: 'x' });
 });
 
 test('filesystem replies are matched to their request id once', () => {
@@ -480,6 +479,8 @@ test('the session list puts sessions that need you first, then running ones, the
   assert.deepEqual(plain(MC.sessionLayout([idle('a', { workspace: 'C:\\work\\app' }), idle('b', { workspace: 'D:\\' })], '').groups).map(x => x.label), ['app', 'D:']);
   assert.deepEqual(plain(MC.sessionLayout(sessions, 'ear').groups).map(x => x.items.map(y => y.id)), [['early']]);
   assert.deepEqual(plain(MC.sessionLayout(sessions, 'DOCS').groups).map(x => x.items.map(y => y.id)), [['mid', 'old']]);
+  // A blank search is no search: every group, in the same order.
+  assert.deepEqual(plain(MC.sessionLayout(sessions, '  ').groups), g);
   // Sessions from a server without live fields are only grouped by workspace.
   assert.deepEqual(plain(MC.sessionLayout(state.sessions, '').groups).map(x => x.label), ['work']);
 });
@@ -644,6 +645,8 @@ test('the slash list filters by name with prefix matches first and templates bef
   assert.equal(MC.slashMenu('/fix-tests src', commands), null);
   assert.equal(MC.slashMenu('hello /fix', commands), null);
   assert.equal(plain(MC.slashMenu('/', commands)).find(c => c.name === 'review').builtin, false);
+  // The + sheet offers the same commands: templates first, then the built-ins.
+  assert.deepEqual(MC.commandList(commands).map(c => [c.name, c.builtin]).slice(commands.length - 1, commands.length + 1), [[commands.at(-1).name, false], ['new', true]]);
 });
 
 test('a slash line is a built-in run here, a template sent as text, or refused as unknown', () => {
@@ -719,16 +722,30 @@ test('a finished turn folds tools and intermediate thinking before the final ans
   const bl = [ask('go'), said('', 'plan'), tool('a', 'bash'), said('checking'), tool('b', 'read', { state: 'failed' }), said(''), { type: 'user', kind: 'steering', text: 'also', at: 0 }, tool('c', 'edit'), said('Done.', 'final thought'), end('t1'),
     ask('next'), tool('d', 'bash'), said('working', '', true)];
   const f = plain(MC.foldTurns(bl, 0, bl.length));
-  assert.equal(f.length, 1);
-  assert.deepEqual(f[0], { key: 'ft1', at: 1, last: 7, hidden: [1, 2, 3, 4, 7], tools: 3, failed: 1, ms: 47000, added: 12, removed: 4 });
-  assert.equal(MC.foldText(f[0]), 'Worked 47.0 s');
+  assert.equal(f.length, 2);
+  assert.deepEqual(f[0], { key: 'ft1:1', at: 1, last: 4, hidden: [1, 2, 3, 4], tools: 2, failed: 1, ms: 0, added: null, removed: null });
+  assert.deepEqual(f[1], { key: 'ft1:7', at: 7, last: 7, hidden: [7], tools: 1, failed: 0, ms: 47000, added: null, removed: null });
+  assert.equal(MC.foldText(f[1]), 'Worked 47.0 s');
   // No answer after the last tool: everything up to the turn end folds.
   const noAnswer = plain(MC.foldTurns([ask('go'), said('first'), tool('a', 'bash'), end('t2', { changes: null })], 0, 4));
   assert.deepEqual(noAnswer[0].hidden, [1, 2]);
   assert.equal(noAnswer[0].added, null);
   // A turn of only an answer has nothing to fold; a window that starts mid-turn folds from its start.
   assert.deepEqual(plain(MC.foldTurns([ask('hi'), said('hello'), end('t3')], 0, 3)), []);
-  assert.deepEqual(plain(MC.foldTurns(bl, 3, 10))[0].hidden, [3, 4, 7]);
+  assert.deepEqual(plain(MC.foldTurns(bl, 3, 10))[0].hidden, [3, 4]);
+});
+
+test('worked segments preserve two steers, counts and timestamp boundaries', () => {
+  const steer = at => ({ type: 'user', kind: 'steering', text: 'change direction', at });
+  const bl = [ask('go'), tool('a', 'bash'), steer(10000), tool('b', 'bash', { state: 'failed' }), steer(30000), tool('c', 'bash'), said('answer'), end('seg')];
+  const folds = MC.foldTurns(bl, 0, bl.length);
+  assert.deepEqual(folds.map(f => [f.hidden, f.tools, f.failed, f.ms]), [[[1], 1, 0, 10000], [[3], 1, 1, 20000], [[5], 1, 0, 17000]]);
+  assert.equal(new Set(folds.map(f => f.key)).size, 3);
+  bl.splice(5, 1);
+  assert.deepEqual(MC.foldTurns(bl, 0, bl.length).map(f => f.hidden), [[1], [3]]);
+  bl[2].at = null;
+  assert.deepEqual(MC.foldTurns(bl, 0, bl.length).map(f => f.ms), [null, null]);
+  assert.equal(MC.foldTurns([ask('go'), tool('a', 'bash'), said('answer'), end('plain')], 0, 4)[0].ms, 47000);
 });
 
 test('consecutive reads and searches group into one row with a count', () => {
@@ -786,28 +803,6 @@ test('the context view reads the reply as a bar with markers and rows for the pa
   assert.deepEqual([bare.rows, bare.trigger, bare.failure, bare.compacting], [[], null, 'model refused', true]);
 });
 
-const step = (id, extra = {}) => ({ type: 'tool', call_id: id, name: 'bash', detail: 'cargo ' + id, input: null, input_lines: null, state: 'succeeded', exit_code: 0, duration_ms: 20, output: [], output_dropped: 0, output_lines: 0, truncated: false, ...extra });
-
-test('the progress panel lists the running turn\'s tool calls with their state and a totals line', () => {
-  const diff = '--- a/x\n+++ b/x\n@@ -1,1 +1,2 @@\n a\n+b\n';
-  const turn = [
-    { type: 'turn_end', loop_id: 'old', outcome: 'completed' }, step('before'),
-    { type: 'user', kind: 'prompt', text: 'go' },
-    step('build'), step('test', { state: 'failed', exit_code: 1 }), step('stop', { state: 'denied' }),
-    { type: 'assistant', loop_id: 'l', request: 1, reasoning: '', text: 'hmm', streaming: false },
-    step('x', { name: 'edit', detail: 'src/a.rs', input: diff }), step('y', { name: 'edit', detail: 'src/a.rs', input: diff }),
-    step('now', { state: 'running', exit_code: null }),
-  ];
-  const t = plain(MC.turnSteps(turn));
-  assert.deepEqual(t.steps.map(x => [x.i, x.state]), [[3, 'done'], [4, 'failed'], [5, 'stopped'], [7, 'done'], [8, 'done'], [9, 'run']]);
-  assert.deepEqual([t.steps[0].verb, t.steps[0].target, t.steps[5].verb], ['Ran', 'cargo build', 'Running']);
-  assert.equal(t.text, '6 tools · 1 failed · 1 file +2 −0');
-  // A steering message does not start a new turn; only the newest steps are listed.
-  const steered = [{ type: 'user', kind: 'prompt', text: 'a' }, step('a1'), { type: 'user', kind: 'steering', text: 'b' }, step('a2'), step('a3')];
-  assert.deepEqual(plain(MC.turnSteps(steered, 2)), { steps: [{ i: 3, verb: 'Ran', target: 'cargo a2', state: 'done' }, { i: 4, verb: 'Ran', target: 'cargo a3', state: 'done' }], earlier: 1, text: '3 tools' });
-  assert.deepEqual(plain(MC.turnSteps([{ type: 'user', kind: 'prompt', text: 'a' }])), { steps: [], earlier: 0, text: '' });
-});
-
 test('the composer says what typing does: idle, running with a keyboard, running on touch', () => {
   assert.equal(MC.placeholder(false, true, null), 'Message MiniCore · / for commands');
   assert.equal(MC.placeholder(false, false, null), 'Describe a task to start');
@@ -816,12 +811,10 @@ test('the composer says what typing does: idle, running with a keyboard, running
   assert.equal(MC.placeholder(true, true, false), 'Type to steer or queue a follow-up');
 });
 
-test('approvals name the tools allowed for the session, and busy sessions are the other live ones', () => {
+test('approvals name the tools allowed for the session', () => {
   assert.equal(MC.allowedText(['bash', 'edit']), 'Allowed for this session: bash, edit');
   assert.equal(MC.allowedText([]), 'Every tool asks first');
   assert.equal(MC.allowedText(undefined), 'Every tool asks first');
-  const others = [live('a', 'running'), live('b', 'approval'), live('c', 'idle'), live('d', 'running', { current: true }), idle('e')];
-  assert.deepEqual(MC.busyOthers(others).map(x => x.id), ['a', 'b']);
 });
 
 test('a failed turn shows the host\'s title, the provider identifiers, the hint and the message', () => {
@@ -912,19 +905,20 @@ test('a tap on the primary decides from the live text and ignores double taps on
   assert.equal(tap({ text: 'next' }, 10000, 30), null);
 });
 
-test('the queue shows follow-ups numbered in order, waiting steers, and the first three until expanded', () => {
-  const q = [{ kind: 'steer', text: 's' }, { kind: 'follow', text: 'a' }, { kind: 'follow', text: 'b' }, { kind: 'follow', text: 'c' }, { kind: 'follow', text: 'd' }];
+test('the tray preserves send order and sent flags with separate kind numbering and bounded expansion', () => {
+  const q = [{ kind: 'steer', text: 's', sent: true }, { kind: 'follow', text: 'a', sent: false }, { kind: 'follow', text: 'b', sent: false }, { kind: 'steer', text: 'waiting', sent: false }, { kind: 'follow', text: 'd', sent: false }];
   const v = plain(MC.queueView(q, false));
-  assert.deepEqual(v.items.map(x => [x.kind, x.index, x.n]), [['steer', 0, 0], ['follow', 1, 1], ['follow', 2, 2]]);
+  assert.deepEqual(v.items.map(x => [x.kind, x.index, x.n]), [['steer', 0, 1], ['follow', 1, 1], ['follow', 2, 2]]);
   assert.deepEqual([v.hidden, v.long], [2, true]);
   const all = plain(MC.queueView(q, true));
-  assert.deepEqual(all.items.map(x => x.n), [0, 1, 2, 3, 4]);
+  assert.deepEqual(all.items.map(x => x.n), [1, 1, 2, 2, 3]);
+  assert.deepEqual(all.items.map(x => x.sent), [true, false, false, false, false]);
+  assert.deepEqual(all.items.map(x => x.text), q.map(x => x.text));
   assert.deepEqual([all.hidden, all.long], [0, true]);
   assert.deepEqual(plain(MC.queueView(q.slice(0, 3), false)), { items: plain(MC.queueView(q.slice(0, 3), true)).items, hidden: 0, long: false });
   assert.deepEqual(plain(MC.queueView([], false)), { items: [], hidden: 0, long: false });
-  // A steer sent after a follow-up is still listed first and keeps its wire index.
-  const mixed = plain(MC.queueView([{ kind: 'follow', text: 'a' }, { kind: 'steer', text: 'b' }, { kind: 'follow', text: 'c' }], true));
-  assert.deepEqual(mixed.items.map(x => [x.kind, x.index, x.n]), [['steer', 1, 0], ['follow', 0, 1], ['follow', 2, 2]]);
+  const mixed = plain(MC.queueView([{ kind: 'follow', text: 'a', sent: false }, { kind: 'steer', text: 'b', sent: false }, { kind: 'follow', text: 'c', sent: false }], true));
+  assert.deepEqual(mixed.items.map(x => [x.kind, x.index, x.n]), [['follow', 0, 1], ['steer', 1, 1], ['follow', 2, 2]]);
 });
 
 test('the thinking preview is the newest sentence without Markdown markers', () => {

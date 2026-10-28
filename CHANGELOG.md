@@ -2,14 +2,40 @@
 
 ## Unreleased
 
-- Built-in backend: Agent 0.8.1 with Runtime 0.8.0, pinned by tag (0.8.0 before).
+- Web client: when the next approval replaces an open one, its sheet starts
+  fresh instead of keeping the deny form and reason typed for the previous one.
+- iPhone: tapping the composer no longer zooms the page in and leaves it
+  zoomed; the composer sits on the keyboard and returns to the bottom when the
+  keyboard closes, and a pinch zoom no longer resizes the app.
+- iPhone: the session drawer reaches under the status bar instead of leaving a
+  grey strip above it.
+- Queued messages dispatch in send order. Steers behind a follow-up wait until
+  that follow-up starts its turn. Unsent steers and follow-ups can be edited or
+  deleted in the web tray; `Alt+↑` takes all unsent messages back in the TUI.
+  Sent steers are marked and cannot be withdrawn. Refused steers keep their
+  place and wait for Agent progress or turn end before retrying. Applied steers
+  also keep their order in the transcript.
+
+- Confirming an IME candidate with Enter no longer submits the message when
+  Safari reports the key outside composition with key code 229.
+- Finished work folds separately between steering messages, preserving the
+  order of instructions and tool calls with per-segment counts and durations.
+- Settings switches use the full row width, with readable descriptions and
+  right-aligned controls on phones and desktops.
+
+- Built-in backend: Agent 0.8.2 with Runtime 0.8.0, pinned by tag (0.8.0 before).
   A failed turn now carries what the provider said: its HTTP status, error code
-  and type, and the full message.
-- Web client, a calmer turn: a progress capsule floats at the top of the
-  transcript while a turn runs (`Thinking 41s · bash cargo test…`) and opens
-  into the turn's steps, status with Stop, and other busy sessions; the status
-  row above the composer is gone. The composer toolbar gains an Approvals shield
-  (the tools allowed for the session) and the context share, and its
+  and type, and the full message. Automatic compaction is decided only before a
+  turn starts, from the context the provider last reported, so restarting no
+  longer compacts a session early; nothing is compacted automatically when a
+  turn ends.
+- Workspace-grouped session lists use denser single-line rows with more room
+  for titles; desktop row actions replace the time on hover or keyboard focus.
+- The composer uses a lighter, compact toolbar: transparent icon and context
+  buttons, smaller model text and primary button, with larger touch hit areas.
+- Web client: the status strip above the composer follows the running tool.
+  The composer toolbar gains an Approvals shield (the tools allowed for the
+  session) and the context share, and its
   placeholder says what typing does while a turn runs. Finished steps of the
   running turn recede while the running one stays bright. The session list
   groups sessions by workspace under Needs you and Running, with folding,
@@ -33,8 +59,8 @@
   the button. `Esc` stops the turn with one press. `Alt+Enter` (Option+Enter on
   macOS) queues a follow-up and `Enter`/`Cmd+Enter` steers, like the TUI;
   `Tab` is ordinary focus navigation. "Enter sends" now defaults to on for a
-  mouse and keyboard and off on touch devices. Queued follow-ups are numbered
-  and listed after pending steers. Collapsed thinking keeps its newest sentence
+  mouse and keyboard and off on touch devices. Queued messages share one row
+  style and keep their send order, with separate steer and follow-up numbering. Collapsed thinking keeps its newest sentence
   on a line under the header that moves up as the agent thinks. On desktop the
   transcript, composer and title share one centred column beside the sidebar,
   with side panels for changes and output, hover states and thin scrollbars.
