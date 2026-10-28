@@ -15,7 +15,7 @@ pub struct Remote {
     pub url: Option<String>,
     pub roots: Vec<PathBuf>,
     pub allow_insecure: bool,
-    /// Set when `tls = true`; the files parsed when the settings loaded.
+    /// Set when `tls = true`; the validated certificate and key paths.
     pub tls: Option<Tls>,
 }
 
@@ -72,10 +72,7 @@ fn drive_root(value: &str) -> Option<PathBuf> {
 
 impl RemoteSection {
     pub(super) fn build(&self, source: &Source) -> Result<Remote, ConfigError> {
-        let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
-            .filter(|value| !value.is_empty())
-            .map(PathBuf::from);
-        self.build_with_home(source, home)
+        self.build_with_home(source, super::home_dir())
     }
 
     fn build_with_home(
@@ -123,17 +120,22 @@ impl RemoteSection {
             }
             bind.push(address);
         }
-        let url = self.url.as_ref().map(|value| value.get_ref().clone());
-        if let Some(value) = &self.url {
-            let url = value.get_ref();
-            if !(url.starts_with("http://") || url.starts_with("https://")) || url.ends_with('/') {
-                return Err(error(
-                    "url",
-                    Some(value.span()),
-                    "must start with http:// or https:// and have no trailing /".into(),
-                ));
+        let url = match &self.url {
+            Some(value) => {
+                let url = value.get_ref();
+                if !(url.starts_with("http://") || url.starts_with("https://"))
+                    || url.ends_with('/')
+                {
+                    return Err(error(
+                        "url",
+                        Some(value.span()),
+                        "must start with http:// or https:// and have no trailing /".into(),
+                    ));
+                }
+                Some(url.clone())
             }
-        }
+            None => None,
+        };
         let roots_span = self.roots.as_ref().map(Spanned::span);
         let home = home.as_deref();
         let expanded = |key: &str, span: Option<std::ops::Range<usize>>, value: &str| {
@@ -147,16 +149,13 @@ impl RemoteSection {
         if roots.is_empty() {
             return Err(error("roots", roots_span, "must not be empty".into()));
         }
-        let paths = roots
+        let roots = roots
             .iter()
-            .map(|value| match drive_root(value).filter(|_| cfg!(windows)) {
-                Some(drive) => Ok(drive),
-                None => expanded("roots", roots_span.clone(), value),
-            })
-            .collect::<Result<Vec<_>, ConfigError>>()?;
-        let roots = paths
-            .into_iter()
-            .map(|path| {
+            .map(|value| {
+                let path = match drive_root(value).filter(|_| cfg!(windows)) {
+                    Some(drive) => drive,
+                    None => expanded("roots", roots_span.clone(), value)?,
+                };
                 let canonical = path.canonicalize().map_err(|cause| {
                     error(
                         "roots",

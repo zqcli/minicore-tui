@@ -6,10 +6,10 @@ use super::harness::*;
 use crate::app::Action;
 use crate::transcript::Block;
 
-fn automatic() -> serde_json::Value {
+fn compacted(operation_id: &str) -> serde_json::Value {
     json!({"session_id": "s1",
-           "last_result": {"origin": "automatic", "operation_id": "auto-lup_1",
-                           "status": "compacted", "before_tokens": 41000, "after_tokens": 12000},
+           "last_result": {"operation_id": operation_id, "status": "compacted",
+                           "before_tokens": 41000, "after_tokens": 12000},
            "budget": {"estimated_history_tokens": 12000}})
 }
 
@@ -18,7 +18,7 @@ async fn a_manual_compaction_adds_one_marker_and_keeps_what_is_loaded() {
     let mut h = Harness::opened(page(1, 0, vec![user(0, "l0", "loaded")])).await;
     h.fake.script(
         "session.compact",
-        json!({"origin": "manual", "operation_id": "tui-1", "status": "compacted",
+        json!({"operation_id": "tui-1", "status": "compacted",
                "before_tokens": 32200, "after_tokens": 2700, "covered_loop_count": 3,
                "covered_item_count": 12, "retained_item_count": 2}),
     );
@@ -35,7 +35,7 @@ async fn a_manual_compaction_adds_one_marker_and_keeps_what_is_loaded() {
 
     h.fake.script(
         "session.compact",
-        json!({"origin": "manual", "operation_id": "tui-2", "status": "noop"}),
+        json!({"operation_id": "tui-2", "status": "noop"}),
     );
     h.action(Action::Compact);
     h.settle().await;
@@ -45,25 +45,19 @@ async fn a_manual_compaction_adds_one_marker_and_keeps_what_is_loaded() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn an_automatic_compaction_is_reported_once_after_the_turn() {
+async fn a_manual_compaction_the_context_reports_again_adds_no_second_marker() {
     let mut h = Harness::opened(display_read(0, 0)).await;
-    h.fake.script("turn.send", json!({"turn": turn("l1")}));
-    h.fake.script("turn.wait", waited("l1", completed()));
-    h.fake.script("session.context", automatic());
-    h.submit("compact me");
-    h.settle().await;
-    assert_eq!(h.compactions(), ["auto-lup_1"]);
-
-    h.context(automatic());
     h.fake.script(
         "session.compact",
-        json!({"origin": "manual", "operation_id": "tui-1", "status": "compacted",
-               "before_tokens": 12000, "after_tokens": 4000}),
+        json!({"operation_id": "tui-1", "status": "compacted",
+               "before_tokens": 41000, "after_tokens": 12000}),
     );
     h.action(Action::Compact);
     h.settle().await;
-    h.context(automatic());
-    assert_eq!(h.compactions(), ["auto-lup_1", "tui-1"]);
+    assert_eq!(h.compactions(), ["tui-1"]);
+
+    h.context(compacted("tui-1"));
+    assert_eq!(h.compactions(), ["tui-1"]);
 }
 
 #[tokio::test(start_paused = true)]
@@ -95,7 +89,7 @@ async fn a_replayed_summary_gets_the_counts_of_the_context_ledger() {
 async fn an_idle_state_with_a_compaction_still_shows_it() {
     let mut h = Harness::opened(display_read(0, 0)).await;
     h.state(json!({"session_id": "s1", "status": "idle",
-                   "compaction": {"operation_id": "auto-l1", "phase": "merging",
+                   "compaction": {"operation_id": "tui-1", "phase": "merging",
                                   "covered_item_count": 8, "retained_item_count": 2}}));
     assert_eq!(h.app.status_label(), Some("Compacting context"));
     h.state(json!({"session_id": "s1", "status": "idle"}));
@@ -108,7 +102,7 @@ fn presentation(percent: f64) -> serde_json::Value {
 }
 
 fn footer_percent(h: &Harness) -> Option<f64> {
-    crate::ui::views::context::percent(h.app.session.as_ref().expect("a session"))
+    crate::app::session::context_percent(h.app.session.as_ref().expect("a session"))
 }
 
 #[tokio::test(start_paused = true)]
@@ -175,7 +169,7 @@ async fn the_end_of_a_compaction_refreshes_the_footer_context_inside_the_window(
     let mut h = Harness::opened(display_read(0, 0)).await;
     h.settle().await;
     let state = |compaction: serde_json::Value| json!({"state": {"session_id": "s1", "status": "idle", "compaction": compaction}});
-    let working = json!({"operation_id": "auto-l1", "phase": "merging",
+    let working = json!({"operation_id": "tui-1", "phase": "merging",
                          "covered_item_count": 8, "retained_item_count": 2});
     h.emit("session_state", state(working)).await;
     h.run_for(Duration::from_millis(100)).await;
@@ -208,7 +202,7 @@ fn automatic_context(current: serde_json::Value, last: serde_json::Value) -> ser
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_compaction_between_requests_shows_its_phase_and_leaves_a_marker() {
+async fn a_compaction_at_turn_start_shows_its_phase_and_leaves_a_marker() {
     let mut h = Harness::opened(display_read(0, 0)).await;
     h.fake.script("turn.send", json!({"turn": turn("l1")}));
     h.fake.script_held("turn.wait", waited("l1", completed()));
@@ -262,10 +256,11 @@ async fn an_earlier_automatic_compaction_is_not_added_when_the_session_opens() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn the_end_of_a_post_turn_compaction_adds_its_marker_and_the_status_names_the_phase() {
+async fn a_compaction_seen_through_session_state_shows_its_phase_and_leaves_a_marker_when_it_ends()
+{
     let mut h = Harness::opened(display_read(0, 0)).await;
     let state = |compaction: serde_json::Value| json!({"state": {"session_id": "s1", "status": "idle", "compaction": compaction}});
-    let working = json!({"operation_id": "auto-l1", "phase": "merging",
+    let working = json!({"operation_id": "tui-1", "phase": "merging",
                          "covered_item_count": 8, "retained_item_count": 2});
     h.emit("session_state", state(working)).await;
     h.until(|app| app.compacting()).await;
@@ -275,12 +270,12 @@ async fn the_end_of_a_post_turn_compaction_adds_its_marker_and_the_status_names_
         "{screen}"
     );
 
-    h.fake.script("session.context", automatic());
+    h.fake.script("session.context", compacted("tui-1"));
     h.emit("session_state", state(serde_json::Value::Null))
         .await;
     h.until(|app| !app.compacting()).await;
     h.settle().await;
-    assert_eq!(h.compactions(), ["auto-lup_1"]);
+    assert_eq!(h.compactions(), ["tui-1"]);
 }
 
 #[tokio::test(start_paused = true)]
@@ -291,7 +286,7 @@ async fn esc_cancels_the_compaction_that_owns_the_session() {
     h.emit(
         "session_state",
         json!({"state": {"session_id": "s1", "status": "idle",
-                         "compaction": {"operation_id": "auto-l1", "phase": "summarizing",
+                         "compaction": {"operation_id": "tui-1", "phase": "summarizing",
                                         "covered_item_count": 8, "retained_item_count": 2}}}),
     )
     .await;
@@ -301,19 +296,22 @@ async fn esc_cancels_the_compaction_that_owns_the_session() {
     h.settle().await;
     assert_eq!(
         h.calls("session.compact.cancel"),
-        [json!({"session_id": "s1", "operation_id": "auto-l1"})]
+        [json!({"session_id": "s1", "operation_id": "tui-1"})]
     );
     assert_eq!(h.app.composer.text(), "a draft", "esc did one thing");
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_failed_automatic_compaction_is_reported_once() {
+async fn a_failed_automatic_compaction_is_reported_once_and_a_cancelled_one_not_at_all() {
     let mut h = Harness::opened(display_read(0, 0)).await;
-    let failed = json!({"session_id": "s1",
-        "last_result": {"origin": "automatic", "operation_id": "auto-l1",
-                        "status": "failed", "failure_kind": "model_failure"}});
+    let failed = automatic_context(
+        json!(null),
+        json!({"operation_id": "auto-boundary-l1-1", "outcome": "model_failure"}),
+    );
     h.context(failed.clone());
     h.context(failed);
+    let cancelled = json!({"operation_id": "auto-boundary-l2-1", "outcome": "cancelled"});
+    h.context(automatic_context(json!(null), cancelled));
     assert_eq!(h.notices(), ["Automatic compaction failed: model_failure"]);
 }
 
@@ -322,7 +320,7 @@ async fn a_cancelled_manual_compaction_says_so() {
     let mut h = Harness::opened(display_read(0, 0)).await;
     h.fake.script_held(
         "session.compact",
-        json!({"origin": "manual", "operation_id": "tui-1", "status": "failed",
+        json!({"operation_id": "tui-1", "status": "failed",
                "failure_kind": "cancelled"}),
     );
     h.fake

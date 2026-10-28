@@ -56,7 +56,11 @@ async fn the_first_submit_creates_the_session_with_the_draft_settings_then_sends
     assert_eq!(create[0]["model"], "mock");
     assert_eq!(create[0]["reasoning"], "high");
     assert_eq!(create[0]["workspace"], json!(workspace));
-    assert_eq!(h.app.workspace, std::path::PathBuf::from("/tmp/ws"));
+    assert_eq!(
+        h.app.workspace,
+        std::path::PathBuf::from(session_info("s1")["workspace"].as_str().unwrap()),
+        "the workspace follows the session"
+    );
     assert_eq!(h.sends(), ["fix the greeting"]);
     assert_eq!(h.texts(), ["fix the greeting"]);
     assert!(h.sent_at("fix the greeting").is_some());

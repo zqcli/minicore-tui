@@ -19,7 +19,7 @@ const SCALE: [Reasoning; 6] = [
 pub(super) const NO_SESSION: &str = "No session yet: send a message first";
 
 impl LaunchSettings {
-    pub fn profile<'a>(
+    fn profile<'a>(
         &self,
         profiles: &'a [ProfileInfo],
         default: Option<&str>,

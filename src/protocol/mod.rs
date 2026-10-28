@@ -492,13 +492,6 @@ pub struct SessionState {
     pub compaction: Option<CompactionProgress>,
 }
 
-impl SessionState {
-    /// A session accepts a new turn only when it is idle and not compacting.
-    pub fn accepts_turn(&self) -> bool {
-        self.status == SessionStatus::Idle && self.compaction.is_none()
-    }
-}
-
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct LoopState {
     pub loop_id: String,
@@ -578,7 +571,7 @@ pub struct SessionContext {
     pub last_prepare_failure: Option<String>,
 }
 
-/// The latest automatic compactions between requests, which have no event.
+/// The latest compactions at the start of a turn, which have no event.
 #[derive(Clone, Debug, Deserialize)]
 pub struct AutomaticView {
     pub current: Option<AutomaticObservation>,
@@ -621,7 +614,6 @@ pub enum CompactStatus {
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct CompactionResult {
-    pub origin: Option<String>,
     pub operation_id: String,
     pub status: CompactStatus,
     pub before_tokens: Option<u64>,
@@ -848,7 +840,6 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(state.status, SessionStatus::Unknown);
-        assert!(!state.accepts_turn());
     }
 
     #[test]

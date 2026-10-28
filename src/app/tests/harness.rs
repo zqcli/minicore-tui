@@ -235,6 +235,12 @@ impl Harness {
             .collect()
     }
 
+    /// The bells in the terminal bytes now, not counting a title sequence's terminator.
+    pub fn bells(&mut self) -> usize {
+        let bytes = self.app.terminal_bytes();
+        bytes.matches('\x07').count() - bytes.matches("\x1b]0;").count()
+    }
+
     pub fn is_busy(&self) -> bool {
         self.app.is_busy()
     }
@@ -294,6 +300,11 @@ impl Harness {
             .collect::<Vec<_>>()
             .join("\n")
     }
+}
+
+/// Waits out the delay before an approval prompt takes answer keys.
+pub async fn arm_prompt() {
+    tokio::time::advance(crate::app::session::ARM_AFTER).await;
 }
 
 /// A display `session.read` page holding `items`.

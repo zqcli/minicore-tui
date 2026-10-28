@@ -334,7 +334,7 @@ Server answers, in order:
 
 ```json
 {"t":"authorized","token":"<base64url>"}                  // only after a login
-{"t":"welcome","v":2,"version":"0.7.3","device":"iPhone Safari","now_ms":1761300003000}
+{"t":"welcome","v":2,"version":"0.7.6","device":"iPhone Safari","now_ms":1761300003000}
 {"t":"snapshot","state":{...},"blocks":[...]}
 ```
 
@@ -477,8 +477,7 @@ replies by id. Agent errors are passed on as their message.
 {"tokens":31200|null,"window":64000|null,"percent":78.0|null,"budget":40000|null,
  "history_tokens":370|null,"trigger_tokens":32000|null,"target_tokens":16000|null,
  "compacting":false,"coverage":{"turns":6,"items":12,"kept":3}|null,
- "last_compaction":{"origin":"automatic"|"manual"|null,
-                    "status":"compacted"|"noop"|"failed"|"unknown_write"|"unknown",
+ "last_compaction":{"status":"compacted"|"noop"|"failed"|"unknown_write"|"unknown",
                     "before":4200|null,"after":900|null}|null,
  "failure":"context_uncompressible"|null}
 // changes: one row per path in list order; branch = state.session.branch;
@@ -635,7 +634,10 @@ uses the routing above; local background notices keep their label prefix.
   steers unsent in place. Editing returns text only to the requesting device,
   unlike asynchronous refused-send routing below.
 - `older`: an older page can be loaded. `sessions`: the catalog filtered to
-  workspaces under `roots`, newest first, at most 50. `context_percent` is the
+  workspaces under `roots`, newest first, at most 50. `updated_at` is the last
+  activity: the Agent's stamp, advanced locally to the end of every turn that
+  finishes in a live session (foreground or background) until the Agent's next
+  report of that session replaces it. `context_percent` is the
   footer's figure, never an estimate. The pure calculation lives in
   `app::session::context_percent` and `ui::views::context` re-exports it as
   `percent`, so the projection does not depend on `ui`.

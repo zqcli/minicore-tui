@@ -120,7 +120,7 @@ history is `history.jsonl` in the TUI directory.
 
 ```text
 
- minicore-tui v0.7.3                                  (welcome header)
+ minicore-tui v0.7.6                                  (welcome header)
 
  esc interrupt · ctrl+c clear · / commands · @ files · ctrl+o expand · ctrl+r sessions
 
@@ -262,8 +262,6 @@ The complete map is [docs/keybindings.md](docs/keybindings.md). The essentials:
 - **Fatal screen:** the Agent exited, sent an unreadable frame or lacks a
   required capability. The screen shows the reason and the last 20 lines of the
   Agent's stderr; `q` or `Esc` quits.
-- **Waiting for compaction:** a compaction after the last turn is still running;
-  your message is queued and sent when it finishes.
 - **Older history does not load:** the history changed while it was read. The
   read is retried once on its own; scroll up again if a notice says so.
 

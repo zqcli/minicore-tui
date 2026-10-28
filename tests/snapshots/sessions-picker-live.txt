@@ -1,12 +1,11 @@
 
-  minicore-tui v0.7.3
+  minicore-tui v0.7.6
 
   esc interrupt · ctrl+c clear · / commands · @ files · ctrl+o expand
   ctrl+r sessions
 
-
  ───────────────────────────────────────────────────────────────────────────────
- Resume Session                                                       5 sessions
+ Resume Session                                                       6 sessions
  enter open · ctrl+n rename · ctrl+d delete · esc close
 
  >
@@ -15,6 +14,7 @@
    Port the lexer                                                     running 0m
    Clean the build                                                needs approval
    Write the docs                                                            new
+   Fix the flaky test                                                     failed
    An old session
  ───────────────────────────────────────────────────────────────────────────────
  ▸ minicore-tui · gpt 6 luna · max · 1 running · 1 needs approval

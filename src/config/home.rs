@@ -1,6 +1,13 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
+/// The user's home directory, when the platform's variable names one.
+pub fn home_dir() -> Option<PathBuf> {
+    std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+}
+
 /// The TUI directory: settings, prompts, sessions and history all live here.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Home(pub(super) PathBuf);
@@ -19,7 +26,9 @@ impl Home {
     }
 
     fn pick(flag: Option<&Path>, env: Option<&Path>, exe: &Path) -> io::Result<Self> {
-        let dir = flag.or(env).unwrap_or_else(|| exe.parent().unwrap_or(exe));
+        let dir = flag
+            .or(env)
+            .unwrap_or_else(|| exe.parent().expect("an executable has a directory"));
         std::path::absolute(dir).map(Self)
     }
 

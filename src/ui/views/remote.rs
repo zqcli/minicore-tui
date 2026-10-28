@@ -54,7 +54,11 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App, styles: Styles) {
         listening.push("TLS".into());
     }
     let mut connect = vec![
-        ("Address", remote.url().unwrap_or_default().to_owned(), text),
+        (
+            "Address",
+            remote.url().expect("remote is on").to_owned(),
+            text,
+        ),
         ("Listening", listening.join(" · "), text),
         ("Password", remote.password().unwrap_or_default(), text),
     ];
@@ -152,7 +156,7 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App, styles: Styles) {
     hints.push(("/remote password", "new password"));
     // Whole hints give way from the end rather than being cut mid-word.
     let mut spans = super::key_hints(&hints, styles);
-    while hints.len() > 1 && spans_width(&spans) > width.saturating_sub(INDENT) {
+    while hints.len() > 1 && status::spans_width(&spans) > width.saturating_sub(INDENT) {
         hints.pop();
         spans = super::key_hints(&hints, styles);
     }
@@ -251,10 +255,6 @@ fn activity(app: &App) -> String {
         Some((outcome, None)) => format!("Idle · last turn {outcome}"),
         None => "Idle".to_owned(),
     }
-}
-
-fn spans_width(spans: &[Span]) -> usize {
-    spans.iter().map(|span| wrap::width(&span.content)).sum()
 }
 
 /// Whole seconds of a running turn: `4s`, `3m07s`.

@@ -102,22 +102,45 @@ re-renders on every `state`).
   Delete). The rename pencil goes away.
 - **Drawer** (phone) / **persistent sidebar** (≥ 900 px): header (logo, host,
   ⚙ settings), New session, search, then groups **Needs you** (approval or
-  question), **Running**, then one group per workspace (folder icon, the
-  folder's name, the full path in its tooltip), the group with the newest
+  question), **Pinned**, **Running**, then one group per workspace (folder icon,
+  the folder's name, the full path in its tooltip), the group with the newest
   session first and each group's sessions newest first with the relative time
-  on the right. A group folds with its header (remembered per workspace path
-  in `localStorage`), shows five rows and then "Show N more", and a search
-  shows every match in every group with a match. Status by shape and colour:
+  on the right. Every session is in exactly one group, in that order of
+  precedence: a pinned session that needs you is listed under Needs you only.
+  A session's time is its last activity (`updated_at`, which the host advances
+  when a turn ends), so a session that just ran tops its workspace group and
+  that group leads. A group folds with its header (remembered per workspace
+  path in `localStorage`, Pinned under its own key), shows five rows and then
+  "Show N more", and a search shows every match in every group with a match,
+  Pinned included. Status by shape and colour:
   amber hand = needs you, spinner = running, red ! = failed last
-  turn, dot = new result. Rows are single-line, 36 px on hover devices and
+  turn, blue dot = new result, green dot = recent (below). Rows are single-line, 36 px on hover devices and
   44 px on touch, with 14/15 px titles and a 16 px status column. Workspace
   headers are 32 px tall. Hover or keyboard focus replaces the relative time
   with the actions button in the same slot; touch keeps a compact actions
   button visible. Pinned rows omit workspace subtitles rather than taking
   another line. The order never changes while the drawer is open
-  (rows update in place); it re-sorts when reopened. ⌘/Ctrl+Shift+F focuses
+  (rows update in place); it re-sorts when reopened, except that pinning or
+  unpinning moves the row at once, and a session that starts waiting on the
+  user moves to the top of Needs you (which never folds), so a folded Pinned
+  or workspace group cannot hide it; it stays there until the list re-sorts. ⌘/Ctrl+Shift+F focuses
   the search (a hint shows on hover devices; ⌘/Ctrl+K stays the command list).
   Footer is one line: connection dot + device name, other devices count.
+- **Pins**: "Pin to top" or "Unpin" in a row's ⋯ menu and in the session menu
+  puts a session in **Pinned** (pin icon, a count when folded, newest pin first,
+  each row with its own status icon and its folder in the tooltip) and takes it
+  out of Running and its workspace group. The pins are an ordered list of ids in
+  `localStorage` (`minicore.pins`): no host or protocol change, and each device
+  keeps its own working set. A pin whose session left the catalog is dropped when
+  the state arrives, unless the catalog holds the host's cap of 50 and may hide
+  it. The TUI's session picker has no pins.
+- **Recent mark**: a session that is resident in the TUI, idle and whose last
+  turn ended less than 30 minutes ago, outside Needs you, Pinned and the open
+  session, shows a green dot in the status column (below unseen's blue dot, red
+  failed and the spinner) and a stronger time; its row label and the dot's
+  tooltip say "finished 3m ago". It is worked out when the list renders from the
+  host clock, with no timer, so it lapses at the next state message after the
+  half hour.
 - **Settings** (full-screen sheet): Appearance (System/Light/Dark), text size
   (4 steps), wrap code by default, show thinking expanded, Enter sends (for
   hardware keyboards; on by default for a fine pointer with hover, off on touch,
@@ -257,11 +280,43 @@ re-renders on every `state`).
   when off.
 - **Code blocks**: language label, Copy, Wrap; tables scroll with an edge
   shadow; nothing clips without a hint.
-- **Scroll**: auto-follow only near the bottom; otherwise a "↓ New output" pill
-  above the composer. Older history keeps the existing paging, with one
-  consistent "Load earlier" control; the mounted window is capped at both ends.
+- **Scroll**: auto-follow only near the bottom. One control, `#jump`, centred
+  above the dock, leads back to the latest content (End does the same when focus
+  is not in a text field):
+
+  | State | Shows when | Face |
+  |---|---|---|
+  | hidden | the reader is within 80 px of the bottom with every newer block mounted, and has not scrolled up by more than min(screen height, 200 px) since | — |
+  | at rest | the reader is more than min(screen height, 200 px) above the bottom, or newer blocks are unmounted | 36 px round ↓ button, `aria-label` "Jump to latest" |
+  | new output | output arrived since the reader left the bottom | the "↓ New output" pill |
+
+  Showing needs that distance and hiding needs the bottom, so a view settling
+  near one line does not flicker; the control is touched only when its state
+  changes, never per scroll event. A click jumps at once (remounting newer blocks
+  that were unmounted) and hides it. Older history keeps the existing paging,
+  with one consistent "Load earlier" control; the mounted window is capped at
+  both ends.
 - **Search in session** (⋯ → Find, or Cmd/Ctrl+F): highlights matches in loaded
   blocks, next/previous.
+
+### Conversation spacing
+
+Three gaps, set once as custom properties of `:root` and applied between
+neighbouring blocks (`#blocks > .b`). They are margins that collapse (the larger
+one wins), so a hidden block, such as a folded step or an empty assistant
+block, never changes the gap between the blocks around it.
+
+| Level | Property | Value | Between |
+|---|---|---|---|
+| Step group | `--gap-tight` | 2 px (0 inside a Worked row's own block) | consecutive tool rows; a thinking-only row and the tool rows next to it; a Worked row and its first child, and the last child and "Hide" |
+| Kinds in one turn | `--gap-step` | 12 px | assistant text and tools either way; a Worked row or tool and the answer; a steer bubble and the next step; thinking and the text under it; the answer and the turn end line; "Load earlier" and the first block |
+| Turns | `--gap-turn` | 24 px | the turn end line and the next prompt; a prompt (not a steer) and the first response |
+
+Step rows (`--row`) are 36 px on touch and 32 px with a hover pointer, which
+is also the thinking row's height; touch keeps the full 36 px hit area. A user
+bubble's time row (28 px, 36 px hit area) belongs to the bubble, so the turn gap
+counts from below it. Expanded tool output keeps 8 px under its box, which
+collapses with the next gap.
 
 ### Approvals and questions
 
@@ -329,7 +384,8 @@ host arrives without TUI key hints.
 - Contrast: all text ≥ 4.5:1 (fix `--tx3` in both themes, success text, accent
   on tinted backgrounds).
 - Touch targets are at least 44 × 44 px outside the compact composer toolbar,
-  whose controls keep at least 40 × 40 px hit areas.
+  whose controls keep at least 40 × 40 px hit areas, and the transcript's step
+  rows, which keep 36 px.
 - Motion: 120–180 ms for small state changes, 220–280 ms for sheets and the
   drawer, `cubic-bezier(.2,.8,.2,1)`; no per-token animation;
   `prefers-reduced-motion` turns shimmer and slides into fades.
@@ -355,7 +411,8 @@ the buttons' labels and thin themed scrollbars; tables wider than the column
 scroll instead of breaking words. Shortcuts:
 Esc close the top sheet or menu, else stop the turn, Cmd/Ctrl+K command list,
 Cmd/Ctrl+Enter send or steer (Enter does when the setting is on; Alt+Enter queues),
-Cmd/Ctrl+F find, Cmd/Ctrl+Shift+F search sessions, Alt+↑/↓ previous/next session, `?` shortcut help.
+Cmd/Ctrl+F find, Cmd/Ctrl+Shift+F search sessions, Alt+↑/↓ previous/next session, End jump to the
+latest message (outside text fields), `?` shortcut help.
 
 ## Code layout
 

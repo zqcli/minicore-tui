@@ -43,7 +43,7 @@ impl App {
                     .background
                     .iter()
                     .any(|session| session.interaction.is_some()),
-            busy_for: self.busy_elapsed(),
+            busy: self.busy_elapsed().is_some(),
             ring: std::mem::take(&mut self.ring),
         };
         self.notifier.update(&snapshot)

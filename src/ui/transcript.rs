@@ -108,7 +108,7 @@ impl RenderState {
 
 /// `path` with the home directory written `~`.
 pub fn home_relative(path: &Path) -> PathBuf {
-    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let home = crate::config::home_dir();
     match home
         .as_deref()
         .and_then(|home| path.strip_prefix(home).ok())

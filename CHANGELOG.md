@@ -2,6 +2,47 @@
 
 ## Unreleased
 
+- On Windows the welcome header and the remote status screen write the home folder
+  as `~`, as on other systems.
+- The sessions picker marks a background session whose last turn failed and that
+  you have not opened since as `failed` (in the failure colour) instead of `new`.
+- An approval or choice prompt takes its answer keys (`y`, `a`, `n`, `Enter`) only
+  after half a second, and any other key pressed meanwhile restarts the wait, so
+  text you were typing when it appeared cannot answer it. `Esc` and `↑` / `↓` act
+  at once.
+- While an approval waits, `PageUp`, `PageDown`, `Ctrl+↑` / `Ctrl+↓`, `End`,
+  `Ctrl+O` and `Ctrl+T` still scroll and fold the transcript.
+- A provider's error code or type can no longer reorder or restyle the failed
+  turn's line in the transcript.
+- With `--agent-config`, an empty `config.toml` is an error again instead of being
+  ignored; a missing one still means defaults.
+- The sessions picker finds an untitled background session by a word of its first
+  prompt and Ctrl+D names it that way, and the filter also matches the
+  workspace folder name.
+- The bell no longer rings when you leave a session whose turn is still running,
+  and it rings for a long turn's approval even while another session waits for
+  one.
+- Web client: pin sessions to the top of the session list (a collapsible Pinned
+  group, "Pin to top" in a session's ⋯ menu; pins stay on the device), and
+  sessions that finished a turn in the last 30 minutes get a green dot and a
+  stronger time. A session that just ran now leads its workspace group. The
+  open list holds its order, except that a session that starts waiting for
+  approval moves to Needs you at once, so a folded group never hides it.
+- A session's time in the session picker and on the phone is its last activity:
+  it advances when a turn finishes, in the foreground or the background, instead
+  of staying at the time the session was opened.
+- Web client: the conversation is denser and follows one rhythm. Tool and
+  thinking rows are 32 px (36 px on touch) with 2 px between them, 12 px
+  separates text, tools and steering inside a turn, and 24 px separates turns.
+- Web client: a round ↓ button above the composer jumps to the latest message
+  whenever you are scrolled well above the bottom, and becomes the "New output"
+  pill when output arrived meanwhile. `End` does the same outside text fields.
+- A message is never held back by a compaction that follows the previous turn: the
+  Agent compacts only before a turn starts, so the "Waiting for compaction"
+  state is gone and a refused message returns to the composer.
+- The context view and the phone's context sheet list the last compaction without
+  an "(automatic)" or "(manual)" origin, and the turn-start one reads "Last
+  automatic compaction"; a turn-start compaction that failed is reported once.
 - Web client: when the next approval replaces an open one, its sheet starts
   fresh instead of keeping the deny form and reason typed for the previous one.
 - iPhone: tapping the composer no longer zooms the page in and leaves it

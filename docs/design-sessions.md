@@ -50,8 +50,6 @@ pub struct App {
   - `unseen: bool`: a turn ended (or failed) while it was in the background;
     cleared when it comes to the foreground or any phone opens it; a turn end
     in a session viewed by a phone does not mark it unseen.
-  - `waiting_for_compaction`: a send refused while post-turn compaction owned
-    the session (formerly on `App`); it counts as `compacting`.
 - Each `Session` keeps the transcript-view state it needs when it returns:
   `scroll: Scroll` (the foreground's `App::scroll` is saved into it on leave and
   restored on return). The layout cache is cleared on every switch, as today.

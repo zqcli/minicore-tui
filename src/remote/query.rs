@@ -126,8 +126,7 @@ fn context_data(context: &SessionContext, usage: Option<&ContextUsage>) -> Value
         "compacting": context.current_operation.is_some(),
         "coverage": context.coverage.as_ref().map(|coverage| json!({"turns": coverage.covered_loop_count,
             "items": coverage.covered_item_count, "kept": coverage.retained_item_count})),
-        "last_compaction": context.last_result.as_ref().map(|last| json!({"origin": last.origin,
-            "status": last.status, "before": last.before_tokens, "after": last.after_tokens})),
+        "last_compaction": context.last_result.as_ref().map(|last| json!({"status": last.status, "before": last.before_tokens, "after": last.after_tokens})),
         "failure": context.last_prepare_failure,
     })
 }

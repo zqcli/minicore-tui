@@ -94,7 +94,9 @@ back in the editor with the error. While the session is being created another
 `Enter` leaves its text in the editor. `/model`, `/reasoning`, `Ctrl+L`,
 `Ctrl+P` and `Shift+Tab` choose the settings of that session and confirm with a
 notice, and `/new <profile>` chooses its profile. `Ctrl+R` opens a stored
-session.
+session; the picker lists live sessions first and shows each one's time since
+its last activity (a finished turn counts). It has no pins; those are in the web
+client.
 
 Leaving a session (`/new`, or opening another) does not stop it: its turn,
 queued follow-ups and approvals carry on in the background, and its draft stays
@@ -157,7 +159,7 @@ counter.
 | Sheet | Keys |
 |---|---|
 | Command list | The text after `/` stays in the composer and filters the commands fuzzily, best match first. `Enter` runs the highlighted command with the argument typed after its name; `Tab` completes `/name ` without running. After `/model `, `/new `, `/reasoning ` or `/theme ` the list offers that command's arguments (model ids, profiles, levels) and `Enter` runs the command with the highlighted one. Prompt templates are listed with their description. `Esc` closes the list and leaves the draft as it is; deleting the `/` closes it too. |
-| Sessions | Type to filter by title. `Enter` opens the session. `Ctrl+N` renames the selected one (`Enter` saves, `Esc` cancels; an empty title clears it). `Ctrl+D` twice deletes the selected one; the open session cannot be deleted. Sessions of this workspace come first, newest first. Each row ends with its last activity; the open one says `current`, one from another workspace names it, and a title shared with another row adds the short id. |
+| Sessions | Type to filter by title (an untitled session by its first prompt) or workspace folder. `Enter` opens the session. `Ctrl+N` renames the selected one (`Enter` saves, `Esc` cancels; an empty title clears it). `Ctrl+D` twice deletes the selected one; the open session cannot be deleted. Sessions of this workspace come first, newest first. Each row ends with its last activity; the open one says `current`, one from another workspace names it, and a title shared with another row adds the short id. |
 | Session (`/session`) | Id, title, workspace, profile, model, history items, token totals and the tools allowed for the session (when there are any). `Enter` or `c` copies the id. |
 | Context (`/context`) | Show context usage. `r` re-reads the report (it also reads on open); `c` copies it; `Esc` closes. |
 | Model | Type to filter by id. `Enter` switches to the highlighted model; the current one is marked `✓`. |
@@ -168,6 +170,11 @@ counter.
 ## Approval and choice prompts
 
 While an interaction is pending, only these keys act; the rest are ignored.
+The answer keys (`y`, `a`, `n`, `Enter`) act once the prompt has been up for
+half a second. Any other key pressed before then, such as a sentence you were
+still typing, restarts the half second, so it cannot answer the prompt by
+accident; an answer key pressed too early is ignored. `Esc` and `↑` / `↓` always
+act.
 
 | Key | Action |
 |---|---|
@@ -175,6 +182,7 @@ While an interaction is pending, only these keys act; the rest are ignored.
 | `a` | Allow once and answer every later approval of the same tool for the rest of this session (the footer shows `allow <tool>`). |
 | `n`, `Esc` | Deny (approval). |
 | `↑` / `↓`, `Enter` | Select a row and submit it. For an approval the rows are `Allow once`, `Deny` and `Allow <tool> this session`. An `edit` or patch approval shows its diff. |
+| `PageUp` / `PageDown`, `Ctrl+↑` / `Ctrl+↓`, `End`, `Ctrl+O`, `Ctrl+T` | Read the transcript while the prompt waits: scroll, jump between prompts, return to the latest, fold tool output and thinking. |
 
 ## Views
 
@@ -194,7 +202,7 @@ the name.
 | Command | Effect |
 |---|---|
 | `/new [profile]` | Leave the open session for an empty conversation; the first message creates the new session, with the Agent's default profile or the named one. |
-| `/sessions`, `/resume` | Open the sessions picker. Live sessions come first, each row starting with its state: `running 2m`, `needs approval`, `compacting` or `new` (a turn ended unseen). Opening a live one switches at once; a session that is still working cannot be deleted (`Stop "<title>" first: open it and press Esc`). |
+| `/sessions`, `/resume` | Open the sessions picker. Live sessions come first, each row starting with its state: `running 2m`, `needs approval`, `compacting`, `new` (a turn ended unseen) or `failed` (that turn failed). Opening a live one switches at once; a session that is still working cannot be deleted (`Stop "<title>" first: open it and press Esc`). |
 | `/rename <title>` | Rename the current session (an empty title is an error). |
 | `/model [id]` | Switch to the model (an exact id or a unique fuzzy match), or open the picker. When the model does not support the current reasoning level, the switch also moves to the nearest level it supports (the higher one on a tie) and a notice names it. `Ctrl+P` and `Ctrl+L` do the same, and a draft adjusts the level its session will start with. |
 | `/session` | Show the open session's id, workspace, profile, model, item count, token totals and the tools allowed for the session. |
@@ -247,6 +255,7 @@ text, as pi does.
 
 The window title is `workspace · session title · idle|working|approval`, written
 only when it changes. The terminal bell rings when a turn that ran more than
-10 s ends, or asks for approval; `bell = false` under `[ui]` in `config.toml` turns it off.
+10 s ends or asks for approval, in any session, and when a background session
+asks for approval; leaving a running session does not ring. `bell = false` under `[ui]` in `config.toml` turns it off.
 Quitting restores the title and prints `Resume: minicore-tui --session <id>` for
 a session with history.

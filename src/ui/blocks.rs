@@ -532,10 +532,10 @@ fn title_spans(
     right: Vec<Span<'static>>,
     inner: usize,
 ) -> Vec<Span<'static>> {
-    let cells = |spans: &[Span<'static>]| -> usize {
-        spans.iter().map(|span| wrap::width(&span.content)).sum()
-    };
-    let (left_width, right_width) = (cells(&left), cells(&right));
+    let (left_width, right_width) = (
+        super::status::spans_width(&left),
+        super::status::spans_width(&right),
+    );
     let mut spans = padded(left);
     if right_width > 0 && left_width + right_width < inner {
         spans.push(chrome_span(Span::raw(
@@ -656,8 +656,7 @@ const QUOTE_MORE: &str = " · ctrl+o full message";
 /// Rows of a provider message shown before its expand hint.
 const QUOTE_ROWS: usize = 3;
 
-/// The provider's message behind a quote rail. The rail and the hint are chrome,
-/// so a selection takes the message alone.
+/// The provider's message behind a quote rail; the rail and the hint are chrome.
 fn quote(message: &str, styles: Styles, width: usize, expanded: bool) -> Vec<Line<'static>> {
     let room = text_width(width) - wrap::width(QUOTE_RAIL);
     // A tab is the one control character the Agent leaves in.
@@ -723,7 +722,7 @@ pub fn turn_end_line(
             None => files,
         });
     }
-    parts.join(" · ")
+    wrap::sanitize(&parts.join(" · ")).into_owned()
 }
 
 /// The marker's one-line account: token figures, else the item counts.
@@ -1458,7 +1457,7 @@ mod tests {
     #[test]
     fn a_compaction_without_token_figures_reports_its_coverage() {
         let block = Block::Compaction {
-            operation_id: "auto-lup_1".into(),
+            operation_id: "auto-boundary-lup_1-1".into(),
             before: None,
             after: None,
             coverage: Some((Some(177), Some(0))),
@@ -1468,7 +1467,7 @@ mod tests {
         assert_eq!(body[3], " Compacted 177 items · 0 kept");
 
         let block = Block::Compaction {
-            operation_id: "auto-lup_2".into(),
+            operation_id: "auto-boundary-lup_1-2".into(),
             before: None,
             after: None,
             coverage: Some((Some(332), None)),
@@ -1619,6 +1618,16 @@ mod tests {
         assert_eq!(
             turn_end_line(&completed, None, 8, 7, None),
             "completed · 8 requests · 7 tools"
+        );
+        let relayed: crate::protocol::LoopOutcome = serde_json::from_value(serde_json::json!({
+            "type": "failed", "kind": "model", "model_error": {"kind": "provider_unavailable",
+            "delivery": "unknown", "retryable": false,
+            "provider": {"status": 502, "code": "gate\u{202e}way\u{1b}[31m"}}
+        }))
+        .unwrap();
+        assert_eq!(
+            turn_end_line(&relayed, None, 1, 0, None),
+            "failed · provider unavailable · 502 gate\\u{202e}way"
         );
         assert_eq!(format_duration(Duration::from_secs(187)), "3m07s");
     }

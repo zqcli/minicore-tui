@@ -1,7 +1,7 @@
 'use strict';
 // Network first, so the next online load always uses what the host serves now; the cache only opens the app while
 // the host is unreachable. The WebSocket and other origins are never touched.
-const CACHE = 'minicore-16';
+const CACHE = 'minicore-19';
 const SHELL = [
   '/', '/app.css', '/theme.js', '/main.js', '/core.js', '/ui.js', '/net.js', '/sessions.js', '/conversation.js', '/manifest.webmanifest', '/icon.svg',
   '/icon-192.png', '/icon-512.png', '/icon-maskable.png', '/apple-touch-icon.png',

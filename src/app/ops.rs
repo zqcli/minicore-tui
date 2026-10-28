@@ -1,7 +1,5 @@
 //! Applying the results of async operations and the Agent's events.
 
-use serde_json::json;
-
 use super::tasks::{self, History, Window};
 use super::{App, LiveTurn, NoticeLevel, Overlay, Queued, Scroll, Session, SessionOp, find};
 use crate::protocol::stamp::unix_millis;
@@ -9,6 +7,7 @@ use crate::protocol::{
     self, AgentEvent, CompactStatus, CompactionResult, RpcError, SessionInfo, SessionState,
     SteerResult, TurnRef, TurnSendResult, TurnWaitResult,
 };
+use crate::title::LONG_TURN;
 use crate::transcript::{Block, ChangeSummary};
 
 /// Pages read on open to reach the latest answer behind a compaction summary.
@@ -257,19 +256,11 @@ impl App {
         let Some(state) = self.ok(result) else {
             return;
         };
-        let idle = state.accepts_turn();
         let session = self.session_mut();
-        let was_compacting = session.compaction.is_some();
+        let was_compacting = session.compacting();
         session.compaction = state.compaction;
         if was_compacting && session.compaction.is_none() {
             self.refresh_context();
-        }
-        if idle {
-            self.session_mut().waiting_for_compaction = false;
-        } else if self.session_mut().waiting_for_compaction {
-            // Post-turn compaction still owns the session: keep asking until
-            // it settles, or the queue never flushes.
-            self.retry_when_idle();
         }
         // A loop this process did not start has no `turn.wait` of its own.
         if let Some(active) = state.active_loop {
@@ -292,7 +283,6 @@ impl App {
         let mut live = LiveTurn::new(turn.clone(), start);
         live.usage_base = session.usage.clone();
         session.live = Some(live);
-        session.steers_paused = false;
         self.spawn(tasks::wait_turn(self.client.clone(), turn));
     }
 
@@ -308,15 +298,6 @@ impl App {
                     self.rename(&title);
                 }
             }
-            // Post-turn compaction owns the session: the turn was refused, not
-            // sent, so the message keeps its place until the Agent is idle.
-            Err(error) if error.is_busy() => {
-                let session = self.session_mut();
-                session.waiting_for_compaction = true;
-                session.unsend_prompt(text);
-                session.queue.insert(0, queued);
-                self.retry_when_idle();
-            }
             // The text never reached the Agent; it returns to the draft.
             Err(error) => {
                 self.session_mut().unsend_prompt(text);
@@ -324,15 +305,6 @@ impl App {
                 self.error(error);
             }
         }
-    }
-
-    fn retry_when_idle(&mut self) {
-        let client = self.client.clone();
-        let params = json!({ "session_id": self.session_mut().info.session_id });
-        self.spawn(async move {
-            tokio::time::sleep(super::BUSY_RETRY).await;
-            SessionOp::State(client.call(protocol::METHOD_SESSION_STATE, &params).await)
-        });
     }
 
     fn on_waited(&mut self, result: Result<TurnWaitResult, RpcError>) {
@@ -354,9 +326,12 @@ impl App {
                 }
             }
         };
+        let busy = self.busy_elapsed();
         let Some(reconcile) = self.session_mut().end_turn(&wait) else {
             return;
         };
+        self.ring |= busy >= Some(LONG_TURN);
+        self.stamp_activity();
         if self.background_op {
             self.background_turn_ended();
         }
@@ -372,7 +347,7 @@ impl App {
             let changes = tasks::turn_changes(client, turn.session_id, turn.loop_id.clone()).await;
             SessionOp::Changes(turn.loop_id, changes)
         });
-        // An automatic compaction has no response of its own: `session.context`
+        // A turn-start compaction has no response of its own: `session.context`
         // is where it is reported, and the footer's figure moved too. The turn
         // may also have switched branches.
         self.refresh_branch();
@@ -388,25 +363,27 @@ impl App {
         {
             return;
         }
-        if result.is_err() {
-            self.session_mut().refuse_steer(&text);
-        }
         match result {
             Ok(steer) => {
                 if let Some(at) = steer.accepted_at.as_deref().and_then(unix_millis) {
                     self.session_mut().stamp_steer(&text, at);
                 }
             }
-            Err(error) if error.code == protocol::TURN_NOT_FOUND => {
-                self.notice(NoticeLevel::Info, "Turn already ended; queued as next");
+            Err(error) => {
+                self.session_mut().refuse_steer(&text);
+                match error.code {
+                    protocol::TURN_NOT_FOUND => {
+                        self.notice(NoticeLevel::Info, "Turn already ended; queued as next");
+                    }
+                    protocol::STEER_QUEUE_FULL => {
+                        self.notice(
+                            NoticeLevel::Error,
+                            "Steer queue is full; queued for the next turn",
+                        );
+                    }
+                    _ => self.error(error),
+                }
             }
-            Err(error) if error.code == protocol::STEER_QUEUE_FULL => {
-                self.notice(
-                    NoticeLevel::Error,
-                    "Steer queue is full; queued for the next turn",
-                );
-            }
-            Err(error) => self.error(error),
         }
     }
 
@@ -459,15 +436,15 @@ impl App {
         let Some(meta) = event.meta() else {
             return;
         };
-        let foreground = self
+        let id = meta.session_id.clone();
+        if self
             .session
             .as_ref()
-            .is_some_and(|session| session.info.session_id == meta.session_id);
-        if !foreground && let Some(index) = self.live_index(&meta.session_id) {
-            self.with_background(index, |app| app.on_agent_event(event));
-        } else if foreground {
-            let id = meta.session_id.clone();
+            .is_some_and(|session| session.info.session_id == id)
+        {
             self.with_notice_for(&id, |app| app.apply_agent_event(event));
+        } else if let Some(index) = self.live_index(&id) {
+            self.with_background(index, |app| app.apply_agent_event(event));
         } else if let AgentEvent::SessionOpened { session, .. } = event {
             self.merge_catalog_info(*session);
         }
@@ -475,7 +452,7 @@ impl App {
 
     fn apply_agent_event(&mut self, event: AgentEvent) {
         let session = self.session_mut();
-        let was_compacting = session.compaction.is_some();
+        let was_compacting = session.compacting();
         let usage = matches!(event, AgentEvent::RequestUsage { .. });
         let requested = matches!(event, AgentEvent::InteractionRequested { .. });
         let queue_changed = matches!(
@@ -502,6 +479,14 @@ impl App {
         if queue_changed || compaction_ended {
             self.pump_queue();
         }
+    }
+
+    /// Dates the session's latest activity now; the Agent's own stamp replaces it on the next info read.
+    fn stamp_activity(&mut self) {
+        let session = self.session_mut();
+        session.info.updated_at = protocol::stamp::rfc3339_millis(protocol::stamp::now_millis());
+        let info = session.info.clone();
+        self.merge_catalog_info(info);
     }
 
     /// Updates the known sessions with `info`, adding it when new.

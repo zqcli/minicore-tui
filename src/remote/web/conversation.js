@@ -290,11 +290,10 @@ let liveFrom = Infinity;
 const MAX_MOUNT = 600;
 let lo = 0, hi = 0, win = MC.WINDOW, pinned = true, stick = true, anchor = null, raf = 0, liveIdx = -1;
 export const schedule = () => { if (!raf) raf = requestAnimationFrame(flush); };
-const atBottom = () => log.scrollHeight - log.scrollTop - log.clientHeight < 80;
 // Tool rows start open when they failed and thinking when the setting says so; folds, groups, messages and compactions start closed.
 const startsOpen = (k, b) => k[0] === 't' ? b.state === 'failed' : k[0] === 'r' && prefs.thinking;
 const isOpen = (k, b) => opened.has(k) ? opened.get(k) : startsOpen(k, b);
-export function onNewSession() { stick = true; pinned = true; win = MC.WINDOW; opened.clear(); thinkTimes.clear(); loadDraft(); }
+export function onNewSession() { stick = true; pinned = true; win = MC.WINDOW; opened.clear(); thinkTimes.clear(); showJump(false); loadDraft(); }
 export function resetTranscript() { nodes.forEach(n => n.remove()); nodes.length = 0; lo = hi = 0; win = MC.WINDOW; pinned = true; opened.clear(); dirty.clear(); }
 function redrawAll() { for (let i = lo; i < hi; i++) dirty.add(i); schedule(); }
 // The element with data-k `k` keeps its place on screen through the next flush.
@@ -430,6 +429,7 @@ function asstNode(b, i) {
 function updateAsst(n, b) {
   const asst = n._asst, m = asst.md, r = MC.mdInc(m.cache, b.text);
   n.hidden = MC.quiet(b);
+  n.classList.toggle('thk', !b.text);
   thinkUpdate(asst, b);
   m.cache = r.cache;
   let k = 0;
@@ -453,7 +453,7 @@ function answerActs(b, i) {
 function userNode(b, i) {
   const k = 'u' + i, lines = b.text.split('\n').length, long = lines > 12 || b.text.length > 900, o = isOpen(k);
   const more = h('button', { class: 'ib', 'aria-label': 'Message actions', 'aria-haspopup': 'dialog', onclick: () => userActions(b) }, icon('more', 'sm'));
-  const n = h('div', 'u', b.kind === 'steering' && h('div', 'ulbl', icon('steer', 'xs'), 'Steer'),
+  const n = h('div', b.kind === 'steering' ? 'u steer' : 'u', b.kind === 'steering' && h('div', 'ulbl', icon('steer', 'xs'), 'Steer'),
     h('div', { class: 'bubble' + (long && !o ? ' clip' : '') }, b.text),
     h('div', 'acts', long && h('button', { class: 'more2', 'data-k': k }, o ? 'Show less' : 'Show more'),
       b.at && h('time', '', stampAt(b.at)), more));
@@ -594,13 +594,22 @@ function flush() {
   const a = anchor && anchor.k && box.querySelector('[data-k="' + anchor.k + '"]');
   if (a) log.scrollTop += a.getBoundingClientRect().top - anchor.y;
   else if (serverPrepend && !wasStick) log.scrollTop = log.scrollHeight - fromBottom;
-  else if (wasStick && !anchor) { log.scrollTop = log.scrollHeight; newOut(false); }
-  else { log.scrollTop += topDelta; if (grew && !anchor && !wasStick) newOut(true); }
-  // Newer blocks are unmounted while reading far back: the pill leads back to them.
-  if (!pinned) newOut(true);
+  else if (wasStick && !anchor) { log.scrollTop = log.scrollHeight; showJump(false); }
+  else { log.scrollTop += topDelta; if (grew && !anchor && !wasStick) showJump(true, true); }
+  // Newer blocks are unmounted while reading far back: the button leads back to them.
+  if (!pinned) showJump(true);
   anchor = null;
 }
-function newOut(on) { set($('newout'), 'hidden', !on); }
+// The jump control shows once the reader is far above the latest content and becomes the "New output" pill when output arrived since.
+const jump = $('jump');
+let jumpOn = false, jumpNew = false;
+function showJump(on, fresh = on && jumpNew) {
+  if (on === jumpOn && fresh === jumpNew) return;
+  jumpOn = on; jumpNew = fresh;
+  jump.hidden = !on;
+  jump.classList.toggle('new', fresh);
+  jump.setAttribute('aria-label', fresh ? 'New output, jump to latest' : 'Jump to latest');
+}
 function loadEarlierBtn(label) {
   const busy = pendingKind('load_older');
   return h('button', { class: 'pill', disabled: busy, 'data-k': 'earlier', onclick: e => loadEarlier(e.currentTarget) }, busy ? spin('sm') : icon('history', 'sm'), busy ? 'Loading…' : 'Load earlier' + (label ? ' · ' + label : ''));
@@ -613,12 +622,12 @@ function loadEarlier(el) {
     anchorTo(el); schedule();
   } else if (!pendingKind('load_older')) intent(MC.intents.loadOlder());
 }
-function toLatest() {
+export function toLatest() {
   const was = pinned;
   pinned = true; win = MC.WINDOW; stick = true;
   if (!was) schedule();
-  log.scrollTo({ top: log.scrollHeight, behavior: reduced.matches || !was ? 'auto' : 'smooth' });
-  newOut(false);
+  log.scrollTop = log.scrollHeight;
+  showJump(false);
 }
 const topPart = part($('top'), x => x && loadEarlierBtn(x[0]));
 export function renderTop() {
@@ -637,8 +646,14 @@ export function renderEmpty() {
   set(e, 'hidden', S.blocks.length > 0);
   if (!e.hidden) emptyPart({ loading: s.status.loading, session: !!s.session, ws: s.draft.workspace });
 }
-log.addEventListener('scroll', () => { stick = atBottom(); if (stick && pinned) newOut(false); }, { passive: true });
-$('newout').addEventListener('click', toLatest);
+// Showing needs more distance than hiding, so the control does not flicker while a flick settles near one line.
+log.addEventListener('scroll', () => {
+  const away = log.scrollHeight - log.scrollTop - log.clientHeight;
+  stick = away < 80;
+  if (away > Math.min(log.clientHeight, 200)) showJump(true);
+  else if (stick && pinned) showJump(false);
+}, { passive: true });
+jump.addEventListener('click', toLatest);
 
 export function markDirty(indexes) { for (const i of indexes) dirty.add(i); schedule(); }
 // A denied tool row says who denied it: this device with the reason it gave, or, without `text`, another one.

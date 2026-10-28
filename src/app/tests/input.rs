@@ -43,8 +43,8 @@ fn first_row(h: &mut Harness) -> String {
         .unwrap_or_default()
 }
 
-#[tokio::test(start_paused = true)]
-async fn an_approval_prompt_owns_the_keys_and_answers_over_the_wire() {
+/// A running turn that has just asked to run `bash`.
+async fn asking() -> Harness {
     let mut h = Harness::opened(display_read(0, 0)).await;
     h.fake.script("turn.send", json!({"turn": turn("l1")}));
     h.fake.script_held("turn.wait", waited("l1", completed()));
@@ -59,6 +59,12 @@ async fn an_approval_prompt_owns_the_keys_and_answers_over_the_wire() {
     )
     .await;
     h.until(|app| app.has_interaction()).await;
+    h
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_approval_prompt_owns_the_keys_and_answers_over_the_wire() {
+    let mut h = asking().await;
     let screen = h.screen(80, 20);
     for text in [
         "Allow bash?",
@@ -80,6 +86,7 @@ async fn an_approval_prompt_owns_the_keys_and_answers_over_the_wire() {
     );
 
     h.press(KeyCode::Down);
+    arm_prompt().await;
     h.press(KeyCode::Enter);
     h.settle().await;
     let answered = h.calls("interaction.answer");
@@ -90,7 +97,83 @@ async fn an_approval_prompt_owns_the_keys_and_answers_over_the_wire() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn follow_ups_queue_behind_a_running_turn_and_alt_up_recalls_them_in_order() {
+async fn answer_keys_pressed_as_the_prompt_appears_do_nothing_until_it_is_armed() {
+    let mut h = asking().await;
+    for key in [KeyCode::Char('y'), KeyCode::Char('a'), KeyCode::Char('n')] {
+        h.press(key);
+    }
+    h.press(KeyCode::Enter);
+    h.run_for(Duration::from_millis(50)).await;
+    assert!(h.calls("interaction.answer").is_empty());
+    assert!(h.app.has_interaction());
+
+    arm_prompt().await;
+    h.press(KeyCode::Char('y'));
+    h.settle().await;
+    let answered = h.calls("interaction.answer");
+    assert_eq!(answered.len(), 1);
+    assert_eq!(answered[0]["answer"]["decision"], "allow_once");
+}
+
+#[tokio::test(start_paused = true)]
+async fn typing_on_keeps_a_prompt_unarmed_until_a_pause() {
+    let mut h = asking().await;
+    for _ in 0..5 {
+        tokio::time::advance(Duration::from_millis(400)).await;
+        h.type_text("a sentence");
+    }
+    h.press(KeyCode::Enter);
+    h.run_for(Duration::from_millis(50)).await;
+    assert!(h.calls("interaction.answer").is_empty());
+
+    arm_prompt().await;
+    h.press(KeyCode::Char('n'));
+    h.settle().await;
+    let answered = h.calls("interaction.answer");
+    assert_eq!(answered.len(), 1);
+    assert_eq!(answered[0]["answer"]["decision"], "deny");
+}
+
+#[tokio::test(start_paused = true)]
+async fn escape_denies_a_prompt_that_is_not_armed_yet() {
+    let mut h = asking().await;
+    h.press(KeyCode::Esc);
+    h.settle().await;
+    let answered = h.calls("interaction.answer");
+    assert_eq!(answered.len(), 1);
+    assert_eq!(answered[0]["answer"]["decision"], "deny");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_shifted_end_does_not_select_in_the_draft_behind_a_prompt() {
+    let mut h = asking().await;
+    h.app.composer.set_text("draft");
+    h.app.composer.move_home();
+    h.key(KeyCode::End, KeyModifiers::SHIFT);
+    assert!(h.app.composer.selection().is_none());
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_transcript_scrolls_while_a_prompt_waits() {
+    let mut h = asking().await;
+    conversation(&mut h, 12);
+    h.screen(60, 24);
+    h.press(KeyCode::PageUp);
+    assert_ne!(h.app.scroll, Scroll::Follow);
+    h.press(KeyCode::End);
+    assert_eq!(h.app.scroll, Scroll::Follow);
+    h.screen(60, 24);
+    h.ctrl(KeyCode::Up);
+    assert_ne!(h.app.scroll, Scroll::Follow);
+    let expanded = h.app.tools_expanded;
+    h.ctrl(KeyCode::Char('o'));
+    assert_ne!(h.app.tools_expanded, expanded);
+    assert!(h.app.has_interaction(), "the prompt stays");
+    assert!(h.calls("interaction.answer").is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn shift_enter_adds_a_line_and_alt_enter_queues_follow_ups_behind_a_running_turn() {
     let mut h = Harness::opened(display_read(0, 0)).await;
     h.fake.script("turn.send", json!({"turn": turn("l1")}));
     h.fake.script_held("turn.wait", waited("l1", completed()));
@@ -108,24 +191,6 @@ async fn follow_ups_queue_behind_a_running_turn_and_alt_up_recalls_them_in_order
         h.key(KeyCode::Enter, KeyModifiers::ALT);
     }
     assert_eq!(h.queue(), ["one", "two"]);
-
-    h.app.composer.set_text("half");
-    h.key(KeyCode::Up, KeyModifiers::ALT);
-    assert_eq!(
-        h.app.composer.text(),
-        "half",
-        "a draft is never overwritten"
-    );
-    assert_eq!(h.queue(), ["one", "two"]);
-    assert_eq!(
-        h.notices(),
-        ["Clear the draft before recalling a queued message"]
-    );
-
-    h.ctrl(KeyCode::Char('c'));
-    h.key(KeyCode::Up, KeyModifiers::ALT);
-    assert_eq!(h.app.composer.text(), "one\n\ntwo");
-    assert!(h.queue().is_empty());
 }
 
 #[tokio::test(start_paused = true)]
@@ -191,19 +256,31 @@ async fn tab_with_a_completion_list_open_completes() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn alt_enter_queues_during_a_compaction() {
+async fn a_follow_up_waits_in_the_queue_while_a_compaction_runs() {
     let mut h = Harness::opened(display_read(0, 0)).await;
+    h.fake.script("turn.send", json!({"turn": turn("l1")}));
+    h.fake.script_held("turn.wait", waited("l1", completed()));
     h.emit(
         "session_state",
         json!({"state": {"session_id": "s1", "status": "idle",
-                         "compaction": {"operation_id": "auto-l1", "phase": "summarizing",
+                         "compaction": {"operation_id": "auto-boundary-l1-1", "phase": "summarizing",
                                         "covered_item_count": 8, "retained_item_count": 2}}}),
     )
     .await;
     h.until(|app| app.compacting()).await;
-    h.type_text("later");
-    let key = crossterm::event::KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT);
-    assert_eq!(h.app.on_key(key), Some(crate::app::Action::QueueFollowUp));
+    h.app.composer.set_text("later");
+    h.action(crate::app::Action::QueueFollowUp);
+    h.settle().await;
+    assert_eq!(h.queue(), ["later"]);
+    assert!(h.sends().is_empty());
+
+    h.emit(
+        "session_state",
+        json!({"state": {"session_id": "s1", "status": "idle"}}),
+    )
+    .await;
+    h.settle().await;
+    assert_eq!(h.sends(), ["later"]);
 }
 
 #[tokio::test(start_paused = true)]

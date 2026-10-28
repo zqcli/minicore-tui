@@ -32,8 +32,8 @@ use crate::wrap;
 use self::theme::Styles;
 
 /// Draws one frame and returns the caret to `terminal::draw_frame`.
-/// Fatal errors take the whole screen. The terminal owns cursor visibility.
 pub fn draw(frame: &mut Frame, app: &mut App) -> Option<Position> {
+    // The terminal owns cursor visibility; this only says where the caret goes.
     let area = frame.area();
     app.composer_area = Rect::default();
     if let Some(fatal) = &app.fatal {

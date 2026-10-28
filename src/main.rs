@@ -169,19 +169,6 @@ async fn run() -> i32 {
         .or_else(|| std::env::current_dir().ok())
         .unwrap_or_else(|| PathBuf::from("."));
 
-    let (msg_tx, mut msg_rx) = mpsc::unbounded_channel::<Msg>();
-    let (incoming_tx, mut incoming_rx) = mpsc::channel::<Incoming>(256);
-    let client = match rpc::agent_command(launch.agent_binary.as_deref(), &launch.agent_config)
-        .map_err(|error| format!("cannot locate the running executable: {error}"))
-        .and_then(|command| Client::spawn(command, incoming_tx).map_err(|error| error.to_string()))
-    {
-        Ok(client) => client,
-        Err(error) => {
-            eprintln!("{error}");
-            return 1;
-        }
-    };
-
     let remote = if args.remote {
         match minicore_tui::remote::Bound::bind(&launch.remote, home.dir().join("remote.json"))
             .await
@@ -194,6 +181,19 @@ async fn run() -> i32 {
         }
     } else {
         None
+    };
+
+    let (msg_tx, mut msg_rx) = mpsc::unbounded_channel::<Msg>();
+    let (incoming_tx, mut incoming_rx) = mpsc::channel::<Incoming>(256);
+    let client = match rpc::agent_command(launch.agent_binary.as_deref(), &launch.agent_config)
+        .map_err(|error| format!("cannot locate the running executable: {error}"))
+        .and_then(|command| Client::spawn(command, incoming_tx).map_err(|error| error.to_string()))
+    {
+        Ok(client) => client,
+        Err(error) => {
+            eprintln!("{error}");
+            return 1;
+        }
     };
 
     terminal::install_panic_hook();

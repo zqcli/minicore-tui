@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use serde::de::DeserializeOwned;
 
 use compose::AgentFile;
-pub use home::Home;
+pub use home::{Home, home_dir};
 pub use remote::{Remote, Tls};
 pub use settings::{Settings, ThemeKind, Ui, editor_command, save_theme};
 
@@ -192,23 +192,7 @@ pub fn prepare(
     has_env: &dyn Fn(&str) -> bool,
 ) -> Result<Prepared, String> {
     if let Some(raw) = request.agent_config {
-        let source = if home.config_file().exists() {
-            Source::read(home.config_file()).map_err(|error| error.to_string())?
-        } else {
-            Source {
-                file: home.config_file(),
-                text: String::new(),
-            }
-        };
-        let (ui, binary, section) = if source.text.is_empty() {
-            (Ui::default(), None, remote::RemoteSection::default())
-        } else {
-            let settings = source
-                .parse::<Settings>()
-                .map_err(|error| error.to_string())?;
-            (settings.ui, settings.agent.binary, settings.remote)
-        };
-        let remote = section.build(&source).map_err(|error| error.to_string())?;
+        let (ui, binary, remote) = raw_settings(home).map_err(|error| error.to_string())?;
         return Ok(Prepared::Launch(Box::new(Launch {
             remote,
             ui,
@@ -235,6 +219,24 @@ pub fn prepare(
         composed: true,
         default_profile: Some(loaded.agent.default_profile),
     })))
+}
+
+/// What a raw launch takes from `config.toml`: its settings, or the defaults
+/// when the file does not exist.
+fn raw_settings(home: &Home) -> Result<(Ui, Option<PathBuf>, Remote), ConfigError> {
+    let file = home.config_file();
+    if !file.exists() {
+        let none = Source {
+            file,
+            text: String::new(),
+        };
+        let remote = remote::RemoteSection::default().build(&none)?;
+        return Ok((Ui::default(), None, remote));
+    }
+    let source = Source::read(file)?;
+    let settings = source.parse::<Settings>()?;
+    let remote = settings.remote.build(&source)?;
+    Ok((settings.ui, settings.agent.binary, remote))
 }
 
 /// `--agent`, else `[agent] binary`, else none: the built-in Agent.

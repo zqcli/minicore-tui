@@ -85,7 +85,7 @@ pub struct Ready {
     pub sessions: Vec<SessionInfo>,
 }
 
-/// What an async operation on the resident session produced.
+/// What an async operation on the foreground session produced.
 pub enum SessionOp {
     Tail(Result<tasks::History, RpcError>),
     Page(Result<tasks::History, RpcError>),
@@ -98,7 +98,7 @@ pub enum SessionOp {
     /// A `workspace.status` answer, wanted only for the branch it caches in the presentation.
     WorkspaceStatus(Result<Value, RpcError>),
     Context(Result<SessionContext, RpcError>),
-    /// The send answer, with the text so a refusal can hand it back.
+    /// The send answer, with the queued message so a refusal can hand it back.
     Sent(Queued, Result<TurnSendResult, RpcError>),
     Waited(Result<TurnWaitResult, RpcError>),
     /// The loop and text keep late steer results from changing another turn's queue.
@@ -188,7 +188,7 @@ pub struct App {
     pub background_op: bool,
     /// The draft's composer text while a session is on screen.
     pub draft_text: String,
-    /// A background approval or a long background turn asks for the bell.
+    /// A long turn ended or asked for approval, or a background session asked.
     pub ring: bool,
     pub sessions: Vec<SessionInfo>,
     pub catalog_generation: u64,
@@ -236,7 +236,7 @@ pub struct App {
     pub loading_session: bool,
     /// The draft's text while its session is being created; sent once it exists.
     pub first_message: Option<String>,
-    /// Numbers the sessions made resident, so a late result never reaches a later one.
+    /// Numbers the live sessions, so a late result never reaches another one.
     pub epoch: u64,
     pub templates: Vec<templates::Template>,
     /// The TUI directory; `None` in tests, which touch no files.
@@ -261,7 +261,7 @@ pub const NOTICE_TTL: Duration = Duration::from_secs(5);
 pub const FLASH_TTL: Duration = Duration::from_secs(1);
 /// Presses this close together on one word make a double or triple click.
 pub const DOUBLE_CLICK: Duration = Duration::from_millis(500);
-/// Delay before asking again whether post-turn compaction finished.
+/// Delay before asking the Agent again after a busy or full-queue refusal.
 pub const BUSY_RETRY: Duration = Duration::from_millis(700);
 
 impl App {
@@ -366,27 +366,19 @@ impl App {
                     app.background
                         .retain(|session| session.info.session_id != id);
                     app.catalog_generation += 1;
-                    if let Overlay::Sessions {
-                        rows,
-                        filter,
-                        selected,
-                        ..
-                    } = &mut app.overlay
-                    {
+                    if let Overlay::Sessions { rows, .. } = &mut app.overlay {
                         rows.retain(|session| session.session_id != id);
-                        let shown = overlay::filtered_sessions(rows, filter, app.session.as_ref());
-                        *selected = (*selected).min(shown.len().saturating_sub(1));
+                        // A zero step keeps the selection on a row that is still there.
+                        app.overlay_move(0);
                     }
                 }
             }),
             Msg::Renamed(id, result) => self.with_notice_for(&id, |app| app.on_renamed(result)),
             Msg::Session(epoch, op) => {
-                if self
-                    .session
-                    .as_ref()
-                    .is_some_and(|session| session.epoch == epoch)
+                if let Some(session) = self.session.as_ref()
+                    && session.epoch == epoch
                 {
-                    let id = self.session.as_ref().unwrap().info.session_id.clone();
+                    let id = session.info.session_id.clone();
                     self.with_notice_for(&id, |app| app.on_op(*op));
                 } else if let Some(index) = self
                     .background
@@ -492,11 +484,11 @@ impl App {
         result.map_err(|error| self.error(error)).ok()
     }
 
-    /// The resident session, for results `on_msg` has matched to it by epoch.
+    /// The foreground session, for results `on_msg` has matched to it by epoch.
     pub(super) fn session_mut(&mut self) -> &mut Session {
         self.session
             .as_mut()
-            .expect("the result's session is resident")
+            .expect("the result's session is in the foreground")
     }
 
     pub fn is_busy(&self) -> bool {

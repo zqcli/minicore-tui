@@ -1,6 +1,6 @@
-//! The dock under the transcript: queued messages, the Working line, the
-//! notice, the editor with its completion rows, and the footer. Rows are built
-//! for the band right of the 1-column gutter.
+//! The dock under the transcript: queued messages, the Working line, the key
+//! hint, the notice, the editor with its completion rows, and the footer. Rows
+//! are built for the band right of the 1-column gutter.
 
 use std::time::Duration;
 
@@ -33,20 +33,18 @@ pub fn dock(app: &App, styles: Styles, width: u16, height: u16) -> Dock {
     let mut above = Vec::new();
     // The remote status screen shows the work and the queue instead.
     let local = !app.remote.active();
-    if let Some(session) = app
-        .session
-        .as_ref()
-        .filter(|s| local && !s.queue.is_empty())
-    {
-        above.push(Line::default());
-        above.extend(queued_rows(session, styles, width));
-    }
-    if local && let Some(line) = working_line(app, styles, width) {
-        above.push(Line::default());
-        above.push(line);
-    }
-    if local && let Some(hint) = key_hint(app) {
-        above.push(padded(&hint, width, styles.faint()));
+    if local {
+        if let Some(session) = app.session.as_ref().filter(|s| !s.queue.is_empty()) {
+            above.push(Line::default());
+            above.extend(queued_rows(session, styles, width));
+        }
+        if let Some(line) = working_line(app, styles, width) {
+            above.push(Line::default());
+            above.push(line);
+        }
+        if let Some(hint) = key_hint(app, styles, width) {
+            above.push(hint);
+        }
     }
     if let Some(notice) = app.notices.back() {
         above.push(Line::default());
@@ -61,7 +59,7 @@ pub fn dock(app: &App, styles: Styles, width: u16, height: u16) -> Dock {
         composer::max_rows(height),
         if app.overlay.is_view() {
             Editor::View
-        } else if app.remote.active() {
+        } else if !local {
             Editor::Remote
         } else {
             Editor::Live
@@ -132,7 +130,9 @@ fn queued_rows(session: &Session, styles: Styles, width: u16) -> Vec<Line<'stati
             let sent = if queued.sent { " · sent" } else { "" };
             let room =
                 usize::from(width).saturating_sub(wrap::width(&label) + wrap::width(sent) + 4);
-            let text = wrap::sanitize(&queued.text.replace('\n', " ")).into_owned();
+            // One more than fits, so the cut still ends in its ellipsis.
+            let text: String = queued.text.chars().take(room + 1).collect();
+            let text = wrap::sanitize(&text.replace('\n', " ")).into_owned();
             Line::from(vec![
                 Span::raw(" "),
                 Span::styled(label, styles.meta()),
@@ -151,7 +151,7 @@ fn queued_rows(session: &Session, styles: Styles, width: u16) -> Vec<Line<'stati
 
 /// The keys that act on the queue now: Enter steers and Alt+Enter queues while a
 /// draft waits, `alt+↑` takes unsent messages back.
-fn key_hint(app: &App) -> Option<String> {
+fn key_hint(app: &App, styles: Styles, width: u16) -> Option<Line<'static>> {
     let session = app.session.as_ref().filter(|_| !app.has_interaction())?;
     let drafting = !app.composer.is_empty();
     let mut keys = Vec::new();
@@ -164,21 +164,22 @@ fn key_hint(app: &App) -> Option<String> {
     if session.queue.iter().any(|queued| !queued.sent) {
         keys.push("alt+↑ edit queued");
     }
-    (!keys.is_empty()).then(|| keys.join(" · "))
+    (!keys.is_empty()).then(|| {
+        let spans = vec![
+            Span::raw(" "),
+            Span::styled(keys.join(" · "), styles.faint()),
+        ];
+        Line::from(fit(spans, usize::from(width)))
+    })
 }
 
 /// `⠋ Working (esc to interrupt) · Running bash … · request 3` while
 /// something is in flight.
 fn working_line(app: &App, styles: Styles, width: u16) -> Option<Line<'static>> {
-    let live = app
-        .session
-        .as_ref()
-        .and_then(|session| session.live.as_ref());
+    let session = app.session.as_ref();
+    let live = session.and_then(|session| session.live.as_ref());
     let interrupting = live.is_some_and(|live| live.interrupting);
-    let compaction = app
-        .session
-        .as_ref()
-        .and_then(|session| session.compaction_label());
+    let compaction = session.and_then(Session::compaction_label);
     let text = if let Some(label) = &compaction {
         label.as_str()
     } else if app.has_interaction() {
@@ -188,12 +189,6 @@ fn working_line(app: &App, styles: Styles, width: u16) -> Option<Line<'static>> 
         "Interrupting…"
     } else if live.is_some() {
         "Working (esc to interrupt)"
-    } else if app
-        .session
-        .as_ref()
-        .is_some_and(|session| session.waiting_for_compaction)
-    {
-        "Waiting for compaction…"
     } else {
         return None;
     };
@@ -212,10 +207,7 @@ fn working_line(app: &App, styles: Styles, width: u16) -> Option<Line<'static>> 
         if live.requests > 1 {
             extras.push(format!("request {}", live.requests));
         }
-        let tools = app
-            .session
-            .as_ref()
-            .map_or(0, |session| session.tools_since(live.start));
+        let tools = session.map_or(0, |session| session.tools_since(live.start));
         if tools > 0 {
             extras.push(super::blocks::plural(tools, "tool"));
         }
@@ -256,8 +248,7 @@ fn notice_line(notice: &Notice, styles: Styles, width: u16) -> Line<'static> {
 /// `▸ dir@branch · model · reasoning · 3m · queued` and,
 /// right-aligned, `↑in ↓out Rcache · ctx N%`. Short of room, the directory and
 /// branch give way first, then the elapsed time and queue mark, then the model;
-/// the reasoning level stays. The remote mark and the background sessions take
-/// only what the rest leaves.
+/// the reasoning level stays.
 fn footer(app: &App, styles: Styles, width: u16) -> Line<'static> {
     let width = usize::from(width);
     let session = app.session.as_ref();
@@ -278,19 +269,15 @@ fn footer(app: &App, styles: Styles, width: u16) -> Line<'static> {
     if let Some(level) = app.reasoning() {
         priority.push(Span::styled(level.label(), styles.amber()));
     }
-    let mut extras = Vec::new();
     if let Some(session) = session.filter(|session| !session.allowed_tools.is_empty()) {
         let tools: Vec<&str> = session.allowed_tools.iter().map(String::as_str).collect();
-        extras.push(Span::styled(
-            format!("allow {}", tools.join(",")),
-            styles.amber(),
-        ));
-    }
-    for extra in extras {
         if !priority.is_empty() {
             priority.push(Span::styled(" · ", styles.meta()));
         }
-        priority.push(extra);
+        priority.push(Span::styled(
+            format!("allow {}", tools.join(",")),
+            styles.amber(),
+        ));
     }
 
     let mut suffix = Vec::new();
@@ -339,6 +326,7 @@ fn footer(app: &App, styles: Styles, width: u16) -> Line<'static> {
         room.saturating_sub(rest + separator),
         styles,
     );
+    // The remote mark and the background sessions take only what the rest leaves.
     groups[4] = remote;
     groups[5] = others;
     for index in [4, 5, 3, 1, 2] {
@@ -429,7 +417,7 @@ fn totals(session: &Session, styles: Styles) -> Vec<Span<'static>> {
         ));
     }
     // An unknown window is only worth a mark once the session has used some.
-    let context = match super::views::context::percent(session) {
+    let context = match crate::app::session::context_percent(session) {
         Some(percent) if percent >= 70.0 => Some((format!("ctx {percent:.2}%"), styles.amber())),
         Some(percent) => Some((format!("ctx {percent:.2}%"), styles.reasoning_rail())),
         None if session.presentation.is_some() && usage.input > 0 => {
@@ -508,7 +496,7 @@ fn join(groups: &[Vec<Span<'static>>], styles: Styles) -> Vec<Span<'static>> {
     spans
 }
 
-fn spans_width(spans: &[Span<'_>]) -> usize {
+pub(super) fn spans_width(spans: &[Span<'_>]) -> usize {
     spans.iter().map(|span| wrap::width(&span.content)).sum()
 }
 

@@ -2,16 +2,19 @@
 //! model and reasoning pickers, the approval prompt and the find bar each turn
 //! app state into one [`Sheet`]; the command and `@` file lists are plain rows.
 
+use std::collections::HashMap;
+
 use ratatui::text::{Line, Span};
 
-use crate::app::overlay::{
-    self, filtered_sessions, matching_models, session_label, short_session_id,
-};
+use crate::app::overlay::{self, matching_models, session_label, short_session_id, workspace_name};
 use crate::app::picker;
 use crate::app::session::InteractionKind;
 use crate::app::{App, LiveStatus, Overlay, Session};
-use crate::protocol::{ModelInfo, Reasoning, SessionInfo};
+use crate::protocol::stamp::{now_millis, unix_millis};
+use crate::protocol::{LoopOutcome, ModelInfo, Reasoning, SessionInfo};
+use crate::transcript::Block;
 
+use super::blocks::plural;
 use super::panel::{Kind, Row, Sheet, Tone, body_lines, truncate};
 use super::theme::Styles;
 use crate::wrap::width;
@@ -53,14 +56,6 @@ pub fn sheet(app: &App, styles: Styles) -> Option<Sheet> {
         | Overlay::Help { .. }
         | Overlay::Diff(_) => return None,
     })
-}
-
-/// A dim `name` padded to a column, then its `value` cut to `cells`.
-fn fact(name: &str, value: &str, cells: usize, styles: Styles) -> Vec<Span<'static>> {
-    vec![
-        Span::styled(format!("{name:<10}"), styles.dim()),
-        Span::styled(truncate(value, cells), styles.text()),
-    ]
 }
 
 /// Rows of the inline completion list (commands, `@` files) shown inside the
@@ -136,31 +131,29 @@ fn sessions_sheet(app: &App, rows: &[SessionInfo], state: &SessionsState, styles
         armed,
         renaming,
     } = *state;
-    let resident = app
+    let foreground = app
         .session
         .as_ref()
         .map(|session| session.info.session_id.as_str());
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|elapsed| elapsed.as_secs())
-        .unwrap_or(0);
-    let shown = filtered_sessions(rows, filter, app.session.as_ref());
+    let now = now_millis() / 1000;
+    let shown = app.filtered_sessions(rows, filter);
     if let Some(title) = renaming {
         let target = shown
             .get(selected)
-            .map(|info| session_label(info, app.session.as_ref()))
+            .map(|info| app.session_title(info))
             .unwrap_or_default();
         return Sheet::new("Rename Session", "enter save · esc cancel")
             .status(target)
             .search(title);
     }
-    let labels: Vec<String> = shown
-        .iter()
-        .map(|info| session_label(info, app.live(&info.session_id)))
-        .collect();
+    let labels: Vec<String> = shown.iter().map(|info| app.session_title(info)).collect();
+    let mut shared: HashMap<&str, usize> = HashMap::new();
+    for label in &labels {
+        *shared.entry(label).or_default() += 1;
+    }
     let workspace = app.workspace.to_string_lossy();
     let status = if shown.len() == rows.len() {
-        count(rows.len(), "session")
+        plural(rows.len() as u64, "session")
     } else {
         format!("{} of {}", shown.len(), rows.len())
     };
@@ -168,15 +161,16 @@ fn sessions_sheet(app: &App, rows: &[SessionInfo], state: &SessionsState, styles
         .iter()
         .zip(&labels)
         .map(|(info, label)| {
-            let current = resident == Some(info.session_id.as_str());
+            let current = foreground == Some(info.session_id.as_str());
+            let live = app.live(&info.session_id);
             let context = RowContext {
-                state: app.live(&info.session_id).and_then(live_state),
+                state: live.and_then(live_state),
                 current,
                 other_workspace: info.workspace != workspace,
-                duplicate: labels.iter().filter(|other| *other == label).count() > 1,
+                duplicate: shared[label.as_str()] > 1,
             };
             let row = session_row(info, label.clone(), &context, now);
-            if armed == Some(info.session_id.as_str()) {
+            if armed == Some(info.session_id.as_str()) || live.is_some_and(failed_unseen) {
                 row.tone(Tone::Failure)
             } else {
                 row
@@ -224,17 +218,11 @@ fn models_sheet(app: &App, filter: &str, selected: usize, styles: Styles) -> She
         None => vec![Line::styled("  No matching models", styles.dim())],
     };
     Sheet::new("Select Model", "enter select · esc cancel")
-        .status(count(app.models.len(), "model"))
+        .status(plural(app.models.len() as u64, "model"))
         .search(filter)
         .rows(rows)
         .selected(Some(selected))
         .notes(notes)
-}
-
-/// `1 session`, `3 sessions`.
-fn count(total: usize, noun: &str) -> String {
-    let plural = if total == 1 { "" } else { "s" };
-    format!("{total} {noun}{plural}")
 }
 
 /// The provider part of a `provider/model` reference.
@@ -445,9 +433,22 @@ fn live_state(session: &Session) -> Option<String> {
         }
         LiveStatus::Approval => "needs approval".to_owned(),
         LiveStatus::Compacting => "compacting".to_owned(),
+        LiveStatus::Idle if failed_unseen(session) => "failed".to_owned(),
         LiveStatus::Idle if session.unseen => "new".to_owned(),
         LiveStatus::Idle => return None,
     })
+}
+
+/// A background turn ended in failure and the session was not opened since.
+fn failed_unseen(session: &Session) -> bool {
+    session.unseen
+        && matches!(
+            session.transcript.blocks().last(),
+            Some(Block::TurnEnd {
+                outcome: LoopOutcome::Failed { .. },
+                ..
+            })
+        )
 }
 
 /// What sets one sessions-picker row apart from the others.
@@ -470,9 +471,9 @@ fn session_row(info: &SessionInfo, label: String, context: &RowContext, now_seco
         parts.push("current".to_owned());
     }
     if context.other_workspace
-        && let Some(name) = std::path::Path::new(&info.workspace).file_name()
+        && let Some(name) = workspace_name(info)
     {
-        parts.push(name.to_string_lossy().into_owned());
+        parts.push(name.into_owned());
     }
     if context.duplicate {
         parts.push(short_session_id(&info.session_id).to_owned());
@@ -489,7 +490,7 @@ fn context_sheet(app: &App, styles: Styles) -> Sheet {
     Sheet::new("Context", "r refresh · c copy · esc close").body(lines)
 }
 
-/// `/session`: the facts about the resident session; Enter or `c` copies its id.
+/// `/session`: the facts about the foreground session; Enter or `c` copies its id.
 fn session_info_sheet(app: &App, items: Option<usize>, styles: Styles) -> Sheet {
     let sheet = Sheet::new("Session", "enter copy id · c copy id · esc close");
     let Some(session) = app.session.as_ref() else {
@@ -540,17 +541,22 @@ fn session_info_sheet(app: &App, items: Option<usize>, styles: Styles) -> Sheet 
     }
     let body = facts
         .into_iter()
-        .map(|(name, value)| Line::from(fact(name, &value, 120, styles)))
+        .map(|(name, value)| {
+            Line::from(vec![
+                Span::styled(format!("{name:<10}"), styles.dim()),
+                Span::styled(truncate(&value, 120), styles.text()),
+            ])
+        })
         .collect();
     sheet.body(body)
 }
 
 /// `now`, `5m`, `3h`, `2d`, `1w`, `4mo` or `2y`; empty when the timestamp is not RFC 3339.
 fn age_label(updated_at: &str, now: u64) -> String {
-    let Some(then) = parse_unix_seconds(updated_at) else {
+    let Some(then) = unix_millis(updated_at) else {
         return String::new();
     };
-    let seconds = now.saturating_sub(then);
+    let seconds = now.saturating_sub(then / 1000);
     match seconds {
         0..=59 => "now".into(),
         60..=3599 => format!("{}m", seconds / 60),
@@ -560,11 +566,6 @@ fn age_label(updated_at: &str, now: u64) -> String {
         2_592_000..=31_535_999 => format!("{}mo", seconds / 2_592_000),
         _ => format!("{}y", seconds / 31_536_000),
     }
-}
-
-/// Seconds since the Unix epoch for an RFC 3339 stamp.
-fn parse_unix_seconds(stamp: &str) -> Option<u64> {
-    crate::protocol::stamp::unix_millis(stamp).map(|millis| millis / 1000)
 }
 
 #[cfg(test)]
@@ -653,7 +654,7 @@ mod tests {
     }
 
     fn now() -> u64 {
-        parse_unix_seconds("2026-01-02T06:04:05.006Z").unwrap()
+        unix_millis("2026-01-02T06:04:05.006Z").unwrap() / 1000
     }
 
     const NO_SUBJECT: Subject<'static> = Subject {
@@ -794,7 +795,7 @@ mod tests {
     #[test]
     fn ages_cover_every_unit() {
         let stamp = "2026-01-02T03:04:05Z";
-        let base = parse_unix_seconds(stamp).unwrap();
+        let base = unix_millis(stamp).unwrap() / 1000;
         let age = |seconds| age_label(stamp, base + seconds);
         assert_eq!(age(30), "now");
         assert_eq!(age(600), "10m");
@@ -804,12 +805,6 @@ mod tests {
         assert_eq!(age(100 * 86_400), "3mo");
         assert_eq!(age(800 * 86_400), "2y");
         assert_eq!(age_label("not a timestamp", base), "");
-    }
-
-    #[test]
-    fn counts_agree_with_their_noun() {
-        assert_eq!(count(1, "model"), "1 model");
-        assert_eq!(count(0, "session"), "0 sessions");
     }
 
     #[test]

@@ -161,7 +161,7 @@ export function compactNow(done) {
 }
 export function exportSession() { share(S.state.session.title || 'MiniCore session', MC.exportMd(S.state, S.blocks)); }
 const KEYS = [['Esc', 'Close the top sheet or stop the turn'], ['Enter', 'Send, or steer a running turn (“Enter sends”)'], ['⌘/Ctrl Enter', 'Send, or steer a running turn'], ['⌥/Alt Enter', 'Queue a follow-up while a turn runs'], ['↑ ↓', 'Recent prompts in an empty composer'],
-  ['⌘/Ctrl K', 'Commands and prompts'], ['⌘/Ctrl F', 'Find in session'], ['⌘/Ctrl ⇧ F', 'Search sessions'], ['Alt ↑ ↓', 'Previous or next session'], ['Y A N', 'Allow, allow for session, deny'], ['?', 'This help']];
+  ['⌘/Ctrl K', 'Commands and prompts'], ['⌘/Ctrl F', 'Find in session'], ['⌘/Ctrl ⇧ F', 'Search sessions'], ['Alt ↑ ↓', 'Previous or next session'], ['Y A N', 'Allow, allow for session, deny'], ['End', 'Jump to the latest message'], ['?', 'This help']];
 export function openHelp() {
   sheet({ key: 'help', cls: 'dialog', title: 'Keyboard shortcuts', body: () => h('dl', 'kv keys', KEYS.map(([k, d]) => [h('dt', '', h('kbd', '', k)), h('dd', '', d)])) });
 }
@@ -199,6 +199,18 @@ let pendingRow = null, query = '', frozen = null, navLook = false;
 // Workspace groups the reader folded (kept across visits) and the ones opened past their first rows (this page only).
 const CLOSED = 'minicore.nav.closed', closedWs = new Set(JSON.parse(localStorage.getItem(CLOSED) || '[]')), moreWs = new Set();
 const navShown = () => wide.matches || nav.classList.contains('on');
+// The device's own working set, newest pin first: no host or protocol change, so another device keeps its own.
+const PINS = 'minicore.pins';
+let pins = JSON.parse(localStorage.getItem(PINS) || '[]'), pinsSeen = null;
+const savePins = () => localStorage.setItem(PINS, JSON.stringify(pins));
+function togglePin(id) {
+  pins = pins.includes(id) ? pins.filter(x => x !== id) : [id, ...pins];
+  savePins();
+  // A pin is an explicit action: the row moves at once, even while the open list holds its order.
+  if (frozen) frozen.delete(id);
+  renderNav();
+}
+const pinRow = (m, id) => menuRow(m, 'pin', pins.includes(id) ? 'Unpin' : 'Pin to top', () => togglePin(id));
 export function buildNav() {
   const q = h('input', { type: 'search', placeholder: hover.matches ? 'Search' : 'Search sessions', 'aria-label': 'Search sessions', autocomplete: 'off', enterKeyHint: 'search', oninput: () => { query = q.value; renderNav(); } });
   fill(nav, h('div', 'nhead', h('img', { src: '/icon.svg', alt: '' }), h('div', '', h('b', '', 'MiniCore'), h('small', '', HOST)),
@@ -243,13 +255,16 @@ nav.addEventListener('pointerleave', () => { navLook = false; if (!nav.contains(
 nav.addEventListener('focusout', () => setTimeout(() => { if (!navLook && !nav.contains(document.activeElement) && wide.matches) { frozen = null; renderNav(); } }));
 export function renderNav() {
   if (!navShown() || !S.state) return;
-  const s = S.state, lay = MC.sessionLayout(s.sessions, query, frozen), searching = query.trim() !== '';
+  const s = S.state;
+  if (s.sessions !== pinsSeen) { pinsSeen = s.sessions; const kept = MC.prunePins(pins, s.sessions); if (kept !== pins) { pins = kept; savePins(); } }
+  const lay = MC.sessionLayout(s.sessions, query, frozen, pins), searching = query.trim() !== '', now = hostNow();
   if (nav.classList.contains('on') || navLook || nav.contains(document.activeElement)) frozen = lay.order;
-  const row = x => [x.id, x.title, x.workspace, x.current, x.live && x.status, x.unseen, MC.relTime(Date.parse(x.updated_at), hostNow(), tz()), failed.has(x.id)];
+  // Only a workspace group marks recent sessions, and not the open one: the others already stand out and that one is in front.
+  const row = recent => x => [x.id, x.title, x.workspace, x.current, x.live && x.status, x.unseen, MC.relTime(Date.parse(x.updated_at), now, tz()), failed.has(x.id), recent && !x.current && MC.recent(x, now)];
   listPart({
     groups: lay.groups.map(g => {
-      const v = MC.groupRows(g.items, g.pinned != null || searching || moreWs.has(g.ws));
-      return { label: g.label, ws: g.ws, pinned: g.pinned != null, closed: !searching && closedWs.has(g.ws), count: g.items.length, hidden: v.hidden, rows: v.shown.map(row) };
+      const v = MC.groupRows(g.items, g.level < 3 || searching || moreWs.has(g.ws));
+      return { label: g.label, ws: g.ws, level: g.level, closed: !searching && closedWs.has(g.ws), count: g.items.length, hidden: v.hidden, rows: v.shown.map(row(g.level === 3)) };
     }), pendingRow, query: !!query,
   });
   renderNavFoot();
@@ -261,23 +276,23 @@ function renderNavFoot() {
 }
 function renderList(l) {
   if (!l.groups.length) return h('div', 'muted', l.query ? 'No matching sessions' : 'No sessions yet');
-  return l.groups.map(g => g.pinned ? [h('div', 'sec' + (g.label === 'Needs you' ? ' warn' : ''), g.label), g.rows.map(r => sessionRow(r, true))] : [
-    h('button', { class: 'sec gh', 'data-k': 'g' + encodeURIComponent(g.ws), title: MC.tilde(g.ws), 'aria-expanded': String(!g.closed) },
-      icon('folder', 'sm'), h('span', 'gn', g.label), g.closed && h('span', 'gc', String(g.count)), icon('chev', 'xs cv')),
-    !g.closed && g.rows.map(r => sessionRow(r, false)),
+  return l.groups.map(g => g.level === 0 || g.level === 2 ? [h('div', 'sec' + (g.level === 0 ? ' warn' : ''), g.label), g.rows.map(r => sessionRow(r, true))] : [
+    h('button', { class: 'sec gh', 'data-k': 'g' + encodeURIComponent(g.ws), title: g.level === 1 ? '' : MC.tilde(g.ws), 'aria-expanded': String(!g.closed) },
+      icon(g.level === 1 ? 'pin' : 'folder', 'sm'), h('span', 'gn', g.label), g.closed && h('span', 'gc', String(g.count)), icon('chev', 'xs cv')),
+    !g.closed && g.rows.map(r => sessionRow(r, false, g.level === 1)),
     !g.closed && g.hidden > 0 && h('button', { class: 'gmore', 'data-k': 'x' + encodeURIComponent(g.ws) }, 'Show ' + g.hidden + ' more')]);
 }
-// `pinned` rows (Needs you, Running) name their folder; a workspace group's header already does.
-function sessionRow([id, title, ws, current, status, unseen, rel, bad], pinned) {
+// Rows of Needs you and Running show no time; the ones in Pinned have no folder header, so theirs is in the tooltip.
+function sessionRow([id, title, ws, current, status, unseen, rel, bad, recent], pinned, inPins) {
   const shape = status === 'approval' ? h('span', { class: 'sst warn', title: 'Needs you' }, icon('hand', 'sm'))
     : status === 'running' || status === 'compacting' ? h('span', 'sst', spin('sm'))
     : bad ? h('span', { class: 'sst er', title: 'Last turn failed' }, icon('alert', 'sm'))
-    : unseen ? h('span', { class: 'sst', title: 'New result' }, h('i', 'ndot')) : h('span', 'sst');
-  const what = pinned ? MC.basename(ws) : rel;
+    : unseen ? h('span', { class: 'sst', title: 'New result' }, h('i', 'ndot'))
+    : recent ? h('span', { class: 'sst', title: MC.finishedText(rel) }, h('i', 'rdot')) : h('span', 'sst');
   return h('div', 'srow' + (current ? ' cur' : ''), h('button', {
-    class: 'sopen', 'data-k': 's' + id, 'aria-current': current ? 'page' : null,
-    'aria-label': MC.titled(title) + ', ' + MC.basename(ws) + (status === 'approval' ? ', needs you' : status === 'running' ? ', running' : ''),
-  }, pendingRow === id ? h('span', 'sst', spin('sm')) : shape, rowText(MC.titled(title)), h('span', 'stime' + (pinned ? ' workspace' : ''), what)),
+    class: 'sopen', 'data-k': 's' + id, 'aria-current': current ? 'page' : null, title: inPins ? MC.tilde(ws) : null,
+    'aria-label': MC.titled(title) + ', ' + MC.basename(ws) + (status === 'approval' ? ', needs you' : status === 'running' ? ', running' : recent ? ', ' + MC.finishedText(rel) : ''),
+  }, pendingRow === id ? h('span', 'sst', spin('sm')) : shape, rowText(MC.titled(title)), h('span', 'stime' + (pinned ? ' workspace' : '') + (recent ? ' recent' : ''), rel)),
   h('button', { class: 'ib more', 'data-k': 'm' + id, 'aria-label': 'Actions for ' + MC.titled(title), 'aria-haspopup': 'dialog' }, icon('more')));
 }
 (() => {
@@ -294,6 +309,7 @@ function sessionActions(id) {
     key: 'actions', cls: 'dialog', title: MC.titled(x.title), sub: MC.tilde(x.workspace),
     body: m => h('div', 'list',
       !current && menuRow(m, 'open', 'Open', () => openLive(id), { focus: true }),
+      pinRow(m, id),
       menuRow(m, 'edit', 'Rename', () => rename(id), { focus: current }),
       menuRow(m, 'copy', 'Copy session id', () => copyText(id)),
       menuRow(m, 'trash', 'Delete session', () => remove(id), { cls: 'bad', disabled: current, sub: current && 'Open another session first' })),
@@ -342,7 +358,7 @@ export function openSessionMenu() {
   sheet({
     key: 'menu', cls: 'dialog', title: MC.titled(s.title), sub: MC.tilde(s.workspace),
     body: m => h('div', 'list',
-      menuRow(m, 'edit', 'Rename', () => rename(s.id)), menuRow(m, 'diff', 'Changes', openChanges), menuRow(m, 'gauge', 'Context', openContext),
+      pinRow(m, s.id), menuRow(m, 'edit', 'Rename', () => rename(s.id)), menuRow(m, 'diff', 'Changes', openChanges), menuRow(m, 'gauge', 'Context', openContext),
       menuRow(m, 'layers', 'Compact now', () => compactNow()), menuRow(m, 'search', 'Find in session', () => actions.find()), menuRow(m, 'info', 'Session info', openInfo),
       menuRow(m, 'copy', 'Copy session id', () => copyText(s.id)), menuRow(m, 'share', 'Share or export', exportSession),
       menuRow(m, 'trash', 'Delete session', () => remove(s.id), { cls: 'bad' })),
@@ -438,7 +454,7 @@ function renderNew() {
   ];
 }
 export function stepSession(d) {
-  const list = MC.sessionLayout(S.state.sessions, '', frozen).groups.flatMap(g => g.items), i = list.findIndex(x => x.current), x = list[i + d];
+  const list = MC.sessionLayout(S.state.sessions, '', frozen, pins).groups.flatMap(g => g.items), i = list.findIndex(x => x.current), x = list[i + d];
   if (x && !pendingRow && intent(MC.intents.openSession(x.id))) pendingRow = x.id;
 }
 export function settle(id) { const was = pendingRow === id; if (was) pendingRow = null; return was; }

@@ -22,7 +22,7 @@ const PRESENTATION_EVERY: Duration = Duration::from_secs(2);
 
 pub struct Session {
     pub info: SessionInfo,
-    /// Identifies this residency; results posted for another one are stale.
+    /// Identifies this live session; results posted for another one are stale.
     pub epoch: u64,
     pub transcript: Transcript,
     pub live: Option<LiveTurn>,
@@ -37,15 +37,15 @@ pub struct Session {
     pub context: Option<SessionContext>,
     /// When `session.context` was last asked for while a turn ran.
     pub context_asked: Option<tokio::time::Instant>,
-    /// The latest automatic compaction `session.context` reported.
+    /// The latest turn-start compaction attempt `session.context` reported.
     auto_seen: Option<String>,
-    /// The latest failed automatic compaction operation `session.context` reported.
-    failure_seen: Option<String>,
     pub compaction: Option<CompactionProgress>,
     /// Coverage of the current summary from `session.context`; a summary
     /// replayed from history carries none of its own.
     pub summary_coverage: Option<(usize, usize)>,
     pub interaction: Option<PendingInteraction>,
+    /// When the pending prompt starts taking answer keys; a stray key before then moves it back.
+    pub armed_at: tokio::time::Instant,
     /// Tools whose approvals the user allowed for the rest of this session.
     pub allowed_tools: BTreeSet<String>,
     /// The display projection's first item; older items are behind the
@@ -62,9 +62,6 @@ pub struct Session {
     pub reconcile_from: Vec<(String, usize)>,
     /// Where the next turn's region starts, captured before its prompt block.
     pub next_turn_start: Option<usize>,
-    /// A send was refused while post-turn compaction owned the session; the
-    /// message keeps its place until the session is idle.
-    pub waiting_for_compaction: bool,
     /// The composer text this session had when it left the foreground.
     pub draft: Option<String>,
     /// Refused texts awaiting local control because no remote recipient received them.
@@ -88,7 +85,7 @@ pub enum LiveStatus {
 
 pub struct LiveTurn {
     pub turn: TurnRef,
-    pub started: Instant,
+    pub started: tokio::time::Instant,
     pub started_ms: u64,
     pub requests: u32,
     pub phase: Phase,
@@ -125,7 +122,7 @@ impl LiveTurn {
     pub fn new(turn: TurnRef, start: usize) -> Self {
         Self {
             turn,
-            started: Instant::now(),
+            started: tokio::time::Instant::now(),
             started_ms: crate::protocol::stamp::now_millis(),
             requests: 1,
             phase: Phase::Thinking,
@@ -163,6 +160,9 @@ pub enum QueuedKind {
     Steer,
     Follow,
 }
+
+/// How long a prompt waits after it appears, or after a stray key, before it takes an answer.
+pub const ARM_AFTER: Duration = Duration::from_millis(500);
 
 pub struct PendingInteraction {
     pub turn: TurnRef,
@@ -244,10 +244,10 @@ impl Session {
             context: None,
             context_asked: None,
             auto_seen: None,
-            failure_seen: None,
             compaction: None,
             summary_coverage: None,
             interaction: None,
+            armed_at: tokio::time::Instant::now(),
             allowed_tools: BTreeSet::new(),
             first_item: 0,
             loaded_from: 0,
@@ -256,7 +256,6 @@ impl Session {
             applied_steers: 0,
             reconcile_from: Vec::new(),
             next_turn_start: None,
-            waiting_for_compaction: false,
             draft: None,
             returned: Vec::new(),
             last_sender: None,
@@ -285,17 +284,14 @@ impl Session {
         } else if self.interaction.is_some() {
             Some("Waiting for approval")
         } else {
-            self.phase_label().or_else(|| {
-                self.waiting_for_compaction
-                    .then_some("Waiting for compaction")
-            })
+            self.phase_label()
         }
     }
 
     pub fn live_status(&self) -> LiveStatus {
         if self.interaction.is_some() {
             LiveStatus::Approval
-        } else if self.compaction.is_some() || self.waiting_for_compaction {
+        } else if self.compacting() {
             LiveStatus::Compacting
         } else if self.is_busy() {
             LiveStatus::Running
@@ -555,7 +551,10 @@ impl Session {
             }
             AgentEvent::InteractionRequested {
                 turn, interaction, ..
-            } => self.interaction = Some(PendingInteraction::from_wire(turn, &interaction)),
+            } => {
+                self.interaction = Some(PendingInteraction::from_wire(turn, &interaction));
+                self.armed_at = tokio::time::Instant::now() + ARM_AFTER;
+            }
             AgentEvent::InteractionResolved { .. } => self.interaction = None,
             // Only `turn.wait` ends a turn; this just stops the phase text.
             AgentEvent::TurnFinished { .. } => {
@@ -769,7 +768,7 @@ impl Session {
             .iter()
             .rposition(|block| block.loop_id() == Some(loop_id))
             .map_or(self.transcript.len(), |index| index + 1);
-        // User blocks have no loop id, so keep earlier steers after the same step ahead of this batch.
+        // User blocks carry no loop id: keep steers already placed after this step first.
         while matches!(
             self.transcript.blocks().get(at),
             Some(Block::User {
@@ -916,11 +915,11 @@ impl Session {
     }
 
     /// Takes a `session.context` report: compaction progress, the last result
-    /// as a marker, and the coverage of the current summary. Returns the reason
-    /// of an automatic compaction that failed since the previous report.
+    /// as a marker, and the coverage of the current summary. Returns the outcome
+    /// of a turn-start compaction that failed since the previous report.
     pub fn apply_context(&mut self, context: SessionContext) -> Option<String> {
         let automatic = context.automatic.as_ref();
-        // A compaction between two requests has no event or operation of its own.
+        // A turn-start compaction has no event or operation of its own.
         self.compaction = context.current_operation.clone().or_else(|| {
             let running = automatic?.current.as_ref()?;
             Some(CompactionProgress {
@@ -930,26 +929,29 @@ impl Session {
                 retained_item_count: 0,
             })
         });
-        // The first report only sets the baseline: an earlier compaction is
+        // The first report only sets the baseline: an earlier attempt is
         // already in the history that was read.
+        let mut failure = None;
         if let Some(last) = automatic.and_then(|view| view.last.as_ref())
             && self.auto_seen.replace(last.operation_id.clone()).as_ref()
                 != Some(&last.operation_id)
-            && last.outcome == "compacted"
             && self.context.is_some()
         {
-            let result = CompactionResult {
-                origin: Some("automatic".into()),
-                operation_id: last.operation_id.clone(),
-                status: CompactStatus::Compacted,
-                before_tokens: last.before_tokens,
-                after_tokens: last.after_tokens,
-                covered_loop_count: None,
-                covered_item_count: None,
-                retained_item_count: None,
-                failure_kind: None,
-            };
-            self.push_compaction(&result, None);
+            if last.outcome == "compacted" {
+                let result = CompactionResult {
+                    operation_id: last.operation_id.clone(),
+                    status: CompactStatus::Compacted,
+                    before_tokens: last.before_tokens,
+                    after_tokens: last.after_tokens,
+                    covered_loop_count: None,
+                    covered_item_count: None,
+                    retained_item_count: None,
+                    failure_kind: None,
+                };
+                self.push_compaction(&result, None);
+            } else if !last.outcome.starts_with("compacted") && last.outcome != "cancelled" {
+                failure = Some(last.outcome.clone());
+            }
         }
         let coverage = context
             .coverage
@@ -962,24 +964,6 @@ impl Session {
         if let Some(coverage) = coverage {
             self.cover_replayed_compaction(coverage);
         }
-        let failure = context.last_result.as_ref().filter(|last| {
-            last.origin.as_deref() == Some("automatic")
-                && last.status == CompactStatus::Failed
-                && last.failure_kind.as_deref() != Some("cancelled")
-        });
-        let failure = failure
-            .filter(|last| {
-                self.failure_seen
-                    .replace(last.operation_id.clone())
-                    .as_ref()
-                    != Some(&last.operation_id)
-                    && self.context.is_some()
-            })
-            .map(|last| {
-                last.failure_kind
-                    .clone()
-                    .unwrap_or_else(|| "no progress".into())
-            });
         self.context = Some(context);
         failure
     }
@@ -1129,7 +1113,7 @@ mod tests {
     }
 
     #[test]
-    fn a_turn_end_keeps_unapplied_steers_in_place_as_unsent() {
+    fn a_turn_ends_once_and_keeps_unapplied_steers_in_the_queue() {
         let mut session = session();
         session.live = Some(LiveTurn::new(TurnRef::new("s", "l"), 0));
         queue(&mut session, "steer", QueuedKind::Steer);
@@ -1141,8 +1125,6 @@ mod tests {
         assert_eq!(session.end_turn(&wait), None, "the turn ends once");
         let queued = session.take_next().unwrap();
         assert_eq!(queued.text, "steer");
-        assert_eq!(queued.kind, QueuedKind::Steer);
-        assert!(!queued.sent);
     }
 
     #[test]

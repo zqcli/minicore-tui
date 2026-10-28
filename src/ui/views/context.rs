@@ -3,7 +3,10 @@
 use ratatui::text::Line;
 
 use crate::app::Session;
-use crate::protocol::{CompactStatus, SessionContext, SessionPresentation};
+use crate::app::session::input_budget;
+use crate::protocol::{
+    CompactStatus, CompactionPhase, CompactionProgress, SessionContext, SessionPresentation,
+};
 
 use super::styled;
 use crate::ui::format_tokens;
@@ -27,9 +30,6 @@ pub fn text(session: Option<&Session>, styles: Styles) -> String {
         .collect::<Vec<_>>()
         .join("\n")
 }
-
-pub use crate::app::session::context_percent as percent;
-use crate::app::session::input_budget;
 
 /// Labels estimates as estimates and never prints an unknown number as zero.
 fn summary_lines(
@@ -131,10 +131,6 @@ fn summary_lines(
             ));
         }
         if let Some(last) = &context.last_result {
-            let origin = match last.origin.as_deref() {
-                Some(origin @ ("automatic" | "manual")) => format!(" ({origin})"),
-                _ => String::new(),
-            };
             // Coverage is the Summary line's; equal figures say nothing.
             let detail = match (last.before_tokens, last.after_tokens) {
                 (Some(before), Some(after))
@@ -149,13 +145,7 @@ fn summary_lines(
                 }
                 _ => compact_status(last.status).to_owned(),
             };
-            // An automatic check that found nothing to do is not a compaction;
-            // the summary line below says what the last real one covered.
-            let label = match (last.status, last.origin.as_deref()) {
-                (CompactStatus::Noop, Some("automatic")) => "Last automatic check".to_owned(),
-                _ => format!("Last compaction{origin}"),
-            };
-            lines.push(styled(&format!("{label}: {detail}"), styles.dim()));
+            lines.push(styled(&format!("Last compaction: {detail}"), styles.dim()));
         }
         if let Some(last) = context
             .automatic
@@ -173,7 +163,7 @@ fn summary_lines(
                 _ => last.outcome.replace('_', " "),
             };
             lines.push(styled(
-                &format!("Last compaction between requests: {detail}"),
+                &format!("Last automatic compaction: {detail}"),
                 styles.dim(),
             ));
         }
@@ -209,30 +199,30 @@ fn summary_lines(
     lines
 }
 
-fn phase_counts(operation: &crate::protocol::CompactionProgress) -> String {
+fn phase_counts(operation: &CompactionProgress) -> String {
     format!(
         "{} items prepared · {} kept",
         operation.covered_item_count, operation.retained_item_count
     )
 }
 
-fn operation_label(phase: &crate::protocol::CompactionPhase) -> &'static str {
+fn operation_label(phase: &CompactionPhase) -> &'static str {
     match phase {
-        crate::protocol::CompactionPhase::Preparing => "preparing",
-        crate::protocol::CompactionPhase::Summarizing => "summarizing",
-        crate::protocol::CompactionPhase::Merging => "merging",
-        crate::protocol::CompactionPhase::Committing => "committing",
-        crate::protocol::CompactionPhase::Unknown => "working",
+        CompactionPhase::Preparing => "preparing",
+        CompactionPhase::Summarizing => "summarizing",
+        CompactionPhase::Merging => "merging",
+        CompactionPhase::Committing => "committing",
+        CompactionPhase::Unknown => "working",
     }
 }
 
-fn compact_status(status: crate::protocol::CompactStatus) -> &'static str {
+fn compact_status(status: CompactStatus) -> &'static str {
     match status {
-        crate::protocol::CompactStatus::Compacted => "compacted",
-        crate::protocol::CompactStatus::Noop => "nothing to compact",
-        crate::protocol::CompactStatus::Failed => "failed",
-        crate::protocol::CompactStatus::UnknownWrite => "write outcome unknown",
-        crate::protocol::CompactStatus::Unknown => "unknown",
+        CompactStatus::Compacted => "compacted",
+        CompactStatus::Noop => "nothing to compact",
+        CompactStatus::Failed => "failed",
+        CompactStatus::UnknownWrite => "write outcome unknown",
+        CompactStatus::Unknown => "unknown",
     }
 }
 
@@ -241,7 +231,12 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    use crate::app::session::context_percent;
     use crate::ui::theme::Palette;
+
+    fn lines_of(lines: Vec<Line<'static>>) -> Vec<String> {
+        lines.iter().map(Line::to_string).collect()
+    }
 
     #[test]
     fn the_context_view_prefers_reported_numbers_and_labels_estimates() {
@@ -256,20 +251,12 @@ mod tests {
             "coverage": {"covered_loop_count": 6, "covered_item_count": 12, "retained_item_count": 3},
             "budget": {"estimated_history_tokens": 370, "input_budget_tokens": 40000,
                        "trigger_tokens": 32000, "target_tokens": 16000},
-            "last_result": {"operation_id": "auto-1", "status": "compacted",
+            "last_result": {"operation_id": "tui-1", "status": "compacted",
                             "before_tokens": 4200, "after_tokens": 900, "covered_loop_count": 6}
         }))
         .unwrap();
         let lines = summary_lines(Some(&context), Some(&presentation), styles);
-        let text: Vec<String> = lines
-            .iter()
-            .map(|line| {
-                line.spans
-                    .iter()
-                    .map(|span| span.content.as_ref())
-                    .collect()
-            })
-            .collect();
+        let text = lines_of(lines);
         assert!(
             text[0].contains("31.2k of 40k input budget (78%)"),
             "{text:?}"
@@ -301,15 +288,7 @@ mod tests {
         }))
         .unwrap();
         let lines = summary_lines(Some(&context), None, styles);
-        let text: Vec<String> = lines
-            .iter()
-            .map(|line| {
-                line.spans
-                    .iter()
-                    .map(|span| span.content.as_ref())
-                    .collect()
-            })
-            .collect();
+        let text = lines_of(lines);
         assert!(
             text.iter()
                 .any(|line| line.contains("History estimate: 1k of 4k")),
@@ -323,38 +302,12 @@ mod tests {
     }
 
     #[test]
-    fn a_compaction_result_names_whether_it_was_automatic() {
-        let styles = Styles::of(Palette::dark());
-        let context: SessionContext = serde_json::from_value(json!({
-            "session_id": "ses_1",
-            "last_result": {"operation_id": "auto-1", "origin": "automatic", "status": "compacted",
-                            "before_tokens": 32100, "after_tokens": 2700}
-        }))
-        .unwrap();
-        let lines = summary_lines(Some(&context), None, styles);
-        let text: String = lines
-            .iter()
-            .map(|line| {
-                line.spans
-                    .iter()
-                    .map(|span| span.content.as_ref())
-                    .collect::<String>()
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(
-            text.contains("Last compaction (automatic): 32.1k → 2.7k tokens"),
-            "{text}"
-        );
-    }
-
-    #[test]
     fn a_compaction_that_changed_nothing_shows_its_status_not_coverage() {
         let styles = Styles::of(Palette::dark());
         let context: SessionContext = serde_json::from_value(json!({
             "session_id": "ses_1",
             "coverage": {"covered_loop_count": 6, "covered_item_count": 379, "retained_item_count": 0},
-            "last_result": {"operation_id": "auto-1", "origin": "automatic", "status": "compacted",
+            "last_result": {"operation_id": "tui-1", "status": "compacted",
                             "before_tokens": 14812, "after_tokens": 14790,
                             "covered_loop_count": 0, "covered_item_count": 379,
                             "retained_item_count": 0}
@@ -365,7 +318,7 @@ mod tests {
             .map(Line::to_string)
             .collect();
         assert!(
-            text.contains(&"Last compaction (automatic): compacted".to_owned()),
+            text.contains(&"Last compaction: compacted".to_owned()),
             "{text:?}"
         );
         assert!(text.iter().all(|line| !line.contains('→')), "{text:?}");
@@ -386,16 +339,7 @@ mod tests {
         }))
         .unwrap();
         let lines = summary_lines(Some(&context), None, styles);
-        let text: String = lines
-            .iter()
-            .map(|line| {
-                line.spans
-                    .iter()
-                    .map(|span| span.content.as_ref())
-                    .collect::<String>()
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
+        let text = lines_of(lines).join("\n");
         assert!(!text.contains("0 tokens"), "{text}");
         assert!(text.contains("not reported yet"), "{text}");
     }
@@ -405,21 +349,12 @@ mod tests {
         let styles = Styles::of(Palette::dark());
         let context: SessionContext = serde_json::from_value(json!({
             "session_id": "ses_1",
-            "current_operation": {"operation_id": "auto-1", "phase": "summarizing",
+            "current_operation": {"operation_id": "tui-1", "phase": "summarizing",
                                   "covered_item_count": 12, "retained_item_count": 0}
         }))
         .unwrap();
         let lines = summary_lines(Some(&context), None, styles);
-        let text: String = lines
-            .iter()
-            .map(|line| {
-                line.spans
-                    .iter()
-                    .map(|span| span.content.as_ref())
-                    .collect::<String>()
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
+        let text = lines_of(lines).join("\n");
         assert!(text.contains("Compacting now: summarizing"), "{text}");
     }
 
@@ -445,29 +380,19 @@ mod tests {
     }
 
     #[test]
-    fn an_automatic_last_observation_without_numbers_does_not_panic() {
+    fn an_automatic_observation_without_numbers_reads_as_its_outcome() {
         let styles = Styles::of(Palette::dark());
         let context: SessionContext = serde_json::from_value(json!({
             "session_id": "ses_1",
-            "last_result": {"operation_id": "auto-1", "status": "failed", "failure_kind": "no_progress"}
+            "automatic": {"last": {"operation_id": "auto-boundary-l1-1", "outcome": "no_progress"}}
         }))
         .unwrap();
         let lines = summary_lines(Some(&context), None, styles);
-        let text: String = lines
-            .iter()
-            .map(|line| {
-                line.spans
-                    .iter()
-                    .map(|span| span.content.as_ref())
-                    .collect::<String>()
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(text.contains("Last compaction: failed"), "{text}");
-    }
-
-    fn lines_of(lines: Vec<Line<'static>>) -> Vec<String> {
-        lines.iter().map(Line::to_string).collect()
+        let text = lines_of(lines).join("\n");
+        assert!(
+            text.contains("Last automatic compaction: no progress"),
+            "{text}"
+        );
     }
 
     #[test]
@@ -483,7 +408,11 @@ mod tests {
             }))
             .unwrap(),
         );
-        assert_eq!(percent(&session), Some(28.1), "no budget yet: the window");
+        assert_eq!(
+            context_percent(&session),
+            Some(28.1),
+            "no budget yet: the window"
+        );
         session.context = Some(
             serde_json::from_value(json!({
                 "session_id": "s",
@@ -491,7 +420,7 @@ mod tests {
             }))
             .unwrap(),
         );
-        assert_eq!(percent(&session), Some(45.0));
+        assert_eq!(context_percent(&session), Some(45.0));
         let text = lines_of(lines(Some(&session), Styles::of(Palette::dark())));
         assert!(
             text[0].starts_with("Context: 18k of 40k input budget (45%) · model window 64k"),
@@ -500,33 +429,9 @@ mod tests {
     }
 
     #[test]
-    fn an_automatic_check_that_found_nothing_is_not_called_a_compaction() {
+    fn a_turn_start_compaction_is_listed_as_the_last_automatic_one() {
         let context: SessionContext = serde_json::from_value(json!({
             "session_id": "ses_1",
-            "coverage": {"covered_loop_count": 5, "covered_item_count": 64, "retained_item_count": 0},
-            "last_result": {"operation_id": "auto-2", "origin": "automatic", "status": "noop"}
-        }))
-        .unwrap();
-        let text = lines_of(summary_lines(
-            Some(&context),
-            None,
-            Styles::of(Palette::dark()),
-        ));
-        assert!(
-            text.contains(&"Last automatic check: nothing to compact".to_owned()),
-            "{text:?}"
-        );
-        assert!(
-            text.contains(&"Summary covers 5 turns · 64 items · 0 kept".to_owned()),
-            "{text:?}"
-        );
-    }
-
-    #[test]
-    fn a_compaction_between_requests_is_listed_beside_the_last_check() {
-        let context: SessionContext = serde_json::from_value(json!({
-            "session_id": "ses_1",
-            "last_result": {"operation_id": "auto-2", "origin": "automatic", "status": "noop"},
             "automatic": {"last": {"operation_id": "auto-boundary-l1-1", "before_tokens": 35300,
                                    "after_tokens": 8000, "outcome": "compacted"}}
         }))
@@ -537,7 +442,7 @@ mod tests {
             Styles::of(Palette::dark()),
         ));
         assert!(
-            text.contains(&"Last compaction between requests: 35.3k → 8k tokens".to_owned()),
+            text.contains(&"Last automatic compaction: 35.3k → 8k tokens".to_owned()),
             "{text:?}"
         );
     }

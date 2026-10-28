@@ -68,7 +68,7 @@ pub fn chrome(line: Line<'static>) -> Line<'static> {
     line.patch_style(CHROME)
 }
 
-/// Tags a span the UI adds after a row's content, such as a card's duration.
+/// Tags a span the UI adds before or after a row's content, such as a card's duration.
 pub fn chrome_span(span: Span<'static>) -> Span<'static> {
     span.patch_style(CHROME)
 }

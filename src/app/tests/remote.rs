@@ -2081,7 +2081,7 @@ async fn context_and_files_queries_read_the_requesting_devices_session_and_map_t
         "session.context@s2",
         json!({"session_id":"s2", "current_operation":null,
                "coverage":{"covered_loop_count":6, "covered_item_count":12, "retained_item_count":3},
-               "last_result":{"operation_id":"auto-1", "origin":"automatic", "status":"compacted",
+               "last_result":{"operation_id":"tui-1", "status":"compacted",
                               "before_tokens":4200, "after_tokens":900},
                "budget":{"estimated_history_tokens":370, "input_budget_tokens":40000,
                          "trigger_tokens":32000, "target_tokens":16000},
@@ -2112,7 +2112,7 @@ async fn context_and_files_queries_read_the_requesting_devices_session_and_map_t
             "tokens":18000, "window":64000, "percent":45.0, "budget":40000, "history_tokens":370,
             "trigger_tokens":32000, "target_tokens":16000, "compacting":false,
             "coverage":{"turns":6, "items":12, "kept":3},
-            "last_compaction":{"origin":"automatic", "status":"compacted", "before":4200, "after":900},
+            "last_compaction":{"status":"compacted", "before":4200, "after":900},
             "failure":null}})]
     );
     assert_eq!(

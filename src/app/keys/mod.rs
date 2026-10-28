@@ -7,6 +7,7 @@ mod overlay;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
+use super::session::ARM_AFTER;
 use super::{Action, Answer, App, InteractionKind};
 
 impl App {
@@ -37,7 +38,11 @@ impl App {
     /// Approval prompts own the keyboard until answered; other keys are
     /// swallowed rather than reaching the draft behind the prompt.
     fn on_interaction_key(&mut self, key: KeyEvent) -> Option<Action> {
-        let interaction = self.session.as_mut()?.interaction.as_mut()?;
+        let now = tokio::time::Instant::now();
+        let session = self.session.as_mut()?;
+        // Answer keys wait for the arming, so typing under way cannot answer.
+        let armed = now >= session.armed_at;
+        let interaction = session.interaction.as_mut()?;
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let answer = match key.code {
             KeyCode::Char('y') if !ctrl => Answer::Allow,
@@ -47,8 +52,14 @@ impl App {
                 Answer::AllowTool
             }
             KeyCode::Char('n') if !ctrl => Answer::Deny,
-            KeyCode::Esc => Answer::Deny,
             KeyCode::Enter => Answer::Choice(interaction.selected),
+            KeyCode::Esc => return Some(Action::Answer(Answer::Deny)),
+            // Reading the transcript before answering.
+            KeyCode::Up | KeyCode::Down if ctrl => return self.on_composer_key(key),
+            KeyCode::PageUp | KeyCode::PageDown | KeyCode::End if key.modifiers.is_empty() => {
+                return self.on_composer_key(key);
+            }
+            KeyCode::Char('o' | 't') if ctrl => return self.on_composer_key(key),
             KeyCode::Up => {
                 interaction.selected = interaction.selected.saturating_sub(1);
                 return None;
@@ -58,8 +69,13 @@ impl App {
                 interaction.selected = (interaction.selected + 1).min(last);
                 return None;
             }
-            _ => return None,
+            _ => {
+                if !armed {
+                    session.armed_at = now + ARM_AFTER;
+                }
+                return None;
+            }
         };
-        Some(Action::Answer(answer))
+        armed.then_some(Action::Answer(answer))
     }
 }

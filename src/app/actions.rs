@@ -11,6 +11,7 @@ use super::{
 use crate::config::ThemeKind;
 use crate::protocol::stamp::now_millis;
 use crate::protocol::{self, CompactionPhase, CompactionProgress, Reasoning, SessionResult};
+use crate::title::LONG_TURN;
 use crate::transcript::Block;
 use crate::ui::theme::{Palette, Styles};
 
@@ -86,8 +87,8 @@ impl App {
             return;
         }
         match action {
-            Action::Submit => self.submit(),
-            Action::QueueFollowUp => self.submit_follow_up(),
+            Action::Submit => self.submit_composer(false),
+            Action::QueueFollowUp => self.submit_composer(true),
             Action::OpenSession(id) => self.open_session(id),
             Action::NewSession => self.new_draft(None),
             Action::NewSessionWith(profile) if self.profiles.iter().any(|p| p.id == profile) => {
@@ -153,17 +154,6 @@ impl App {
             Action::Quit => self.request_quit(),
             Action::Remote(command) => self.remote_command(&command),
         }
-    }
-
-    /// Enter: send when idle, steer when a turn is running. Without a session
-    /// the draft's text starts one.
-    fn submit(&mut self) {
-        self.submit_composer(false);
-    }
-
-    /// Alt+Enter or Ctrl+Enter: queue a follow-up; when idle it just sends.
-    fn submit_follow_up(&mut self) {
-        self.submit_composer(true);
     }
 
     fn submit_composer(&mut self, follow: bool) {
@@ -254,7 +244,7 @@ impl App {
     }
 
     /// Asks for the context report now and then while a turn runs, because a
-    /// compaction between two requests has no event.
+    /// turn-start compaction has no event.
     pub fn watch_context(&mut self) {
         let Some(session) = self.session.as_mut().filter(|session| session.is_busy()) else {
             return;
@@ -439,6 +429,8 @@ impl App {
         }
         if self.background_op {
             self.background_approval();
+        } else {
+            self.ring |= self.busy_elapsed() >= Some(LONG_TURN);
         }
     }
 
@@ -461,7 +453,7 @@ impl App {
         self.read_history(window);
     }
 
-    /// Reads a history window for the resident session.
+    /// Reads a history window for the foreground session.
     pub(super) fn read_history(&self, window: tasks::Window) {
         let Some(session) = self.session.as_ref() else {
             return;
@@ -521,7 +513,6 @@ impl App {
             );
         } else if let Some(text) = self.session.as_mut().and_then(Session::recall_unsent) {
             self.composer.set_text(&text);
-            self.pump_queue();
         }
     }
 
@@ -587,7 +578,6 @@ impl App {
             }
         } else if session.next_turn_start.is_none()
             && !session.compacting()
-            && !session.waiting_for_compaction
             && let Some(queued) = session.take_next()
         {
             self.send(queued);

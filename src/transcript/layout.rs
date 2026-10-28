@@ -29,6 +29,13 @@ struct Uses {
 }
 
 impl Uses {
+    fn expanded(expanded: bool) -> Self {
+        Self {
+            expanded,
+            show_reasoning: false,
+        }
+    }
+
     fn of(block: &Block) -> Self {
         match block {
             Block::Assistant {
@@ -42,22 +49,12 @@ impl Uses {
                     show_reasoning: thinking,
                 }
             }
-            Block::Tool(call) => Self {
-                expanded: call.expanded.is_none(),
-                show_reasoning: false,
-            },
-            Block::Compaction { .. } => Self {
-                expanded: true,
-                show_reasoning: false,
-            },
-            Block::TurnEnd { outcome, .. } => Self {
-                expanded: outcome.provider().is_some_and(|p| p.message.is_some()),
-                show_reasoning: false,
-            },
-            _ => Self {
-                expanded: false,
-                show_reasoning: false,
-            },
+            Block::Tool(call) => Self::expanded(call.expanded.is_none()),
+            Block::Compaction { .. } => Self::expanded(true),
+            Block::TurnEnd { outcome, .. } => {
+                Self::expanded(outcome.provider().is_some_and(|p| p.message.is_some()))
+            }
+            _ => Self::expanded(false),
         }
     }
 }

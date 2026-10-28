@@ -495,10 +495,10 @@ test('a workspace group shows five sessions and "Show N more" opens the rest', (
 test('an open session list keeps its order while statuses change and puts new sessions on top of their group', () => {
   const first = MC.sessionLayout([live('a', 'running', { started_ms: 1 }), live('b', 'approval'), idle('c')], '');
   const frozen = first.order;
-  // b's approval is answered and a starts waiting; c is gone; d is new and needs you.
+  // b's approval is answered and keeps its place; a starts waiting and surfaces in Needs you; c is gone; d is new and needs you.
   const later = MC.sessionLayout([live('d', 'approval'), live('a', 'approval', { started_ms: 1 }), live('b', 'running', { started_ms: 2 })], '', frozen);
   assert.equal(later.order, frozen);
-  assert.deepEqual(plain(later.groups).map(x => [x.label, x.items.map(y => y.id)]), [['Needs you', ['d', 'b']], ['Running', ['a']]]);
+  assert.deepEqual(plain(later.groups).map(x => [x.label, x.items.map(y => y.id)]), [['Needs you', ['d', 'a', 'b']]]);
   // Opened again: sorted afresh.
   const again = MC.sessionLayout([live('d', 'approval'), live('a', 'approval', { started_ms: 1 }), live('b', 'running', { started_ms: 2 })], '');
   assert.deepEqual(plain(again.groups).map(x => [x.label, x.items.map(y => y.id)]), [['Needs you', ['a', 'd']], ['Running', ['b']]]);
@@ -506,6 +506,59 @@ test('an open session list keeps its order while statuses change and puts new se
   const before = MC.sessionLayout([idle('e', { workspace: '/other' }), idle('c')], '').order;
   const settled = MC.sessionLayout([idle('n', { updated_at: '2026-10-25T05:00:00Z' }), idle('c'), idle('e', { workspace: '/other' })], '', before);
   assert.deepEqual(plain(settled.groups).map(x => [x.label, x.items.map(y => y.id)]), [['w', ['n', 'c']], ['other', ['e']]]);
+});
+
+test('an open list moves a session that starts waiting on the user into Needs you from any group and keeps it there', () => {
+  const groups = lay => plain(lay.groups).map(x => [x.label, x.items.map(y => y.id)]);
+  // A pinned running session: Pinned may be folded, so held in place its approval would be hidden.
+  const first = MC.sessionLayout([live('a', 'running', { started_ms: 1 })], '', null, ['a']);
+  assert.deepEqual(groups(first), [['Pinned', ['a']]]);
+  const asked = MC.sessionLayout([live('a', 'approval', { started_ms: 1 })], '', first.order, ['a']);
+  assert.deepEqual(groups(asked), [['Needs you', ['a']]]);
+  // Answered while the list is still open, it keeps its new place instead of jumping back; reopening sorts afresh.
+  assert.deepEqual(groups(MC.sessionLayout([live('a', 'running', { started_ms: 1 })], '', asked.order, ['a'])), [['Needs you', ['a']]]);
+  assert.deepEqual(groups(MC.sessionLayout([live('a', 'running', { started_ms: 1 })], '', null, ['a'])), [['Pinned', ['a']]]);
+  // From a workspace group (which may be folded too) it lands on top of the sessions already waiting; other rows hold still.
+  const held = () => MC.sessionLayout([live('w', 'approval'), live('b', 'idle'), idle('c')], '').order;
+  assert.deepEqual(groups(MC.sessionLayout([live('w', 'approval'), live('b', 'approval'), idle('c')], '', held())), [['Needs you', ['b', 'w']], ['w', ['c']]]);
+  // A session that starts running holds its place: only a wait on the user overrides the frozen order.
+  assert.deepEqual(groups(MC.sessionLayout([live('w', 'approval'), live('b', 'running', { started_ms: 1 }), idle('c')], '', held())), [['Needs you', ['w']], ['w', ['b', 'c']]]);
+});
+
+test('pinned sessions form one group after Needs you, newest pin first, and appear nowhere else', () => {
+  const sessions = [idle('a'), live('b', 'running', { started_ms: 1 }), idle('c', { workspace: '/docs' }), live('ask', 'approval'), idle('d')];
+  const groups = (pins, query = '', frozen) => plain(MC.sessionLayout(sessions, query, frozen, pins).groups).map(x => [x.label, x.items.map(y => y.id)]);
+  assert.deepEqual(groups([]), [['Needs you', ['ask']], ['Running', ['b']], ['w', ['a', 'd']], ['docs', ['c']]]);
+  // The newest pin leads; a pinned running session moves out of Running and a pinned approval stays under Needs you.
+  assert.deepEqual(groups(['c', 'b', 'ask']), [['Needs you', ['ask']], ['Pinned', ['c', 'b']], ['w', ['a', 'd']]]);
+  assert.equal(MC.sessionLayout(sessions, '', null, ['c']).groups[1].ws, MC.PINNED_KEY);
+  // A search covers the pinned group too and hides groups without a match.
+  assert.deepEqual(groups(['c', 'b'], 'docs'), [['Pinned', ['c']]]);
+  assert.deepEqual(groups(['c', 'b'], 'zzz'), []);
+  // An open list keeps its rows in place; a row that is pinned (its entry dropped from the frozen order) goes to the top of Pinned.
+  const frozen = MC.sessionLayout(sessions, '', null, ['c']).order;
+  frozen.delete('d');
+  assert.deepEqual(groups(['d', 'c'], '', frozen), [['Needs you', ['ask']], ['Pinned', ['d', 'c']], ['Running', ['b']], ['w', ['a']]]);
+});
+
+test('a session is recent while resident and idle with its last turn under 30 minutes old, and its label says when', () => {
+  const now = Date.parse('2026-10-25T01:00:00Z'), at = min => new Date(now - min * 60000).toISOString();
+  assert.equal(MC.recent(live('a', 'idle', { updated_at: at(3) }), now), true);
+  assert.equal(MC.recent(live('a', 'idle', { updated_at: at(29.9) }), now), true);
+  assert.equal(MC.recent(live('a', 'idle', { updated_at: at(30) }), now), false);
+  assert.equal(MC.recent(live('a', 'running', { updated_at: at(1) }), now), false);
+  assert.equal(MC.recent(idle('a', { updated_at: at(1) }), now), false);
+  assert.equal(MC.finishedText('now'), 'finished just now');
+  assert.equal(MC.finishedText('3m'), 'finished 3m ago');
+});
+
+test('pins of sessions the catalog dropped are forgotten, unless a full catalog may hide them', () => {
+  const some = [idle('a'), idle('b')];
+  assert.deepEqual(plain(MC.prunePins(['x', 'b', 'a'], some)), ['b', 'a']);
+  const same = ['b', 'a'];
+  assert.equal(MC.prunePins(same, some), same);
+  const full = Array.from({ length: 50 }, (_, k) => idle('s' + k));
+  assert.deepEqual(plain(MC.prunePins(['gone', 's1'], full)), ['gone', 's1']);
 });
 
 test('attention counts other sessions that need you plus this view, and notices name their session', () => {
@@ -795,10 +848,10 @@ test('approval buttons use the host labels, allow first and deny last; choices a
 
 test('the context view reads the reply as a bar with markers and rows for the parts present', () => {
   const full = { tokens: 46800, window: 200000, percent: 23.4, budget: 180000, history_tokens: 38500, trigger_tokens: 160000, target_tokens: 60000, compacting: false,
-    coverage: { turns: 14, items: 212, kept: 58 }, last_compaction: { origin: 'manual', status: 'completed', before: 182400, after: 9100 }, failure: null };
+    coverage: { turns: 14, items: 212, kept: 58 }, last_compaction: { status: 'completed', before: 182400, after: 9100 }, failure: null };
   const v = plain(MC.contextView(full));
   assert.deepEqual([v.percent, v.used, v.trigger, v.target, v.failure], [23.4, '46.8k of 200.0k tokens', 80, 30, '']);
-  assert.deepEqual(v.rows, [['History', '38.5k tokens'], ['Compacts at', '160.0k → 60.0k'], ['Covers', '14 turns · 212 items · 58 kept'], ['Last compaction', 'Manual · completed · 182.4k → 9.1k']]);
+  assert.deepEqual(v.rows, [['History', '38.5k tokens'], ['Compacts at', '160.0k → 60.0k'], ['Covers', '14 turns · 212 items · 58 kept'], ['Last compaction', 'completed · 182.4k → 9.1k']]);
   const bare = plain(MC.contextView({ tokens: 10, window: 100, percent: 10, history_tokens: null, trigger_tokens: null, target_tokens: null, coverage: null, last_compaction: null, failure: 'model refused', compacting: true }));
   assert.deepEqual([bare.rows, bare.trigger, bare.failure, bare.compacting], [[], null, 'model refused', true]);
 });
