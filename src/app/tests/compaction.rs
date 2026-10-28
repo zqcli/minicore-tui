@@ -102,7 +102,7 @@ fn presentation(percent: f64) -> serde_json::Value {
 }
 
 fn footer_percent(h: &Harness) -> Option<f64> {
-    crate::ui::views::context::percent(h.app.session.as_ref().expect("a session"))
+    crate::app::session::context_percent(h.app.session.as_ref().expect("a session"))
 }
 
 #[tokio::test(start_paused = true)]

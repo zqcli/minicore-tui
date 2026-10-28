@@ -532,10 +532,10 @@ fn title_spans(
     right: Vec<Span<'static>>,
     inner: usize,
 ) -> Vec<Span<'static>> {
-    let cells = |spans: &[Span<'static>]| -> usize {
-        spans.iter().map(|span| wrap::width(&span.content)).sum()
-    };
-    let (left_width, right_width) = (cells(&left), cells(&right));
+    let (left_width, right_width) = (
+        super::status::spans_width(&left),
+        super::status::spans_width(&right),
+    );
     let mut spans = padded(left);
     if right_width > 0 && left_width + right_width < inner {
         spans.push(chrome_span(Span::raw(

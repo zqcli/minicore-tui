@@ -3,7 +3,10 @@
 use ratatui::text::Line;
 
 use crate::app::Session;
-use crate::protocol::{CompactStatus, SessionContext, SessionPresentation};
+use crate::app::session::input_budget;
+use crate::protocol::{
+    CompactStatus, CompactionPhase, CompactionProgress, SessionContext, SessionPresentation,
+};
 
 use super::styled;
 use crate::ui::format_tokens;
@@ -27,9 +30,6 @@ pub fn text(session: Option<&Session>, styles: Styles) -> String {
         .collect::<Vec<_>>()
         .join("\n")
 }
-
-pub use crate::app::session::context_percent as percent;
-use crate::app::session::input_budget;
 
 /// Labels estimates as estimates and never prints an unknown number as zero.
 fn summary_lines(
@@ -199,30 +199,30 @@ fn summary_lines(
     lines
 }
 
-fn phase_counts(operation: &crate::protocol::CompactionProgress) -> String {
+fn phase_counts(operation: &CompactionProgress) -> String {
     format!(
         "{} items prepared · {} kept",
         operation.covered_item_count, operation.retained_item_count
     )
 }
 
-fn operation_label(phase: &crate::protocol::CompactionPhase) -> &'static str {
+fn operation_label(phase: &CompactionPhase) -> &'static str {
     match phase {
-        crate::protocol::CompactionPhase::Preparing => "preparing",
-        crate::protocol::CompactionPhase::Summarizing => "summarizing",
-        crate::protocol::CompactionPhase::Merging => "merging",
-        crate::protocol::CompactionPhase::Committing => "committing",
-        crate::protocol::CompactionPhase::Unknown => "working",
+        CompactionPhase::Preparing => "preparing",
+        CompactionPhase::Summarizing => "summarizing",
+        CompactionPhase::Merging => "merging",
+        CompactionPhase::Committing => "committing",
+        CompactionPhase::Unknown => "working",
     }
 }
 
-fn compact_status(status: crate::protocol::CompactStatus) -> &'static str {
+fn compact_status(status: CompactStatus) -> &'static str {
     match status {
-        crate::protocol::CompactStatus::Compacted => "compacted",
-        crate::protocol::CompactStatus::Noop => "nothing to compact",
-        crate::protocol::CompactStatus::Failed => "failed",
-        crate::protocol::CompactStatus::UnknownWrite => "write outcome unknown",
-        crate::protocol::CompactStatus::Unknown => "unknown",
+        CompactStatus::Compacted => "compacted",
+        CompactStatus::Noop => "nothing to compact",
+        CompactStatus::Failed => "failed",
+        CompactStatus::UnknownWrite => "write outcome unknown",
+        CompactStatus::Unknown => "unknown",
     }
 }
 
@@ -231,7 +231,12 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    use crate::app::session::context_percent;
     use crate::ui::theme::Palette;
+
+    fn lines_of(lines: Vec<Line<'static>>) -> Vec<String> {
+        lines.iter().map(Line::to_string).collect()
+    }
 
     #[test]
     fn the_context_view_prefers_reported_numbers_and_labels_estimates() {
@@ -251,15 +256,7 @@ mod tests {
         }))
         .unwrap();
         let lines = summary_lines(Some(&context), Some(&presentation), styles);
-        let text: Vec<String> = lines
-            .iter()
-            .map(|line| {
-                line.spans
-                    .iter()
-                    .map(|span| span.content.as_ref())
-                    .collect()
-            })
-            .collect();
+        let text = lines_of(lines);
         assert!(
             text[0].contains("31.2k of 40k input budget (78%)"),
             "{text:?}"
@@ -291,15 +288,7 @@ mod tests {
         }))
         .unwrap();
         let lines = summary_lines(Some(&context), None, styles);
-        let text: Vec<String> = lines
-            .iter()
-            .map(|line| {
-                line.spans
-                    .iter()
-                    .map(|span| span.content.as_ref())
-                    .collect()
-            })
-            .collect();
+        let text = lines_of(lines);
         assert!(
             text.iter()
                 .any(|line| line.contains("History estimate: 1k of 4k")),
@@ -350,16 +339,7 @@ mod tests {
         }))
         .unwrap();
         let lines = summary_lines(Some(&context), None, styles);
-        let text: String = lines
-            .iter()
-            .map(|line| {
-                line.spans
-                    .iter()
-                    .map(|span| span.content.as_ref())
-                    .collect::<String>()
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
+        let text = lines_of(lines).join("\n");
         assert!(!text.contains("0 tokens"), "{text}");
         assert!(text.contains("not reported yet"), "{text}");
     }
@@ -374,16 +354,7 @@ mod tests {
         }))
         .unwrap();
         let lines = summary_lines(Some(&context), None, styles);
-        let text: String = lines
-            .iter()
-            .map(|line| {
-                line.spans
-                    .iter()
-                    .map(|span| span.content.as_ref())
-                    .collect::<String>()
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
+        let text = lines_of(lines).join("\n");
         assert!(text.contains("Compacting now: summarizing"), "{text}");
     }
 
@@ -409,7 +380,7 @@ mod tests {
     }
 
     #[test]
-    fn an_automatic_last_observation_without_numbers_does_not_panic() {
+    fn an_automatic_observation_without_numbers_reads_as_its_outcome() {
         let styles = Styles::of(Palette::dark());
         let context: SessionContext = serde_json::from_value(json!({
             "session_id": "ses_1",
@@ -417,24 +388,11 @@ mod tests {
         }))
         .unwrap();
         let lines = summary_lines(Some(&context), None, styles);
-        let text: String = lines
-            .iter()
-            .map(|line| {
-                line.spans
-                    .iter()
-                    .map(|span| span.content.as_ref())
-                    .collect::<String>()
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
+        let text = lines_of(lines).join("\n");
         assert!(
             text.contains("Last automatic compaction: no progress"),
             "{text}"
         );
-    }
-
-    fn lines_of(lines: Vec<Line<'static>>) -> Vec<String> {
-        lines.iter().map(Line::to_string).collect()
     }
 
     #[test]
@@ -450,7 +408,11 @@ mod tests {
             }))
             .unwrap(),
         );
-        assert_eq!(percent(&session), Some(28.1), "no budget yet: the window");
+        assert_eq!(
+            context_percent(&session),
+            Some(28.1),
+            "no budget yet: the window"
+        );
         session.context = Some(
             serde_json::from_value(json!({
                 "session_id": "s",
@@ -458,7 +420,7 @@ mod tests {
             }))
             .unwrap(),
         );
-        assert_eq!(percent(&session), Some(45.0));
+        assert_eq!(context_percent(&session), Some(45.0));
         let text = lines_of(lines(Some(&session), Styles::of(Palette::dark())));
         assert!(
             text[0].starts_with("Context: 18k of 40k input budget (45%) · model window 64k"),
