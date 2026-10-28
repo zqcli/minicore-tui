@@ -146,26 +146,27 @@ fn render(app: &mut App, width: u16, height: u16) -> String {
     out
 }
 
-/// Checked-in frames, reviewed with the code that draws them;
-/// `UPDATE_SNAPSHOTS=1 cargo test` rewrites them.
-const IDLE: &str = include_str!("../../tests/snapshots/idle.txt");
-const STREAMING: &str = include_str!("../../tests/snapshots/streaming.txt");
-const DRAFT: &str = include_str!("../../tests/snapshots/draft.txt");
-
-fn snapshot(path: &str, expected: &str, rendered: String) {
+/// Compares `rendered` with the checked-in frame `tests/snapshots/{name}.txt`,
+/// reviewed with the code that draws it; `UPDATE_SNAPSHOTS=1 cargo test` writes it.
+fn snapshot(name: &str, rendered: String) {
+    let file = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/snapshots")
+        .join(format!("{name}.txt"));
     if std::env::var_os("UPDATE_SNAPSHOTS").is_some() {
-        let file = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path);
         std::fs::write(file, rendered).expect("write snapshot");
         return;
     }
-    assert_eq!(expected, rendered, "frame differs from {path}");
+    let expected = std::fs::read_to_string(&file).unwrap_or_else(|error| {
+        panic!("{}: {error}; UPDATE_SNAPSHOTS=1 creates it", file.display())
+    });
+    assert_eq!(expected, rendered, "frame differs from {name}.txt");
 }
 
 #[test]
 fn idle_screen_shows_the_rail_composer_and_footer() {
     let mut app = app();
     conversation(&mut app);
-    snapshot("tests/snapshots/idle.txt", IDLE, render(&mut app, 70, 20));
+    snapshot("idle", render(&mut app, 70, 20));
 }
 
 #[test]
@@ -183,11 +184,7 @@ fn expanded_cards_show_hidden_lines_at_the_cut() {
     transcript.push(Block::Tool(Box::new(tool())));
     transcript.push(Block::Tool(Box::new(read)));
     app.tools_expanded = true;
-    snapshot(
-        "tests/snapshots/expanded-cards.txt",
-        include_str!("../../tests/snapshots/expanded-cards.txt"),
-        render(&mut app, 70, 32),
-    );
+    snapshot("expanded-cards", render(&mut app, 70, 32));
 }
 
 #[test]
@@ -202,7 +199,7 @@ fn the_draft_is_the_welcome_header_over_the_editor_and_the_footer() {
     ];
     app.default_profile = Some("coding".into());
     let screen = render(&mut app, 70, 14);
-    snapshot("tests/snapshots/draft.txt", DRAFT, screen.clone());
+    snapshot("draft", screen.clone());
     assert!(!screen.contains("No session"), "a draft shows no status");
 
     app.ready = false;
@@ -231,11 +228,7 @@ fn the_screen_shows_earlier_content_while_streaming() {
         streaming: true,
         expanded: None,
     });
-    snapshot(
-        "tests/snapshots/streaming.txt",
-        STREAMING,
-        render(&mut app, 70, 20),
-    );
+    snapshot("streaming", render(&mut app, 70, 20));
 }
 
 #[test]
@@ -568,11 +561,7 @@ fn the_dock_lists_sent_and_unsent_messages_in_send_order_with_the_keys() {
     );
     app.session.as_mut().unwrap().queue[0].sent = true;
     app.composer.set_text("one more thing");
-    snapshot(
-        "tests/snapshots/dock-queue.txt",
-        include_str!("../../tests/snapshots/dock-queue.txt"),
-        render(&mut app, 70, 20),
-    );
+    snapshot("dock-queue", render(&mut app, 70, 20));
 }
 
 #[test]
@@ -624,63 +613,38 @@ fn a_long_queued_message_is_cut_to_the_dock_width() {
 
 #[test]
 fn a_running_turn_keeps_elapsed_time_only_in_the_footer() {
-    let mut app = app();
-    let session = app.session.as_mut().expect("session");
-    session.live = Some(crate::app::LiveTurn::new(
-        TurnRef {
-            session_id: "ses_0123456789abcdef".into(),
-            loop_id: "loop_9".into(),
-        },
-        0,
-    ));
-    let rendered = render(&mut app, 70, 12);
-    assert!(
-        rendered.contains("Working (esc to interrupt)"),
-        "{rendered}"
-    );
-    assert!(rendered.contains("Thinking"), "{rendered}");
-    let footer = rendered.lines().last().unwrap();
-    assert!(footer.contains("gpt 6 luna · max"), "{footer}");
-    assert!(!footer.contains("working"), "{footer}");
-    let working = rendered
-        .lines()
-        .find(|line| line.contains("Working (esc to interrupt)"))
-        .expect("working row");
-    assert!(working.ends_with(" · Thinking"), "{working}");
-    assert!(
-        rendered.lines().last().unwrap().ends_with(" · 0m"),
-        "{rendered}"
-    );
-}
-
-#[test]
-fn a_long_running_turn_has_no_duplicate_timer_in_the_working_row() {
-    let mut fixture = app();
-    let app = &mut fixture.app;
-    let session = app.session.as_mut().unwrap();
-    let mut live = crate::app::LiveTurn::new(
-        TurnRef {
-            session_id: session.info.session_id.clone(),
-            loop_id: "loop_9".into(),
-        },
-        0,
-    );
-    live.running_tool = Some(("read".into(), "src/main.rs".into()));
-    live.requests = 3;
-    session.live = Some(live);
-    let rendered = render(app, 110, 12);
-    let working = rendered
-        .lines()
-        .find(|line| line.contains("Working (esc to interrupt)"))
-        .expect("working row");
-    assert!(
-        working.ends_with("Running read src/main.rs · request 3"),
-        "{working}"
-    );
-    assert!(
-        rendered.lines().last().unwrap().ends_with(" · 0m"),
-        "{rendered}"
-    );
+    for (width, tool, requests, working_ends) in [
+        (70, None, 1, " · Thinking"),
+        (
+            110,
+            Some(("read".to_owned(), "src/main.rs".to_owned())),
+            3,
+            "Running read src/main.rs · request 3",
+        ),
+    ] {
+        let mut app = app();
+        let session = app.session.as_mut().expect("session");
+        let mut live = crate::app::LiveTurn::new(
+            TurnRef {
+                session_id: session.info.session_id.clone(),
+                loop_id: "loop_9".into(),
+            },
+            0,
+        );
+        live.running_tool = tool;
+        live.requests = requests;
+        session.live = Some(live);
+        let rendered = render(&mut app, width, 12);
+        let working = rendered
+            .lines()
+            .find(|line| line.contains("Working (esc to interrupt)"))
+            .expect("working row");
+        assert!(working.ends_with(working_ends), "{working}");
+        let footer = rendered.lines().last().unwrap();
+        assert!(footer.contains("gpt 6 luna · max"), "{footer}");
+        assert!(!footer.contains("working"), "{footer}");
+        assert!(footer.ends_with(" · 0m"), "{rendered}");
+    }
 }
 
 /// A left press and release on one cell: a click, not a drag.
@@ -865,11 +829,7 @@ fn rate_limited() -> serde_json::Value {
 fn a_failed_turn_names_the_provider_status_the_hint_and_clips_a_long_message() {
     let mut app = app();
     failed_turn(&mut app, rate_limited());
-    snapshot(
-        "tests/snapshots/failed-provider.txt",
-        include_str!("../../tests/snapshots/failed-provider.txt"),
-        render(&mut app, 80, 16),
-    );
+    snapshot("failed-provider", render(&mut app, 80, 16));
 }
 
 #[test]
@@ -878,11 +838,7 @@ fn ctrl_o_opens_the_whole_provider_message_and_closes_it_again() {
     failed_turn(&mut app, rate_limited());
     app.tools_expanded = true;
     let open = render(&mut app, 80, 16);
-    snapshot(
-        "tests/snapshots/failed-provider-expanded.txt",
-        include_str!("../../tests/snapshots/failed-provider-expanded.txt"),
-        open,
-    );
+    snapshot("failed-provider-expanded", open);
     app.tools_expanded = false;
     let shut = render(&mut app, 80, 16);
     assert!(shut.contains("full message"), "{shut}");
@@ -900,11 +856,7 @@ fn a_failure_without_provider_details_shows_its_hint_and_nothing_quoted() {
         &mut app,
         serde_json::json!({"type": "failed", "kind": "output_limit"}),
     );
-    snapshot(
-        "tests/snapshots/failed-plain.txt",
-        include_str!("../../tests/snapshots/failed-plain.txt"),
-        render(&mut app, 80, 18),
-    );
+    snapshot("failed-plain", render(&mut app, 80, 18));
 }
 
 #[test]
@@ -1357,7 +1309,7 @@ fn connected(app: &mut App) {
     admit(app, "iPhone Safari", "2026-10-25T14:02:00Z");
 }
 
-/// A turn running `bash` in the resident session, its spinner on its first frame.
+/// A turn running `bash` in the foreground session, its spinner on its first frame.
 fn running_bash(app: &mut App) {
     let session = app.session.as_mut().expect("session");
     let mut live = crate::app::LiveTurn::new(
@@ -1384,11 +1336,7 @@ fn the_remote_status_screen_waits_for_a_phone_on_a_draft() {
     ];
     app.default_profile = Some("coding".into());
     listening(&mut app);
-    snapshot(
-        "tests/snapshots/remote-waiting.txt",
-        include_str!("../../tests/snapshots/remote-waiting.txt"),
-        render(&mut app, 80, 24),
-    );
+    snapshot("remote-waiting", render(&mut app, 80, 24));
 }
 
 #[test]
@@ -1409,11 +1357,7 @@ fn the_remote_status_screen_shows_the_phone_the_work_the_queue_and_refused_sign_
     app.remote.failed_logins = 3;
     app.remote.paused_until =
         Some(tokio::time::Instant::now() + std::time::Duration::from_secs(30));
-    snapshot(
-        "tests/snapshots/remote-busy.txt",
-        include_str!("../../tests/snapshots/remote-busy.txt"),
-        render(&mut app, 80, 24),
-    );
+    snapshot("remote-busy", render(&mut app, 80, 24));
 }
 
 #[test]
@@ -1641,9 +1585,5 @@ fn the_sessions_picker_shows_what_live_sessions_are_doing() {
     ];
     app.background = vec![running, asking, done, failed];
     app.open_panel(crate::app::Panel::Sessions);
-    snapshot(
-        "tests/snapshots/sessions-picker-live.txt",
-        include_str!("../../tests/snapshots/sessions-picker-live.txt"),
-        render(&mut app, 80, 20),
-    );
+    snapshot("sessions-picker-live", render(&mut app, 80, 20));
 }
