@@ -263,6 +263,25 @@ re-renders on every `state`).
 - **Search in session** (⋯ → Find, or Cmd/Ctrl+F): highlights matches in loaded
   blocks, next/previous.
 
+### Conversation spacing
+
+Three gaps, set once as custom properties of `:root` and applied between
+neighbouring blocks (`#blocks > .b`). They are margins that collapse (the larger
+one wins), so a hidden block, such as a folded step or an empty assistant
+block, never changes the gap between the blocks around it.
+
+| Level | Property | Value | Between |
+|---|---|---|---|
+| Step group | `--gap-tight` | 2 px (0 inside a Worked row's own block) | consecutive tool rows; a thinking-only row and the tool rows next to it; a Worked row and its first child, and the last child and "Hide" |
+| Kinds in one turn | `--gap-step` | 12 px | assistant text and tools either way; a Worked row or tool and the answer; a steer bubble and the next step; thinking and the text under it; the answer and the turn end line; "Load earlier" and the first block |
+| Turns | `--gap-turn` | 24 px | the turn end line and the next prompt; a prompt (not a steer) and the first response |
+
+Step rows (`--row`) are 36 px on touch and 32 px with a hover pointer, which
+is also the thinking row's height; touch keeps the full 36 px hit area. A user
+bubble's time row (28 px, 36 px hit area) belongs to the bubble, so the turn gap
+counts from below it. Expanded tool output keeps 8 px under its box, which
+collapses with the next gap.
+
 ### Approvals and questions
 
 - Never focus an approving control. On hardware keyboards `y` allow, `a` allow
@@ -329,7 +348,8 @@ host arrives without TUI key hints.
 - Contrast: all text ≥ 4.5:1 (fix `--tx3` in both themes, success text, accent
   on tinted backgrounds).
 - Touch targets are at least 44 × 44 px outside the compact composer toolbar,
-  whose controls keep at least 40 × 40 px hit areas.
+  whose controls keep at least 40 × 40 px hit areas, and the transcript's step
+  rows, which keep 36 px.
 - Motion: 120–180 ms for small state changes, 220–280 ms for sheets and the
   drawer, `cubic-bezier(.2,.8,.2,1)`; no per-token animation;
   `prefers-reduced-motion` turns shimmer and slides into fades.

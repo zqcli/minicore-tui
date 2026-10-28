@@ -430,6 +430,7 @@ function asstNode(b, i) {
 function updateAsst(n, b) {
   const asst = n._asst, m = asst.md, r = MC.mdInc(m.cache, b.text);
   n.hidden = MC.quiet(b);
+  n.classList.toggle('thk', !b.text);
   thinkUpdate(asst, b);
   m.cache = r.cache;
   let k = 0;
@@ -453,7 +454,7 @@ function answerActs(b, i) {
 function userNode(b, i) {
   const k = 'u' + i, lines = b.text.split('\n').length, long = lines > 12 || b.text.length > 900, o = isOpen(k);
   const more = h('button', { class: 'ib', 'aria-label': 'Message actions', 'aria-haspopup': 'dialog', onclick: () => userActions(b) }, icon('more', 'sm'));
-  const n = h('div', 'u', b.kind === 'steering' && h('div', 'ulbl', icon('steer', 'xs'), 'Steer'),
+  const n = h('div', b.kind === 'steering' ? 'u steer' : 'u', b.kind === 'steering' && h('div', 'ulbl', icon('steer', 'xs'), 'Steer'),
     h('div', { class: 'bubble' + (long && !o ? ' clip' : '') }, b.text),
     h('div', 'acts', long && h('button', { class: 'more2', 'data-k': k }, o ? 'Show less' : 'Show more'),
       b.at && h('time', '', stampAt(b.at)), more));
