@@ -102,12 +102,17 @@ re-renders on every `state`).
   Delete). The rename pencil goes away.
 - **Drawer** (phone) / **persistent sidebar** (≥ 900 px): header (logo, host,
   ⚙ settings), New session, search, then groups **Needs you** (approval or
-  question), **Running**, then one group per workspace (folder icon, the
-  folder's name, the full path in its tooltip), the group with the newest
+  question), **Pinned**, **Running**, then one group per workspace (folder icon,
+  the folder's name, the full path in its tooltip), the group with the newest
   session first and each group's sessions newest first with the relative time
-  on the right. A group folds with its header (remembered per workspace path
-  in `localStorage`), shows five rows and then "Show N more", and a search
-  shows every match in every group with a match. Status by shape and colour:
+  on the right. Every session is in exactly one group, in that order of
+  precedence: a pinned session that needs you is listed under Needs you only.
+  A session's time is its last activity (`updated_at`, which the host advances
+  when a turn ends), so a session that just ran tops its workspace group and
+  that group leads. A group folds with its header (remembered per workspace
+  path in `localStorage`, Pinned under its own key), shows five rows and then
+  "Show N more", and a search shows every match in every group with a match,
+  Pinned included. Status by shape and colour:
   amber hand = needs you, spinner = running, red ! = failed last
   turn, dot = new result. Rows are single-line, 36 px on hover devices and
   44 px on touch, with 14/15 px titles and a 16 px status column. Workspace
@@ -115,9 +120,18 @@ re-renders on every `state`).
   with the actions button in the same slot; touch keeps a compact actions
   button visible. Pinned rows omit workspace subtitles rather than taking
   another line. The order never changes while the drawer is open
-  (rows update in place); it re-sorts when reopened. ⌘/Ctrl+Shift+F focuses
+  (rows update in place); it re-sorts when reopened, except that pinning or
+  unpinning moves the row at once. ⌘/Ctrl+Shift+F focuses
   the search (a hint shows on hover devices; ⌘/Ctrl+K stays the command list).
   Footer is one line: connection dot + device name, other devices count.
+- **Pins**: "Pin to top" or "Unpin" in a row's ⋯ menu and in the session menu
+  puts a session in **Pinned** (pin icon, a count when folded, newest pin first,
+  each row with its own status icon and its folder in the tooltip) and takes it
+  out of Running and its workspace group. The pins are an ordered list of ids in
+  `localStorage` (`minicore.pins`): no host or protocol change, and each device
+  keeps its own working set. A pin whose session left the catalog is dropped when
+  the state arrives, unless the catalog holds the host's cap of 50 and may hide
+  it. The TUI's session picker has no pins.
 - **Settings** (full-screen sheet): Appearance (System/Light/Dark), text size
   (4 steps), wrap code by default, show thinking expanded, Enter sends (for
   hardware keyboards; on by default for a fine pointer with hover, off on touch,

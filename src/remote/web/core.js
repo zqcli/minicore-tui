@@ -330,13 +330,16 @@ function stamp(ms, now, tz) {
   return MON[d.getUTCMonth()] + ' ' + d.getUTCDate() + ', ' + clock(ms, tz);
 }
 const busyStatus = st => st === 'running' || st === 'approval' || st === 'compacting';
-// The drawer: Needs you (longest waiting first), Running (oldest first), then one group per workspace, the one with the newest
-// session first and each group's sessions newest first. `frozen` is the order captured on open: rows keep their place (and
-// group), and new sessions go to the top of their group. Runs on every state while the list shows, so each date parses once.
-function sessionLayout(sessions, query, frozen) {
-  const rows = sessions.map((x, index) => ({ x, index, pin: x.live && x.status === 'approval' ? 0 : x.live && busyStatus(x.status) ? 1 : 2, at: Date.parse(x.updated_at) }));
+const PINNED_KEY = '*pinned', CATALOG_MAX = 50;
+// The drawer: Needs you (longest waiting first), the reader's Pinned sessions (newest pin first), Running (oldest first), then
+// one group per workspace, the one with the newest session first and each group's sessions newest first. `pins` lists the pinned
+// ids, newest pin first. `frozen` is the order captured on open: rows keep their place (and group), and new sessions go to the
+// top of their group. Runs on every state while the list shows, so each date parses once.
+function sessionLayout(sessions, query, frozen, pins = []) {
+  const pinAt = new Map(pins.map((id, k) => [id, k]));
+  const rows = sessions.map((x, index) => ({ x, index, level: x.live && x.status === 'approval' ? 0 : pinAt.has(x.id) ? 1 : x.live && busyStatus(x.status) ? 2 : 3, at: Date.parse(x.updated_at) }));
   const wsRows = new Map();
-  for (const r of rows.filter(r => r.pin === 2).sort((a, b) => b.at - a.at || a.index - b.index)) {
+  for (const r of rows.filter(r => r.level === 3).sort((a, b) => b.at - a.at || a.index - b.index)) {
     if (!wsRows.has(r.x.workspace)) wsRows.set(r.x.workspace, []);
     wsRows.get(r.x.workspace).push(r);
   }
@@ -344,26 +347,32 @@ function sessionLayout(sessions, query, frozen) {
   for (const list of wsRows.values()) for (const r of list) r.rank = rank++;
   for (const r of rows) {
     const f = frozen && frozen.get(r.x.id);
-    if (f) { r.pin = f[0]; r.order = f[1]; } else r.order = frozen ? r.index - 1e9 : r.pin < 2 ? (r.x.started_ms == null ? Infinity : r.x.started_ms) : r.rank;
+    if (f) { r.level = f[0]; r.order = f[1]; } else r.order = frozen ? r.index - 1e9 : r.level === 1 ? pinAt.get(r.x.id) : r.level < 3 ? (r.x.started_ms == null ? Infinity : r.x.started_ms) : r.rank;
   }
-  rows.sort((a, b) => a.pin - b.pin || a.order - b.order || a.index - b.index);
-  const all = [], byWs = new Map(), pins = new Map();
+  rows.sort((a, b) => a.level - b.level || a.order - b.order || a.index - b.index);
+  const all = [], byWs = new Map(), levels = new Map();
   for (const r of rows) {
-    pins.set(r.x.id, r.pin);
-    let g = r.pin < 2 ? all.find(y => y.pinned === r.pin) : byWs.get(r.x.workspace);
+    levels.set(r.x.id, r.level);
+    let g = r.level < 3 ? all.find(y => y.level === r.level) : byWs.get(r.x.workspace);
     if (!g) {
-      g = r.pin < 2 ? { label: PINNED[r.pin], pinned: r.pin, items: [] } : { label: basename(r.x.workspace), ws: r.x.workspace, items: [] };
+      g = r.level === 1 ? { label: LEVELS[1], level: 1, ws: PINNED_KEY, items: [] } : r.level < 3 ? { label: LEVELS[r.level], level: r.level, items: [] } : { label: basename(r.x.workspace), level: 3, ws: r.x.workspace, items: [] };
       all.push(g);
-      if (r.pin === 2) byWs.set(r.x.workspace, g);
+      if (r.level === 3) byWs.set(r.x.workspace, g);
     }
     g.items.push(r.x);
   }
-  const order = new Map(all.flatMap(g => g.items).map((x, k) => [x.id, [pins.get(x.id), k]]));
+  const order = new Map(all.flatMap(g => g.items).map((x, k) => [x.id, [levels.get(x.id), k]]));
   const q = (query || '').trim().toLowerCase();
   const groups = !q ? all : all.map(g => ({ ...g, items: g.items.filter(x => ((x.title || '') + '\n' + x.workspace).toLowerCase().includes(q)) })).filter(g => g.items.length);
   return { groups, order: frozen || order };
 }
-const PINNED = ['Needs you', 'Running'], GROUP_ROWS = 5;
+const LEVELS = ['Needs you', 'Pinned', 'Running'], GROUP_ROWS = 5;
+// The pins that are still in the catalog. A catalog at its cap may not list every session, so then nothing is dropped.
+const prunePins = (pins, sessions) => {
+  if (sessions.length >= CATALOG_MAX) return pins;
+  const known = new Set(sessions.map(x => x.id)), kept = pins.filter(id => known.has(id));
+  return kept.length === pins.length ? pins : kept;
+};
 // A workspace group shows its newest rows until opened with "Show N more"; a search shows every match.
 const groupRows = (items, open) => open ? { shown: items, hidden: 0 } : { shown: items.slice(0, GROUP_ROWS), hidden: Math.max(0, items.length - GROUP_ROWS) };
 function fmtElapsed(ms) {
@@ -750,7 +759,7 @@ function recentWorkspaces(sessions, max = 6) {
 export {
   V, WINDOW, inline, parseMd, mdInc, backoff, basename, plural, titled, quiet, midTrunc, retireText, mergeReturned, otherDevices, deviceName,
   installOffer, login, hello, intents, queries, fs, createStore, intent, request, query, queryRoom, pending, disconnect,
-  sendAgain, unconfirmed, reduce, lockText, unreachable, fsError, errorText, stamp, relTime, sessionLayout, groupRows,
+  sendAgain, unconfirmed, reduce, lockText, unreachable, fsError, errorText, stamp, relTime, sessionLayout, groupRows, PINNED_KEY, prunePins,
   fmtElapsed, fmtTok, fmtNum, groupTools, foldTurns, findBlocks, foldText, toolInfo, parseDiff, diffStats, liveBlock, turnEnd,
   changesText, compactionText, statusLine, placeholder, allowedText, canStop, primaryKind, primaryTap, TAP_SLOP, approvalKey, approvalTitle,
   approvalOptions, approvalBody, approvalLine, changeStatus, contextView, exportMd, slashMenu, parseSlash, atToken,

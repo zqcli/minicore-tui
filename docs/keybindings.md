@@ -94,7 +94,9 @@ back in the editor with the error. While the session is being created another
 `Enter` leaves its text in the editor. `/model`, `/reasoning`, `Ctrl+L`,
 `Ctrl+P` and `Shift+Tab` choose the settings of that session and confirm with a
 notice, and `/new <profile>` chooses its profile. `Ctrl+R` opens a stored
-session.
+session; the picker lists live sessions first and shows each one's time since
+its last activity (a finished turn counts). It has no pins; those are in the web
+client.
 
 Leaving a session (`/new`, or opening another) does not stop it: its turn,
 queued follow-ups and approvals carry on in the background, and its draft stays

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Web client: pin sessions to the top of the session list (a collapsible Pinned
+  group, "Pin to top" in a session's ⋯ menu; pins stay on the device).
 - A session's time in the session picker and on the phone is its last activity:
   it advances when a turn finishes, in the foreground or the background, instead
   of staying at the time the session was opened.

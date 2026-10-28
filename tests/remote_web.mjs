@@ -508,6 +508,31 @@ test('an open session list keeps its order while statuses change and puts new se
   assert.deepEqual(plain(settled.groups).map(x => [x.label, x.items.map(y => y.id)]), [['w', ['n', 'c']], ['other', ['e']]]);
 });
 
+test('pinned sessions form one group after Needs you, newest pin first, and appear nowhere else', () => {
+  const sessions = [idle('a'), live('b', 'running', { started_ms: 1 }), idle('c', { workspace: '/docs' }), live('ask', 'approval'), idle('d')];
+  const groups = (pins, query = '', frozen) => plain(MC.sessionLayout(sessions, query, frozen, pins).groups).map(x => [x.label, x.items.map(y => y.id)]);
+  assert.deepEqual(groups([]), [['Needs you', ['ask']], ['Running', ['b']], ['w', ['a', 'd']], ['docs', ['c']]]);
+  // The newest pin leads; a pinned running session moves out of Running and a pinned approval stays under Needs you.
+  assert.deepEqual(groups(['c', 'b', 'ask']), [['Needs you', ['ask']], ['Pinned', ['c', 'b']], ['w', ['a', 'd']]]);
+  assert.equal(MC.sessionLayout(sessions, '', null, ['c']).groups[1].ws, MC.PINNED_KEY);
+  // A search covers the pinned group too and hides groups without a match.
+  assert.deepEqual(groups(['c', 'b'], 'docs'), [['Pinned', ['c']]]);
+  assert.deepEqual(groups(['c', 'b'], 'zzz'), []);
+  // An open list keeps its rows in place; a row that is pinned (its entry dropped from the frozen order) goes to the top of Pinned.
+  const frozen = MC.sessionLayout(sessions, '', null, ['c']).order;
+  frozen.delete('d');
+  assert.deepEqual(groups(['d', 'c'], '', frozen), [['Needs you', ['ask']], ['Pinned', ['d', 'c']], ['Running', ['b']], ['w', ['a']]]);
+});
+
+test('pins of sessions the catalog dropped are forgotten, unless a full catalog may hide them', () => {
+  const some = [idle('a'), idle('b')];
+  assert.deepEqual(plain(MC.prunePins(['x', 'b', 'a'], some)), ['b', 'a']);
+  const same = ['b', 'a'];
+  assert.equal(MC.prunePins(same, some), same);
+  const full = Array.from({ length: 50 }, (_, k) => idle('s' + k));
+  assert.deepEqual(plain(MC.prunePins(['gone', 's1'], full)), ['gone', 's1']);
+});
+
 test('attention counts other sessions that need you plus this view, and notices name their session', () => {
   assert.equal(MC.attentionCount({ ...state, background: { running: 2, approval: 1 } }), 2);
   assert.equal(MC.attentionCount({ ...state, interaction: null, background: { running: 2, approval: 0 } }), 0);
