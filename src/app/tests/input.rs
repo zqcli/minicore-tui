@@ -43,8 +43,8 @@ fn first_row(h: &mut Harness) -> String {
         .unwrap_or_default()
 }
 
-#[tokio::test(start_paused = true)]
-async fn an_approval_prompt_owns_the_keys_and_answers_over_the_wire() {
+/// A running turn that has just asked to run `bash`.
+async fn asking() -> Harness {
     let mut h = Harness::opened(display_read(0, 0)).await;
     h.fake.script("turn.send", json!({"turn": turn("l1")}));
     h.fake.script_held("turn.wait", waited("l1", completed()));
@@ -59,6 +59,12 @@ async fn an_approval_prompt_owns_the_keys_and_answers_over_the_wire() {
     )
     .await;
     h.until(|app| app.has_interaction()).await;
+    h
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_approval_prompt_owns_the_keys_and_answers_over_the_wire() {
+    let mut h = asking().await;
     let screen = h.screen(80, 20);
     for text in [
         "Allow bash?",
@@ -80,6 +86,7 @@ async fn an_approval_prompt_owns_the_keys_and_answers_over_the_wire() {
     );
 
     h.press(KeyCode::Down);
+    arm_prompt().await;
     h.press(KeyCode::Enter);
     h.settle().await;
     let answered = h.calls("interaction.answer");
@@ -87,6 +94,73 @@ async fn an_approval_prompt_owns_the_keys_and_answers_over_the_wire() {
     assert_eq!(answered[0]["interaction_id"], "i1");
     assert_eq!(answered[0]["answer"]["decision"], "deny");
     assert!(!h.app.has_interaction());
+}
+
+#[tokio::test(start_paused = true)]
+async fn answer_keys_pressed_as_the_prompt_appears_do_nothing_until_it_is_armed() {
+    let mut h = asking().await;
+    for key in [KeyCode::Char('y'), KeyCode::Char('a'), KeyCode::Char('n')] {
+        h.press(key);
+    }
+    h.press(KeyCode::Enter);
+    h.run_for(Duration::from_millis(50)).await;
+    assert!(h.calls("interaction.answer").is_empty());
+    assert!(h.app.has_interaction());
+
+    arm_prompt().await;
+    h.press(KeyCode::Char('y'));
+    h.settle().await;
+    let answered = h.calls("interaction.answer");
+    assert_eq!(answered.len(), 1);
+    assert_eq!(answered[0]["answer"]["decision"], "allow_once");
+}
+
+#[tokio::test(start_paused = true)]
+async fn typing_on_keeps_a_prompt_unarmed_until_a_pause() {
+    let mut h = asking().await;
+    for _ in 0..5 {
+        tokio::time::advance(Duration::from_millis(400)).await;
+        h.type_text("a sentence");
+    }
+    h.press(KeyCode::Enter);
+    h.run_for(Duration::from_millis(50)).await;
+    assert!(h.calls("interaction.answer").is_empty());
+
+    arm_prompt().await;
+    h.press(KeyCode::Char('n'));
+    h.settle().await;
+    let answered = h.calls("interaction.answer");
+    assert_eq!(answered.len(), 1);
+    assert_eq!(answered[0]["answer"]["decision"], "deny");
+}
+
+#[tokio::test(start_paused = true)]
+async fn escape_denies_a_prompt_that_is_not_armed_yet() {
+    let mut h = asking().await;
+    h.press(KeyCode::Esc);
+    h.settle().await;
+    let answered = h.calls("interaction.answer");
+    assert_eq!(answered.len(), 1);
+    assert_eq!(answered[0]["answer"]["decision"], "deny");
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_transcript_scrolls_while_a_prompt_waits() {
+    let mut h = asking().await;
+    conversation(&mut h, 12);
+    h.screen(60, 24);
+    h.press(KeyCode::PageUp);
+    assert_ne!(h.app.scroll, Scroll::Follow);
+    h.press(KeyCode::End);
+    assert_eq!(h.app.scroll, Scroll::Follow);
+    h.screen(60, 24);
+    h.ctrl(KeyCode::Up);
+    assert_ne!(h.app.scroll, Scroll::Follow);
+    let expanded = h.app.tools_expanded;
+    h.ctrl(KeyCode::Char('o'));
+    assert_ne!(h.app.tools_expanded, expanded);
+    assert!(h.app.has_interaction(), "the prompt stays");
+    assert!(h.calls("interaction.answer").is_empty());
 }
 
 #[tokio::test(start_paused = true)]

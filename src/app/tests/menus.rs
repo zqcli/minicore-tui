@@ -340,6 +340,7 @@ async fn allowing_a_tool_for_the_session_answers_its_later_approvals_itself() {
 
     ask(&mut h, "i1", "bash").await;
     assert!(h.app.has_interaction());
+    arm_prompt().await;
     h.type_text("a");
     h.run_for(Duration::from_millis(50)).await;
     assert_eq!(answers(&h), [("i1".to_owned(), "allow_once".to_owned())]);
@@ -378,6 +379,7 @@ async fn the_third_row_allows_the_tool_for_the_session() {
     assert!(screen.contains("Allow edit this session"), "{screen}");
     h.press(KeyCode::Down);
     h.press(KeyCode::Down);
+    arm_prompt().await;
     h.press(KeyCode::Enter);
     h.run_for(Duration::from_millis(50)).await;
     assert_eq!(answers(&h), [("i1".to_owned(), "allow_once".to_owned())]);

@@ -302,6 +302,11 @@ impl Harness {
     }
 }
 
+/// Waits out the delay before an approval prompt takes answer keys.
+pub async fn arm_prompt() {
+    tokio::time::advance(crate::app::session::ARM_AFTER).await;
+}
+
 /// A display `session.read` page holding `items`.
 pub fn page(total: usize, first_item: usize, items: Vec<Value>) -> Value {
     let mut page = display_read(total, first_item);

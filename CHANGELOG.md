@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- An approval or choice prompt takes its answer keys (`y`, `a`, `n`, `Enter`) only
+  after half a second, and any other key pressed meanwhile restarts the wait, so
+  text you were typing when it appeared cannot answer it. `Esc` and `↑` / `↓` act
+  at once.
+- While an approval waits, `PageUp`, `PageDown`, `Ctrl+↑` / `Ctrl+↓`, `End`,
+  `Ctrl+O` and `Ctrl+T` still scroll and fold the transcript.
 - A provider's error code or type can no longer reorder or restyle the failed
   turn's line in the transcript.
 - With `--agent-config`, an empty `config.toml` is an error again instead of being

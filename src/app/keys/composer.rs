@@ -48,7 +48,7 @@ impl App {
         self.copy(text);
     }
 
-    fn on_composer_key(&mut self, key: KeyEvent) -> Option<Action> {
+    pub(super) fn on_composer_key(&mut self, key: KeyEvent) -> Option<Action> {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
         let shift = key.modifiers.contains(KeyModifiers::SHIFT);

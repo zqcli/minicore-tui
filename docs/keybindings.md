@@ -170,6 +170,11 @@ counter.
 ## Approval and choice prompts
 
 While an interaction is pending, only these keys act; the rest are ignored.
+The answer keys (`y`, `a`, `n`, `Enter`) act once the prompt has been up for
+half a second. Any other key pressed before then, such as a sentence you were
+still typing, restarts the half second, so it cannot answer the prompt by
+accident; an answer key pressed too early is ignored. `Esc` and `↑` / `↓` always
+act.
 
 | Key | Action |
 |---|---|
@@ -177,6 +182,7 @@ While an interaction is pending, only these keys act; the rest are ignored.
 | `a` | Allow once and answer every later approval of the same tool for the rest of this session (the footer shows `allow <tool>`). |
 | `n`, `Esc` | Deny (approval). |
 | `↑` / `↓`, `Enter` | Select a row and submit it. For an approval the rows are `Allow once`, `Deny` and `Allow <tool> this session`. An `edit` or patch approval shows its diff. |
+| `PageUp` / `PageDown`, `Ctrl+↑` / `Ctrl+↓`, `End`, `Ctrl+O`, `Ctrl+T` | Read the transcript while the prompt waits: scroll, jump between prompts, return to the latest, fold tool output and thinking. |
 
 ## Views
 

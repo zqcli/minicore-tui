@@ -44,6 +44,8 @@ pub struct Session {
     /// replayed from history carries none of its own.
     pub summary_coverage: Option<(usize, usize)>,
     pub interaction: Option<PendingInteraction>,
+    /// When the pending prompt starts taking answer keys; a stray key before then moves it back.
+    pub armed_at: tokio::time::Instant,
     /// Tools whose approvals the user allowed for the rest of this session.
     pub allowed_tools: BTreeSet<String>,
     /// The display projection's first item; older items are behind the
@@ -159,6 +161,9 @@ pub enum QueuedKind {
     Follow,
 }
 
+/// How long a prompt waits after it appears, or after a stray key, before it takes an answer.
+pub const ARM_AFTER: Duration = Duration::from_millis(500);
+
 pub struct PendingInteraction {
     pub turn: TurnRef,
     pub interaction_id: String,
@@ -242,6 +247,7 @@ impl Session {
             compaction: None,
             summary_coverage: None,
             interaction: None,
+            armed_at: tokio::time::Instant::now(),
             allowed_tools: BTreeSet::new(),
             first_item: 0,
             loaded_from: 0,
@@ -545,7 +551,10 @@ impl Session {
             }
             AgentEvent::InteractionRequested {
                 turn, interaction, ..
-            } => self.interaction = Some(PendingInteraction::from_wire(turn, &interaction)),
+            } => {
+                self.interaction = Some(PendingInteraction::from_wire(turn, &interaction));
+                self.armed_at = tokio::time::Instant::now() + ARM_AFTER;
+            }
             AgentEvent::InteractionResolved { .. } => self.interaction = None,
             // Only `turn.wait` ends a turn; this just stops the phase text.
             AgentEvent::TurnFinished { .. } => {
