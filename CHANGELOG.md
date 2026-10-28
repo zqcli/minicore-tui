@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- A session's time in the session picker and on the phone is its last activity:
+  it advances when a turn finishes, in the foreground or the background, instead
+  of staying at the time the session was opened.
 - Web client: the conversation is denser and follows one rhythm. Tool and
   thinking rows are 32 px (36 px on touch) with 2 px between them, 12 px
   separates text, tools and steering inside a turn, and 24 px separates turns.

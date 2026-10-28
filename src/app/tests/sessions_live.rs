@@ -377,6 +377,79 @@ async fn the_picker_lists_live_sessions_first() {
     assert!(screen.contains("running 0m"), "{screen}");
 }
 
+/// The ids of the phone's session list, in order, for a phone that just connected.
+async fn phone_catalog(h: &mut Harness) -> Vec<String> {
+    h.app.remote.config = Some(config(std::path::PathBuf::from("/tmp/ws")));
+    h.app.remote.url = Some("http://localhost:8765".into());
+    let (mut output, _closing, admission) = phone(h, 1, "phone");
+    assert!(admission.await.unwrap());
+    let state = synced_state(h, &mut output).expect("a snapshot");
+    state["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|session| session["id"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+/// A catalog entry that was updated long before the turns of these tests.
+fn idle_session(id: &str) -> crate::protocol::SessionInfo {
+    let mut info = session_info(id);
+    info["updated_at"] = json!("2025-06-01T00:00:00Z");
+    serde_json::from_value(info).unwrap()
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_background_turn_end_is_the_sessions_latest_activity_in_the_phone_and_picker_lists() {
+    let mut h = running_first().await;
+    h.app.sessions.push(idle_session("s3"));
+    show(&mut h, "s2").await;
+    let generation = h.app.catalog_generation;
+    h.fake.release("turn.wait@s1");
+    h.until(|app| app.live("s1").is_some_and(|s| s.unseen))
+        .await;
+    assert!(h.app.catalog_generation > generation);
+    let stamp = |h: &Harness, id: &str| {
+        let info = h.app.sessions.iter().find(|info| info.session_id == id);
+        info.unwrap().updated_at.clone()
+    };
+    assert!(
+        stamp(&h, "s1").as_str() > "2026-01-01",
+        "{}",
+        stamp(&h, "s1")
+    );
+    assert!(stamp(&h, "s1").ends_with('Z') && stamp(&h, "s1").len() == 24);
+    assert_eq!(stamp(&h, "s1"), first(&h).info.updated_at);
+    assert_eq!(phone_catalog(&mut h).await[0], "s1");
+    h.ctrl(KeyCode::Char('r'));
+    let screen = h.screen(100, 24);
+    assert!(
+        screen
+            .lines()
+            .any(|row| row.contains("First") && row.contains("now")),
+        "{screen}"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_foreground_turn_end_is_the_sessions_latest_activity_in_the_phone_and_picker_lists() {
+    let mut h = running_first().await;
+    h.app.sessions.push(idle_session("s3"));
+    let before = h.app.sessions[0].updated_at.clone();
+    h.fake.release("turn.wait@s1");
+    h.until(|app| !app.is_busy()).await;
+    assert!(h.app.sessions[0].updated_at > before);
+    assert_eq!(phone_catalog(&mut h).await[0], "s1");
+    h.ctrl(KeyCode::Char('r'));
+    let screen = h.screen(100, 24);
+    assert!(
+        screen
+            .lines()
+            .any(|row| row.contains("First") && row.contains("now")),
+        "{screen}"
+    );
+}
+
 #[tokio::test(start_paused = true)]
 async fn the_phone_sees_live_sessions_and_switches_to_one_at_once() {
     let mut h = running_first().await;

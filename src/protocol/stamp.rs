@@ -34,6 +34,37 @@ pub fn unix_millis(stamp: &str) -> Option<u64> {
     Some(u64::try_from(seconds).ok()? * 1000 + fraction.parse::<u64>().unwrap_or(0))
 }
 
+/// The stamp for `millis` since the Unix epoch, as the Agent writes it: `2026-01-02T03:04:05.006Z`.
+pub fn rfc3339_millis(millis: u64) -> String {
+    let (days, rest) = ((millis / 86_400_000) as i64, millis % 86_400_000);
+    let (year, month, day) = civil_from_days(days);
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}.{:03}Z",
+        rest / 3_600_000,
+        rest / 60_000 % 60,
+        rest / 1000 % 60,
+        rest % 1000
+    )
+}
+
+/// The civil date for days since the Unix epoch; the inverse of `days_from_civil`.
+fn civil_from_days(days: i64) -> (i64, i64, i64) {
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let shifted_month = (5 * doy + 2) / 153;
+    let day = doy - (153 * shifted_month + 2) / 5 + 1;
+    let month = if shifted_month < 10 {
+        shifted_month + 3
+    } else {
+        shifted_month - 9
+    };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    (year, month, day)
+}
+
 /// Days since the Unix epoch for a civil date (Howard Hinnant's algorithm).
 fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
     let year = if month <= 2 { year - 1 } else { year };
@@ -61,6 +92,12 @@ mod tests {
             Some(1_767_323_045_500)
         );
         assert_eq!(unix_millis("1767323045"), None);
+        assert_eq!(
+            rfc3339_millis(1_767_323_045_006),
+            "2026-01-02T03:04:05.006Z"
+        );
+        assert_eq!(rfc3339_millis(0), "1970-01-01T00:00:00.000Z");
+        assert_eq!(rfc3339_millis(951_782_400_000), "2000-02-29T00:00:00.000Z");
         assert_eq!(unix_millis("2026-13-02T03:04:05Z"), None);
     }
 }

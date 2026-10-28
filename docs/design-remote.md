@@ -634,7 +634,10 @@ uses the routing above; local background notices keep their label prefix.
   steers unsent in place. Editing returns text only to the requesting device,
   unlike asynchronous refused-send routing below.
 - `older`: an older page can be loaded. `sessions`: the catalog filtered to
-  workspaces under `roots`, newest first, at most 50. `context_percent` is the
+  workspaces under `roots`, newest first, at most 50. `updated_at` is the last
+  activity: the Agent's stamp, advanced locally to the end of every turn that
+  finishes in a live session (foreground or background) until the Agent's next
+  report of that session replaces it. `context_percent` is the
   footer's figure, never an estimate. The pure calculation lives in
   `app::session::context_percent` and `ui::views::context` re-exports it as
   `percent`, so the projection does not depend on `ui`.
