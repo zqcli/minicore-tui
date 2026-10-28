@@ -742,9 +742,9 @@ function recentWorkspaces(sessions, max = 6) {
 }
 
 export {
-  V, WINDOW, norm, inline, parseMd, mdInc, backoff, basename, plural, titled, quiet, midTrunc, retireText, mergeReturned, otherDevices, deviceName,
+  V, WINDOW, inline, parseMd, mdInc, backoff, basename, plural, titled, quiet, midTrunc, retireText, mergeReturned, otherDevices, deviceName,
   installOffer, login, hello, intents, queries, fs, createStore, intent, request, query, queryRoom, pending, disconnect,
-  sendAgain, unconfirmed, reduce, lockText, unreachable, fsError, errorText, clock, stamp, relTime, sessionLayout, groupRows,
+  sendAgain, unconfirmed, reduce, lockText, unreachable, fsError, errorText, stamp, relTime, sessionLayout, groupRows,
   fmtElapsed, fmtTok, fmtNum, groupTools, foldTurns, findBlocks, foldText, toolInfo, parseDiff, diffStats, liveBlock, turnEnd,
   changesText, compactionText, statusLine, placeholder, allowedText, canStop, primaryKind, primaryTap, TAP_SLOP, approvalKey, approvalTitle,
   approvalOptions, approvalBody, approvalLine, changeStatus, contextView, exportMd, BUILTINS, slashMenu, parseSlash, atToken,

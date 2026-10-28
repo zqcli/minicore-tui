@@ -368,9 +368,9 @@ function toolMeta(f) {
 }
 const TAIL = 20;
 function toolBody(b, f) {
-  const out = b.output || [], tail = out.slice(-TAIL), earlier = (b.output_dropped || 0) + out.length - tail.length;
+  const out = b.output, tail = out.slice(-TAIL), earlier = b.output_dropped + out.length - tail.length;
   const input = b.input || '', files = f.kind === 'edit' && input ? MC.parseDiff(input) : [];
-  const total = b.output_lines != null ? b.output_lines : out.length + (b.output_dropped || 0);
+  const total = b.output_lines != null ? b.output_lines : out.length + b.output_dropped;
   const shown = tail.length > 0 || earlier > 0, pre = shown && h('pre', { class: 'out' + (prefs.wrap ? ' wrap' : ''), tabindex: '0' }, tail.join('\n'));
   const copy = shown && h('button', { onclick: () => copyText(out.join('\n'), copy) }, icon('copy', 'xs'), 'Copy');
   return h('div', 'tb',

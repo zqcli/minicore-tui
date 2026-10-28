@@ -1,5 +1,5 @@
 import * as MC from './core.js';
-import { $, actions, closeAll, fill, h, icon, spin, toast } from './ui.js';
+import { $, closeAll, fill, h, icon, spin, toast } from './ui.js';
 
 // ---- net ----
 export const S = MC.createStore(), HOST = location.host, KEY = 'minicore.token';

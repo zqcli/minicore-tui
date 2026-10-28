@@ -3,7 +3,7 @@ const NS = 'http://www.w3.org/2000/svg';
 // Late-bound calls upward in the import graph: the module that defines one sets it, callers below it use it here.
 export const actions = {};
 
-const $ = id => document.getElementById(id);
+export const $ = id => document.getElementById(id);
 export const apple = /Mac|iPhone|iPad/.test(navigator.userAgent);
 export const kids = k => k.flat(Infinity).filter(x => typeof x === 'string' ? x !== '' : x instanceof Node);
 export function h(tag, p, ...c) {
@@ -196,8 +196,6 @@ export function diffView(files, wrap) {
         !nums && h('span', 'sgn', l.t === 'add' ? '+' : l.t === 'del' ? '−' : ' '), h('span', 'c', l.s || ' '))));
     })));
 }
-
-export { $ };
 
 // ---- platform ----
 const stored = JSON.parse(localStorage.getItem('minicore.prefs') || '{}');
