@@ -723,7 +723,7 @@ pub fn turn_end_line(
             None => files,
         });
     }
-    parts.join(" · ")
+    wrap::sanitize(&parts.join(" · ")).into_owned()
 }
 
 /// The marker's one-line account: token figures, else the item counts.
@@ -1619,6 +1619,16 @@ mod tests {
         assert_eq!(
             turn_end_line(&completed, None, 8, 7, None),
             "completed · 8 requests · 7 tools"
+        );
+        let relayed: crate::protocol::LoopOutcome = serde_json::from_value(serde_json::json!({
+            "type": "failed", "kind": "model", "model_error": {"kind": "provider_unavailable",
+            "delivery": "unknown", "retryable": false,
+            "provider": {"status": 502, "code": "gate\u{202e}way\u{1b}[31m"}}
+        }))
+        .unwrap();
+        assert_eq!(
+            turn_end_line(&relayed, None, 1, 0, None),
+            "failed · provider unavailable · 502 gate\\u{202e}way"
         );
         assert_eq!(format_duration(Duration::from_secs(187)), "3m07s");
     }

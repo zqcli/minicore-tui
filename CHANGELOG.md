@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- A provider's error code or type can no longer reorder or restyle the failed
+  turn's line in the transcript.
 - The sessions picker finds an untitled background session by a word of its first
   prompt and Ctrl+D names it that way, and the filter also matches the
   workspace folder name.
