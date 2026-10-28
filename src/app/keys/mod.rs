@@ -36,12 +36,11 @@ impl App {
     }
 
     /// Approval prompts own the keyboard until answered; other keys are
-    /// swallowed rather than reaching the draft behind the prompt. The answer
-    /// keys act only once the prompt is armed, so typing that was under way
-    /// when it appeared cannot answer it.
+    /// swallowed rather than reaching the draft behind the prompt.
     fn on_interaction_key(&mut self, key: KeyEvent) -> Option<Action> {
         let now = tokio::time::Instant::now();
         let session = self.session.as_mut()?;
+        // Answer keys wait for the arming, so typing under way cannot answer.
         let armed = now >= session.armed_at;
         let interaction = session.interaction.as_mut()?;
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
@@ -57,7 +56,7 @@ impl App {
             KeyCode::Esc => return Some(Action::Answer(Answer::Deny)),
             // Reading the transcript before answering.
             KeyCode::Up | KeyCode::Down if ctrl => return self.on_composer_key(key),
-            KeyCode::PageUp | KeyCode::PageDown | KeyCode::End => {
+            KeyCode::PageUp | KeyCode::PageDown | KeyCode::End if key.modifiers.is_empty() => {
                 return self.on_composer_key(key);
             }
             KeyCode::Char('o' | 't') if ctrl => return self.on_composer_key(key),

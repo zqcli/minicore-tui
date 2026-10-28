@@ -145,6 +145,15 @@ async fn escape_denies_a_prompt_that_is_not_armed_yet() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_shifted_end_does_not_select_in_the_draft_behind_a_prompt() {
+    let mut h = asking().await;
+    h.app.composer.set_text("draft");
+    h.app.composer.move_home();
+    h.key(KeyCode::End, KeyModifiers::SHIFT);
+    assert!(h.app.composer.selection().is_none());
+}
+
+#[tokio::test(start_paused = true)]
 async fn the_transcript_scrolls_while_a_prompt_waits() {
     let mut h = asking().await;
     conversation(&mut h, 12);
