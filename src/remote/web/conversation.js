@@ -412,8 +412,9 @@ function thinkText(n, text, live) {
     if (end) el.scrollTop = el.scrollHeight;
     return;
   }
-  el.textContent = to;
-  if (live && !n._open && was && !to.startsWith(was) && !reduced.matches) { el.classList.remove('up'); void el.offsetWidth; el.classList.add('up'); }
+  // A new sentence slides in: a fresh span starts the animation without the forced layout that restarting a class needs.
+  if (live && was && !to.startsWith(was) && !reduced.matches) { n._text = h('span', 'up', to); el.replaceWith(n._text); }
+  else el.textContent = to;
 }
 function thinkUpdate(a, b) {
   const k = 'r' + b.loop_id + ':' + b.request, thinking = a.live && !b.text, o = isOpen(k, b), sig = b.reasoning ? k + thinking + o : '';
