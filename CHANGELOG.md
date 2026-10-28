@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- iPhone: tapping the composer no longer zooms the page in and leaves it
+  zoomed; the composer sits on the keyboard and returns to the bottom when the
+  keyboard closes.
 - Queued messages dispatch in send order. Steers behind a follow-up wait until
   that follow-up starts its turn. Unsent steers and follow-ups can be edited or
   deleted in the web tray; `Alt+↑` takes all unsent messages back in the TUI.

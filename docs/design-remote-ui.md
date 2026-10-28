@@ -333,7 +333,9 @@ host arrives without TUI key hints.
 - Motion: 120–180 ms for small state changes, 220–280 ms for sheets and the
   drawer, `cubic-bezier(.2,.8,.2,1)`; no per-token animation;
   `prefers-reduced-motion` turns shimmer and slides into fades.
-- Text size setting scales rem-based type; the message textarea is 15 px.
+- Text size setting scales rem-based type. Text fields are at least 16 px on
+  touch devices, because iOS Safari zooms into a smaller focused field and keeps
+  the zoom; the message textarea is 15 px only with a fine pointer and hover.
 
 ### Accessibility
 
