@@ -12,6 +12,7 @@ export const repaint = () => on.render();
 
 export const tz = () => new Date().getTimezoneOffset();
 export const hostNow = () => Date.now() + S.skew;
+export const stampAt = ms => MC.stamp(ms, hostNow(), tz());
 export const turnStatus = () => S.state.status;
 export const viewed = () => S.state.session || S.state.draft;
 // An unconfirmed send that went back to the composer is no longer tracked.

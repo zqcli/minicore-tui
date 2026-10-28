@@ -1,7 +1,7 @@
 import * as MC from './core.js';
-import { HOST, S, abandon, ask, hostNow, intent, online, pendingKind, repaint, send, sending, turnStatus, tz, viewed } from './net.js';
+import { HOST, S, abandon, ask, hostNow, intent, online, pendingKind, repaint, send, sending, stampAt, turnStatus, tz, viewed } from './net.js';
 import { compactNow, exportSession, openApprovals, openChanges, openContext, openHelp, openInfo, openModel, openNav, openNew, openOutput, openSettings, rename } from './sessions.js';
-import { $, actions, announce, apple, copyText, diffView, findSheet, h, hover, icon, inField, keepFocus, kids, menuRow, notify, part, prefs, reduced, set, share, sheet, spin, toast, topModal, wide } from './ui.js';
+import { $, actions, announce, apple, copyButton, copyText, diffView, findSheet, h, hover, icon, inField, keepFocus, kids, loading, menuRow, notify, part, prefs, reduced, set, share, sheet, spin, toast, topModal, wide } from './ui.js';
 
 // ---- composer ----
 // "Enter sends" is stored once chosen; until then the pointer default follows the device.
@@ -246,7 +246,7 @@ export function openPlus() {
   sheet({
     key: 'plus', title: 'Add to your message', deps: () => [S.state.commands, recent.slice(0, 8), !!S.state.session],
     body: m => {
-      const cmds = S.state.commands.map(c => ({ ...c, builtin: false })).concat(MC.BUILTINS);
+      const cmds = MC.commandList(S.state.commands);
       return [S.state.session && [h('h3', 'sec2', 'Insert'), h('div', 'list', menuRow(m, 'at', 'File', insertAt, { sub: 'Mention a file in this workspace as @path' }))],
         recent.length > 0 && [h('h3', 'sec2', 'Recent prompts'), h('div', 'list', recent.slice(0, 8).map(t => menuRow(m, 'history', t.length > 120 ? t.slice(0, 120) + '…' : t, () => fillComposer(t))))],
         h('h3', 'sec2', 'Commands'), h('div', 'list', cmds.map(c => menuRow(m, c.builtin ? 'term' : 'sparkle', '/' + c.name + (c.hint ? ' ' + c.hint : ''),
@@ -345,8 +345,7 @@ function wrapButton(box) {
 }
 function codeBlock(lang, text) {
   const n = h('div', 'cb' + (prefs.wrap ? ' wrap' : ''));
-  const c = h('button', { 'aria-label': 'Copy code', onclick: () => copyText(text, c) }, icon('copy', 'xs'), 'Copy');
-  n.append(h('div', 'cbh', h('span', '', lang), wrapButton(n), c), h('pre', '', h('code', '', text)));
+  n.append(h('div', 'cbh', h('span', '', lang), wrapButton(n), copyButton(text, 'Copy', { 'aria-label': 'Copy code' })), h('pre', '', h('code', '', text)));
   return n;
 }
 function caretInto(body) {
@@ -372,14 +371,13 @@ function toolBody(b, f) {
   const input = b.input || '', files = f.kind === 'edit' && input ? MC.parseDiff(input) : [];
   const total = b.output_lines != null ? b.output_lines : out.length + b.output_dropped;
   const shown = tail.length > 0 || earlier > 0, pre = shown && h('pre', { class: 'out' + (prefs.wrap ? ' wrap' : ''), tabindex: '0' }, tail.join('\n'));
-  const copy = shown && h('button', { onclick: () => copyText(out.join('\n'), copy) }, icon('copy', 'xs'), 'Copy');
   return h('div', 'tb',
     f.kind === 'cmd' && h('pre', 'cmd', '$ ' + (input || b.detail)),
     files.length > 0 ? diffView(files, prefs.wrap) : f.kind === 'write' && input && h('pre', '', input.split('\n').slice(0, 400).join('\n')),
     shown && [
       h('div', 'lbl', h('span', '', 'Output'), earlier > 0 && h('span', '', 'last ' + tail.length + ' of ' + MC.fmtNum(total) + ' lines')),
       pre,
-      h('div', 'tbar', wrapButton(pre), copy, h('button', { onclick: () => openOutput(b) }, icon('open', 'xs'), 'Open'), b.truncated && h('span', 'hint', 'Output truncated'))],
+      h('div', 'tbar', wrapButton(pre), copyButton(out.join('\n')), h('button', { onclick: () => openOutput(b) }, icon('open', 'xs'), 'Open'), b.truncated && h('span', 'hint', 'Output truncated'))],
     !shown && !files.length && f.kind !== 'cmd' && h('div', 'hint', f.run ? 'Running…' : 'No output'),
     !shown && f.kind === 'cmd' && !f.run && h('div', 'hint', 'No output'));
 }
@@ -453,7 +451,7 @@ function answerActs(b, i) {
   let j = i + 1;
   while (j < S.blocks.length && S.blocks[j].type !== 'turn_end' && S.blocks[j].type !== 'user') j++;
   const at = S.blocks[j] && S.blocks[j].type === 'turn_end' && turnClock(j);
-  return h('div', 'acts', c, s, at && h('time', '', MC.stamp(at, hostNow(), tz())));
+  return h('div', 'acts', c, s, at && h('time', '', stampAt(at)));
 }
 function userNode(b, i) {
   const k = 'u' + i, lines = b.text.split('\n').length, long = lines > 12 || b.text.length > 900, o = isOpen(k);
@@ -461,13 +459,13 @@ function userNode(b, i) {
   const n = h('div', 'u', b.kind === 'steering' && h('div', 'ulbl', icon('steer', 'xs'), 'Steer'),
     h('div', { class: 'bubble' + (long && !o ? ' clip' : '') }, b.text),
     h('div', 'acts', long && h('button', { class: 'more2', 'data-k': k }, o ? 'Show less' : 'Show more'),
-      b.at && h('time', '', MC.stamp(b.at, hostNow(), tz())), more));
+      b.at && h('time', '', stampAt(b.at)), more));
   n.addEventListener('contextmenu', e => { if (!hover.matches) { e.preventDefault(); userActions(b); } });
   return n;
 }
 function userActions(b) {
   sheet({
-    key: 'uact', cls: 'dialog', head: hid => h('h2', { id: hid }, 'Message', b.at && h('span', 'sub2', MC.stamp(b.at, hostNow(), tz()))),
+    key: 'uact', cls: 'dialog', title: 'Message', sub: b.at && stampAt(b.at),
     body: m => h('div', 'list', menuRow(m, 'copy', 'Copy', () => copyText(b.text)), menuRow(m, 'edit', 'Edit in composer', () => fillComposer(b.text)),
       menuRow(m, 'retry', 'Send again', () => { if (!sending()) intent(turnStatus().busy ? MC.intents.queue(b.text) : MC.intents.submit(b.text)); })),
   });
@@ -484,7 +482,7 @@ function turnClock(i) {
 // The failed turn's header with what the host said under it: the hint, the provider's own message clamped to three lines
 // (its toggle shows when the text overflows, see `place`) and the button that helps.
 function failureNode(head, f, i) {
-  const k = 'e' + i, o = isOpen(k), copy = f.message && h('button', { class: 'fbtn', onclick: () => copyText(f.message, copy) }, icon('copy', 'xs'), 'Copy');
+  const k = 'e' + i, o = isOpen(k), copy = f.message && copyButton(f.message, 'Copy', { class: 'fbtn' });
   const act = f.action && h('button', { class: 'btn sm', onclick: f.action === 'compact' ? () => compactNow() : openModel }, f.action === 'compact' ? 'Compact now' : 'Switch model');
   return h('div', 'fail', head, f.hint && h('p', 'fhint', f.hint),
     f.message && h('blockquote', 'fmsg' + (o ? '' : ' clip'), h('div', 'fmt', f.message)),
@@ -628,7 +626,7 @@ export function renderTop() {
 }
 const SUGG = [['Explain this project', 'Structure, entry points and how it fits together'], ['Run the tests and fix failures', 'Find what breaks and repair it'],
   ['Review my uncommitted changes', 'Spot bugs and risky edits'], ['Find TODOs', 'List open TODO and FIXME notes']];
-const emptyPart = part($('empty'), e => e.loading ? h('div', 'loadrow', spin(), 'Opening session…') : e.session ? h('div', 'muted', 'No messages yet.') : [
+const emptyPart = part($('empty'), e => e.loading ? loading('Opening session…') : e.session ? h('div', 'muted', 'No messages yet.') : [
   h('img', { class: 'appicon', src: '/icon.svg', alt: '' }), h('h2', '', 'What should we work on?'),
   h('button', { class: 'where', 'aria-label': 'Change folder, ' + e.ws, onclick: () => openNew() }, icon('folder', 'sm'), h('span', '', MC.basename(e.ws)), icon('chevd', 'xs')),
   h('div', 'hint mt6', MC.tilde(e.ws)),

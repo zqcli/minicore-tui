@@ -35,6 +35,7 @@ export const fill = (n, ...k) => n.replaceChildren(...kids(k));
 // Renders run on every state or frame; writing the value a property already has still costs a style pass.
 export const set = (el, prop, value) => { if (el[prop] !== value) el[prop] = value; };
 export const spin = cls => h('span', 'spin' + (cls ? ' ' + cls : ''));
+export const loading = text => h('div', 'loadrow', spin(), text);
 const mq = q => matchMedia(q);
 export const wide = mq('(min-width: 900px)'), hover = mq('(hover: hover)'), reduced = mq('(prefers-reduced-motion: reduce)');
 const panelWide = mq('(min-width: 1200px)');
@@ -82,6 +83,7 @@ export function copyText(text, btn) {
   };
   if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).then(done, legacy); else legacy();
 }
+export const copyButton = (text, label = 'Copy', p = {}) => h('button', { ...p, onclick: e => copyText(text, e.currentTarget) }, icon('copy', 'xs'), label);
 export function share(title, text, btn) {
   if (navigator.share) navigator.share({ title, text }).catch(() => {}); else copyText(text, btn);
 }
@@ -131,8 +133,8 @@ export function closeAll() { for (const m of [...stack].reverse()) m.close(); }
 $('scrim').addEventListener('click', () => { const m = topModal(); if (m) m.close(); });
 
 let sid = 0;
-// A sheet: persistent header, body and footer re-rendered when deps() changes. cls: '' | 'full' | 'dialog';
-// `side` sheets become a non-modal right-hand panel from 1200 px.
+// A sheet: a header (`title` with an optional `sub` line, or `head`), body and footer re-rendered when deps() changes;
+// cls: '' | 'full' | 'dialog'. `side` sheets become a non-modal right-hand panel from 1200 px.
 export function sheet(o) {
   const old = stack.find(m => m.key === o.key);
   if (old) old.close(true);
@@ -146,7 +148,7 @@ export function sheet(o) {
     if (k === m.last && !force) return;
     m.last = k;
     const top = body.scrollTop;
-    fill(head, o.head ? o.head(id) : h('h2', { id }, o.title), h('button', { class: 'ib', 'aria-label': o.closeLabel || 'Close', onclick: () => m.close() }, icon(o.closeIcon || 'x')));
+    fill(head, o.head ? o.head(id) : h('h2', { id }, o.title, o.sub && h('span', 'sub2', o.sub)), h('button', { class: 'ib', 'aria-label': o.closeLabel || 'Close', onclick: () => m.close() }, icon(o.closeIcon || 'x')));
     swap(body, o.body(m));
     const f = o.foot && o.foot();
     foot.hidden = !f;

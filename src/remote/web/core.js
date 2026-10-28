@@ -581,7 +581,8 @@ function approvalOptions(a) {
 function approvalBody(a) {
   const k = toolKind(a.tool), input = a.input || '';
   if (k === 'cmd') return { cmd: input || a.detail };
-  if (k === 'edit' && parseDiff(input).length) return { diff: parseDiff(input) };
+  const diff = k === 'edit' ? parseDiff(input) : [];
+  if (diff.length) return { diff };
   if (k === 'write' && input) {
     const lines = input.split('\n');
     return { diff: [{ path: a.detail, op: 'add', added: lines.length, removed: 0, hunks: [{ head: '', lines: lines.map((s, i) => ({ t: 'add', s, a: null, b: i + 1 })) }] }] };
@@ -652,11 +653,13 @@ const BUILTINS = [
   ['sessions', 'Open the session list'], ['copy', 'Copy the last answer'], ['settings', 'Open settings'], ['help', 'Keyboard shortcuts'],
 ].map(([name, description, hint]) => ({ name, description, hint: hint || '', builtin: true }));
 const ALIAS = { diff: 'changes', resume: 'sessions', reasoning: 'model' };
+// Every command the composer offers: the host's templates, then the built-ins the client runs itself.
+const commandList = commands => commands.map(c => ({ ...c, builtin: false })).concat(BUILTINS);
 // The command list while the composer holds only "/word": prefix matches first, templates before built-ins.
 function slashMenu(text, commands) {
   const m = /^\/(\S*)$/.exec(text);
   if (!m) return null;
-  const q = m[1].toLowerCase(), all = commands.map(c => ({ ...c, builtin: false })).concat(BUILTINS);
+  const q = m[1].toLowerCase(), all = commandList(commands);
   const hit = all.filter(c => c.name.toLowerCase().includes(q));
   return hit.filter(c => c.name.toLowerCase().startsWith(q)).concat(hit.filter(c => !c.name.toLowerCase().startsWith(q)));
 }
@@ -750,7 +753,7 @@ export {
   sendAgain, unconfirmed, reduce, lockText, unreachable, fsError, errorText, stamp, relTime, sessionLayout, groupRows,
   fmtElapsed, fmtTok, fmtNum, groupTools, foldTurns, findBlocks, foldText, toolInfo, parseDiff, diffStats, liveBlock, turnEnd,
   changesText, compactionText, statusLine, placeholder, allowedText, canStop, primaryKind, primaryTap, TAP_SLOP, approvalKey, approvalTitle,
-  approvalOptions, approvalBody, approvalLine, changeStatus, contextView, exportMd, BUILTINS, slashMenu, parseSlash, atToken,
-  insertMention, pushRecent, literal, composerKey, queueView, thinkingPreview, splitPath, within, crumbs, tilde, isDrive,
+  approvalOptions, approvalBody, approvalLine, changeStatus, contextView, exportMd, slashMenu, parseSlash, atToken,
+  insertMention, pushRecent, literal, composerKey, commandList, queueView, thinkingPreview, splitPath, within, crumbs, tilde, isDrive,
   recentWorkspaces, sessionTransitions, noticeEvent, attentionCount,
 };

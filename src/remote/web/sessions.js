@@ -1,6 +1,6 @@
 import * as MC from './core.js';
-import { HOST, S, ask, fsCall, hostNow, intent, isHalted, isMain, online, signOut, turnStatus, tz, viewed } from './net.js';
-import { $, actions, announce, apple, closeAll, copyText, diffView, errBox, fill, findSheet, h, hover, icon, installApp, installable, layout, menuRow, notify, part, popModal, prefs, pushModal, refreshSheets, rowText, set, setPref, share, sheet, spin, standalone, toast, wide } from './ui.js';
+import { HOST, S, ask, fsCall, hostNow, intent, isHalted, isMain, online, signOut, stampAt, turnStatus, tz, viewed } from './net.js';
+import { $, actions, announce, apple, closeAll, copyButton, copyText, diffView, errBox, fill, findSheet, h, hover, icon, installApp, installable, layout, loading, menuRow, notify, part, popModal, prefs, pushModal, refreshSheets, rowText, set, setPref, share, sheet, spin, standalone, toast, wide } from './ui.js';
 
 // ---- sheets ----
 function confirmSheet(o) {
@@ -90,8 +90,8 @@ export function openChanges() {
     body: () => {
       if (c.err) return errBox(c.err);
       if (c.path) return c.diff ? [h('div', 'tbar', h('button', { 'aria-pressed': String(c.wrap), onclick: () => { c.wrap = !c.wrap; m.refresh(); } }, icon('wrap', 'xs'), 'Wrap'),
-        c.diff.truncated && h('span', 'hint', 'Diff truncated')), diffView(MC.parseDiff(c.diff.lines.join('\n')).map(f => ({ ...f, path: f.path || c.path })), c.wrap)] : h('div', 'loadrow', spin(), 'Loading diff…');
-      if (!c.files) return h('div', 'loadrow', spin(), 'Loading changes…');
+        c.diff.truncated && h('span', 'hint', 'Diff truncated')), diffView(MC.parseDiff(c.diff.lines.join('\n')).map(f => ({ ...f, path: f.path || c.path })), c.wrap)] : loading('Loading diff…');
+      if (!c.files) return loading('Loading changes…');
       if (!c.files.length) return h('div', 'muted', 'No changes in this workspace');
       return [h('div', 'list', c.files.map(f => { const [l, cls] = MC.changeStatus(f.status), dir = f.path.slice(0, -MC.basename(f.path).length);
         return h('button', { class: 'row flat', 'data-k': f.path, 'aria-label': f.status + ' ' + f.path, onclick: () => file(f.path) }, h('span', 'st ' + cls, l),
@@ -115,7 +115,7 @@ export function openContext() {
     key: 'context', side: true, title: 'Context', deps: () => [c, turnStatus().busy, turnStatus().compacting, online()],
     body: () => {
       if (c.err) return errBox(c.err);
-      if (!c.d) return h('div', 'loadrow', spin(), 'Loading…');
+      if (!c.d) return loading('Loading…');
       const x = MC.contextView(c.d);
       return [h('div', 'cbar', h('b', '', Math.round(x.percent) + '%'), h('span', '', x.used)),
         h('div', { class: 'meter', role: 'meter', 'aria-valuenow': String(Math.round(x.percent)), 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-label': 'Context used' },
@@ -137,7 +137,7 @@ export function openOutput(b) {
     body: () => [o.err && errBox(o.err), o.capped && h('p', 'hint', 'Showing the first 4 MB.'),
       h('pre', { class: 'out view' + (o.wrap ? ' wrap' : ''), tabindex: '0' }, o.text)],
     foot: () => [h('button', { class: 'btn sm', 'aria-pressed': String(o.wrap), onclick: () => { o.wrap = !o.wrap; m.refresh(); } }, icon('wrap', 'xs'), 'Wrap'),
-      h('button', { class: 'btn sm', onclick: e => copyText(o.text, e.currentTarget) }, icon('copy', 'xs'), 'Copy'),
+      copyButton(o.text, 'Copy', { class: 'btn sm' }),
       !o.full && h('button', { class: 'btn sm primary', 'data-k': 'full', disabled: o.loading, onclick: () => loadFull(b, o, m) }, o.loading && spin('sm'), o.loading ? 'Loading…' : 'Load full output')],
     after: body => { if (o.shown !== o.text.length) { o.shown = o.text.length; requestAnimationFrame(() => { body.scrollTop = body.scrollHeight; }); } },
   });
@@ -291,7 +291,7 @@ wide.addEventListener('change', () => { if (wide.matches) closeNav(); layout(); 
 function sessionActions(id) {
   const x = S.state.sessions.find(y => y.id === id), current = x.current;
   sheet({
-    key: 'actions', cls: 'dialog', head: hid => h('h2', { id: hid }, MC.titled(x.title), h('span', 'sub2', MC.tilde(x.workspace))),
+    key: 'actions', cls: 'dialog', title: MC.titled(x.title), sub: MC.tilde(x.workspace),
     body: m => h('div', 'list',
       !current && menuRow(m, 'open', 'Open', () => openLive(id), { focus: true }),
       menuRow(m, 'edit', 'Rename', () => rename(id), { focus: current }),
@@ -340,7 +340,7 @@ function remove(id) {
 export function openSessionMenu() {
   const s = S.state.session;
   sheet({
-    key: 'menu', cls: 'dialog', head: hid => h('h2', { id: hid }, MC.titled(s.title), h('span', 'sub2', MC.tilde(s.workspace))),
+    key: 'menu', cls: 'dialog', title: MC.titled(s.title), sub: MC.tilde(s.workspace),
     body: m => h('div', 'list',
       menuRow(m, 'edit', 'Rename', () => rename(s.id)), menuRow(m, 'diff', 'Changes', openChanges), menuRow(m, 'gauge', 'Context', openContext),
       menuRow(m, 'layers', 'Compact now', () => compactNow()), menuRow(m, 'search', 'Find in session', () => actions.find()), menuRow(m, 'info', 'Session info', openInfo),
@@ -359,10 +359,10 @@ export function openInfo() {
       const kv = (k, v) => v && [h('dt', '', k), h('dd', '', v)];
       return [h('h3', 'stitle', MC.titled(x.title)),
         h('dl', 'kv', kv('Session', h('span', 'mono', x.id)), kv('Workspace', MC.tilde(x.workspace)), kv('Branch', x.branch), kv('Profile', x.profile), kv('Allowed for this session', x.allowed.join(', ')),
-          kv('Model', [x.model, x.reasoning].filter(Boolean).join(' · ')), kv('Updated', cat && MC.stamp(Date.parse(cat.updated_at), hostNow(), tz())),
+          kv('Model', [x.model, x.reasoning].filter(Boolean).join(' · ')), kv('Updated', cat && stampAt(Date.parse(cat.updated_at))),
           kv('Usage', (u.input || u.output) ? MC.fmtTok(u.input) + ' in · ' + MC.fmtTok(u.output) + ' out' + (u.cached ? ' · ' + MC.fmtTok(u.cached) + ' cached' : '') : ''),
           kv('Context', S.state.context_percent != null ? Math.round(S.state.context_percent) + '% used' : ''), kv('Also viewing', others.join(', '))),
-        h('div', 'sacts', h('button', { class: 'btn sm', onclick: e => copyText(x.id, e.currentTarget) }, icon('copy', 'xs'), 'Copy id'))];
+        h('div', 'sacts', copyButton(x.id, 'Copy id', { class: 'btn sm' }))];
     },
   });
 }

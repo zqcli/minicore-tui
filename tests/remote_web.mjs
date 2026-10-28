@@ -645,6 +645,8 @@ test('the slash list filters by name with prefix matches first and templates bef
   assert.equal(MC.slashMenu('/fix-tests src', commands), null);
   assert.equal(MC.slashMenu('hello /fix', commands), null);
   assert.equal(plain(MC.slashMenu('/', commands)).find(c => c.name === 'review').builtin, false);
+  // The + sheet offers the same commands: templates first, then the built-ins.
+  assert.deepEqual(MC.commandList(commands).map(c => [c.name, c.builtin]).slice(commands.length - 1, commands.length + 1), [[commands.at(-1).name, false], ['new', true]]);
 });
 
 test('a slash line is a built-in run here, a template sent as text, or refused as unknown', () => {
