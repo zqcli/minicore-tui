@@ -22,7 +22,7 @@ const PRESENTATION_EVERY: Duration = Duration::from_secs(2);
 
 pub struct Session {
     pub info: SessionInfo,
-    /// Identifies this residency; results posted for another one are stale.
+    /// Identifies this live session; results posted for another one are stale.
     pub epoch: u64,
     pub transcript: Transcript,
     pub live: Option<LiveTurn>,
@@ -768,7 +768,7 @@ impl Session {
             .iter()
             .rposition(|block| block.loop_id() == Some(loop_id))
             .map_or(self.transcript.len(), |index| index + 1);
-        // User blocks have no loop id, so keep earlier steers after the same step ahead of this batch.
+        // User blocks carry no loop id: keep steers already placed after this step first.
         while matches!(
             self.transcript.blocks().get(at),
             Some(Block::User {
@@ -919,7 +919,7 @@ impl Session {
     /// of a turn-start compaction that failed since the previous report.
     pub fn apply_context(&mut self, context: SessionContext) -> Option<String> {
         let automatic = context.automatic.as_ref();
-        // A compaction between two requests has no event or operation of its own.
+        // A turn-start compaction has no event or operation of its own.
         self.compaction = context.current_operation.clone().or_else(|| {
             let running = automatic?.current.as_ref()?;
             Some(CompactionProgress {

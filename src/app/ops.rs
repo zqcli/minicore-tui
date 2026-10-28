@@ -481,9 +481,7 @@ impl App {
         }
     }
 
-    /// A finished turn is the session's latest activity, which the lists sort and
-    /// show; the Agent's own stamp replaces this one, a few milliseconds apart,
-    /// the next time the session's info is read.
+    /// Dates the session's latest activity now; the Agent's own stamp replaces it on the next info read.
     fn stamp_activity(&mut self) {
         let session = self.session_mut();
         session.info.updated_at = protocol::stamp::rfc3339_millis(protocol::stamp::now_millis());

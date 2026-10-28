@@ -48,7 +48,7 @@ pub enum Window {
 }
 
 impl App {
-    /// Runs `work` and posts its result for the session resident now.
+    /// Runs `work` and posts its result for the foreground session.
     pub(super) fn spawn(&self, work: impl Future<Output = SessionOp> + Send + 'static) {
         let Some(epoch) = self.session.as_ref().map(|session| session.epoch) else {
             return;
@@ -59,7 +59,7 @@ impl App {
         });
     }
 
-    /// One call for the resident session, whose id joins `fields`; `wrap` turns
+    /// One call for the foreground session, whose id joins `fields`; `wrap` turns
     /// the result into the op to post.
     pub(super) fn call<R: DeserializeOwned + Send + 'static>(
         &self,

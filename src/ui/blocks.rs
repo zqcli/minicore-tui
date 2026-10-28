@@ -656,8 +656,7 @@ const QUOTE_MORE: &str = " · ctrl+o full message";
 /// Rows of a provider message shown before its expand hint.
 const QUOTE_ROWS: usize = 3;
 
-/// The provider's message behind a quote rail. The rail and the hint are chrome,
-/// so a selection takes the message alone.
+/// The provider's message behind a quote rail; the rail and the hint are chrome.
 fn quote(message: &str, styles: Styles, width: usize, expanded: bool) -> Vec<Line<'static>> {
     let room = text_width(width) - wrap::width(QUOTE_RAIL);
     // A tab is the one control character the Agent leaves in.
@@ -1458,7 +1457,7 @@ mod tests {
     #[test]
     fn a_compaction_without_token_figures_reports_its_coverage() {
         let block = Block::Compaction {
-            operation_id: "auto-lup_1".into(),
+            operation_id: "auto-boundary-lup_1-1".into(),
             before: None,
             after: None,
             coverage: Some((Some(177), Some(0))),
@@ -1468,7 +1467,7 @@ mod tests {
         assert_eq!(body[3], " Compacted 177 items · 0 kept");
 
         let block = Block::Compaction {
-            operation_id: "auto-lup_2".into(),
+            operation_id: "auto-boundary-lup_1-2".into(),
             before: None,
             after: None,
             coverage: Some((Some(332), None)),

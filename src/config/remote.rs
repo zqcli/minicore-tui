@@ -15,7 +15,7 @@ pub struct Remote {
     pub url: Option<String>,
     pub roots: Vec<PathBuf>,
     pub allow_insecure: bool,
-    /// Set when `tls = true`; the files parsed when the settings loaded.
+    /// Set when `tls = true`; the validated certificate and key paths.
     pub tls: Option<Tls>,
 }
 

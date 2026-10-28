@@ -1,6 +1,6 @@
-//! The dock under the transcript: queued messages, the Working line, the
-//! notice, the editor with its completion rows, and the footer. Rows are built
-//! for the band right of the 1-column gutter.
+//! The dock under the transcript: queued messages, the Working line, the key
+//! hint, the notice, the editor with its completion rows, and the footer. Rows
+//! are built for the band right of the 1-column gutter.
 
 use std::time::Duration;
 
@@ -248,8 +248,7 @@ fn notice_line(notice: &Notice, styles: Styles, width: u16) -> Line<'static> {
 /// `▸ dir@branch · model · reasoning · 3m · queued` and,
 /// right-aligned, `↑in ↓out Rcache · ctx N%`. Short of room, the directory and
 /// branch give way first, then the elapsed time and queue mark, then the model;
-/// the reasoning level stays. The remote mark and the background sessions take
-/// only what the rest leaves.
+/// the reasoning level stays.
 fn footer(app: &App, styles: Styles, width: u16) -> Line<'static> {
     let width = usize::from(width);
     let session = app.session.as_ref();
@@ -327,6 +326,7 @@ fn footer(app: &App, styles: Styles, width: u16) -> Line<'static> {
         room.saturating_sub(rest + separator),
         styles,
     );
+    // The remote mark and the background sessions take only what the rest leaves.
     groups[4] = remote;
     groups[5] = others;
     for index in [4, 5, 3, 1, 2] {

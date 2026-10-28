@@ -362,7 +362,7 @@ impl App {
         );
     }
 
-    /// Copies the resident session's id.
+    /// Copies the foreground session's id.
     pub(super) fn copy_session_id(&mut self) {
         if let Some(session) = &self.session {
             let id = session.info.session_id.clone();

@@ -85,7 +85,7 @@ pub struct Ready {
     pub sessions: Vec<SessionInfo>,
 }
 
-/// What an async operation on the resident session produced.
+/// What an async operation on the foreground session produced.
 pub enum SessionOp {
     Tail(Result<tasks::History, RpcError>),
     Page(Result<tasks::History, RpcError>),
@@ -98,7 +98,7 @@ pub enum SessionOp {
     /// A `workspace.status` answer, wanted only for the branch it caches in the presentation.
     WorkspaceStatus(Result<Value, RpcError>),
     Context(Result<SessionContext, RpcError>),
-    /// The send answer, with the text so a refusal can hand it back.
+    /// The send answer, with the queued message so a refusal can hand it back.
     Sent(Queued, Result<TurnSendResult, RpcError>),
     Waited(Result<TurnWaitResult, RpcError>),
     /// The loop and text keep late steer results from changing another turn's queue.
@@ -236,7 +236,7 @@ pub struct App {
     pub loading_session: bool,
     /// The draft's text while its session is being created; sent once it exists.
     pub first_message: Option<String>,
-    /// Numbers the sessions made resident, so a late result never reaches a later one.
+    /// Numbers the live sessions, so a late result never reaches another one.
     pub epoch: u64,
     pub templates: Vec<templates::Template>,
     /// The TUI directory; `None` in tests, which touch no files.
@@ -484,11 +484,11 @@ impl App {
         result.map_err(|error| self.error(error)).ok()
     }
 
-    /// The resident session, for results `on_msg` has matched to it by epoch.
+    /// The foreground session, for results `on_msg` has matched to it by epoch.
     pub(super) fn session_mut(&mut self) -> &mut Session {
         self.session
             .as_mut()
-            .expect("the result's session is resident")
+            .expect("the result's session is in the foreground")
     }
 
     pub fn is_busy(&self) -> bool {

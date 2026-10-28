@@ -131,7 +131,7 @@ fn sessions_sheet(app: &App, rows: &[SessionInfo], state: &SessionsState, styles
         armed,
         renaming,
     } = *state;
-    let resident = app
+    let foreground = app
         .session
         .as_ref()
         .map(|session| session.info.session_id.as_str());
@@ -161,7 +161,7 @@ fn sessions_sheet(app: &App, rows: &[SessionInfo], state: &SessionsState, styles
         .iter()
         .zip(&labels)
         .map(|(info, label)| {
-            let current = resident == Some(info.session_id.as_str());
+            let current = foreground == Some(info.session_id.as_str());
             let live = app.live(&info.session_id);
             let context = RowContext {
                 state: live.and_then(live_state),
@@ -490,7 +490,7 @@ fn context_sheet(app: &App, styles: Styles) -> Sheet {
     Sheet::new("Context", "r refresh · c copy · esc close").body(lines)
 }
 
-/// `/session`: the facts about the resident session; Enter or `c` copies its id.
+/// `/session`: the facts about the foreground session; Enter or `c` copies its id.
 fn session_info_sheet(app: &App, items: Option<usize>, styles: Styles) -> Sheet {
     let sheet = Sheet::new("Session", "enter copy id · c copy id · esc close");
     let Some(session) = app.session.as_ref() else {

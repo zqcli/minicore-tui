@@ -244,7 +244,7 @@ impl App {
     }
 
     /// Asks for the context report now and then while a turn runs, because a
-    /// compaction between two requests has no event.
+    /// turn-start compaction has no event.
     pub fn watch_context(&mut self) {
         let Some(session) = self.session.as_mut().filter(|session| session.is_busy()) else {
             return;
@@ -453,7 +453,7 @@ impl App {
         self.read_history(window);
     }
 
-    /// Reads a history window for the resident session.
+    /// Reads a history window for the foreground session.
     pub(super) fn read_history(&self, window: tasks::Window) {
         let Some(session) = self.session.as_ref() else {
             return;
