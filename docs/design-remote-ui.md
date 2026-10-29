@@ -216,8 +216,8 @@ re-renders on every `state`).
   with ↑ in an empty composer on hardware keyboards.
 - `enterkeyhint="send"`, `autocapitalize="sentences"`, autocorrect off while
   the text starts with `/` or `@`; drafts persist per session as today.
-- The queue above the composer lists the Agent's order under "Sent in order ·
-  steers join this turn; follow-ups start the next". Every row shares the same
+- The queue above the composer lists the Agent's run order (steers first) under
+  "Steers join this turn · follow-ups start the next". Every row shares the same
   height, padding and radius. Accent-labelled `↗ Steer N` and neutral
   `↳ Follow-up N` are numbered independently. Every row has pencil **Edit in
   composer** and **Delete** buttons; edits merge the requester-only `returned`
