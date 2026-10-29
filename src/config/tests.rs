@@ -206,7 +206,7 @@ fn every_rejection_names_the_file_the_line_and_the_key() {
         (
             "model_timeout_seconds = 900",
             "turbo_seconds = 1",
-            "<home>/config.toml:17: [loop] turbo_seconds: unknown key (known: event_capacity, max_pending_steers, prompt_timeout_seconds, model_timeout_seconds, policy_timeout_seconds, tool_timeout_seconds, model_retry_attempts, model_retry_base_delay_millis)".into(),
+            "<home>/config.toml:17: [loop] turbo_seconds: unknown key (known: event_capacity, prompt_timeout_seconds, model_timeout_seconds, policy_timeout_seconds, tool_timeout_seconds, model_retry_attempts, model_retry_base_delay_millis)".into(),
             "config",
         ),
     ];

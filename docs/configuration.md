@@ -166,7 +166,7 @@ model_retry_attempts = 2
 model_retry_base_delay_millis = 1000
 ```
 
-`[loop]` keys: `event_capacity`, `max_pending_steers`, `prompt_timeout_seconds`,
+`[loop]` keys: `event_capacity`, `prompt_timeout_seconds`,
 `model_timeout_seconds`, `policy_timeout_seconds`, `tool_timeout_seconds`,
 `model_retry_attempts`, `model_retry_base_delay_millis`. The Agent checks their
 ranges when it starts.
