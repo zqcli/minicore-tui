@@ -18,7 +18,7 @@ struct KeyRow {
 const KEYS: &[KeyRow] = &[
     KeyRow {
         keys: "enter",
-        action: "send, or steer while a turn runs",
+        action: "send, or steer while a turn runs; with no draft, resume a paused queue",
     },
     KeyRow {
         keys: "alt+enter, ctrl+enter",
@@ -46,7 +46,7 @@ const KEYS: &[KeyRow] = &[
     },
     KeyRow {
         keys: "alt+↑",
-        action: "take all unsent queued messages back",
+        action: "take every queued message back",
     },
     KeyRow {
         keys: "ctrl+x",

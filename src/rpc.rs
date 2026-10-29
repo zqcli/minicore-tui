@@ -418,7 +418,7 @@ mod tests {
         let big = "x".repeat(MAX_REQUEST_BYTES);
         let error = encode_request(OutgoingRequest::new(
             RequestId(1),
-            "turn.send",
+            "input.push",
             json!({"text": big}),
         ))
         .unwrap_err();

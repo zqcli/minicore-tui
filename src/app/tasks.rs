@@ -173,6 +173,8 @@ async fn stored_outcome(
         usage: page.usage,
         requests: page.requests,
         tool_rounds: page.tool_rounds,
+        next: None,
+        queue: None,
     }))
 }
 

@@ -14,9 +14,8 @@ use crate::protocol::Reasoning;
 
 /// The Agent's complete tool set; a profile without `tools` gets all of it.
 const TOOLS: [&str; 5] = ["read", "write", "edit", "apply_patch", "bash"];
-const LOOP_KEYS: [&str; 8] = [
+const LOOP_KEYS: [&str; 7] = [
     "event_capacity",
-    "max_pending_steers",
     "prompt_timeout_seconds",
     "model_timeout_seconds",
     "policy_timeout_seconds",

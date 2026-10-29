@@ -1176,8 +1176,8 @@ checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
 name = "minicore-agent"
-version = "0.8.2"
-source = "git+https://github.com/zqcli/minicore-agent?tag=v0.8.2#f337b2be9dbea30a2caa4e4a4145293458dd081f"
+version = "0.9.0"
+source = "git+https://github.com/zqcli/minicore-agent?tag=v0.9.0#b02f63aadaed692b2e2084a2f945a357f8511da7"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -1205,8 +1205,8 @@ dependencies = [
 
 [[package]]
 name = "minicore-runtime"
-version = "0.8.0"
-source = "git+https://github.com/zqcli/minicore-runtime?tag=v0.8.0#f3ef7b2eaad8568b5f03a4a9d4d69ce8bfd75f1f"
+version = "0.9.0"
+source = "git+https://github.com/zqcli/minicore-runtime?tag=v0.9.0#b276d9c0a1f3a3c06e32029f831ccd100c9699c7"
 dependencies = [
  "futures-util",
  "getrandom 0.4.3",
@@ -1219,7 +1219,7 @@ dependencies = [
 
 [[package]]
 name = "minicore-tui"
-version = "0.7.6"
+version = "0.9.0"
 dependencies = [
  "base64 0.22.1",
  "clipboard-win",

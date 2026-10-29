@@ -6,10 +6,11 @@ use std::time::{Duration, Instant};
 use crate::protocol::event::{PreviewState, ToolOutcome};
 use crate::protocol::read::{InterruptedRequest, TurnRecord};
 use crate::protocol::read::{RawHistoryItem, UserKind};
+use crate::protocol::stamp::{now_millis, unix_millis};
 use crate::protocol::{
     AgentEvent, CompactStatus, CompactionPhase, CompactionProgress, CompactionResult, ContextUsage,
-    SessionContext, SessionInfo, SessionPresentation, ToolRef, TurnRef, TurnWaitResult, Usage,
-    UsageTotals,
+    DeliveredInput, Queue, SessionContext, SessionInfo, SessionPresentation, ToolRef, TurnRef,
+    TurnWaitResult, Usage, UsageTotals,
 };
 use crate::transcript::{Block, EXPANDED_ROWS, RequestKey, ToolCall, ToolState, Transcript};
 use crate::transcript::{append_history, append_history_item, merge_live, push_interrupted};
@@ -26,9 +27,10 @@ pub struct Session {
     pub epoch: u64,
     pub transcript: Transcript,
     pub live: Option<LiveTurn>,
-    pub queue: Vec<Queued>,
-    /// A refused steer waits for progress or a turn change before dispatch resumes.
-    pub steers_paused: bool,
+    /// The Agent's queue as last reported; the Agent owns it.
+    pub queue: Queue,
+    /// Inputs a turn took before its wait was registered, placed when it starts.
+    early: Vec<(String, Vec<DeliveredInput>)>,
     pub usage: UsageTotals,
     pub presentation: Option<SessionPresentation>,
     /// When `presentation` was last asked for, and whether that answer is still due.
@@ -56,12 +58,9 @@ pub struct Session {
     pub loading_older: bool,
     /// Pages still to load behind the summary until the latest answer shows.
     pub backfill: u8,
-    pub applied_steers: u64,
     /// The finished turns whose durable items will replace their streamed
     /// regions, with where each region starts.
     pub reconcile_from: Vec<(String, usize)>,
-    /// Where the next turn's region starts, captured before its prompt block.
-    pub next_turn_start: Option<usize>,
     /// The composer text this session had when it left the foreground.
     pub draft: Option<String>,
     /// Refused texts awaiting local control because no remote recipient received them.
@@ -133,32 +132,6 @@ impl LiveTurn {
             usage_base: UsageTotals::default(),
         }
     }
-}
-
-/// A message waiting in send order, possibly already handed to the running turn.
-pub struct Queued {
-    pub text: String,
-    pub kind: QueuedKind,
-    pub sent: bool,
-    /// A steer's send time in Unix milliseconds; it becomes a block when applied.
-    pub at: Option<u64>,
-}
-
-impl Queued {
-    pub fn new(text: String, kind: QueuedKind) -> Self {
-        Self {
-            text,
-            kind,
-            sent: false,
-            at: None,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum QueuedKind {
-    Steer,
-    Follow,
 }
 
 /// How long a prompt waits after it appears, or after a stray key, before it takes an answer.
@@ -235,8 +208,8 @@ impl Session {
             epoch,
             transcript: Transcript::default(),
             live: None,
-            queue: Vec::new(),
-            steers_paused: false,
+            queue: Queue::default(),
+            early: Vec::new(),
             usage: UsageTotals::default(),
             presentation: None,
             presentation_asked: None,
@@ -253,9 +226,7 @@ impl Session {
             loaded_from: 0,
             loading_older: false,
             backfill: 0,
-            applied_steers: 0,
             reconcile_from: Vec::new(),
-            next_turn_start: None,
             draft: None,
             returned: Vec::new(),
             last_sender: None,
@@ -360,8 +331,8 @@ impl Session {
     }
 
     /// Applies one event for this session. Events are hints that may arrive in
-    /// any order; returns a turn the Agent started that is not live yet.
-    pub fn apply_event(&mut self, event: AgentEvent) -> Option<TurnRef> {
+    /// any order; a turn starts only from an RPC answer, never from an event.
+    pub fn apply_event(&mut self, event: AgentEvent) {
         if event.meta().is_some_and(|meta| meta.dropped_before > 0)
             && let Some(live) = self.live.as_mut()
         {
@@ -372,7 +343,6 @@ impl Session {
             // The Agent reports `idle` while a compaction still owns the
             // session, so the progress is taken as it comes.
             AgentEvent::SessionState { state, .. } => self.compaction = state.compaction,
-            AgentEvent::TurnStarted { turn, .. } => return Some(turn),
             AgentEvent::RequestUsage { turn, usage, .. } if self.is_live(&turn) => {
                 self.usage.add(&usage);
             }
@@ -418,14 +388,8 @@ impl Session {
                     };
                 }
             }
-            AgentEvent::SteerProgress {
-                turn,
-                applied_count,
-                ..
-            } if self.is_live(&turn) => {
-                self.apply_steer_progress(&turn.loop_id, applied_count);
-                self.steers_paused = false;
-            }
+            AgentEvent::InputQueue { queue, .. } => self.queue = queue,
+            AgentEvent::InputDelivered { turn, items, .. } => self.deliver(turn, items),
             AgentEvent::ToolStarted {
                 turn,
                 request_index,
@@ -512,7 +476,9 @@ impl Session {
                 }
             }
             AgentEvent::ToolProcess { data, .. } => {
-                let card = self.transcript.find_tool_mut(&data.tool_ref)?;
+                let Some(card) = self.transcript.find_tool_mut(&data.tool_ref) else {
+                    return;
+                };
                 if let Some(command) = &data.command {
                     card.apply_command(command);
                 }
@@ -564,7 +530,6 @@ impl Session {
             }
             _ => {}
         }
-        None
     }
 
     fn push_running_tool(&mut self, key: ToolRef, name: String) {
@@ -619,7 +584,6 @@ impl Session {
         let live = self
             .live
             .take_if(|live| live.turn.loop_id == wait.turn.loop_id)?;
-        self.abandon_steers();
         let streaming: Vec<usize> = (live.start..self.transcript.len())
             .filter(|index| self.transcript.blocks()[*index].is_streaming())
             .collect();
@@ -686,82 +650,29 @@ impl Session {
         Some((end, grown))
     }
 
-    /// A refused send: the optimistic prompt block goes again.
-    pub fn unsend_prompt(&mut self, text: &str) {
-        if let Some(index) = self
-            .transcript
-            .blocks()
-            .iter()
-            .rposition(|block| matches!(block, Block::User { text: sent, .. } if sent == text))
-        {
-            self.transcript.remove(index);
-        }
-        self.next_turn_start = None;
-    }
-
-    /// The Agent's acceptance time replaces the clock reading on the sent prompt.
-    pub fn stamp_prompt(&mut self, text: &str, accepted: u64) {
-        let index = self.transcript.blocks().iter().rposition(
-            |block| matches!(block, Block::User { text: sent, kind: UserKind::Prompt, .. } if sent == text),
-        );
-        if let Some(Block::User { at, .. }) =
-            index.and_then(|index| self.transcript.block_mut(index))
-        {
-            *at = Some(accepted);
+    /// Makes the inputs a running turn took steering blocks, or holds them for a turn not live yet.
+    fn deliver(&mut self, turn: TurnRef, items: Vec<DeliveredInput>) {
+        let delivered = |id: &str| items.iter().any(|item| item.id == id);
+        self.queue.items.retain(|item| !delivered(&item.id));
+        if self.is_live(&turn) {
+            self.place_steers(&turn.loop_id, items);
+        } else {
+            self.early.push((turn.loop_id, items));
         }
     }
 
-    /// The Agent's acceptance time replaces the clock reading on a queued steer.
-    pub fn stamp_steer(&mut self, text: &str, accepted: u64) {
-        let steer = self
-            .queue
-            .iter_mut()
-            .find(|queued| queued.sent && queued.text == text);
-        if let Some(queued) = steer {
-            queued.at = Some(accepted);
-        }
-    }
-
-    pub fn push_follow_up(&mut self, text: String) {
-        self.queue.push(Queued::new(text, QueuedKind::Follow));
-    }
-
-    pub fn take_next(&mut self) -> Option<Queued> {
-        (!self.queue.is_empty()).then(|| self.queue.remove(0))
-    }
-
-    /// Takes back unsent messages in send order, separated by blank lines.
-    pub fn recall_unsent(&mut self) -> Option<String> {
-        let (unsent, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut self.queue)
+    /// Places what was delivered before the turn `loop_id` became live.
+    pub fn place_early(&mut self, loop_id: &str) {
+        let (mine, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut self.early)
             .into_iter()
-            .partition(|queued| !queued.sent);
-        self.queue = rest;
-        let texts: Vec<_> = unsent.into_iter().map(|queued| queued.text).collect();
-        (!texts.is_empty()).then(|| texts.join("\n\n"))
-    }
-
-    /// The Agent discards unapplied steers at turn end; their position and kind stay intact.
-    pub fn abandon_steers(&mut self) {
-        for queued in &mut self.queue {
-            queued.sent = false;
+            .partition(|(early, _)| early == loop_id);
+        self.early = rest;
+        for (_, items) in mine {
+            self.place_steers(loop_id, items);
         }
-        self.applied_steers = 0;
-        self.steers_paused = false;
     }
 
-    pub fn refuse_steer(&mut self, text: &str) {
-        if let Some(queued) = self
-            .queue
-            .iter_mut()
-            .find(|queued| queued.sent && queued.text == text)
-        {
-            queued.sent = false;
-        }
-        self.steers_paused = true;
-    }
-
-    /// Applied steers leave the queue and enter the transcript in send order.
-    pub fn apply_steer_progress(&mut self, loop_id: &str, applied_count: u64) {
+    fn place_steers(&mut self, loop_id: &str, items: Vec<DeliveredInput>) {
         let mut at = self
             .transcript
             .blocks()
@@ -778,20 +689,15 @@ impl Session {
         ) {
             at += 1;
         }
-        while self.applied_steers < applied_count {
-            let Some(index) = self.queue.iter().position(|queued| queued.sent) else {
-                break;
-            };
-            let queued = self.queue.remove(index);
+        for item in items {
             self.transcript.insert(
                 at,
                 Block::User {
-                    text: queued.text,
+                    text: item.text,
                     kind: UserKind::Steering,
-                    at: queued.at,
+                    at: Some(accepted_millis(item.accepted_at.as_deref())),
                 },
             );
-            self.applied_steers += 1;
             at += 1;
         }
     }
@@ -906,9 +812,6 @@ impl Session {
         if let Some(live) = self.live.as_mut() {
             shift(&mut live.start);
         }
-        if let Some(start) = self.next_turn_start.as_mut() {
-            shift(start);
-        }
         for (_, start) in &mut self.reconcile_from {
             shift(start);
         }
@@ -947,6 +850,7 @@ impl Session {
                     covered_item_count: None,
                     retained_item_count: None,
                     failure_kind: None,
+                    next: None,
                 };
                 self.push_compaction(&result, None);
             } else if !last.outcome.starts_with("compacted") && last.outcome != "cancelled" {
@@ -1002,6 +906,11 @@ impl Session {
             *slot = Some((Some(coverage.0), Some(coverage.1)));
         }
     }
+}
+
+/// The Agent's acceptance time of an input in Unix milliseconds, else now.
+pub(super) fn accepted_millis(stamp: Option<&str>) -> u64 {
+    stamp.and_then(unix_millis).unwrap_or_else(now_millis)
 }
 
 /// The first meaningful line of a prompt, cut at a word boundary near 60
@@ -1065,6 +974,7 @@ pub fn reported_percent(usage: &ContextUsage, context: Option<&SessionContext>) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::{InputMode, QueueItem};
 
     fn session() -> Session {
         Session::new(
@@ -1073,26 +983,25 @@ mod tests {
         )
     }
 
-    fn queue(session: &mut Session, text: &str, kind: QueuedKind) {
-        session.queue.push(Queued {
+    fn item(id: &str, mode: InputMode, text: &str) -> QueueItem {
+        QueueItem {
+            id: id.into(),
+            mode,
             text: text.into(),
-            kind,
-            sent: kind == QueuedKind::Steer,
-            at: None,
-        });
+            accepted_at: None,
+        }
     }
 
-    #[test]
-    fn applied_steers_become_steering_blocks_in_order_once() {
-        let mut session = session();
-        session.live = Some(LiveTurn::new(TurnRef::new("s", "l"), 0));
-        queue(&mut session, "first", QueuedKind::Steer);
-        queue(&mut session, "second", QueuedKind::Steer);
-        queue(&mut session, "later", QueuedKind::Follow);
-        session.apply_steer_progress("l", 1);
-        session.apply_steer_progress("l", 2);
-        session.apply_steer_progress("l", 2);
-        let steered: Vec<&str> = session
+    fn delivered(id: &str, text: &str) -> DeliveredInput {
+        DeliveredInput {
+            id: id.into(),
+            text: text.into(),
+            accepted_at: None,
+        }
+    }
+
+    fn steering(session: &Session) -> Vec<&str> {
+        session
             .transcript
             .blocks()
             .iter()
@@ -1104,27 +1013,59 @@ mod tests {
                 } => Some(text.as_str()),
                 _ => None,
             })
-            .collect();
-        assert_eq!(steered, ["first", "second"]);
-        assert_eq!(
-            session.take_next().map(|queued| queued.text).as_deref(),
-            Some("later")
-        );
+            .collect()
     }
 
     #[test]
-    fn a_turn_ends_once_and_keeps_unapplied_steers_in_the_queue() {
+    fn delivered_inputs_leave_the_queue_and_become_steering_blocks_in_order() {
         let mut session = session();
         session.live = Some(LiveTurn::new(TurnRef::new("s", "l"), 0));
-        queue(&mut session, "steer", QueuedKind::Steer);
+        session.queue = Queue {
+            items: vec![
+                item("a", InputMode::Steer, "first"),
+                item("b", InputMode::Steer, "second"),
+                item("c", InputMode::FollowUp, "later"),
+            ],
+            paused: false,
+        };
+        session.deliver(
+            TurnRef::new("s", "l"),
+            vec![delivered("a", "first"), delivered("b", "second")],
+        );
+        assert_eq!(steering(&session), ["first", "second"]);
+        let queued: Vec<&str> = session.queue.items.iter().map(|i| i.id.as_str()).collect();
+        assert_eq!(queued, ["c"]);
+    }
+
+    #[test]
+    fn inputs_delivered_before_the_turn_is_live_are_placed_when_it_starts() {
+        let mut session = session();
+        session.deliver(TurnRef::new("s", "l"), vec![delivered("a", "early")]);
+        assert!(steering(&session).is_empty());
+        session.live = Some(LiveTurn::new(TurnRef::new("s", "l"), 0));
+        session.place_early("other");
+        assert!(steering(&session).is_empty(), "another turn's inputs wait");
+        session.place_early("l");
+        assert_eq!(steering(&session), ["early"]);
+        session.place_early("l");
+        assert_eq!(steering(&session), ["early"], "placed once");
+    }
+
+    #[test]
+    fn a_turn_ends_once_and_leaves_the_queue_to_the_agent() {
+        let mut session = session();
+        session.live = Some(LiveTurn::new(TurnRef::new("s", "l"), 0));
+        session.queue = Queue {
+            items: vec![item("a", InputMode::Steer, "steer")],
+            paused: false,
+        };
         let wait: TurnWaitResult = serde_json::from_value(serde_json::json!({
             "turn": {"session_id": "s", "loop_id": "l"}, "outcome": {"type": "completed"}
         }))
         .unwrap();
         assert_eq!(session.end_turn(&wait), Some(false));
         assert_eq!(session.end_turn(&wait), None, "the turn ends once");
-        let queued = session.take_next().unwrap();
-        assert_eq!(queued.text, "steer");
+        assert_eq!(session.queue.items.len(), 1);
     }
 
     #[test]

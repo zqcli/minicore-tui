@@ -39,9 +39,10 @@ use crate::config::ThemeKind;
 use crate::protocol::changes::DiffPage;
 use crate::protocol::read::{InterruptedRequest, RawHistoryItem};
 use crate::protocol::{
-    AgentEvent, ChangeList, CompactionResult, ModelInfo, ProfileInfo, Reasoning, RpcError,
-    SessionContext, SessionInfo, SessionPresentation, SessionState, SteerResult, ToolReadResult,
-    ToolRef, TurnSendResult, TurnWaitResult,
+    AgentEvent, ChangeList, CompactionResult, InputPushResult, InputRecallResult,
+    InputRemoveResult, InputResumeResult, ModelInfo, ProfileInfo, Queue, Reasoning, RpcError,
+    SessionContext, SessionInfo, SessionPresentation, SessionState, ToolReadResult, ToolRef,
+    TurnWaitResult,
 };
 use crate::rpc::Client;
 use crate::transcript::layout::Layout;
@@ -53,9 +54,7 @@ use crate::ui::views;
 pub use actions::{Action, Answer};
 pub use diff::DiffQuery;
 pub use overlay::{Overlay, Panel};
-pub use session::{
-    InteractionKind, LiveStatus, LiveTurn, PendingInteraction, Phase, Queued, QueuedKind, Session,
-};
+pub use session::{InteractionKind, LiveStatus, LiveTurn, PendingInteraction, Phase, Session};
 pub use tasks::Tx;
 
 /// Everything the main loop can hand to the reducer.
@@ -98,11 +97,14 @@ pub enum SessionOp {
     /// A `workspace.status` answer, wanted only for the branch it caches in the presentation.
     WorkspaceStatus(Result<Value, RpcError>),
     Context(Result<SessionContext, RpcError>),
-    /// The send answer, with the queued message so a refusal can hand it back.
-    Sent(Queued, Result<TurnSendResult, RpcError>),
+    /// The push answer, with the text so a refusal can hand it back.
+    Pushed(String, Result<InputPushResult, RpcError>),
+    Resumed(Result<InputResumeResult, RpcError>),
+    /// A removal; the connection is the phone that gets the text back to edit.
+    Removed(Option<u64>, Result<InputRemoveResult, RpcError>),
+    Recalled(Result<InputRecallResult, RpcError>),
+    Queue(Result<Queue, RpcError>),
     Waited(Result<TurnWaitResult, RpcError>),
-    /// The loop and text keep late steer results from changing another turn's queue.
-    Steered(String, String, Result<SteerResult, RpcError>),
     /// An answer of which only a failure matters.
     Done(Result<Value, RpcError>),
     Compacted(Result<CompactionResult, RpcError>),

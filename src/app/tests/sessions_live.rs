@@ -30,22 +30,24 @@ async fn running_first() -> Harness {
 
 /// `running_first` where the first session's turn ends with `outcome`.
 async fn running_first_ending(outcome: Value) -> Harness {
+    running_first_with(json!({"turn": turn_in("s1", "l1"), "outcome": outcome})).await
+}
+
+/// `running_first` where the first session's turn ends with the `turn.wait` answer `wait`.
+async fn running_first_with(wait: Value) -> Harness {
     let mut h = Harness::opened(display_read(0, 0)).await;
     let mut first = session_info("s1");
     first["title"] = json!("First");
     h.fake
         .script("session.rename@s1", json!({"session": first}));
     h.fake
-        .script("turn.send@s1", json!({"turn": turn_in("s1", "l1")}));
-    h.fake.script_held(
-        "turn.wait@s1",
-        json!({"turn": turn_in("s1", "l1"), "outcome": outcome}),
-    );
+        .script("input.push@s1", started_in(turn_in("s1", "l1"), vec![]));
+    h.fake.script_held("turn.wait@s1", wait);
     let mut second = session_info("s2");
     second["title"] = json!("Second");
     h.fake.script("session.open@s2", json!({"session": second}));
     h.fake
-        .script("turn.send@s2", json!({"turn": turn_in("s2", "l2")}));
+        .script("input.push@s2", started_in(turn_in("s2", "l2"), vec![]));
     h.fake.script_held("turn.wait@s2", waited_in("s2", "l2"));
     h.submit("work in one");
     h.until(|app| app.is_busy()).await;
@@ -93,7 +95,7 @@ async fn two_sessions_run_at_once_and_switching_back_needs_no_reload() {
     h.submit("work in two");
     h.until(|app| app.is_busy()).await;
     let sent: Vec<Value> = h
-        .calls("turn.send")
+        .calls("input.push")
         .iter()
         .map(|call| call["session_id"].clone())
         .collect();
@@ -137,28 +139,44 @@ async fn two_sessions_run_at_once_and_switching_back_needs_no_reload() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_background_turn_ends_there_sends_its_follow_up_and_is_marked_new() {
-    let mut h = running_first().await;
-    h.app
-        .session
-        .as_mut()
-        .unwrap()
-        .push_follow_up("next for one".into());
+async fn a_background_turn_ends_there_and_waits_for_the_successor_the_agent_started() {
+    let mut h = running_first_with(json!({
+        "turn": turn_in("s1", "l1"), "outcome": completed(),
+        "next": started_turn(turn_in("s1", "l3"), "next for one"),
+        "queue": queue(vec![], false),
+    }))
+    .await;
+    h.mirror(vec![entry("f1", "follow_up", "next for one")], false);
     show(&mut h, "s2").await;
     h.fake.release("turn.wait@s1");
-    // The follow-up's own turn keeps running.
-    h.fake
-        .script("turn.send@s1", json!({"turn": turn_in("s1", "l3")}));
+    // The Agent's successor turn keeps running.
     h.fake.script_held("turn.wait@s1", waited_in("s1", "l3"));
     h.until(|app| app.live("s1").is_some_and(|s| s.unseen))
         .await;
     h.settle().await;
-    let ended = first(&h)
+    let shape: Vec<&str> = first(&h)
         .transcript
         .blocks()
         .iter()
-        .any(|block| matches!(block, Block::TurnEnd { .. }));
-    assert!(ended);
+        .map(|block| match block {
+            Block::User { .. } => "user",
+            Block::TurnEnd { .. } => "end",
+            _ => "other",
+        })
+        .collect();
+    assert_eq!(shape, ["user", "end", "user"]);
+    assert_eq!(texts_of(first(&h)), ["work in one", "next for one"]);
+    let running = first(&h).live.as_ref().expect("the successor runs in s1");
+    assert_eq!(running.turn.loop_id, "l3");
+    let waits: Vec<(Value, Value)> = h
+        .calls("turn.wait")
+        .iter()
+        .map(|call| (call["session_id"].clone(), call["loop_id"].clone()))
+        .collect();
+    assert_eq!(
+        waits,
+        [(json!("s1"), json!("l1")), (json!("s1"), json!("l3"))]
+    );
     assert!(
         h.notices()
             .iter()
@@ -166,8 +184,11 @@ async fn a_background_turn_ends_there_sends_its_follow_up_and_is_marked_new() {
         "{:?}",
         h.notices()
     );
-    assert_eq!(h.sends(), ["work in one", "next for one"]);
-    assert_eq!(h.calls("turn.send")[1]["session_id"], "s1");
+    assert_eq!(
+        h.sends(),
+        ["work in one"],
+        "the Agent started it, not the TUI"
+    );
     assert_eq!(h.app.session.as_ref().unwrap().info.session_id, "s2");
     show(&mut h, "s1").await;
     assert!(!h.app.session.as_ref().unwrap().unseen);
@@ -317,20 +338,16 @@ async fn a_young_turn_asking_for_approval_does_not_ring() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn refused_background_text_and_drafts_return_with_their_session() {
+async fn text_refused_after_leaving_a_session_returns_with_that_session() {
     let mut h = running_first().await;
-    h.app
-        .session
-        .as_mut()
-        .unwrap()
-        .push_follow_up("next for one".into());
+    h.fake
+        .script_error_held("input.push@s1", -32000, "refused", "invalid_state");
+    h.submit("next for one");
     h.app.composer.set_text("draft in one");
     show(&mut h, "s2").await;
     assert_eq!(h.app.composer.text(), "");
     h.app.composer.set_text("draft in two");
-    h.fake
-        .script_error("turn.send@s1", -32000, "refused", "invalid_state");
-    h.fake.release("turn.wait@s1");
+    h.fake.release("input.push@s1");
     h.until(|app| app.live("s1").is_some_and(|s| !s.returned.is_empty()))
         .await;
     assert_eq!(h.app.composer.text(), "draft in two");
@@ -402,6 +419,48 @@ async fn a_working_background_session_cannot_be_deleted() {
     assert_eq!(h.notices(), ["Stop \"First\" first: open it and press Esc"]);
     h.settle().await;
     assert!(h.calls("session.delete").is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_idle_background_session_with_queued_messages_cannot_be_deleted() {
+    let mut h = running_first_with(waited_then(
+        "l1",
+        cancelled(),
+        None,
+        queue(vec![entry("i2", "follow_up", "after the stop")], true),
+    ))
+    .await;
+    h.fake.script("turn.result", turn_result("l1", vec![]));
+    show(&mut h, "s2").await;
+    h.fake.release("turn.wait@s1");
+    h.until(|app| app.live("s1").is_some_and(|s| !s.is_busy()))
+        .await;
+    h.settle().await;
+    assert_eq!(first(&h).live_status(), LiveStatus::Idle);
+    delete_from_picker(&mut h, "s1");
+    assert_eq!(
+        h.notices().last().map(String::as_str),
+        Some("Clear the queued messages of \"First\" first")
+    );
+    h.settle().await;
+    assert!(h.calls("session.delete").is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_input_queue_event_updates_the_mirror_of_a_background_session_only() {
+    let mut h = running_first().await;
+    show(&mut h, "s2").await;
+    h.emit(
+        "input_queue",
+        json!({"queue": queue(vec![entry("i1", "follow_up", "later")], false)}),
+    )
+    .await;
+    h.settle().await;
+    assert_eq!(first(&h).queue.items[0].text, "later");
+    assert!(
+        h.queue().is_empty(),
+        "the foreground session is not touched"
+    );
 }
 
 #[tokio::test(start_paused = true)]

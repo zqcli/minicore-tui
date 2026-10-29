@@ -18,7 +18,7 @@ use crate::ui::theme::Palette;
 
 /// A turn that stays running once sent.
 fn script_turn(h: &Harness) {
-    h.fake.script("turn.send", json!({"turn": turn("l1")}));
+    h.fake.script("input.push", started("l1"));
     h.fake.script_held("turn.wait", waited("l1", completed()));
 }
 

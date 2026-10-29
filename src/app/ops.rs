@@ -1,11 +1,13 @@
 //! Applying the results of async operations and the Agent's events.
 
+use super::session::accepted_millis;
 use super::tasks::{self, History, Window};
-use super::{App, LiveTurn, NoticeLevel, Overlay, Queued, Scroll, Session, SessionOp, find};
-use crate::protocol::stamp::unix_millis;
+use super::{App, LiveTurn, NoticeLevel, Overlay, Scroll, Session, SessionOp, find};
+use crate::protocol::read::UserKind;
 use crate::protocol::{
-    self, AgentEvent, CompactStatus, CompactionResult, RpcError, SessionInfo, SessionState,
-    SteerResult, TurnRef, TurnSendResult, TurnWaitResult,
+    self, AgentEvent, CompactStatus, CompactionResult, InputPushResult, InputRecallResult,
+    InputRemoveResult, InputResumeResult, QueueItem, RpcError, SessionInfo, SessionState, TurnRef,
+    TurnWaitResult,
 };
 use crate::title::LONG_TURN;
 use crate::transcript::{Block, ChangeSummary};
@@ -52,9 +54,16 @@ impl App {
                     );
                 }
             }
-            SessionOp::Sent(text, result) => self.on_sent(text, result),
+            SessionOp::Pushed(text, result) => self.on_pushed(text, result),
+            SessionOp::Resumed(result) => self.on_resumed(result),
+            SessionOp::Removed(requester, result) => self.on_removed(requester, result),
+            SessionOp::Recalled(result) => self.on_recalled(result),
+            SessionOp::Queue(result) => {
+                if let Some(queue) = self.ok(result) {
+                    self.session_mut().queue = queue;
+                }
+            }
             SessionOp::Waited(result) => self.on_waited(result),
-            SessionOp::Steered(loop_id, text, result) => self.on_steered(&loop_id, text, result),
             SessionOp::Done(result) => {
                 self.ok(result);
             }
@@ -92,7 +101,6 @@ impl App {
             SessionOp::ChangeFiles(result) => self.on_change_files(result),
             SessionOp::DiffFile(query, result) => self.on_diff_file(query, result),
         }
-        self.pump_queue();
     }
 
     /// Adopts a session and assigns its remote creator or opener's view without moving other devices.
@@ -142,8 +150,7 @@ impl App {
             self.draft_text.clear();
             self.composer.set_text(&typed);
         }
-        // A new session has no history to read, and the tail would clear the
-        // prompt block of the first send.
+        // A new session has no history to read.
         if first.is_none() {
             self.read_history(Window::Tail);
         }
@@ -169,6 +176,7 @@ impl App {
             self.scroll = Scroll::Follow;
             // After the tail: a turn already running takes its place at the end.
             self.read_state();
+            self.read_queue();
             self.backfill();
         }
     }
@@ -262,48 +270,94 @@ impl App {
         if was_compacting && session.compaction.is_none() {
             self.refresh_context();
         }
-        // A loop this process did not start has no `turn.wait` of its own.
+        // A loop already running when the session opened has no `turn.wait` of its own.
         if let Some(active) = state.active_loop {
             let session_id = self.session_mut().info.session_id.clone();
-            self.start_turn(TurnRef::new(session_id, active.loop_id));
+            self.start_turn(TurnRef::new(session_id, active.loop_id), None);
         }
     }
 
-    /// Makes `turn` the live turn and waits for it. The only place a
-    /// `turn.wait` is registered, and only while no turn is live.
-    pub(super) fn start_turn(&mut self, turn: TurnRef) {
+    /// Makes `turn` the live turn and waits for it, with `prompt` as the
+    /// entry that started it. The only place a `turn.wait` is registered, and
+    /// only while no turn is live.
+    pub(super) fn start_turn(&mut self, turn: TurnRef, prompt: Option<QueueItem>) {
         let session = self.session_mut();
         if session.live.is_some() {
             return;
         }
-        let start = session
-            .next_turn_start
-            .take()
-            .unwrap_or(session.transcript.len());
+        // The prompt opens the turn's region, so reconciling replaces it with the durable one.
+        let start = session.transcript.len();
+        if let Some(prompt) = prompt {
+            session.transcript.push(Block::User {
+                text: prompt.text,
+                kind: UserKind::Prompt,
+                at: Some(accepted_millis(prompt.accepted_at.as_deref())),
+            });
+        }
         let mut live = LiveTurn::new(turn.clone(), start);
         live.usage_base = session.usage.clone();
         session.live = Some(live);
+        session.place_early(&turn.loop_id);
         self.spawn(tasks::wait_turn(self.client.clone(), turn));
     }
 
-    fn on_sent(&mut self, queued: Queued, result: Result<TurnSendResult, RpcError>) {
-        let text = &queued.text;
-        match result {
-            Ok(sent) => {
-                if let Some(at) = sent.accepted_at.as_deref().and_then(unix_millis) {
-                    self.session_mut().stamp_prompt(text, at);
-                }
-                self.start_turn(sent.turn);
-                if let Some(title) = self.session.as_ref().and_then(Session::auto_title) {
-                    self.rename(&title);
-                }
-            }
+    fn on_pushed(&mut self, text: String, result: Result<InputPushResult, RpcError>) {
+        let pushed = match result {
+            Ok(pushed) => pushed,
             // The text never reached the Agent; it returns to the draft.
             Err(error) => {
-                self.session_mut().unsend_prompt(text);
-                self.restore_draft(text);
+                self.restore_draft(&text);
                 self.error(error);
+                return;
             }
+        };
+        self.session_mut().queue = pushed.queue;
+        if let Some(started) = pushed.started {
+            self.start_turn(started.turn, Some(started.input));
+            if let Some(title) = self.session.as_ref().and_then(Session::auto_title) {
+                self.rename(&title);
+            }
+        }
+    }
+
+    fn on_resumed(&mut self, result: Result<InputResumeResult, RpcError>) {
+        let Some(resumed) = self.ok(result) else {
+            return;
+        };
+        self.session_mut().queue = resumed.queue;
+        if let Some(started) = resumed.started {
+            self.start_turn(started.turn, Some(started.input));
+        }
+    }
+
+    /// An entry taken out of the queue; its text goes back to `requester`, a phone that wants to edit it.
+    fn on_removed(&mut self, requester: Option<u64>, result: Result<InputRemoveResult, RpcError>) {
+        let Some(removed) = self.ok(result) else {
+            return;
+        };
+        self.session_mut().queue = removed.queue;
+        if let Some(connection) = requester {
+            self.remote.send(
+                Some(connection),
+                serde_json::json!({"t":"returned", "text":removed.text}),
+            );
+        }
+    }
+
+    /// Every queued message back as one draft, in the order they would have run.
+    fn on_recalled(&mut self, result: Result<InputRecallResult, RpcError>) {
+        let Some(recalled) = self.ok(result) else {
+            return;
+        };
+        self.session_mut().queue = recalled.queue;
+        if recalled.texts.is_empty() {
+            return;
+        }
+        let text = recalled.texts.join("\n\n");
+        // A session left meanwhile shows it when it comes back.
+        match self.background_op {
+            true => self.session_mut().returned.push(text),
+            false => self.restore_to_composer(&text),
         }
     }
 
@@ -323,6 +377,8 @@ impl App {
                     usage: None,
                     requests: None,
                     tool_rounds: None,
+                    next: None,
+                    queue: None,
                 }
             }
         };
@@ -330,12 +386,19 @@ impl App {
         let Some(reconcile) = self.session_mut().end_turn(&wait) else {
             return;
         };
+        let TurnWaitResult {
+            turn, next, queue, ..
+        } = wait;
+        match queue {
+            Some(queue) => self.session_mut().queue = queue,
+            // An outcome made up or read from the stored result does not know the queue.
+            None => self.read_queue(),
+        }
         self.ring |= busy >= Some(LONG_TURN);
         self.stamp_activity();
         if self.background_op {
             self.background_turn_ended();
         }
-        let TurnWaitResult { turn, .. } = wait;
         let client = self.client.clone();
         if reconcile {
             let (client, turn) = (client.clone(), turn.clone());
@@ -352,46 +415,25 @@ impl App {
         // may also have switched branches.
         self.refresh_branch();
         self.refresh_context();
-    }
-
-    fn on_steered(&mut self, loop_id: &str, text: String, result: Result<SteerResult, RpcError>) {
-        if !self
-            .session_mut()
-            .live
-            .as_ref()
-            .is_some_and(|live| live.turn.loop_id == loop_id)
-        {
-            return;
-        }
-        match result {
-            Ok(steer) => {
-                if let Some(at) = steer.accepted_at.as_deref().and_then(unix_millis) {
-                    self.session_mut().stamp_steer(&text, at);
-                }
-            }
-            Err(error) => {
-                self.session_mut().refuse_steer(&text);
-                match error.code {
-                    protocol::TURN_NOT_FOUND => {
-                        self.notice(NoticeLevel::Info, "Turn already ended; queued as next");
-                    }
-                    protocol::STEER_QUEUE_FULL => {
-                        self.notice(
-                            NoticeLevel::Error,
-                            "Steer queue is full; queued for the next turn",
-                        );
-                    }
-                    _ => self.error(error),
-                }
-            }
+        // After the turn-end line and the background notice, which read it.
+        if let Some(next) = next {
+            self.start_turn(next.turn, Some(next.input));
         }
     }
 
     fn on_compacted(&mut self, result: Result<CompactionResult, RpcError>) {
         self.session_mut().compaction = None;
-        let Some(result) = self.ok(result) else {
+        let Some(mut result) = self.ok(result) else {
             return;
         };
+        // The Agent starts the queue's head once the compaction is over.
+        if let Some(next) = result.next.take() {
+            self.session_mut()
+                .queue
+                .items
+                .retain(|item| item.id != next.input.id);
+            self.start_turn(next.turn, Some(next.input));
+        }
         match result.status {
             CompactStatus::Compacted => {
                 self.session_mut().push_compaction(&result, None);
@@ -455,15 +497,8 @@ impl App {
         let was_compacting = session.compacting();
         let usage = matches!(event, AgentEvent::RequestUsage { .. });
         let requested = matches!(event, AgentEvent::InteractionRequested { .. });
-        let queue_changed = matches!(
-            event,
-            AgentEvent::SteerProgress { .. } | AgentEvent::TurnStarted { .. }
-        );
-        let started = session.apply_event(event);
+        session.apply_event(event);
         let compaction_ended = was_compacting && session.compaction.is_none();
-        if let Some(turn) = started {
-            self.start_turn(turn);
-        }
         if requested {
             self.on_approval_requested();
         }
@@ -475,9 +510,6 @@ impl App {
         // The context report holds the finished compaction's marker.
         if compaction_ended {
             self.refresh_context();
-        }
-        if queue_changed || compaction_ended {
-            self.pump_queue();
         }
     }
 

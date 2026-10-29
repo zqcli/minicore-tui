@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.9.0 — 2026-10-30
 
 - On Windows the welcome header and the remote status screen write the home folder
   as `~`, as on other systems.
@@ -50,12 +50,24 @@
   keyboard closes, and a pinch zoom no longer resizes the app.
 - iPhone: the session drawer reaches under the status bar instead of leaving a
   grey strip above it.
-- Queued messages dispatch in send order. Steers behind a follow-up wait until
-  that follow-up starts its turn. Unsent steers and follow-ups can be edited or
-  deleted in the web tray; `Alt+↑` takes all unsent messages back in the TUI.
-  Sent steers are marked and cannot be withdrawn. Refused steers keep their
-  place and wait for Agent progress or turn end before retrying. Applied steers
-  also keep their order in the transcript.
+- The Agent now keeps each session's queue of messages and the TUI only shows
+  it (the new Agent input queue API, `input.push` and friends, replaces
+  `turn.send` and `turn.steer`). `Enter` sends a steer, which reaches the running
+  turn at its next request or starts a turn when idle; `Alt+Enter` (or
+  `Ctrl+Enter`) queues a follow-up that starts a turn of its own once the running
+  one has ended. Steers run before follow-ups, and the dock lists the messages in
+  that order. A steer leaves the list and appears in the transcript, in order,
+  when the running turn takes it, and a turn the Agent starts from the queue gets
+  its own wait in the foreground and in background sessions alike.
+- An interrupted or failed turn pauses a queue that still holds messages: the
+  dock says `paused · enter resumes · alt+↑ edit`, and `Enter` on an empty draft
+  resumes it (a draft sends and resumes it, older messages first). `Alt+↑` takes
+  every queued message back in the TUI, the web tray offers Edit and Delete on
+  every row until the running turn takes it, and a session with queued messages
+  cannot be deleted.
+- The phone's queue rows no longer carry a `sent` marker, and the `[loop]` key
+  `max_pending_steers` is gone from `config.toml`: the Agent no longer has a steer
+  limit of its own, only a bound of 32 queued messages per session.
 
 - Confirming an IME candidate with Enter no longer submits the message when
   Safari reports the key outside composition with key code 229.

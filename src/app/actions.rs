@@ -5,14 +5,13 @@ use serde_json::{Value, json};
 
 use super::draft::NO_SESSION;
 use super::{
-    App, InteractionKind, Msg, NoticeLevel, Queued, QueuedKind, Scroll, Session, SessionOp,
-    commands, tasks, templates,
+    App, InteractionKind, Msg, NoticeLevel, Scroll, SessionOp, commands, tasks, templates,
 };
 use crate::config::ThemeKind;
-use crate::protocol::stamp::now_millis;
-use crate::protocol::{self, CompactionPhase, CompactionProgress, Reasoning, SessionResult};
+use crate::protocol::{
+    self, CompactionPhase, CompactionProgress, InputMode, Reasoning, SessionResult,
+};
 use crate::title::LONG_TURN;
-use crate::transcript::Block;
 use crate::ui::theme::{Palette, Styles};
 
 /// How often the context report is asked for while a turn runs.
@@ -20,7 +19,7 @@ const CONTEXT_EVERY: std::time::Duration = std::time::Duration::from_secs(2);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Action {
-    /// Enter: send when idle, steer when a turn runs.
+    /// Enter: steer, which starts a turn when idle; with no draft, resume a paused queue.
     Submit,
     /// Alt+Enter or Ctrl+Enter: queue a follow-up.
     QueueFollowUp,
@@ -163,6 +162,8 @@ impl App {
         let text = self.composer.submit().trim_end().to_owned();
         if !text.is_empty() {
             self.submit_text(text, follow);
+        } else if !follow && self.session.as_ref().is_some_and(|s| s.queue.paused) {
+            self.call(protocol::METHOD_INPUT_RESUME, json!({}), SessionOp::Resumed);
         }
     }
 
@@ -174,38 +175,21 @@ impl App {
             if !self.is_busy() {
                 self.scroll = Scroll::Follow;
             }
-            if follow {
-                self.session_mut().push_follow_up(text);
-                self.pump_queue();
-            } else {
-                self.steer(text);
-            }
+            let mode = match follow {
+                true => InputMode::FollowUp,
+                false => InputMode::Steer,
+            };
+            self.push_input(text, mode);
         }
     }
 
-    fn send(&mut self, queued: Queued) {
-        let text = &queued.text;
-        let session = self.session_mut();
-        // The durable history echoes this prompt, so the turn's region starts
-        // before it: reconciling replaces the prompt rather than doubling it.
-        session.next_turn_start = Some(session.transcript.len());
-        session.transcript.push(Block::User {
-            text: text.clone(),
-            kind: protocol::read::UserKind::Prompt,
-            at: Some(now_millis()),
-        });
+    /// Hands `text` to the Agent's queue; its answer says whether a turn started.
+    pub(super) fn push_input(&self, text: String, mode: InputMode) {
         self.call(
-            protocol::METHOD_TURN_SEND,
-            json!({ "text": text }),
-            move |result| SessionOp::Sent(queued, result),
+            protocol::METHOD_INPUT_PUSH,
+            json!({ "mode": mode, "text": text }),
+            move |result| SessionOp::Pushed(text, result),
         );
-    }
-
-    pub(super) fn steer(&mut self, text: String) {
-        self.session_mut()
-            .queue
-            .push(Queued::new(text, QueuedKind::Steer));
-        self.pump_queue();
     }
 
     /// Esc on a running turn asks the Agent to cancel it; `turn.wait` ends it.
@@ -504,16 +488,34 @@ impl App {
         );
     }
 
-    /// Alt+↑ takes all unsent messages back to an empty composer.
+    /// Alt+↑ takes every queued message back to an empty composer.
     fn recall_queued(&mut self) {
         if !self.composer.is_empty() {
             self.notice(
                 NoticeLevel::Info,
                 "Clear the draft before recalling a queued message",
             );
-        } else if let Some(text) = self.session.as_mut().and_then(Session::recall_unsent) {
-            self.composer.set_text(&text);
+        } else if self
+            .session
+            .as_ref()
+            .is_some_and(|s| !s.queue.items.is_empty())
+        {
+            self.recall_queue();
         }
+    }
+
+    /// Asks the Agent to give back every queued message.
+    pub(super) fn recall_queue(&self) {
+        self.call(
+            protocol::METHOD_INPUT_RECALL,
+            json!({}),
+            SessionOp::Recalled,
+        );
+    }
+
+    /// Asks for the queue, which a session opened later may already have.
+    pub(super) fn read_queue(&self) {
+        self.call(protocol::METHOD_INPUT_LIST, json!({}), SessionOp::Queue);
     }
 
     /// Returns refused text to its remote sender or session, otherwise appending it to the local composer.
@@ -540,47 +542,15 @@ impl App {
                 .send(Some(connection), json!({"t":"returned", "text":text}));
             return;
         }
+        self.restore_to_composer(text);
+    }
+
+    /// Puts `text` in the composer, behind a draft typed meanwhile.
+    pub(super) fn restore_to_composer(&mut self, text: &str) {
         if self.composer.is_empty() {
             self.composer.restore_text(text);
         } else {
             self.composer.insert(text);
-        }
-    }
-
-    /// Dispatches in send order, stopping at a follow-up while a turn is live.
-    pub(super) fn pump_queue(&mut self) {
-        let Some(session) = self.session.as_mut() else {
-            return;
-        };
-        if let Some(live) = &session.live {
-            if session.steers_paused {
-                return;
-            }
-            let loop_id = live.turn.loop_id.clone();
-            let mut texts = Vec::new();
-            for queued in &mut session.queue {
-                if queued.kind == QueuedKind::Follow {
-                    break;
-                }
-                if !queued.sent {
-                    queued.sent = true;
-                    queued.at = Some(now_millis());
-                    texts.push(queued.text.clone());
-                }
-            }
-            for text in texts {
-                let loop_id = loop_id.clone();
-                self.call(
-                    protocol::METHOD_TURN_STEER,
-                    json!({"loop_id": loop_id, "text": text}),
-                    move |result| SessionOp::Steered(loop_id, text, result),
-                );
-            }
-        } else if session.next_turn_start.is_none()
-            && !session.compacting()
-            && let Some(queued) = session.take_next()
-        {
-            self.send(queued);
         }
     }
 

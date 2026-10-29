@@ -18,6 +18,9 @@ pub use crate::testing::{chunk, chunk_envelope, display_read, session_info, turn
 /// or scripted delay.
 const QUIET: Duration = Duration::from_secs(5);
 
+/// More messages than any test needs; a run past it is a loop.
+const MAX_MESSAGES: usize = 10_000;
+
 pub struct Harness {
     pub app: App,
     pub fake: FakeAgent,
@@ -61,6 +64,7 @@ impl Harness {
             json!({"session_id": "s1", "status": "idle"}),
         );
         fake.script("session.context", json!({"session_id": "s1"}));
+        fake.script("input.list", queue(vec![], false));
         fake.script("session.read", display_read(0, 0));
         fake.script(
             "changes.list",
@@ -92,17 +96,26 @@ impl Harness {
 
     /// Applies messages until none arrives for a while.
     pub async fn settle(&mut self) {
-        while let Ok(Some(message)) = tokio::time::timeout(QUIET, self.rx.recv()).await {
+        // A chain of answers that feeds itself never goes quiet; fail instead of spinning.
+        for _ in 0..MAX_MESSAGES {
+            let Ok(Some(message)) = tokio::time::timeout(QUIET, self.rx.recv()).await else {
+                return;
+            };
             self.app.on_msg(message);
         }
+        panic!("still busy after {MAX_MESSAGES} messages");
     }
 
     /// Applies the messages that arrive within `duration`.
     pub async fn run_for(&mut self, duration: Duration) {
         let deadline = tokio::time::Instant::now() + duration;
-        while let Ok(Some(message)) = tokio::time::timeout_at(deadline, self.rx.recv()).await {
+        for _ in 0..MAX_MESSAGES {
+            let Ok(Some(message)) = tokio::time::timeout_at(deadline, self.rx.recv()).await else {
+                return;
+            };
             self.app.on_msg(message);
         }
+        panic!("still busy after {MAX_MESSAGES} messages");
     }
 
     /// Applies messages until `check` holds.
@@ -226,13 +239,21 @@ impl Harness {
             .collect()
     }
 
+    /// The texts in the mirrored queue, in the order the Agent reported them.
     pub fn queue(&self) -> Vec<String> {
         let session = self.app.session.as_ref().expect("a session");
         session
             .queue
+            .items
             .iter()
             .map(|queued| queued.text.clone())
             .collect()
+    }
+
+    /// Sets the foreground session's mirrored queue as if the Agent had reported `items`.
+    pub fn mirror(&mut self, items: Vec<Value>, paused: bool) {
+        self.app.session.as_mut().expect("a session").queue =
+            serde_json::from_value(queue(items, paused)).unwrap();
     }
 
     /// The bells in the terminal bytes now, not counting a title sequence's terminator.
@@ -257,9 +278,20 @@ impl Harness {
         self.fake.calls(method)
     }
 
-    /// The texts of every `turn.send`, in order.
+    /// The mode and text of every `input.push`, in order.
+    pub fn pushes(&self) -> Vec<(String, String)> {
+        self.calls("input.push")
+            .iter()
+            .map(|params| {
+                let field = |name: &str| params[name].as_str().unwrap().to_owned();
+                (field("mode"), field("text"))
+            })
+            .collect()
+    }
+
+    /// The texts of every `input.push`, in order.
     pub fn sends(&self) -> Vec<String> {
-        self.calls("turn.send")
+        self.calls("input.push")
             .iter()
             .filter_map(|params| params["text"].as_str().map(str::to_owned))
             .collect()
@@ -357,9 +389,14 @@ pub fn summary(index: usize) -> Value {
     )
 }
 
-/// A `turn.wait` answer for `loop_id`.
+/// A `turn.wait` answer for `loop_id` with nothing queued and no successor.
 pub fn waited(loop_id: &str, outcome: Value) -> Value {
-    json!({"turn": turn(loop_id), "outcome": outcome})
+    waited_then(loop_id, outcome, None, queue(vec![], false))
+}
+
+/// A `turn.wait` answer for `loop_id` that also says which turn the Agent started next and what still waits.
+pub fn waited_then(loop_id: &str, outcome: Value, next: Option<Value>, queued: Value) -> Value {
+    json!({"turn": turn(loop_id), "outcome": outcome, "next": next, "queue": queued})
 }
 
 pub fn completed() -> Value {
@@ -374,6 +411,49 @@ pub fn cancelled() -> Value {
 pub fn turn_result(loop_id: &str, items: Vec<Value>) -> Value {
     json!({"turn": turn(loop_id), "outcome": {"type": "cancelled", "reason": "user"},
            "total": items.len(), "items": items, "next_cursor": null})
+}
+
+/// One queue entry as the Agent reports it.
+pub fn entry(id: &str, mode: &str, text: &str) -> Value {
+    json!({"id": id, "mode": mode, "text": text})
+}
+
+/// A queue as the Agent reports it.
+pub fn queue(items: Vec<Value>, paused: bool) -> Value {
+    json!({"items": items, "paused": paused})
+}
+
+/// An `input.push` answer for an entry that waits in `queued`.
+pub fn pushed(queued: Vec<Value>) -> Value {
+    json!({"id": "i1", "started": null, "queue": queue(queued, false)})
+}
+
+/// A turn the Agent started from the queue with `text` as its input.
+pub fn started_turn(turn: Value, text: &str) -> Value {
+    json!({"turn": turn, "input": entry("n1", "follow_up", text)})
+}
+
+/// `started_turn` for `loop_id` of `s1`.
+pub fn next_turn(loop_id: &str, text: &str) -> Value {
+    started_turn(turn(loop_id), text)
+}
+
+/// An `input.push` answer for an entry that started `loop_id` with nothing else waiting.
+pub fn started(loop_id: &str) -> Value {
+    started_in(turn(loop_id), vec![])
+}
+
+/// `started` with the time the Agent accepted the entry.
+pub fn started_at(loop_id: &str, accepted_at: &str) -> Value {
+    let mut push = started(loop_id);
+    push["started"]["input"]["accepted_at"] = json!(accepted_at);
+    push
+}
+
+/// An `input.push` answer that started `turn` with the pushed text and left `queued` waiting.
+pub fn started_in(turn: Value, queued: Vec<Value>) -> Value {
+    let started = json!({"turn": turn, "input": entry("i1", "steer", "$text")});
+    json!({"id": "i1", "started": started, "queue": queue(queued, false)})
 }
 
 /// A refusal in the shape `FakeAgent::script_sequence` accepts.

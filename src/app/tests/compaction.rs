@@ -204,7 +204,7 @@ fn automatic_context(current: serde_json::Value, last: serde_json::Value) -> ser
 #[tokio::test(start_paused = true)]
 async fn a_compaction_at_turn_start_shows_its_phase_and_leaves_a_marker() {
     let mut h = Harness::opened(display_read(0, 0)).await;
-    h.fake.script("turn.send", json!({"turn": turn("l1")}));
+    h.fake.script("input.push", started("l1"));
     h.fake.script_held("turn.wait", waited("l1", completed()));
     h.submit("go");
     h.until(|app| app.is_busy()).await;
@@ -336,4 +336,40 @@ async fn a_cancelled_manual_compaction_says_so() {
     h.settle().await;
     assert!(h.notices().is_empty());
     assert_eq!(h.app.flash.as_ref().unwrap().0, "Compaction cancelled");
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_turn_the_agent_starts_when_a_compaction_ends_gets_its_wait_and_its_prompt() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.fake.script(
+        "input.push",
+        pushed(vec![entry("i1", "follow_up", "asked meanwhile")]),
+    );
+    h.fake.script_held(
+        "session.compact",
+        json!({"operation_id": "tui-1", "status": "compacted", "before_tokens": 9000,
+               "after_tokens": 2000,
+               "next": {"turn": turn("l2"),
+                         "input": entry("i1", "follow_up", "asked meanwhile")}}),
+    );
+    h.fake.script_held("turn.wait", waited("l2", completed()));
+    h.action(Action::Compact);
+    h.until(|app| app.compacting()).await;
+    h.app.composer.set_text("asked meanwhile");
+    h.action(Action::QueueFollowUp);
+    h.settle().await;
+    assert_eq!(h.queue(), ["asked meanwhile"]);
+    assert!(!h.is_busy(), "nothing starts while the compaction runs");
+
+    // The Agent started the entry that waited behind it, before the compaction answered.
+    h.fake.release("session.compact");
+    h.until(|app| app.is_busy()).await;
+    h.settle().await;
+    assert_eq!(h.texts(), ["asked meanwhile"]);
+    assert!(h.queue().is_empty(), "the started entry left the mirror");
+    assert_eq!(h.calls("turn.wait")[0]["loop_id"], "l2");
+    assert!(
+        h.calls("session.state").len() <= 1,
+        "no state read to find it"
+    );
 }
