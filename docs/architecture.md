@@ -244,7 +244,7 @@ and the sign-in pause countdown refreshes with the next frame.
 explicit allowlist for viewing, copying/exporting, draft editing, theme changes,
 queue recall, quit and remote commands. Command completion checks before clearing
 the draft. Approval sheets neither render nor take the local keyboard; Esc can
-still interrupt. Entering remote recalls all unsent queued messages into the composer.
+still interrupt. Entering remote recalls every queued message (`input.recall`) into the composer.
 Each `Phone` owns a `PhoneView`: a live session id or draft workspace and launch
 settings, copied from the foreground on admission. Before an intent one helper
 focuses that view through the ordinary live switch or draft path; the phones
@@ -362,35 +362,40 @@ to 3 s, then aborts the pipe tasks; the child is killed on drop.
 The `turn.wait` result is the only thing that ends a turn; events are display
 hints.
 
-1. **Submit.** The user block is appended at once, then `turn.send`. On success
-   `start_turn` creates the `LiveTurn` and spawns `turn.wait`. It is the only
-   place a wait is registered and does nothing while a turn is live, so a turn
-   adopted from `turn_started` or `session.state` is never waited on twice.
-   Opening a session reads `session.state` once its tail is installed, so a turn
-   still running in the Agent is adopted and waited on. A refusal removes the
-   prompt block and puts the text back in the draft; the Agent never refuses a
-   send because of the previous turn's compaction, which runs only at turn start.
-2. **Events** (`output_delta`, `tool_*`, `request_started`, `steer_progress`,
-   `session_state`, `interaction_*`) update the live turn's blocks by key, so
-   order does not matter. Deltas and tool starts for a loop that is not live are
-   ignored. `dropped_before > 0` marks the turn as having a gap.
+1. **Submit.** `Enter` is `input.push` with mode `steer`, `Alt+Enter` the same
+   with `follow_up`; the answer names the turn this push started, if any. Every
+   turn is learned from an RPC answer, never from an event: `input.push`,
+   `input.resume` and the `next` of a `turn.wait` result each carry the turn the
+   Agent started. `start_turn` makes it the `LiveTurn` and spawns `turn.wait`. It
+   is the only place a wait is registered and does nothing while a turn is live,
+   so a turn is never waited on twice. It also opens the turn's region with the
+   prompt block of the entry that started it (see Steering). Opening a session
+   reads `session.state` once its tail is installed, so a turn still running in
+   the Agent is adopted and waited on; a manual compaction's end reads it too,
+   because the Agent starts the queue's head then. A refusal puts the text back
+   in the draft.
+2. **Events** (`output_delta`, `tool_*`, `request_started`, `input_queue`,
+   `input_delivered`, `session_state`, `interaction_*`) update the live turn's
+   blocks by key, so order does not matter. Deltas and tool starts for a loop
+   that is not live are ignored. `dropped_before > 0` marks the turn as having
+   a gap.
 3. **`turn.wait` resolves** and the turn is over. `wait_turn` retries capacity
    and busy refusals. If the wait fails otherwise it asks `turn.result` (limit 1)
    for the stored outcome; with none stored it waits again; only if that read
    fails too does the turn end as `Unknown` with an error notice. `end_turn` then
    closes streaming blocks, adds usage to the totals, appends the turn-end block
-   and marks unapplied steers unsent without changing their order or kind. If the outcome is not `completed`
+   and takes the result's `queue`. If the outcome is not `completed`
    or the turn had a gap, its durable items are read with `turn.result` (paged,
    chunk-assembled) and **reconciled**: they replace the blocks the turn streamed,
    up to its turn-end line and no further, so a follow-up already sent stays
-   after it. Cards keep the detail, input and output the live events knew,
+   after it, which is where a successor's prompt already sits. Cards keep the detail, input and output the live events knew,
    thinking and text the items lack stay, and so do blocks no item covers
    (compaction markers). The page's `interrupted` partial reply, when the
    cancel cut a request short, is the durable block of that request and
    replaces the streamed one in place; the streamed text stays only when the
    Agent sent none. In every case `changes.list` for the turn fills the change
-   summary, `session.presentation` and `session.context` are refreshed, and the
-   queue is pumped in send order.
+   summary, `session.presentation` and `session.context` are refreshed, and a
+   `next` turn gets its own wait.
 4. **`turn_finished`** only changes the phase text. A wait answer for another
    loop leaves the live turn running.
 5. **Interrupt.** `Esc` sends `turn.cancel` once; the status line shows
@@ -413,19 +418,29 @@ interrupt left on screen. A record without
 details, or with a binary, truncated, stale or unreadable diff, makes the total
 unknown, and the line then shows only `N files changed`, never a zero.
 
-Steering: `Session::queue` preserves send order. Each entry has its kind and a
-`sent` flag, true only for a steer handed to the Agent and awaiting application.
-`pump_queue` dispatches unsent steers up to the first follow-up while a turn is
-live. When idle, the front item of either kind starts the next turn; steers
-behind it can then join that turn. A pending send or compaction blocks another
-prompt. `steer_progress` moves applied sent steers into the transcript.
-A refusal clears that steer's `sent` flag in place and pauses steer dispatch
-until progress for the live turn or a turn change; there is no retry timer.
-Turn end marks all unapplied steers unsent, preserving their kind and position.
-`Alt+Enter` (or `Ctrl+Enter`) queues a follow-up; `Alt+↑` takes every unsent
-item back into an empty draft, in order, joined by blank lines. Phones can edit
-or delete any unsent item, but the Agent has no withdrawal API for sent steers. The first prompt
-of an untitled session becomes its title through `session.rename`.
+Input queue: the Agent owns one queue per session (`protocol::input`: entries
+with an id, a mode and a text; steers run before follow-ups; a `paused` flag
+after an interrupted or failed turn). `Session::queue` only mirrors it, from
+every `input.*` answer, the `queue` of each `turn.wait` result, the
+`input_queue` event and one `input.list` when a session opens. The mirror drives
+the dock rows, the paused hint and the phone's `queue`; nothing in the TUI
+dispatches. `Alt+↑` and entering remote ask `input.recall`, and the answer's
+texts go back to the composer joined by blank lines. `Enter` on an empty draft
+asks `input.resume` while the mirror is paused. The phone's `unqueue` becomes
+`input.remove` with the id of the mirrored entry at its `index`, after the text
+matched; an entry the Agent handed over meanwhile answers `input_not_queued`,
+which shows as a notice.
+
+An `input_delivered` event is a running turn taking steers: they leave the
+mirror by id and become steering blocks after the turn's latest step, in
+delivery order. A successor can take steers before its predecessor's wait
+answers, so deliveries for a turn that is not live yet wait in the session and
+are placed when `start_turn` runs. A turn's prompt block comes from the entry
+that started it: the pushed one when the push answer no longer lists it, else the
+entry that left the mirror unasked (the queue's head, which a `next` or a resume
+consumed). The wire names no such entry, so this is read from the mirror.
+Deleting a session that holds queued entries is refused, as the Agent does.
+The first prompt of an untitled session becomes its title through `session.rename`.
 
 ## History
 

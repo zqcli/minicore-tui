@@ -181,8 +181,11 @@ line is never written to the prompt history.
 - `Esc` still interrupts a running turn or cancels a compaction: a safety valve
   for the person at the computer.
 - A pending approval does not take the local keyboard; the phone answers it.
-- Entering remote mode moves all unsent queued messages back into the composer
-  (`restore_draft` of the joined text), so no local message waits to be sent.
+- Entering remote mode takes every queued message back from the Agent
+  (`input.recall`) into the composer, joined by blank lines. The answer arrives
+  after the mode is on, so it waits with the session until `/remote off` or goes
+  to the phone that last sent text there; the Agent starts no queued message
+  meanwhile.
 - Quitting asks twice: the first request (Ctrl+C, `/quit`) flashes
   `Remote control is on · quit again to end it`; a second within 3 s quits.
   Quitting says `bye` to every phone first.
@@ -389,12 +392,12 @@ dispatched it, or refused it):
 
 | kind | Behaviour | Refused when |
 |---|---|---|
-| `submit` | In this device's draft: create one in its workspace with its launch settings and this first message. Idle session: send. Running: steer. Only the creating device changes view on adoption. The text is read as the composer reads Enter (below). | a built-in command or a bare unknown `/word` (`"unknown_command"`); empty text, also after expansion; pending-open/create rules below |
-| `queue` | In this device's running session: queue a follow-up. Otherwise as `submit`. | as `submit` |
+| `submit` | In this device's draft: create one in its workspace with its launch settings and this first message. `input.push` with mode `steer`: it starts a turn on an idle session and reaches the running turn's next request otherwise. Only the creating device changes view on adoption. The text is read as the composer reads Enter (below). | a built-in command or a bare unknown `/word` (`"unknown_command"`); empty text, also after expansion; pending-open/create rules below |
+| `queue` | In this device's running session: `input.push` with mode `follow_up`, which waits for the turn to end and then starts a turn. Otherwise as `submit`. | as `submit` |
 | `cancel` | Interrupt the running turn, else cancel a running compaction, else nothing. | pending-create rule below |
 | `compact` | `/compact`'s path: `session.compact` for this device's session. | a draft (`"No session"`); a running turn or a compaction under way (`"busy"`); pending-create rule below |
-| `unqueue` | Removes an unsent item at `index` of `state.queue`. Required `edit:true` returns its text as `returned` to the requester only; `edit:false` deletes it without returning text. Dispatch resumes after removal. | the entry is sent, is missing, or its text differs from `text`, and in a draft (`"stale"`); pending-create rule below |
-| `answer` | Approvals accept only `"allow"`, `"allow_session"`, or `"deny"`; choice prompts accept only an in-range row index. Goes through the local answer path, so session allowance is remembered. An optional `message` with `"deny"` is queued as a steer after `interaction.answer`, with trailing whitespace trimmed and the same send-order rules as Enter, so the agent hears why. | no pending interaction or id differs (`"stale"`); wrong answer kind or index, or a `message` that is blank or beside anything but an approval's `"deny"` (`"bad_request"`), leaving the interaction untouched; pending-create rule below |
+| `unqueue` | Removes the item at `index` of `state.queue` with `input.remove` by the id of the mirrored entry. Required `edit:true` returns its text as `returned` to the requester only, once the Agent has removed it; `edit:false` deletes it without returning text. | the entry is missing or its text differs from `text`, and in a draft (`"stale"`); pending-create rule below. An entry the Agent handed to the turn meanwhile is acknowledged and then reported as a notice (`input_not_queued`) |
+| `answer` | Approvals accept only `"allow"`, `"allow_session"`, or `"deny"`; choice prompts accept only an in-range row index. Goes through the local answer path, so session allowance is remembered. An optional `message` with `"deny"` is pushed as a steer (`input.push`) after `interaction.answer`, with trailing whitespace trimmed and the same rules as Enter, so the agent hears why. | no pending interaction or id differs (`"stale"`); wrong answer kind or index, or a `message` that is blank or beside anything but an approval's `"deny"` (`"bad_request"`), leaving the interaction untouched; pending-create rule below |
 | `load_older` | Load an older history page into this device's session transcript. | no session; pending-create rule below |
 | `open_session` | Change only this device's view: a live session switches at once (no `session.open`), another is opened and assigned on adoption. | unknown id; workspace outside `roots`; pending-open/create rules below |
 | `new_session` | Change only this device's view to a draft in `workspace` (default: its viewed workspace), with optional `profile` and that profile's/default settings; the next `submit` creates it. No empty session is created. | workspace relative, outside `roots`, missing or not a directory; unknown profile; pending-open/create rules below |
@@ -434,7 +437,7 @@ where the composer warns once. Anything else is sent unchanged: a path
 later in the text, `/9lives`, `/ hello`. Then trailing whitespace is trimmed
 like local sends.
 A refused `submit` or `queue` text is never put into the local composer. When the
-Agent later refuses a send (the path that calls `restore_draft` today) while a
+Agent later refuses an `input.push` (the path that calls `restore_draft`) while a
 phone is connected, the text goes back as `returned` (see the routing below).
 
 Any admitted connection may send intents and filesystem requests; requests
@@ -585,7 +588,7 @@ uses the routing above; local background notices keep their label prefix.
   "context_percent": 41.5 | null,
   "interaction": null | {"id":"...","kind":"approval"|"choice","tool":"bash","detail":"cargo test",
                          "input":"..."|null,"prompt":"...","options":["Allow once","Deny","Allow bash this session"]},
-  "queue": [{"kind":"steer"|"follow","text":"...","sent":false}],
+  "queue": [{"kind":"steer"|"follow","text":"..."}],
   "older": true,
   "sessions": [{"id":"ses_...","title":"...","workspace":"/abs","updated_at":"<RFC 3339>","current":true,
                 "live":true,"status":"running"|"approval"|"compacting"|"idle","started_ms":1761300000000|null,
@@ -625,14 +628,11 @@ uses the routing above; local background notices keep their label prefix.
 - `commands` are the prompt templates (`prompt/commands/*.md`): name, the
   description line and the `argument-hint`, sorted by name, shared by every
   device and built with the cached catalog. Sending `/name args` expands one.
-- `queue` stays in send order. `sent:true` means a steer was handed to the
-  Agent and awaits application; it cannot be edited or deleted. All other
-  entries have `sent:false`. During a live turn, steers dispatch only up to the
-  first follow-up. When idle, the front entry of either kind starts the next
-  turn. Refused steers keep their place and kind, clear `sent`, and pause steer
-  dispatch until live-turn progress or a turn change. Turn end marks unapplied
-  steers unsent in place. Editing returns text only to the requesting device,
-  unlike asynchronous refused-send routing below.
+- `queue` mirrors the Agent's queue in the order it runs the entries: steers
+  first, then follow-ups, each in the order sent. Every row can be edited or
+  deleted until the running turn takes it, which removes it from the list. The
+  TUI dispatches nothing itself. Editing returns text only to the requesting
+  device, unlike asynchronous refused-send routing below.
 - `older`: an older page can be loaded. `sessions`: the catalog filtered to
   workspaces under `roots`, newest first, at most 50. `updated_at` is the last
   activity: the Agent's stamp, advanced locally to the end of every turn that

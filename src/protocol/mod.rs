@@ -1,10 +1,11 @@
-//! Wire DTOs for minicore-agent 0.7.0 (Protocol v1). Unknown fields are
+//! Wire DTOs for minicore-agent 0.9.0 (Protocol v1). Unknown fields are
 //! ignored, and enums the Agent documents as non-exhaustive decode future values
 //! to `Unknown` instead of failing the frame.
 
 pub mod changes;
 pub mod event;
 pub mod failure;
+pub mod input;
 pub mod read;
 pub mod stamp;
 pub mod tool;
@@ -19,6 +20,10 @@ use serde_json::Value;
 pub use changes::{ChangeKind, ChangeList};
 pub use event::AgentEvent;
 pub use failure::Failure;
+pub use input::{
+    DeliveredInput, InputMode, InputPushResult, InputRecallResult, InputRemoveResult,
+    InputResumeResult, MAX_QUEUED_INPUTS, Queue, QueueItem,
+};
 pub use read::{
     ChunkAssembler, ChunkOutcome, DisplayProjection, RawHistoryItem, ReadChunk, ReadCursor,
     ReadSessionResult, RuntimeAssistantItem, RuntimeAssistantPart, RuntimeItem, RuntimeToolResult,
@@ -50,8 +55,11 @@ pub const METHOD_SESSION_PRESENTATION: &str = "session.presentation";
 pub const METHOD_SESSION_CONTEXT: &str = "session.context";
 pub const METHOD_SESSION_COMPACT: &str = "session.compact";
 pub const METHOD_SESSION_COMPACT_CANCEL: &str = "session.compact.cancel";
-pub const METHOD_TURN_SEND: &str = "turn.send";
-pub const METHOD_TURN_STEER: &str = "turn.steer";
+pub const METHOD_INPUT_PUSH: &str = "input.push";
+pub const METHOD_INPUT_REMOVE: &str = "input.remove";
+pub const METHOD_INPUT_RECALL: &str = "input.recall";
+pub const METHOD_INPUT_RESUME: &str = "input.resume";
+pub const METHOD_INPUT_LIST: &str = "input.list";
 pub const METHOD_TURN_CANCEL: &str = "turn.cancel";
 pub const METHOD_TURN_WAIT: &str = "turn.wait";
 pub const METHOD_TURN_RESULT: &str = "turn.result";
@@ -69,8 +77,6 @@ pub const INTERNAL_ERROR: i64 = -32_603;
 pub const SESSION_NOT_LOADED: i64 = -32_002;
 pub const SESSION_BUSY: i64 = -32_003;
 pub const INVALID_STATE: i64 = -32_005;
-pub const TURN_NOT_FOUND: i64 = -32_007;
-pub const STEER_QUEUE_FULL: i64 = -32_016;
 pub const RESOURCE_EXHAUSTED: i64 = -32_019;
 pub const QUERY_LIMIT: i64 = -32_020;
 
@@ -624,17 +630,6 @@ pub struct CompactionResult {
     pub failure_kind: Option<String>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
-pub struct TurnSendResult {
-    pub turn: TurnRef,
-    pub accepted_at: Option<String>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-pub struct SteerResult {
-    pub accepted_at: Option<String>,
-}
-
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Usage {
     pub input_tokens: Option<u64>,
@@ -809,6 +804,10 @@ pub struct TurnWaitResult {
     pub usage: Option<Usage>,
     pub requests: Option<u32>,
     pub tool_rounds: Option<u64>,
+    /// The turn the Agent started from the queue when this one ended.
+    pub next: Option<TurnRef>,
+    /// The queue after the turn ended; `None` for an outcome the TUI made up.
+    pub queue: Option<Queue>,
 }
 
 #[cfg(test)]

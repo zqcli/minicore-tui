@@ -284,10 +284,8 @@ async fn history_paged_in_during_a_turn_survives_its_reconcile() {
         };
         let result = turn_result("l1", vec![user(100, "l1", "streaming question")]);
         match timing {
-            Timing::BeforeTheSendAnswers => {
-                h.fake.script_held("turn.send", json!({"turn": turn("l1")}))
-            }
-            _ => h.fake.script("turn.send", json!({"turn": turn("l1")})),
+            Timing::BeforeTheSendAnswers => h.fake.script_held("input.push", started("l1")),
+            _ => h.fake.script("input.push", started("l1")),
         }
         match timing {
             Timing::BeforeTheDurableItems => {
@@ -329,7 +327,7 @@ async fn history_paged_in_during_a_turn_survives_its_reconcile() {
                 "{timing:?}: the anchored block keeps its place"
             );
         }
-        h.fake.release("turn.send");
+        h.fake.release("input.push");
         h.fake.release("turn.wait");
         h.fake.release("turn.result");
         h.settle().await;
@@ -340,7 +338,7 @@ async fn history_paged_in_during_a_turn_survives_its_reconcile() {
 #[tokio::test(start_paused = true)]
 async fn an_empty_canonical_page_removes_the_marker_and_the_turn_still_reconciles() {
     let mut h = Harness::opened(answered(62, 60)).await;
-    h.fake.script("turn.send", json!({"turn": turn("l1")}));
+    h.fake.script("input.push", started("l1"));
     h.fake.script_held("turn.wait", waited("l1", cancelled()));
     h.fake.script(
         "turn.result",

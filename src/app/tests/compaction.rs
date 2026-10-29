@@ -204,7 +204,7 @@ fn automatic_context(current: serde_json::Value, last: serde_json::Value) -> ser
 #[tokio::test(start_paused = true)]
 async fn a_compaction_at_turn_start_shows_its_phase_and_leaves_a_marker() {
     let mut h = Harness::opened(display_read(0, 0)).await;
-    h.fake.script("turn.send", json!({"turn": turn("l1")}));
+    h.fake.script("input.push", started("l1"));
     h.fake.script_held("turn.wait", waited("l1", completed()));
     h.submit("go");
     h.until(|app| app.is_busy()).await;
@@ -336,4 +336,40 @@ async fn a_cancelled_manual_compaction_says_so() {
     h.settle().await;
     assert!(h.notices().is_empty());
     assert_eq!(h.app.flash.as_ref().unwrap().0, "Compaction cancelled");
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_turn_the_agent_starts_after_a_compaction_is_adopted_with_the_prompt_that_waited() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.fake.script(
+        "input.push",
+        pushed("i1", vec![entry("i1", "follow_up", "asked meanwhile")]),
+    );
+    let compacting = |progress: serde_json::Value| json!({"state": {"session_id": "s1", "status": "idle", "compaction": progress}});
+    h.emit(
+        "session_state",
+        compacting(json!({"operation_id": "tui-1", "phase": "summarizing",
+                          "covered_item_count": 8, "retained_item_count": 2})),
+    )
+    .await;
+    h.until(|app| app.compacting()).await;
+    h.app.composer.set_text("asked meanwhile");
+    h.action(Action::QueueFollowUp);
+    h.settle().await;
+    assert_eq!(h.queue(), ["asked meanwhile"]);
+    assert!(!h.is_busy(), "nothing starts while the compaction runs");
+
+    // The compaction ends and the Agent starts the entry that waited behind it.
+    h.fake.script(
+        "session.state",
+        json!({"session_id": "s1", "status": "running", "active_loop": {"loop_id": "l2"}}),
+    );
+    h.fake.script_held("turn.wait", waited("l2", completed()));
+    h.emit("input_queue", json!({"queue": queue(vec![], false)}))
+        .await;
+    h.emit("session_state", compacting(serde_json::Value::Null))
+        .await;
+    h.until(|app| app.is_busy()).await;
+    assert_eq!(h.texts(), ["asked meanwhile"]);
+    assert_eq!(h.calls("turn.wait")[0]["loop_id"], "l2");
 }

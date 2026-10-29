@@ -10,6 +10,7 @@ use ratatui::style::Color;
 use tokio::sync::mpsc;
 
 use crate::app::{App, Msg, Overlay, Scroll, Session};
+use crate::protocol::InputMode::{self, FollowUp, Steer};
 use crate::protocol::read::UserKind;
 use crate::protocol::stamp::unix_millis;
 use crate::protocol::{LoopOutcome, Reasoning, SessionInfo, ToolRef, TurnRef};
@@ -525,14 +526,15 @@ fn a_view_dims_the_composer_and_keys_typed_in_it_do_not_edit_the_draft() {
     assert!(!rendered.contains("view open"), "{rendered}");
 }
 
-fn queue(app: &mut App, messages: &[(&str, crate::app::QueuedKind)]) {
+/// Mirrors the Agent's queue, which lists the entries in the order they run.
+fn queue(app: &mut App, messages: &[(&str, InputMode)]) {
     let queue = &mut app.session.as_mut().expect("session").queue;
-    for (text, kind) in messages {
-        queue.push(crate::app::Queued {
+    for (text, mode) in messages {
+        queue.items.push(crate::protocol::QueueItem {
+            id: format!("inp_{}", queue.items.len()),
+            mode: *mode,
             text: (*text).into(),
-            kind: *kind,
-            sent: false,
-            at: None,
+            accepted_at: None,
         });
     }
 }
@@ -541,13 +543,14 @@ fn queue(app: &mut App, messages: &[(&str, crate::app::QueuedKind)]) {
 fn hint_row(rendered: &str) -> Option<&str> {
     rendered
         .lines()
-        .find(|line| line.contains("steer ·") || line.contains("edit queued"))
+        .find(|line| {
+            line.contains("steer ·") || line.contains("edit queued") || line.contains("paused ·")
+        })
         .map(str::trim)
 }
 
 #[test]
-fn the_dock_lists_sent_and_unsent_messages_in_send_order_with_the_keys() {
-    use crate::app::QueuedKind::{Follow, Steer};
+fn the_dock_lists_queued_messages_in_the_order_the_agent_runs_them_with_the_keys() {
     let mut app = app();
     conversation(&mut app);
     running_bash(&mut app);
@@ -555,18 +558,32 @@ fn the_dock_lists_sent_and_unsent_messages_in_send_order_with_the_keys() {
         &mut app,
         &[
             ("focus on the parser first", Steer),
-            ("then update the docs", Follow),
             ("and the changelog", Steer),
+            ("then update the docs", FollowUp),
         ],
     );
-    app.session.as_mut().unwrap().queue[0].sent = true;
     app.composer.set_text("one more thing");
     snapshot("dock-queue", render(&mut app, 70, 20));
 }
 
 #[test]
+fn a_paused_queue_says_how_to_go_on() {
+    let mut app = app();
+    queue(&mut app, &[("after the stop", FollowUp)]);
+    app.session.as_mut().unwrap().queue.paused = true;
+    assert_eq!(
+        hint_row(&render(&mut app, 70, 12)),
+        Some("paused · enter resumes · alt+↑ edit")
+    );
+    app.composer.set_text("draft");
+    assert_eq!(
+        hint_row(&render(&mut app, 70, 12)),
+        Some("paused · enter sends · alt+↑ edit")
+    );
+}
+
+#[test]
 fn the_dock_hint_follows_what_the_keys_can_do() {
-    use crate::app::QueuedKind::Follow;
     let mut app = app();
     assert_eq!(hint_row(&render(&mut app, 70, 12)), None, "idle");
 
@@ -583,7 +600,7 @@ fn the_dock_hint_follows_what_the_keys_can_do() {
         Some("enter steer · alt+enter follow-up")
     );
 
-    queue(&mut app, &[("later", Follow)]);
+    queue(&mut app, &[("later", FollowUp)]);
     assert_eq!(
         hint_row(&render(&mut app, 70, 12)),
         Some("enter steer · alt+enter follow-up · alt+↑ edit queued")
@@ -598,11 +615,10 @@ fn the_dock_hint_follows_what_the_keys_can_do() {
 
 #[test]
 fn a_long_queued_message_is_cut_to_the_dock_width() {
-    use crate::app::QueuedKind::Follow;
     let mut app = app();
     queue(
         &mut app,
-        &[("a very long follow-up message that cannot fit", Follow)],
+        &[("a very long follow-up message that cannot fit", FollowUp)],
     );
     let rendered = render(&mut app, 30, 12);
     assert!(
@@ -1345,15 +1361,13 @@ fn the_remote_status_screen_shows_the_phone_the_work_the_queue_and_refused_sign_
     conversation(&mut app);
     connected(&mut app);
     running_bash(&mut app);
-    let session = app.session.as_mut().expect("session");
-    for text in ["then update the docs", "and the changelog"] {
-        session.queue.push(crate::app::Queued {
-            text: text.into(),
-            kind: crate::app::QueuedKind::Follow,
-            sent: false,
-            at: None,
-        });
-    }
+    queue(
+        &mut app,
+        &[
+            ("then update the docs", FollowUp),
+            ("and the changelog", FollowUp),
+        ],
+    );
     app.remote.failed_logins = 3;
     app.remote.paused_until =
         Some(tokio::time::Instant::now() + std::time::Duration::from_secs(30));

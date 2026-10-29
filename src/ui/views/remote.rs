@@ -112,7 +112,7 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App, styles: Styles) {
         ("Now", activity(app), text),
     ];
     if let Some(waiting) = session
-        .map(|session| session.queue.len() as u64)
+        .map(|session| session.queue.items.len() as u64)
         .filter(|waiting| *waiting > 0)
     {
         let queue = format!("{} waiting", blocks::plural(waiting, "message"));

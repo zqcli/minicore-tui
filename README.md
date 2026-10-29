@@ -138,9 +138,9 @@ history is `history.jsonl` in the TUI directory.
 The look follows pi-rail-ui. While something is in flight a Working line sits
 above the editor with the phase (`Thinking`, `Running <tool> <detail>`,
 `Waiting for approval`, `Compacting context`, …), elapsed time, request and
-tool counts. Queued messages show in send order as `↗ steer` / `↳ follow-up N`
-rows above it (`sent` marks steers the Agent already has), with a hint
-for the keys that act on them.
+tool counts. Queued messages show in the order the Agent runs them as
+`↗ steer` / `↳ follow-up N` rows above it, with a hint for the keys that act on
+them (a paused queue says how to go on).
 The latest notice is a railed line in the band: info fades after 5 seconds,
 errors stay until the next key press.
 
@@ -181,12 +181,14 @@ without a report. The TUI never estimates it.
   commands that read a session (`/compact`, `/context`, `/diff`,
   `/rename`, `/export`, `/copy`, `/session`) and the `@` file picker say
   `No session yet: send a message first`.
-- **Steering and queue.** `Enter` queues a steer; `Alt+Enter` (or `Ctrl+Enter`)
-  queues a follow-up. Messages dispatch in send order: steers behind a follow-up
-  wait until it starts the next turn. `Alt+↑` takes all unsent messages back;
-  the web tray offers Edit and Delete. Sent steers cannot be withdrawn.
-  `Esc` interrupts. A message sent while a compaction after a turn is
-  running waits in the queue and is sent when the session is idle.
+- **Steering and queue.** The Agent keeps each session's queue. `Enter` sends a
+  steer, which reaches the running turn at its next request (or starts a turn
+  when idle); `Alt+Enter` (or `Ctrl+Enter`) queues a follow-up that starts a turn
+  of its own once the running one has ended. Steers run before follow-ups. An
+  interrupted or failed turn pauses a queue that still holds messages: `Enter`
+  on an empty draft resumes it. `Alt+↑` takes every queued message back; the web
+  tray offers Edit and Delete. `Esc` interrupts. A message sent while a
+  compaction is running waits in the queue until the session is idle.
 - **Compaction** shows as a status phase and leaves a `[compaction]` box with
   the token counts and the summary behind `Ctrl+O`; loaded content is never
   removed. `/compact` runs it manually.

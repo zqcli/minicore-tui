@@ -9,15 +9,23 @@ press clears the notices.
 the kitty keyboard protocol (and on Windows consoles); `Ctrl+J` always inserts
 a newline.
 
-A steer and a follow-up are different: a steer (`Enter` while busy) goes to the
-running turn at its next step unless an earlier follow-up blocks it. A follow-up
-(`Alt+Enter`) starts the next turn. Messages dispatch in send order: nothing
-jumps ahead of a follow-up. The dock lists `↗ steer  <text>` and numbered
-`↳ follow-up 1  <text>` rows in that same order, three rows and `+N more queued`.
-A dim `sent` marker means the Agent already has that steer and it cannot be
-withdrawn. A hint row under the Working line names the keys that act now:
+A steer and a follow-up are different: a steer (`Enter`) reaches the session as
+soon as possible, at the running turn's next request or as a new turn when the
+session is idle. A follow-up (`Alt+Enter`) waits until the running turn has
+ended and then starts a new turn. The Agent keeps the queue: every steer runs
+before any follow-up, in the order sent, and each follow-up starts a turn of its
+own, oldest first. The dock lists `↗ steer  <text>` and numbered
+`↳ follow-up 1  <text>` rows in the order the Agent will run them, three rows
+and `+N more queued`; a message leaves the list the moment the turn takes it.
+A hint row under the Working line names the keys that act now:
 `enter steer · alt+enter follow-up` while a draft waits during a turn, and
-`alt+↑ edit queued` while any unsent message exists.
+`alt+↑ edit queued` while any message is queued.
+
+A turn that ends interrupted or failed pauses a queue that still holds messages:
+nothing starts by itself, and the hint row reads
+`paused · enter resumes · alt+↑ edit`. `Enter` on an empty draft resumes it;
+`Enter` on a draft sends it and resumes the queue, the older messages going
+first.
 
 ### Alt+Enter by terminal
 
@@ -41,14 +49,14 @@ dock label before sending.
 
 | Key | Action |
 |---|---|
-| `Enter` | Send when the session is idle; steer the running turn when it is busy. A draft whose first word names a command (`/model`, `/rename x`) or a prompt template runs it. A bare `/word` that names nothing (`/modle`) is not sent: a notice offers the nearest command, and a second `Enter` (or a leading `//`, which sends the rest) sends it as text. Any other draft, `/usr/bin/env is broken` and `/usr/bin` included, is a prompt. |
-| `Alt+Enter`, `Ctrl+Enter` | While a turn runs or a compaction is under way, queue the draft as a follow-up: it is sent when the session is idle, one per turn, oldest first. When idle it sends the draft. With no draft it does nothing. See the terminal notes above; where a terminal reports `Ctrl+Enter` as `Enter`, it steers. |
+| `Enter` | Steer: start a turn when the session is idle, reach the running turn's next request when it is busy. With no draft, resume a paused queue. A draft whose first word names a command (`/model`, `/rename x`) or a prompt template runs it. A bare `/word` that names nothing (`/modle`) is not sent: a notice offers the nearest command, and a second `Enter` (or a leading `//`, which sends the rest) sends it as text. Any other draft, `/usr/bin/env is broken` and `/usr/bin` included, is a prompt. |
+| `Alt+Enter`, `Ctrl+Enter` | While a turn runs or a compaction is under way, queue the draft as a follow-up: the Agent starts it when the session is idle, one per turn, oldest first. When idle it starts a turn with the draft. With no draft it does nothing. See the terminal notes above; where a terminal reports `Ctrl+Enter` as `Enter`, it steers. |
 | `Shift+Enter`, `Ctrl+J` | Newline. |
 | `Esc` | Close an open picker or view first; in the editor, cancel an active selection before interrupting a turn, cancelling a compaction or clearing the draft. |
 | `Ctrl+C` | Copy the editor selection when one exists; otherwise clear the draft, with a second press within 500 ms quitting. |
 | `Ctrl+D` | Quit when the draft is empty; otherwise delete the character after the cursor. |
 | `↑` / `↓` | Move between lines of a multi-line draft; on the first or last line, browse prompt history. The last 100 prompts, paste chips included, are kept in `history.jsonl` in the TUI directory and survive a restart; a prompt over 32 KiB stays in memory only. |
-| `Alt+↑` | Take every unsent queued message back into an empty draft, in send order and separated by blank lines. A sent steer cannot be taken back. |
+| `Alt+↑` | Take every queued message back into an empty draft, in the order the Agent would have run them and separated by blank lines. A message the running turn already took cannot be taken back. |
 | `Ctrl+X` | Cut the editor selection when one exists; otherwise copy the last assistant answer, as `/copy` does. |
 | `Ctrl+G` | Edit the draft in `[ui] editor` from `config.toml`, else `$VISUAL`, else `$EDITOR`. |
 | `/` at the start of the draft | Open the command palette. `Enter` runs the highlighted command; with no match it sends the line as a prompt. |

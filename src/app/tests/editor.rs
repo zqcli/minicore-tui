@@ -141,8 +141,7 @@ async fn a_multiline_paste_is_draft_text_and_never_runs_a_command() {
         h.settle().await;
         assert_eq!(h.app.composer.text(), text.replace("\r\n", "\n"));
         for method in [
-            "turn.send",
-            "turn.steer",
+            "input.push",
             "session.create",
             "session.delete",
             "interaction.answer",

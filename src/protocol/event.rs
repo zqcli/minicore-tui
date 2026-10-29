@@ -5,8 +5,8 @@
 use serde::{Deserialize, Deserializer};
 
 use super::{
-    PendingInteraction, SessionInfo, SessionState, ToolDisplay, ToolExecution, ToolInvocation,
-    ToolRef, TurnRef, Usage,
+    DeliveredInput, PendingInteraction, Queue, SessionInfo, SessionState, ToolDisplay,
+    ToolExecution, ToolInvocation, ToolRef, TurnRef, Usage,
 };
 
 #[derive(Clone, Debug, Deserialize)]
@@ -53,10 +53,14 @@ pub enum AgentEvent {
         reasoning: bool,
         delta: String,
     },
-    SteerProgress {
+    InputQueue {
+        meta: EventMeta,
+        queue: Queue,
+    },
+    InputDelivered {
         meta: EventMeta,
         turn: TurnRef,
-        applied_count: u64,
+        items: Vec<DeliveredInput>,
     },
     ToolStarted {
         meta: EventMeta,
@@ -133,7 +137,8 @@ impl AgentEvent {
             | Self::RequestStarted { meta, .. }
             | Self::RequestUsage { meta, .. }
             | Self::OutputDelta { meta, .. }
-            | Self::SteerProgress { meta, .. }
+            | Self::InputQueue { meta, .. }
+            | Self::InputDelivered { meta, .. }
             | Self::ToolStarted { meta, .. }
             | Self::ToolPresentation { meta, .. }
             | Self::ToolArgumentsPreview { meta, .. }
@@ -245,6 +250,7 @@ pub enum CommandStatus {
 
 #[cfg(test)]
 mod tests {
+    use super::super::InputMode;
     use super::*;
     use serde_json::{Value, json};
 
@@ -266,7 +272,7 @@ mod tests {
             .lines()
             .map(|line| decode(serde_json::from_str(line).unwrap()))
             .collect();
-        assert_eq!(events.len(), 19);
+        assert_eq!(events.len(), 20);
         let unknown: Vec<&str> = AGENT_EVENTS
             .lines()
             .zip(&events)
@@ -320,6 +326,32 @@ mod tests {
             (chunk.stream, chunk.next_offset),
             (ProcessStream::Stdout, 2)
         );
+    }
+
+    #[test]
+    fn input_events_carry_the_queue_and_the_delivered_texts() {
+        let events: Vec<AgentEvent> = AGENT_EVENTS
+            .lines()
+            .map(|line| decode(serde_json::from_str(line).unwrap()))
+            .collect();
+        let Some(AgentEvent::InputQueue { queue, .. }) = events
+            .iter()
+            .find(|event| matches!(event, AgentEvent::InputQueue { .. }))
+        else {
+            panic!("no input_queue");
+        };
+        let modes: Vec<_> = queue.items.iter().map(|item| item.mode).collect();
+        assert_eq!(modes, [InputMode::Steer, InputMode::FollowUp]);
+        assert!(!queue.paused);
+        let Some(AgentEvent::InputDelivered { turn, items, .. }) = events
+            .iter()
+            .find(|event| matches!(event, AgentEvent::InputDelivered { .. }))
+        else {
+            panic!("no input_delivered");
+        };
+        assert_eq!(turn.loop_id, "lup_00000000000000000000000000000002");
+        assert_eq!(items[0].text, "also the tests");
+        assert_eq!(items[0].id, queue.items[0].id);
     }
 
     #[test]

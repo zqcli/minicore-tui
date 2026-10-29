@@ -61,6 +61,7 @@ impl Harness {
             json!({"session_id": "s1", "status": "idle"}),
         );
         fake.script("session.context", json!({"session_id": "s1"}));
+        fake.script("input.list", queue(vec![], false));
         fake.script("session.read", display_read(0, 0));
         fake.script(
             "changes.list",
@@ -226,13 +227,21 @@ impl Harness {
             .collect()
     }
 
+    /// The texts in the mirrored queue, in the order the Agent reported them.
     pub fn queue(&self) -> Vec<String> {
         let session = self.app.session.as_ref().expect("a session");
         session
             .queue
+            .items
             .iter()
             .map(|queued| queued.text.clone())
             .collect()
+    }
+
+    /// Sets the foreground session's mirrored queue as if the Agent had reported `items`.
+    pub fn mirror(&mut self, items: Vec<Value>, paused: bool) {
+        self.app.session.as_mut().expect("a session").queue =
+            serde_json::from_value(queue(items, paused)).unwrap();
     }
 
     /// The bells in the terminal bytes now, not counting a title sequence's terminator.
@@ -257,9 +266,20 @@ impl Harness {
         self.fake.calls(method)
     }
 
-    /// The texts of every `turn.send`, in order.
+    /// The mode and text of every `input.push`, in order.
+    pub fn pushes(&self) -> Vec<(String, String)> {
+        self.calls("input.push")
+            .iter()
+            .map(|params| {
+                let field = |name: &str| params[name].as_str().unwrap().to_owned();
+                (field("mode"), field("text"))
+            })
+            .collect()
+    }
+
+    /// The texts of every `input.push`, in order.
     pub fn sends(&self) -> Vec<String> {
-        self.calls("turn.send")
+        self.calls("input.push")
             .iter()
             .filter_map(|params| params["text"].as_str().map(str::to_owned))
             .collect()
@@ -357,9 +377,14 @@ pub fn summary(index: usize) -> Value {
     )
 }
 
-/// A `turn.wait` answer for `loop_id`.
+/// A `turn.wait` answer for `loop_id` with nothing queued and no successor.
 pub fn waited(loop_id: &str, outcome: Value) -> Value {
-    json!({"turn": turn(loop_id), "outcome": outcome})
+    waited_then(loop_id, outcome, None, queue(vec![], false))
+}
+
+/// A `turn.wait` answer for `loop_id` that also says which turn the Agent started next and what still waits.
+pub fn waited_then(loop_id: &str, outcome: Value, next: Option<&str>, queued: Value) -> Value {
+    json!({"turn": turn(loop_id), "outcome": outcome, "next": next.map(turn), "queue": queued})
 }
 
 pub fn completed() -> Value {
@@ -374,6 +399,38 @@ pub fn cancelled() -> Value {
 pub fn turn_result(loop_id: &str, items: Vec<Value>) -> Value {
     json!({"turn": turn(loop_id), "outcome": {"type": "cancelled", "reason": "user"},
            "total": items.len(), "items": items, "next_cursor": null})
+}
+
+/// One queue entry as the Agent reports it.
+pub fn entry(id: &str, mode: &str, text: &str) -> Value {
+    json!({"id": id, "mode": mode, "text": text})
+}
+
+/// A queue as the Agent reports it.
+pub fn queue(items: Vec<Value>, paused: bool) -> Value {
+    json!({"items": items, "paused": paused})
+}
+
+/// An `input.push` answer for an entry that waits in `queued`.
+pub fn pushed(id: &str, queued: Vec<Value>) -> Value {
+    json!({"id": id, "turn": null, "queue": queue(queued, false)})
+}
+
+/// An `input.push` answer for an entry that started `loop_id` with nothing else waiting.
+pub fn started(loop_id: &str) -> Value {
+    started_in(turn(loop_id), vec![])
+}
+
+/// `started` with the time the Agent accepted the entry.
+pub fn started_at(loop_id: &str, accepted_at: &str) -> Value {
+    let mut push = started(loop_id);
+    push["accepted_at"] = json!(accepted_at);
+    push
+}
+
+/// An `input.push` answer that started `turn` and left `queued` waiting.
+pub fn started_in(turn: Value, queued: Vec<Value>) -> Value {
+    json!({"id": "i1", "turn": turn, "queue": queue(queued, false)})
 }
 
 /// A refusal in the shape `FakeAgent::script_sequence` accepts.

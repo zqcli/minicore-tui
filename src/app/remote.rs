@@ -6,9 +6,9 @@ use std::time::Duration;
 use serde_json::json;
 
 use super::{
-    Action, Answer, App, LaunchSettings, Msg, NoticeLevel, Overlay, Session, commands, tasks,
+    Action, Answer, App, LaunchSettings, Msg, NoticeLevel, Overlay, SessionOp, commands, tasks,
 };
-use crate::protocol::{self, Reasoning};
+use crate::protocol::{self, InputMode, Reasoning};
 use crate::remote::{
     Bound, DraftSettings, NoticeTarget, Phone, PhoneView, RemoteEvent,
     auth::Auth,
@@ -63,9 +63,12 @@ impl App {
     }
 
     pub fn enter_remote(&mut self, bound: Bound) {
-        if let Some(text) = self.session.as_mut().and_then(Session::recall_unsent) {
-            self.restore_draft(&text);
-            self.pump_queue();
+        if self
+            .session
+            .as_ref()
+            .is_some_and(|s| !s.queue.items.is_empty())
+        {
+            self.recall_queue();
         }
         for (address, reason) in &bound.skipped {
             let text = format!("Remote: not listening on {address} ({reason})");
@@ -441,22 +444,18 @@ impl App {
                 self.compact();
             }
             Intent::Unqueue { index, text, edit } => {
-                let session = self
+                let queued = self
                     .session
-                    .as_mut()
-                    .filter(|session| {
-                        session
-                            .queue
-                            .get(index)
-                            .is_some_and(|queued| !queued.sent && queued.text == text)
-                    })
+                    .as_ref()
+                    .and_then(|session| session.queue.items.get(index))
+                    .filter(|queued| queued.text == text)
                     .ok_or("stale")?;
-                session.queue.remove(index);
-                if edit {
-                    self.remote
-                        .send(Some(connection), json!({"t":"returned", "text":text}));
-                }
-                self.pump_queue();
+                let requester = edit.then_some(connection);
+                self.call(
+                    protocol::METHOD_INPUT_REMOVE,
+                    json!({ "id": queued.id }),
+                    move |result| SessionOp::Removed(requester, result),
+                );
             }
             Intent::Answer {
                 interaction_id,
@@ -491,7 +490,7 @@ impl App {
                 }
                 self.answer(answer);
                 if let Some(message) = message {
-                    self.steer(message.trim_end().to_owned());
+                    self.push_input(message.trim_end().to_owned(), InputMode::Steer);
                 }
             }
             Intent::LoadOlder => {

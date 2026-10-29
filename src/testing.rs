@@ -248,6 +248,18 @@ impl FakeAgent {
         );
     }
 
+    /// A JSON-RPC error that is answered only after [`FakeAgent::release`].
+    pub fn script_error_held(&self, method: &str, code: i64, message: &str, kind: &str) {
+        self.script.lock().unwrap().insert(
+            method.to_owned(),
+            Reply {
+                frame: json!({"error": {"code": code, "message": message, "data": {"kind": kind}}}),
+                delay: Duration::ZERO,
+                hold: Some(Arc::new(Hold::default())),
+            },
+        );
+    }
+
     /// Sets a result that arrives after `delay`, like a deferred call
     /// (`turn.wait`) or a slow read.
     /// Answers `method` with each result in turn, one per call, then falls back

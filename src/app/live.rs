@@ -164,8 +164,8 @@ impl App {
         self.push_notice(NoticeLevel::Info, format!("{text}{hint}"));
     }
 
-    /// Why session `id` cannot be deleted now: it is on screen, or still
-    /// working in the background.
+    /// Why session `id` cannot be deleted now: it is on screen, still working
+    /// in the background, or holds queued messages the Agent would refuse to drop.
     pub(super) fn delete_refusal(&self, id: &str) -> Option<String> {
         if self
             .session
@@ -175,11 +175,16 @@ impl App {
             return Some("Open another session before deleting this one".to_owned());
         }
         let session = &self.background[self.live_index(id)?];
-        (session.live_status() != LiveStatus::Idle).then(|| {
-            format!(
-                "Stop \"{}\" first: open it and press Esc",
-                session_label(&session.info, Some(session))
-            )
-        })
+        let label = || session_label(&session.info, Some(session));
+        if session.live_status() != LiveStatus::Idle {
+            Some(format!("Stop \"{}\" first: open it and press Esc", label()))
+        } else if !session.queue.items.is_empty() {
+            Some(format!(
+                "Clear the queued messages of \"{}\" first",
+                label()
+            ))
+        } else {
+            None
+        }
     }
 }

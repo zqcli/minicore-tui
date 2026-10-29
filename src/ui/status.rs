@@ -10,7 +10,8 @@ use ratatui::text::{Line, Span};
 use super::composer::Editor;
 use super::theme::Styles;
 use super::{composer, sheets};
-use crate::app::{App, Notice, NoticeLevel, QueuedKind, Session};
+use crate::app::{App, Notice, NoticeLevel, Session};
+use crate::protocol::InputMode;
 use crate::transcript::Block;
 use crate::wrap;
 
@@ -34,7 +35,7 @@ pub fn dock(app: &App, styles: Styles, width: u16, height: u16) -> Dock {
     // The remote status screen shows the work and the queue instead.
     let local = !app.remote.active();
     if local {
-        if let Some(session) = app.session.as_ref().filter(|s| !s.queue.is_empty()) {
+        if let Some(session) = app.session.as_ref().filter(|s| !s.queue.items.is_empty()) {
             above.push(Line::default());
             above.extend(queued_rows(session, styles, width));
         }
@@ -112,24 +113,23 @@ fn padded(text: &str, width: u16, style: Style) -> Line<'static> {
     ])
 }
 
-/// Messages stay in send order, with sent steers marked as no longer editable.
+/// Messages in the order the Agent will run them: steers, then follow-ups.
 fn queued_rows(session: &Session, styles: Styles, width: u16) -> Vec<Line<'static>> {
     let mut follow = 0;
     let mut rows: Vec<Line<'static>> = session
         .queue
+        .items
         .iter()
         .take(QUEUE_ROWS)
         .map(|queued| {
-            let label = match queued.kind {
-                QueuedKind::Steer => "↗ steer".to_owned(),
-                QueuedKind::Follow => {
+            let label = match queued.mode {
+                InputMode::Steer => "↗ steer".to_owned(),
+                InputMode::FollowUp => {
                     follow += 1;
                     format!("↳ follow-up {follow}")
                 }
             };
-            let sent = if queued.sent { " · sent" } else { "" };
-            let room =
-                usize::from(width).saturating_sub(wrap::width(&label) + wrap::width(sent) + 4);
+            let room = usize::from(width).saturating_sub(wrap::width(&label) + 4);
             // One more than fits, so the cut still ends in its ellipsis.
             let text: String = queued.text.chars().take(room + 1).collect();
             let text = wrap::sanitize(&text.replace('\n', " ")).into_owned();
@@ -138,31 +138,38 @@ fn queued_rows(session: &Session, styles: Styles, width: u16) -> Vec<Line<'stati
                 Span::styled(label, styles.meta()),
                 Span::raw("  "),
                 Span::styled(wrap::truncate(&text, room), styles.faint()),
-                Span::styled(sent, styles.faint()),
             ])
         })
         .collect();
-    if session.queue.len() > QUEUE_ROWS {
-        let more = format!("+{} more queued", session.queue.len() - QUEUE_ROWS);
+    if session.queue.items.len() > QUEUE_ROWS {
+        let more = format!("+{} more queued", session.queue.items.len() - QUEUE_ROWS);
         rows.push(padded(&more, width, styles.faint()));
     }
     rows
 }
 
 /// The keys that act on the queue now: Enter steers and Alt+Enter queues while a
-/// draft waits, `alt+↑` takes unsent messages back.
+/// draft waits, `alt+↑` takes the queued messages back. A paused queue says how to go on.
 fn key_hint(app: &App, styles: Styles, width: u16) -> Option<Line<'static>> {
     let session = app.session.as_ref().filter(|_| !app.has_interaction())?;
     let drafting = !app.composer.is_empty();
     let mut keys = Vec::new();
-    if drafting && session.is_busy() {
-        keys.push("enter steer");
-    }
-    if drafting && (session.is_busy() || session.compacting()) {
-        keys.push("alt+enter follow-up");
-    }
-    if session.queue.iter().any(|queued| !queued.sent) {
-        keys.push("alt+↑ edit queued");
+    if session.queue.paused {
+        keys.push(match drafting {
+            true => "paused · enter sends",
+            false => "paused · enter resumes",
+        });
+        keys.push("alt+↑ edit");
+    } else {
+        if drafting && session.is_busy() {
+            keys.push("enter steer");
+        }
+        if drafting && (session.is_busy() || session.compacting()) {
+            keys.push("alt+enter follow-up");
+        }
+        if !session.queue.items.is_empty() {
+            keys.push("alt+↑ edit queued");
+        }
     }
     (!keys.is_empty()).then(|| {
         let spans = vec![
@@ -284,7 +291,7 @@ fn footer(app: &App, styles: Styles, width: u16) -> Line<'static> {
     if let Some(elapsed) = session.and_then(|session| turn_elapsed(app, session)) {
         suffix.push(Span::styled(minutes(elapsed), styles.amber()));
     }
-    if session.is_some_and(|session| !session.queue.is_empty()) {
+    if session.is_some_and(|session| !session.queue.items.is_empty()) {
         if !suffix.is_empty() {
             suffix.push(Span::styled(" · ", styles.meta()));
         }

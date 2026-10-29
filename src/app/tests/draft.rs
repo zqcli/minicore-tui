@@ -15,7 +15,7 @@ const NO_SESSION: &str = "No session yet: send a message first";
 fn script_first_message(h: &Harness) {
     h.fake
         .script("session.create", json!({"session": session_info("s1")}));
-    h.fake.script("turn.send", json!({"turn": turn("l1")}));
+    h.fake.script("input.push", started("l1"));
     h.fake.script_held("turn.wait", waited("l1", completed()));
 }
 

@@ -2,14 +2,14 @@
 
 Switching sessions no longer drops the one you leave. Every session opened in
 this TUI process stays live in memory: its turn keeps running in the Agent, its
-events keep being applied, its waits, reconciliations and queued follow-ups keep
-working. The session on screen is the *foreground*; the others are *background*.
+events keep being applied, its waits and reconciliations keep working, and the
+Agent keeps running its queued messages. The session on screen is the *foreground*; the others are *background*.
 Switching swaps them instantly, without `session.open` or a history reload, so
 nothing streamed meanwhile is lost. Keys (Enter, Esc, approvals) act on the
 foreground only.
 
 The Agent already runs turns of different sessions concurrently (loaded
-sessions live in a map; `turn.send` reserves only its session) and sends every
+sessions live in a map, each with its own input queue) and sends every
 session's events on the one stdio stream with `session_id`. It does not change.
 
 This document is the contract for the implementation; where code and document
@@ -64,7 +64,7 @@ pub struct App {
 - **Running reducer code for a background session**: `App::with_background(index, f)`
   swaps that session into `App::session`, sets `App::background_op = true`,
   runs `f` (the existing `on_op`, event handling, `start_turn`, `end_turn`,
-  `pump_queue`, `on_approval_requested`, …), then swaps back and clears the
+  `on_approval_requested`, …), then swaps back and clears the
   flag. `App::scroll` is swapped with the session's own `scroll` around it, so
   a page prepended in the background keeps that session's anchor and the
   foreground's is never touched; the layout cache is not used by reducer code.

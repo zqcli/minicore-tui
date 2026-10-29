@@ -46,7 +46,7 @@ fn first_row(h: &mut Harness) -> String {
 /// A running turn that has just asked to run `bash`.
 async fn asking() -> Harness {
     let mut h = Harness::opened(display_read(0, 0)).await;
-    h.fake.script("turn.send", json!({"turn": turn("l1")}));
+    h.fake.script("input.push", started("l1"));
     h.fake.script_held("turn.wait", waited("l1", completed()));
     h.fake.script("interaction.answer", json!({"ok": true}));
     h.submit("write a file");
@@ -175,7 +175,16 @@ async fn the_transcript_scrolls_while_a_prompt_waits() {
 #[tokio::test(start_paused = true)]
 async fn shift_enter_adds_a_line_and_alt_enter_queues_follow_ups_behind_a_running_turn() {
     let mut h = Harness::opened(display_read(0, 0)).await;
-    h.fake.script("turn.send", json!({"turn": turn("l1")}));
+    let one = entry("i2", "follow_up", "one");
+    let two = entry("i3", "follow_up", "two");
+    h.fake.script_sequence(
+        "input.push",
+        vec![
+            started("l1"),
+            pushed("i2", vec![one.clone()]),
+            pushed("i3", vec![one, two]),
+        ],
+    );
     h.fake.script_held("turn.wait", waited("l1", completed()));
 
     h.app.composer.set_text("first line");
@@ -190,50 +199,79 @@ async fn shift_enter_adds_a_line_and_alt_enter_queues_follow_ups_behind_a_runnin
         h.app.composer.set_text(text);
         h.key(KeyCode::Enter, KeyModifiers::ALT);
     }
+    h.settle().await;
     assert_eq!(h.queue(), ["one", "two"]);
+    assert_eq!(
+        h.pushes()[1..],
+        [
+            ("follow_up".to_owned(), "one".to_owned()),
+            ("follow_up".to_owned(), "two".to_owned())
+        ]
+    );
 }
 
 #[tokio::test(start_paused = true)]
-async fn alt_enter_and_ctrl_enter_queue_follow_ups_while_enter_steers() {
+async fn enter_pushes_a_steer_alt_and_ctrl_enter_a_follow_up_and_the_dock_follows_the_agents_order()
+{
     let mut h = Harness::opened(display_read(0, 0)).await;
-    h.fake.script("turn.send", json!({"turn": turn("l1")}));
-    h.fake
-        .script("turn.steer", json!({"ok": true, "steer_index": 0}));
+    let alt = entry("i2", "follow_up", "by alt enter");
+    let ctrl = entry("i3", "follow_up", "by ctrl enter");
+    let now = entry("i4", "steer", "now");
+    h.fake.script_sequence(
+        "input.push",
+        vec![
+            started("l1"),
+            pushed("i2", vec![alt.clone()]),
+            pushed("i3", vec![alt.clone(), ctrl.clone()]),
+            // The Agent runs steers first.
+            pushed("i4", vec![now, alt, ctrl]),
+        ],
+    );
     h.fake.script_held("turn.wait", waited("l1", completed()));
     h.submit("start");
     h.until(|app| app.is_busy()).await;
 
     h.key(KeyCode::Enter, KeyModifiers::ALT);
-    assert!(h.queue().is_empty(), "an empty draft queues nothing");
+    assert_eq!(h.sends(), ["start"], "an empty draft pushes nothing");
 
     h.type_text("by alt enter");
     h.key(KeyCode::Enter, KeyModifiers::ALT);
     h.type_text("by ctrl enter");
     h.key(KeyCode::Enter, KeyModifiers::CONTROL);
-    assert_eq!(h.queue(), ["by alt enter", "by ctrl enter"]);
-    assert!(
-        h.calls("turn.steer").is_empty(),
-        "a follow-up is not a steer"
-    );
-
     h.type_text("now");
     h.press(KeyCode::Enter);
     h.settle().await;
-    assert!(
-        h.calls("turn.steer").is_empty(),
-        "the steer waits behind both follow-ups"
-    );
-    assert_eq!(h.queue(), ["by alt enter", "by ctrl enter", "now"]);
     assert_eq!(
-        h.app.session.as_ref().unwrap().queue[2].kind,
-        crate::app::QueuedKind::Steer
+        h.pushes(),
+        [
+            ("steer", "start"),
+            ("follow_up", "by alt enter"),
+            ("follow_up", "by ctrl enter"),
+            ("steer", "now"),
+        ]
+        .map(|(mode, text)| (mode.to_owned(), text.to_owned()))
+    );
+    assert_eq!(h.queue(), ["now", "by alt enter", "by ctrl enter"]);
+    let screen = h.screen(60, 14);
+    let at = |needle: &str| {
+        screen
+            .find(needle)
+            .unwrap_or_else(|| panic!("{needle}\n{screen}"))
+    };
+    assert!(
+        at("↗ steer  now") < at("↳ follow-up 1  by alt enter"),
+        "{screen}"
+    );
+    assert!(
+        at("follow-up 1") < at("↳ follow-up 2  by ctrl enter"),
+        "{screen}"
     );
 }
 
 #[tokio::test(start_paused = true)]
 async fn tab_does_nothing_in_the_composer() {
     let mut h = Harness::opened(display_read(0, 0)).await;
-    h.fake.script("turn.send", json!({"turn": turn("l1")}));
+    h.fake.script("input.push", started("l1"));
     h.fake.script_held("turn.wait", waited("l1", completed()));
     h.type_text("draft");
     h.press(KeyCode::Tab);
@@ -256,10 +294,12 @@ async fn tab_with_a_completion_list_open_completes() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_follow_up_waits_in_the_queue_while_a_compaction_runs() {
+async fn a_message_sent_during_a_compaction_waits_in_the_agents_queue_without_a_turn() {
     let mut h = Harness::opened(display_read(0, 0)).await;
-    h.fake.script("turn.send", json!({"turn": turn("l1")}));
-    h.fake.script_held("turn.wait", waited("l1", completed()));
+    h.fake.script(
+        "input.push",
+        pushed("i1", vec![entry("i1", "follow_up", "later")]),
+    );
     h.emit(
         "session_state",
         json!({"state": {"session_id": "s1", "status": "idle",
@@ -272,15 +312,9 @@ async fn a_follow_up_waits_in_the_queue_while_a_compaction_runs() {
     h.action(crate::app::Action::QueueFollowUp);
     h.settle().await;
     assert_eq!(h.queue(), ["later"]);
-    assert!(h.sends().is_empty());
-
-    h.emit(
-        "session_state",
-        json!({"state": {"session_id": "s1", "status": "idle"}}),
-    )
-    .await;
-    h.settle().await;
-    assert_eq!(h.sends(), ["later"]);
+    assert_eq!(h.pushes(), [("follow_up".to_owned(), "later".to_owned())]);
+    assert!(!h.is_busy());
+    assert!(h.calls("turn.wait").is_empty(), "the TUI starts nothing");
 }
 
 #[tokio::test(start_paused = true)]
@@ -338,10 +372,11 @@ async fn the_palette_delivers_the_typed_argument_to_the_accepted_command() {
 #[tokio::test(start_paused = true)]
 async fn a_slash_line_that_names_no_command_is_a_prompt() {
     let mut h = Harness::opened(display_read(0, 0)).await;
-    h.fake.script("turn.send", json!({"turn": turn("l1")}));
+    h.fake.script_sequence(
+        "input.push",
+        vec![started("l1"), pushed("i2", vec![entry("i2", "steer", "x")])],
+    );
     h.fake.script_held("turn.wait", waited("l1", completed()));
-    h.fake
-        .script("turn.steer", json!({"ok": true, "steer_index": 0}));
 
     h.type_text("/usr/bin/env is broken");
     h.press(KeyCode::Enter);
@@ -354,7 +389,7 @@ async fn a_slash_line_that_names_no_command_is_a_prompt() {
     h.app.composer.set_text("/var/log is huge");
     h.press(KeyCode::Enter);
     h.settle().await;
-    assert_eq!(h.calls("turn.steer")[0]["text"], "/var/log is huge");
+    assert_eq!(h.sends()[1], "/var/log is huge");
 }
 
 #[tokio::test(start_paused = true)]

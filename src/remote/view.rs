@@ -8,7 +8,8 @@ use serde_json::{Value, json};
 use super::{PhoneView, fs};
 
 use crate::app::session::context_percent;
-use crate::app::{App, InteractionKind, LiveStatus, QueuedKind, Session};
+use crate::app::{App, InteractionKind, LiveStatus, Session};
+use crate::protocol::InputMode;
 use crate::protocol::read::UserKind;
 use crate::transcript::{Block, RequestKey, ToolCall, ToolState};
 
@@ -326,8 +327,8 @@ fn state(app: &App, catalog: &Value, view: &PhoneView, loading: bool) -> Value {
             "input":call.and_then(|call| call.expanded_input.as_deref()),
             "prompt":interaction.prompt, "options":interaction.options()})
     }));
-    let queue: Vec<_> = session.into_iter().flat_map(|s| &s.queue).map(|queued| json!({
-        "kind":match queued.kind { QueuedKind::Steer => "steer", QueuedKind::Follow => "follow" }, "text":queued.text, "sent":queued.sent,
+    let queue: Vec<_> = session.into_iter().flat_map(|s| &s.queue.items).map(|queued| json!({
+        "kind":match queued.mode { InputMode::Steer => "steer", InputMode::FollowUp => "follow" }, "text":queued.text,
     })).collect();
     let (running, approval) = app.other_counts(current);
     json!({
@@ -533,24 +534,28 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn queue_projection_preserves_send_order_and_sent_markers() {
+    async fn queue_projection_keeps_the_agents_order_and_carries_no_sent_marker() {
         let (_fake, mut app) = connected_app();
         let queue = &mut app.session.as_mut().unwrap().queue;
-        for (text, kind) in [
-            ("sent", QueuedKind::Steer),
-            ("follow", QueuedKind::Follow),
-            ("waiting", QueuedKind::Steer),
+        for (id, text, mode) in [
+            ("a", "now", InputMode::Steer),
+            ("b", "also now", InputMode::Steer),
+            ("c", "follow", InputMode::FollowUp),
         ] {
-            queue.push(crate::app::Queued::new(text.into(), kind));
+            queue.items.push(crate::protocol::QueueItem {
+                id: id.into(),
+                mode,
+                text: text.into(),
+                accepted_at: None,
+            });
         }
-        queue[0].sent = true;
         let mut view = View::default();
         assert_eq!(
             sync(&mut view, &mut app)[0]["state"]["queue"],
             json!([
-                {"kind":"steer", "text":"sent", "sent":true},
-                {"kind":"follow", "text":"follow", "sent":false},
-                {"kind":"steer", "text":"waiting", "sent":false}
+                {"kind":"steer", "text":"now"},
+                {"kind":"steer", "text":"also now"},
+                {"kind":"follow", "text":"follow"}
             ])
         );
         assert!(sync(&mut view, &mut app).is_empty());

@@ -24,7 +24,7 @@ async fn a_new_session_carries_only_the_launch_flags_given() {
         let mut h = Harness::new();
         h.fake
             .script("session.create", json!({"session": session_info("s1")}));
-        h.fake.script("turn.send", json!({"turn": turn("l1")}));
+        h.fake.script("input.push", started("l1"));
         h.app.launch = launch;
         h.boot().await;
         let workspace = h.app.workspace.clone();
@@ -111,7 +111,7 @@ async fn a_reply_for_a_session_that_is_no_longer_open_is_dropped() {
 #[tokio::test(start_paused = true)]
 async fn copy_never_takes_the_answer_of_the_previous_session() {
     let mut h = Harness::opened(display_read(0, 0)).await;
-    h.fake.script("turn.send", json!({"turn": turn("l1")}));
+    h.fake.script("input.push", started("l1"));
     h.fake.script_held("turn.wait", waited("l1", completed()));
     h.submit("question");
     h.until(|app| app.is_busy()).await;
@@ -125,7 +125,7 @@ async fn copy_never_takes_the_answer_of_the_previous_session() {
 
     h.fake
         .script("session.create", json!({"session": session_info("s2")}));
-    h.fake.script("turn.send", json!({"turn": turn("l2")}));
+    h.fake.script("input.push", started("l2"));
     h.fake.script_held("turn.wait", waited("l2", completed()));
     h.action(Action::NewSession);
     h.submit("a new question");
