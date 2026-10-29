@@ -20,7 +20,7 @@ const state = {
   status: { label: 'Thinking', busy: true, started_ms: 1761300000000, interrupting: false, compacting: false, loading: false },
   usage: { input: 10, output: 2, cached: 1 }, context_percent: 41.5,
   interaction: { id: 'approval', kind: 'approval', tool: 'bash', detail: 'pwd', input: 'pwd', prompt: 'Allow?', options: ['Allow once', 'Deny', 'Allow bash this session'] },
-  queue: [{ kind: 'steer', text: 'now', sent: true }, { kind: 'follow', text: 'later', sent: false }], older: true,
+  queue: [{ kind: 'steer', text: 'now' }, { kind: 'follow', text: 'later' }], older: true,
   sessions: [{ id: 'ses_one', title: 'One', workspace: '/work', updated_at: '2026-01-01T00:00:00Z', current: true }],
   models: [{ id: 'model', reasoning: ['low', 'high'] }], profiles: ['coding'],
 };
@@ -958,19 +958,18 @@ test('a tap on the primary decides from the live text and ignores double taps on
   assert.equal(tap({ text: 'next' }, 10000, 30), null);
 });
 
-test('the tray preserves send order and sent flags with separate kind numbering and bounded expansion', () => {
-  const q = [{ kind: 'steer', text: 's', sent: true }, { kind: 'follow', text: 'a', sent: false }, { kind: 'follow', text: 'b', sent: false }, { kind: 'steer', text: 'waiting', sent: false }, { kind: 'follow', text: 'd', sent: false }];
+test('the tray preserves queue order with separate kind numbering and bounded expansion', () => {
+  const q = [{ kind: 'steer', text: 's' }, { kind: 'follow', text: 'a' }, { kind: 'follow', text: 'b' }, { kind: 'steer', text: 'waiting' }, { kind: 'follow', text: 'd' }];
   const v = plain(MC.queueView(q, false));
   assert.deepEqual(v.items.map(x => [x.kind, x.index, x.n]), [['steer', 0, 1], ['follow', 1, 1], ['follow', 2, 2]]);
   assert.deepEqual([v.hidden, v.long], [2, true]);
   const all = plain(MC.queueView(q, true));
   assert.deepEqual(all.items.map(x => x.n), [1, 1, 2, 2, 3]);
-  assert.deepEqual(all.items.map(x => x.sent), [true, false, false, false, false]);
   assert.deepEqual(all.items.map(x => x.text), q.map(x => x.text));
   assert.deepEqual([all.hidden, all.long], [0, true]);
   assert.deepEqual(plain(MC.queueView(q.slice(0, 3), false)), { items: plain(MC.queueView(q.slice(0, 3), true)).items, hidden: 0, long: false });
   assert.deepEqual(plain(MC.queueView([], false)), { items: [], hidden: 0, long: false });
-  const mixed = plain(MC.queueView([{ kind: 'follow', text: 'a', sent: false }, { kind: 'steer', text: 'b', sent: false }, { kind: 'follow', text: 'c', sent: false }], true));
+  const mixed = plain(MC.queueView([{ kind: 'follow', text: 'a' }, { kind: 'steer', text: 'b' }, { kind: 'follow', text: 'c' }], true));
   assert.deepEqual(mixed.items.map(x => [x.kind, x.index, x.n]), [['follow', 0, 1], ['steer', 1, 1], ['follow', 2, 2]]);
 });
 

@@ -24,10 +24,9 @@ const trayPart = part($('tray'), t => [
     h('button', { class: 'ib s', 'aria-label': 'Edit instead', 'data-k': 'edit' + id }, icon('edit', 'sm')))),
   t.q.items.length > 0 && h('div', 'qcap', 'Sent in order · steers join this turn; follow-ups start the next'),
   t.q.items.map(q => h('div', { class: 'qp ' + q.kind, 'data-index': q.index, 'data-text': q.text },
-    h('div', 'qbody', h('div', 'qhead', h('span', 'qk', icon(q.kind, 'xs'), (q.kind === 'steer' ? 'Steer ' : 'Follow-up ') + q.n),
-      q.sent && h('span', 'qsent', 'Sent · applies at the next step')), h('span', 'qt', q.text)),
-    !q.sent && [h('button', { class: 'ib', 'data-k': 'qedit', disabled: !t.on, 'aria-label': 'Edit in composer', title: 'Edit in composer' }, icon('edit', 'sm')),
-      h('button', { class: 'ib', 'data-k': 'qdelete', disabled: !t.on, 'aria-label': 'Delete', title: 'Delete' }, icon('x', 'sm'))])),
+    h('div', 'qbody', h('div', 'qhead', h('span', 'qk', icon(q.kind, 'xs'), (q.kind === 'steer' ? 'Steer ' : 'Follow-up ') + q.n)), h('span', 'qt', q.text)),
+    h('button', { class: 'ib', 'data-k': 'qedit', disabled: !t.on, 'aria-label': 'Edit in composer', title: 'Edit in composer' }, icon('edit', 'sm')),
+    h('button', { class: 'ib', 'data-k': 'qdelete', disabled: !t.on, 'aria-label': 'Delete', title: 'Delete' }, icon('x', 'sm')))),
   t.q.long && h('button', { class: 'qmore', 'data-k': 'qmore', 'aria-expanded': String(qAll) }, t.q.hidden ? '+' + t.q.hidden + ' more' : 'Show less'),
 ]);
 let qAll = false;
