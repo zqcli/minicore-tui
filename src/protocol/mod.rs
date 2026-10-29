@@ -22,7 +22,7 @@ pub use event::AgentEvent;
 pub use failure::Failure;
 pub use input::{
     DeliveredInput, InputMode, InputPushResult, InputRecallResult, InputRemoveResult,
-    InputResumeResult, MAX_QUEUED_INPUTS, Queue, QueueItem,
+    InputResumeResult, Queue, QueueItem, StartedTurn,
 };
 pub use read::{
     ChunkAssembler, ChunkOutcome, DisplayProjection, RawHistoryItem, ReadChunk, ReadCursor,
@@ -628,6 +628,8 @@ pub struct CompactionResult {
     pub covered_item_count: Option<usize>,
     pub retained_item_count: Option<usize>,
     pub failure_kind: Option<String>,
+    /// The turn the Agent started from the queue when a manual compaction ended.
+    pub next: Option<StartedTurn>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -805,7 +807,7 @@ pub struct TurnWaitResult {
     pub requests: Option<u32>,
     pub tool_rounds: Option<u64>,
     /// The turn the Agent started from the queue when this one ended.
-    pub next: Option<TurnRef>,
+    pub next: Option<StartedTurn>,
     /// The queue after the turn ended; `None` for an outcome the TUI made up.
     pub queue: Option<Queue>,
 }

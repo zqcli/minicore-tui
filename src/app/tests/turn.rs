@@ -18,19 +18,29 @@ async fn queued_follow_ups_run_one_per_turn_as_the_agent_starts_them() {
         "input.push",
         vec![
             started("l1"),
-            pushed("i2", vec![first.clone()]),
-            pushed("i3", vec![first, second.clone()]),
+            pushed(vec![first.clone()]),
+            pushed(vec![first, second.clone()]),
         ],
     );
     h.fake.script_sequence_later(
         "turn.wait",
         vec![
             (
-                waited_then("l1", completed(), Some("l2"), queue(vec![second], false)),
+                waited_then(
+                    "l1",
+                    completed(),
+                    Some(next_turn("l2", "first")),
+                    queue(vec![second], false),
+                ),
                 Duration::from_secs(1),
             ),
             (
-                waited_then("l2", completed(), Some("l3"), queue(vec![], false)),
+                waited_then(
+                    "l2",
+                    completed(),
+                    Some(next_turn("l3", "second")),
+                    queue(vec![], false),
+                ),
                 Duration::ZERO,
             ),
             (
@@ -90,8 +100,8 @@ async fn steers_a_running_turn_took_become_steering_blocks_in_the_agents_order()
             "input.push",
             vec![
                 started("l1"),
-                pushed("i2", vec![first.clone()]),
-                pushed("i3", vec![first, second]),
+                pushed(vec![first.clone()]),
+                pushed(vec![first, second]),
             ],
         );
         h.fake.script_held("turn.wait", waited("l1", completed()));
@@ -149,10 +159,15 @@ async fn inputs_taken_by_a_successor_before_its_wait_starts_still_become_steerin
     let mut h = Harness::opened(display_read(0, 0)).await;
     let next = entry("i2", "steer", "next up");
     h.fake
-        .script_sequence("input.push", vec![started("A"), pushed("i2", vec![next])]);
+        .script_sequence("input.push", vec![started("A"), pushed(vec![next])]);
     h.fake.script_held(
         "turn.wait",
-        waited_then("A", completed(), Some("B"), queue(vec![], false)),
+        waited_then(
+            "A",
+            completed(),
+            Some(next_turn("B", "next up")),
+            queue(vec![], false),
+        ),
     );
     h.submit("start");
     h.until(|app| app.is_busy()).await;
@@ -178,7 +193,7 @@ async fn a_push_into_a_paused_queue_shows_the_older_entry_the_agent_started_with
     h.mirror(vec![entry("i1", "follow_up", "older")], true);
     h.fake.script(
         "input.push",
-        json!({"id": "i2", "turn": turn("l2"),
+        json!({"id": "i2", "started": next_turn("l2", "older"),
                "queue": queue(vec![entry("i2", "follow_up", "newer")], false)}),
     );
     h.fake.script_held("turn.wait", waited("l2", completed()));
@@ -188,6 +203,30 @@ async fn a_push_into_a_paused_queue_shows_the_older_entry_the_agent_started_with
     assert_eq!(h.texts(), ["older"], "queue order wins over arrival");
     assert_eq!(h.queue(), ["newer"]);
     assert!(!h.app.session.as_ref().unwrap().queue.paused);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_wait_answer_without_a_queue_asks_for_it_once_and_nothing_else() {
+    let mut h = Harness::new();
+    // The state names the loop that just ended, as a stale Agent could.
+    h.fake.script(
+        "session.state",
+        json!({"session_id": "s1", "status": "running", "active_loop": {"loop_id": "l9"}}),
+    );
+    h.fake.script_held(
+        "turn.wait",
+        json!({"turn": turn("l9"), "outcome": completed()}),
+    );
+    h.open().await;
+    assert!(h.is_busy());
+    let states = h.calls("session.state").len();
+    let lists = h.calls("input.list").len();
+    h.fake.release("turn.wait");
+    h.settle().await;
+    assert!(!h.is_busy());
+    assert_eq!(h.calls("turn.wait").len(), 1, "no second wait for the loop");
+    assert_eq!(h.calls("session.state").len(), states);
+    assert_eq!(h.calls("input.list").len(), lists + 1);
 }
 
 #[tokio::test(start_paused = true)]
@@ -259,7 +298,7 @@ async fn a_paused_queue_shows_how_to_go_on_and_enter_without_a_draft_resumes_it(
 
     h.fake.script(
         "input.resume",
-        json!({"turn": turn("l2"), "queue": queue(vec![], false)}),
+        json!({"started": next_turn("l2", "after the stop"), "queue": queue(vec![], false)}),
     );
     h.fake.script_held("turn.wait", waited("l2", completed()));
     h.press(KeyCode::Enter);
@@ -341,7 +380,7 @@ async fn a_push_the_agent_refuses_returns_its_text_and_leaves_the_queue_as_it_wa
         "input.push",
         vec![
             started("l1"),
-            pushed("i2", vec![waiting]),
+            pushed(vec![waiting]),
             refusal(-32030, "input_queue_full"),
         ],
     );
@@ -648,7 +687,7 @@ async fn a_pushed_steer_waits_in_the_dock_until_the_turn_takes_it_and_shows_its_
         "input.push",
         vec![
             started("l1"),
-            pushed("i2", vec![entry("i2", "steer", "also the tests")]),
+            pushed(vec![entry("i2", "steer", "also the tests")]),
         ],
     );
     h.fake.script_held("turn.wait", waited("l1", completed()));
@@ -727,17 +766,15 @@ async fn rows_added_to_the_dock_never_cover_the_running_card() {
             }
             match shown {
                 "↗ steer  more" => {
-                    h.fake.script(
-                        "input.push",
-                        pushed("i2", vec![entry("i2", "steer", "more")]),
-                    );
+                    h.fake
+                        .script("input.push", pushed(vec![entry("i2", "steer", "more")]));
                     h.submit("more");
                     h.settle().await;
                 }
                 "↳ follow-up 1  later" => {
                     h.fake.script(
                         "input.push",
-                        pushed("i2", vec![entry("i2", "follow_up", "later")]),
+                        pushed(vec![entry("i2", "follow_up", "later")]),
                     );
                     h.app.composer.set_text("later");
                     h.key(KeyCode::Enter, KeyModifiers::ALT);
@@ -964,12 +1001,17 @@ async fn a_successor_started_before_the_finished_turn_reconciles_stays_after_it(
     let mut h = Harness::opened(display_read(0, 0)).await;
     let next = entry("i2", "follow_up", "next");
     h.fake
-        .script_sequence("input.push", vec![started("l1"), pushed("i2", vec![next])]);
+        .script_sequence("input.push", vec![started("l1"), pushed(vec![next])]);
     h.fake.script_sequence_later(
         "turn.wait",
         vec![
             (
-                waited_then("l1", completed(), Some("l2"), queue(vec![], false)),
+                waited_then(
+                    "l1",
+                    completed(),
+                    Some(next_turn("l2", "next")),
+                    queue(vec![], false),
+                ),
                 Duration::from_secs(1),
             ),
             (waited("l2", completed()), Duration::from_secs(60)),
@@ -1141,16 +1183,18 @@ async fn the_turn_start_and_end_leave_an_anchored_view_where_it_is() {
     let mut h = Harness::opened(display_read(0, 0)).await;
     h.fake.script_sequence(
         "input.push",
-        vec![
-            started("l1"),
-            pushed("i2", vec![entry("i2", "follow_up", "two")]),
-        ],
+        vec![started("l1"), pushed(vec![entry("i2", "follow_up", "two")])],
     );
     h.fake.script_sequence_later(
         "turn.wait",
         vec![
             (
-                waited_then("l1", completed(), Some("l2"), queue(vec![], false)),
+                waited_then(
+                    "l1",
+                    completed(),
+                    Some(next_turn("l2", "two")),
+                    queue(vec![], false),
+                ),
                 Duration::from_secs(1),
             ),
             (waited("l2", completed()), Duration::from_secs(1)),

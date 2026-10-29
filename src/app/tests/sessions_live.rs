@@ -142,7 +142,8 @@ async fn two_sessions_run_at_once_and_switching_back_needs_no_reload() {
 async fn a_background_turn_ends_there_and_waits_for_the_successor_the_agent_started() {
     let mut h = running_first_with(json!({
         "turn": turn_in("s1", "l1"), "outcome": completed(),
-        "next": turn_in("s1", "l3"), "queue": queue(vec![], false),
+        "next": started_turn(turn_in("s1", "l3"), "next for one"),
+        "queue": queue(vec![], false),
     }))
     .await;
     h.mirror(vec![entry("f1", "follow_up", "next for one")], false);

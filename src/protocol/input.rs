@@ -30,15 +30,17 @@ pub struct Queue {
     pub paused: bool,
 }
 
-/// The most entries the Agent keeps per session.
-pub const MAX_QUEUED_INPUTS: usize = 32;
+/// A turn the Agent started from the queue, with the entry that became its first input.
+#[derive(Clone, Debug, Deserialize)]
+pub struct StartedTurn {
+    pub turn: TurnRef,
+    pub input: QueueItem,
+}
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct InputPushResult {
-    pub id: String,
-    pub accepted_at: Option<String>,
-    /// The turn this push started, if any.
-    pub turn: Option<TurnRef>,
+    /// The turn this push started, whose input is an older entry when queue order requires.
+    pub started: Option<StartedTurn>,
     pub queue: Queue,
 }
 
@@ -56,7 +58,7 @@ pub struct InputRecallResult {
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct InputResumeResult {
-    pub turn: Option<TurnRef>,
+    pub started: Option<StartedTurn>,
     pub queue: Queue,
 }
 

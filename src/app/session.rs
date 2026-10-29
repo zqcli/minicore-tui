@@ -9,8 +9,8 @@ use crate::protocol::read::{RawHistoryItem, UserKind};
 use crate::protocol::stamp::{now_millis, unix_millis};
 use crate::protocol::{
     AgentEvent, CompactStatus, CompactionPhase, CompactionProgress, CompactionResult, ContextUsage,
-    DeliveredInput, MAX_QUEUED_INPUTS, Queue, QueueItem, SessionContext, SessionInfo,
-    SessionPresentation, ToolRef, TurnRef, TurnWaitResult, Usage, UsageTotals,
+    DeliveredInput, Queue, SessionContext, SessionInfo, SessionPresentation, ToolRef, TurnRef,
+    TurnWaitResult, Usage, UsageTotals,
 };
 use crate::transcript::{Block, EXPANDED_ROWS, RequestKey, ToolCall, ToolState, Transcript};
 use crate::transcript::{append_history, append_history_item, merge_live, push_interrupted};
@@ -29,8 +29,6 @@ pub struct Session {
     pub live: Option<LiveTurn>,
     /// The Agent's queue as last reported; the Agent owns it.
     pub queue: Queue,
-    /// Entries that left the queue unasked: the Agent started turns with them.
-    taken: Vec<QueueItem>,
     /// Inputs a turn took before its wait was registered, placed when it starts.
     early: Vec<(String, Vec<DeliveredInput>)>,
     pub usage: UsageTotals,
@@ -211,7 +209,6 @@ impl Session {
             transcript: Transcript::default(),
             live: None,
             queue: Queue::default(),
-            taken: Vec::new(),
             early: Vec::new(),
             usage: UsageTotals::default(),
             presentation: None,
@@ -391,7 +388,7 @@ impl Session {
                     };
                 }
             }
-            AgentEvent::InputQueue { queue, .. } => self.apply_queue(queue),
+            AgentEvent::InputQueue { queue, .. } => self.queue = queue,
             AgentEvent::InputDelivered { turn, items, .. } => self.deliver(turn, items),
             AgentEvent::ToolStarted {
                 turn,
@@ -653,28 +650,10 @@ impl Session {
         Some((end, grown))
     }
 
-    /// Takes the Agent's queue, keeping an entry that left it unasked and undelivered for the turn it started.
-    pub fn apply_queue(&mut self, queue: Queue) {
-        let old = std::mem::replace(&mut self.queue, queue);
-        let gone = old
-            .items
-            .into_iter()
-            .filter(|item| !self.queue.items.iter().any(|kept| kept.id == item.id));
-        self.taken.extend(gone);
-        let excess = self.taken.len().saturating_sub(MAX_QUEUED_INPUTS);
-        self.taken.drain(..excess);
-    }
-
-    /// The entry the Agent started the latest turn with, as far as it was seen leaving the queue.
-    pub fn take_started(&mut self) -> Option<QueueItem> {
-        (!self.taken.is_empty()).then(|| self.taken.remove(0))
-    }
-
     /// Makes the inputs a running turn took steering blocks, or holds them for a turn not live yet.
     fn deliver(&mut self, turn: TurnRef, items: Vec<DeliveredInput>) {
         let delivered = |id: &str| items.iter().any(|item| item.id == id);
         self.queue.items.retain(|item| !delivered(&item.id));
-        self.taken.retain(|item| !delivered(&item.id));
         if self.is_live(&turn) {
             self.place_steers(&turn.loop_id, items);
         } else {
@@ -871,6 +850,7 @@ impl Session {
                     covered_item_count: None,
                     retained_item_count: None,
                     failure_kind: None,
+                    next: None,
                 };
                 self.push_compaction(&result, None);
             } else if !last.outcome.starts_with("compacted") && last.outcome != "cancelled" {
@@ -994,7 +974,7 @@ pub fn reported_percent(usage: &ContextUsage, context: Option<&SessionContext>) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::InputMode;
+    use crate::protocol::{InputMode, QueueItem};
 
     fn session() -> Session {
         Session::new(
@@ -1040,14 +1020,14 @@ mod tests {
     fn delivered_inputs_leave_the_queue_and_become_steering_blocks_in_order() {
         let mut session = session();
         session.live = Some(LiveTurn::new(TurnRef::new("s", "l"), 0));
-        session.apply_queue(Queue {
+        session.queue = Queue {
             items: vec![
                 item("a", InputMode::Steer, "first"),
                 item("b", InputMode::Steer, "second"),
                 item("c", InputMode::FollowUp, "later"),
             ],
             paused: false,
-        });
+        };
         session.deliver(
             TurnRef::new("s", "l"),
             vec![delivered("a", "first"), delivered("b", "second")],
@@ -1055,10 +1035,6 @@ mod tests {
         assert_eq!(steering(&session), ["first", "second"]);
         let queued: Vec<&str> = session.queue.items.iter().map(|i| i.id.as_str()).collect();
         assert_eq!(queued, ["c"]);
-        assert!(
-            session.take_started().is_none(),
-            "a delivery is not a start"
-        );
     }
 
     #[test]
@@ -1076,29 +1052,13 @@ mod tests {
     }
 
     #[test]
-    fn an_entry_that_leaves_the_queue_unasked_is_the_one_a_turn_started_with() {
-        let mut session = session();
-        let queue = |ids: &[&str]| Queue {
-            items: ids
-                .iter()
-                .map(|id| item(id, InputMode::FollowUp, id))
-                .collect(),
-            paused: false,
-        };
-        session.apply_queue(queue(&["a", "b"]));
-        session.apply_queue(queue(&["b"]));
-        assert_eq!(session.take_started().map(|i| i.text).as_deref(), Some("a"));
-        assert!(session.take_started().is_none());
-    }
-
-    #[test]
     fn a_turn_ends_once_and_leaves_the_queue_to_the_agent() {
         let mut session = session();
         session.live = Some(LiveTurn::new(TurnRef::new("s", "l"), 0));
-        session.apply_queue(Queue {
+        session.queue = Queue {
             items: vec![item("a", InputMode::Steer, "steer")],
             paused: false,
-        });
+        };
         let wait: TurnWaitResult = serde_json::from_value(serde_json::json!({
             "turn": {"session_id": "s", "loop_id": "l"}, "outcome": {"type": "completed"}
         }))

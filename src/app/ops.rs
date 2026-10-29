@@ -5,9 +5,9 @@ use super::tasks::{self, History, Window};
 use super::{App, LiveTurn, NoticeLevel, Overlay, Scroll, Session, SessionOp, find};
 use crate::protocol::read::UserKind;
 use crate::protocol::{
-    self, AgentEvent, CompactStatus, CompactionResult, InputMode, InputPushResult,
-    InputRecallResult, InputRemoveResult, InputResumeResult, QueueItem, RpcError, SessionInfo,
-    SessionState, TurnRef, TurnWaitResult,
+    self, AgentEvent, CompactStatus, CompactionResult, InputPushResult, InputRecallResult,
+    InputRemoveResult, InputResumeResult, QueueItem, RpcError, SessionInfo, SessionState, TurnRef,
+    TurnWaitResult,
 };
 use crate::title::LONG_TURN;
 use crate::transcript::{Block, ChangeSummary};
@@ -54,7 +54,7 @@ impl App {
                     );
                 }
             }
-            SessionOp::Pushed(text, mode, result) => self.on_pushed(text, mode, result),
+            SessionOp::Pushed(text, result) => self.on_pushed(text, result),
             SessionOp::Resumed(result) => self.on_resumed(result),
             SessionOp::Removed(requester, result) => self.on_removed(requester, result),
             SessionOp::Recalled(result) => self.on_recalled(result),
@@ -270,15 +270,10 @@ impl App {
         if was_compacting && session.compaction.is_none() {
             self.refresh_context();
         }
-        // A loop no answer announced has no `turn.wait` of its own: one already
-        // running when the session opened, or the queue's head after a compaction.
-        if let Some(active) = state.active_loop
-            && self.session_mut().live.is_none()
-        {
-            let session = self.session_mut();
-            let session_id = session.info.session_id.clone();
-            let started = session.take_started();
-            self.start_turn(TurnRef::new(session_id, active.loop_id), started);
+        // A loop already running when the session opened has no `turn.wait` of its own.
+        if let Some(active) = state.active_loop {
+            let session_id = self.session_mut().info.session_id.clone();
+            self.start_turn(TurnRef::new(session_id, active.loop_id), None);
         }
     }
 
@@ -306,12 +301,7 @@ impl App {
         self.spawn(tasks::wait_turn(self.client.clone(), turn));
     }
 
-    fn on_pushed(
-        &mut self,
-        text: String,
-        mode: InputMode,
-        result: Result<InputPushResult, RpcError>,
-    ) {
+    fn on_pushed(&mut self, text: String, result: Result<InputPushResult, RpcError>) {
         let pushed = match result {
             Ok(pushed) => pushed,
             // The text never reached the Agent; it returns to the draft.
@@ -321,25 +311,12 @@ impl App {
                 return;
             }
         };
-        let session = self.session_mut();
-        let waiting = pushed.queue.items.iter().any(|item| item.id == pushed.id);
-        session.apply_queue(pushed.queue);
-        let Some(turn) = pushed.turn else {
-            return;
-        };
-        // Still queued means an older entry started the turn.
-        let started = match waiting {
-            true => session.take_started(),
-            false => Some(QueueItem {
-                id: pushed.id,
-                mode,
-                text,
-                accepted_at: pushed.accepted_at,
-            }),
-        };
-        self.start_turn(turn, started);
-        if let Some(title) = self.session.as_ref().and_then(Session::auto_title) {
-            self.rename(&title);
+        self.session_mut().queue = pushed.queue;
+        if let Some(started) = pushed.started {
+            self.start_turn(started.turn, Some(started.input));
+            if let Some(title) = self.session.as_ref().and_then(Session::auto_title) {
+                self.rename(&title);
+            }
         }
     }
 
@@ -347,11 +324,9 @@ impl App {
         let Some(resumed) = self.ok(result) else {
             return;
         };
-        let session = self.session_mut();
-        session.apply_queue(resumed.queue);
-        if let Some(turn) = resumed.turn {
-            let started = session.take_started();
-            self.start_turn(turn, started);
+        self.session_mut().queue = resumed.queue;
+        if let Some(started) = resumed.started {
+            self.start_turn(started.turn, Some(started.input));
         }
     }
 
@@ -415,7 +390,7 @@ impl App {
             turn, next, queue, ..
         } = wait;
         match queue {
-            Some(queue) => self.session_mut().apply_queue(queue),
+            Some(queue) => self.session_mut().queue = queue,
             // An outcome made up or read from the stored result does not know the queue.
             None => self.read_queue(),
         }
@@ -442,18 +417,23 @@ impl App {
         self.refresh_context();
         // After the turn-end line and the background notice, which read it.
         if let Some(next) = next {
-            let started = self.session_mut().take_started();
-            self.start_turn(next, started);
+            self.start_turn(next.turn, Some(next.input));
         }
     }
 
     fn on_compacted(&mut self, result: Result<CompactionResult, RpcError>) {
         self.session_mut().compaction = None;
-        // The Agent starts the queue's head once the compaction is over.
-        self.read_state();
-        let Some(result) = self.ok(result) else {
+        let Some(mut result) = self.ok(result) else {
             return;
         };
+        // The Agent starts the queue's head once the compaction is over.
+        if let Some(next) = result.next.take() {
+            self.session_mut()
+                .queue
+                .items
+                .retain(|item| item.id != next.input.id);
+            self.start_turn(next.turn, Some(next.input));
+        }
         match result.status {
             CompactStatus::Compacted => {
                 self.session_mut().push_compaction(&result, None);
@@ -527,11 +507,9 @@ impl App {
         if compaction_ended || (usage && self.session_mut().presentation_due()) {
             self.refresh_presentation();
         }
-        // The context report holds the finished compaction's marker, and the
-        // Agent may have started the turn that waited behind it.
+        // The context report holds the finished compaction's marker.
         if compaction_ended {
             self.refresh_context();
-            self.read_state();
         }
     }
 

@@ -6,7 +6,6 @@ use tokio::sync::{mpsc, oneshot, watch};
 
 use super::harness::*;
 use crate::app::{Action, Msg, Overlay, SessionOp};
-use crate::protocol::InputMode;
 use std::sync::{Arc, Mutex};
 
 use crate::remote::{
@@ -42,6 +41,29 @@ pub(super) fn phone(
         accepted,
     }));
     (output, closing, admission)
+}
+
+/// The first frame of type `t` within a bounded number of frames and time.
+async fn frame_of_type<S>(socket: &mut S, t: &str) -> Value
+where
+    S: futures_util::Stream<
+            Item = Result<
+                tokio_tungstenite::tungstenite::Message,
+                tokio_tungstenite::tungstenite::Error,
+            >,
+        > + Unpin,
+{
+    use futures_util::StreamExt;
+    for _ in 0..100 {
+        let next = tokio::time::timeout(std::time::Duration::from_secs(5), socket.next())
+            .await
+            .unwrap_or_else(|_| panic!("no {t} frame within 5s"));
+        let reply: Value = serde_json::from_str(next.unwrap().unwrap().to_text().unwrap()).unwrap();
+        if reply["t"] == t {
+            return reply;
+        }
+    }
+    panic!("no {t} frame within 100 frames");
 }
 
 pub(super) fn request(h: &mut Harness, intent: Value) {
@@ -112,15 +134,8 @@ async fn a_real_phone_signs_in_submits_through_the_agent_and_receives_the_user_b
             ))
             .await
             .unwrap();
-        loop {
-            let reply: Value =
-                serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap())
-                    .unwrap();
-            if reply["t"] == "blocks" {
-                assert_eq!(reply["upserts"][0]["block"]["text"], "real phone text");
-                break;
-            }
-        }
+        let reply = frame_of_type(&mut socket, "blocks").await;
+        assert_eq!(reply["upserts"][0]["block"]["text"], "real phone text");
         socket
     });
     h.until(|app| !app.remote.phones.is_empty()).await;
@@ -134,14 +149,8 @@ async fn a_real_phone_signs_in_submits_through_the_agent_and_receives_the_user_b
     assert_eq!(h.sends(), ["real phone text"]);
     assert_eq!(h.app.composer.text(), "untouched");
     h.action(Action::Remote("off".into()));
-    loop {
-        let reply: Value =
-            serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap()).unwrap();
-        if reply["t"] == "bye" {
-            assert_eq!(reply["reason"], "remote_off");
-            break;
-        }
-    }
+    let reply = frame_of_type(&mut socket, "bye").await;
+    assert_eq!(reply["reason"], "remote_off");
     assert!(matches!(socket.next().await, Some(Ok(Message::Close(_)))));
 }
 
@@ -224,7 +233,7 @@ async fn a_deny_with_a_message_answers_first_then_pushes_the_reason_as_a_steer()
     let mut h = Harness::opened(display_read(0, 0)).await;
     h.fake.script(
         "input.push",
-        pushed("i1", vec![entry("i1", "steer", "Use the staging bucket")]),
+        pushed(vec![entry("i1", "steer", "Use the staging bucket")]),
     );
     h.app.remote.url = Some("http://localhost:8765".into());
     let (mut output, _closing, admission) = phone(&mut h, 1, "phone");
@@ -284,7 +293,7 @@ async fn phone_text_expands_templates_refuses_commands_and_keeps_other_slashes_a
  {
     let mut h = Harness::opened(display_read(0, 0)).await;
     h.fake.script_sequence("input.push", vec![started("l1")]);
-    h.fake.script("input.push", pushed("i2", vec![]));
+    h.fake.script("input.push", pushed(vec![]));
     h.fake.script_held("turn.wait", waited("l1", completed()));
     h.app.templates = vec![crate::app::templates::Template::parse(
         "review".into(),
@@ -489,7 +498,7 @@ async fn queue_cancel_and_history_intents_use_the_existing_reducer_operations() 
     ));
     h.fake.script(
         "input.push",
-        pushed("i1", vec![entry("i1", "follow_up", "follow up")]),
+        pushed(vec![entry("i1", "follow_up", "follow up")]),
     );
     request(&mut h, json!({"kind":"queue", "text":"follow up  \n"}));
     assert_eq!(output.recv().await.unwrap()["ok"], true);
@@ -625,11 +634,7 @@ async fn entering_remote_recalls_the_queue_and_an_agent_refusal_returns_only_to_
     let (mut output, _close, admission) = phone(&mut h, 1, "phone");
     assert!(admission.await.unwrap());
     let error = crate::protocol::RpcError::new(-1, "refused", "refused");
-    h.op(SessionOp::Pushed(
-        "remote rejected".into(),
-        InputMode::FollowUp,
-        Err(error),
-    ));
+    h.op(SessionOp::Pushed("remote rejected".into(), Err(error)));
     assert_eq!(
         output.recv().await.unwrap(),
         json!({"t":"returned", "text":"remote rejected"})
@@ -792,20 +797,12 @@ async fn a_refused_text_returns_to_its_session_sender_or_once_it_left_to_viewers
     request_from(&mut h, 2, json!({"kind":"submit", "text":"from second"}));
     h.until(|app| app.is_busy()).await;
     let refused = || crate::protocol::RpcError::new(-1, "refused", "refused");
-    h.op(SessionOp::Pushed(
-        "from second".into(),
-        InputMode::FollowUp,
-        Err(refused()),
-    ));
+    h.op(SessionOp::Pushed("from second".into(), Err(refused())));
     assert_eq!(received(&mut a), ["notice"]);
     assert_eq!(received(&mut b), ["ack", "returned", "notice"]);
     assert_eq!(received(&mut c), ["notice"]);
     h.app.on_msg(Msg::Remote(RemoteEvent::Disconnected(2)));
-    h.op(SessionOp::Pushed(
-        "again".into(),
-        InputMode::FollowUp,
-        Err(refused()),
-    ));
+    h.op(SessionOp::Pushed("again".into(), Err(refused())));
     for output in [&mut a, &mut c] {
         let returned = output.try_recv().unwrap();
         assert_eq!(returned, json!({"t":"returned", "text":"again"}));
@@ -1804,7 +1801,6 @@ async fn refused_text_uses_its_session_sender_then_viewers_then_stays_with_the_s
             epoch,
             Box::new(SessionOp::Pushed(
                 text.into(),
-                InputMode::FollowUp,
                 Err(crate::protocol::RpcError::new(-1, "refused", "test")),
             )),
         )

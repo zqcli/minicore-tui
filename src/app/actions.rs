@@ -188,7 +188,7 @@ impl App {
         self.call(
             protocol::METHOD_INPUT_PUSH,
             json!({ "mode": mode, "text": text }),
-            move |result| SessionOp::Pushed(text, mode, result),
+            move |result| SessionOp::Pushed(text, result),
         );
     }
 

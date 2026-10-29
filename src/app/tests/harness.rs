@@ -18,6 +18,9 @@ pub use crate::testing::{chunk, chunk_envelope, display_read, session_info, turn
 /// or scripted delay.
 const QUIET: Duration = Duration::from_secs(5);
 
+/// More messages than any test needs; a run past it is a loop.
+const MAX_MESSAGES: usize = 10_000;
+
 pub struct Harness {
     pub app: App,
     pub fake: FakeAgent,
@@ -93,17 +96,26 @@ impl Harness {
 
     /// Applies messages until none arrives for a while.
     pub async fn settle(&mut self) {
-        while let Ok(Some(message)) = tokio::time::timeout(QUIET, self.rx.recv()).await {
+        // A chain of answers that feeds itself never goes quiet; fail instead of spinning.
+        for _ in 0..MAX_MESSAGES {
+            let Ok(Some(message)) = tokio::time::timeout(QUIET, self.rx.recv()).await else {
+                return;
+            };
             self.app.on_msg(message);
         }
+        panic!("still busy after {MAX_MESSAGES} messages");
     }
 
     /// Applies the messages that arrive within `duration`.
     pub async fn run_for(&mut self, duration: Duration) {
         let deadline = tokio::time::Instant::now() + duration;
-        while let Ok(Some(message)) = tokio::time::timeout_at(deadline, self.rx.recv()).await {
+        for _ in 0..MAX_MESSAGES {
+            let Ok(Some(message)) = tokio::time::timeout_at(deadline, self.rx.recv()).await else {
+                return;
+            };
             self.app.on_msg(message);
         }
+        panic!("still busy after {MAX_MESSAGES} messages");
     }
 
     /// Applies messages until `check` holds.
@@ -383,8 +395,8 @@ pub fn waited(loop_id: &str, outcome: Value) -> Value {
 }
 
 /// A `turn.wait` answer for `loop_id` that also says which turn the Agent started next and what still waits.
-pub fn waited_then(loop_id: &str, outcome: Value, next: Option<&str>, queued: Value) -> Value {
-    json!({"turn": turn(loop_id), "outcome": outcome, "next": next.map(turn), "queue": queued})
+pub fn waited_then(loop_id: &str, outcome: Value, next: Option<Value>, queued: Value) -> Value {
+    json!({"turn": turn(loop_id), "outcome": outcome, "next": next, "queue": queued})
 }
 
 pub fn completed() -> Value {
@@ -412,8 +424,18 @@ pub fn queue(items: Vec<Value>, paused: bool) -> Value {
 }
 
 /// An `input.push` answer for an entry that waits in `queued`.
-pub fn pushed(id: &str, queued: Vec<Value>) -> Value {
-    json!({"id": id, "turn": null, "queue": queue(queued, false)})
+pub fn pushed(queued: Vec<Value>) -> Value {
+    json!({"id": "i1", "started": null, "queue": queue(queued, false)})
+}
+
+/// A turn the Agent started from the queue with `text` as its input.
+pub fn started_turn(turn: Value, text: &str) -> Value {
+    json!({"turn": turn, "input": entry("n1", "follow_up", text)})
+}
+
+/// `started_turn` for `loop_id` of `s1`.
+pub fn next_turn(loop_id: &str, text: &str) -> Value {
+    started_turn(turn(loop_id), text)
 }
 
 /// An `input.push` answer for an entry that started `loop_id` with nothing else waiting.
@@ -424,13 +446,14 @@ pub fn started(loop_id: &str) -> Value {
 /// `started` with the time the Agent accepted the entry.
 pub fn started_at(loop_id: &str, accepted_at: &str) -> Value {
     let mut push = started(loop_id);
-    push["accepted_at"] = json!(accepted_at);
+    push["started"]["input"]["accepted_at"] = json!(accepted_at);
     push
 }
 
-/// An `input.push` answer that started `turn` and left `queued` waiting.
+/// An `input.push` answer that started `turn` with the pushed text and left `queued` waiting.
 pub fn started_in(turn: Value, queued: Vec<Value>) -> Value {
-    json!({"id": "i1", "turn": turn, "queue": queue(queued, false)})
+    let started = json!({"turn": turn, "input": entry("i1", "steer", "$text")});
+    json!({"id": "i1", "started": started, "queue": queue(queued, false)})
 }
 
 /// A refusal in the shape `FakeAgent::script_sequence` accepts.

@@ -39,7 +39,7 @@ use crate::config::ThemeKind;
 use crate::protocol::changes::DiffPage;
 use crate::protocol::read::{InterruptedRequest, RawHistoryItem};
 use crate::protocol::{
-    AgentEvent, ChangeList, CompactionResult, InputMode, InputPushResult, InputRecallResult,
+    AgentEvent, ChangeList, CompactionResult, InputPushResult, InputRecallResult,
     InputRemoveResult, InputResumeResult, ModelInfo, ProfileInfo, Queue, Reasoning, RpcError,
     SessionContext, SessionInfo, SessionPresentation, SessionState, ToolReadResult, ToolRef,
     TurnWaitResult,
@@ -97,8 +97,8 @@ pub enum SessionOp {
     /// A `workspace.status` answer, wanted only for the branch it caches in the presentation.
     WorkspaceStatus(Result<Value, RpcError>),
     Context(Result<SessionContext, RpcError>),
-    /// The push answer, with the text and mode so a refusal can hand the text back.
-    Pushed(String, InputMode, Result<InputPushResult, RpcError>),
+    /// The push answer, with the text so a refusal can hand it back.
+    Pushed(String, Result<InputPushResult, RpcError>),
     Resumed(Result<InputResumeResult, RpcError>),
     /// A removal; the connection is the phone that gets the text back to edit.
     Removed(Option<u64>, Result<InputRemoveResult, RpcError>),

@@ -168,7 +168,8 @@ impl FakeAgent {
                     };
                     let mut frame = json!({"jsonrpc": "2.0", "id": request["id"]});
                     if let Value::Object(fields) = reply.frame {
-                        for (key, value) in fields {
+                        for (key, mut value) in fields {
+                            echo(&mut value, &request["params"]["text"]);
                             frame[key] = value;
                         }
                     }
@@ -361,6 +362,19 @@ impl FakeAgent {
             .filter(|call| call.method == method)
             .map(|call| call.params.clone())
             .collect()
+    }
+}
+
+/// Replaces every `"$text"` in a scripted answer with the request's text, so an answer can name what was pushed.
+fn echo(value: &mut Value, text: &Value) {
+    if value.as_str() == Some("$text") {
+        *value = text.clone();
+        return;
+    }
+    match value {
+        Value::Array(items) => items.iter_mut().for_each(|item| echo(item, text)),
+        Value::Object(fields) => fields.values_mut().for_each(|field| echo(field, text)),
+        _ => {}
     }
 }
 

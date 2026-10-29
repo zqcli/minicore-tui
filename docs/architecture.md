@@ -365,15 +365,16 @@ hints.
 1. **Submit.** `Enter` is `input.push` with mode `steer`, `Alt+Enter` the same
    with `follow_up`; the answer names the turn this push started, if any. Every
    turn is learned from an RPC answer, never from an event: `input.push`,
-   `input.resume` and the `next` of a `turn.wait` result each carry the turn the
-   Agent started. `start_turn` makes it the `LiveTurn` and spawns `turn.wait`. It
+   `input.resume`, the `next` of a `turn.wait` result and the `next` of the
+   deferred `session.compact` result each carry the turn the Agent started with
+   the entry that became its input (`StartedTurn`). `start_turn` makes it the `LiveTurn` and spawns `turn.wait`. It
    is the only place a wait is registered and does nothing while a turn is live,
    so a turn is never waited on twice. It also opens the turn's region with the
-   prompt block of the entry that started it (see Steering). Opening a session
-   reads `session.state` once its tail is installed, so a turn still running in
-   the Agent is adopted and waited on; a manual compaction's end reads it too,
-   because the Agent starts the queue's head then. A refusal puts the text back
-   in the draft.
+   prompt block of that entry (see Steering). Opening a session reads
+   `session.state` once its tail is installed, so a turn still running in the
+   Agent is adopted and waited on; a manual compaction's end reads nothing, its
+   result names the turn started behind it. A refusal puts the text back in the
+   draft.
 2. **Events** (`output_delta`, `tool_*`, `request_started`, `input_queue`,
    `input_delivered`, `session_state`, `interaction_*`) update the live turn's
    blocks by key, so order does not matter. Deltas and tool starts for a loop
@@ -435,10 +436,9 @@ An `input_delivered` event is a running turn taking steers: they leave the
 mirror by id and become steering blocks after the turn's latest step, in
 delivery order. A successor can take steers before its predecessor's wait
 answers, so deliveries for a turn that is not live yet wait in the session and
-are placed when `start_turn` runs. A turn's prompt block comes from the entry
-that started it: the pushed one when the push answer no longer lists it, else the
-entry that left the mirror unasked (the queue's head, which a `next` or a resume
-consumed). The wire names no such entry, so this is read from the mirror.
+are placed when `start_turn` runs. A turn's prompt block comes from the `input`
+of the `StartedTurn` the Agent returned, which may be an older entry than the one
+pushed; it leaves the mirror with the answer's `queue`.
 Deleting a session that holds queued entries is refused, as the Agent does.
 The first prompt of an untitled session becomes its title through `session.rename`.
 

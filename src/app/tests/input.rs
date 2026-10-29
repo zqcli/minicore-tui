@@ -181,8 +181,8 @@ async fn shift_enter_adds_a_line_and_alt_enter_queues_follow_ups_behind_a_runnin
         "input.push",
         vec![
             started("l1"),
-            pushed("i2", vec![one.clone()]),
-            pushed("i3", vec![one, two]),
+            pushed(vec![one.clone()]),
+            pushed(vec![one, two]),
         ],
     );
     h.fake.script_held("turn.wait", waited("l1", completed()));
@@ -221,10 +221,10 @@ async fn enter_pushes_a_steer_alt_and_ctrl_enter_a_follow_up_and_the_dock_follow
         "input.push",
         vec![
             started("l1"),
-            pushed("i2", vec![alt.clone()]),
-            pushed("i3", vec![alt.clone(), ctrl.clone()]),
+            pushed(vec![alt.clone()]),
+            pushed(vec![alt.clone(), ctrl.clone()]),
             // The Agent runs steers first.
-            pushed("i4", vec![now, alt, ctrl]),
+            pushed(vec![now, alt, ctrl]),
         ],
     );
     h.fake.script_held("turn.wait", waited("l1", completed()));
@@ -298,7 +298,7 @@ async fn a_message_sent_during_a_compaction_waits_in_the_agents_queue_without_a_
     let mut h = Harness::opened(display_read(0, 0)).await;
     h.fake.script(
         "input.push",
-        pushed("i1", vec![entry("i1", "follow_up", "later")]),
+        pushed(vec![entry("i1", "follow_up", "later")]),
     );
     h.emit(
         "session_state",
@@ -374,7 +374,7 @@ async fn a_slash_line_that_names_no_command_is_a_prompt() {
     let mut h = Harness::opened(display_read(0, 0)).await;
     h.fake.script_sequence(
         "input.push",
-        vec![started("l1"), pushed("i2", vec![entry("i2", "steer", "x")])],
+        vec![started("l1"), pushed(vec![entry("i2", "steer", "x")])],
     );
     h.fake.script_held("turn.wait", waited("l1", completed()));
 
