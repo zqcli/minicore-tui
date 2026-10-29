@@ -115,7 +115,7 @@ async fn steers_a_running_turn_took_become_steering_blocks_in_the_agents_order()
         for batch in batches {
             let items: Vec<Value> = batch
                 .iter()
-                .map(|text| json!({"id": id(*text), "text": text}))
+                .map(|text| json!({"id": id(text), "text": text}))
                 .collect();
             h.emit(
                 "input_delivered",

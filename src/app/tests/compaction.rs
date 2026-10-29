@@ -370,6 +370,7 @@ async fn the_turn_the_agent_starts_after_a_compaction_is_adopted_with_the_prompt
     h.emit("session_state", compacting(serde_json::Value::Null))
         .await;
     h.until(|app| app.is_busy()).await;
+    h.settle().await;
     assert_eq!(h.texts(), ["asked meanwhile"]);
     assert_eq!(h.calls("turn.wait")[0]["loop_id"], "l2");
 }
