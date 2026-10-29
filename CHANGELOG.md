@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.9.0 — 2026-10-30
 
 - On Windows the welcome header and the remote status screen write the home folder
   as `~`, as on other systems.
