@@ -45,14 +45,18 @@ fn read_views(h: &Harness) -> Vec<String> {
 #[tokio::test(start_paused = true)]
 async fn the_tail_window_and_each_older_page_move_the_marker() {
     let mut h = Harness::opened(answered(80, 0)).await;
-    assert_eq!(cursors(&h), [20], "the tail is the last sixty items");
+    assert_eq!(
+        cursors(&h),
+        [20, 40, 60],
+        "the tail is the last sixty items"
+    );
     assert_eq!(h.marker(), Some(20));
 
     h.fake
         .script("session.read", page(80, 0, vec![user(0, "l0", "first")]));
     h.action(Action::LoadOlder);
     h.settle().await;
-    assert_eq!(cursors(&h), [20, 0]);
+    assert_eq!(cursors(&h), [20, 40, 60, 0]);
     assert_eq!(h.marker(), None, "nothing is older than item 0");
     assert_eq!(h.texts(), ["first", "latest"]);
 }
@@ -197,12 +201,12 @@ async fn a_stale_pin_on_the_tail_restarts_with_a_fresh_probe() {
 
 #[tokio::test(start_paused = true)]
 async fn a_stale_pin_on_an_older_page_retries_once() {
-    for (tail, text) in [
-        (answered(80, 0), "display item"),
-        (answered(32, 30), "canonical item"),
+    for (tail, total, index, text) in [
+        (answered(80, 0), 80, 0, "display item"),
+        (answered(32, 30), 32, 11, "canonical item"),
     ] {
         let mut h = Harness::opened(tail).await;
-        let page = page(80, 0, vec![user(0, "l0", text)]);
+        let page = page(total, 0, vec![user(index, "l0", text)]);
         h.fake.script_sequence(
             "session.read",
             vec![refusal(STALE, "invalid_state"), page.clone(), page],
@@ -247,6 +251,41 @@ async fn an_older_page_that_stays_stale_keeps_the_loaded_window() {
     );
 }
 
+#[tokio::test(start_paused = true)]
+async fn a_late_history_page_error_keeps_the_existing_transcript_and_anchor() {
+    let mut h = Harness::opened(answered(80, 0)).await;
+    h.app.scroll = Scroll::Anchor {
+        block: 1,
+        offset: 0,
+    };
+    let before = format!("{:?}", h.blocks());
+    let mut first = page(80, 0, vec![user(0, "l0", "unverified prefix")]);
+    first.as_object_mut().unwrap().remove("_fixture_history");
+    first["next_cursor"] = json!({"item": 1, "offset": 0});
+    let mut bad_item = assistant(1, "l0", "bad");
+    bad_item["encoding"] = json!("wrong");
+    let mut last = page(80, 0, vec![bad_item]);
+    last.as_object_mut().unwrap().remove("_fixture_history");
+    last["next_cursor"] = Value::Null;
+    h.fake
+        .script_sequence("session.read", vec![display_read(80, 0), first, last]);
+    h.action(Action::LoadOlder);
+    h.settle().await;
+    assert_eq!(format!("{:?}", h.blocks()), before);
+    assert_eq!(
+        h.app.scroll,
+        Scroll::Anchor {
+            block: 1,
+            offset: 0
+        }
+    );
+    assert!(
+        h.notices().iter().any(|notice| notice.contains("encoding")),
+        "{:?}",
+        h.notices()
+    );
+}
+
 /// When a page lands during a turn.
 #[derive(Clone, Copy, Debug)]
 enum Timing {
@@ -270,7 +309,7 @@ async fn history_paged_in_during_a_turn_survives_its_reconcile() {
         };
         let mut h = Harness::opened(tail).await;
         let older: Vec<Value> = if canonical {
-            vec![user(0, "l0", "history one")]
+            vec![user(11, "l0", "history one")]
         } else {
             vec![
                 user(38, "l0", "history one"),
@@ -314,7 +353,8 @@ async fn history_paged_in_during_a_turn_survives_its_reconcile() {
             block: 1,
             offset: 1,
         };
-        h.fake.script("session.read", page(100, 0, older));
+        let total = if canonical { 32 } else { 100 };
+        h.fake.script("session.read", page(total, 0, older));
         h.action(Action::LoadOlder);
         h.settle().await;
         if !canonical {
@@ -336,7 +376,8 @@ async fn history_paged_in_during_a_turn_survives_its_reconcile() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn an_empty_canonical_page_removes_the_marker_and_the_turn_still_reconciles() {
+async fn a_canonical_page_without_visible_content_removes_the_marker_and_the_turn_still_reconciles()
+{
     let mut h = Harness::opened(answered(62, 60)).await;
     h.fake.script("input.push", started("l1"));
     h.fake.script_held("turn.wait", waited("l1", cancelled()));
@@ -358,12 +399,23 @@ async fn an_empty_canonical_page_removes_the_marker_and_the_turn_still_reconcile
     assert!(matches!(h.blocks().last(), Some(Block::TurnEnd { .. })));
 }
 
-/// Every `session.read` the fake answers, in call order: each window is a
-/// probe followed by the page.
+/// Every `session.read` the fake answers, including the tail's continuation pages.
 fn reads(windows: Vec<(usize, usize, Vec<Value>)>) -> Vec<Value> {
     windows
         .into_iter()
-        .flat_map(|(total, floor, items)| [display_read(total, floor), page(total, floor, items)])
+        .enumerate()
+        .flat_map(|(index, (total, floor, items))| {
+            let pages = if index == 0 {
+                total
+                    .saturating_sub(floor)
+                    .min(crate::protocol::TAIL_ITEMS)
+                    .div_ceil(crate::protocol::PAGE_LIMIT)
+            } else {
+                1
+            };
+            std::iter::once(display_read(total, floor))
+                .chain(std::iter::repeat_n(page(total, floor, items), pages))
+        })
         .collect()
 }
 
@@ -470,7 +522,7 @@ async fn canonical_cards_take_their_detail_and_facts_from_tool_read() {
         "session.read",
         reads(vec![
             (32, 30, vec![summary(30), assistant(31, "l9", "latest")]),
-            (32, 30, vec![assistant_tool(8, "l1", "c1", "bash")]),
+            (32, 30, vec![assistant_tool(11, "l1", "c1", "bash")]),
         ]),
     );
     h.open().await;
@@ -513,8 +565,8 @@ async fn every_card_of_a_page_is_read_once_and_a_missing_call_stays_bare() {
                 32,
                 30,
                 vec![
-                    assistant_tool(8, "l1", "c1", "bash"),
-                    assistant_tool(9, "l1", "c2", "read"),
+                    assistant_tool(11, "l1", "c1", "bash"),
+                    assistant_tool(12, "l1", "c2", "read"),
                 ],
             ),
         ]),

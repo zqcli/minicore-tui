@@ -170,6 +170,9 @@ impl FakeAgent {
                     if let Value::Object(fields) = reply.frame {
                         for (key, mut value) in fields {
                             echo(&mut value, &request["params"]["text"]);
+                            if method == "session.read" && key == "result" {
+                                history_fixture(&mut value, &request["params"]);
+                            }
                             frame[key] = value;
                         }
                     }
@@ -378,6 +381,54 @@ fn echo(value: &mut Value, text: &Value) {
     }
 }
 
+fn history_fixture(value: &mut Value, params: &Value) {
+    let Some(fields) = value.as_object_mut() else {
+        return;
+    };
+    if fields.remove("_fixture_history") != Some(Value::Bool(true)) {
+        return;
+    }
+    fields["session"]["session_id"] = params["session_id"].clone();
+    let total = fields["total"].as_u64().unwrap() as usize;
+    let canonical = params["view"] == "canonical";
+    let floor = if canonical {
+        fields["projection"] = Value::Null;
+        0
+    } else {
+        fields["projection"]
+            .get("first_item")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as usize
+    };
+    let start = params["cursor"]["item"]
+        .as_u64()
+        .map_or(floor, |item| item as usize);
+    let limit = params["limit"].as_u64().unwrap() as usize;
+    let end = start.saturating_add(limit).min(total);
+    let known: HashMap<usize, Value> = fields["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| (item["index"].as_u64().unwrap() as usize, item.clone()))
+        .collect();
+    let items: Vec<Value> = (start..end)
+        .map(|index| {
+            known.get(&index).cloned().unwrap_or_else(|| chunk(index, json!({
+            "type": "assistant", "data": {"loop_id": "fixture", "request_index": 0, "content": []}
+        })))
+        })
+        .collect();
+    fields.insert("items".into(), json!(items));
+    fields.insert(
+        "next_cursor".into(),
+        if end < total {
+            json!({"item": end, "offset": 0})
+        } else {
+            Value::Null
+        },
+    );
+}
+
 /// The Agent-side tasks of a fake: the frame writer, its stop signal and the
 /// pipes, which must be dropped for the client to see a close.
 struct Responder {
@@ -448,16 +499,19 @@ pub fn chunk_envelope(index: usize, envelope: Value) -> Value {
 
 pub fn display_read(total: usize, first_item: usize) -> Value {
     json!({
+        "_fixture_history": true,
         "session": session_info("s1"),
         "items": [],
         "next_cursor": null,
         "total": total,
+        "records": [],
         "history_revision": "h1",
         "captured_end": 1,
         "projection": {
             "revision": "p1",
             "first_item": first_item,
             "covered_item_count": first_item,
+            "covered_usage": {"usage": {}, "partial": true},
         },
     })
 }

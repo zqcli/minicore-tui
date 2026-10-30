@@ -48,6 +48,7 @@ pub struct Client {
     pending: Arc<Mutex<HashMap<RequestId, oneshot::Sender<RpcResponse>>>>,
     next_id: AtomicU64,
     queries: Arc<Semaphore>,
+    read_workspaces: Arc<Semaphore>,
     stderr_tail: Arc<Mutex<VecDeque<String>>>,
     closed: Arc<Mutex<Option<String>>>,
     incoming: mpsc::Sender<Incoming>,
@@ -143,6 +144,7 @@ impl Client {
             pending,
             next_id: AtomicU64::new(1),
             queries: Arc::new(Semaphore::new(QUERY_PERMITS)),
+            read_workspaces: Arc::new(Semaphore::new(2)),
             stderr_tail,
             closed,
             incoming,
@@ -199,6 +201,10 @@ impl Client {
 
     pub fn stderr_tail(&self) -> Vec<String> {
         self.stderr_tail.lock().unwrap().iter().cloned().collect()
+    }
+
+    pub(crate) fn read_workspaces(&self) -> Arc<Semaphore> {
+        self.read_workspaces.clone()
     }
 
     /// Sends `agent.shutdown` and gives the child a bounded moment to exit

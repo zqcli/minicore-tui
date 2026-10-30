@@ -408,8 +408,12 @@ pub fn cancelled() -> Value {
 }
 
 /// A `turn.result` page with `items`.
-pub fn turn_result(loop_id: &str, items: Vec<Value>) -> Value {
+pub fn turn_result(loop_id: &str, mut items: Vec<Value>) -> Value {
+    for (index, item) in items.iter_mut().enumerate() {
+        item["index"] = json!(index);
+    }
     json!({"turn": turn(loop_id), "outcome": {"type": "cancelled", "reason": "user"},
+           "availability": "stored", "persistence": "persisted",
            "total": items.len(), "items": items, "next_cursor": null})
 }
 

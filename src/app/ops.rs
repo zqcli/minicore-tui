@@ -1,7 +1,7 @@
 //! Applying the results of async operations and the Agent's events.
 
 use super::session::accepted_millis;
-use super::tasks::{self, History, Window};
+use super::tasks::{self, HistoryRead, TurnRead, Window};
 use super::{App, LiveTurn, NoticeLevel, Overlay, Scroll, Session, SessionOp, find};
 use crate::protocol::read::UserKind;
 use crate::protocol::{
@@ -26,15 +26,25 @@ impl App {
                 if self.background_op => {}
             SessionOp::Tail(result) => self.on_tail(result),
             SessionOp::Page(result) => self.on_page(result),
-            SessionOp::TurnItems(loop_id, result) => {
-                if let Some((items, interrupted)) = self.ok(result)
-                    && let Some((at, grown)) =
-                        self.session_mut()
-                            .reconcile_turn(&loop_id, &items, interrupted.as_ref())
-                {
-                    self.blocks_moved(at, grown);
+            SessionOp::TurnItems(loop_id, result) => match result {
+                Ok(TurnRead::Complete(content)) => {
+                    if let Some((at, grown)) = self.session_mut().reconcile_turn(
+                        &loop_id,
+                        &content.items,
+                        content.interrupted.as_ref(),
+                    ) {
+                        self.blocks_moved(at, grown);
+                    }
                 }
-            }
+                Ok(TurnRead::Pending) => self.notice(
+                    NoticeLevel::Info,
+                    "Turn result is pending; existing content was kept",
+                ),
+                Ok(TurnRead::Partial(partial)) => {
+                    self.notice(NoticeLevel::Error, partial.message())
+                }
+                Ok(TurnRead::Unavailable(error)) | Err(error) => self.error(error),
+            },
             SessionOp::State(result) => self.on_state(result),
             SessionOp::Presentation(result) => {
                 self.session_mut().presentation_in_flight = false;
@@ -168,17 +178,26 @@ impl App {
         }
     }
 
-    fn on_tail(&mut self, result: Result<History, RpcError>) {
-        if let Some(page) = self.ok(result) {
-            let session = self.session_mut();
-            session.install_tail(page);
-            session.backfill = BACKFILL_PAGES;
-            self.scroll = Scroll::Follow;
-            // After the tail: a turn already running takes its place at the end.
-            self.read_state();
-            self.read_queue();
-            self.backfill();
-        }
+    fn on_tail(&mut self, result: Result<HistoryRead, RpcError>) {
+        let page = match result {
+            Ok(HistoryRead::Complete(page)) => *page,
+            Ok(HistoryRead::Partial(partial)) => {
+                self.notice(NoticeLevel::Error, partial.message());
+                return;
+            }
+            Err(error) => {
+                self.error(error);
+                return;
+            }
+        };
+        let session = self.session_mut();
+        session.install_tail(page);
+        session.backfill = BACKFILL_PAGES;
+        self.scroll = Scroll::Follow;
+        // After the tail: a turn already running takes its place at the end.
+        self.read_state();
+        self.read_queue();
+        self.backfill();
     }
 
     /// Reads on behind the summary until the latest answer is loaded, so a
@@ -194,9 +213,16 @@ impl App {
         }
     }
 
-    fn on_page(&mut self, result: Result<History, RpcError>) {
+    fn on_page(&mut self, result: Result<HistoryRead, RpcError>) {
         let page = match result {
-            Ok(page) => page,
+            Ok(HistoryRead::Complete(page)) => *page,
+            Ok(HistoryRead::Partial(partial)) => {
+                let session = self.session_mut();
+                session.loading_older = false;
+                session.backfill = 0;
+                self.notice(NoticeLevel::Error, partial.message());
+                return;
+            }
             Err(error) => {
                 let session = self.session_mut();
                 session.loading_older = false;

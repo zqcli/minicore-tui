@@ -454,6 +454,21 @@ operation that took it. A stale pin (`invalid_state`) restarts that operation
 once with a fresh probe; a second failure is reported, never as malformed
 history.
 
+Turn and history reads check the response identity, chunk encoding and byte
+continuity, item JSON, cursor progress and the requested item range before any
+content is installed. A pending turn is not an empty result. A missing turn,
+invalid page, oversized item or exhausted read workspace leaves the existing
+transcript in place and reports the problem. The current RPC v1 does not supply
+an immutable result identity or load identity, so it cannot verify that two
+otherwise consistent turn pages came from the same immutable source.
+
+At most two history, turn or export reads assemble at once per client. Each
+workspace has a 64 MiB budget, including conservative reservations for decoded
+data, metadata and page copies; a completed result holds its slot until the
+reducer finishes installing it. An item above the 8 MiB automatic decode limit
+produces a partial-read notice rather than an incomplete replacement. This bound
+does not include the existing transcript or the RPC client's general buffers.
+
 - **Display floor.** `first_item` is the oldest item the display view serves; the
   item there is the compaction summary, standing in for the original one. Older
   items sit behind it and the transcript shows an `EarlierHistory` row

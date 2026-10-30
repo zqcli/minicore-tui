@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- History and turn reads keep the existing transcript and report an error or an
+  oversized item instead of installing an incomplete or invalid result.
+
 ## 0.9.0 — 2026-10-30
 
 - On Windows the welcome header and the remote status screen write the home folder

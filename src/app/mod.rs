@@ -37,7 +37,6 @@ use serde_json::{Value, json};
 
 use crate::config::ThemeKind;
 use crate::protocol::changes::DiffPage;
-use crate::protocol::read::{InterruptedRequest, RawHistoryItem};
 use crate::protocol::{
     AgentEvent, ChangeList, CompactionResult, InputPushResult, InputRecallResult,
     InputRemoveResult, InputResumeResult, ModelInfo, ProfileInfo, Queue, Reasoning, RpcError,
@@ -86,12 +85,9 @@ pub struct Ready {
 
 /// What an async operation on the foreground session produced.
 pub enum SessionOp {
-    Tail(Result<tasks::History, RpcError>),
-    Page(Result<tasks::History, RpcError>),
-    TurnItems(
-        String,
-        Result<(Vec<RawHistoryItem>, Option<InterruptedRequest>), RpcError>,
-    ),
+    Tail(Result<tasks::HistoryRead, RpcError>),
+    Page(Result<tasks::HistoryRead, RpcError>),
+    TurnItems(String, Result<tasks::TurnRead, RpcError>),
     State(Result<SessionState, RpcError>),
     Presentation(Result<SessionPresentation, RpcError>),
     /// A `workspace.status` answer, wanted only for the branch it caches in the presentation.

@@ -1,9 +1,17 @@
 //! `session.read` / `turn.result` DTOs and the chunk assembler.
 
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
-use super::{LoopOutcome, ToolSummary, Usage};
+use super::{LoopOutcome, SessionInfo, ToolSummary, TurnRef, Usage};
+
+fn required_option<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer)
+}
 
 /// One canonical item body, complete and contiguous.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -24,19 +32,20 @@ pub struct ReadChunk {
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct ReadSessionResult {
+    pub session: SessionInfo,
     pub items: Vec<ReadChunk>,
-    pub next_cursor: Option<Value>,
+    #[serde(deserialize_with = "required_option")]
+    pub next_cursor: Option<ReadCursor>,
     pub total: usize,
     pub history_revision: String,
     pub captured_end: u64,
     pub projection: Option<DisplayProjection>,
     /// Summaries of the turns that have an item in this page.
-    #[serde(default)]
     pub records: Vec<TurnRecord>,
 }
 
 /// How a stored turn ended.
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct TurnRecord {
     pub loop_id: String,
     pub outcome: LoopOutcome,
@@ -48,7 +57,7 @@ pub struct TurnRecord {
 }
 
 /// What a cancelled request had streamed; display-only, never a history item.
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct InterruptedRequest {
     pub request_index: u32,
     pub reasoning: String,
@@ -61,10 +70,10 @@ pub struct DisplayProjection {
     pub first_item: usize,
     pub covered_item_count: usize,
     /// The usage of the turns behind the summary.
-    pub covered_usage: Option<CoveredUsage>,
+    pub covered_usage: CoveredUsage,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct CoveredUsage {
     pub usage: Usage,
     pub partial: bool,
@@ -87,14 +96,14 @@ impl ReadSessionResult {
             covered_usage: self
                 .projection
                 .as_ref()
-                .and_then(|projection| projection.covered_usage.clone()),
+                .map(|projection| projection.covered_usage.clone()),
         }
     }
 }
 
 /// The read prefix a continuation is pinned to. Never cached across
 /// operations: every read starts from a fresh probe.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct SnapshotPin {
     pub captured_end: u64,
     pub history_revision: String,
@@ -105,7 +114,7 @@ pub struct SnapshotPin {
 }
 
 /// A read position: an item index and a byte offset inside that item.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ReadCursor {
     pub item: usize,
     pub offset: usize,
@@ -118,14 +127,6 @@ impl ReadCursor {
 
     pub fn value(self) -> Value {
         serde_json::json!({"item": self.item, "offset": self.offset})
-    }
-
-    /// Reads a cursor the Agent handed back; `None` means the read cannot go on.
-    pub fn from_value(value: &Value) -> Option<Self> {
-        Some(Self {
-            item: value.get("item")?.as_u64()? as usize,
-            offset: value.get("offset").and_then(Value::as_u64).unwrap_or(0) as usize,
-        })
     }
 }
 
@@ -154,8 +155,12 @@ pub enum ReadError {
         declared: usize,
         delivered: usize,
     },
-    #[error("agent cursor {0} is not a read cursor")]
-    Cursor(Value),
+    #[error("an incomplete chunk made no progress")]
+    EmptyChunk,
+    #[error("an incomplete chunk reached its declared byte count")]
+    IncompleteAtEnd,
+    #[error("could not reserve the item buffer")]
+    Allocation,
 }
 
 /// Reassembles items from read chunks; one item may span pages, so the buffer
@@ -195,6 +200,9 @@ impl ChunkAssembler {
             return Err(ReadError::Encoding(chunk.encoding));
         }
         let delivered = chunk.data.len();
+        if delivered == 0 && !chunk.complete {
+            return Err(ReadError::EmptyChunk);
+        }
         if self.active && chunk.index != self.index {
             return Err(ReadError::OutOfOrder {
                 expected: self.index,
@@ -213,11 +221,16 @@ impl ChunkAssembler {
             self.buffer.clear();
             self.active = true;
             self.skipping = chunk.total_bytes > MAX_AUTO_ITEM_BYTES;
+            if !self.skipping {
+                self.buffer
+                    .try_reserve_exact(chunk.total_bytes)
+                    .map_err(|_| ReadError::Allocation)?;
+            }
         } else if chunk.total_bytes != self.total_bytes {
             return Err(ReadError::ByteCount {
                 index: self.index,
                 declared: self.total_bytes,
-                delivered: self.next_offset + delivered,
+                delivered: self.next_offset.saturating_add(delivered),
             });
         }
         if chunk.offset != self.next_offset {
@@ -226,7 +239,14 @@ impl ChunkAssembler {
                 found: chunk.offset,
             });
         }
-        self.next_offset += delivered;
+        self.next_offset = self
+            .next_offset
+            .checked_add(delivered)
+            .ok_or(ReadError::ByteCount {
+                index: self.index,
+                declared: self.total_bytes,
+                delivered: usize::MAX,
+            })?;
         if self.next_offset > self.total_bytes {
             return Err(ReadError::ByteCount {
                 index: self.index,
@@ -234,17 +254,13 @@ impl ChunkAssembler {
                 delivered: self.next_offset,
             });
         }
-        if self.skipping {
-            if !chunk.complete {
-                return Ok(ChunkOutcome::Pending);
-            }
-            let index = self.index;
-            let total_bytes = self.total_bytes;
-            self.discard();
-            return Ok(ChunkOutcome::Oversized { index, total_bytes });
-        }
-        self.buffer.push_str(&chunk.data);
         if !chunk.complete {
+            if self.next_offset == self.total_bytes {
+                return Err(ReadError::IncompleteAtEnd);
+            }
+            if !self.skipping {
+                self.buffer.push_str(&chunk.data);
+            }
             return Ok(ChunkOutcome::Pending);
         }
         if self.next_offset != self.total_bytes {
@@ -254,6 +270,13 @@ impl ChunkAssembler {
                 delivered: self.next_offset,
             });
         }
+        if self.skipping {
+            let index = self.index;
+            let total_bytes = self.total_bytes;
+            self.discard();
+            return Ok(ChunkOutcome::Oversized { index, total_bytes });
+        }
+        self.buffer.push_str(&chunk.data);
         let item = EncodedItem {
             index: self.index,
             data: self.buffer.as_str().into(),
@@ -279,6 +302,58 @@ impl RawHistoryItem {
         self.tool_summaries
             .iter()
             .find(|summary| summary.tool_call_id == call_id)
+    }
+
+    pub(crate) fn heap_bytes(&self) -> usize {
+        let optional = |value: &Option<String>| value.as_ref().map_or(0, String::capacity);
+        let mut bytes = optional(&self.timestamp).saturating_add(
+            self.tool_summaries
+                .capacity()
+                .saturating_mul(std::mem::size_of::<ToolSummary>()),
+        );
+        for summary in &self.tool_summaries {
+            bytes = bytes
+                .saturating_add(summary.tool_call_id.capacity())
+                .saturating_add(summary.display.detail.capacity())
+                .saturating_add(optional(&summary.display.expanded_input))
+                .saturating_add(optional(&summary.state));
+        }
+        match &self.item {
+            RuntimeItem::User(item) => bytes
+                .saturating_add(item.loop_id.capacity())
+                .saturating_add(item.input.text.capacity()),
+            RuntimeItem::Assistant(item) => {
+                bytes = bytes
+                    .saturating_add(item.loop_id.capacity())
+                    .saturating_add(
+                        item.content
+                            .capacity()
+                            .saturating_mul(std::mem::size_of::<RuntimeAssistantPart>()),
+                    );
+                for part in &item.content {
+                    bytes = bytes.saturating_add(match part {
+                        RuntimeAssistantPart::Text(text) => text.capacity(),
+                        RuntimeAssistantPart::Reasoning { text, summary } => {
+                            optional(text).saturating_add(optional(summary))
+                        }
+                        RuntimeAssistantPart::ToolCall { tool_call_id, name } => {
+                            tool_call_id.capacity().saturating_add(name.capacity())
+                        }
+                    });
+                }
+                bytes
+            }
+            RuntimeItem::ToolResult(item) => bytes
+                .saturating_add(item.loop_id.capacity())
+                .saturating_add(item.call_id.capacity())
+                .saturating_add(item.outcome.capacity())
+                .saturating_add(
+                    item.output
+                        .as_ref()
+                        .map_or(0, |output| output.content.capacity()),
+                ),
+            RuntimeItem::Summary(item) => bytes.saturating_add(item.content.capacity()),
+        }
     }
 }
 
@@ -368,12 +443,32 @@ pub fn decode_item(raw: &str) -> Result<RawHistoryItem, String> {
     serde_json::from_str(raw).map_err(|error| format!("item JSON: {error}"))
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnAvailability {
+    Pending,
+    Live,
+    Stored,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnPersistence {
+    Persisted,
+    Failed,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct TurnResultPage {
+    pub turn: TurnRef,
+    pub availability: TurnAvailability,
     pub items: Vec<ReadChunk>,
-    pub next_cursor: Option<Value>,
+    #[serde(deserialize_with = "required_option")]
+    pub next_cursor: Option<ReadCursor>,
+    pub total: usize,
     /// Absent while the turn is still running.
     pub outcome: Option<super::LoopOutcome>,
+    pub persistence: Option<TurnPersistence>,
     pub usage: Option<super::Usage>,
     pub requests: Option<u32>,
     pub tool_rounds: Option<u64>,
@@ -440,9 +535,12 @@ mod tests {
     fn oversized_items_are_reported_rather_than_buffered() {
         let mut assembler = ChunkAssembler::new();
         let total = MAX_AUTO_ITEM_BYTES + 1;
-        let outcome = assembler.push(chunk(2, 0, total, "", false)).unwrap();
+        let first = "x".repeat(MAX_AUTO_ITEM_BYTES);
+        let outcome = assembler.push(chunk(2, 0, total, &first, false)).unwrap();
         assert_eq!(outcome, ChunkOutcome::Pending);
-        let outcome = assembler.push(chunk(2, 0, total, "", true)).unwrap();
+        let outcome = assembler
+            .push(chunk(2, MAX_AUTO_ITEM_BYTES, total, "x", true))
+            .unwrap();
         assert!(matches!(
             outcome,
             ChunkOutcome::Oversized {
@@ -450,6 +548,20 @@ mod tests {
                 total_bytes
             } if total_bytes == total
         ));
+    }
+
+    #[test]
+    fn an_oversized_item_cannot_finish_before_its_declared_bytes() {
+        let mut assembler = ChunkAssembler::new();
+        let total = MAX_AUTO_ITEM_BYTES + 1;
+        assert_eq!(
+            assembler.push(chunk(2, 0, total, "x", true)).unwrap_err(),
+            ReadError::ByteCount {
+                index: 2,
+                declared: total,
+                delivered: 1
+            }
+        );
     }
 
     #[test]

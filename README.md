@@ -194,7 +194,9 @@ without a report. The TUI never estimates it.
   removed. `/compact` runs it manually.
 - **History.** Opening a session loads the latest items; scrolling to the top
   loads older pages, including the history behind a compaction summary.
-  A card whose output is not loaded shows its line count.
+  A card whose output is not loaded shows its line count. An incomplete,
+  unreadable or oversized history read keeps the content already shown and
+  reports the problem instead of replacing it with a partial page.
 - **Views** replace the transcript and keep the footer: Git diff and help.
   `/diff` shows the workspace's live tracked changes and untracked files,
   also when opened by clicking a turn-end line. `Esc` returns; the

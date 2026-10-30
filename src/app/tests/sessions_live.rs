@@ -489,18 +489,15 @@ async fn an_idle_background_session_is_deleted_and_a_late_result_for_it_goes_now
             kind: UserKind::Prompt,
             at: None,
         });
-    h.app.on_msg(Msg::Session(
-        epoch,
-        Box::new(SessionOp::Tail(Ok(crate::app::tasks::History {
-            items: Vec::new(),
-            from: 0,
-            floor: 0,
-            has_more: false,
-            canonical: false,
-            records: Vec::new(),
-            covered_usage: None,
-        }))),
-    ));
+    let late = crate::app::tasks::read_history(
+        h.fake.client.clone(),
+        "s1".into(),
+        crate::app::tasks::Window::Tail,
+    )
+    .await
+    .unwrap();
+    h.app
+        .on_msg(Msg::Session(epoch, Box::new(SessionOp::Tail(Ok(late)))));
     assert_eq!(
         h.texts(),
         ["kept"],

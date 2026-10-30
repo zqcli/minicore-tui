@@ -974,7 +974,8 @@ async fn a_lost_wait_ends_the_turn_from_its_stored_result() {
         .script_error("turn.wait", -32007, "turn not found", "turn_not_found");
     h.fake.script(
         "turn.result",
-        json!({"items": [], "next_cursor": null, "outcome": completed(), "requests": 3}),
+        json!({"turn": turn("l1"), "availability": "stored", "persistence": "persisted",
+               "total": 0, "items": [], "next_cursor": null, "outcome": completed(), "requests": 3}),
     );
     h.submit("go");
     h.settle().await;
@@ -994,6 +995,54 @@ async fn a_turn_whose_end_cannot_be_read_still_ends() {
     h.settle().await;
     assert!(!h.is_busy());
     assert_eq!(turn_ends(&h), ["l1"]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_oversized_turn_read_keeps_the_live_region_and_reports_the_missing_item() {
+    use crate::app::tasks::{ReadPartial, TurnRead};
+
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.fake.script("input.push", started("l1"));
+    h.fake.script_held("turn.wait", waited("l1", cancelled()));
+    h.fake
+        .script_held("turn.result", turn_result("l1", vec![user(0, "l1", "go")]));
+    h.submit("go");
+    h.until(|app| app.is_busy()).await;
+    h.emit(
+        "output_delta",
+        json!({"turn":turn("l1"), "request_index":0,
+        "channel":"text", "delta":"already shown"}),
+    )
+    .await;
+    h.until(|app| {
+        app.transcript_blocks().iter().any(|block| {
+            matches!(block,
+        Block::Assistant { text, .. } if text == "already shown")
+        })
+    })
+    .await;
+    h.fake.release("turn.wait");
+    h.until(|app| {
+        app.session
+            .as_ref()
+            .is_some_and(|session| !session.reconcile_from.is_empty())
+    })
+    .await;
+    let before = format!("{:?}", h.blocks());
+    h.op(SessionOp::TurnItems(
+        "l1".into(),
+        Ok(TurnRead::Partial(ReadPartial::Oversized {
+            index: 1,
+            total_bytes: 8_388_609,
+        })),
+    ));
+    assert_eq!(format!("{:?}", h.blocks()), before);
+    assert_eq!(h.app.session.as_ref().unwrap().reconcile_from.len(), 1);
+    assert!(
+        h.notices()
+            .iter()
+            .any(|notice| notice.contains("Item 1 is too large"))
+    );
 }
 
 #[tokio::test(start_paused = true)]
