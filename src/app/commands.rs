@@ -90,6 +90,16 @@ pub const COMMANDS: &[Command<'static>] = &[
         description: "Reload the agent configuration",
     },
     Command {
+        name: "recover",
+        args: "",
+        description: "Retry incomplete conversation recovery",
+    },
+    Command {
+        name: "unconfirmed",
+        args: "",
+        description: "Review local inputs whose acceptance is unconfirmed",
+    },
+    Command {
         name: "remote",
         args: "[on|off|status|password [text]]",
         description: "Let a phone drive this TUI, or set its password",
@@ -176,6 +186,8 @@ pub fn execute(name: &str, arg: &str) -> Option<Executed> {
             _ => Executed::Noop,
         },
         "reload" => Executed::Action(Action::ReloadAgent),
+        "recover" => Executed::Action(Action::RetryRecovery),
+        "unconfirmed" => Executed::Panel(super::Panel::Unconfirmed),
         "help" => Executed::Panel(super::Panel::Help),
         "quit" => Executed::Action(Action::Quit),
         "remote" => Executed::Action(Action::Remote(arg.to_owned())),
@@ -457,8 +469,16 @@ mod tests {
             let found = filter(input, &templates);
             found.iter().map(|command| command.name).collect()
         };
-        assert_eq!(names("rev"), ["review"]);
-        assert_eq!(names("re").last(), Some(&"review"));
+        assert_eq!(names("rev"), ["review", "recover"]);
+        let found = names("re");
+        assert!(
+            found.iter().position(|name| *name == "reload").unwrap()
+                < found.iter().position(|name| *name == "review").unwrap()
+        );
+        assert!(
+            found.contains(&"unconfirmed"),
+            "the new review command participates in fuzzy matching"
+        );
         let found = filter("review", &templates);
         assert_eq!(found[0].description, "Review staged changes");
     }

@@ -369,6 +369,10 @@ html.kb #dock{padding-bottom:6px}
 #strip{display:flex;align-items:center;gap:8px;min-height:32px;padding:0 6px 4px;font-size:var(--t14)}
 #strip .spin{color:var(--ac)}
 #strip b{font-weight:600;white-space:nowrap}
+#strip.warn{color:var(--wa)}
+#strip.warn b{white-space:normal}
+#strip.warn>svg{flex:none}
+.projection-note{color:var(--wa);font-size:var(--t13);margin:6px 0;user-select:none;-webkit-user-select:none}
 #strip .el{flex:none;font-size:var(--t13);color:var(--tx3);font-variant-numeric:tabular-nums}
 #strip .mono{min-width:0;font-size:var(--t12);color:var(--tx3)}
 /* the turn in progress: finished steps recede, the running one stays primary */

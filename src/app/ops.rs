@@ -1,13 +1,10 @@
 //! Applying the results of async operations and the Agent's events.
 
-use super::session::accepted_millis;
-use super::tasks::{self, HistoryRead, TurnRead, Window};
-use super::{App, LiveTurn, NoticeLevel, Overlay, Scroll, Session, SessionOp, find};
-use crate::protocol::read::UserKind;
+use super::tasks::{self, HistoryRead, Window};
+use super::{App, NoticeLevel, Overlay, Scroll, Session, SessionOp, find};
 use crate::protocol::{
-    self, AgentEvent, CompactStatus, CompactionResult, InputPushResult, InputRecallResult,
-    InputRemoveResult, InputResumeResult, QueueItem, RpcError, SessionInfo, SessionState, TurnRef,
-    TurnWaitResult,
+    self, AgentEvent, CompactStatus, CompactionResult, InputRecallResult, InputResumeResult,
+    RpcError, SessionInfo, TurnWaitResult,
 };
 use crate::title::LONG_TURN;
 use crate::transcript::{Block, ChangeSummary};
@@ -26,25 +23,71 @@ impl App {
                 if self.background_op => {}
             SessionOp::Tail(result) => self.on_tail(result),
             SessionOp::Page(result) => self.on_page(result),
-            SessionOp::TurnItems(loop_id, result) => match result {
-                Ok(TurnRead::Complete(content)) => {
-                    if let Some((at, grown)) = self.session_mut().reconcile_turn(
-                        &loop_id,
-                        &content.items,
-                        content.interrupted.as_ref(),
-                    ) {
-                        self.blocks_moved(at, grown);
+            SessionOp::Recovered(outcome) => self.on_recovered(outcome),
+            SessionOp::HistoryRecovered(generation, through, result) => {
+                if !self.session_mut().recovery.accepts(generation) {
+                    return;
+                }
+                self.session_mut().recovery_tasks.finish(None);
+                let superseded = through != self.session_mut().recovery.gap_through;
+                let (page, limit) = match result {
+                    Ok(HistoryRead::Complete(page)) => (Some(page), None),
+                    Ok(HistoryRead::Limited(page, limit)) => (Some(page), Some(limit)),
+                    Ok(HistoryRead::Partial(partial)) => {
+                        self.session_mut().recovery.history_status =
+                            Some(super::recovery::RecoveryStatus::Exhausted);
+                        self.notice(NoticeLevel::Error, partial.message());
+                        (None, None)
+                    }
+                    Err(error) => {
+                        self.session_mut().recovery.retry_history();
+                        if self.session_mut().recovery.history_status
+                            == Some(super::recovery::RecoveryStatus::Exhausted)
+                        {
+                            self.error(error);
+                        }
+                        (None, None)
+                    }
+                };
+                if let Some(page) = page {
+                    let covered = page.coverage();
+                    let prepend = self
+                        .session_mut()
+                        .recovery
+                        .history_coverage
+                        .as_ref()
+                        .is_some_and(|known| known.matches(&page.pin) && page.end == known.from);
+                    if prepend {
+                        let (grown, _) = self.session_mut().prepend_page(*page);
+                        self.blocks_moved(0, grown);
+                    } else {
+                        self.install_history(*page);
+                    }
+                    self.session_mut().recovery.cover_history(covered, true);
+                    if superseded {
+                        self.session_mut().recovery.history_status =
+                            Some(super::recovery::RecoveryStatus::Pending);
+                    } else if !self.session_mut().recovery.settle_history_gap() {
+                        self.session_mut().recovery.history_status =
+                            Some(super::recovery::RecoveryStatus::Exhausted);
+                        self.notice(
+                            NoticeLevel::Info,
+                            limit.map_or_else(
+                                || "More history remains to recover; /recover to continue".into(),
+                                |limit| limit.message(),
+                            ),
+                        );
+                    } else {
+                        let gap = self.session_mut().recovery.gap_through > 0;
+                        if gap {
+                            self.notice(NoticeLevel::Error, "Saved history recovered; unsaved turns outside the completion catalog may be missing");
+                        }
+                        self.session_mut().recovery.retry_failed();
+                        self.session_mut().ordering_gap = false;
                     }
                 }
-                Ok(TurnRead::Pending) => self.notice(
-                    NoticeLevel::Info,
-                    "Turn result is pending; existing content was kept",
-                ),
-                Ok(TurnRead::Partial(partial)) => {
-                    self.notice(NoticeLevel::Error, partial.message())
-                }
-                Ok(TurnRead::Unavailable(error)) | Err(error) => self.error(error),
-            },
+                self.recover_completions();
+            }
             SessionOp::State(result) => self.on_state(result),
             SessionOp::Presentation(result) => {
                 self.session_mut().presentation_in_flight = false;
@@ -64,14 +107,11 @@ impl App {
                     );
                 }
             }
-            SessionOp::Pushed(text, result) => self.on_pushed(text, result),
             SessionOp::Resumed(result) => self.on_resumed(result),
-            SessionOp::Removed(requester, result) => self.on_removed(requester, result),
             SessionOp::Recalled(result) => self.on_recalled(result),
             SessionOp::Queue(result) => {
-                if let Some(queue) = self.ok(result) {
-                    self.session_mut().queue = queue;
-                }
+                self.ok(result);
+                self.refresh_control();
             }
             SessionOp::Waited(result) => self.on_waited(result),
             SessionOp::Done(result) => {
@@ -114,10 +154,17 @@ impl App {
     }
 
     /// Adopts a session and assigns its remote creator or opener's view without moving other devices.
-    pub(super) fn adopt(&mut self, result: Result<SessionInfo, RpcError>, first: Option<String>) {
+    pub(super) fn adopt(
+        &mut self,
+        result: Result<tasks::Adopted, RpcError>,
+        first: Option<String>,
+    ) {
         let opening = self.remote.opening.take();
         let created = first.is_some();
-        let id = result.as_ref().ok().map(|info| info.session_id.clone());
+        let id = result
+            .as_ref()
+            .ok()
+            .map(|adopted| adopted.info.session_id.clone());
         let previous = opening.filter(|_| created).map(|connection| {
             std::mem::replace(
                 &mut self.remote.notice_target,
@@ -129,9 +176,6 @@ impl App {
             self.remote.draft = None;
             if let Some(connection) = opening {
                 self.set_phone_view(connection, crate::remote::PhoneView::Session(id));
-                if created {
-                    self.session_mut().last_sender = Some(connection);
-                }
             }
         }
         if let Some(previous) = previous {
@@ -139,10 +183,16 @@ impl App {
         }
     }
 
-    fn adopt_session(&mut self, result: Result<SessionInfo, RpcError>, first: Option<String>) {
+    fn adopt_session(&mut self, result: Result<tasks::Adopted, RpcError>, first: Option<String>) {
         self.loading_session = false;
-        let Some(info) = self.ok(result) else {
+        let Some(tasks::Adopted {
+            info,
+            load,
+            snapshot,
+        }) = self.ok(result)
+        else {
             if let Some(text) = first {
+                self.first_submission = None;
                 self.restore_draft(&text);
             }
             return;
@@ -152,10 +202,28 @@ impl App {
         if self.live(&info.session_id).is_some() {
             return;
         }
-        self.epoch += 1;
+        self.epoch = self.epoch.checked_add(1).expect("session epoch exhausted");
         // What was typed while the draft's session was created belongs to it.
         let typed = first.is_some().then(|| self.composer.text().to_owned());
+        let session_id = info.session_id.clone();
         self.show_session(Some(Session::new(info, self.epoch)));
+        // The instance identity comes from the open itself; its snapshot then
+        // supplies the current control state.
+        self.install_load(load);
+        // The open's own snapshot is newest; a held early one is the fallback,
+        // and a dropped hold is why the refresh below is unconditional.
+        // The open's own snapshot is the same observation the Agent would have
+        // pushed, so a held one that is newer is the better state to install.
+        let held = self.pre_install.take(&session_id);
+        let snapshot = match (snapshot, held) {
+            (Some(own), Some(held)) if held.load == own.load && held.revision > own.revision => {
+                Some(held)
+            }
+            (own, held) => own.or(held),
+        };
+        if let Some(snapshot) = snapshot {
+            self.apply_snapshot(snapshot);
+        }
         if let Some(typed) = typed {
             self.draft_text.clear();
             self.composer.set_text(&typed);
@@ -164,13 +232,17 @@ impl App {
         if first.is_none() {
             self.read_history(Window::Tail);
         }
+        self.refresh_control();
         self.refresh_branch();
         self.refresh_context();
         // A new session already carries its settings; an opened one takes them
         // through `session.update`, so a flag is never silently dropped.
         let launch = std::mem::take(&mut self.launch);
         match first {
-            Some(text) => self.submit_text(text, false),
+            Some(text) => match self.first_submission.take() {
+                Some(entry) => self.submit_entry(entry, false, None),
+                None => self.submit_text(text, false),
+            },
             None if launch.model.is_some() || launch.reasoning.is_some() => {
                 self.update_session(launch.fields(false));
             }
@@ -181,7 +253,7 @@ impl App {
     fn on_tail(&mut self, result: Result<HistoryRead, RpcError>) {
         let page = match result {
             Ok(HistoryRead::Complete(page)) => *page,
-            Ok(HistoryRead::Partial(partial)) => {
+            Ok(HistoryRead::Partial(partial) | HistoryRead::Limited(_, partial)) => {
                 self.notice(NoticeLevel::Error, partial.message());
                 return;
             }
@@ -190,14 +262,27 @@ impl App {
                 return;
             }
         };
-        let session = self.session_mut();
-        session.install_tail(page);
-        session.backfill = BACKFILL_PAGES;
-        self.scroll = Scroll::Follow;
-        // After the tail: a turn already running takes its place at the end.
+        self.install_history(page);
+        self.session_mut().backfill = BACKFILL_PAGES;
         self.read_state();
-        self.read_queue();
         self.backfill();
+    }
+
+    fn install_history(&mut self, page: tasks::History) {
+        let mapping = self.session_mut().install_tail(page);
+        if let Scroll::Anchor { block, offset } = self.scroll
+            && let Some((old, start, replaced)) =
+                mapping.iter().find(|(range, _, _)| range.contains(&block))
+        {
+            self.scroll = Scroll::Anchor {
+                block: if *replaced {
+                    *start
+                } else {
+                    start + block - old.start
+                },
+                offset,
+            };
+        }
     }
 
     /// Reads on behind the summary until the latest answer is loaded, so a
@@ -216,7 +301,7 @@ impl App {
     fn on_page(&mut self, result: Result<HistoryRead, RpcError>) {
         let page = match result {
             Ok(HistoryRead::Complete(page)) => *page,
-            Ok(HistoryRead::Partial(partial)) => {
+            Ok(HistoryRead::Partial(partial) | HistoryRead::Limited(_, partial)) => {
                 let session = self.session_mut();
                 session.loading_older = false;
                 session.backfill = 0;
@@ -239,8 +324,31 @@ impl App {
                 return;
             }
         };
+        if self
+            .session_mut()
+            .recovery
+            .history_coverage
+            .as_ref()
+            .is_some_and(|known| !known.complete() && !known.matches(&page.pin))
+        {
+            self.session_mut().loading_older = false;
+            self.session_mut().backfill = 0;
+            self.notice(
+                NoticeLevel::Info,
+                "History changed; existing recovery coverage was kept",
+            );
+            return;
+        }
+        let covered = page.coverage();
         let (grown, cards) = self.session_mut().prepend_page(page);
         self.blocks_moved(0, grown);
+        self.session_mut().recovery.cover_history(covered, false);
+        if self.session_mut().recovery.gap_through > self.session_mut().recovery.settled_through
+            && self.session_mut().recovery.settle_history_gap()
+        {
+            self.notice(NoticeLevel::Error,"Saved history recovered; unsaved turns outside the completion catalog may be missing");
+            self.recover_completions();
+        }
         for key in cards {
             let hydrated = key.clone();
             self.read_tool(&key, move |read| {
@@ -250,9 +358,24 @@ impl App {
         self.backfill();
     }
 
+    /// Keeps a view anchored inside a replaced region on that region's start,
+    /// and one anchored after it on its block, after `grown` more blocks.
+    pub(super) fn moved_region(&mut self, start: usize, end: usize, grown: isize) {
+        if let Scroll::Anchor { block, offset } = self.scroll
+            && block >= start
+            && block < end
+        {
+            self.scroll = Scroll::Anchor {
+                block: start,
+                offset,
+            };
+        }
+        self.blocks_moved(end, grown);
+    }
+
     /// Keeps the anchored view and the find matches on their blocks after
     /// `delta` blocks were added or removed in front of block `at`.
-    fn blocks_moved(&mut self, at: usize, delta: isize) {
+    pub(super) fn blocks_moved(&mut self, at: usize, delta: isize) {
         let moved = |block: usize| match block >= at {
             true => block.saturating_add_signed(delta),
             false => block,
@@ -286,88 +409,49 @@ impl App {
         }
     }
 
-    fn on_state(&mut self, result: Result<SessionState, RpcError>) {
+    fn on_state(&mut self, result: Result<crate::protocol::SessionStateResult, RpcError>) {
+        self.session_mut().control_in_flight = false;
+        let again = std::mem::take(&mut self.session_mut().control_due);
         let Some(state) = self.ok(result) else {
+            // A failed read must not lose the change it was fetched for.
+            self.session_mut().control_due = true;
             return;
         };
-        let session = self.session_mut();
-        let was_compacting = session.compacting();
-        session.compaction = state.compaction;
-        if was_compacting && session.compaction.is_none() {
+        if state.snapshot.session_id != self.session_mut().info.session_id {
+            self.notice(
+                NoticeLevel::Error,
+                "The control response belongs to another session",
+            );
+            return;
+        }
+        let was_compacting = self
+            .session
+            .as_ref()
+            .is_some_and(|session| session.compacting());
+        self.apply_snapshot(state.snapshot);
+        // The snapshot just read answers every hint that was outstanding when
+        // it was asked for; only a hint that arrived since needs another read.
+        if again {
+            self.refresh_control();
+        }
+        let compacting = self
+            .session
+            .as_ref()
+            .is_some_and(|session| session.compacting());
+        if was_compacting && !compacting {
             self.refresh_context();
         }
-        // A loop already running when the session opened has no `turn.wait` of its own.
-        if let Some(active) = state.active_loop {
-            let session_id = self.session_mut().info.session_id.clone();
-            self.start_turn(TurnRef::new(session_id, active.loop_id), None);
-        }
-    }
-
-    /// Makes `turn` the live turn and waits for it, with `prompt` as the
-    /// entry that started it. The only place a `turn.wait` is registered, and
-    /// only while no turn is live.
-    pub(super) fn start_turn(&mut self, turn: TurnRef, prompt: Option<QueueItem>) {
-        let session = self.session_mut();
-        if session.live.is_some() {
-            return;
-        }
-        // The prompt opens the turn's region, so reconciling replaces it with the durable one.
-        let start = session.transcript.len();
-        if let Some(prompt) = prompt {
-            session.transcript.push(Block::User {
-                text: prompt.text,
-                kind: UserKind::Prompt,
-                at: Some(accepted_millis(prompt.accepted_at.as_deref())),
-            });
-        }
-        let mut live = LiveTurn::new(turn.clone(), start);
-        live.usage_base = session.usage.clone();
-        session.live = Some(live);
-        session.place_early(&turn.loop_id);
-        self.spawn(tasks::wait_turn(self.client.clone(), turn));
-    }
-
-    fn on_pushed(&mut self, text: String, result: Result<InputPushResult, RpcError>) {
-        let pushed = match result {
-            Ok(pushed) => pushed,
-            // The text never reached the Agent; it returns to the draft.
-            Err(error) => {
-                self.restore_draft(&text);
-                self.error(error);
-                return;
-            }
-        };
-        self.session_mut().queue = pushed.queue;
-        if let Some(started) = pushed.started {
-            self.start_turn(started.turn, Some(started.input));
-            if let Some(title) = self.session.as_ref().and_then(Session::auto_title) {
-                self.rename(&title);
-            }
-        }
+        self.start_adopted_turn();
     }
 
     fn on_resumed(&mut self, result: Result<InputResumeResult, RpcError>) {
         let Some(resumed) = self.ok(result) else {
             return;
         };
-        self.session_mut().queue = resumed.queue;
-        if let Some(started) = resumed.started {
-            self.start_turn(started.turn, Some(started.input));
+        if let Some(error) = resumed.start_error {
+            self.notice(NoticeLevel::Error, error.message);
         }
-    }
-
-    /// An entry taken out of the queue; its text goes back to `requester`, a phone that wants to edit it.
-    fn on_removed(&mut self, requester: Option<u64>, result: Result<InputRemoveResult, RpcError>) {
-        let Some(removed) = self.ok(result) else {
-            return;
-        };
-        self.session_mut().queue = removed.queue;
-        if let Some(connection) = requester {
-            self.remote.send(
-                Some(connection),
-                serde_json::json!({"t":"returned", "text":removed.text}),
-            );
-        }
+        self.refresh_control();
     }
 
     /// Every queued message back as one draft, in the order they would have run.
@@ -375,7 +459,7 @@ impl App {
         let Some(recalled) = self.ok(result) else {
             return;
         };
-        self.session_mut().queue = recalled.queue;
+        self.refresh_control();
         if recalled.texts.is_empty() {
             return;
         }
@@ -392,46 +476,37 @@ impl App {
             Ok(wait) => wait,
             Err(error) => {
                 self.error(error);
-                // Neither the wait nor the stored result answered: end the turn
-                // as unknown rather than leave it running forever.
-                let Some(live) = self.session.as_ref().and_then(|s| s.live.as_ref()) else {
-                    return;
-                };
-                TurnWaitResult {
-                    turn: live.turn.clone(),
-                    outcome: crate::protocol::LoopOutcome::Unknown,
-                    usage: None,
-                    requests: None,
-                    tool_rounds: None,
-                    next: None,
-                    queue: None,
-                }
+                self.refresh_control();
+                return;
             }
         };
-        let busy = self.busy_elapsed();
-        let Some(reconcile) = self.session_mut().end_turn(&wait) else {
+        let background = self.background_op;
+        let mut completion_background = None;
+        let mut busy = None;
+        let session = self.session_mut();
+        if let Some(live) = session
+            .live
+            .iter_mut()
+            .chain(&mut session.ended_live)
+            .find(|live| live.turn.loop_id == wait.turn.loop_id)
+        {
+            completion_background = live.completion_background;
+            busy = Some(live.started.elapsed());
+            live.completion_background = Some(background);
+        }
+        let Some(_) = self.session_mut().end_turn(&wait) else {
             return;
         };
-        let TurnWaitResult {
-            turn, next, queue, ..
-        } = wait;
-        match queue {
-            Some(queue) => self.session_mut().queue = queue,
-            // An outcome made up or read from the stored result does not know the queue.
-            None => self.read_queue(),
+        let turn = wait.turn;
+        self.refresh_control();
+        if completion_background.is_none() {
+            self.ring |= busy >= Some(LONG_TURN);
         }
-        self.ring |= busy >= Some(LONG_TURN);
         self.stamp_activity();
-        if self.background_op {
-            self.background_turn_ended();
+        if self.background_op && completion_background != Some(false) {
+            self.background_turn_ended(&turn.loop_id);
         }
         let client = self.client.clone();
-        if reconcile {
-            let (client, turn) = (client.clone(), turn.clone());
-            self.spawn(async move {
-                SessionOp::TurnItems(turn.loop_id.clone(), tasks::read_turn(client, turn).await)
-            });
-        }
         self.spawn(async move {
             let changes = tasks::turn_changes(client, turn.session_id, turn.loop_id.clone()).await;
             SessionOp::Changes(turn.loop_id, changes)
@@ -441,25 +516,13 @@ impl App {
         // may also have switched branches.
         self.refresh_branch();
         self.refresh_context();
-        // After the turn-end line and the background notice, which read it.
-        if let Some(next) = next {
-            self.start_turn(next.turn, Some(next.input));
-        }
     }
 
     fn on_compacted(&mut self, result: Result<CompactionResult, RpcError>) {
-        self.session_mut().compaction = None;
-        let Some(mut result) = self.ok(result) else {
+        self.refresh_control();
+        let Some(result) = self.ok(result) else {
             return;
         };
-        // The Agent starts the queue's head once the compaction is over.
-        if let Some(next) = result.next.take() {
-            self.session_mut()
-                .queue
-                .items
-                .retain(|item| item.id != next.input.id);
-            self.start_turn(next.turn, Some(next.input));
-        }
         match result.status {
             CompactStatus::Compacted => {
                 self.session_mut().push_compaction(&result, None);
@@ -500,32 +563,153 @@ impl App {
 
     /// Applies an Agent event: to the live session it is for, or to the
     /// catalog for another one.
-    pub(super) fn on_agent_event(&mut self, event: AgentEvent) {
+    pub(super) fn on_agent_event(&mut self, event: AgentEvent, bytes: usize) {
         let Some(meta) = event.meta() else {
             return;
         };
         let id = meta.session_id.clone();
+        if event.body_session().is_some_and(|body| body != id) {
+            return;
+        }
+        let bytes = event.retained_bytes(bytes);
+        if let AgentEvent::SessionSnapshot { snapshot, .. } = &event
+            && (snapshot.session_id != id || meta.load.as_deref() != Some(snapshot.load.as_str()))
+        {
+            return;
+        }
+        if self
+            .live(&id)
+            .and_then(|session| session.load.as_deref())
+            .is_some_and(|installed| meta.load.as_deref() != Some(installed))
+        {
+            return;
+        }
+        let extra = event
+            .loop_id()
+            .filter(|loop_id| {
+                self.live(&id)
+                    .is_some_and(|session| !session.knows_turn(loop_id))
+            })
+            .filter(|_| bytes <= super::session::EARLY_BYTES)
+            .map_or(0, |_| bytes);
+        while self
+            .session
+            .iter()
+            .chain(&self.background)
+            .map(|session| session.early_bytes)
+            .sum::<usize>()
+            + extra
+            > 8 * 1024 * 1024
+        {
+            let Some(session) = self
+                .session
+                .iter_mut()
+                .chain(&mut self.background)
+                .find(|session| session.early_bytes > 0)
+            else {
+                break;
+            };
+            session.evict_early();
+        }
+        // A snapshot for a session this client has not opened yet is held for
+        // the open that will install it, within the pre-install budget.
+        if self.live(&id).is_none()
+            && let AgentEvent::SessionSnapshot { snapshot, .. } = event
+        {
+            if self.loading_session
+                && self
+                    .opening_target
+                    .as_ref()
+                    .is_none_or(|(_, target)| target == &id)
+            {
+                self.hold_snapshot(*snapshot, bytes);
+            }
+            return;
+        }
         if self
             .session
             .as_ref()
             .is_some_and(|session| session.info.session_id == id)
         {
-            self.with_notice_for(&id, |app| app.apply_agent_event(event));
+            self.with_notice_for(&id, |app| app.apply_agent_event(event, bytes));
         } else if let Some(index) = self.live_index(&id) {
-            self.with_background(index, |app| app.apply_agent_event(event));
+            self.with_background(index, |app| app.apply_agent_event(event, bytes));
         } else if let AgentEvent::SessionOpened { session, .. } = event {
             self.merge_catalog_info(*session);
         }
     }
 
-    fn apply_agent_event(&mut self, event: AgentEvent) {
+    fn apply_agent_event(&mut self, event: AgentEvent, bytes: usize) {
+        // The control snapshot is the one event that writes control state.
+        if let AgentEvent::SessionSnapshot { snapshot, .. } = event {
+            let was_compacting = self
+                .session
+                .as_ref()
+                .is_some_and(|session| session.compacting());
+            self.apply_snapshot(*snapshot);
+            // The context report holds the finished compaction's marker, and
+            // the footer's figure moved with it.
+            if was_compacting
+                && self
+                    .session
+                    .as_ref()
+                    .is_some_and(|session| !session.compacting())
+            {
+                // The context report holds the finished compaction's marker,
+                // and the footer's figure moved too.
+                self.refresh_context();
+                self.refresh_presentation();
+            }
+            return;
+        }
+        // These events only say control changed. Until the Agent pushes the
+        // change itself, one coalesced read fetches the snapshot behind them.
+        if matches!(
+            event,
+            AgentEvent::InteractionRequested { .. }
+                | AgentEvent::InteractionResolved { .. }
+                | AgentEvent::InputQueue { .. }
+                | AgentEvent::SessionState { .. }
+        ) {
+            self.session_mut().control_due = true;
+        }
+        let seen = self.approval_seen.clone();
+        let delivered = matches!(event, AgentEvent::InputDelivered { .. });
+        let delivery_anchor = if delivered {
+            match self.scroll {
+                Scroll::Anchor { block, offset } => self
+                    .session
+                    .as_ref()
+                    .and_then(|session| session.transcript.revisions().get(block))
+                    .map(|revision| (*revision, offset)),
+                Scroll::Follow => None,
+            }
+        } else {
+            None
+        };
         let session = self.session_mut();
         let was_compacting = session.compacting();
         let usage = matches!(event, AgentEvent::RequestUsage { .. });
-        let requested = matches!(event, AgentEvent::InteractionRequested { .. });
-        session.apply_event(event);
+        // The interaction itself comes from the control snapshot, but the
+        // announcement runs once per interaction whichever arrived first.
+        let requested = session
+            .interaction
+            .as_ref()
+            .map(|interaction| interaction.interaction_id.clone())
+            .filter(|id| seen.as_ref() != Some(id));
+        session.apply_body_event(event, bytes);
         let compaction_ended = was_compacting && session.compaction.is_none();
-        if requested {
+        if let Some((revision, offset)) = delivery_anchor
+            && let Some(block) = session
+                .transcript
+                .revisions()
+                .iter()
+                .position(|known| *known == revision)
+        {
+            self.scroll = Scroll::Anchor { block, offset };
+        }
+        if requested.is_some() {
+            self.approval_seen = requested;
             self.on_approval_requested();
         }
         // The footer's context figure moves with each request and each
@@ -537,10 +721,15 @@ impl App {
         if compaction_ended {
             self.refresh_context();
         }
+        self.pull_control();
+        #[cfg(feature = "e2e-observe")]
+        if delivered {
+            self.observe_checkpoint(false);
+        }
     }
 
     /// Dates the session's latest activity now; the Agent's own stamp replaces it on the next info read.
-    fn stamp_activity(&mut self) {
+    pub(super) fn stamp_activity(&mut self) {
         let session = self.session_mut();
         session.info.updated_at = protocol::stamp::rfc3339_millis(protocol::stamp::now_millis());
         let info = session.info.clone();

@@ -8,9 +8,7 @@ use super::{
     App, InteractionKind, Msg, NoticeLevel, Scroll, SessionOp, commands, tasks, templates,
 };
 use crate::config::ThemeKind;
-use crate::protocol::{
-    self, CompactionPhase, CompactionProgress, InputMode, Reasoning, SessionResult,
-};
+use crate::protocol::{self, InputMode, Reasoning};
 use crate::title::LONG_TURN;
 use crate::ui::theme::{Palette, Styles};
 
@@ -44,6 +42,7 @@ pub enum Action {
     Export(Option<String>),
     EditDraft,
     ReloadAgent,
+    RetryRecovery,
     Answer(Answer),
     LoadOlder,
     RecallQueued,
@@ -59,6 +58,7 @@ pub enum Answer {
     Deny,
     /// The row picked from the prompt's options; for an approval, row 0 allows.
     Choice(usize),
+    Text(String),
 }
 
 impl Action {
@@ -117,10 +117,17 @@ impl App {
                     self.spawn_msg(tasks::export(client, session_id, path));
                 }
             }
-            Action::EditDraft => self.edit_request = Some(self.composer.submit()),
+            Action::EditDraft => self.edit_request = Some(self.composer.take_for_editor()),
             Action::Answer(answer) => self.answer(answer),
             Action::LoadOlder => self.load_older(),
             Action::RecallQueued => self.recall_queued(),
+            Action::RetryRecovery => {
+                if let Some(session) = self.session.as_mut() {
+                    session.recovery.retry_failed();
+                    self.refresh_control();
+                    self.recover_completions();
+                }
+            }
             Action::SetTheme(kind) => self.apply_theme(kind),
             Action::ToggleTheme => self.apply_theme(match self.theme {
                 ThemeKind::Dark => ThemeKind::Light,
@@ -156,20 +163,56 @@ impl App {
     }
 
     fn submit_composer(&mut self, follow: bool) {
+        if let super::Overlay::Unconfirmed { mode, .. } = &mut self.overlay {
+            if let super::unconfirmed::ReviewMode::Edit(id) = *mode {
+                *mode = super::unconfirmed::ReviewMode::ResendEdited(id);
+            }
+            return;
+        }
         if self.session.is_none() && (!self.ready || self.loading_session) {
             return;
         }
-        let text = self.composer.submit().trim_end().to_owned();
-        if !text.is_empty() {
-            self.submit_text(text, follow);
+        if !self.composer.text().trim_end().is_empty() {
+            if !self.local_input_room(
+                self.composer.text().len() + std::mem::size_of_val(self.composer.pastes()),
+            ) {
+                self.notice(
+                    NoticeLevel::Error,
+                    "Local input confirmation budget is full; F8 to resolve retained inputs",
+                );
+                return;
+            }
+            let entry = self.composer.take_submission();
+            self.submit_entry(entry, follow, None);
         } else if !follow && self.session.as_ref().is_some_and(|s| s.queue.paused) {
             self.call(protocol::METHOD_INPUT_RESUME, json!({}), SessionOp::Resumed);
         }
     }
 
     pub(super) fn submit_text(&mut self, text: String, follow: bool) {
+        self.submit_entry(super::composer::Entry::new(text), follow, None);
+    }
+
+    pub(super) fn submit_entry(
+        &mut self,
+        mut entry: super::composer::Entry,
+        follow: bool,
+        retry_of: Option<u64>,
+    ) {
         if self.session.is_none() {
-            self.first_message = Some(text);
+            if !self.local_input_room(entry.retained_bytes() + entry.text().len()) {
+                entry.discard_rollback();
+            }
+            if !self.local_input_room(entry.retained_bytes() + entry.text().len()) {
+                self.composer.restore_submission(entry);
+                self.notice(
+                    NoticeLevel::Error,
+                    "Local input confirmation budget is full; F8 to resolve retained inputs",
+                );
+                return;
+            }
+            self.first_message = Some(entry.text().to_owned());
+            self.first_submission = Some(entry);
             self.create_session();
         } else {
             if !self.is_busy() {
@@ -179,17 +222,8 @@ impl App {
                 true => InputMode::FollowUp,
                 false => InputMode::Steer,
             };
-            self.push_input(text, mode);
+            self.push_local_input(entry, mode, retry_of);
         }
-    }
-
-    /// Hands `text` to the Agent's queue; its answer says whether a turn started.
-    pub(super) fn push_input(&self, text: String, mode: InputMode) {
-        self.call(
-            protocol::METHOD_INPUT_PUSH,
-            json!({ "mode": mode, "text": text }),
-            move |result| SessionOp::Pushed(text, result),
-        );
     }
 
     /// Esc on a running turn asks the Agent to cancel it; `turn.wait` ends it.
@@ -244,6 +278,7 @@ impl App {
     }
 
     pub(super) fn create_session(&mut self) {
+        self.opening_target = None;
         self.loading_session = true;
         // Without a profile the Agent picks its configured default; choosing
         // one here would override that.
@@ -255,13 +290,34 @@ impl App {
         });
     }
 
+    pub(super) fn request_session_open(&mut self, id: String) {
+        self.open_generation = self
+            .open_generation
+            .checked_add(1)
+            .expect("open generation exhausted");
+        let generation = self.open_generation;
+        self.opening_target = Some((generation, id.clone()));
+        self.loading_session = true;
+        let client = self.client.clone();
+        self.spawn_msg(async move {
+            let params = json!({"session_id":id});
+            Msg::Opened(
+                generation,
+                id,
+                tasks::session(client, protocol::METHOD_SESSION_OPEN, params).await,
+            )
+        });
+    }
+
     pub(super) fn rename(&self, title: &str) {
         let title = title.trim();
         if !title.is_empty() {
             self.call(
                 protocol::METHOD_SESSION_RENAME,
                 json!({ "title": title }),
-                |result: Result<SessionResult, _>| SessionOp::Info(result.map(|r| r.session)),
+                |result: Result<crate::protocol::SessionResult, _>| {
+                    SessionOp::Info(result.map(|result| result.session))
+                },
             );
         }
     }
@@ -271,7 +327,9 @@ impl App {
         self.call(
             protocol::METHOD_SESSION_UPDATE,
             fields,
-            |result: Result<SessionResult, _>| SessionOp::Info(result.map(|r| r.session)),
+            |result: Result<crate::protocol::SessionResult, _>| {
+                SessionOp::Info(result.map(|result| result.session))
+            },
         );
     }
 
@@ -301,14 +359,11 @@ impl App {
             self.notice(NoticeLevel::Error, "Finish the running turn first");
             return;
         }
-        self.op_seq += 1;
+        self.op_seq = self
+            .op_seq
+            .checked_add(1)
+            .expect("operation identity exhausted");
         let operation_id = format!("tui-{}", self.op_seq);
-        session.compaction = Some(CompactionProgress {
-            operation_id: operation_id.clone(),
-            phase: CompactionPhase::Preparing,
-            covered_item_count: 0,
-            retained_item_count: 0,
-        });
         self.call(
             protocol::METHOD_SESSION_COMPACT,
             json!({ "operation_id": operation_id }),
@@ -358,13 +413,43 @@ impl App {
     pub(super) fn answer(&mut self, answer: Answer) {
         let Some(interaction) = self
             .session
-            .as_mut()
-            .and_then(|session| session.interaction.take())
+            .as_ref()
+            .and_then(|session| session.interaction.as_ref())
+            .cloned()
         else {
             return;
         };
         let decision = |decision: &str| json!({"type": "approval", "decision": decision});
         let wire = match (answer, &interaction.kind) {
+            (Answer::Text(text), InteractionKind::Text) => {
+                if text.is_empty()
+                    || text.len() > super::session::TEXT_ANSWER_MAX_BYTES
+                    || text.chars().any(char::is_control)
+                {
+                    self.notice(
+                        NoticeLevel::Error,
+                        "An answer must contain 1–8192 UTF-8 bytes without control characters",
+                    );
+                    return;
+                }
+                json!({"type":"text","text":text})
+            }
+            (Answer::Text(_), _) => {
+                self.notice(NoticeLevel::Error, "This interaction does not accept text");
+                return;
+            }
+            (Answer::Deny, InteractionKind::Text) => {
+                self.call(
+                    protocol::METHOD_TURN_CANCEL,
+                    json!({"loop_id":interaction.turn.loop_id}),
+                    SessionOp::Done,
+                );
+                self.refresh_control();
+                return;
+            }
+            (Answer::Allow | Answer::AllowTool | Answer::Choice(_), InteractionKind::Text) => {
+                return;
+            }
             (Answer::Choice(index), InteractionKind::Choice(_)) => {
                 json!({"type": "choice", "index": index})
             }
@@ -382,7 +467,10 @@ impl App {
             "interaction_id": interaction.interaction_id,
             "answer": wire,
         });
+        // The answer settles the request; the snapshot that follows is what
+        // takes the sheet down.
         self.call(protocol::METHOD_INTERACTION_ANSWER, fields, SessionOp::Done);
+        self.refresh_control();
     }
 
     /// A new approval: answered silently for a tool allowed for the session,
@@ -444,10 +532,12 @@ impl App {
         };
         let (client, session_id) = (self.client.clone(), session.info.session_id.clone());
         self.spawn(async move {
+            let tail = matches!(&window, tasks::Window::Tail);
             let history = tasks::read_history(client, session_id, window).await;
-            match window {
-                tasks::Window::Tail => SessionOp::Tail(history),
-                _ => SessionOp::Page(history),
+            if tail {
+                SessionOp::Tail(history)
+            } else {
+                SessionOp::Page(history)
             }
         });
     }
@@ -513,34 +603,33 @@ impl App {
         );
     }
 
-    /// Asks for the queue, which a session opened later may already have.
-    pub(super) fn read_queue(&self) {
-        self.call(protocol::METHOD_INPUT_LIST, json!({}), SessionOp::Queue);
-    }
-
-    /// Returns refused text to its remote sender or session, otherwise appending it to the local composer.
+    /// Returns refused text to the operation that sent it, else to the session, else to the composer.
+    ///
+    /// The only routing identity is the operation: text never follows whichever
+    /// device most recently sent something to the session.
     pub(super) fn restore_draft(&mut self, text: &str) {
-        if let Some(session) = &mut self.session {
-            if self
-                .remote
-                .returned(&session.info.session_id, session.last_sender, text)
-            {
-                return;
-            }
-            if self.background_op || self.remote.active() {
+        if let Some(session) = &mut self.session
+            && !self.background_op
+            && !self.remote.active()
+        {
+            session.draft = Some(text.to_owned());
+            self.restore_to_composer(text);
+            return;
+        }
+        if let Some(session) = &mut self.session
+            && !self.background_op
+            && self.remote.active()
+        {
+            session.returned.push(text.to_owned());
+            return;
+        }
+        if self.background_op {
+            // The session it was typed in owns it, so it is there when the user
+            // returns rather than in whichever session is on screen now.
+            if let Some(session) = &mut self.session {
                 session.returned.push(text.to_owned());
                 return;
             }
-        } else if let crate::remote::NoticeTarget::Phone(connection) = self.remote.notice_target
-            && self
-                .remote
-                .phones
-                .iter()
-                .any(|phone| phone.connection.id == connection)
-        {
-            self.remote
-                .send(Some(connection), json!({"t":"returned", "text":text}));
-            return;
         }
         self.restore_to_composer(text);
     }

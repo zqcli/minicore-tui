@@ -1,10 +1,10 @@
-# Phone client v2 design
+# Phone client v3 design
 
 The phone client (`src/remote/web/`) is redesigned for daily use as a remote
 for a coding agent: quieter and more readable, safer around approvals and
 stopping, richer (changes, context, full tool output, commands, templates,
 `@` files, settings), and good on iPad and desktop. Breaking changes to the
-web client and the phone protocol are accepted; the protocol becomes v2.
+web client and the phone protocol are accepted; the current protocol is v3.
 
 Inputs: competitive research (ZCode remote control, Happy, Claude Code remote,
 Codex/ChatGPT, Cursor iOS, DeepSeek, Kimi, Qwen, Doubao) in
@@ -12,7 +12,7 @@ Codex/ChatGPT, Cursor iOS, DeepSeek, Kimi, Qwen, Doubao) in
 `minicore-remote-build/audit/report.md`. This document is the contract; where
 the code and this document disagree after it lands, the code wins and this
 file is fixed. `docs/design-remote.md` stays the protocol reference and gains
-the v2 additions below.
+the current fields below.
 
 ## Principles
 
@@ -29,18 +29,29 @@ the v2 additions below.
 - **Phone first, then iPad and desktop**, which get a persistent sidebar and
   keyboard shortcuts.
 
-## Protocol v2 (server, `src/remote/*`, `src/app/remote.rs`)
+## Protocol v3 (server, `src/remote/*`, `src/app/remote.rs`)
 
-`wire::VERSION` becomes 2; a v1 client gets the existing `version` error and
-shows "Update needed · Reload". All requests act on the requesting device's
-own view (its session or draft), as v1 intents do.
+`wire::VERSION` is 3; v1 and v2 clients receive `version` before sign-in or
+side effects and show "Update needed · Reload". Every intent carries the
+snapshot's `view_epoch`. Resident-session operations also carry `session_id`
+and `load`; cancel names its `loop_id` or compaction `operation_id`, and an
+answer names both `loop_id` and `interaction_id`. Queue rows carry `input_id`.
+Missing/stale identities are refused, never guessed from the current view.
+
+Agent-backed intent ACKs wait for the Agent outcome and remain correlated
+to the original connection and client operation ID. Accepted startup failure
+stays accepted. Explicit rejection is unsent; an unknown result, absent
+acceptance or disconnect keeps the original text unconfirmed. Reconnection
+replaces state/blocks completely and never resends it. Send again is an
+explicit action with a duplicate warning and a new operation ID. Late results
+cannot focus a newer view or be delivered to a replacement connection.
 
 ### New and changed intents (`{"t":"intent","id","kind",...}` → `ack`)
 
 | kind | fields | effect |
 |---|---|---|
 | `compact` | — | `session.compact` for the viewed session; refused while a turn runs or compaction is under way (`busy`), and in a draft (`No session`). `cancel` already stops a compaction. |
-| `unqueue` | `index`, `text`, `edit` | Removes `queue[index]` if its text still equals `text` (else `stale`). With `edit:true`, text returns to the requester as `returned` once the Agent has removed it; `edit:false` deletes without returning text. A row the running turn took meanwhile is reported as a notice. |
+| `unqueue` | `input_id`, `edit` | Removes exactly that queued identity. With `edit:true`, its delayed ACK carries `input_id` and `text` for the original operation; `edit:false` deletes without text. An already consumed entry is `input_not_queued`; no index/text fallback. |
 | `answer` | + optional `message` (deny only) | Denies, then pushes `message` as a steer so the agent hears why. A blank `message`, or one beside anything but an approval's `deny`, is `bad_request`. |
 | `submit` / `queue` | text | Text that starts with `/name` naming a prompt template is expanded on the host exactly as the TUI does (`$1`, `$@`, …); `//text` sends `/text`. A built-in command line, and a bare `/word` naming nothing (where the composer warns once), are refused with `unknown_command`; the client handles built-in commands itself and never sends them. |
 
@@ -220,12 +231,32 @@ re-renders on every `state`).
   "Steers join this turn · follow-ups start the next". Every row shares the same
   height, padding and radius. Accent-labelled `↗ Steer N` and neutral
   `↳ Follow-up N` are numbered independently. Every row has pencil **Edit in
-  composer** and **Delete** buttons; edits merge the requester-only `returned`
-  text through the ordinary composer path. A row leaves the list when the
+  composer** and **Delete** buttons; edits merge the text in their own delayed
+  ACK through the ordinary composer path. After a view change it is saved to
+  the original session's draft, without changing focus. A row leaves the list when the
   running turn takes it. Three rows show at first, then "+N more" expands the
   rest. Taken steers keep their transcript label; either kind starting a new
   turn becomes an ordinary prompt. Unconfirmed sends keep
-  their single "Not sent · Send again" card; the composer is not filled twice.
+  their single "Not confirmed · it may or may not have arrived" card with explicit
+  Send again/Edit instead controls; the submitted draft version leaves the
+  composer on an unknown ACK as well as on disconnect. Typing a newer draft
+  stays available while an ACK waits; its independent version is preserved,
+  even when the text is identical. Outcomes never identify drafts by text
+  equality. Edit instead binds unknown origin to the edited draft version rather
+  than making it an ordinary unsent message. Typing retains that origin; normal
+  Send warns even if the text is edited. Deleting to empty keeps the warning
+  through Undo/Redo and view refresh; empty text is not an independent draft.
+  Cancelling sends nothing; explicit Discard draft removes the edited copy's
+  origin without resolving the original unknown operation, and unrelated drafts do not
+  inherit it by matching text. Each unconfirmed card also has Discard message:
+  confirmation forgets only the retained local card and frees its capacity, not
+  the host execution or an edited draft's uncertainty. The browser operation map
+  holds at most 64 pending/unconfirmed entries and 16 MiB of UTF-8 payload text
+  (not total JS heap). Admission happens before allocating an ID or sending;
+  buffer-full refusal preserves the new draft and every old unknown card.
+  Unknown input acceptance and reconnect retain their charge. A full-buffer
+  warned retry is visibly busy rather than dropping its original operation. Explicit Send again warns about duplicates and uses a new operation
+  ID; reconnect never sends a retained card automatically.
 
 ### Transcript
 
@@ -248,9 +279,20 @@ re-renders on every `state`).
   expanded" setting opens it by default.
 - **Status strip**: directly above the composer, a spinner, label, elapsed
   time and running tool detail show while a turn, compaction or session opening
-  is active. Tool detail follows transcript updates even without a state
-  change. Context appears only in the composer toolbar. Finished tool rows of
+  is active. An installed persistence or internal block instead shows a
+  persistent warning icon and host-provided label, even while idle and after
+  reconnect, without a spinner or elapsed timer. Blocking takes label priority
+  without hiding a still-actionable approval or question; only a newer host
+  control snapshot clears it. Tool detail follows transcript updates even without
+  a state change. Context appears only in the composer toolbar. Finished tool rows of
   the running turn use the secondary text tone and the running row the primary.
+- **Body recovery and provenance**: partial/unavailable turn ends retain a
+  persistent host reason next to the independent record-saving label. A saved
+  record can still have an incomplete displayed body. Preserved blocks or
+  individual reasoning/text channels are marked as kept from the live view,
+  not canonical content. Full snapshots and metadata-only block replacements
+  keep these labels after reconnect; no transient notice is required. Labels
+  stay outside answer text and copy/share content and do not hide interactions.
 - **Tools**: one-line rows: state icon · past-tense verb · muted mono target ·
   right-aligned meta (duration, `+12 −4`, exit code). Consecutive reads and
   searches group ("Read 6 files ›"). Tap expands inline: command, the **end**
@@ -331,6 +373,14 @@ collapses with the next gap.
   needed · Review") to read the transcript, and is re-opened from it.
 - Choice questions: numbered options, neutral styling (no option is primary
   unless the host marks one).
+- Text questions: a separate single-line answer editor and Send answer button,
+  using `choice:{"text":"..."}` on the existing answer intent. Literal spaces
+  and UTF-8 text are preserved; the Agent's non-empty, 8,192-byte/no-control
+  boundary applies, not an extra character cap. Ordinary state updates and
+  minimizing the sheet preserve the answer draft. Exact session/load/loop/
+  interaction changes or cancellation clear it. A late ACK or pending answer
+  for another interaction never clears or disables the current editor, and
+  typing or answering never changes the conversation draft.
 - A denial stays on the tool row with its reason (by this device, or "Denied
   on another device"). Allowed tools show nothing extra: the row's own state
   says what happened, and a tool allowed for the session is answered by the host
@@ -471,7 +521,7 @@ one tap, the Roots view marks drives with a disk icon, and `~` stands for
 
 Web Push while the page is closed (needs a push service and credentials on the
 host), image attachments, editing or forking earlier turns (no Agent RPC),
-free-text answers to choice questions, reading file contents.
+free-text answers to choice-only questions, reading file contents.
 
 ## Verification
 

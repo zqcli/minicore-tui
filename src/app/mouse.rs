@@ -13,11 +13,32 @@ impl App {
     /// have changed; plain pointer motion elsewhere does not.
     pub fn on_mouse(&mut self, mouse: MouseEvent) -> bool {
         let cell = (mouse.column, mouse.row);
-        let editor = (!self.has_interaction() || self.remote.active())
-            && self.fatal.is_none()
+        let uncertain_edit = matches!(
+            self.overlay,
+            Overlay::Unconfirmed {
+                mode: super::unconfirmed::ReviewMode::Edit(_),
+                ..
+            }
+        );
+        let editor = (!self.has_interaction()
+            || uncertain_edit
+            || self.remote.active()
+            || self.session.as_ref().is_some_and(|session| {
+                session
+                    .interaction
+                    .as_ref()
+                    .is_some_and(|pending| matches!(pending.kind, super::InteractionKind::Text))
+            }))
+            && (self.fatal.is_none() || uncertain_edit)
             && matches!(
                 self.overlay,
-                Overlay::None | Overlay::Palette { .. } | Overlay::Files { .. }
+                Overlay::None
+                    | Overlay::Palette { .. }
+                    | Overlay::Files { .. }
+                    | Overlay::Unconfirmed {
+                        mode: super::unconfirmed::ReviewMode::Edit(_),
+                        ..
+                    }
             )
             && !self.composer_area.is_empty();
         match mouse.kind {
@@ -43,7 +64,7 @@ impl App {
                 // Like a transcript selection, a draft one is copied on release.
                 if matches!(mouse.kind, MouseEventKind::Up(_)) {
                     self.composer_dragging = false;
-                    if let Some(text) = self.composer.selected_text() {
+                    if let Some(text) = self.active_editor().selected_text() {
                         self.copy(text.to_owned());
                     }
                 }
@@ -51,7 +72,7 @@ impl App {
             }
             MouseEventKind::Down(_) => {
                 self.composer_dragging = false;
-                self.composer.clear_selection();
+                self.active_editor_mut().clear_selection();
             }
             _ => {}
         }
@@ -146,13 +167,13 @@ impl App {
             .saturating_sub(area.x)
             .min(area.width.saturating_sub(1));
         let at = crate::ui::composer::hit_test_row(
-            &self.composer,
+            self.active_editor(),
             area.width,
             self.composer_max_rows,
             row,
             column,
         );
-        self.composer.place_cursor(at, extend);
+        self.active_editor_mut().place_cursor(at, extend);
     }
 
     /// A left press: a click, or the second or third of one on the same word,

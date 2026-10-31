@@ -39,9 +39,10 @@ document disagree after the feature lands, the code wins and this file is fixed.
   the status screen and for returning to local control. Non-live opens remember
   the requesting connection; adoption changes only its view. Creation does the
   same and sends the first message to the newly adopted session.
-  The TUI foreground is the view of the device that acted last; an asynchronous
-  open or create takes the foreground when it completes. `/remote off` shows
-  that foreground, not a separate local session.
+  The TUI foreground is the view of the device that acted last. A phone create
+  keeps its original operation, session and load even if that device changes
+  views before it completes; its late result does not refocus the newer view.
+  `/remote off` shows the foreground, not a separate local session.
 - **The TUI only reports.** While remote mode is on, the TUI does not show the
   conversation: its transcript area becomes a status screen saying that remote
   control is on, how to connect, which phones are connected, which session and
@@ -54,7 +55,7 @@ document disagree after the feature lands, the code wins and this file is fixed.
   gives a fresh snapshot.
 - **Web client first.** The TUI serves a web client (plain files, no build step) that installs
   as a home-screen app and opens offline from a service worker cache.
-  The protocol below is versioned (`v: 2`) and is the interface a future native
+  The protocol below is versioned (`v: 3`) and is the interface a future native
   or Flutter client uses too, so it carries semantic data, never rendered rows.
 - **Optional TLS with a user certificate.** Default bind is loopback on both
   families. `tls = true` serves HTTPS and WSS with a PEM certificate and key the
@@ -183,9 +184,8 @@ line is never written to the prompt history.
 - A pending approval does not take the local keyboard; the phone answers it.
 - Entering remote mode takes every queued message back from the Agent
   (`input.recall`) into the composer, joined by blank lines. The answer arrives
-  after the mode is on, so it waits with the session until `/remote off` or goes
-  to the phone that last sent text there; the Agent starts no queued message
-  meanwhile.
+  after the mode is on and restores the local draft. It is never assigned to
+  a phone by the latest sender or by matching its text.
 - Quitting asks twice: the first request (Ctrl+C, `/quit`) flashes
   `Remote control is on · quit again to end it`; a second within 3 s quits.
   Quitting says `bye` to every phone first.
@@ -290,7 +290,8 @@ with `originServerName` (or `noTLSVerify`) when the certificate does not name
 Cloudflare's WebSocket idle timeout.
 
 WebSocket rules: text frames of JSON objects with a `"t"` type field; max
-message 1 MiB; the first message must arrive within 10 s; at most 8
+message 8 MiB (the Agent request ceiling, admitting a fully JSON-escaped
+256 KiB input without truncation); the first message must arrive within 10 s; at most 32
 unauthenticated connections at once; the server sends a WebSocket ping every
 20 s and closes a connection that has sent nothing (pong included) for 60 s.
 Each authenticated connection has an outbound queue of 512 messages; when it is
@@ -319,7 +320,7 @@ Process exit allows at most 500 ms for the connection task to flush and close.
   `bye remote_off` and nothing is stored. The web client keeps the token in `localStorage` (`minicore.token`)
   and later signs in with `hello`. The server compares SHA-256 hashes.
 
-## Protocol v2
+## Protocol v3
 
 ### Handshake
 
@@ -329,16 +330,16 @@ names are `bad_request` and do not count as a wrong password.
 Client's first message, one of:
 
 ```json
-{"t":"login","v":2,"password":"k7mq-x2pa-n9dt","device":"iPhone Safari"}
-{"t":"hello","v":2,"token":"<base64url>"}
+{"t":"login","v":3,"password":"k7mq-x2pa-n9dt","device":"iPhone Safari"}
+{"t":"hello","v":3,"token":"<base64url>"}
 ```
 
 Server answers, in order:
 
 ```json
 {"t":"authorized","token":"<base64url>"}                  // only after a login
-{"t":"welcome","v":2,"version":"0.9.0","device":"iPhone Safari","now_ms":1761300003000}
-{"t":"snapshot","state":{...},"blocks":[...]}
+{"t":"welcome","v":3,"version":"0.9.1","device":"iPhone Safari","now_ms":1761300003000}
+{"t":"snapshot","view_epoch":"view_8_0","state":{...},"blocks":[...]}
 ```
 
 `welcome.now_ms` is the host's Unix time in milliseconds when that message is
@@ -352,19 +353,20 @@ On failure, the server sends one error and closes:
 `wrong_password`: the login password is wrong. `locked`: sign-in is paused; the
 error carries `"retry_after":<whole seconds, rounded up>`. `unauthorized`: the
 `hello` token is unknown (signed out); the client forgets it and asks for the
-password. `version`: `v` is not 2 (a v1 client must reload). Another connected device never refuses a
+password. `version`: `v` is not 3 (v1 and v2 clients must reload). Version
+mismatch is refused before authentication or any modifying intent. Another connected device never refuses a
 sign-in.
 
 ### Client → server (after the handshake)
 
 ```json
-{"t":"intent","id":"c17","kind":"submit","text":"..."}
-{"t":"intent","id":"c18","kind":"queue","text":"..."}
-{"t":"intent","id":"c19","kind":"cancel"}
-{"t":"intent","id":"c20","kind":"answer","interaction_id":"...","choice":"allow"}
-{"t":"intent","id":"c31","kind":"answer","interaction_id":"...","choice":"deny","message":"Use the staging bucket"}
-{"t":"intent","id":"c32","kind":"compact"}
-{"t":"intent","id":"c33","kind":"unqueue","index":1,"text":"run the tests too","edit":true}
+{"t":"intent","id":"c17","kind":"submit","text":"...","view_epoch":"view_8_0","session_id":"ses_1","load":"load_1"}
+{"t":"intent","id":"c18","kind":"queue","text":"...","view_epoch":"view_8_0","session_id":"ses_1","load":"load_1"}
+{"t":"intent","id":"c19","kind":"cancel","loop_id":"loop_1","view_epoch":"view_8_0","session_id":"ses_1","load":"load_1"}
+{"t":"intent","id":"c20","kind":"answer","loop_id":"loop_1","interaction_id":"int_1","choice":"allow","view_epoch":"view_8_0","session_id":"ses_1","load":"load_1"}
+{"t":"intent","id":"c31","kind":"answer","loop_id":"loop_1","interaction_id":"int_1","choice":"deny","message":"Use the staging bucket","view_epoch":"view_8_0","session_id":"ses_1","load":"load_1"}
+{"t":"intent","id":"c32","kind":"compact","view_epoch":"view_8_0","session_id":"ses_1","load":"load_1"}
+{"t":"intent","id":"c33","kind":"unqueue","input_id":"inp_1","edit":true,"view_epoch":"view_8_0","session_id":"ses_1","load":"load_1"}
 {"t":"intent","id":"c21","kind":"load_older"}
 {"t":"intent","id":"c22","kind":"open_session","session_id":"ses_..."}
 {"t":"intent","id":"c23","kind":"new_session","workspace":"/Users/me/Develops/app","profile":"coding"}
@@ -387,34 +389,45 @@ or `kind`, or missing fields, answer `ack`/`fs`/`result` with `ok:false` and
 `error:"bad_request"`; the connection stays open. An invalid or oversized `id`
 is returned as the empty string, never echoed without its 64-byte bound.
 
-Intent semantics (each is acknowledged once the reducer has accepted and
-dispatched it, or refused it):
+Every intent carries `view_epoch` from its latest snapshot. Operations on the
+viewed resident session also carry its `session_id` and `load`; missing or stale
+loads are refused before side effects. Draft intents name neither, and a draft
+submit stays bound to the session/load created for that operation. The remaining
+intent examples above omit these common fields for readability. `cancel` names
+either `loop_id` or the projected compaction `operation_id`; `answer` names both
+`loop_id` and `interaction_id`. No identity falls back to a row index or text.
+
+ACKs for Agent-backed modifications and non-live opens wait for the actual
+Agent outcome; local view changes and history-read dispatch complete locally.
+Dispatch completion only releases transport backpressure; it is not an ACK.
+The operation context captures the original connection, client ID, view,
+session/load and local session epoch. View changes never retarget that context.
+
+Intent semantics:
 
 | kind | Behaviour | Refused when |
 |---|---|---|
 | `submit` | In this device's draft: create one in its workspace with its launch settings and this first message. `input.push` with mode `steer`: it starts a turn on an idle session and reaches the running turn's next request otherwise. Only the creating device changes view on adoption. The text is read as the composer reads Enter (below). | a built-in command or a bare unknown `/word` (`"unknown_command"`); empty text, also after expansion; pending-open/create rules below |
 | `queue` | In this device's running session: `input.push` with mode `follow_up`, which waits for the turn to end and then starts a turn. Otherwise as `submit`. | as `submit` |
-| `cancel` | Interrupt the running turn, else cancel a running compaction, else nothing. | pending-create rule below |
+| `cancel` | Cancel only the projected `loop_id` or compaction `operation_id`, never a newer operation. | stale identity; pending-open/create rule below |
 | `compact` | `/compact`'s path: `session.compact` for this device's session. | a draft (`"No session"`); a running turn or a compaction under way (`"busy"`); pending-create rule below |
-| `unqueue` | Removes the item at `index` of `state.queue` with `input.remove` by the id of the mirrored entry. Required `edit:true` returns its text as `returned` to the requester only, once the Agent has removed it; `edit:false` deletes it without returning text. | the entry is missing or its text differs from `text`, and in a draft (`"stale"`); pending-create rule below. An entry the Agent handed to the turn meanwhile is acknowledged and then reported as a notice (`input_not_queued`) |
-| `answer` | Approvals accept only `"allow"`, `"allow_session"`, or `"deny"`; choice prompts accept only an in-range row index. Goes through the local answer path, so session allowance is remembered. An optional `message` with `"deny"` is pushed as a steer (`input.push`) after `interaction.answer`, with trailing whitespace trimmed and the same rules as Enter, so the agent hears why. | no pending interaction or id differs (`"stale"`); wrong answer kind or index, or a `message` that is blank or beside anything but an approval's `"deny"` (`"bad_request"`), leaving the interaction untouched; pending-create rule below |
+| `unqueue` | `input.remove` names `input_id`. With `edit:true`, the successful ACK carries that input ID and returned `text`; `edit:false` returns no text. | `input_not_queued` if already consumed, absent or removed; stale view/load; no index/text fallback |
+| `answer` | Approvals accept only `"allow"`, `"allow_session"`, or `"deny"`; choice prompts accept only an in-range row index; text prompts accept only `{"text":"literal answer"}`. Goes through the local answer path, so session allowance is remembered. An optional `message` with `"deny"` is pushed as a steer (`input.push`) after `interaction.answer`, with trailing whitespace trimmed and the same rules as Enter, so the agent hears why. | no pending interaction or id differs (`"stale"`); wrong answer kind or index, or a `message` that is blank or beside anything but an approval's `"deny"` (`"bad_request"`), leaving the interaction untouched; pending-create rule below |
 | `load_older` | Load an older history page into this device's session transcript. | no session; pending-create rule below |
 | `open_session` | Change only this device's view: a live session switches at once (no `session.open`), another is opened and assigned on adoption. | unknown id; workspace outside `roots`; pending-open/create rules below |
 | `new_session` | Change only this device's view to a draft in `workspace` (default: its viewed workspace), with optional `profile` and that profile's/default settings; the next `submit` creates it. No empty session is created. | workspace relative, outside `roots`, missing or not a directory; unknown profile; pending-open/create rules below |
 | `set_model` / `set_reasoning` | As `/model` and `/reasoning`: a session update persists for that session; a draft changes only this device's launch settings. Draft notices go only to this device. | unknown model or level; pending-create rule below |
 | `rename_session` | Rename any listed session through the sessions picker's rename path (`session.rename` with its id); the title is trimmed, and an empty title clears it so the label falls back to the first prompt or short id. The catalog, the live session and the phones' states follow; no notice is sent, the new title is the confirmation. | unknown id; workspace outside `roots`; title over 200 characters or containing control characters; pending-create rule below |
-| `delete_session` | Delete permanently through the local path (`session.close` when loaded, then `session.delete`); it leaves the catalog and the lists. The phone confirms before sending. | unknown id; workspace outside `roots`; viewed by the requester (`"Open another session before deleting this one"`) or another device (`Open on "<device name>"`); the existing foreground or working-live-session refusal; pending-create rule below |
+| `delete_session` | Delete permanently (`session.close` with its exact known load when resident, then `session.delete`); it leaves the catalog and the lists. The phone confirms before sending. | unknown id; workspace outside `roots`; viewed by the requester (`"Open another session before deleting this one"`) or another device (`Open on "<device name>"`); the existing foreground or working-live-session refusal; pending-create rule below |
 
-`loading_session` remains global. While an open is pending, another non-live
-open, `new_session`, or draft `submit`/`queue` is refused; live-session intents
-and live opens still work. While a create's `first_message` is pending, **all
-intents** are refused, including live-session intents: the first text and the
-local composer are global until adoption, so focusing another view would steal
-the creating draft. Filesystem requests are unaffected. The owner receives
-`"A session is opening or being created"`; other devices receive
-`"Another device is opening a session"`. Only the owner's `status.loading` is
-true. A failed create returns its text only to its connected creator and keeps
-that device's draft settings.
+`loading_session` remains global. While an open/create is pending, another
+non-live open or draft submit/queue is refused. Live-session intents, live opens
+and switching to another draft still work: the in-flight first text belongs to
+its original operation, not the global composer. Filesystem requests are
+unaffected. The owner receives `"A session is opening or being created"`; other
+devices receive `"Another device is opening a session"`. Only the owner's
+`status.loading` is true. A failed create rejects only its original input
+operation, without changing a newer device view or its draft settings.
 
 Deletion cannot normally invalidate a view: viewed sessions cannot be deleted,
 and `/remote off` disconnects every phone before local deletion is possible.
@@ -436,9 +449,48 @@ where the composer warns once. Anything else is sent unchanged: a path
 (`/usr/bin is…`), `/word` followed by other text (`/reveiw the parser`), a slash
 later in the text, `/9lives`, `/ hello`. Then trailing whitespace is trimmed
 like local sends.
-A refused `submit` or `queue` text is never put into the local composer. When the
-Agent later refuses an `input.push` (the path that calls `restore_draft`) while a
-phone is connected, the text goes back as `returned` (see the routing below).
+A refused submit/queue is never put into the local composer or sent to another
+device. Explicit `acceptance:"rejected"` means the original phone may retain its
+unsent draft. `acceptance:"unknown"`, missing acceptance, timeout or disconnect
+means unconfirmed: retain the original operation in its unconfirmed card, never
+resend it automatically. The submitted composer draft has a local version captured by that
+operation, not an identity inferred from matching text. An unknown or accepted
+outcome clears only that submitted version; typing a newer independent draft
+(even identical text) or switching views protects the newer draft. Typing stays
+available while the ACK waits, but another send waits for the current receipt.
+An explicit Send again warns that it may duplicate accepted work and allocates
+a new operation ID. Edit instead keeps that unknown origin on the exact edited
+draft version, including after further typing, view changes and reconnect. Normal
+Send from that draft asks the same duplicate warning, whether the text changed
+or not. Cancel creates no request or operation ID; accepting sends a new operation.
+Deleting all text does not clear that origin: Undo, Redo or fresh typing in the
+same editor still requires the warning. The empty draft retains its version and
+origin across view changes and reconnect. Only an explicit Discard draft ends
+that edited copy's uncertainty; it does not resolve the original unknown fact. A different
+view's independently owned draft does not inherit the warning by text equality.
+This draft provenance is local metadata, not phone or Agent wire input.
+Accepted startup failure remains accepted, with `start_error`
+naming the actual failed queue head, which may differ from the new input.
+
+The browser keeps at most 64 pending/unconfirmed operations and 16 MiB of retained
+UTF-8 payload text. It checks admission before allocating an operation ID or
+calling WebSocket send. Full capacity shows a local buffer-full refusal and keeps
+the new draft unchanged; it never evicts existing unknown text. Accepted or
+explicitly rejected receipts release their entry; unknown input acceptance and
+ordinary disconnect/reconnect do not. Discard message asks for confirmation and
+forgets only that local unconfirmed card, not an execution on the host. It cannot
+remove an in-flight operation or resolve a separately edited copy's uncertainty.
+Discard draft clears the edited draft only and does not free the original card.
+A warned retry also needs admission capacity: when full it is visibly refused
+without replacing or dropping the original unknown operation.
+
+These are bounds on the browser operation map and its full payload text fields
+(input text, interaction text/deny reason and rename title), not on total JS heap,
+transcript, drafts, local storage or encoding/rendering copies. One legal 256 KiB
+input is admitted whole when capacity permits; nothing is truncated. Each entry's
+UTF-8 size is charged once across its pending/unconfirmed lifetime. Edited-draft
+origin references keep at most the 64 live operation identities plus one anonymous
+warning for discarded identities, without using text equality.
 
 Any admitted connection may send intents and filesystem requests; requests
 from a connection that is no longer admitted (replaced, dropped, or from a
@@ -509,13 +561,14 @@ The Agent reports no per-category token breakdown, so `context` carries the
 ### Server → client
 
 ```json
-{"t":"ack","id":"c17","ok":true}
-{"t":"ack","id":"c17","ok":false,"error":"Remote text is empty"}
-{"t":"snapshot","state":State,"blocks":[Block, ...]}
+{"t":"ack","id":"c17","ok":true,"accepted":true,"session_id":"ses_1","load":"load_1","input_id":"inp_1","accepted_at":"<RFC 3339>","start_error":null}
+{"t":"ack","id":"c17","ok":false,"acceptance":"rejected","error":"Remote text is empty"}
+{"t":"ack","id":"c18","ok":false,"acceptance":"unknown","error":"Connection lost"}
+{"t":"ack","id":"c33","ok":true,"input_id":"inp_1","text":"text returned for editing"}
+{"t":"snapshot","view_epoch":"view_8_0","state":State,"blocks":[Block, ...]}
 {"t":"blocks","len":42,"upserts":[{"i":40,"block":Block},{"i":41,"block":Block}]}
 {"t":"state","state":State}
 {"t":"notice","level":"info"|"error","text":"..."}
-{"t":"returned","text":"..."}
 {"t":"fs","id":"c26","ok":true,"roots":[{"path":"/Users/me/Develops","name":"Develops"}]}
 {"t":"fs","id":"c27","ok":true,"listing":Listing}
 {"t":"fs","id":"c28","ok":true,"created":"/Users/me/Develops/new-app"}
@@ -535,15 +588,19 @@ Routing, with several devices connected:
 | Sign-in attempt `notice` (wrong password, sign-in paused) | Every connection |
 | Any other TUI notice (key hints, local refusals, `/remote` status, config) | The TUI only |
 | `ack`, `fs`, `result` | Only the connection that sent the request |
-| `returned` | For an `unqueue` edit: only its requester. Otherwise the connection that last sent `submit`/`queue` **to that session**, if connected; otherwise devices viewing it; otherwise kept in `Session::returned` for local control |
+| Input feedback and edit text | Only the original connection/operation ACK; never another connection or viewers of the session |
 | `bye` | `replaced`: only the older connection of that device; `remote_off`, `tui_exit`, `signed_out`: every connection |
 
-For an `unqueue` edit, `returned` goes only to the requester. Otherwise,
-`returned` follows the latest text intent for that session, not the refused
-text itself: when two devices send to the same session in quick succession and
-the first send is refused, the text goes to the second. A later text intent to
-another session cannot take it. Session-retained text stays out of the hidden
-local composer during remote focus changes and is restored on local return.
+There is no session-level sender mapping or text matching. Identical text from
+two devices remains two independent operations. Disconnect/replacement revokes
+delivery to the old connection; late ACKs and edit text never reach its
+replacement, even for the same remembered device. In-flight operations remain
+charged until their Agent result arrives. Reconnection replaces the entire
+projection, not operation-confirmation history. No queue or unsaved-body
+recovery is promised after the TUI/Agent exits.
+
+For an edit ACK received after a view change, the web client stores the text in
+the original session's draft instead of focusing or modifying the new view.
 
 `blocks`: the transcript now has `len` blocks; the client truncates its list to
 `len`, then applies each upsert at index `i`. An upsert is exactly one of:
@@ -578,17 +635,17 @@ uses the routing above; local background notices keep their label prefix.
 
 ```json
 {
-  "session": null | {"id":"ses_...","title":"Fix parser","workspace":"/abs","profile":"coding",
+  "session": null | {"id":"ses_...","load":"load_...","loop_id":"loop_..."|null,"title":"Fix parser","workspace":"/abs","profile":"coding",
                      "model":"gpt-6-luna","reasoning":"high","branch":"main"|null,
                      "allowed":["bash","edit"]},
   "draft": {"workspace":"/abs","profile":"coding"|null,"model":"..."|null,"reasoning":"..."|null},
-  "status": {"label":"Thinking"|null,"busy":false,"started_ms":1761300000000|null,
-             "interrupting":false,"compacting":false,"loading":false},
+  "status": {"label":"Thinking"|null,"block_reason":"persistence"|"internal"|null,"busy":false,"started_ms":1761300000000|null,
+             "interrupting":false,"compacting":false,"operation_id":"compact_..."|null,"loading":false},
   "usage": {"input":0,"output":0,"cached":0},
   "context_percent": 41.5 | null,
-  "interaction": null | {"id":"...","kind":"approval"|"choice","tool":"bash","detail":"cargo test",
+  "interaction": null | {"id":"...","loop_id":"loop_...","tool_call_id":"call_...","kind":"approval"|"choice"|"text","tool":"bash","detail":"cargo test",
                          "input":"..."|null,"prompt":"...","options":["Allow once","Deny","Allow bash this session"]},
-  "queue": [{"kind":"steer"|"follow","text":"..."}],
+  "queue": [{"id":"inp_...","kind":"steer"|"follow","text":"..."}],
   "older": true,
   "sessions": [{"id":"ses_...","title":"...","workspace":"/abs","updated_at":"<RFC 3339>","current":true,
                 "live":true,"status":"running"|"approval"|"compacting"|"idle","started_ms":1761300000000|null,
@@ -606,7 +663,13 @@ uses the routing above; local background notices keep their label prefix.
   `draft.model` and `draft.reasoning` use the same resolved settings as the
   footer, including profile defaults; `draft.profile` is the launch/default
   profile, or the viewed session's profile. Unresolved values remain `null`.
-- `label` uses the viewed `Session::status_label()`. `started_ms` is the Unix
+- `block_reason` is the viewed session's installed snapshot reason, never
+  inferred from a failed command or an uncertain turn marker. `label` gives
+  `Session::block_label()` priority over `Session::status_label()`. A blocked
+  session keeps a persistent warning above the composer, including while idle
+  and after reconnect; it clears only when a newer snapshot clears the reason.
+  The warning does not change execution or hide an actionable `interaction`.
+  `started_ms` is the Unix
   time stored once on its live turn, not derived from `Instant`, so the state
   does not change by itself. `loading` is true only for the opening/creating
   device. `background` counts live sessions other than this device's session,
@@ -632,7 +695,7 @@ uses the routing above; local background notices keep their label prefix.
   first, then follow-ups, each in the order sent. Every row can be edited or
   deleted until the running turn takes it, which removes it from the list. The
   TUI dispatches nothing itself. Editing returns text only to the requesting
-  device, unlike asynchronous refused-send routing below.
+  device, as part of that edit operation's delayed ACK.
 - `older`: an older page can be loaded. `sessions`: the catalog filtered to
   workspaces under `roots`, newest first, at most 50. `updated_at` is the last
   activity: the Agent's stamp, advanced locally to the end of every turn that
@@ -656,8 +719,30 @@ uses the routing above; local background notices keep their label prefix.
 {"type":"earlier","hidden_items":12}
 ```
 
+A turn-end block may additionally carry
+`"recovery":{"status":"partial","reason":"Item 1 is too large"}`. Status is
+`pending`, `fetching`, `complete`, `partial`, `unavailable`, `retryable_error` or
+`exhausted`, taken from the installed per-turn body recovery note. `saving`
+remains the independent record-saving fact: `saved` does not prove this phone
+has the complete body. The client persistently renders both facts and the reason,
+not an expiring notice. Absence of a recovery note is not a new completeness proof.
+
+A block kept outside the canonical body carries `"preserved":true`. An assistant
+with only certain preserved channels carries
+`"preserved_channels":["reasoning","text"]` (only the actual channels, in that
+order). These annotations label live-only content without changing its text,
+reasoning or tool output. UI annotation rows are not answer content: copy/share
+keep the original content and the annotation is separate in Markdown exports.
+
+Full snapshots and full `blocks.upserts[].block` replacements use these same
+fields. Recovery/provenance changes invalidate a block even when its body revision
+has not changed; a metadata change sends a full replacement, never a suffix-only
+append. A replacement without an old annotation clears it. Reconnect retains the
+current notes, including partial/unavailable reasons and preserved channels.
+These fields never clear or hide a separately actionable interaction.
+
 A failed turn's `turn_end` also carries the host's account of it, so clients
-need no table of their own (additive; protocol v2 is unchanged, and a client
+need no table of their own (additive within protocol v3; a client
 without it shows `Failed`):
 
 ```json
@@ -671,6 +756,17 @@ with the retry, delivery and provider-processing remarks appended. `status`,
 provider sent none; the message is plain text, at most 16 KiB. `action` names
 the command that helps: `compact` for a full context, `model` when another
 model may; clients offer it as a button.
+
+A text interaction has `kind:"text"` and `options:[]`. Its answer uses the same
+`answer` intent, for example `choice:{"text":" allow "}`, with exact
+session/load/loop/interaction and view identities. Text is never interpreted as
+an approval name or sent as a conversation steer. Agent RPC validates the
+existing answer boundary: non-empty, at most 8,192 UTF-8 bytes, no control
+characters, with whitespace preserved rather than trimmed. The editor has no
+additional character cap. The tool-answer draft is separate from the
+conversation draft, survives ordinary state refreshes and minimizing its sheet,
+and resets on a session/load/loop/interaction change or cancellation. An old
+answer ACK cannot clear or disable the replacement interaction.
 
 Enum values (`kind`, `outcome`) use the names the Agent protocol already uses.
 A user block uses `kind:"steering"`; the pending queue uses `kind:"steer"`.
@@ -785,13 +881,17 @@ gains no new branch beyond calling `sync_remote` once per iteration.
 | TLS handshake | 10 s |
 | Request head | 8 KiB, 10 s |
 | HTTP reply | dropped after 10 s without progress |
-| WebSocket message in | 1 MiB |
+| WebSocket message in | 8 MiB (shared Agent request ceiling) |
 | First message | 10 s |
 | Unauthenticated connections | 32 |
 | Outbound queue per connection | 512 messages, then the connection is dropped |
 | Ping / idle close | 20 s / 60 s |
 | Directory entries per listing | 1000 |
 | Queries waiting on the Agent per connection | 4, then `busy` |
+| Browser pending + unconfirmed operation map | 64 entries; local refusal before ID allocation/send, no eviction |
+| Browser retained operation payload text | 16 MiB UTF-8 across pending + unconfirmed; not a total-JS-heap limit |
+| Pending Agent-backed phone operations | 4 per connection, 64 across the TUI |
+| Pending operation text, including expanded templates and deny messages | 16 MiB across the TUI, then `busy` before side effects |
 | `diff` text / `tool_output` page / `files` names | 256 KiB / 64 KiB / 50 |
 | `changes` records listed | 200 (one `changes.list` page) |
 | Sessions in `State` | 50 |

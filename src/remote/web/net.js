@@ -3,6 +3,8 @@ import { $, closeAll, fill, h, icon, spin, toast } from './ui.js';
 
 // ---- net ----
 export const S = MC.createStore(), HOST = location.host, KEY = 'minicore.token';
+const draftClient = Array.from(crypto.getRandomValues(new Uint32Array(4)), n => n.toString(16).padStart(8, '0')).join('');
+export const newDraftVersion = () => draftClient + ':' + MC.newDraftVersion(S);
 let ws = null, ready = false;
 // Callbacks main.js binds: message(msg, effects), lost() once the socket is gone, render() when the state changed locally
 // and reset() when the signed-out device forgets what it showed.
@@ -44,17 +46,25 @@ function lost() {
   on.lost();
 }
 // ---- intents and requests ----
-// `own` handles the ack where the request was made (a dialog shows its own error).
-export function intent(spec, own) {
-  if (!online()) { toast('Not connected', 'error'); return false; }
-  const msg = MC.intent(S, spec, own);
-  send(msg);
+function sendIntent(message) {
+  if (!message) { toast('Local confirmation buffer is full · resolve or discard an unconfirmed message', 'error'); return false; }
+  send(message);
   repaint();
   return true;
 }
-// An unconfirmed send, sent again as a new intent or taken back into the composer, where it is no longer tracked.
-export function resend(id) { send(MC.sendAgain(S, id)); repaint(); }
-export function takeBack(id) { const text = S.intents.get(id).text; S.intents.delete(id); return text; }
+// `own` handles the ack where the request was made (a dialog shows its own error).
+export function intent(spec, own, draft) {
+  if (!online()) { toast('Not connected', 'error'); return false; }
+  return sendIntent(MC.intent(S, spec, own, draft));
+}
+// Only an explicit warned action retries an unconfirmed send.
+export function resend(id) {
+  if (!online() || !confirm('This message may already have arrived. Send it again, possibly creating a duplicate?')) return;
+  return sendIntent(MC.sendAgain(S, id));
+}
+export function discard(id) {
+  if (confirm('This message may already have arrived. Discard only its retained local copy?') && MC.discardUnconfirmed(S, id)) repaint();
+}
 export const pendingKind = k => !!MC.pending(S, k);
 export const sending = () => pendingKind('submit') || pendingKind('queue');
 const fsWait = new Map();

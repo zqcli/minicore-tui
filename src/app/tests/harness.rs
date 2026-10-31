@@ -12,7 +12,7 @@ use crate::app::{Action, App, Msg, SessionOp};
 use crate::testing::FakeAgent;
 use crate::transcript::Block;
 
-pub use crate::testing::{chunk, chunk_envelope, display_read, session_info, turn};
+pub use crate::testing::{chunk, chunk_envelope, display_read, session_info, snapshot, turn};
 
 /// The channel counts as settled after this much quiet; longer than any retry
 /// or scripted delay.
@@ -34,7 +34,7 @@ impl Harness {
         let (fake, app) = FakeAgent::start(tx);
         fake.script(
             "agent.ping",
-            json!({"version": "0.7.0", "protocol_version": 1, "capabilities": [
+            json!({"version": "0.7.0", "protocol_version": 2, "capabilities": [
                 "session.read", "session.read.display", "session.context", "turn.result",
                 "tool.read", "tool.read.display", "tool.output", "workspace.files",
                 "workspace.search", "workspace.status", "changes.list", "changes.diff"
@@ -52,8 +52,17 @@ impl Harness {
             json!({"profiles": [{"id": "coding", "model": "mock", "reasoning": "medium"}]}),
         );
         fake.script("session.list", json!({"sessions": [session_info("s1")]}));
-        fake.script("session.open", json!({"session": session_info("s1")}));
+        fake.script(
+            "session.open",
+            json!({"session": session_info("s1"), "load": "load_1",
+                   "snapshot": snapshot("s1", "load_1", 1)}),
+        );
         fake.script("session.rename", json!({"session": session_info("s1")}));
+        fake.script(
+            "session.create",
+            json!({"session": session_info("s1"), "load": "load_1",
+                   "snapshot": snapshot("s1", "load_1", 1)}),
+        );
         fake.script(
             "session.presentation",
             json!({"session_id": "s1", "model_label": "mock", "git_branch": "main",
@@ -65,6 +74,18 @@ impl Harness {
         );
         fake.script("session.context", json!({"session_id": "s1"}));
         fake.script("input.list", queue(vec![], false));
+        fake.script(
+            "input.remove",
+            json!({"text": "", "queue": queue(vec![], false)}),
+        );
+        fake.script(
+            "input.recall",
+            json!({"texts": [], "queue": queue(vec![], false)}),
+        );
+        fake.script(
+            "input.resume",
+            json!({"started": null, "queue": queue(vec![], false)}),
+        );
         fake.script("session.read", display_read(0, 0));
         fake.script(
             "changes.list",
@@ -94,16 +115,31 @@ impl Harness {
         self.settle().await;
     }
 
-    /// Applies messages until none arrives for a while.
-    pub async fn settle(&mut self) {
-        // A chain of answers that feeds itself never goes quiet; fail instead of spinning.
+    /// Applies messages until none arrives for a while, leaving the phone
+    /// channels untouched so a test can read every frame in order.
+    pub async fn run_until_quiet(&mut self) {
+        crate::testing::real_bounded(self.drain()).await;
+    }
+
+    async fn drain(&mut self) {
         for _ in 0..MAX_MESSAGES {
             let Ok(Some(message)) = tokio::time::timeout(QUIET, self.rx.recv()).await else {
                 return;
             };
             self.app.on_msg(message);
         }
-        panic!("still busy after {MAX_MESSAGES} messages");
+        panic!("messages never went quiet");
+    }
+
+    /// Applies messages until none arrives for a while.
+    pub async fn settle(&mut self) {
+        crate::testing::real_bounded(self.drain()).await;
+    }
+
+    pub async fn next_message(&mut self) -> Msg {
+        crate::testing::real_bounded(self.rx.recv())
+            .await
+            .expect("an actual reducer message")
     }
 
     /// Applies the messages that arrive within `duration`.
@@ -167,6 +203,11 @@ impl Harness {
         }
     }
 
+    /// Sends an Agent event exactly as given, `meta` included.
+    pub async fn emit_no_meta(&mut self, kind: &str, data: Value) {
+        self.fake.emit(json!({"type": kind, "data": data})).await;
+    }
+
     /// Sends an Agent event for `s1`; `meta` is filled in unless given.
     pub async fn emit(&mut self, kind: &str, mut data: Value) {
         if data.get("meta").is_none() {
@@ -175,9 +216,50 @@ impl Harness {
         self.fake.emit(json!({"type": kind, "data": data})).await;
     }
 
-    /// A `session.state` answer arriving for the open session.
-    pub fn state(&mut self, state: Value) {
+    /// A `session.state` answer arriving for the open session. The v2 answer
+    /// carries the same control snapshot it derives its own fields from, so a
+    /// test that patches `compaction` gets both.
+    pub fn state(&mut self, mut state: Value) {
+        if state.get("snapshot").is_none() {
+            let mut snapshot = snapshot("s1", "load_1", 1);
+            if let Some(compaction) = state.get("compaction") {
+                snapshot["compaction"] = compaction.clone();
+            }
+            state["snapshot"] = snapshot;
+        }
+        // A hand-written snapshot must be a newer observation than the one on
+        // screen, or the client rightly ignores it as delayed.
+        let next = self.app.session.as_ref().map_or(1, |s| {
+            s.recovery
+                .revision
+                .max(self.fake.control_revision(&s.info.session_id))
+                + 1
+        });
+        if state["snapshot"]["revision"].as_u64().unwrap_or(0) < next {
+            state["snapshot"]["revision"] = json!(next);
+        }
+        if state["snapshot"]["load"].is_null() {
+            state["snapshot"]["load"] = json!(crate::testing::LOAD);
+        }
         self.op(SessionOp::State(Ok(serde_json::from_value(state).unwrap())));
+    }
+
+    /// A `session.state` answer whose snapshot is a running turn on `loop_id`.
+    pub fn running_state(&mut self, loop_id: &str, input: Value) {
+        let revision = self
+            .app
+            .session
+            .as_ref()
+            .map_or(1, |s| s.recovery.revision + 1);
+        let snapshot =
+            crate::testing::snapshot_running("s1", crate::testing::LOAD, revision, loop_id, input);
+        self.op(SessionOp::State(Ok(serde_json::from_value(json!({
+            "session_id": "s1",
+            "status": "running",
+            "active_loop": {"loop_id": loop_id},
+            "snapshot": snapshot,
+        }))
+        .unwrap())));
     }
 
     /// A `session.context` answer arriving for the open session.
@@ -250,10 +332,51 @@ impl Harness {
             .collect()
     }
 
-    /// Sets the foreground session's mirrored queue as if the Agent had reported `items`.
+    /// Sets the queue the Agent holds, as `session.state` would report it.
+    ///
+    /// The reducer only takes the queue from a control observation, so this
+    /// seeds the scripted Agent's own control state and then the session's.
     pub fn mirror(&mut self, items: Vec<Value>, paused: bool) {
+        let queued = queue(items, paused);
+        self.fake.set_queue(queued.clone());
         self.app.session.as_mut().expect("a session").queue =
-            serde_json::from_value(queue(items, paused)).unwrap();
+            serde_json::from_value(queued).unwrap();
+    }
+
+    /// A `session_snapshot` event, which is how the Agent reports control.
+    pub async fn snapshot_event(&mut self, snapshot: Value) {
+        let session_id = snapshot["session_id"].as_str().unwrap_or("s1").to_owned();
+        self.emit(
+            "session_snapshot",
+            json!({"meta": {"session_id": session_id, "dropped_before": 0},
+                   "snapshot": snapshot}),
+        )
+        .await;
+    }
+
+    /// A control snapshot whose fields the caller patches, revised past the
+    /// last one this session applied.
+    pub fn control(&self, patch: Value) -> Value {
+        let session = self.app.session.as_ref().expect("a session");
+        let mut snapshot = crate::testing::snapshot(
+            "s1",
+            session.load.as_deref().unwrap_or(crate::testing::LOAD),
+            session
+                .recovery
+                .revision
+                .max(self.fake.control_revision(&session.info.session_id))
+                + 1,
+        );
+        for (key, value) in patch.as_object().expect("a patch object") {
+            snapshot[key] = value.clone();
+        }
+        snapshot
+    }
+
+    /// Reports control through the authoritative snapshot event.
+    pub async fn control_event(&mut self, patch: Value) {
+        let snapshot = self.control(patch);
+        self.snapshot_event(snapshot).await;
     }
 
     /// The bells in the terminal bytes now, not counting a title sequence's terminator.
@@ -407,6 +530,9 @@ pub fn cancelled() -> Value {
     json!({"type": "cancelled", "reason": "user"})
 }
 
+/// The immutable identity a test result body carries.
+pub const RESULT_ID: &str = "r1:0000000000000000000000000000000000000000000000000000000000000001";
+
 /// A `turn.result` page with `items`.
 pub fn turn_result(loop_id: &str, mut items: Vec<Value>) -> Value {
     for (index, item) in items.iter_mut().enumerate() {
@@ -414,6 +540,7 @@ pub fn turn_result(loop_id: &str, mut items: Vec<Value>) -> Value {
     }
     json!({"turn": turn(loop_id), "outcome": {"type": "cancelled", "reason": "user"},
            "availability": "stored", "persistence": "persisted",
+           "load": crate::testing::LOAD, "result_id": RESULT_ID,
            "total": items.len(), "items": items, "next_cursor": null})
 }
 
@@ -462,5 +589,5 @@ pub fn started_in(turn: Value, queued: Vec<Value>) -> Value {
 
 /// A refusal in the shape `FakeAgent::script_sequence` accepts.
 pub fn refusal(code: i64, kind: &str) -> Value {
-    json!({"error": {"code": code, "message": kind, "data": {"kind": kind}}})
+    json!({"error": {"code": code, "message": kind, "data": {"kind": kind,"acceptance":(kind == "input_queue_full").then_some("rejected")}}})
 }

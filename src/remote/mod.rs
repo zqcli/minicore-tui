@@ -2,6 +2,8 @@
 
 pub mod auth;
 pub mod fs;
+#[cfg(feature = "e2e-observe")]
+pub mod phone_gate;
 pub mod query;
 pub mod server;
 pub mod tls;
@@ -43,11 +45,14 @@ pub struct Connection {
 
 impl Connection {
     pub fn send(&self, message: Value) -> bool {
-        if self.outbound.try_send(message).is_err() {
-            let _ = self.close.send(Some("overflow"));
-            return false;
+        match self.outbound.try_send(message) {
+            Ok(()) => true,
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                let _ = self.close.send(Some("overflow"));
+                false
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => false,
         }
-        true
     }
 
     pub fn bye(&self, reason: &'static str) {
@@ -200,8 +205,93 @@ impl Phone {
     pub fn set_view(&mut self, view: PhoneView) {
         if self.view != view {
             self.view = view;
-            self.projection = view::View::default();
+            self.projection.invalidate(self.connection.id);
         }
+    }
+}
+
+/// One modification a phone made, held until its Agent answer decides the ack.
+#[derive(Debug)]
+pub struct PendingIntent {
+    /// The client's operation id, echoed in the answer.
+    pub id: String,
+    /// The projection the client built it from; a later view makes it stale.
+    pub view_epoch: String,
+    /// The session it named, absent for an intent that creates one.
+    pub session_id: Option<String>,
+    pub load: Option<String>,
+    pub epoch: Option<u64>,
+    pub focus_generation: u64,
+    pub kind: PendingKind,
+}
+
+#[derive(Debug)]
+pub enum PendingKind {
+    /// Text waiting on the Agent's acceptance outcome.
+    Input {
+        text: String,
+    },
+    /// Text whose operation creates a session before pushing.
+    DraftInput {
+        text: String,
+        mode: crate::protocol::InputMode,
+    },
+    /// Taking a queued entry back for editing.
+    Unqueue {
+        input_id: String,
+        edit: bool,
+    },
+    Open,
+    Command {
+        allow_tool: Option<String>,
+        text: Option<String>,
+    },
+}
+
+impl PendingKind {
+    /// The text this intent holds, charged to the remote mode's text budget.
+    pub fn text(&self) -> Option<&str> {
+        match self {
+            Self::Input { text, .. } | Self::DraftInput { text, .. } => Some(text),
+            Self::Command { text, .. } => text.as_deref(),
+            Self::Unqueue { .. } | Self::Open => None,
+        }
+    }
+}
+
+/// The bounded modifications one connection may have waiting on the Agent.
+///
+/// A phone that exceeds a bound is refused before anything runs, so a refused
+/// operation can never have had a side effect.
+#[derive(Default)]
+pub struct PendingIntents {
+    items: Vec<PendingIntent>,
+}
+
+impl PendingIntents {
+    /// Modifying operations one connection may have waiting at once.
+    pub const PER_CONNECTION: usize = 4;
+
+    pub fn len(&self) -> usize {
+        self.items.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+
+    pub fn get(&self, id: &str) -> Option<&PendingIntent> {
+        self.items.iter().find(|intent| intent.id == id)
+    }
+
+    pub fn push(&mut self, intent: PendingIntent) {
+        self.items.push(intent);
+    }
+
+    /// Forgets the operation `id`, whatever its outcome; the answer carries it on.
+    pub fn take(&mut self, id: &str) -> Option<PendingIntent> {
+        let index = self.items.iter().position(|intent| intent.id == id)?;
+        Some(self.items.remove(index))
     }
 }
 
@@ -222,6 +312,7 @@ pub struct Remote {
     pub catalog: view::Catalog,
     /// The connection whose session open or create is pending.
     pub opening: Option<u64>,
+    pub focus_generation: u64,
     pub notice_target: NoticeTarget,
     /// The foreground draft's settings while `App::launch` stays neutral.
     pub draft: Option<DraftSettings>,
@@ -237,6 +328,10 @@ pub struct Remote {
     /// Wrong passwords since remote control started or the password changed.
     pub failed_logins: u32,
     pub paused_until: Option<tokio::time::Instant>,
+    /// Modifications waiting on their Agent answer, per connection, oldest first.
+    pending: std::collections::BTreeMap<u64, PendingIntents>,
+    /// Text those modifications hold.
+    pending_text_bytes: usize,
     stop: Option<oneshot::Sender<()>>,
     server_task: Option<tokio::task::JoinHandle<()>>,
 }
@@ -284,22 +379,6 @@ impl Remote {
         sent
     }
 
-    pub fn returned(&mut self, id: &str, sender: Option<u64>, text: &str) -> bool {
-        let message = json!({"t":"returned", "text":text});
-        if let Some(phone) = self
-            .phones
-            .iter()
-            .find(|phone| Some(phone.connection.id) == sender)
-        {
-            if phone.connection.send(message.clone()) {
-                return true;
-            }
-            self.phones
-                .retain(|phone| Some(phone.connection.id) != sender);
-        }
-        self.send_viewers(id, true, message)
-    }
-
     pub fn mode(&self) -> RemoteMode {
         if self.url.is_none() {
             RemoteMode::Off
@@ -320,6 +399,59 @@ impl Remote {
     pub fn active(&self) -> bool {
         self.mode() != RemoteMode::Off
     }
+
+    /// Modifications waiting across the whole TUI.
+    pub const MAX_PENDING: usize = 64;
+    /// Text those modifications hold, across the whole TUI.
+    pub const MAX_PENDING_BYTES: usize = 16 * 1024 * 1024;
+
+    /// Whether one more modification may wait on `connection`: per connection
+    /// and for the whole TUI, counting the text it would hold.
+    ///
+    /// A phone that does not fit is refused before anything runs.
+    pub fn admits_pending(&self, connection: u64, text: Option<&str>) -> bool {
+        let own = self.pending.get(&connection).map_or(0, PendingIntents::len);
+        let total: usize = self.pending.values().map(PendingIntents::len).sum();
+        let bytes = self.pending_text_bytes + text.map_or(0, str::len);
+        own < PendingIntents::PER_CONNECTION
+            && total < Self::MAX_PENDING
+            && bytes <= Self::MAX_PENDING_BYTES
+    }
+
+    /// Whether `id` already waits on `connection`; a live id must not be reused,
+    /// or its answer would be attributed to the wrong operation.
+    pub fn holds_pending(&self, connection: u64, id: &str) -> bool {
+        self.pending
+            .get(&connection)
+            .is_some_and(|pending| pending.get(id).is_some())
+    }
+
+    /// Records an operation as waiting, charging its text to the budget.
+    pub fn hold_pending(&mut self, connection: u64, intent: PendingIntent) {
+        self.pending_text_bytes += intent.kind.text().map_or(0, str::len);
+        self.pending.entry(connection).or_default().push(intent);
+    }
+
+    /// Answers an operation: its text leaves the budget and the ack goes to the
+    /// connection that made it, while that connection is still admitted.
+    pub fn release_pending(&mut self, connection: u64, id: &str) -> Option<PendingIntent> {
+        let intent = self.pending.get_mut(&connection)?.take(id)?;
+        if self
+            .pending
+            .get(&connection)
+            .is_some_and(PendingIntents::is_empty)
+        {
+            self.pending.remove(&connection);
+        }
+        self.pending_text_bytes -= intent.kind.text().map_or(0, str::len);
+        Some(intent)
+    }
+
+    /// The operation `id` waiting on `connection`.
+    pub fn pending(&self, connection: u64, id: &str) -> Option<&PendingIntent> {
+        self.pending.get(&connection)?.get(id)
+    }
+
     pub fn roots(&self) -> &[PathBuf] {
         &self
             .config
@@ -329,16 +461,22 @@ impl Remote {
     }
 
     pub fn start(&mut self, bound: Bound, tx: crate::app::Tx) {
+        #[cfg(feature = "e2e-observe")]
+        let phone_gate = phone_gate::Gate::from_env().expect("acceptance phone gate setup failed");
         let (stop, stopped) = oneshot::channel();
         self.tls = bound.tls.is_some();
         self.server_task = Some(tokio::spawn(server::serve(
             bound.listeners,
             bound.tls.map(tokio_rustls::TlsAcceptor::from),
-            bound.auth.clone(),
+            server::Host {
+                auth: bound.auth.clone(),
+                generation: self.generation,
+                roots: self.roots().to_vec().into(),
+                #[cfg(feature = "e2e-observe")]
+                phone_gate,
+            },
             tx,
             stopped,
-            self.generation,
-            self.roots().to_vec().into(),
         )));
         self.stop = Some(stop);
         self.auth = Some(bound.auth);
@@ -350,7 +488,10 @@ impl Remote {
     }
 
     pub fn stop(&mut self, reason: &'static str) {
-        self.generation += 1;
+        self.generation = self
+            .generation
+            .checked_add(1)
+            .expect("remote generation exhausted");
         if let Some(starting) = self.starting.take() {
             starting.abort();
         }
@@ -379,12 +520,25 @@ impl Remote {
     /// Sends `message` to connection `to`, or to every phone for `None`; a full queue drops its phone.
     pub fn send(&mut self, to: Option<u64>, message: Value) {
         self.phones.retain(|phone| {
-            to.is_some_and(|id| id != phone.connection.id) || phone.connection.send(message.clone())
+            if to.is_some_and(|id| id != phone.connection.id) {
+                return true;
+            }
+            phone.connection.send(message.clone())
         });
+    }
+
+    /// Revokes delivery without freeing operations still waiting on the Agent.
+    pub fn disconnected(&mut self, connection: u64) {
+        self.phones
+            .retain(|phone| phone.connection.id != connection);
     }
 }
 
 pub enum RemoteEvent {
+    #[cfg(feature = "e2e-observe")]
+    PhoneGate(phone_gate::Observation),
+    #[cfg(feature = "e2e-observe")]
+    PhoneGateFailed(String),
     Bound(u64, Result<Bound, String>),
     Connect {
         connection: Connection,
@@ -407,6 +561,30 @@ pub enum RemoteEvent {
         id: String,
         result: Result<Value, String>,
     },
+    /// The Agent's answer to a phone's `input.push`, which decides its ack.
+    Pushed {
+        connection: u64,
+        id: String,
+        result: Box<Result<crate::protocol::InputPushResult, crate::protocol::RpcError>>,
+    },
+    /// The Agent's answer to the session open or create this phone requested.
+    Created {
+        connection: u64,
+        id: String,
+        result: Box<Result<crate::app::tasks::Adopted, crate::protocol::RpcError>>,
+    },
+    Finished {
+        connection: u64,
+        id: String,
+        method: &'static str,
+        result: Result<Value, crate::protocol::RpcError>,
+    },
+    /// The Agent's answer to a phone's `input.remove`, which decides its ack.
+    Removed {
+        connection: u64,
+        id: String,
+        result: Box<Result<crate::protocol::InputRemoveResult, crate::protocol::RpcError>>,
+    },
     Disconnected(u64),
     /// A wrong password; `locked` is the pause it started or ran into.
     LoginRefused {
@@ -417,6 +595,26 @@ pub enum RemoteEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_closed_receiver_is_not_reported_as_a_full_outbound_queue() {
+        let (outbound, receiver) = mpsc::channel(1);
+        let (close, closing) = watch::channel(None);
+        let connection = Connection {
+            id: 1,
+            generation: 0,
+            device: Device {
+                name: "phone".into(),
+                token_sha256: "test".into(),
+                paired_at: String::new(),
+            },
+            outbound,
+            close,
+        };
+        drop(receiver);
+        assert!(!connection.send(json!({"t":"notice"})));
+        assert_eq!(*closing.borrow(), None);
+    }
 
     fn config(addresses: &[&str], dir: &std::path::Path) -> crate::config::Remote {
         crate::config::Remote {

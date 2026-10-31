@@ -91,7 +91,7 @@ impl App {
 
     /// The level to switch to when `model` does not support the current one,
     /// with a notice saying so.
-    fn reasoning_for(&mut self, model: &str) -> Option<Reasoning> {
+    pub(super) fn reasoning_for(&mut self, model: &str) -> Option<Reasoning> {
         let current = self.reasoning()?;
         let supported = &self
             .models

@@ -185,7 +185,7 @@ let tick = 0;
 // Only active work in this view needs elapsed-time updates.
 export function syncTick() {
   const s = S.state, x = s && s.status;
-  const want = !!s && !!(x.started_ms && (x.busy || x.compacting));
+  const want = !!s && !x.block_reason && !!(x.started_ms && (x.busy || x.compacting));
   if (want && !tick) tick = setInterval(onTick, 1000);
   if (!want && tick) { clearInterval(tick); tick = 0; }
 }

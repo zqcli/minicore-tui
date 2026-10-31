@@ -18,6 +18,10 @@ use crate::ui::sheets;
 #[derive(Debug)]
 pub enum Overlay {
     None,
+    Unconfirmed {
+        selected: usize,
+        mode: super::unconfirmed::ReviewMode,
+    },
     /// The inline command list; its filter is the composer's `/name`.
     Palette {
         selected: usize,
@@ -75,6 +79,7 @@ impl Overlay {
 /// A picker or view a command or key opens.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Panel {
+    Unconfirmed,
     Sessions,
     Models,
     Reasoning,
@@ -211,6 +216,10 @@ impl App {
             self.remote_flash();
             return;
         }
+        if panel == Panel::Unconfirmed {
+            self.open_unconfirmed();
+            return;
+        }
         if self.session.is_none() {
             // `workspace.files` needs a loaded session.
             let hint = match panel {
@@ -226,6 +235,7 @@ impl App {
             }
         }
         self.overlay = match panel {
+            Panel::Unconfirmed => unreachable!("local input review opens before session panels"),
             Panel::Sessions => Overlay::Sessions {
                 filter: String::new(),
                 selected: 0,
@@ -423,10 +433,9 @@ impl App {
     pub(super) fn rename_session(&self, session_id: String, title: String) {
         let client = self.client.clone();
         self.spawn_msg(async move {
-            let params = json!({ "session_id": session_id, "title": title.trim() });
             Msg::Renamed(
-                session_id,
-                tasks::session(client, protocol::METHOD_SESSION_RENAME, params).await,
+                session_id.clone(),
+                tasks::renamed_session(client, session_id, title).await,
             )
         });
     }

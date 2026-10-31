@@ -8,6 +8,688 @@ use crate::app::{FLASH_TTL, Msg, NoticeLevel, Overlay, Scroll};
 use crate::protocol::read::UserKind;
 use crate::transcript::{Block, RequestKey};
 
+#[tokio::test(start_paused = true)]
+async fn answering_an_interaction_keeps_it_until_the_authoritative_snapshot_resolves_it() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.fake
+        .script_held("interaction.answer", json!({"accepted":true}));
+    h.fake
+        .script_held("session.state", json!({"session_id":"s1"}));
+    h.control_event(json!({"pending_interaction":{"loop_id":"l1","request_index":0,"interaction_id":"first","tool_call_id":"call","tool_name":"bash","kind":{"type":"approval","data":{"prompt":"Allow?"}}}})).await;
+    h.until(|app| app.has_interaction()).await;
+    h.action(crate::app::Action::Answer(crate::app::Answer::Allow));
+    assert_eq!(
+        h.app
+            .session
+            .as_ref()
+            .unwrap()
+            .interaction
+            .as_ref()
+            .unwrap()
+            .interaction_id,
+        "first"
+    );
+    h.control_event(json!({"pending_interaction":{"loop_id":"l1","request_index":0,"interaction_id":"newer","tool_call_id":"call2","tool_name":"bash","kind":{"type":"approval","data":{"prompt":"New approval?"}}}})).await;
+    h.until(|app| {
+        app.session
+            .as_ref()
+            .unwrap()
+            .interaction
+            .as_ref()
+            .unwrap()
+            .interaction_id
+            == "newer"
+    })
+    .await;
+    h.fake.release("interaction.answer");
+    h.settle().await;
+    assert_eq!(
+        h.app
+            .session
+            .as_ref()
+            .unwrap()
+            .interaction
+            .as_ref()
+            .unwrap()
+            .interaction_id,
+        "newer"
+    );
+}
+
+fn text_interaction(id: &str) -> serde_json::Value {
+    json!({"loop_id":"l1","request_index":0,"interaction_id":id,"tool_call_id":"call","tool_name":"question","kind":{"type":"tool_input","data":{"prompt":"Describe the branch to use","answer_kind":"text","choices":[{"index":0,"text":"not a choice prompt"}]}}})
+}
+
+#[tokio::test(start_paused = true)]
+async fn persistence_blocking_stays_visible_without_hiding_an_actionable_text_interaction() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.fake
+        .script_held("interaction.answer", json!({"accepted":true}));
+    h.control_event(json!({"block_reason":"persistence"})).await;
+    h.until(|app| app.session.as_ref().unwrap().block_reason.is_some())
+        .await;
+    h.app.notices.clear();
+    assert!(h.screen(120, 30).contains("Persistence blocked"));
+    h.app.composer.set_text("separate conversation draft");
+    h.control_event(json!({"pending_interaction":text_interaction("blocked-question"),"block_reason":"persistence"})).await;
+    h.until(|app| app.has_interaction()).await;
+    h.type_text("the answer");
+    let screen = h.screen(120, 30);
+    for text in [
+        "Persistence blocked",
+        "Waiting for input",
+        "Describe the branch to use",
+        "the answer",
+    ] {
+        assert!(screen.contains(text), "{text}: {screen}");
+    }
+    tokio::time::advance(Duration::from_millis(500)).await;
+    h.press(KeyCode::Enter);
+    h.fake.wait_for_calls("interaction.answer", 1).await;
+    assert_eq!(
+        h.calls("interaction.answer")[0]["interaction_id"],
+        "blocked-question"
+    );
+    assert_eq!(
+        h.calls("interaction.answer")[0]["answer"],
+        json!({"type":"text","text":"the answer"})
+    );
+    assert_eq!(h.app.composer.text(), "separate conversation draft");
+    let mut long_question = text_interaction("long-blocked-question");
+    long_question["kind"]["data"]["prompt"] = json!("question line\n".repeat(100));
+    h.control_event(json!({"pending_interaction":long_question,"block_reason":"persistence"}))
+        .await;
+    h.until(|app| {
+        app.session
+            .as_ref()
+            .unwrap()
+            .interaction
+            .as_ref()
+            .unwrap()
+            .interaction_id
+            == "long-blocked-question"
+    })
+    .await;
+    h.type_text("narrow answer");
+    let narrow = h.screen(70, 12);
+    for text in ["Persistence blocked", "Text answer", "narrow answer"] {
+        assert!(narrow.contains(text), "{text}: {narrow}");
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn local_unknown_input_retains_its_owner_and_requires_a_duplicate_warning_after_editing() {
+    use crate::app::{
+        Action, Overlay,
+        unconfirmed::{ReviewMode, Status},
+    };
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    #[cfg(feature = "e2e-observe")]
+    let trace = tempfile::NamedTempFile::new().unwrap();
+    #[cfg(feature = "e2e-observe")]
+    h.app.start_observer(trace.reopen().unwrap());
+    h.fake.script_error_with(
+        "input.push",
+        -32603,
+        "acceptance unknown",
+        "transport_uncertain",
+        Some("unknown"),
+    );
+    h.app.composer.set_text("original unknown");
+    h.action(Action::QueueFollowUp);
+    let original_id = h.app.local_inputs[0].id;
+    h.app.composer.set_text("new independent draft");
+    h.settle().await;
+    assert_eq!(
+        h.app.local_inputs.len(),
+        1,
+        "a generic notice and history are not unconfirmed operation ownership"
+    );
+    let original = &h.app.local_inputs[0];
+    assert_eq!(original.id, original_id);
+    assert_eq!(original.status, Status::Unconfirmed);
+    assert_eq!(original.entry.text(), "original unknown");
+    assert_eq!(original.target.session_id, "s1");
+    assert_eq!(original.target.load, crate::testing::LOAD);
+    assert_eq!(original.target.epoch, h.app.session.as_ref().unwrap().epoch);
+    assert_eq!(original.mode, crate::protocol::InputMode::FollowUp);
+    assert!(
+        !h.app.composer.history_prev(),
+        "uncertain input is not ordinary recallable prompt history"
+    );
+    h.app.notices.clear();
+    tokio::time::advance(Duration::from_secs(60)).await;
+    h.app.tick();
+    assert!(h.screen(120, 24).contains("F8 review"));
+    h.press(KeyCode::F(8));
+    h.press(KeyCode::Char('e'));
+    assert!(matches!(
+        h.app.overlay,
+        Overlay::Unconfirmed {
+            mode: ReviewMode::Edit(_),
+            ..
+        }
+    ));
+    h.press(KeyCode::Home);
+    h.type_text("edited ");
+    assert_eq!(h.app.composer.text(), "new independent draft");
+    #[cfg(feature = "e2e-observe")]
+    {
+        h.app.observe_checkpoint(false);
+        let rows: Vec<serde_json::Value> = std::fs::read_to_string(trace.path())
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        let state = rows
+            .iter()
+            .rev()
+            .find(|row| row["event"] == "canonical_view")
+            .unwrap()["local_input_state"]
+            .clone();
+        assert_eq!(
+            state["operations"][0]["operation_id"],
+            format!("tui-{original_id}")
+        );
+        assert_eq!(state["operations"][0]["status"], "unconfirmed");
+        assert_eq!(state["operations"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            state["review"]["operation_id"],
+            format!("tui-{original_id}")
+        );
+        assert_eq!(state["review"]["mode"], "edit");
+        assert_ne!(
+            state["operations"][0]["body"],
+            state["review"]["edited_body"]
+        );
+        assert!(
+            !std::fs::read_to_string(trace.path())
+                .unwrap()
+                .contains("original unknown")
+        );
+    }
+    assert_eq!(
+        h.app.local_inputs[0].entry.text(),
+        "original unknown",
+        "editing cannot rewrite the original acceptance uncertainty"
+    );
+    h.press(KeyCode::Enter);
+    let warning = h.screen(140, 24).to_lowercase();
+    assert!(
+        warning.contains("may already") && warning.contains("duplicate"),
+        "{warning}"
+    );
+    h.key(KeyCode::Char('y'), KeyModifiers::CONTROL);
+    h.key(KeyCode::Char('y'), KeyModifiers::ALT);
+    assert_eq!(
+        h.calls("input.push").len(),
+        1,
+        "redo or modified keys are not an explicit resend decision"
+    );
+    h.press(KeyCode::Enter);
+    assert!(matches!(
+        h.app.overlay,
+        Overlay::Unconfirmed {
+            mode: ReviewMode::Edit(_),
+            ..
+        }
+    ));
+    assert_eq!(
+        h.calls("input.push").len(),
+        1,
+        "Enter cancels the warning, never confirms an uncertain resend"
+    );
+    h.press(KeyCode::Esc);
+    h.press(KeyCode::Char('r'));
+    h.press(KeyCode::Esc);
+    assert_eq!(h.app.local_inputs[0].status, Status::Unconfirmed);
+    assert_eq!(h.calls("input.push").len(), 1);
+    h.press(KeyCode::Char('e'));
+    h.press(KeyCode::Home);
+    h.type_text("edited ");
+    h.press(KeyCode::Enter);
+    h.fake.script_held("input.push", pushed(vec![]));
+    h.press(KeyCode::Char('y'));
+    h.fake.wait_for_calls("input.push", 2).await;
+    assert_eq!(h.app.local_inputs.len(), 2);
+    let retry = &h.app.local_inputs[1];
+    assert_ne!(retry.id, original_id);
+    assert_eq!(retry.retry_of, Some(original_id));
+    assert_eq!(retry.target, h.app.local_inputs[0].target);
+    assert_eq!(retry.mode, crate::protocol::InputMode::FollowUp);
+    assert_eq!(h.calls("input.push")[1]["text"], "edited original unknown");
+    assert_eq!(
+        h.app.local_inputs[0].status,
+        Status::Unconfirmed,
+        "a new operation's acceptance cannot resolve the old operation"
+    );
+    assert_eq!(h.app.composer.text(), "new independent draft");
+    h.press(KeyCode::Char('d'));
+    h.press(KeyCode::Esc);
+    assert_eq!(h.app.local_inputs.len(), 2);
+    h.press(KeyCode::Char('d'));
+    h.press(KeyCode::Char('y'));
+    assert_eq!(
+        h.app.local_inputs.len(),
+        1,
+        "forget is an explicit decision and never a cancellation RPC"
+    );
+    assert_eq!(h.calls("input.remove").len(), 0);
+    assert_eq!(h.calls("turn.cancel").len(), 0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn local_unknown_inputs_survive_view_and_load_changes_without_retargeting_or_automatic_recall()
+ {
+    use crate::app::{Action, Panel, unconfirmed::Status};
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.fake.script_error_with(
+        "input.push",
+        -32603,
+        "no receipt",
+        "transport_uncertain",
+        Some("unknown"),
+    );
+    h.submit("retained original");
+    let target = h.app.local_inputs[0].target.clone();
+    h.action(Action::NewSession);
+    h.settle().await;
+    assert!(h.app.session.is_none());
+    assert_eq!(h.app.local_inputs[0].target, target);
+    assert_eq!(h.app.local_inputs[0].status, Status::Unconfirmed);
+    h.app.background.clear();
+    h.fake.script("session.open",json!({"session":session_info("s1"),"load":"new-load","snapshot":snapshot("s1","new-load",1)}));
+    h.fake.script("session.state",json!({"_fixture_exact_snapshot":true,"session_id":"s1","status":"idle","snapshot":snapshot("s1","new-load",2)}));
+    h.action(Action::OpenSession("s1".into()));
+    h.until(|app| {
+        app.session
+            .as_ref()
+            .is_some_and(|session| session.load.as_deref() == Some("new-load"))
+    })
+    .await;
+    h.app.open_panel(Panel::Unconfirmed);
+    h.press(KeyCode::Char('r'));
+    h.press(KeyCode::Char('y'));
+    h.settle().await;
+    assert_eq!(
+        h.calls("input.push").len(),
+        1,
+        "a known old load must not be retargeted to the reopened session"
+    );
+    assert_eq!(h.app.local_inputs[0].target, target);
+    assert_eq!(h.app.local_inputs[0].entry.text(), "retained original");
+    h.fake.close();
+    h.until(|app| app.fatal.is_some()).await;
+    h.press(KeyCode::Esc);
+    h.press(KeyCode::F(8));
+    assert!(
+        h.screen(120, 24).contains("retained original"),
+        "the fatal screen must not make the retained operation inaccessible"
+    );
+    assert!(!h.app.composer.history_prev());
+}
+
+#[tokio::test(start_paused = true)]
+async fn unknown_input_confirmation_keeps_the_same_operation_when_an_earlier_receipt_removes_a_row()
+{
+    use crate::app::{Action, unconfirmed::Status};
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.fake.script_held("input.push@s1", pushed(vec![]));
+    h.submit("same");
+    let first = h.app.local_inputs[0].id;
+    h.fake
+        .script("session.open@s2", json!({"session":session_info("s2")}));
+    h.fake.script("session.read@s2", display_read(0, 0));
+    h.action(Action::OpenSession("s2".into()));
+    h.until(|app| {
+        app.session
+            .as_ref()
+            .is_some_and(|session| session.info.session_id == "s2")
+    })
+    .await;
+    h.fake.script_error_with(
+        "input.push@s2",
+        -32603,
+        "unknown",
+        "transport_uncertain",
+        Some("unknown"),
+    );
+    h.submit("same");
+    h.settle().await;
+    let original = h.app.local_inputs[1].id;
+    assert_ne!(first, original);
+    assert_eq!(h.app.local_inputs[1].status, Status::Unconfirmed);
+    h.press(KeyCode::F(8));
+    h.press(KeyCode::Down);
+    h.press(KeyCode::Char('r'));
+    h.fake.release("input.push@s1");
+    h.until(|app| app.local_inputs.len() == 1).await;
+    assert_eq!(
+        h.app.selected_local_input().map(|input| input.id),
+        Some(original),
+        "the confirmation owns an ID, not a shifted list index or matching text"
+    );
+    h.fake.script_held("input.push@s2", pushed(vec![]));
+    h.press(KeyCode::Char('y'));
+    h.fake.wait_for_calls("input.push", 3).await;
+    let retry = h.app.local_inputs.back().unwrap();
+    assert_eq!(retry.retry_of, Some(original));
+    assert_eq!(retry.target.session_id, "s2");
+    assert!(retry.id > original);
+    assert_eq!(h.calls("input.push")[2]["session_id"], "s2");
+    assert_eq!(h.calls("input.push")[2]["text"], "same");
+    assert_eq!(h.app.local_inputs[0].id, original);
+    assert_eq!(h.app.local_inputs[0].status, Status::Unconfirmed);
+}
+
+#[tokio::test(start_paused = true)]
+async fn local_uncertainty_cannot_be_bypassed_through_undo_external_edit_or_history() {
+    use crate::app::{Action, Msg, unconfirmed::Status};
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.app.composer.insert("not yet accepted");
+    h.action(Action::EditDraft);
+    assert!(
+        !h.app.composer.history_prev(),
+        "opening an external editor is not acceptance"
+    );
+    let original = h.app.edit_request.take().unwrap();
+    h.app.on_msg(Msg::DraftEdited(Some(original)));
+    h.fake
+        .script_error_with("input.push", -32603, "unknown", "transport_uncertain", None);
+    h.action(Action::Submit);
+    h.settle().await;
+    assert_eq!(h.app.local_inputs[0].status, Status::Unconfirmed);
+    assert!(
+        !h.app.composer.undo(),
+        "the uncertain submission's old undo payload is not an ordinary draft"
+    );
+    assert!(!h.app.composer.history_prev());
+    h.press(KeyCode::F(8));
+    h.press(KeyCode::Char('e'));
+    h.app.on_paste("edited ");
+    h.press(KeyCode::Enter);
+    h.press(KeyCode::Esc);
+    assert_eq!(h.calls("input.push").len(), 1);
+    assert_eq!(h.app.local_inputs[0].entry.text(), "not yet accepted");
+}
+
+#[tokio::test(start_paused = true)]
+async fn local_start_failure_is_accepted_history_but_a_rejection_never_overwrites_an_edited_equal_draft()
+ {
+    use crate::app::{Action, unconfirmed::Status};
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.fake.script("input.push",json!({"session_id":"s1","load":crate::testing::LOAD,"accepted":true,"id":"accepted-input","started":null,"start_error":{"input_id":"older-input","kind":"runtime_start_failed","message":"The older queued input could not start"},"queue":queue(vec![],true)}));
+    let payload = "accepted paste\n".repeat(12);
+    h.app.on_paste(&payload);
+    h.action(Action::Submit);
+    h.settle().await;
+    assert!(h.app.local_inputs.is_empty());
+    assert!(h.app.composer.is_empty());
+    assert!(h.app.composer.history_prev());
+    assert_eq!(h.app.composer.text(), payload);
+    assert!(h.app.composer.display().contains("[paste"));
+    assert!(
+        h.notices()
+            .iter()
+            .any(|notice| notice.contains("was accepted"))
+    );
+    h.fake.script_error(
+        "input.push",
+        -32602,
+        "rejected before acceptance",
+        "invalid_params",
+    );
+    h.submit("same");
+    h.app.composer.set_text("same");
+    h.settle().await;
+    assert_eq!(h.app.composer.text(), "same");
+    assert_eq!(h.app.local_inputs.len(), 1);
+    assert_eq!(h.app.local_inputs[0].status, Status::Rejected);
+    assert_eq!(h.app.local_inputs[0].entry.text(), "same");
+}
+
+#[tokio::test(start_paused = true)]
+async fn local_unconfirmed_capacity_refuses_before_sending_and_keeps_the_new_draft() {
+    use crate::app::{
+        Action,
+        unconfirmed::{MAX_BYTES, MAX_OPERATIONS, Status},
+    };
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.fake.script_error_with(
+        "input.push",
+        -32603,
+        "unknown",
+        "transport_uncertain",
+        Some("unknown"),
+    );
+    for index in 0..MAX_OPERATIONS {
+        h.submit(&format!("input {index}"));
+        h.settle().await;
+    }
+    assert_eq!(h.app.local_inputs.len(), MAX_OPERATIONS);
+    assert!(
+        h.app
+            .local_inputs
+            .iter()
+            .all(|input| input.status == Status::Unconfirmed)
+    );
+    assert!(h.app.local_input_bytes() <= MAX_BYTES);
+    let operation = h.app.op_seq;
+    h.submit("kept at capacity");
+    h.settle().await;
+    assert_eq!(h.calls("input.push").len(), MAX_OPERATIONS);
+    assert_eq!(h.app.op_seq, operation);
+    assert_eq!(h.app.composer.text(), "kept at capacity");
+    let mut empty = Harness::opened(display_read(0, 0)).await;
+    empty.app.composer.set_text(&"x".repeat(MAX_BYTES + 1));
+    let operation = empty.app.op_seq;
+    empty.action(Action::Submit);
+    assert!(empty.app.local_inputs.is_empty());
+    assert_eq!(empty.app.op_seq, operation);
+    assert_eq!(empty.app.composer.text().len(), MAX_BYTES + 1);
+    assert!(empty.calls("input.push").is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_first_input_that_becomes_unconfirmed_keeps_its_paste_and_the_draft_typed_during_creation()
+ {
+    use crate::app::{Action, unconfirmed::Status};
+    let mut h = Harness::new();
+    h.boot().await;
+    h.fake
+        .script_held("session.create", json!({"session":session_info("s1")}));
+    h.fake.script_error_with(
+        "input.push",
+        -32603,
+        "unknown",
+        "transport_uncertain",
+        Some("unknown"),
+    );
+    let payload = "first paste\n".repeat(12);
+    h.app.on_paste(&payload);
+    h.action(Action::Submit);
+    h.fake.wait_for_calls("session.create", 1).await;
+    assert!(
+        h.app.local_input_bytes() >= payload.len() * 2,
+        "the creation copy and submission are both owned"
+    );
+    h.app.composer.set_text("next draft while creating");
+    h.fake.release("session.create");
+    h.until(|app| {
+        app.local_inputs
+            .iter()
+            .any(|input| input.status == Status::Unconfirmed)
+    })
+    .await;
+    assert_eq!(h.app.composer.text(), "next draft while creating");
+    assert_eq!(h.app.local_inputs[0].entry.text(), payload);
+    assert!(!h.app.composer.history_prev());
+    h.press(KeyCode::F(8));
+    h.press(KeyCode::Char('e'));
+    h.press(KeyCode::Home);
+    h.press(KeyCode::End);
+    let original = h.app.local_inputs[0].id;
+    h.app.unconfirmed_editor.set_text("");
+    h.press(KeyCode::Enter);
+    h.press(KeyCode::Char('y'));
+    assert_eq!(
+        h.calls("input.push").len(),
+        1,
+        "an empty edit is not a new send or resolution"
+    );
+    assert_eq!(h.app.local_inputs[0].id, original);
+    assert_eq!(h.app.local_inputs[0].status, Status::Unconfirmed);
+}
+
+#[tokio::test(start_paused = true)]
+async fn text_input_uses_its_own_editor_and_explicit_answer_kind_without_consuming_the_conversation_draft()
+ {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.app.composer.set_text("conversation draft stays here");
+    h.fake
+        .script_held("interaction.answer", json!({"accepted":true}));
+    h.control_event(json!({"pending_interaction":text_interaction("text-1")}))
+        .await;
+    h.until(|app| app.has_interaction()).await;
+    assert!(matches!(
+        h.app
+            .session
+            .as_ref()
+            .unwrap()
+            .interaction
+            .as_ref()
+            .unwrap()
+            .kind,
+        crate::app::InteractionKind::Text
+    ));
+    h.type_text("y an answer n");
+    h.app.on_paste(" second portion");
+    h.press(KeyCode::Left);
+    h.press(KeyCode::Backspace);
+    h.press(KeyCode::End);
+    assert_eq!(h.app.composer.text(), "conversation draft stays here");
+    assert!(h.calls("interaction.answer").is_empty());
+    let expected = h
+        .app
+        .session
+        .as_ref()
+        .unwrap()
+        .interaction_editor
+        .text()
+        .to_owned();
+    assert!(expected.starts_with("y an answer n "));
+    let screen = h.screen(100, 25);
+    assert!(screen.contains("Describe the branch to use"), "{screen}");
+    assert!(screen.contains("Text answer"), "{screen}");
+    assert!(!screen.contains("Allow once"), "{screen}");
+    assert!(
+        h.app
+            .on_key(crossterm::event::KeyEvent::new(
+                KeyCode::Enter,
+                KeyModifiers::NONE
+            ))
+            .is_none(),
+        "the new text prompt preserves the answer arming window"
+    );
+    arm_prompt().await;
+    h.press(KeyCode::Enter);
+    h.fake.wait_for_calls("interaction.answer", 1).await;
+    let request = h.calls("interaction.answer").remove(0);
+    assert_eq!(request["answer"], json!({"type":"text","text":expected}));
+    assert_eq!(request["interaction_id"], "text-1");
+    assert_eq!(request["loop_id"], "l1");
+    assert_eq!(request["load"], crate::testing::LOAD);
+    assert_eq!(h.app.composer.text(), "conversation draft stays here");
+}
+
+#[tokio::test(start_paused = true)]
+async fn text_editor_is_preserved_by_same_id_revisions_but_old_answers_cannot_replace_a_new_prompt()
+{
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.fake
+        .script_held("interaction.answer", json!({"accepted":true}));
+    h.control_event(json!({"pending_interaction":text_interaction("first")}))
+        .await;
+    h.until(|app| app.has_interaction()).await;
+    h.type_text("first answer");
+    h.control_event(json!({"pending_interaction":text_interaction("first")}))
+        .await;
+    h.settle().await;
+    assert_eq!(
+        h.app.session.as_ref().unwrap().interaction_editor.text(),
+        "first answer"
+    );
+    arm_prompt().await;
+    h.press(KeyCode::Enter);
+    h.fake.wait_for_calls("interaction.answer", 1).await;
+    h.control_event(json!({"pending_interaction":text_interaction("second")}))
+        .await;
+    h.until(|app| {
+        app.session
+            .as_ref()
+            .unwrap()
+            .interaction
+            .as_ref()
+            .unwrap()
+            .interaction_id
+            == "second"
+    })
+    .await;
+    assert!(
+        h.app
+            .session
+            .as_ref()
+            .unwrap()
+            .interaction_editor
+            .is_empty()
+    );
+    h.type_text("new answer");
+    h.fake.release("interaction.answer");
+    h.emit(
+        "interaction_resolved",
+        json!({"turn":turn("l1"),"interaction_id":"first"}),
+    )
+    .await;
+    h.settle().await;
+    let session = h.app.session.as_ref().unwrap();
+    assert_eq!(
+        session.interaction.as_ref().unwrap().interaction_id,
+        "second"
+    );
+    assert_eq!(session.interaction_editor.text(), "new answer");
+    assert_eq!(h.calls("interaction.answer").len(), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn empty_or_oversized_text_answers_are_rejected_without_truncating_or_sending_them() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.fake
+        .script_held("interaction.answer", json!({"accepted":true}));
+    h.control_event(json!({"pending_interaction":text_interaction("text")}))
+        .await;
+    h.until(|app| app.has_interaction()).await;
+    for text in [String::new(), "bad\ntext".to_owned(), "界".repeat(2731)] {
+        h.action(crate::app::Action::Answer(crate::app::Answer::Text(text)));
+    }
+    h.settle().await;
+    assert!(h.calls("interaction.answer").is_empty());
+    let text = "é".repeat(crate::app::session::TEXT_ANSWER_MAX_BYTES / 2);
+    h.action(crate::app::Action::Answer(crate::app::Answer::Text(
+        text.clone(),
+    )));
+    h.fake.wait_for_calls("interaction.answer", 1).await;
+    assert_eq!(h.calls("interaction.answer")[0]["answer"]["text"], text);
+    h.action(crate::app::Action::Answer(crate::app::Answer::Text(
+        "   ".into(),
+    )));
+    h.fake.wait_for_calls("interaction.answer", 2).await;
+    assert_eq!(
+        h.calls("interaction.answer")[1]["answer"]["text"],
+        "   ",
+        "Agent-legal whitespace must not be trimmed or rejected"
+    );
+}
+
 /// `count` prompts, each followed by a three-line answer.
 fn conversation(h: &mut Harness, count: usize) {
     let transcript = &mut h.app.session.as_mut().unwrap().transcript;
@@ -300,12 +982,10 @@ async fn a_message_sent_during_a_compaction_waits_in_the_agents_queue_without_a_
         "input.push",
         pushed(vec![entry("i1", "follow_up", "later")]),
     );
-    h.emit(
-        "session_state",
-        json!({"state": {"session_id": "s1", "status": "idle",
-                         "compaction": {"operation_id": "auto-boundary-l1-1", "phase": "summarizing",
-                                        "covered_item_count": 8, "retained_item_count": 2}}}),
-    )
+    h.control_event(json!({"compaction": {
+        "operation_id": "auto-boundary-l1-1", "phase": "summarizing",
+        "covered_item_count": 8, "retained_item_count": 2,
+    }}))
     .await;
     h.until(|app| app.compacting()).await;
     h.app.composer.set_text("later");

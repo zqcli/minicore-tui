@@ -2,6 +2,51 @@
 
 ## Unreleased
 
+- Local inputs whose acceptance is unknown remain separately reviewable with F8
+  or `/unconfirmed`, without replacing a new draft or entering ordinary prompt
+  history. Editing keeps that uncertainty; resending warns about possible
+  duplication and uses a new operation against the original target.
+- Late steering stays at its Agent-reported request boundary before the original
+  turn's terminal and successor, including identical-text inputs and incomplete
+  turns. Inputs arriving after canonical installation cannot resurrect that body.
+- Quitting waits for the Agent child to finish after its shutdown acknowledgement
+  instead of interrupting its final cleanup; an unresponsive child is still
+  terminated within a bounded deadline.
+- Completion recovery shares its two read slots fairly across resident sessions.
+  A recovered saved tail keeps an explicit warning for unknown missing unsaved
+  turns, and late tool-record save facts update already-restored cards.
+- Persistence blocking stays visible while idle and alongside an actionable
+  interaction. A missing or oversized completed body keeps its turn identity,
+  known outcome and saving status instead of disappearing with a notice.
+- Bounded history catch-up keeps its verified newer window and `/recover`
+  continues the actual missing range. Older pagination cannot hide a missing
+  newer suffix; saved-history anchors also preserve order when result reads
+  finish out of order, and delayed waits preserve successor token usage.
+- Tool text-input questions use a separate answer editor without consuming the
+  conversation draft. Answers keep their exact interaction target, and a newer
+  prompt cannot be replaced by a delayed old reply. An answered tool question
+  finishes as done in live output, history and restored tool details.
+- Phone protocol v3 targets operations by session/load and stable input or turn
+  identity. Input ACKs wait for the Agent result; unknown acceptance stays
+  unconfirmed, and edit text returns only to the originating operation.
+- Unknown-turn body and tool events wait in a bounded cache until the Agent
+  confirms their identity. Recovery keeps newer live output, unsaved turns and
+  drafts, and `/recover` retries an exhausted read without resubmitting input.
+- Control state — what is running, the queue, the paused flag, a waiting
+  interaction, compaction and a blocked session — comes from one authoritative
+  snapshot the Agent pushes (or from `session.state`), applied whole. A turn's
+  body, outcome and saved state are still confirmed by `turn.wait` and
+  `turn.result`. A missed turn is discovered from the completion catalogue and
+  read back, so a session keeps its history even when events were dropped.
+- A turn's canonical body is installed once, from a result identity checked on
+  every page; a turn the client never streamed is placed where the catalogue says
+  it belongs. Its turn-end line says when the Agent could not save it.
+- A snapshot arriving during its session's pending open is held (at most two,
+  128 MiB total) and installed by that open; overflow forces a fresh
+  `session.state` rather than leaving control empty.
+- The client admits the Agent's 64 MiB control frame and may send a request up
+  to the Agent's 8 MiB ceiling, so a maximum 256 KiB input can actually be
+  submitted instead of being refused. No input is truncated to fit a limit.
 - History and turn reads keep the existing transcript and report an error or an
   oversized item instead of installing an incomplete or invalid result.
 

@@ -39,9 +39,38 @@ pub struct StartedTurn {
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct InputPushResult {
+    /// The instance the receipt belongs to; a pre-v2 Agent omits both.
+    #[serde(default)]
+    pub session_id: Option<String>,
+    #[serde(default)]
+    pub load: Option<String>,
+    /// What the Agent accepted. A success receipt without the flag is an
+    /// acceptance: a rejected push never answers successfully.
+    #[serde(default = "accepted")]
+    pub accepted: bool,
     /// The turn this push started, whose input is an older entry when queue order requires.
     pub started: Option<StartedTurn>,
+    /// The entry this push accepted; the Agent always states it.
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub accepted_at: Option<String>,
+    /// The input whose start failed after acceptance; `accepted` stays true.
+    #[serde(default)]
+    pub start_error: Option<InputStartError>,
     pub queue: Queue,
+}
+
+fn accepted() -> bool {
+    true
+}
+
+/// A claimed input that could not start its turn, after it was accepted.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct InputStartError {
+    pub input_id: String,
+    pub kind: String,
+    pub message: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -59,6 +88,8 @@ pub struct InputRecallResult {
 #[derive(Clone, Debug, Deserialize)]
 pub struct InputResumeResult {
     pub started: Option<StartedTurn>,
+    #[serde(default)]
+    pub start_error: Option<InputStartError>,
     pub queue: Queue,
 }
 
@@ -68,6 +99,8 @@ pub struct DeliveredInput {
     pub id: String,
     pub text: String,
     pub accepted_at: Option<String>,
+    /// The preparation candidate this input joined, which may never have been issued.
+    pub request_index: u32,
 }
 
 #[cfg(test)]
@@ -98,5 +131,37 @@ mod tests {
             serde_json::to_value(InputMode::FollowUp).unwrap(),
             "follow_up"
         );
+    }
+
+    #[test]
+    fn a_push_receipt_states_acceptance_and_an_older_heads_start_failure() {
+        let push: InputPushResult = serde_json::from_value(json!({
+            "session_id": "ses_1", "load": "load_1", "accepted": true,
+            "id": "inp_new", "accepted_at": "2026-10-30T10:00:00Z", "started": null,
+            "start_error": {"input_id": "inp_older", "kind": "runtime_start_failed",
+                            "message": "The queued turn could not start"},
+            "queue": {"items": [
+                {"id": "inp_older", "mode": "follow_up", "text": "Older"},
+                {"id": "inp_new", "mode": "follow_up", "text": "New"}
+            ], "paused": true}
+        }))
+        .unwrap();
+        assert_eq!(push.id.as_deref(), Some("inp_new"));
+        let error = push.start_error.unwrap();
+        assert_eq!(error.input_id, "inp_older");
+        assert!(push.queue.paused);
+        assert!(push.started.is_none());
+    }
+
+    #[test]
+    fn a_resume_receipt_may_report_a_start_failure() {
+        let resume: InputResumeResult = serde_json::from_value(json!({
+            "started": null,
+            "start_error": {"input_id": "inp_1", "kind": "runtime_start_failed",
+                            "message": "The queued turn could not start"},
+            "queue": {"items": [], "paused": true}
+        }))
+        .unwrap();
+        assert_eq!(resume.start_error.unwrap().input_id, "inp_1");
     }
 }

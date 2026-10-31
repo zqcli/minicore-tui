@@ -32,6 +32,8 @@ pub enum Block {
         tools: u64,
         usage: Usage,
         changes: Option<ChangeSummary>,
+        /// Whether the Agent saved this turn, once a result said so.
+        saving: Option<Saving>,
     },
     Compaction {
         /// The Agent's operation id, so a duplicate report is recognised.
@@ -78,6 +80,32 @@ impl Block {
             Block::TurnEnd { loop_id, .. } => Some(loop_id),
             _ => None,
         }
+    }
+}
+
+/// Whether the Agent wrote a finished turn to the store.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Saving {
+    /// The stored record holds the whole turn.
+    Saved,
+    /// The turn is readable only while the Agent retains it.
+    Unsaved,
+    /// A write happened but its result is unknown; only reopening settles it.
+    Uncertain,
+}
+
+impl Saving {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Saved => "saved",
+            Self::Unsaved => "not saved",
+            Self::Uncertain => "save unconfirmed",
+        }
+    }
+
+    /// Whether a reader must be told the turn is not in committed history.
+    pub fn is_persisted(self) -> bool {
+        self == Self::Saved
     }
 }
 

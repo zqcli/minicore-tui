@@ -1,4 +1,4 @@
-//! Wire DTOs for minicore-agent 0.9.0 (Protocol v1). Unknown fields are
+//! Wire DTOs for minicore-agent 0.9.1 (Protocol v2). Unknown fields are
 //! ignored, and enums the Agent documents as non-exhaustive decode future values
 //! to `Unknown` instead of failing the frame.
 
@@ -7,6 +7,7 @@ pub mod event;
 pub mod failure;
 pub mod input;
 pub mod read;
+pub mod snapshot;
 pub mod stamp;
 pub mod tool;
 pub mod workspace;
@@ -22,21 +23,26 @@ pub use event::AgentEvent;
 pub use failure::Failure;
 pub use input::{
     DeliveredInput, InputMode, InputPushResult, InputRecallResult, InputRemoveResult,
-    InputResumeResult, Queue, QueueItem, StartedTurn,
+    InputResumeResult, InputStartError, Queue, QueueItem, StartedTurn,
 };
 pub use read::{
     ChunkAssembler, ChunkOutcome, DisplayProjection, RawHistoryItem, ReadChunk, ReadCursor,
     ReadSessionResult, RuntimeAssistantItem, RuntimeAssistantPart, RuntimeItem, RuntimeToolResult,
-    RuntimeUserItem, SnapshotPin, TurnResultPage,
+    RuntimeUserItem, SnapshotPin, TurnAvailability, TurnPersistence, TurnResultPage,
+};
+pub use snapshot::{
+    BlockReason, CompletedTurn, CompletionDirectory, CompletionKind, CompletionOutcome,
+    ExecutionPhase, ResultAvailability, SessionExecution, SessionSnapshot, SnapshotInteraction,
+    UnavailableReason,
 };
 pub use tool::{
     ToolDisplay, ToolExecution, ToolExecutionState, ToolInvocation, ToolOutputPage, ToolReadResult,
-    ToolRef, ToolSubject, ToolSummary,
+    ToolRecordingState, ToolRef, ToolSubject, ToolSummary,
 };
 pub use workspace::{FileEntry, FileKind, FilesPage};
 
 pub const JSONRPC_VERSION: &str = "2.0";
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 pub const METHOD_PING: &str = "agent.ping";
 pub const METHOD_RELOAD: &str = "agent.reload";
@@ -70,6 +76,8 @@ pub const METHOD_WORKSPACE_STATUS: &str = "workspace.status";
 pub const METHOD_CHANGES_LIST: &str = "changes.list";
 pub const METHOD_CHANGES_DIFF: &str = "changes.diff";
 pub const METHOD_INTERACTION_ANSWER: &str = "interaction.answer";
+/// The notification that carries the authoritative control snapshot.
+pub const EVENT_SESSION_SNAPSHOT: &str = "session_snapshot";
 
 pub const INVALID_REQUEST: i64 = -32_600;
 pub const INVALID_PARAMS: i64 = -32_602;
@@ -79,6 +87,9 @@ pub const SESSION_BUSY: i64 = -32_003;
 pub const INVALID_STATE: i64 = -32_005;
 pub const RESOURCE_EXHAUSTED: i64 = -32_019;
 pub const QUERY_LIMIT: i64 = -32_020;
+pub const MISSING_LOAD: i64 = -32_026;
+pub const STALE_LOAD: i64 = -32_027;
+pub const STALE_RESULT: i64 = -32_028;
 
 /// Capabilities this client requires before it sends anything beyond the
 /// handshake: exactly the ones it uses.
@@ -163,6 +174,7 @@ impl RpcResponse {
                     kind: "malformed_result".into(),
                     message: error.to_string(),
                     retryable: false,
+                    acceptance: None,
                 })
             }
             (None, Some(error)) => Err(error.clone()),
@@ -171,6 +183,7 @@ impl RpcResponse {
                 kind: "malformed_result".into(),
                 message: "response has neither result nor error".into(),
                 retryable: false,
+                acceptance: None,
             }),
         }
     }
@@ -182,6 +195,15 @@ pub struct RpcError {
     pub kind: String,
     pub message: String,
     pub retryable: bool,
+    /// For input methods: whether the Agent refused before accepting anything.
+    pub acceptance: Option<Acceptance>,
+}
+
+/// Whether an input command was refused before it could be accepted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Acceptance {
+    Rejected,
+    Unknown,
 }
 
 impl RpcError {
@@ -191,6 +213,7 @@ impl RpcError {
             kind: kind.into(),
             message: message.into(),
             retryable: false,
+            acceptance: None,
         }
     }
 
@@ -323,7 +346,7 @@ fn parse_wire_error(value: Value) -> Result<RpcError, FrameError> {
         .get("message")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    let (kind, retryable) = match object.get("data") {
+    let (kind, retryable, acceptance) = match object.get("data") {
         Some(data) => (
             data.get("kind")
                 .and_then(Value::as_str)
@@ -331,14 +354,20 @@ fn parse_wire_error(value: Value) -> Result<RpcError, FrameError> {
             data.get("retryable")
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
+            match data.get("acceptance").and_then(Value::as_str) {
+                Some("rejected") => Some(Acceptance::Rejected),
+                Some("unknown") => Some(Acceptance::Unknown),
+                _ => None,
+            },
         ),
-        None => ("unknown", false),
+        None => ("unknown", false, None),
     };
     Ok(RpcError {
         code,
         kind: kind.to_owned(),
         message: message.to_owned(),
         retryable,
+        acceptance,
     })
 }
 
@@ -476,6 +505,18 @@ pub struct SessionInfo {
 #[derive(Clone, Debug, Deserialize)]
 pub struct SessionResult {
     pub session: SessionInfo,
+    /// The resident instance the snapshot belongs to.
+    #[serde(default)]
+    pub load: Option<String>,
+    #[serde(default)]
+    pub snapshot: Option<SessionSnapshot>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct SessionStateResult {
+    #[serde(flatten)]
+    pub state: SessionState,
+    pub snapshot: SessionSnapshot,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
@@ -497,7 +538,6 @@ pub struct SessionState {
     pub active_loop: Option<LoopState>,
     pub compaction: Option<CompactionProgress>,
 }
-
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct LoopState {
     pub loop_id: String,
@@ -666,6 +706,22 @@ pub struct UsageTotals {
 }
 
 impl UsageTotals {
+    pub fn replace_contribution(&mut self, previous: &Usage, next: &Usage) {
+        self.input = self
+            .input
+            .checked_sub(previous.input_tokens.unwrap_or(0))
+            .expect("turn input usage was accounted");
+        self.output = self
+            .output
+            .checked_sub(previous.output_tokens.unwrap_or(0))
+            .expect("turn output usage was accounted");
+        self.cached = self
+            .cached
+            .checked_sub(previous.cache_read_tokens.unwrap_or(0))
+            .expect("turn cache usage was accounted");
+        self.add(next);
+    }
+
     pub fn add(&mut self, usage: &Usage) {
         self.input += usage.input_tokens.unwrap_or(0);
         self.output += usage.output_tokens.unwrap_or(0);
@@ -945,10 +1001,10 @@ mod tests {
     }
 
     #[test]
-    fn handshake_requires_protocol_one_and_used_capabilities() {
+    fn handshake_requires_protocol_two_and_used_capabilities() {
         let ping = |capabilities: &[&str]| PingResult {
             version: "0.7.0".into(),
-            protocol_version: 1,
+            protocol_version: 2,
             capabilities: capabilities.iter().map(|c| (*c).to_owned()).collect(),
         };
         assert_eq!(validate_backend(&ping(REQUIRED_CAPABILITIES)), Ok(()));
@@ -957,10 +1013,10 @@ mod tests {
             Err(BackendError::MissingCapabilities { .. })
         ));
         let mut wrong = ping(REQUIRED_CAPABILITIES);
-        wrong.protocol_version = 2;
+        wrong.protocol_version = 1;
         assert!(matches!(
             validate_backend(&wrong),
-            Err(BackendError::ProtocolVersion { found: 2, .. })
+            Err(BackendError::ProtocolVersion { found: 1, .. })
         ));
     }
 

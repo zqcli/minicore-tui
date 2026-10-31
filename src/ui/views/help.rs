@@ -129,8 +129,16 @@ const KEYS: &[KeyRow] = &[
         action: "select text, a word, a line; copies on release",
     },
     KeyRow {
+        keys: "f8",
+        action: "review retained local confirmations; edit separately, warn before resend, no automatic retry",
+    },
+    KeyRow {
         keys: "f1",
         action: "this help",
+    },
+    KeyRow {
+        keys: "text answer: enter / esc",
+        action: "send the separate answer / cancel that turn; conversation draft stays",
     },
 ];
 

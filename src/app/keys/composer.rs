@@ -215,6 +215,36 @@ impl App {
     /// A terminal paste. The composer decides whether the payload becomes a
     /// single token; a pasted `/name` opens the command list like typing does.
     pub fn on_paste(&mut self, text: &str) {
+        if matches!(
+            self.overlay,
+            crate::app::Overlay::Unconfirmed {
+                mode: crate::app::unconfirmed::ReviewMode::Edit(_),
+                ..
+            }
+        ) {
+            if !self
+                .unconfirmed_editor
+                .insert_bounded(text, crate::app::unconfirmed::EDIT_BYTES)
+            {
+                self.notice(
+                    NoticeLevel::Error,
+                    "The unconfirmed input edit buffer is full; its original is retained",
+                );
+            }
+            return;
+        }
+        if !self.remote.active()
+            && self.overlay.is_none()
+            && self.fatal.is_none()
+            && let Some(session) = self.session.as_mut()
+            && session
+                .interaction
+                .as_ref()
+                .is_some_and(|pending| matches!(pending.kind, crate::app::InteractionKind::Text))
+        {
+            session.interaction_editor.insert(text);
+            return;
+        }
         if (self.has_interaction() && !self.remote.active())
             || self.fatal.is_some()
             || !matches!(

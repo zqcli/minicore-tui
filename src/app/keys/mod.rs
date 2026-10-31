@@ -16,6 +16,14 @@ impl App {
         self.notices.clear();
         self.selection = None;
         self.composer_dragging = false;
+        if key.code == KeyCode::F(8) && !self.remote.active() {
+            self.open_unconfirmed();
+            return None;
+        }
+        if matches!(self.overlay, super::Overlay::Unconfirmed { .. }) {
+            self.on_unconfirmed_key(key);
+            return None;
+        }
         if self.fatal.is_some() {
             return matches!(key.code, KeyCode::Char('q') | KeyCode::Esc).then_some(Action::Quit);
         }
@@ -38,6 +46,14 @@ impl App {
     /// Approval prompts own the keyboard until answered; other keys are
     /// swallowed rather than reaching the draft behind the prompt.
     fn on_interaction_key(&mut self, key: KeyEvent) -> Option<Action> {
+        if self
+            .session
+            .as_ref()
+            .and_then(|session| session.interaction.as_ref())
+            .is_some_and(|pending| matches!(pending.kind, InteractionKind::Text))
+        {
+            return self.on_text_interaction_key(key);
+        }
         let now = tokio::time::Instant::now();
         let session = self.session.as_mut()?;
         // Answer keys wait for the arming, so typing under way cannot answer.
@@ -77,5 +93,60 @@ impl App {
             }
         };
         armed.then_some(Action::Answer(answer))
+    }
+
+    fn on_text_interaction_key(&mut self, key: KeyEvent) -> Option<Action> {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+        if matches!(key.code, KeyCode::PageUp | KeyCode::PageDown)
+            || (ctrl
+                && matches!(
+                    key.code,
+                    KeyCode::Up | KeyCode::Down | KeyCode::Char('o' | 't')
+                ))
+        {
+            return self.on_composer_key(key);
+        }
+        let session = self.session.as_mut()?;
+        let armed = tokio::time::Instant::now() >= session.armed_at;
+        let editor = &mut session.interaction_editor;
+        match key.code {
+            KeyCode::Enter if shift => editor.newline(),
+            KeyCode::Enter if armed => {
+                return Some(Action::Answer(Answer::Text(editor.text().to_owned())));
+            }
+            KeyCode::Enter => {}
+            KeyCode::Esc => return Some(Action::Answer(Answer::Deny)),
+            KeyCode::Char('j') if ctrl => editor.newline(),
+            KeyCode::Char('a') if ctrl => editor.move_home(),
+            KeyCode::Char('e') if ctrl => editor.move_end(),
+            KeyCode::Char('u') if ctrl => editor.delete_to_line_start(),
+            KeyCode::Char('k') if ctrl => editor.delete_to_line_end(),
+            KeyCode::Char('w' | 'h') if ctrl => editor.delete_word_left(),
+            KeyCode::Char('z') if ctrl => {
+                editor.undo();
+            }
+            KeyCode::Char('y') if ctrl => {
+                editor.redo();
+            }
+            KeyCode::Char(_) if ctrl => {}
+            KeyCode::Char(ch) => editor.type_char(ch),
+            KeyCode::Backspace => editor.backspace(),
+            KeyCode::Delete => editor.delete(),
+            KeyCode::Left if ctrl => editor.move_word_left(),
+            KeyCode::Right if ctrl => editor.move_word_right(),
+            KeyCode::Left => editor.move_left(),
+            KeyCode::Right => editor.move_right(),
+            KeyCode::Home => editor.move_home(),
+            KeyCode::End => editor.move_end(),
+            KeyCode::Up => {
+                editor.move_up();
+            }
+            KeyCode::Down => {
+                editor.move_down();
+            }
+            _ => {}
+        }
+        None
     }
 }

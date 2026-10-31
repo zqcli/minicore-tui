@@ -9,8 +9,8 @@ use super::{PhoneView, fs};
 
 use crate::app::session::context_percent;
 use crate::app::{App, InteractionKind, LiveStatus, Session};
-use crate::protocol::InputMode;
 use crate::protocol::read::UserKind;
+use crate::protocol::{BlockReason, InputMode};
 use crate::transcript::{Block, RequestKey, ToolCall, ToolState};
 
 /// What one connection was last sent.
@@ -19,8 +19,39 @@ pub struct View {
     /// `None` until the first snapshot, then the viewed session's epoch.
     epoch: Option<Option<u64>>,
     revisions: Vec<u64>,
+    annotations: Vec<Value>,
     state: String,
     streaming: Vec<Option<Streaming>>,
+    /// The projection identity; renewed with every snapshot and view change.
+    view_epoch: String,
+    epoch_count: u64,
+}
+
+impl View {
+    pub fn invalidate(&mut self, connection: u64) {
+        let count = self.epoch_count;
+        *self = Self::default();
+        self.epoch_count = count;
+        self.renew(connection);
+    }
+
+    /// The projection a client holds for its current view.
+    ///
+    /// It is renewed whenever the client is sent a different view — a snapshot,
+    /// adoption of a created session, or a switch to another session or draft —
+    /// and kept across content updates, so an intent built from one projection
+    /// is refused once the client has moved on to another.
+    pub fn view_epoch(&self) -> &str {
+        &self.view_epoch
+    }
+
+    fn renew(&mut self, connection: u64) {
+        self.view_epoch = format!("view_{connection}_{}", self.epoch_count);
+        self.epoch_count = self
+            .epoch_count
+            .checked_add(1)
+            .expect("view epoch exhausted");
+    }
 }
 
 /// The catalog part of `State`, rebuilt only when the catalog or the listener changes.
@@ -204,29 +235,60 @@ impl Streaming {
 }
 
 impl View {
-    pub fn sync(&mut self, session: Option<&Session>, shared: &Shared) -> Vec<Value> {
+    /// Sends what this connection has not been told yet; `connection` names the
+    /// projection epoch the client will send back with its intents.
+    pub fn sync(
+        &mut self,
+        connection: u64,
+        session: Option<&Session>,
+        shared: &Shared,
+    ) -> Vec<Value> {
         let epoch = session.map(|session| session.epoch);
         let revisions = session.map_or(&[][..], |session| session.transcript.revisions());
         let blocks = session.map_or(&[][..], |session| session.transcript.blocks());
+        let annotations: Vec<_> = session
+            .into_iter()
+            .flat_map(|session| {
+                blocks
+                    .iter()
+                    .enumerate()
+                    .map(move |(index, block)| annotation(session, index, block))
+            })
+            .collect();
+        let project = |index: usize| {
+            let mut value = block(&blocks[index]);
+            if let Some(fields) = annotations[index].as_object() {
+                value.as_object_mut().unwrap().extend(fields.clone());
+            }
+            value
+        };
         let mut messages = Vec::new();
         if self.epoch != Some(epoch) {
-            messages.push(json!({"t":"snapshot", "state":shared.state, "blocks":blocks.iter().map(block).collect::<Vec<_>>()}));
+            if self.epoch.is_some() || self.view_epoch.is_empty() {
+                self.renew(connection);
+            }
+            messages.push(json!({"t":"snapshot", "view_epoch":self.view_epoch, "state":shared.state, "blocks":(0..blocks.len()).map(project).collect::<Vec<_>>()}));
             self.streaming = blocks.iter().map(Streaming::of).collect();
         } else {
             self.streaming.resize_with(revisions.len(), || None);
             let mut upserts = Vec::new();
             for (i, revision) in revisions.iter().enumerate() {
-                if self.revisions.get(i) == Some(revision) {
+                let same_annotation = self.annotations.get(i) == Some(&annotations[i]);
+                if self.revisions.get(i) == Some(revision) && same_annotation {
                     continue;
                 }
                 let current = &blocks[i];
-                let append = self.streaming[i]
-                    .as_ref()
-                    .and_then(|sent| sent.append(current));
+                let append = same_annotation
+                    .then(|| {
+                        self.streaming[i]
+                            .as_ref()
+                            .and_then(|sent| sent.append(current))
+                    })
+                    .flatten();
                 match append {
                     Some(append) if append.as_object().unwrap().is_empty() => {}
                     Some(append) => upserts.push(json!({"i":i, "append":append})),
-                    None => upserts.push(json!({"i":i, "block":block(current)})),
+                    None => upserts.push(json!({"i":i, "block":project(i)})),
                 }
                 self.streaming[i] = Streaming::of(current);
             }
@@ -240,6 +302,7 @@ impl View {
         self.epoch = Some(epoch);
         self.revisions.clear();
         self.revisions.extend_from_slice(revisions);
+        self.annotations = annotations;
         self.state.clone_from(&shared.serialized);
         messages
     }
@@ -321,20 +384,20 @@ fn state(app: &App, catalog: &Value, view: &PhoneView, loading: bool) -> Value {
     }
     let interaction = session.and_then(|s| s.interaction.as_ref().map(|interaction| {
         let call = s.transcript.find_tool_by_call_id(&interaction.tool_call_id);
-        json!({"id":interaction.interaction_id,
-            "kind":match interaction.kind { InteractionKind::Approval => "approval", InteractionKind::Choice(_) => "choice" },
+        json!({"id":interaction.interaction_id, "loop_id":interaction.turn.loop_id, "tool_call_id":interaction.tool_call_id,
+            "kind":match interaction.kind { InteractionKind::Approval => "approval", InteractionKind::Choice(_) => "choice", InteractionKind::Text => "text" },
             "tool":interaction.tool_name, "detail":call.map_or("", |call| call.detail.as_str()),
             "input":call.and_then(|call| call.expanded_input.as_deref()),
             "prompt":interaction.prompt, "options":interaction.options()})
     }));
     let queue: Vec<_> = session.into_iter().flat_map(|s| &s.queue.items).map(|queued| json!({
-        "kind":match queued.mode { InputMode::Steer => "steer", InputMode::FollowUp => "follow" }, "text":queued.text,
+        "id":queued.id, "kind":match queued.mode { InputMode::Steer => "steer", InputMode::FollowUp => "follow" }, "text":queued.text,
     })).collect();
     let (running, approval) = app.other_counts(current);
     json!({
-        "session":session.map(|s| json!({"id":s.info.session_id, "title":crate::app::overlay::session_label(&s.info, session), "workspace":fs::display(Path::new(&s.info.workspace)), "profile":s.info.profile, "model":s.info.model, "reasoning":s.info.reasoning, "branch":s.branch(), "allowed":s.allowed_tools})),
+        "session":session.map(|s| json!({"id":s.info.session_id, "load":s.load, "loop_id":live.map(|live| &live.turn.loop_id), "title":crate::app::overlay::session_label(&s.info, session), "workspace":fs::display(Path::new(&s.info.workspace)), "profile":s.info.profile, "model":s.info.model, "reasoning":s.info.reasoning, "branch":s.branch(), "allowed":s.allowed_tools})),
         "draft":{"workspace":fs::display(workspace), "profile":profile, "model":model, "reasoning":reasoning},
-        "status":{"label":session.and_then(Session::status_label), "busy":session.is_some_and(Session::is_busy), "started_ms":live.map(|live| live.started_ms), "interrupting":live.is_some_and(|live| live.interrupting), "compacting":session.is_some_and(Session::compacting), "loading":loading},
+        "status":{"label":session.and_then(|s| s.block_label().or_else(|| s.status_label())), "block_reason":session.and_then(|s| s.block_reason.map(|reason| match reason { BlockReason::Persistence => "persistence", BlockReason::Internal => "internal" })), "busy":session.is_some_and(Session::is_busy), "started_ms":live.map(|live| live.started_ms), "interrupting":live.is_some_and(|live| live.interrupting), "compacting":session.is_some_and(Session::compacting), "operation_id":session.and_then(|s| s.compaction.as_ref().map(|c| &c.operation_id)), "loading":loading},
         "usage":{"input":session.map_or(0, |s| s.usage.input), "output":session.map_or(0, |s| s.usage.output), "cached":session.map_or(0, |s| s.usage.cached)},
         "context_percent":session.and_then(context_percent), "interaction":interaction, "queue":queue,
         "older":session.is_some_and(|s| s.loaded_from > 0), "sessions":sessions,
@@ -344,7 +407,54 @@ fn state(app: &App, catalog: &Value, view: &PhoneView, loading: bool) -> Value {
     })
 }
 
-pub fn block(block: &Block) -> Value {
+fn annotation(session: &Session, index: usize, block: &Block) -> Value {
+    let mut fields = serde_json::Map::new();
+    if session.transcript.is_preserved(index) {
+        fields.insert("preserved".into(), json!(true));
+    }
+    if let Block::Assistant { key, .. } = block {
+        let channels: Vec<_> = [("reasoning", true), ("text", false)]
+            .into_iter()
+            .filter_map(|(name, reasoning)| {
+                session
+                    .transcript
+                    .is_preserved_channel(key, reasoning)
+                    .then_some(name)
+            })
+            .collect();
+        if !channels.is_empty() {
+            fields.insert("preserved_channels".into(), json!(channels));
+        }
+    }
+    if let Block::TurnEnd { loop_id, .. } = block
+        && let Some(note) = session
+            .body_recovery
+            .iter()
+            .find(|note| note.loop_id == *loop_id)
+    {
+        use crate::app::recovery::RecoveryStatus;
+        let status = match note.status {
+            RecoveryStatus::Pending => "pending",
+            RecoveryStatus::Fetching => "fetching",
+            RecoveryStatus::Complete => "complete",
+            RecoveryStatus::Partial => "partial",
+            RecoveryStatus::Unavailable => "unavailable",
+            RecoveryStatus::Retryable { .. } => "retryable_error",
+            RecoveryStatus::Exhausted => "exhausted",
+        };
+        fields.insert(
+            "recovery".into(),
+            json!({"status":status, "reason":note.message}),
+        );
+    }
+    if fields.is_empty() {
+        Value::Null
+    } else {
+        Value::Object(fields)
+    }
+}
+
+fn block(block: &Block) -> Value {
     match block {
         Block::User { text, kind, at } => {
             json!({"type":"user", "text":text, "kind":match kind { UserKind::Prompt => "prompt", UserKind::Steering => "steering", UserKind::Unknown => "unknown" }, "at":at})
@@ -371,9 +481,11 @@ pub fn block(block: &Block) -> Value {
             tools,
             usage,
             changes,
+            saving,
         } => {
             let mut turn = json!({"type":"turn_end", "loop_id":loop_id, "outcome":json!(outcome)["type"], "duration_ms":duration.map(|d| d.as_millis() as u64), "requests":requests, "tools":tools,
             "usage":{"input":usage.input_tokens.unwrap_or(0), "output":usage.output_tokens.unwrap_or(0), "cached":usage.cache_read_tokens.unwrap_or(0)},
+            "saving": saving.map(|saving| saving.label()),
             "changes":changes.map(|changes| json!({"files":changes.files, "added":changes.lines.map(|l| l.0), "removed":changes.lines.map(|l| l.1)}))});
             if let Some(failure) = outcome.failure() {
                 let mut value = outcome
@@ -406,7 +518,7 @@ mod tests {
     fn sync(view: &mut View, app: &mut App) -> Vec<Value> {
         Catalog::refresh(app);
         let shared = Shared::new(app, PhoneView::foreground(app), false);
-        view.sync(app.session.as_ref(), &shared)
+        view.sync(1, app.session.as_ref(), &shared)
     }
 
     fn turn_end(outcome: Value) -> Value {
@@ -418,7 +530,72 @@ mod tests {
             tools: 0,
             usage: Default::default(),
             changes: None,
+            saving: None,
         })
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn recovery_and_preserved_channel_changes_replace_blocks_without_body_revision_changes() {
+        let (_fake, mut app) = connected_app();
+        let key = RequestKey {
+            loop_id: "partial".into(),
+            request_index: 0,
+        };
+        let session = app.session.as_mut().unwrap();
+        session.transcript.push(Block::Assistant {
+            key: key.clone(),
+            text: "verified text".into(),
+            reasoning: "received only".into(),
+            streaming: true,
+            expanded: None,
+        });
+        session.transcript.push(Block::TurnEnd {
+            loop_id: "partial".into(),
+            outcome: crate::protocol::LoopOutcome::Completed,
+            duration: None,
+            requests: 1,
+            tools: 0,
+            usage: Default::default(),
+            changes: None,
+            saving: Some(crate::transcript::Saving::Saved),
+        });
+        let mut view = View::default();
+        sync(&mut view, &mut app);
+        let session = app.session.as_mut().unwrap();
+        let revisions = session.transcript.revisions().to_vec();
+        session
+            .body_recovery
+            .push_back(crate::app::session::BodyRecovery {
+                loop_id: "partial".into(),
+                status: crate::app::recovery::RecoveryStatus::Partial,
+                message: "Item 1 is too large".into(),
+            });
+        session
+            .transcript
+            .mark_preserved([crate::transcript::PreservedKey::AssistantReasoning(key)]);
+        assert_eq!(session.transcript.revisions(), revisions);
+        let update = sync(&mut view, &mut app);
+        assert_eq!(update[0]["t"], "blocks");
+        assert_eq!(
+            update[0]["upserts"][0]["block"]["preserved_channels"],
+            json!(["reasoning"])
+        );
+        assert_eq!(update[0]["upserts"][0]["block"]["text"], "verified text");
+        assert_eq!(update[0]["upserts"][1]["block"]["saving"], "saved");
+        assert_eq!(
+            update[0]["upserts"][1]["block"]["recovery"],
+            json!({"status":"partial", "reason":"Item 1 is too large"})
+        );
+        assert!(sync(&mut view, &mut app).is_empty());
+        app.session.as_mut().unwrap().body_recovery.clear();
+        let cleared = sync(&mut view, &mut app);
+        assert!(cleared[0]["upserts"][0]["block"].get("recovery").is_none());
+        let full = sync(&mut View::default(), &mut app);
+        assert_eq!(
+            full[0]["blocks"][0]["preserved_channels"],
+            json!(["reasoning"])
+        );
+        assert!(full[0]["blocks"][1].get("recovery").is_none());
     }
 
     #[test]
@@ -553,9 +730,9 @@ mod tests {
         assert_eq!(
             sync(&mut view, &mut app)[0]["state"]["queue"],
             json!([
-                {"kind":"steer", "text":"now"},
-                {"kind":"steer", "text":"also now"},
-                {"kind":"follow", "text":"follow"}
+                {"id":"a", "kind":"steer", "text":"now"},
+                {"id":"b", "kind":"steer", "text":"also now"},
+                {"id":"c", "kind":"follow", "text":"follow"}
             ])
         );
         assert!(sync(&mut view, &mut app).is_empty());

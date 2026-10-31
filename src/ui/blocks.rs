@@ -76,9 +76,17 @@ pub fn render(block: &Block, styles: Styles, width: u16, fold: Fold) -> Vec<Line
             requests,
             tools,
             changes,
+            saving,
             ..
         } => {
-            let text = turn_end_line(outcome, *duration, *requests, *tools, changes.as_ref());
+            let text = turn_end_line(
+                outcome,
+                *duration,
+                *requests,
+                *tools,
+                changes.as_ref(),
+                *saving,
+            );
             let style = match outcome {
                 crate::protocol::LoopOutcome::Completed => styles.meta(),
                 crate::protocol::LoopOutcome::Failed { .. } => styles.failure(),
@@ -693,6 +701,7 @@ pub fn turn_end_line(
     requests: u32,
     tools: u64,
     changes: Option<&crate::transcript::ChangeSummary>,
+    saving: Option<crate::transcript::Saving>,
 ) -> String {
     let completed = outcome.is_completed();
     let mut parts: Vec<String> = Vec::new();
@@ -721,6 +730,10 @@ pub fn turn_end_line(
             Some((added, removed)) => format!("{files} (+{added} −{removed})"),
             None => files,
         });
+    }
+    // A turn only this process can still show says so where it ends.
+    if let Some(saving) = saving.filter(|saving| !saving.is_persisted()) {
+        parts.push(saving.label().to_owned());
     }
     wrap::sanitize(&parts.join(" · ")).into_owned()
 }
@@ -1375,6 +1388,7 @@ mod tests {
                 files: 3,
                 lines: Some((40, 7)),
             }),
+            saving: None,
         };
         let lines = render(&block, styles(), 100, fold());
         assert_eq!(
@@ -1394,6 +1408,7 @@ mod tests {
             tools: 6,
             usage: Default::default(),
             changes: (files > 0).then_some(ChangeSummary { files, lines: None }),
+            saving: None,
         }
     }
 
@@ -1597,7 +1612,7 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(
-            turn_end_line(&failed, Some(Duration::from_millis(20)), 1, 0, None),
+            turn_end_line(&failed, Some(Duration::from_millis(20)), 1, 0, None, None),
             "failed · provider unavailable · 503 overloaded · 0.0s"
         );
         let changes = crate::transcript::ChangeSummary {
@@ -1611,12 +1626,13 @@ mod tests {
                 Some(Duration::from_secs(5)),
                 1,
                 1,
-                Some(&changes)
+                Some(&changes),
+                None
             ),
             "completed in 5.0s · 1 request · 1 tool · 1 file changed (+2 −1)"
         );
         assert_eq!(
-            turn_end_line(&completed, None, 8, 7, None),
+            turn_end_line(&completed, None, 8, 7, None, None),
             "completed · 8 requests · 7 tools"
         );
         let relayed: crate::protocol::LoopOutcome = serde_json::from_value(serde_json::json!({
@@ -1626,7 +1642,7 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(
-            turn_end_line(&relayed, None, 1, 0, None),
+            turn_end_line(&relayed, None, 1, 0, None, None),
             "failed · provider unavailable · 502 gate\\u{202e}way"
         );
         assert_eq!(format_duration(Duration::from_secs(187)), "3m07s");

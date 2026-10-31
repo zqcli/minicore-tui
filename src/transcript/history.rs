@@ -7,10 +7,44 @@ use crate::protocol::read::{
 };
 use crate::protocol::stamp::unix_millis;
 
+/// Identifies a block a reconcile kept although the canonical body omits it, so
+/// the reader is told that text is temporary rather than authoritative.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PreservedKey {
+    Assistant(RequestKey),
+    AssistantText(RequestKey),
+    AssistantReasoning(RequestKey),
+    User(String),
+    Tool(ToolRef),
+}
+
+impl PreservedKey {
+    pub fn belongs_to(&self, block: &Block) -> bool {
+        match (self, block) {
+            (
+                Self::AssistantText(key) | Self::AssistantReasoning(key),
+                Block::Assistant { key: other, .. },
+            ) => key == other,
+            _ => Self::of(block).as_ref() == Some(self),
+        }
+    }
+    pub fn of(block: &Block) -> Option<Self> {
+        match block {
+            Block::Assistant { key, .. } => Some(Self::Assistant(key.clone())),
+            Block::User { text, .. } => Some(Self::User(text.clone())),
+            Block::Tool(call) => Some(Self::Tool(call.key.clone())),
+            _ => None,
+        }
+    }
+}
+
+/// The canonical body with the live-only text kept, and the keys of that text.
+///
 /// The blocks of a turn's durable items with what only the live turn showed
 /// put back: card facts, thinking and text the items lack, and the blocks no
 /// item covers, such as the request an interrupt cut short.
-pub fn merge_live(mut durable: Vec<Block>, live: &[Block]) -> Vec<Block> {
+pub fn merge_live(mut durable: Vec<Block>, live: &[Block]) -> (Vec<Block>, Vec<PreservedKey>) {
+    let mut preserved = Vec::new();
     for block in &mut durable {
         match block {
             Block::Tool(call) => {
@@ -40,11 +74,13 @@ pub fn merge_live(mut durable: Vec<Block>, live: &[Block]) -> Vec<Block> {
                         _ => None,
                     })
                 {
-                    if reasoning.is_empty() {
+                    if reasoning.is_empty() && !known_reasoning.is_empty() {
                         reasoning.clone_from(known_reasoning);
+                        preserved.push(PreservedKey::AssistantReasoning(key.clone()));
                     }
-                    if text.is_empty() {
+                    if text.is_empty() && !known_text.is_empty() {
                         text.clone_from(known_text);
+                        preserved.push(PreservedKey::AssistantText(key.clone()));
                     }
                     *expanded = expanded.or(*known_expanded);
                 }
@@ -80,10 +116,13 @@ pub fn merge_live(mut durable: Vec<Block>, live: &[Block]) -> Vec<Block> {
         })
         .cloned()
         .collect();
+    // What no canonical item covers is text only the live turn had, so it is
+    // kept but marked as temporary rather than authoritative.
+    preserved.extend(uncovered.iter().filter_map(PreservedKey::of));
     durable.extend(uncovered);
     // Blank blocks stayed until now so live text could fill them in place.
     durable.retain(|block| !block.is_blank_assistant());
-    durable
+    (durable, preserved)
 }
 
 /// Appends history items, closing each turn that has a record with its
@@ -117,6 +156,8 @@ pub fn append_history(
             tools,
             usage: record.usage.clone(),
             changes: None,
+            // A stored record exists, so the turn is in committed history.
+            saving: Some(crate::transcript::Saving::Saved),
         });
     };
     let mut open: Option<&str> = None;
@@ -173,11 +214,13 @@ pub fn push_interrupted(transcript: &mut Transcript, loop_id: &str, partial: &In
 pub fn append_history_item(transcript: &mut Transcript, item: &RawHistoryItem, session_id: &str) {
     match &item.item {
         RuntimeItem::User(user) => {
+            let index = transcript.len();
             transcript.push(Block::User {
                 text: user.input.text.clone(),
                 kind: user.kind,
                 at: item.timestamp.as_deref().and_then(unix_millis),
             });
+            transcript.identify_user(index, &user.loop_id, None);
         }
         RuntimeItem::Assistant(assistant) => {
             let mut reasoning = String::new();
@@ -204,7 +247,6 @@ pub fn append_history_item(transcript: &mut Transcript, item: &RawHistoryItem, s
                             tool_call_id: tool_call_id.clone(),
                         };
                         let mut call = ToolCall::new(key, name.clone());
-                        call.state = ToolState::Succeeded;
                         if let Some(summary) = item.summary(tool_call_id) {
                             call.apply_summary(summary);
                         }
@@ -240,7 +282,7 @@ pub fn append_history_item(transcript: &mut Transcript, item: &RawHistoryItem, s
                 return;
             };
             call.state = match result.outcome.as_str() {
-                "success" => ToolState::Succeeded,
+                "success" | "input_provided" => ToolState::Succeeded,
                 "denied" => ToolState::Denied,
                 "cancelled" => ToolState::Cancelled,
                 _ => ToolState::Failed,
@@ -370,7 +412,7 @@ mod tests {
             kind: UserKind::Prompt,
             at: Some(42),
         }];
-        let merged = merge_live(durable.into_blocks(), &live);
+        let (merged, _) = merge_live(durable.into_blocks(), &live);
         assert!(matches!(
             merged.as_slice(),
             [Block::User { at: Some(42), .. }]
@@ -413,29 +455,118 @@ mod tests {
             panic!("expected a tool card");
         };
         assert_eq!(call.detail, "$ pytest");
+        assert_eq!(
+            call.state,
+            ToolState::Pending,
+            "a call with no result or final state is not known succeeded"
+        );
     }
 
     #[test]
     fn tool_result_updates_the_card_it_belongs_to() {
-        let mut transcript = Transcript::default();
-        let mut call = ToolCall::new(key("c1"), "bash");
-        call.state = ToolState::Running;
-        transcript.push(Block::Tool(Box::new(call)));
-        let result = decode_item(
-            &json!({"item": {"type": "tool_result", "data": {
-                "loop_id": "l", "request_index": 1, "call_id": "c1",
-                "tool_name": "bash", "outcome": "success",
-                "output": {"content": "ok"}
-            }}})
-            .to_string(),
-        )
-        .unwrap();
-        append_history_item(&mut transcript, &result, "s");
-        let Block::Tool(call) = &transcript.blocks()[0] else {
-            panic!("expected a tool card");
+        for outcome in ["success", "input_provided"] {
+            let mut transcript = Transcript::default();
+            let mut call = ToolCall::new(key("c1"), "bash");
+            call.state = ToolState::Running;
+            transcript.push(Block::Tool(Box::new(call)));
+            let result = decode_item(
+                &json!({"item": {"type": "tool_result", "data": {
+                    "loop_id": "l", "request_index": 1, "call_id": "c1",
+                    "tool_name": "bash", "outcome": outcome,
+                    "output": {"content": "ok"}
+                }}})
+                .to_string(),
+            )
+            .unwrap();
+            append_history_item(&mut transcript, &result, "s");
+            let Block::Tool(call) = &transcript.blocks()[0] else {
+                panic!("expected a tool card");
+            };
+            assert_eq!(call.state, ToolState::Succeeded);
+            assert_eq!(call.output, vec!["ok".to_owned()]);
+        }
+    }
+
+    #[test]
+    fn only_text_the_canonical_body_lacks_is_marked_preserved() {
+        let durable = vec![Block::Assistant {
+            key: RequestKey {
+                loop_id: "l".into(),
+                request_index: 0,
+            },
+            reasoning: String::new(),
+            text: "the canonical answer".into(),
+            streaming: false,
+            expanded: None,
+        }];
+        let live = vec![
+            Block::Assistant {
+                key: RequestKey {
+                    loop_id: "l".into(),
+                    request_index: 0,
+                },
+                reasoning: String::new(),
+                text: "the canonical answer".into(),
+                streaming: false,
+                expanded: None,
+            },
+            // A request the canonical body does not contain, such as the one an
+            // interrupt cut short.
+            Block::Assistant {
+                key: RequestKey {
+                    loop_id: "l".into(),
+                    request_index: 1,
+                },
+                reasoning: String::new(),
+                text: "the interrupted reply".into(),
+                streaming: false,
+                expanded: None,
+            },
+        ];
+        let (merged, preserved) = merge_live(durable, &live);
+        assert_eq!(merged.len(), 2, "the live-only text is kept");
+        assert_eq!(
+            preserved,
+            [PreservedKey::Assistant(RequestKey {
+                loop_id: "l".into(),
+                request_index: 1,
+            })],
+            "only the text canonical does not contain is marked"
+        );
+    }
+
+    #[test]
+    fn a_live_only_channel_is_temporary_without_relabeling_the_canonical_channel() {
+        let key = RequestKey {
+            loop_id: "l".into(),
+            request_index: 0,
         };
-        assert_eq!(call.state, ToolState::Succeeded);
-        assert_eq!(call.output, vec!["ok".to_owned()]);
+        let block = |reasoning: &str, text: &str| Block::Assistant {
+            key: key.clone(),
+            reasoning: reasoning.into(),
+            text: text.into(),
+            streaming: false,
+            expanded: None,
+        };
+        let (blocks, preserved) = merge_live(
+            vec![block("", "canonical")],
+            &[block("live-only reasoning", "streamed")],
+        );
+        assert_eq!(
+            preserved,
+            vec![PreservedKey::AssistantReasoning(key.clone())]
+        );
+        let mut transcript = Transcript::default();
+        transcript.splice(0..0, blocks);
+        transcript.mark_preserved(preserved);
+        assert!(!transcript.is_preserved(0));
+        assert!(!transcript.is_preserved_channel(&key, false));
+        assert!(transcript.is_preserved_channel(&key, true));
+        transcript.splice(0..1, vec![block("canonical reasoning", "canonical")]);
+        assert!(
+            !transcript.is_preserved_channel(&key, true),
+            "a later verified channel clears its old temporary marker"
+        );
     }
 
     fn request_item(request_index: u64, content: Value) -> RawHistoryItem {
@@ -471,7 +602,7 @@ mod tests {
             streaming: false,
             expanded: None,
         }];
-        let merged = merge_live(durable.into_blocks(), &live);
+        let (merged, _) = merge_live(durable.into_blocks(), &live);
         let shape: Vec<String> = merged
             .iter()
             .map(|block| match block {

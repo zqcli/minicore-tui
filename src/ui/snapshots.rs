@@ -127,6 +127,7 @@ fn conversation(app: &mut App) {
             files: 2,
             lines: Some((40, 7)),
         }),
+        saving: None,
     });
 }
 
@@ -567,6 +568,26 @@ fn the_dock_lists_queued_messages_in_the_order_the_agent_runs_them_with_the_keys
 }
 
 #[test]
+fn an_unrecoverable_gap_is_said_in_the_dock_rather_than_silently_computed() {
+    let mut fixture = app();
+    conversation(&mut fixture);
+    fixture.session.as_mut().unwrap().recovery.truncated_gap = true;
+    assert!(
+        render(&mut fixture, 70, 14)
+            .contains("Some unsaved turns may be missing outside the completion catalog"),
+        "a truncated completion window must be shown"
+    );
+    let mut fixture = app();
+    conversation(&mut fixture);
+    fixture.session.as_mut().unwrap().ordering_gap = true;
+    assert!(
+        render(&mut fixture, 70, 14)
+            .contains("Turn order is incomplete; reload the session to read it in order"),
+        "an unplaceable completion must be shown"
+    );
+}
+
+#[test]
 fn a_paused_queue_says_how_to_go_on() {
     let mut app = app();
     queue(&mut app, &[("after the stop", FollowUp)]);
@@ -831,6 +852,7 @@ fn failed_turn(app: &mut App, outcome: serde_json::Value) {
         tools: 2,
         usage: Default::default(),
         changes: None,
+        saving: None,
     });
 }
 
@@ -1283,6 +1305,40 @@ fn an_approval_shows_the_tool_its_target_and_its_input() {
     );
 }
 
+#[test]
+fn a_text_question_shows_its_separate_editor_without_exposing_the_conversation_draft() {
+    let mut app = app();
+    app.composer.set_text("unsent conversation draft");
+    let session = app.session.as_mut().unwrap();
+    session.interaction = Some(crate::app::PendingInteraction {
+        turn: TurnRef::new(&session.info.session_id, "text-loop"),
+        interaction_id: "text-question".into(),
+        tool_call_id: "question".into(),
+        tool_name: "question".into(),
+        prompt: "Which branch should be used?".into(),
+        kind: crate::app::InteractionKind::Text,
+        selected: 0,
+    });
+    session.interaction_editor.set_text("feature/answer-editor");
+    let rendered = render(&mut app, 90, 25);
+    assert!(
+        rendered.contains("Which branch should be used?"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("question · input"),
+        "the tool name must remain visible without a tool card: {rendered}"
+    );
+    assert!(rendered.contains("feature/answer-editor"), "{rendered}");
+    assert!(rendered.contains("Waiting for input"), "{rendered}");
+    assert!(
+        !rendered.contains("unsent conversation draft"),
+        "{rendered}"
+    );
+    assert!(!rendered.contains("Allow once"), "{rendered}");
+    assert_eq!(app.composer.text(), "unsent conversation draft");
+}
+
 /// Remote control listening at a fixed address with a fixed password.
 fn listening(app: &mut App) {
     let dir = tempfile::tempdir().expect("dir");
@@ -1588,6 +1644,7 @@ fn the_sessions_picker_shows_what_live_sessions_are_doing() {
         tools: 0,
         usage: Default::default(),
         changes: None,
+        saving: None,
     });
     app.sessions = vec![
         catalog("ses_old", "An old session"),

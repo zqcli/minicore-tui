@@ -3,7 +3,7 @@
 `minicore-tui` is a fullscreen terminal frontend for [`minicore-agent`]: a
 scrolling transcript, a status line, a composer and a footer. The Agent is built
 into the same executable: the TUI starts itself as `minicore-tui agent` in a
-child process and talks to it with stdio NDJSON JSON-RPC (Protocol v1), so one
+child process and talks to it with stdio NDJSON JSON-RPC (Protocol v2), so one
 file is the whole program. Version 0.4 is a rewrite of the v0.3 frontend; see
 [CHANGELOG.md](CHANGELOG.md).
 
@@ -19,7 +19,7 @@ file is the whole program. Version 0.4 is a rewrite of the v0.3 frontend; see
 Built-in backend: Agent 0.9.0, which links Runtime 0.9.0; `Cargo.toml` pins the
 Agent by its release tag and `Cargo.lock` fixes both. An
 external Agent can still be named with `--agent`. At startup the TUI requires
-Protocol v1 and these Agent capabilities, and refuses an Agent that lacks one: `session.read`, `session.read.display`, `session.context`,
+Protocol v2 and these Agent capabilities, and refuses an Agent that lacks one: `session.read`, `session.read.display`, `session.context`,
 `turn.result`, `tool.read`, `tool.read.display`,
 `workspace.files`, `changes.list`, `changes.diff`.
 
@@ -120,7 +120,7 @@ history is `history.jsonl` in the TUI directory.
 
 ```text
 
- minicore-tui v0.9.0                                  (welcome header)
+ minicore-tui v0.9.1                                  (welcome header)
 
  esc interrupt · ctrl+c clear · / commands · @ files · ctrl+o expand · ctrl+r sessions
 
@@ -142,7 +142,10 @@ tool counts. Queued messages show in the order the Agent runs them as
 `↗ steer` / `↳ follow-up N` rows above it, with a hint for the keys that act on
 them (a paused queue says how to go on).
 The latest notice is a railed line in the band: info fades after 5 seconds,
-errors stay until the next key press.
+errors stay until the next key press. Completion reads share two slots fairly
+across resident sessions; recovering saved history does not hide an unknown gap
+of missing unsaved turns. `Persistence blocked` stays visible until
+the Agent clears the block, without hiding a question that still needs an answer.
 
 The footer shows the workspace and git branch, the model and reasoning level,
 the state while not idle, the current or last turn's minutes, `queued`, token
@@ -157,7 +160,8 @@ without a report. The TUI never estimates it.
   folds to its newest three rows under `... (N earlier lines, ctrl+o to expand)`;
   `Ctrl+T` collapses it to one `Thinking...` row.
 - **Tool cards** start folded to three rows on a state-coloured band (running,
-  done, failed): tool name, target (`$ cmd`, `path:range`, `pattern in path`)
+  done, failed). An answered tool-input question is done, not failed or still
+  pending. Each card shows the tool name, target (`$ cmd`, `path:range`, `pattern in path`)
   and a hidden-line hint (`running…` while a running call has no output yet),
   with duration, exit code or line changes on the right. `Ctrl+O` expands all
   cards and thinking, and a click toggles one. Expanded cards show a plain
@@ -196,7 +200,10 @@ without a report. The TUI never estimates it.
   loads older pages, including the history behind a compaction summary.
   A card whose output is not loaded shows its line count. An incomplete,
   unreadable or oversized history read keeps the content already shown and
-  reports the problem instead of replacing it with a partial page.
+  reports the problem instead of replacing it with a partial page. Background
+  catch-up retains its verified newer window at each limit; `/recover` continues
+  the missing range. An unavailable turn keeps its identity, known outcome and
+  saved/unsaved marker even when no body was received.
 - **Views** replace the transcript and keep the footer: Git diff and help.
   `/diff` shows the workspace's live tracked changes and untracked files,
   also when opened by clicking a turn-end line. `Esc` returns; the
@@ -210,8 +217,18 @@ without a report. The TUI never estimates it.
   clipboard, OSC 52 fallback) and flashes `Copied!`; double-click selects a
   word, triple-click a line. `/copy` copies the last answer, `/export [path]` writes the
   conversation as Markdown (default `./minicore-<session>-<date>.md`).
-- **Composer.** Grapheme-safe editing, undo and redo, prompt history, paste
+- **Unconfirmed local input.** F8 or `/unconfirmed` opens retained inputs whose
+  acceptance is uncertain, independently of the new draft and even on the fatal
+  screen. Edit in a separate buffer, copy, explicitly forget, or review a possible-
+  duplicate warning before resending to the original target with a new operation
+  ID. Enter/Esc cancels the warning; only `y` confirms. Uncertain submissions are
+  not ordinary prompt history and are never automatically resent. Retention is
+  in-process and bounded to 64 operations / 16 MiB; a full budget refuses a new
+  submission before calling the Agent and keeps its draft.
+- **Composer.** Grapheme-safe editing, undo and redo, accepted prompt history, paste
   tokens for large pastes, external editor on `Ctrl+G`.
+- **Shutdown.** Quitting waits for the actual Agent child to finish its cleanup
+  after acknowledging shutdown, with bounded forced termination if it stalls.
 
 ## Remote mode
 

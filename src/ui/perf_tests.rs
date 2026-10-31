@@ -150,6 +150,7 @@ fn turn_end(index: usize) -> Block {
         tools: 2,
         usage: Default::default(),
         changes: None,
+        saving: None,
     }
 }
 

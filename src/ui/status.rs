@@ -35,12 +35,23 @@ pub fn dock(app: &App, styles: Styles, width: u16, height: u16) -> Dock {
     // The remote status screen shows the work and the queue instead.
     let local = !app.remote.active();
     if local {
+        let unresolved = app
+            .local_inputs
+            .iter()
+            .filter(|input| input.status != crate::app::unconfirmed::Status::Sending)
+            .count();
+        if unresolved > 0 {
+            above.push(padded(&format!("{unresolved} retained local inputs · F8 review · unconfirmed may already be accepted"),width,styles.failure()));
+        }
         if let Some(session) = app.session.as_ref().filter(|s| !s.queue.items.is_empty()) {
             above.push(Line::default());
             above.extend(queued_rows(session, styles, width));
         }
         if let Some(line) = working_line(app, styles, width) {
             above.push(Line::default());
+            above.push(line);
+        }
+        if let Some(line) = gap_line(app, styles, width) {
             above.push(line);
         }
         if let Some(hint) = key_hint(app, styles, width) {
@@ -53,8 +64,55 @@ pub fn dock(app: &App, styles: Styles, width: u16, height: u16) -> Dock {
     }
     above.push(Line::default());
 
+    let text_input = local
+        .then_some(app.session.as_ref())
+        .flatten()
+        .filter(|session| {
+            !matches!(app.overlay, crate::app::Overlay::Unconfirmed { .. })
+                && session.interaction.as_ref().is_some_and(|pending| {
+                    matches!(pending.kind, crate::app::InteractionKind::Text)
+                })
+        });
+    if let Some(session) = text_input {
+        let pending = session.interaction.as_ref().unwrap();
+        above.push(padded(
+            &format!("{} · input", pending.tool_name),
+            width,
+            styles.title(),
+        ));
+        above.extend(super::panel::body_lines(
+            &pending.prompt,
+            usize::from(width),
+            styles.text(),
+        ));
+        above.push(padded(
+            "Text answer · enter send · esc cancel turn",
+            width,
+            styles.faint(),
+        ));
+    }
+    if matches!(
+        app.overlay,
+        crate::app::Overlay::Unconfirmed {
+            mode: crate::app::unconfirmed::ReviewMode::Edit(_),
+            ..
+        }
+    ) {
+        let label = if app
+            .selected_local_input()
+            .is_some_and(|input| input.status == crate::app::unconfirmed::Status::Rejected)
+        {
+            "Editing rejected input · not accepted · enter review send · esc cancel edit"
+        } else {
+            "Editing unconfirmed input · acceptance is still unknown · enter review resend · esc cancel edit"
+        };
+        above.push(padded(label, width, styles.failure()));
+    }
+    if local && let Some(label) = app.session.as_ref().and_then(Session::block_label) {
+        above.push(padded(label, width, styles.failure()));
+    }
     let (mut editor, cursor) = composer::render(
-        &app.composer,
+        app.active_editor(),
         styles,
         width,
         composer::max_rows(height),
@@ -190,11 +248,20 @@ fn working_line(app: &App, styles: Styles, width: u16) -> Option<Line<'static>> 
     let text = if let Some(label) = &compaction {
         label.as_str()
     } else if app.has_interaction() {
-        // Esc answers the prompt with a denial; it does not cancel the turn.
-        "Waiting for approval (esc to deny)"
+        if app
+            .session
+            .as_ref()
+            .and_then(|session| session.interaction.as_ref())
+            .is_some_and(|pending| matches!(pending.kind, crate::app::InteractionKind::Text))
+        {
+            "Waiting for input (esc to cancel turn)"
+        } else {
+            // Esc answers the prompt with a denial; it does not cancel the turn.
+            "Waiting for approval (esc to deny)"
+        }
     } else if interrupting {
         "Interrupting…"
-    } else if live.is_some() {
+    } else if session.is_some_and(Session::is_busy) {
         "Working (esc to interrupt)"
     } else {
         return None;
@@ -233,6 +300,33 @@ fn working_line(app: &App, styles: Styles, width: u16) -> Option<Line<'static>> 
         ));
     }
     Some(Line::from(fit(spans, usize::from(width))))
+}
+
+/// Says what the client could not recover, so a computed gap is never silent.
+fn gap_line(app: &App, styles: Styles, width: u16) -> Option<Line<'static>> {
+    let session = app.session.as_ref()?;
+    let text = if session.recovery.gap_through > session.recovery.settled_through
+        || matches!(
+            session.recovery.history_status,
+            Some(crate::app::recovery::RecoveryStatus::Exhausted)
+        ) {
+        "More history remains to recover; /recover to continue"
+    } else if session.recovery.truncated_gap {
+        "Some unsaved turns may be missing outside the completion catalog"
+    } else if session.ordering_gap || session.recovery.behind {
+        "Turn order is incomplete; reload the session to read it in order"
+    } else if !session.body_recovery.is_empty() {
+        "Some turn bodies are incomplete or unavailable; /recover retries failed reads"
+    } else {
+        return None;
+    };
+    Some(Line::from(vec![
+        Span::styled("▎", styles.status_rail()),
+        Span::styled(
+            wrap::truncate(text, usize::from(width).saturating_sub(1)),
+            styles.failure(),
+        ),
+    ]))
 }
 
 /// The latest notice as a status line: a rail, then dim text, or the failure

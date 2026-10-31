@@ -5,13 +5,17 @@
 use serde::{Deserialize, Deserializer};
 
 use super::{
-    DeliveredInput, PendingInteraction, Queue, SessionInfo, SessionState, ToolDisplay,
-    ToolExecution, ToolInvocation, ToolRef, TurnRef, Usage,
+    DeliveredInput, PendingInteraction, Queue, SessionInfo, SessionSnapshot, SessionState,
+    ToolDisplay, ToolExecution, ToolInvocation, ToolRef, TurnRef, Usage,
 };
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct EventMeta {
     pub session_id: String,
+    /// The loaded instance the observation belongs to; `None` only for bodies
+    /// that predate v2.
+    #[serde(default)]
+    pub load: Option<String>,
     pub dropped_before: u64,
 }
 
@@ -118,6 +122,11 @@ pub enum AgentEvent {
         meta: EventMeta,
         turn: TurnRef,
     },
+    /// The authoritative control state of one resident instance.
+    SessionSnapshot {
+        meta: EventMeta,
+        snapshot: Box<SessionSnapshot>,
+    },
     /// An event type this client does not model, or a payload it cannot read.
     #[serde(other)]
     Unknown,
@@ -128,6 +137,73 @@ fn reasoning_channel<'de, D: Deserializer<'de>>(channel: D) -> Result<bool, D::E
 }
 
 impl AgentEvent {
+    pub fn retained_bytes(&self, frame_bytes: usize) -> usize {
+        frame_bytes
+            + std::mem::size_of::<Self>()
+            + match self {
+                Self::InputDelivered { items, .. } => {
+                    items.capacity() * std::mem::size_of::<DeliveredInput>()
+                }
+                Self::ToolInvocation { .. } => std::mem::size_of::<ToolInvocation>(),
+                Self::ToolExecution { .. } => std::mem::size_of::<ToolExecution>(),
+                Self::ToolProcess { .. } => std::mem::size_of::<ToolProcess>(),
+                _ => 0,
+            }
+    }
+
+    pub fn body_session(&self) -> Option<&str> {
+        self.turn()
+            .map(|turn| turn.session_id.as_str())
+            .or(match self {
+                Self::ToolInvocation { invocation, .. } => {
+                    Some(invocation.tool_ref.session_id.as_str())
+                }
+                Self::ToolExecution { execution, .. } => {
+                    Some(execution.tool_ref.session_id.as_str())
+                }
+                Self::ToolProcess { data, .. } => Some(data.tool_ref.session_id.as_str()),
+                _ => None,
+            })
+    }
+
+    pub fn turn(&self) -> Option<&TurnRef> {
+        match self {
+            Self::TurnStarted { turn, .. }
+            | Self::RequestStarted { turn, .. }
+            | Self::RequestUsage { turn, .. }
+            | Self::OutputDelta { turn, .. }
+            | Self::InputDelivered { turn, .. }
+            | Self::ToolStarted { turn, .. }
+            | Self::InteractionRequested { turn, .. }
+            | Self::InteractionResolved { turn, .. }
+            | Self::TurnFinished { turn, .. } => Some(turn),
+            Self::ToolPresentation { call, .. }
+            | Self::ToolArgumentsPreview { call, .. }
+            | Self::ToolFinished { call, .. } => Some(&call.turn),
+            _ => None,
+        }
+    }
+
+    pub fn loop_id(&self) -> Option<&str> {
+        self.turn()
+            .map(|turn| turn.loop_id.as_str())
+            .or(match self {
+                Self::ToolInvocation { invocation, .. } => {
+                    Some(invocation.tool_ref.loop_id.as_str())
+                }
+                Self::ToolExecution { execution, .. } => Some(execution.tool_ref.loop_id.as_str()),
+                Self::ToolProcess { data, .. } => Some(data.tool_ref.loop_id.as_str()),
+                _ => None,
+            })
+    }
+
+    pub fn is_tool_metadata(&self) -> bool {
+        matches!(
+            self,
+            Self::ToolInvocation { .. } | Self::ToolExecution { .. }
+        )
+    }
+
     pub fn meta(&self) -> Option<&EventMeta> {
         match self {
             Self::SessionOpened { meta, .. }
@@ -148,7 +224,8 @@ impl AgentEvent {
             | Self::ToolFinished { meta, .. }
             | Self::InteractionRequested { meta, .. }
             | Self::InteractionResolved { meta, .. }
-            | Self::TurnFinished { meta, .. } => Some(meta),
+            | Self::TurnFinished { meta, .. }
+            | Self::SessionSnapshot { meta, .. } => Some(meta),
             Self::Unknown => None,
         }
     }

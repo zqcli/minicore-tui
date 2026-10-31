@@ -56,8 +56,8 @@ test('the page preloads every module and the modules import each other without a
 });
 
 test('login and hello follow the handshake contract with a bounded device name', () => {
-  assert.deepEqual(plain(MC.login('k7mq-x2pa-n9dt', 'iPhone Safari')), { t: 'login', v: 2, password: 'k7mq-x2pa-n9dt', device: 'iPhone Safari' });
-  assert.deepEqual(plain(MC.hello('tok')), { t: 'hello', v: 2, token: 'tok' });
+  assert.deepEqual(plain(MC.login('k7mq-x2pa-n9dt', 'iPhone Safari')), { t: 'login', v: 3, password: 'k7mq-x2pa-n9dt', device: 'iPhone Safari' });
+  assert.deepEqual(plain(MC.hello('tok')), { t: 'hello', v: 3, token: 'tok' });
   const ua = {
     'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1': 'iPhone Safari',
     'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/130.0 Mobile/15E148 Safari/604.1': 'iPhone Chrome',
@@ -75,17 +75,19 @@ test('login and hello follow the handshake contract with a bounded device name',
 
 test('every intent and filesystem request has the contract shape and a bounded unique id', () => {
   const s = MC.createStore(), I = MC.intents;
+  // Every intent names the projection it was built from; a draft has no session.
+  const target = { view_epoch: '' };
   const cases = [
     [I.submit('send'), { kind: 'submit', text: 'send' }],
     [I.queue('later'), { kind: 'queue', text: 'later' }],
-    [I.cancel(), { kind: 'cancel' }],
-    [I.answer('approval', 'allow'), { kind: 'answer', interaction_id: 'approval', choice: 'allow' }],
-    [I.answer('approval', 'allow_session'), { kind: 'answer', interaction_id: 'approval', choice: 'allow_session' }],
-    [I.answer('approval', 'deny'), { kind: 'answer', interaction_id: 'approval', choice: 'deny' }],
-    [I.answer('choice', 1), { kind: 'answer', interaction_id: 'choice', choice: 1 }],
-    [I.answer('approval', 'deny', 'use the helper instead'), { kind: 'answer', interaction_id: 'approval', choice: 'deny', message: 'use the helper instead' }],
+    [I.cancel('loop_1'), { kind: 'cancel', loop_id: 'loop_1' }],
+    [I.answer('loop_1', 'approval', 'allow'), { kind: 'answer', loop_id: 'loop_1', interaction_id: 'approval', choice: 'allow' }],
+    [I.answer('loop_1', 'approval', 'allow_session'), { kind: 'answer', loop_id: 'loop_1', interaction_id: 'approval', choice: 'allow_session' }],
+    [I.answer('loop_1', 'approval', 'deny'), { kind: 'answer', loop_id: 'loop_1', interaction_id: 'approval', choice: 'deny' }],
+    [I.answer('loop_1', 'choice', 1), { kind: 'answer', loop_id: 'loop_1', interaction_id: 'choice', choice: 1 }],
+    [I.answer('loop_1', 'approval', 'deny', 'use the helper instead'), { kind: 'answer', loop_id: 'loop_1', interaction_id: 'approval', choice: 'deny', message: 'use the helper instead' }],
     [I.compact(), { kind: 'compact' }],
-    [I.unqueue(1, 'later', true), { kind: 'unqueue', index: 1, text: 'later', edit: true }],
+    [I.unqueue('inp_1', true), { kind: 'unqueue', input_id: 'inp_1', edit: true }],
     [I.loadOlder(), { kind: 'load_older' }],
     [I.openSession('ses_one'), { kind: 'open_session', session_id: 'ses_one' }],
     [I.newSession('/work', 'coding'), { kind: 'new_session', workspace: '/work', profile: 'coding' }],
@@ -100,7 +102,9 @@ test('every intent and filesystem request has the contract shape and a bounded u
   const ids = new Set();
   for (const [spec, fields] of cases) {
     const msg = plain(MC.intent(s, spec));
-    assert.deepEqual(msg, { t: 'intent', id: msg.id, ...fields });
+    assert.deepEqual(msg, { t: 'intent', id: msg.id, ...target, ...fields });
+    // A draft names no session unless the intent itself names one (open, rename, delete).
+    if (!('session_id' in fields)) assert.ok(!('session_id' in msg) && !('load' in msg), 'a draft intent names no session');
     assert.equal(typeof msg.id, 'string');
     assert.ok(msg.id.length >= 1 && Buffer.byteLength(msg.id) <= 64);
     ids.add(msg.id);
@@ -132,7 +136,7 @@ test('every intent and filesystem request has the contract shape and a bounded u
 test('an ack hands back the handler the intent was made with, and the handler never goes over the wire', () => {
   const s = MC.createStore(), own = () => {};
   const msg = MC.intent(s, MC.intents.renameSession('ses_1', 'New title'), own);
-  assert.equal(JSON.stringify(msg), JSON.stringify({ t: 'intent', id: msg.id, kind: 'rename_session', session_id: 'ses_1', title: 'New title' }));
+  assert.equal(JSON.stringify(msg), JSON.stringify({ t: 'intent', id: msg.id, kind: 'rename_session', session_id: 'ses_1', title: 'New title', view_epoch: '' }));
   const fx = MC.reduce(s, { t: 'ack', id: msg.id, ok: false, error: 'busy' }, 0);
   assert.equal(fx.ack.own, own);
   assert.equal(fx.ack.error, 'busy');
@@ -155,17 +159,240 @@ test('at most four queries are in flight and results are matched to their id onc
   assert.equal(MC.errorText('Open another session first'), 'Open another session first');
 });
 
-test('queue editing and deletion are explicit intents and never suppress other returned text', () => {
+test('queue editing returns text in the original operation ACK, never by text matching', () => {
   const s = MC.createStore();
-  const del = MC.intent(s, MC.intents.unqueue(0, 'later', false));
-  assert.deepEqual(plain(del), { t: 'intent', id: del.id, kind: 'unqueue', index: 0, text: 'later', edit: false });
+  const del = MC.intent(s, MC.intents.unqueue('inp_1', false));
+  assert.deepEqual(plain(del), { t: 'intent', id: del.id, kind: 'unqueue', input_id: 'inp_1', edit: false, view_epoch: '' });
   assert.equal(MC.reduce(s, { t: 'ack', id: del.id, ok: true }, 0).ack.ok, true);
-  assert.deepEqual(plain(MC.reduce(s, { t: 'returned', text: 'later' }, 0)), { returned: 'later' });
-  const edit = MC.intent(s, MC.intents.unqueue(1, 'edit me', true));
-  assert.equal(edit.edit, true);
-  assert.deepEqual(plain(MC.reduce(s, { t: 'returned', text: 'edit me' }, 0)), { returned: 'edit me' });
+  const edit = MC.intent(s, MC.intents.unqueue('inp_2', true));
+  assert.deepEqual(plain(edit), { t: 'intent', id: edit.id, kind: 'unqueue', input_id: 'inp_2', edit: true, view_epoch: '' });
+  // Two entries with the same text are never confused: only the named one comes back.
+  assert.deepEqual(MC.reduce(s, { t: 'returned', text: 'uncorrelated text' }, 0), {});
+  assert.deepEqual(
+    plain(MC.reduce(s, { t: 'ack', id: edit.id, ok: true, input_id: 'inp_2', text: 'same' }, 0).ack.spec),
+    { kind: 'unqueue', input_id: 'inp_2', edit: true },
+  );
   MC.disconnect(s);
   assert.equal(MC.unconfirmed(s).length, 0);
+});
+
+test('missing acceptance is unknown, duplicate text has independent operation outcomes, and reconnect never resends', () => {
+  const s = MC.createStore();
+  const first = MC.intent(s, MC.intents.submit('same'));
+  const second = MC.intent(s, MC.intents.submit('same'));
+  const unknown = MC.reduce(s, { t: 'ack', id: first.id, ok: false, error: 'busy' }, 0).ack;
+  assert.equal(unknown.acceptance, 'unknown');
+  assert.equal(unknown.unconfirmed, true);
+  MC.reduce(s, { t: 'ack', id: second.id, ok: true, accepted: true, input_id: 'inp_other' }, 0);
+  assert.deepEqual(MC.unconfirmed(s).map(it => it.id), [first.id]);
+  const rejected = MC.intent(s, MC.intents.queue('same'));
+  MC.reduce(s, { t: 'ack', id: rejected.id, ok: false, error: 'busy', acceptance: 'rejected' }, 0);
+  MC.disconnect(s);
+  const fx = MC.reduce(s, { t: 'snapshot', view_epoch: 'fresh', state: structuredClone(state), blocks: [] }, 0);
+  assert.equal(fx.send, undefined);
+  assert.equal(fx.resend, undefined);
+  assert.deepEqual(MC.unconfirmed(s).map(it => it.id), [first.id]);
+});
+
+test('in-flight intents keep exact session load view and operation identity across projection replacement', () => {
+  const s = MC.createStore();
+  const original = structuredClone(state);
+  Object.assign(original.session, { load: 'load_old', loop_id: 'loop_old' });
+  MC.reduce(s, { t: 'snapshot', view_epoch: 'old_view', state: original, blocks: structuredClone(blocks) }, 0);
+  const queued = MC.intent(s, MC.intents.queue('same'));
+  const edit = MC.intent(s, MC.intents.unqueue('inp_old', true));
+  const cancel = MC.intent(s, MC.intents.cancel('loop_old'));
+  const answer = MC.intent(s, MC.intents.answer('loop_old', 'int_old', 'allow'));
+  for (const msg of [queued, edit, cancel, answer]) {
+    assert.equal(msg.view_epoch, 'old_view');
+    assert.equal(msg.session_id, 'ses_one');
+    assert.equal(msg.load, 'load_old');
+  }
+  const replacement = structuredClone(state);
+  replacement.session = { ...replacement.session, id: 'ses_two', load: 'load_new' };
+  MC.reduce(s, { t: 'snapshot', view_epoch: 'new_view', state: replacement, blocks: [] }, 0);
+  const ack = MC.reduce(s, { t: 'ack', id: edit.id, ok: true, input_id: 'inp_old', text: 'same' }, 0).ack;
+  assert.equal(ack.current, false);
+  assert.deepEqual(ack.target, { view_epoch: 'old_view', session_id: 'ses_one', load: 'load_old' });
+  assert.equal(s.sid, 'ses_two');
+  assert.equal(s.view, 'new_view');
+  assert.equal(s.intents.get(queued.id).target.load, 'load_old');
+  assert.deepEqual(MC.intents.cancel(null, 'compact_old'), { kind: 'cancel', operation_id: 'compact_old' });
+});
+
+test('an unknown input outcome keeps its text unconfirmed and is never resent by itself', () => {
+  const s = MC.createStore();
+  const send = MC.intent(s, MC.intents.submit('maybe sent'));
+  const fx = plain(MC.reduce(s, { t: 'ack', id: send.id, ok: false, error: 'closed', acceptance: 'unknown' }, 0));
+  assert.equal(fx.ack.acceptance, 'unknown');
+  assert.equal(fx.ack.unconfirmed, true);
+  assert.deepEqual(plain(MC.unconfirmed(s).map(it => it.text)), ['maybe sent']);
+  // A rejection before acceptance clears the operation: the text is unsent.
+  const refused = MC.intent(s, MC.intents.submit('never sent'));
+  const f2 = plain(MC.reduce(s, { t: 'ack', id: refused.id, ok: false, error: 'empty', acceptance: 'rejected' }, 0));
+  assert.equal(f2.ack.acceptance, 'rejected');
+  assert.equal(f2.ack.unconfirmed, undefined);
+  assert.deepEqual(plain(MC.unconfirmed(s).map(it => it.text)), ['maybe sent']);
+});
+
+test('an accepted input reports the entry the agent took and any start failure', () => {
+  const s = MC.createStore();
+  const send = MC.intent(s, MC.intents.queue('later'));
+  const ack = plain(MC.reduce(s, {
+    t: 'ack', id: send.id, ok: true, accepted: true,
+    input_id: 'inp_new', accepted_at: '2026-10-30T10:00:00Z',
+    start_error: { input_id: 'inp_old', kind: 'runtime_start_failed', message: 'The queued turn could not start' },
+  }, 0).ack);
+  assert.equal(ack.ok, true);
+  assert.equal(ack.input_id, 'inp_new');
+  assert.equal(ack.accepted_at, '2026-10-30T10:00:00Z');
+  assert.equal(ack.start_error.input_id, 'inp_old');
+  assert.equal(s.intents.size, 0);
+});
+
+const textState = (patch = {}) => ({ ...structuredClone(state),
+  session: { ...state.session, load: 'load_text' },
+  interaction: { id: 'text_question', loop_id: 'loop_text', kind: 'text', prompt: 'Your answer?', options: [], ...patch },
+});
+
+test('text answers preserve the full Agent byte and whitespace semantics without approval shortcuts', () => {
+  for (const text of [' ', ' allow ', 'deny', '中文', 'é'.repeat(4096), 'x'.repeat(8192)]) {
+    assert.equal(MC.validAnswerText(text), true, `valid ${Buffer.byteLength(text)} bytes`);
+  }
+  for (const text of ['', '\n', '\t', '\r', '\0', 'a\u0085b', 'é'.repeat(4097), 'x'.repeat(8193)]) {
+    assert.equal(MC.validAnswerText(text), false, `invalid ${Buffer.byteLength(text)} bytes`);
+  }
+  const s = MC.createStore();
+  MC.reduce(s, { t: 'snapshot', view_epoch: 'text_view', state: textState(), blocks: [] }, 0);
+  s.reply.text = ' allow ';
+  assert.deepEqual(MC.textAnswer(s), { kind: 'answer', loop_id: 'loop_text', interaction_id: 'text_question', choice: { text: ' allow ' } });
+  const operation = MC.intent(s, MC.textAnswer(s));
+  assert.deepEqual(operation.choice, { text: ' allow ' });
+  assert.equal(operation.kind, 'answer');
+  assert.equal(operation.message, undefined);
+  assert.equal(operation.session_id, state.session.id);
+  assert.equal(operation.load, 'load_text');
+  assert.equal(operation.view_epoch, 'text_view');
+  assert.equal(MC.answerPending(s).id, operation.id);
+  assert.equal(MC.textAnswer(s), null, 'no duplicate submission while its answer waits');
+  for (const key of ['y', 'a', 'n', '1', 'Enter']) assert.equal(MC.approvalKey(s.state.interaction, key, false, 0, 1000, false), null);
+  assert.deepEqual(MC.approvalOptions(s.state.interaction), []);
+  assert.equal(MC.pending(s, 'submit'), null);
+});
+
+test('a text interaction draft survives ordinary refresh and minimize but is cleared on exact identity changes', () => {
+  const s = MC.createStore();
+  const snapshot = next => MC.reduce(s, { t: 'snapshot', view_epoch: 'same_view', state: next, blocks: [] }, 0);
+  snapshot(textState());
+  s.reply.text = 'answer in progress';
+  const original = s.reply;
+  const refreshed = textState(); refreshed.status.label = 'Still waiting'; refreshed.interaction.prompt = 'Your answer, please?';
+  MC.reduce(s, { t: 'state', state: refreshed }, 0);
+  assert.equal(s.reply, original);
+  snapshot(refreshed);
+  assert.equal(s.reply.text, 'answer in progress');
+  for (const part of ['load', 'loop_id', 'id', 'session']) {
+    const next = textState();
+    if (part === 'load') next.session.load = 'reopened';
+    else if (part === 'session') next.session.id = 'another_session';
+    else next.interaction[part] = 'replacement';
+    MC.reduce(s, { t: 'state', state: next }, 0);
+    assert.equal(s.reply.text, '', part);
+    s.reply.text = 'do not carry this';
+    snapshot(textState());
+    assert.equal(s.reply.text, '', `back from ${part}`);
+    s.reply.text = 'another draft';
+  }
+  MC.reduce(s, { t: 'state', state: { ...textState(), interaction: null } }, 0);
+  assert.deepEqual(s.reply, { key: null, text: '' });
+  snapshot(textState());
+  assert.equal(s.reply.text, '', 'a cancelled interaction cannot recover its old answer');
+});
+
+test('a stale text ACK or disconnect cannot clear or disable a replacement interaction or resend an answer', () => {
+  for (const outcome of [true, false]) {
+    const s = MC.createStore();
+    MC.reduce(s, { t: 'snapshot', view_epoch: 'view', state: textState(), blocks: [] }, 0);
+    s.reply.text = 'old';
+    const first = MC.intent(s, MC.textAnswer(s));
+    MC.reduce(s, { t: 'state', state: textState({ id: 'new_question' }) }, 0);
+    s.reply.text = 'new';
+    assert.equal(MC.answerPending(s), null);
+    const newKey = s.reply.key;
+    MC.reduce(s, { t: 'ack', id: first.id, ok: outcome, error: 'stale' }, 0);
+    assert.equal(s.reply.key, newKey);
+    assert.equal(s.reply.text, 'new');
+    const second = MC.intent(s, MC.textAnswer(s));
+    MC.disconnect(s);
+    assert.equal(s.reply.text, 'new');
+    assert.equal(s.intents.has(second.id), false);
+    assert.deepEqual(MC.unconfirmed(s), [], 'tool answers are not conversation input resends');
+    const fx = MC.reduce(s, { t: 'snapshot', view_epoch: 'reconnected', state: textState({ id: 'new_question' }), blocks: [] }, 0);
+    assert.equal(fx.resend, undefined);
+    assert.equal(s.reply.text, 'new');
+  }
+});
+
+test('the production interaction editor submits exact text, survives refresh and minimize, and ignores stale form callbacks', () => {
+  const S = MC.createStore(), nodes = new Map(), sends = [], callbacks = [], sheets = [], notices = [];
+  const source = read('conversation.js');
+  const context = { MC, S, HOST: 'test', Date, console, localStorage: { getItem: () => null }, document: { addEventListener() {} } };
+  for (const match of source.matchAll(/import \{ ([^}]+) \} from/g)) {
+    for (const name of match[1].split(', ')) context[name] = () => {};
+  }
+  const $ = id => {
+    if (!nodes.has(id)) nodes.set(id, { value: '', addEventListener() {}, classList: { toggle() {} } });
+    return nodes.get(id);
+  };
+  Object.assign(context, { $, S, HOST: 'test', actions: {}, prefs: {}, apple: false,
+    hover: { matches: false }, wide: { matches: false }, reduced: { matches: false },
+    online: () => true, part: () => () => {}, set: (node, key, value) => { node[key] = value; },
+    h: (tag, props, ...children) => ({ tag, props, children }), icon: () => null, spin: () => null,
+    pendingKind: kind => !!MC.pending(S, kind), viewed: () => S.state.session,
+    findSheet: () => sheets.at(-1)?.instance, toast: message => notices.push(message),
+    intent: (spec, own) => { const message = MC.intent(S, spec, own); sends.push(message); callbacks.push(own); return true; },
+    sheet: options => {
+      const instance = { el: { querySelector: () => ({ disabled: false }) }, refresh() {}, close: () => sheets.pop() };
+      sheets.push({ ...options, instance }); return instance;
+    },
+  });
+  vm.runInNewContext(source.replace(/^import .*;$/gm, '').replace(/\bexport /g, '')
+    + '\nglobalThis.interactionUI = { syncApproval, openApproval };', context);
+  const refresh = next => { MC.reduce(S, { t: 'snapshot', view_epoch: 'view', state: next, blocks: [] }, 0); context.interactionUI.syncApproval(); };
+  refresh(textState());
+  $('ta').value = 'conversation draft';
+  const firstSheet = sheets.at(-1), form = firstSheet.body(), input = form.children[0];
+  assert.equal(input.tag, 'input');
+  assert.equal(input.props.maxLength, undefined, 'no arbitrary character cap');
+  input.props.oninput({ target: { value: ' allow 中文 ' } });
+  refresh(textState());
+  assert.equal(firstSheet.body().children[0].props.value, ' allow 中文 ');
+  firstSheet.instance.close();
+  context.interactionUI.openApproval();
+  assert.equal(sheets.at(-1).body().children[0].props.value, ' allow 中文 ');
+  form.props.onsubmit({ preventDefault() {} });
+  assert.equal(sends.length, 1);
+  assert.deepEqual(plain(sends[0].choice), { text: ' allow 中文 ' });
+  assert.equal(sends[0].kind, 'answer');
+  assert.equal(sends[0].message, undefined);
+  assert.equal($('ta').value, 'conversation draft');
+  refresh(textState({ loop_id: 'new_loop' }));
+  const nextForm = sheets.at(-1).body();
+  assert.equal(nextForm.children[0].props.value, '');
+  nextForm.children[0].props.oninput({ target: { value: 'replacement draft' } });
+  callbacks[0]({ ok: false, error: 'stale' });
+  assert.deepEqual(notices, [], 'a stale ACK cannot affect the replacement form');
+  form.props.onsubmit({ preventDefault() {} });
+  input.props.oninput({ target: { value: 'stale edit' } });
+  assert.equal(S.reply.text, 'replacement draft');
+  assert.equal(sends.length, 1);
+  nextForm.props.onsubmit({ preventDefault() {} });
+  assert.equal(sends.length, 2, 'an old pending answer does not disable a new interaction');
+  assert.equal(sends[1].loop_id, 'new_loop');
+  assert.deepEqual(plain(sends[1].choice), { text: 'replacement draft' });
+  refresh({ ...textState(), interaction: null });
+  assert.equal(S.reply.text, '');
+  assert.equal($('ta').value, 'conversation draft');
 });
 
 test('filesystem replies are matched to their request id once', () => {
@@ -283,15 +510,545 @@ test('a dropped connection leaves sends unconfirmed and never resends them', () 
   assert.equal(s.intents.size, 0);
 });
 
-test('retireText removes only the acked text and keeps returned or newly typed text', () => {
-  assert.equal(MC.retireText('draft', 'draft'), '');
-  assert.equal(MC.retireText('draft\nreturned', 'draft'), 'returned');
-  assert.equal(MC.retireText('returned\ndraft', 'draft'), 'returned');
-  assert.equal(MC.retireText('edited draft', 'draft'), 'edited draft');
-  assert.equal(MC.mergeReturned('', 'back'), 'back');
-  assert.equal(MC.mergeReturned('next', 'back'), 'next\nback');
-  // returned arrives while the send is still pending, then the ack retires only the sent text.
-  assert.equal(MC.retireText(MC.mergeReturned('first', 'old'), 'first'), 'old');
+function composerUI() {
+  const S = MC.createStore(), nodes = new Map(), storage = new Map(), sends = [], notices = [], confirmations = [], copies = [], shares = [], parts = new Map();
+  const source = read('conversation.js'), main = read('main.js'), net = read('net.js');
+  const context = { MC, Date, console, localStorage: {
+    getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, String(value)), removeItem: key => storage.delete(key),
+  }, document: { addEventListener() {} } };
+  for (const text of [source, main]) for (const match of text.matchAll(/import \{ ([^}]+) \} from/g)) {
+    for (const name of match[1].split(', ')) context[name] = () => {};
+  }
+  const $ = id => {
+    if (!nodes.has(id)) nodes.set(id, { value: '', style: {}, selectionStart: 0, selectionEnd: 0,
+      handlers: {}, addEventListener(name, fn) { this.handlers[name] = fn; }, setAttribute() {}, removeAttribute() {}, remove() {}, focus() {}, setSelectionRange() {}, classList: { toggle() {} } });
+    return nodes.get(id);
+  };
+  Object.assign(context, { $, S, HOST: 'test', actions: {}, prefs: {}, apple: false,
+    hover: { matches: false }, wide: { matches: false }, reduced: { matches: false },
+    online: () => true, part: (node, render) => value => { node.rendered = render(value); if (node === $('strip')) parts.set(node, { value, children: node.rendered }); },
+    set: (node, key, value) => { node[key] = value; },
+    h: (tag, props, ...children) => ({ tag, props, children, classList: { toggle() {} }, querySelector: () => null, replaceWith() {}, remove() {}, append(...more) { this.children.push(...more); } }), icon: name => ({ icon: name }), spin: () => ({ spinner: true }),
+    pendingKind: kind => !!MC.pending(S, kind), sending: () => !!MC.pending(S, 'submit') || !!MC.pending(S, 'queue'),
+    newDraftVersion: () => 'page:' + MC.newDraftVersion(S),
+    viewed: () => S.state.session || S.state.draft, turnStatus: () => S.state.status, renderState() {},
+    toast: text => notices.push(text), confirm: text => { confirmations.push(text); return context.allowConfirm; }, allowConfirm: true,
+    ws: { send: text => sends.push(JSON.parse(text)) }, keepFocus: (_host, change) => change(),
+    copyText: text => copies.push(text), share: (_title, text) => shares.push(text),
+  });
+  vm.runInNewContext(source.replace(/^import .*;$/gm, '').replace(/\bexport /g, '')
+    + '\nglobalThis.composerUI = { submit, fillComposer, onNewSession, unconfirmedHome, returnedToDraft, renderDock, projectionNote, blockNode, updateAsst };', context);
+  vm.runInNewContext(main.slice(main.indexOf('function onAck('), main.indexOf('// ---- top bar ----')), context);
+  vm.runInNewContext(net.slice(net.indexOf('function send(msg)'), net.indexOf('function hangUp(')), context);
+  vm.runInNewContext(net.slice(net.indexOf('// ---- intents and requests ----'), net.indexOf('export const pendingKind')).replaceAll('export ', ''), context);
+  const snapshot = (id = 'ses_one') => {
+    const next = structuredClone(state);
+    next.session = { ...next.session, id, load: 'load_' + id, allowed: [] };
+    next.interaction = null; next.commands = [];
+    MC.reduce(S, { t: 'snapshot', view_epoch: 'view_' + id, state: next, blocks: [] }, 0);
+    context.composerUI.onNewSession();
+  };
+  const ack = (operation, fields) => {
+    const effect = MC.reduce(S, { t: 'ack', id: operation.id, ...fields }, 0);
+    if (effect.ack) context.onAck(effect.ack);
+    return effect;
+  };
+  snapshot();
+  return { S, storage, sends, notices, confirmations, copies, shares, snapshot, ack, editor: $('ta'),
+    edit: context.composerUI.fillComposer, submit: () => context.composerUI.submit('send'),
+    disconnect: () => { MC.disconnect(S); context.connectionLost(); }, resend: context.resend,
+    sendIntent: context.intent,
+    returnedToDraft: context.composerUI.returnedToDraft,
+    note: context.composerUI.projectionNote, block: context.composerUI.blockNode, updateAssistant: context.composerUI.updateAsst,
+    allowConfirm: value => { context.allowConfirm = value; },
+    type: (text, inputType = 'insertText') => { $('ta').value = text; $('ta').handlers.input({ inputType }); },
+    draftWarning: () => { context.composerUI.renderDock(); return $('tray').rendered[0]; },
+    tray: key => $('tray').handlers.click({ target: { closest: () => ({ dataset: { k: key } }) } }),
+    strip: () => { context.composerUI.renderDock(); return { hidden: $('strip').hidden, ...parts.get($('strip')) }; } };
+}
+
+test('129 sequential unknown submissions stop at the finite browser buffer without evicting text or sending the refused draft', () => {
+  const ui = composerUI();
+  for (let index = 0; index < 129; index++) {
+    const text = String(index) + ': ' + 'x'.repeat(256 * 1024 - 8);
+    ui.edit(text);
+    const sent = ui.sends.length, nid = ui.S.nid;
+    ui.submit();
+    if (ui.sends.length > sent) ui.ack(ui.sends.at(-1), { ok: false, acceptance: 'unknown' });
+    else {
+      assert.equal(ui.S.nid, nid, 'busy admission must not allocate an operation ID');
+      assert.equal(ui.editor.value, text);
+      assert.equal(ui.storage.get('minicore.draft.ses_one'), text);
+    }
+  }
+  const retained = MC.unconfirmed(ui.S), bytes = retained.reduce((sum, operation) => sum + Buffer.byteLength(operation.text), 0);
+  assert.equal(ui.sends.length, 64, 'the actual WebSocket send path stops before operation 65');
+  assert.equal(retained.length, 64);
+  assert.ok(bytes <= 16 * 1024 * 1024);
+  assert.equal(retained[0].text, '0: ' + 'x'.repeat(256 * 1024 - 8));
+  assert.equal(retained.at(-1).text, '63: ' + 'x'.repeat(256 * 1024 - 8));
+  assert.equal(ui.notices.filter(text => /buffer.*full/i.test(text)).length, 65);
+  const nid = ui.S.nid;
+  ui.disconnect(); ui.snapshot();
+  assert.equal(MC.unconfirmed(ui.S).length, 64);
+  assert.equal(ui.sends.length, 64, 'reconnect does not retry unknown inputs');
+  ui.submit();
+  assert.equal(ui.S.nid, nid);
+  assert.equal(ui.sends.length, 64);
+  console.log('PHONE_BUFFER_PRESSURE', JSON.stringify({ attempts: 129, sent: 64, retained: retained.length, retained_utf8_bytes: bytes }));
+});
+
+test('pending and unknown browser operations share the entry bound and only settled outcomes release their slots', () => {
+  const ui = composerUI(), original = [];
+  for (let index = 0; index < 64; index++) {
+    assert.equal(ui.sendIntent(MC.intents.queue('same')), true);
+    original.push(ui.sends.at(-1));
+    if (index % 2 === 0) ui.ack(original.at(-1), { ok: false, acceptance: 'unknown' });
+  }
+  assert.equal(ui.S.intents.size, 64);
+  assert.equal(MC.unconfirmed(ui.S).length, 32);
+  ui.tray('discardMessage' + original[1].id);
+  assert.equal(ui.S.intents.size, 64, 'a pending operation cannot be forgotten as if it were unconfirmed');
+  const nid = ui.S.nid;
+  assert.equal(ui.sendIntent(MC.intents.setReasoning('high')), false);
+  assert.equal(ui.S.nid, nid);
+  assert.equal(ui.sends.length, 64);
+  ui.ack(original[1], { ok: true, accepted: true, input_id: 'accepted' });
+  assert.equal(ui.S.intents.size, 63);
+  assert.equal(ui.sendIntent(MC.intents.queue('same')), true);
+  ui.ack(ui.sends.at(-1), { ok: false, acceptance: 'unknown' });
+  assert.equal(ui.S.intents.size, 64);
+  ui.ack(original[3], { ok: false, acceptance: 'rejected', error: 'refused' });
+  assert.equal(ui.S.intents.size, 63);
+  assert.equal(ui.sendIntent(MC.intents.queue('same')), true);
+  ui.disconnect(); ui.snapshot();
+  assert.equal(ui.S.intents.size, 64, 'pending input becomes unknown rather than freeing its slot');
+  assert.equal(MC.unconfirmed(ui.S).length, 64);
+});
+
+test('browser admission measures retained UTF8 bytes across pending and unknown before send and releases only settled text', () => {
+  const ui = composerUI(), payload = '😀'.repeat(512 * 1024), sent = [];
+  // This client-retention boundary precedes the Agent's separate per-input validation.
+  for (let index = 0; index < 8; index++) {
+    assert.equal(ui.sendIntent(MC.intents.submit(payload)), true);
+    sent.push(ui.sends.at(-1));
+    if (index < 7) ui.ack(sent.at(-1), { ok: false, acceptance: 'unknown' });
+  }
+  assert.equal([...ui.S.intents.values()].reduce((sum, it) => sum + Buffer.byteLength(it.text), 0), 16 * 1024 * 1024);
+  assert.equal(ui.S.intents.size, 8, 'the byte cap is independent of the entry cap');
+  const nid = ui.S.nid;
+  assert.equal(ui.sendIntent(MC.intents.queue('é')), false);
+  assert.equal(ui.sendIntent(MC.intents.answer('loop', 'question', { text: 'é' })), false);
+  assert.equal(ui.sendIntent(MC.intents.answer('loop', 'question', 'deny', 'é')), false);
+  assert.equal(ui.sendIntent(MC.intents.renameSession('ses_one', 'é')), false);
+  assert.equal(ui.S.nid, nid);
+  assert.equal(ui.sends.length, 8);
+  assert.match(ui.notices.at(-1), /buffer.*full/i);
+  ui.ack(sent[7], { ok: true, accepted: true, input_id: 'accepted' });
+  assert.equal(ui.sendIntent(MC.intents.queue(payload)), true);
+  const rejected = ui.sends.at(-1);
+  ui.ack(rejected, { ok: false, acceptance: 'rejected', error: 'refused' });
+  assert.equal(ui.sendIntent(MC.intents.queue(payload)), true);
+  ui.ack(ui.sends.at(-1), { ok: false, acceptance: 'unknown' });
+  ui.disconnect(); ui.snapshot();
+  const before = ui.S.nid, sends = ui.sends.length;
+  assert.equal(ui.sendIntent(MC.intents.queue('x')), false);
+  assert.equal(ui.S.nid, before);
+  assert.equal(ui.sends.length, sends);
+});
+
+test('a full browser buffer refuses warned retry without losing the old unknown and explicit message discard frees capacity', () => {
+  const ui = composerUI(), operations = [];
+  for (let index = 0; index < 64; index++) {
+    assert.equal(ui.sendIntent(MC.intents.submit('same')), true);
+    operations.push(ui.sends.at(-1));
+    ui.ack(operations.at(-1), { ok: false, acceptance: 'unknown' });
+  }
+  const original = operations[0], nid = ui.S.nid;
+  ui.allowConfirm(false); ui.resend(original.id);
+  assert.equal(ui.S.nid, nid);
+  assert.equal(ui.sends.length, 64);
+  ui.allowConfirm(true); ui.resend(original.id);
+  assert.equal(ui.S.nid, nid, 'a full-store retry is visibly busy, not destructive transfer');
+  assert.equal(ui.S.intents.get(original.id).text, 'same');
+  assert.match(ui.notices.at(-1), /buffer.*full/i);
+  ui.tray('edit' + original.id); ui.type('', 'deleteContentBackward'); ui.type('edited', 'historyUndo');
+  const editedNid = ui.S.nid;
+  ui.submit();
+  assert.equal(ui.S.nid, editedNid);
+  assert.equal(ui.editor.value, 'edited');
+  assert.ok(ui.draftWarning(), 'busy admission does not discard editor provenance');
+  ui.allowConfirm(false); ui.tray('discardMessage' + operations[1].id);
+  assert.equal(ui.S.intents.size, 64);
+  ui.allowConfirm(true); ui.tray('discardMessage' + operations[1].id);
+  assert.equal(ui.S.intents.size, 63);
+  assert.equal(ui.S.intents.has(operations[1].id), false);
+  assert.equal(ui.sends.length, 64, 'local discard is never a wire request');
+  assert.ok(ui.draftWarning());
+  ui.submit();
+  assert.equal(ui.sends.length, 65);
+  assert.notEqual(ui.sends.at(-1).id, original.id);
+  assert.equal(ui.sends.at(-1).text, 'edited');
+});
+
+test('client byte capacity is returned by explicit unknown discard without changing an edited draft origin', () => {
+  const ui = composerUI(), text = 'é'.repeat(1024 * 1024), operations = [];
+  for (let index = 0; index < 8; index++) {
+    ui.sendIntent(MC.intents.submit(text)); operations.push(ui.sends.at(-1));
+    ui.ack(operations.at(-1), { ok: false, acceptance: 'unknown' });
+  }
+  ui.tray('edit' + operations[0].id);
+  ui.allowConfirm(false); ui.tray('discardMessage' + operations[0].id);
+  assert.equal(ui.S.intents.size, 8);
+  ui.allowConfirm(true); ui.tray('discardMessage' + operations[0].id);
+  assert.equal(ui.S.intents.size, 7);
+  assert.ok(ui.draftWarning(), 'discarding the card is not proof that its edited copy was unsent');
+  ui.type('é', 'historyUndo'); ui.allowConfirm(false);
+  const nid = ui.S.nid;
+  ui.submit();
+  assert.equal(ui.S.nid, nid);
+  assert.equal(ui.sends.length, 8);
+  assert.equal(ui.sendIntent(MC.intents.submit(text)), true);
+  assert.equal(ui.sendIntent(MC.intents.submit('é')), false);
+});
+
+test('discard pressure bounds editor origin references without resolving the edited unknown lineage', () => {
+  const ui = composerUI();
+  for (let index = 0; index < 129; index++) {
+    assert.equal(ui.sendIntent(MC.intents.submit('same')), true);
+    const operation = ui.sends.at(-1);
+    ui.ack(operation, { ok: false, acceptance: 'unknown' });
+    ui.tray('edit' + operation.id);
+    ui.tray('discardMessage' + operation.id);
+  }
+  const origins = JSON.parse(ui.storage.get('minicore.draft.ses_one.unknown')).origins;
+  assert.ok(origins.length <= 65, 'at most 64 retained origins plus one discarded-origin warning');
+  assert.equal(ui.S.intents.size, 0);
+  assert.ok(ui.draftWarning());
+  ui.type('', 'deleteContentBackward'); ui.type('same', 'historyUndo');
+  ui.allowConfirm(false);
+  const nid = ui.S.nid;
+  ui.submit();
+  assert.equal(ui.S.nid, nid);
+  assert.equal(ui.sends.length, 129);
+});
+
+test('one complete maximum legal UTF8 input is admitted unchanged by the browser bound', () => {
+  const ui = composerUI(), text = 'é'.repeat(128 * 1024);
+  ui.edit(text); ui.submit();
+  assert.equal(Buffer.byteLength(text), 256 * 1024);
+  assert.equal(ui.sends.length, 1);
+  assert.equal(ui.sends[0].text, text);
+  assert.equal(ui.S.intents.get(ui.sends[0].id).text, text);
+  assert.deepEqual(ui.notices, []);
+});
+
+test('tray Edit instead preserves unknown provenance through unchanged and edited normal Send until warned retry', () => {
+  for (const disconnect of [false, true]) for (const edited of [false, true]) {
+    const ui = composerUI();
+    ui.edit('possibly accepted'); ui.submit();
+    const original = ui.sends[0];
+    if (disconnect) { ui.disconnect(); ui.snapshot(); }
+    else ui.ack(original, { ok: false, acceptance: 'unknown', error: 'uncertain' });
+    ui.tray('edit' + original.id);
+    assert.equal(ui.editor.value, 'possibly accepted');
+    if (edited) ui.type('changed after unknown');
+    const text = ui.editor.value, nid = ui.S.nid;
+    ui.allowConfirm(false); ui.submit();
+    assert.equal(ui.confirmations.length, 1);
+    assert.equal(ui.S.nid, nid, 'cancel creates neither RPC nor operation ID');
+    assert.equal(ui.sends.length, 1);
+    assert.equal(ui.editor.value, text);
+    ui.snapshot();
+    assert.equal(ui.editor.value, text, 'ordinary reconnect preserves the exact risky draft version');
+    assert.equal(ui.sends.length, 1, 'reconnect never sends the edited copy');
+    ui.allowConfirm(true); ui.submit();
+    assert.equal(ui.confirmations.length, 2);
+    assert.equal(ui.sends.length, 2);
+    assert.notEqual(ui.sends[1].id, original.id);
+    assert.equal(ui.sends[1].text, text);
+  }
+});
+
+test('unknown edit provenance stays with its draft version not another view or unrelated same-text draft', () => {
+  const ui = composerUI();
+  ui.edit('same'); ui.submit();
+  const original = ui.sends[0];
+  ui.ack(original, { ok: false, acceptance: 'unknown' });
+  ui.tray('edit' + original.id);
+  ui.snapshot('other'); ui.edit('same'); ui.submit();
+  assert.equal(ui.confirmations.length, 0);
+  ui.ack(ui.sends[1], { ok: true, accepted: true, input_id: 'unrelated' });
+  ui.snapshot(); ui.allowConfirm(false); ui.submit();
+  assert.equal(ui.confirmations.length, 1);
+  assert.equal(ui.sends.length, 2);
+  ui.tray('discardUnknownDraft');
+  ui.edit('same'); ui.submit();
+  assert.equal(ui.confirmations.length, 1, 'explicit discard allows an independently owned draft');
+  assert.equal(ui.sends.length, 3);
+});
+
+test('explicit discard starts a distinct same-text draft without erasing the original unknown operation', () => {
+  const ui = composerUI();
+  ui.edit('same'); ui.submit();
+  const original = ui.sends[0];
+  ui.ack(original, { ok: false, acceptance: 'unknown' });
+  ui.tray('edit' + original.id);
+  ui.type('', 'deleteContentBackward');
+  ui.tray('discardUnknownDraft');
+  assert.equal(ui.storage.has('minicore.draft.ses_one.unknown'), false);
+  assert.equal(ui.draftWarning(), false);
+  assert.equal(ui.S.intents.get(original.id).st, 'unconfirmed', 'discard is not proof the original was rejected');
+  ui.type('same');
+  ui.submit();
+  assert.equal(ui.confirmations.length, 0);
+  assert.equal(ui.sends.length, 2);
+  assert.equal(ui.S.intents.get(original.id).st, 'unconfirmed');
+  assert.notEqual(ui.sends[1].id, original.id);
+});
+
+test('delete historyUndo and historyRedo keep the unknown edited draft behind a warned normal Send', () => {
+  for (const disconnected of [false, true]) for (const outcome of ['accepted', 'unknown']) {
+    const ui = composerUI();
+    ui.edit('original'); ui.submit();
+    const original = ui.sends[0];
+    if (disconnected) { ui.disconnect(); ui.snapshot(); }
+    else ui.ack(original, { ok: false, acceptance: 'unknown', error: 'uncertain' });
+    ui.tray('edit' + original.id);
+    ui.type('original edited');
+    ui.type('', 'deleteContentBackward');
+    ui.type('original edited', 'historyUndo');
+    ui.allowConfirm(false);
+    const nid = ui.S.nid, operations = ui.S.intents.size;
+    ui.submit();
+    assert.equal(ui.sends.length, 1, 'Undo must not turn a risky edit into an ordinary request');
+    assert.equal(ui.confirmations.length, 1);
+    assert.equal(ui.S.nid, nid, 'cancelled warning allocates no operation ID');
+    assert.equal(ui.S.intents.size, operations);
+    assert.equal(ui.editor.value, 'original edited');
+    assert.ok(ui.draftWarning());
+    ui.type('', 'historyRedo');
+    assert.ok(ui.draftWarning(), 'Redo to empty does not resolve the unknown origin');
+    const emptyNid = ui.S.nid;
+    ui.submit();
+    assert.equal(ui.S.nid, emptyNid);
+    assert.equal(ui.sends.length, 1);
+    ui.type('original edited', 'historyUndo');
+    ui.allowConfirm(true); ui.submit();
+    assert.equal(ui.confirmations.length, 2);
+    assert.equal(ui.sends.length, 2);
+    assert.notEqual(ui.sends[1].id, original.id);
+    assert.equal(ui.sends[1].text, 'original edited');
+    ui.ack(ui.sends[1], outcome === 'accepted' ? { ok: true, accepted: true, input_id: 'retried' }
+      : { ok: false, acceptance: 'unknown' });
+    assert.equal(ui.editor.value, '');
+    assert.equal(ui.draftWarning(), false, 'the retired warned version is not a hidden clone in the ordinary editor');
+    assert.equal(MC.unconfirmed(ui.S).length, outcome === 'unknown' ? 1 : 0);
+  }
+});
+
+test('an empty risky editor keeps its exact origin across view refresh before Undo or fresh typing', () => {
+  for (const inputType of ['historyUndo', 'insertText']) {
+    const ui = composerUI();
+    ui.edit('same'); ui.submit();
+    const original = ui.sends[0];
+    ui.ack(original, { ok: false, acceptance: 'unknown' });
+    ui.tray('edit' + original.id);
+    ui.type('', 'deleteContentBackward');
+    const version = ui.storage.get('minicore.draft.ses_one.version');
+    assert.ok(ui.draftWarning(), 'deleting is not an explicit independent-draft boundary');
+    assert.ok(version);
+    ui.snapshot('other'); ui.edit('same');
+    assert.equal(ui.draftWarning(), false, 'another view has independent ownership even with identical text');
+    ui.snapshot();
+    assert.equal(ui.storage.get('minicore.draft.ses_one.version'), version);
+    assert.ok(ui.draftWarning());
+    assert.equal(ui.editor.value, '');
+    ui.type('same', inputType);
+    ui.allowConfirm(false);
+    const nid = ui.S.nid;
+    ui.submit();
+    assert.equal(ui.S.nid, nid);
+    assert.equal(ui.sends.length, 1);
+    assert.equal(ui.confirmations.length, 1);
+    assert.equal(ui.S.intents.get(original.id).st, 'unconfirmed');
+  }
+});
+
+test('production recovery labels survive snapshots and metadata replacements without changing body content or Saving', () => {
+  const ui = composerUI(), S = ui.S;
+  const asst = { type: 'assistant', loop_id: 'partial', request: 0, text: 'received text', reasoning: 'transient thought', streaming: false,
+    preserved_channels: ['reasoning'] };
+  const end = { ...blocks[4], type: 'turn_end', loop_id: 'partial', saving: 'saved',
+    recovery: { status: 'partial', reason: 'Item 1 is too large' } };
+  const textOf = node => typeof node === 'string' ? node : Array.isArray(node) ? node.map(textOf).join(' ') : node && node.children ? textOf(node.children) : '';
+  for (const recovery of [{ status: 'partial', reason: 'Item 1 is too large' }, { status: 'unavailable', reason: 'Result expired' }]) {
+    const terminal = { ...end, recovery };
+    let fx = MC.reduce(S, { t: 'snapshot', view_epoch: 'reconnected', state: structuredClone(state), blocks: [asst, terminal] }, 0);
+    assert.equal(fx.notice, undefined);
+    const note = ui.note(S.blocks[0]);
+    assert.match(textOf(note), /reasoning.*not canonical/);
+    assert.equal(note.props['data-chrome'], 'true', 'provenance is UI annotation, not answer text');
+    const node = ui.block(S.blocks[0], 0);
+    assert.match(textOf(node.children[0].rendered), /reasoning.*not canonical/);
+    const actions = node.children.at(-1).children;
+    actions[0].props.onclick(); actions[1].props.onclick();
+    assert.equal(ui.copies.at(-1), asst.text, 'Copy answer never includes provenance chrome');
+    assert.equal(ui.shares.at(-1), asst.text, 'Share answer never includes recovery/provenance labels');
+    ui.updateAssistant(node, { ...asst, preserved_channels: [] });
+    assert.equal(node.children[0].rendered, null, 'incremental assistant reuse clears obsolete annotations');
+    ui.updateAssistant(node, { ...asst, preserved: true });
+    assert.match(textOf(node.children[0].rendered), /not canonical/);
+    assert.match(textOf(ui.block(S.blocks[1], 1)), new RegExp('Saved record; body ' + recovery.status));
+    assert.ok(textOf(ui.block(S.blocks[1], 1)).includes(recovery.reason));
+    assert.equal(S.blocks[0].text, 'received text');
+    assert.equal(S.blocks[0].reasoning, 'transient thought');
+    assert.equal(S.blocks[1].saving, 'saved', 'saved record does not mean a complete displayed body');
+    const changed = { ...asst, preserved: true }, updated = { ...terminal, recovery: { ...recovery, reason: 'Still missing after reconnect' } };
+    fx = MC.reduce(S, { t: 'blocks', len: 2, upserts: [{ i: 0, block: changed }, { i: 1, block: updated }] }, 0);
+    assert.equal(fx.notice, undefined);
+    assert.match(textOf(ui.note(S.blocks[0])), /not canonical/);
+    assert.ok(textOf(ui.block(S.blocks[1], 1)).includes('Still missing after reconnect'));
+    assert.equal(S.blocks[0].text, asst.text);
+    const exported = MC.exportMd(S.state, S.blocks);
+    assert.match(exported, /Saved record; body/);
+    assert.match(exported, /not canonical/);
+    assert.match(exported, /received text/);
+  }
+  MC.reduce(S, { t: 'blocks', len: 2, upserts: [{ i: 0, block: { ...asst, preserved_channels: [] } }, { i: 1, block: { ...end, recovery: undefined } }] }, 0);
+  assert.equal(ui.note(S.blocks[0]), null);
+  assert.equal(ui.note(S.blocks[1]), null);
+});
+
+test('the production status strip keeps an idle block visible without spinning and clears only with state', () => {
+  const ui = composerUI();
+  for (const [block_reason, label] of [['persistence', 'Persistence blocked: reopen the session to reconcile the last save'], ['internal', 'Blocked: the Agent hit an internal error']]) {
+    const next = { ...ui.S.state, status: { ...ui.S.state.status, block_reason, label, busy: false, compacting: false, started_ms: null } };
+    MC.reduce(ui.S, { t: 'state', state: next }, 0);
+    for (let index = 0; index < 3; index++) {
+      const strip = ui.strip();
+      assert.equal(strip.hidden, false);
+      assert.equal(strip.value.label, label);
+      assert.equal(strip.value.started, null);
+      assert.deepEqual(strip.children[0], { icon: 'warn' });
+      assert.equal(strip.children.some(child => child && child.spinner), false);
+    }
+    MC.reduce(ui.S, { t: 'snapshot', view_epoch: 'reconnect', state: next, blocks: [] }, 0);
+    assert.equal(ui.strip().value.label, label);
+    MC.reduce(ui.S, { t: 'state', state: { ...next, status: { ...next.status, block_reason: null, label: null } } }, 0);
+    assert.equal(ui.strip().hidden, true);
+  }
+});
+
+test('the production elapsed timer stays off for a blocked warning and resumes only for active work', () => {
+  const S = MC.createStore(), started = [], stopped = [];
+  const source = read('sessions.js');
+  const context = { S, setInterval: (callback, delay) => { started.push(delay); return started.length; },
+    clearInterval: id => stopped.push(id), turnStatus: () => S.state.status };
+  vm.runInNewContext(source.slice(source.indexOf('let tick = 0;'), source.indexOf('// ---- navigation:')).replace('export ', '')
+    + '\nglobalThis.refresh = syncTick;', context);
+  S.state = { status: { block_reason: 'persistence', started_ms: 1, busy: true } };
+  context.refresh();
+  assert.deepEqual(started, []);
+  S.state.status.block_reason = null;
+  context.refresh();
+  assert.deepEqual(started, [1000]);
+  S.state.status.block_reason = 'internal';
+  context.refresh();
+  assert.deepEqual(stopped, [1]);
+  context.refresh();
+  assert.deepEqual(started, [1000], 'a persistent warning cannot arm a polling timer');
+});
+
+test('blocking takes status priority without suppressing an exact text question or changing execution', () => {
+  const s = MC.createStore(), next = textState();
+  next.status = { ...next.status, block_reason: 'persistence', label: 'Persistence blocked: reopen the session to reconcile the last save', compacting: true, interrupting: true, loading: true };
+  MC.reduce(s, { t: 'snapshot', view_epoch: 'blocked', state: next, blocks: [] }, 0);
+  assert.deepEqual(plain(MC.statusLine(s.state, [{ type: 'tool', name: 'bash', state: 'running', detail: 'old command' }])), { label: next.status.label, detail: '' });
+  assert.equal(s.state.status.busy, true);
+  assert.equal(s.state.interaction.id, next.interaction.id);
+  s.reply.text = 'still actionable';
+  const message = MC.intent(s, MC.textAnswer(s));
+  assert.equal(message.loop_id, next.interaction.loop_id);
+  assert.equal(message.interaction_id, next.interaction.id);
+  assert.deepEqual(plain(message.choice), { text: 'still actionable' });
+});
+
+test('a same-connection unknown ACK retires only its submitted draft version into the unconfirmed card', () => {
+  const ui = composerUI();
+  ui.edit('possibly accepted'); ui.submit();
+  const operation = ui.sends[0];
+  assert.equal(operation.draft, undefined, 'editor ownership never goes over the wire');
+  ui.ack(operation, { ok: false, error: 'uncertain' });
+  assert.equal(ui.editor.value, '');
+  assert.equal(ui.storage.has('minicore.draft.ses_one'), false);
+  assert.deepEqual(MC.unconfirmed(ui.S).map(it => it.text), ['possibly accepted']);
+  ui.submit();
+  assert.equal(ui.sends.length, 1, 'normal Send cannot silently duplicate the retained card');
+  ui.resend(operation.id);
+  assert.equal(ui.confirmations.length, 1);
+  assert.notEqual(ui.sends[1].id, operation.id);
+  assert.equal(ui.sends[1].text, 'possibly accepted');
+});
+
+test('typing a newer independent draft while ACK is pending is preserved even when both texts are identical', () => {
+  for (const newer of ['new independent text', 'same']) {
+    const ui = composerUI();
+    ui.edit('same'); ui.submit();
+    const first = ui.sends[0], firstVersion = ui.S.intents.get(first.id).draft.version;
+    assert.equal(ui.editor.readOnly, false, 'typing is allowed while dispatch waits');
+    ui.edit(newer);
+    assert.notEqual(ui.storage.get('minicore.draft.ses_one.version'), firstVersion);
+    ui.ack(first, { ok: false, acceptance: 'unknown', error: 'uncertain' });
+    assert.equal(ui.editor.value, newer);
+    ui.submit();
+    const second = ui.sends[1];
+    assert.notEqual(second.id, first.id);
+    ui.ack(second, { ok: true, accepted: true, input_id: 'second_input', start_error: { input_id: 'older_head', message: 'could not start' } });
+    assert.equal(ui.editor.value, '', 'accepted startup failure does not restore the submitted version');
+    assert.deepEqual(MC.unconfirmed(ui.S).map(it => it.id), [first.id]);
+  }
+});
+
+test('disconnect and reconnect retain uncertain input only in its card without clearing a newer draft or auto resending', () => {
+  for (const newer of [null, 'same']) {
+    const ui = composerUI();
+    ui.edit('same'); ui.submit();
+    if (newer != null) ui.edit(newer);
+    ui.disconnect();
+    assert.equal(ui.editor.value, newer || '');
+    ui.snapshot();
+    assert.equal(ui.editor.value, newer || '');
+    assert.equal(ui.sends.length, 1);
+    assert.deepEqual(MC.unconfirmed(ui.S).map(it => it.text), ['same']);
+    assert.equal(MC.pending(ui.S, 'submit'), null);
+  }
+});
+
+test('a late outcome clears only its original stored draft version, not a same-text draft in another view', () => {
+  const ui = composerUI();
+  ui.edit('same'); ui.submit();
+  const first = ui.sends[0];
+  ui.snapshot('other'); ui.edit('same');
+  ui.ack(first, { ok: false, acceptance: 'unknown', error: 'uncertain' });
+  assert.equal(ui.editor.value, 'same');
+  assert.equal(ui.storage.get('minicore.draft.other'), 'same');
+  assert.equal(ui.storage.has('minicore.draft.ses_one'), false);
+  ui.snapshot('ses_one');
+  assert.equal(ui.editor.value, '');
+  assert.equal(ui.sends.length, 1);
+});
+
+test('returned edit text replaces draft ownership so an older accepted ACK cannot erase it', () => {
+  const ui = composerUI();
+  ui.edit('same'); ui.submit();
+  const first = ui.sends[0];
+  ui.snapshot('other');
+  ui.returnedToDraft('ses_one', 'same');
+  ui.ack(first, { ok: true, accepted: true, input_id: 'old_input' });
+  ui.snapshot('ses_one');
+  assert.equal(ui.editor.value, 'same\nsame');
+  assert.equal(MC.unconfirmed(ui.S).length, 0);
 });
 
 test('other devices read per-device views and drop just one entry of this device name', () => {
@@ -412,7 +1169,8 @@ test('rename keeps the title exactly, including an empty one that clears it', ()
   const s = MC.createStore();
   for (const title of ['', '  spaced  ', 'Ünïcödé — 修复解析器 🚀', 'x'.repeat(200)]) {
     const msg = plain(MC.intent(s, MC.intents.renameSession('ses_one', title)));
-    assert.deepEqual(Object.keys(msg).sort(), ['id', 'kind', 'session_id', 't', 'title']);
+    assert.deepEqual(Object.keys(msg).sort(), ['id', 'kind', 'session_id', 't', 'title', 'view_epoch']);
+    assert.ok(!('load' in msg), 'renaming another session names only that session');
     assert.equal(msg.title, title);
     assert.ok(Buffer.byteLength(msg.id) <= 64);
   }
@@ -958,19 +1716,26 @@ test('a tap on the primary decides from the live text and ignores double taps on
   assert.equal(tap({ text: 'next' }, 10000, 30), null);
 });
 
-test('the tray preserves queue order with separate kind numbering and bounded expansion', () => {
-  const q = [{ kind: 'steer', text: 's' }, { kind: 'follow', text: 'a' }, { kind: 'follow', text: 'b' }, { kind: 'steer', text: 'waiting' }, { kind: 'follow', text: 'd' }];
+test('the tray preserves queue order with separate kind numbering and carries each input identity', () => {
+  const q = [
+    { id: 'inp_s', kind: 'steer', text: 's' }, { id: 'inp_a', kind: 'follow', text: 'a' },
+    { id: 'inp_b', kind: 'follow', text: 'b' }, { id: 'inp_w', kind: 'steer', text: 'waiting' },
+    { id: 'inp_d', kind: 'follow', text: 'd' },
+  ];
   const v = plain(MC.queueView(q, false));
-  assert.deepEqual(v.items.map(x => [x.kind, x.index, x.n]), [['steer', 0, 1], ['follow', 1, 1], ['follow', 2, 2]]);
+  assert.deepEqual(v.items.map(x => [x.kind, x.text, x.n]), [['steer', 's', 1], ['follow', 'a', 1], ['follow', 'b', 2]]);
+  assert.deepEqual(v.items.map(x => [x.kind, x.id, x.n]), [['steer', 'inp_s', 1], ['follow', 'inp_a', 1], ['follow', 'inp_b', 2]]);
   assert.deepEqual([v.hidden, v.long], [2, true]);
   const all = plain(MC.queueView(q, true));
   assert.deepEqual(all.items.map(x => x.n), [1, 1, 2, 2, 3]);
+  assert.deepEqual(all.items.map(x => x.id), q.map(x => x.id));
   assert.deepEqual(all.items.map(x => x.text), q.map(x => x.text));
   assert.deepEqual([all.hidden, all.long], [0, true]);
   assert.deepEqual(plain(MC.queueView(q.slice(0, 3), false)), { items: plain(MC.queueView(q.slice(0, 3), true)).items, hidden: 0, long: false });
   assert.deepEqual(plain(MC.queueView([], false)), { items: [], hidden: 0, long: false });
-  const mixed = plain(MC.queueView([{ kind: 'follow', text: 'a' }, { kind: 'steer', text: 'b' }, { kind: 'follow', text: 'c' }], true));
-  assert.deepEqual(mixed.items.map(x => [x.kind, x.index, x.n]), [['follow', 0, 1], ['steer', 1, 1], ['follow', 2, 2]]);
+  const mixed = plain(MC.queueView([{ id: 'x', kind: 'follow', text: 'a' }, { id: 'y', kind: 'steer', text: 'b' }, { id: 'z', kind: 'follow', text: 'c' }], true));
+  assert.deepEqual(mixed.items.map(x => [x.kind, x.text, x.n]), [['follow', 'a', 1], ['steer', 'b', 1], ['follow', 'c', 2]]);
+  assert.deepEqual(mixed.items.map(x => [x.kind, x.id, x.n]), [['follow', 'x', 1], ['steer', 'y', 1], ['follow', 'z', 2]]);
 });
 
 test('the thinking preview is the newest sentence without Markdown markers', () => {

@@ -20,6 +20,7 @@ pub struct ToolCall {
     /// Lines in the whole input, which can exceed what `expanded_input` holds.
     pub input_lines: Option<usize>,
     pub state: ToolState,
+    pub recording: Option<crate::protocol::ToolRecordingState>,
     pub started_at: Option<Instant>,
     pub duration: Option<Duration>,
     pub exit_code: Option<i64>,
@@ -60,13 +61,11 @@ impl ToolState {
             ToolExecutionState::AwaitingPolicy
             | ToolExecutionState::Running
             | ToolExecutionState::Cancelling => Self::Running,
-            ToolExecutionState::Succeeded => Self::Succeeded,
+            ToolExecutionState::Succeeded | ToolExecutionState::InputProvided => Self::Succeeded,
             ToolExecutionState::Failed => Self::Failed,
             ToolExecutionState::Denied => Self::Denied,
             ToolExecutionState::Cancelled => Self::Cancelled,
-            // `input_provided` means the call yielded to an interaction; the
-            // final tool_finished event decides the card state.
-            ToolExecutionState::InputProvided | ToolExecutionState::Unknown => Self::Pending,
+            ToolExecutionState::Unknown => Self::Pending,
         }
     }
 }
@@ -80,6 +79,7 @@ impl ToolCall {
             expanded_input: None,
             input_lines: None,
             state: ToolState::Pending,
+            recording: None,
             started_at: None,
             duration: None,
             exit_code: None,
@@ -129,6 +129,7 @@ impl ToolCall {
     /// An execution record: state, duration, counts and the command's exit code.
     pub fn apply_execution(&mut self, execution: &ToolExecution) {
         self.set_state(ToolState::from_execution(execution.state));
+        self.recording = execution.recording.or(self.recording);
         self.duration = execution.duration().or(self.duration);
         self.output_lines = execution.output_line_count.or(self.output_lines);
         self.truncated |= execution.result_truncated;
@@ -244,6 +245,7 @@ impl ToolCall {
         }
         self.duration = self.duration.or(live.duration);
         self.exit_code = self.exit_code.or(live.exit_code);
+        self.recording = self.recording.or(live.recording);
         self.expanded = self.expanded.or(live.expanded);
         if live.stream_offsets.iter().any(Option::is_some) {
             self.output.clone_from(&live.output);
@@ -378,7 +380,7 @@ impl ToolCall {
             Some("failed") => ToolState::Failed,
             Some("denied") => ToolState::Denied,
             Some("cancelled") => ToolState::Cancelled,
-            Some("succeeded") => ToolState::Succeeded,
+            Some("succeeded" | "input_provided") => ToolState::Succeeded,
             _ => self.state,
         };
     }
@@ -547,6 +549,34 @@ mod tests {
             ToolState::from_execution(ToolExecutionState::Denied),
             ToolState::Denied
         );
+    }
+
+    #[test]
+    fn a_provided_input_is_terminal_in_hydrated_and_summary_tool_cards() {
+        let read: ToolReadResult = serde_json::from_value(serde_json::json!({"execution":{
+            "tool_ref":{"session_id":"s","loop_id":"l","request_index":1,"tool_call_id":"c"},
+            "state":"input_provided","result_truncated":false
+        }}))
+        .unwrap();
+        let mut hydrated = ToolCall::new(key("c"), "question");
+        hydrated.apply_read(&read);
+        assert_eq!(
+            hydrated.state,
+            ToolState::Succeeded,
+            "a provided answer is a terminal tool result"
+        );
+        hydrated.set_state(ToolState::Running);
+        assert_eq!(
+            hydrated.state,
+            ToolState::Succeeded,
+            "a late running fact cannot reopen an answered input"
+        );
+        let summary: ToolSummary = serde_json::from_value(serde_json::json!({"tool_call_id":"c","name":"question",
+            "display":{"detail":"a question","truncated":false},"state":"input_provided","output_truncated":false
+        })).unwrap();
+        let mut from_history = ToolCall::new(key("c"), "question");
+        from_history.apply_summary(&summary);
+        assert_eq!(from_history.state, ToolState::Succeeded);
     }
 
     #[test]

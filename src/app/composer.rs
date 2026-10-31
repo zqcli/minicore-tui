@@ -124,12 +124,48 @@ struct Snapshot {
 
 /// A submitted prompt or the draft set aside while recalling one, with its chips.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-struct Entry {
+pub struct Entry {
     text: String,
     pastes: Vec<Paste>,
+    rollback: Option<(Vec<Snapshot>, Vec<Snapshot>)>,
 }
 
 impl Entry {
+    pub fn new(text: String) -> Self {
+        Self {
+            text,
+            pastes: Vec::new(),
+            rollback: None,
+        }
+    }
+
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    pub fn retained_bytes(&self) -> usize {
+        self.text.capacity()
+            + self.pastes.capacity() * std::mem::size_of::<Paste>()
+            + self.rollback.as_ref().map_or(0, |(undo, redo)| {
+                [undo, redo]
+                    .into_iter()
+                    .map(|steps| {
+                        steps.capacity() * std::mem::size_of::<Snapshot>()
+                            + steps
+                                .iter()
+                                .map(|step| {
+                                    step.text.capacity()
+                                        + step.pastes.capacity() * std::mem::size_of::<Paste>()
+                                })
+                                .sum::<usize>()
+                    })
+                    .sum::<usize>()
+            })
+    }
+
+    pub fn discard_rollback(&mut self) {
+        self.rollback = None;
+    }
     fn from_record(record: Record) -> Self {
         let Record { text, pastes } = record;
         let mut end = 0;
@@ -159,7 +195,11 @@ impl Entry {
             .into_iter()
             .map(|range| Paste::new(&text, range))
             .collect();
-        Self { text, pastes }
+        Self {
+            text,
+            pastes,
+            rollback: None,
+        }
     }
 
     fn record(&self) -> Record {
@@ -371,10 +411,21 @@ impl Composer {
 
     /// Records a submitted prompt and starts a fresh draft.
     pub fn submit(&mut self) -> String {
+        let entry = self.take_submission();
+        let text = entry.text.clone();
+        self.remember(entry);
+        text
+    }
+
+    pub fn take_submission(&mut self) -> Entry {
         self.commit();
         let entry = Entry {
             text: std::mem::take(&mut self.text),
             pastes: std::mem::take(&mut self.pastes),
+            rollback: Some((
+                std::mem::take(&mut self.undo),
+                std::mem::take(&mut self.redo),
+            )),
         };
         self.version += 1;
         self.cursor = 0;
@@ -382,16 +433,40 @@ impl Composer {
         self.column = None;
         self.recall = None;
         self.draft = Entry::default();
-        let text = entry.text.clone();
-        let repeat = self.history.back().is_some_and(|last| last.text == text);
-        if !text.trim().is_empty() && !repeat {
+        entry
+    }
+
+    pub fn remember(&mut self, mut entry: Entry) {
+        entry.discard_rollback();
+        let repeat = self
+            .history
+            .back()
+            .is_some_and(|last| last.text == entry.text);
+        if !entry.text.trim().is_empty() && !repeat {
             self.history.push_back(entry);
             if self.history.len() > HISTORY_STEPS {
                 self.history.pop_front();
             }
             self.save_history();
         }
-        text
+    }
+
+    pub fn restore_submission(&mut self, mut entry: Entry) {
+        let rollback = entry.rollback.take();
+        self.load(entry);
+        if let Some((undo, redo)) = rollback {
+            self.undo = undo;
+            self.redo = redo;
+        }
+    }
+
+    pub fn take_for_editor(&mut self) -> String {
+        let mut entry = self.take_submission();
+        if let Some((undo, redo)) = entry.rollback.take() {
+            self.undo = undo;
+            self.redo = redo;
+        }
+        entry.text
     }
 
     fn save_history(&self) {
@@ -485,7 +560,22 @@ impl Composer {
             return;
         }
         let text = normalize(text);
-        let text = text.as_str();
+        self.insert_normalized(&text);
+    }
+
+    pub fn insert_bounded(&mut self, text: &str, limit: usize) -> bool {
+        if text.is_empty() {
+            return true;
+        }
+        let text = normalize(text);
+        if self.text.len() - self.selection().map_or(0, |range| range.len()) + text.len() > limit {
+            return false;
+        }
+        self.insert_normalized(&text);
+        true
+    }
+
+    fn insert_normalized(&mut self, text: &str) {
         self.snapshot();
         self.erase_selection();
         let start = self.cursor;
@@ -834,11 +924,13 @@ impl Composer {
         if self.history.is_empty() {
             return false;
         }
+        self.close_gesture();
         let index = match self.recall {
             None => {
                 self.draft = Entry {
                     text: std::mem::take(&mut self.text),
                     pastes: std::mem::take(&mut self.pastes),
+                    rollback: None,
                 };
                 self.history.len() - 1
             }
@@ -868,7 +960,8 @@ impl Composer {
     /// Swaps in a recalled draft, first committing the live gesture so earlier
     /// typing does not merge with what follows.
     fn load(&mut self, entry: Entry) {
-        self.commit();
+        self.close_gesture();
+        self.recall = None;
         self.gesture = None;
         self.text = entry.text;
         self.version += 1;
@@ -943,6 +1036,19 @@ fn next_grapheme(text: &str, cursor: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bounded_pastes_validate_normalized_bytes_without_losing_the_existing_selection() {
+        let mut editor = Composer::new();
+        editor.insert("abcd");
+        assert!(!editor.insert_bounded("\t", 6));
+        assert_eq!(editor.text(), "abcd");
+        editor.extend_selection(Composer::move_home);
+        assert!(editor.insert_bounded("\t", 6));
+        assert_eq!(editor.text(), "    ");
+        assert!(editor.undo());
+        assert_eq!(editor.text(), "abcd");
+    }
 
     fn composer(text: &str) -> Composer {
         let mut composer = Composer::new();

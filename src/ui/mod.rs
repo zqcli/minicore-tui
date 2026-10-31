@@ -36,7 +36,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Option<Position> {
     // The terminal owns cursor visibility; this only says where the caret goes.
     let area = frame.area();
     app.composer_area = Rect::default();
-    if let Some(fatal) = &app.fatal {
+    if let Some(fatal) = &app.fatal
+        && !matches!(app.overlay, crate::app::Overlay::Unconfirmed { .. })
+    {
         draw_fatal(frame, area, fatal);
         return None;
     }
@@ -95,7 +97,13 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Option<Position> {
     // list is typed into through it.
     if matches!(
         app.overlay,
-        Overlay::None | Overlay::Palette { .. } | Overlay::Files { .. }
+        Overlay::None
+            | Overlay::Palette { .. }
+            | Overlay::Files { .. }
+            | Overlay::Unconfirmed {
+                mode: crate::app::unconfirmed::ReviewMode::Edit(_),
+                ..
+            }
     ) && slot_area.height > 0
     {
         app.composer_max_rows = composer::max_rows(area.height);
@@ -221,7 +229,10 @@ fn draw_fatal(frame: &mut Frame, area: Rect, fatal: &crate::app::Fatal) {
         }
     }
     lines.push(Line::raw(""));
-    lines.push(Line::styled("Press q to quit", styles.dim()));
+    lines.push(Line::styled(
+        "Press q to quit · F8 review local input confirmations",
+        styles.dim(),
+    ));
     frame.render_widget(ratatui::widgets::Paragraph::new(lines), area);
 }
 

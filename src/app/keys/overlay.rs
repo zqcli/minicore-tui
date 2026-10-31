@@ -126,6 +126,7 @@ impl App {
             }
             Overlay::Help { scroll } => *scroll = scroll.saturating_add_signed(delta * 3),
             Overlay::Find { .. } => self.find_step(delta > 0),
+            Overlay::Unconfirmed { .. } => self.move_local_input(delta),
             Overlay::Context | Overlay::SessionInfo { .. } | Overlay::None => {}
         }
     }
@@ -180,6 +181,10 @@ impl App {
             return None;
         }
         match std::mem::replace(&mut self.overlay, Overlay::None) {
+            review @ Overlay::Unconfirmed { .. } => {
+                self.overlay = review;
+                None
+            }
             Overlay::Sessions {
                 selected,
                 filter,

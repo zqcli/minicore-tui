@@ -23,27 +23,53 @@ use crate::protocol::{
     AgentEvent, IncomingFrame, OutgoingRequest, RequestId, RpcError, RpcResponse,
 };
 
+#[cfg(feature = "e2e-observe")]
+pub mod metrics;
+
 /// One incoming frame from the child, in arrival order.
 pub enum Incoming {
-    Event(Box<AgentEvent>),
-    /// The child is gone: no further frames will arrive.
-    Closed {
-        status: Option<String>,
+    Event {
+        event: Box<AgentEvent>,
+        /// Encoded size of the line this event was decoded from.
+        bytes: usize,
     },
+    /// The child is gone: no further frames will arrive.
+    Closed { status: Option<String> },
 }
 
-/// Upper bound for one inbound line. The Agent states no limit of its own.
-const MAX_FRAME_BYTES: usize = 32 * 1024 * 1024;
-/// The Agent terminates the process on an oversized request line, so the
-/// client must refuse to send one.
-const MAX_REQUEST_BYTES: usize = 1024 * 1024;
+/// Upper bound for one frame the Agent sends (a `session_snapshot` notification
+/// or a receipt): 64 MiB fits a full snapshot of 32 queued 256 KiB inputs, the
+/// execution input, a maximum interaction and a 256-entry catalogue.
+pub const CONTROL_FRAME_MAX_BYTES: usize = 64 * 1024 * 1024;
+/// Upper bound for one line from the Agent, envelope and newline included.
+const MAX_FRAME_BYTES: usize = CONTROL_FRAME_MAX_BYTES;
+/// Upper bound for one line to the Agent. It admits an 8 MiB request; a legal
+/// `input.push` carrying one
+/// 256 KiB maximum input escapes to 1,573,049 bytes, so this clears the largest
+/// legal request with room for the method, the id and the load.
+pub const MAX_REQUEST_BYTES: usize = 8 * 1024 * 1024;
 const STDERR_TAIL_LINES: usize = 200;
 const OUTBOUND_CAPACITY: usize = 64;
 /// The Agent admits 4 concurrent read queries; the rest are retried on
 /// `-32019`, which is worse than pacing them here.
 const QUERY_PERMITS: usize = 3;
+const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
+const TERMINATE_TIMEOUT: Duration = Duration::from_secs(1);
+
+#[derive(Default)]
+struct Shutdown {
+    child: Option<ChildOwner>,
+    complete: bool,
+}
+
+struct ChildOwner {
+    task: JoinHandle<()>,
+    terminate: Option<oneshot::Sender<()>>,
+}
 
 pub struct Client {
+    #[cfg(feature = "e2e-observe")]
+    pub metrics: Arc<metrics::Metrics>,
     outbound: mpsc::Sender<Vec<u8>>,
     pending: Arc<Mutex<HashMap<RequestId, oneshot::Sender<RpcResponse>>>>,
     next_id: AtomicU64,
@@ -53,6 +79,7 @@ pub struct Client {
     closed: Arc<Mutex<Option<String>>>,
     incoming: mpsc::Sender<Incoming>,
     tasks: Mutex<Vec<JoinHandle<()>>>,
+    shutdown: tokio::sync::Mutex<Shutdown>,
 }
 
 /// The command serving the Agent on stdio: `binary` when set, else the Agent
@@ -67,6 +94,11 @@ pub fn agent_command(binary: Option<&Path>, config: &Path) -> std::io::Result<Co
         }
     };
     command.arg("--config").arg(config).arg("--stdio");
+    #[cfg(feature = "e2e-observe")]
+    command
+        .env_remove("MINICORE_E2E_TRACE")
+        .env_remove("MINICORE_E2E_APPLY_GATE")
+        .env_remove("MINICORE_E2E_PHONE_GATE");
     Ok(command)
 }
 
@@ -104,13 +136,18 @@ impl Client {
             .ok_or_else(|| RpcError::closed("agent stderr is unavailable"))?;
 
         let client = Self::start(stdin, stdout, stderr, incoming);
-        let waiter = tokio::spawn(waiter_task(
+        let (terminate, termination) = oneshot::channel();
+        let task = tokio::spawn(waiter_task(
             child,
+            termination,
             client.closed.clone(),
             client.pending.clone(),
             client.incoming.clone(),
         ));
-        client.tasks.lock().unwrap().push(waiter);
+        client.shutdown.try_lock().unwrap().child = Some(ChildOwner {
+            task,
+            terminate: Some(terminate),
+        });
         Ok(client)
     }
 
@@ -140,6 +177,8 @@ impl Client {
         ));
         let stderr_reader = tokio::spawn(stderr_task(stderr, stderr_tail.clone()));
         Arc::new(Self {
+            #[cfg(feature = "e2e-observe")]
+            metrics: Arc::default(),
             outbound,
             pending,
             next_id: AtomicU64::new(1),
@@ -149,6 +188,7 @@ impl Client {
             closed,
             incoming,
             tasks: Mutex::new(vec![writer, reader, stderr_reader]),
+            shutdown: tokio::sync::Mutex::new(Shutdown::default()),
         })
     }
 
@@ -164,6 +204,8 @@ impl Client {
         } else {
             None
         };
+        #[cfg(feature = "e2e-observe")]
+        let _observation = _permit.as_ref().map(|_| self.metrics.query());
         let response = self.call_raw(method, params).await?;
         response.decode()
     }
@@ -173,24 +215,42 @@ impl Client {
         method: &'static str,
         params: &P,
     ) -> Result<RpcResponse, RpcError> {
-        if let Some(reason) = self.closed.lock().unwrap().clone() {
-            return Err(RpcError::closed(reason));
-        }
         let id = RequestId(self.next_id.fetch_add(1, Ordering::Relaxed));
-        let mut params = serde_json::to_value(params)
-            .map_err(|error| RpcError::new(-32602, "invalid_params", error.to_string()))?;
+        let mut params = serde_json::to_value(params).map_err(|error| {
+            before_write_error(
+                method,
+                RpcError::new(-32602, "invalid_params", error.to_string()),
+            )
+        })?;
         // The Agent accepts omitted params or an object, never JSON null.
         if params.is_null() {
             params = Value::Object(Default::default());
         }
-        let line = encode_request(OutgoingRequest::new(id, method, params))?;
-        let (tx, rx) = oneshot::channel();
-        self.pending.lock().unwrap().insert(id, tx);
+        let line = encode_request(OutgoingRequest::new(id, method, params))
+            .map_err(|error| before_write_error(method, error))?;
+        let rx = {
+            let closed = self.closed.lock().unwrap();
+            if let Some(reason) = closed.as_ref() {
+                return Err(before_write_error(method, RpcError::closed(reason.clone())));
+            }
+            let (tx, rx) = oneshot::channel();
+            self.pending.lock().unwrap().insert(id, tx);
+            rx
+        };
         match self.outbound.send(line).await {
-            Ok(()) => {}
+            Ok(()) =>
+            {
+                #[cfg(feature = "e2e-observe")]
+                if is_query(method) {
+                    self.metrics.sent(method);
+                }
+            }
             Err(_) => {
                 self.pending.lock().unwrap().remove(&id);
-                return Err(RpcError::closed("agent is not accepting requests"));
+                return Err(before_write_error(
+                    method,
+                    RpcError::closed("agent is not accepting requests"),
+                ));
             }
         }
         rx.await.map_err(|_| {
@@ -210,19 +270,48 @@ impl Client {
     /// Sends `agent.shutdown` and gives the child a bounded moment to exit
     /// before it is killed. Safe to call more than once.
     pub async fn shutdown(&self) {
+        let mut shutdown = self.shutdown.lock().await;
+        if shutdown.complete {
+            return;
+        }
         let _ = tokio::time::timeout(
-            Duration::from_secs(3),
+            SHUTDOWN_TIMEOUT,
             self.call_raw("agent.shutdown", &Value::Null),
         )
         .await;
+        if let Some(child) = &mut shutdown.child
+            && tokio::time::timeout(SHUTDOWN_TIMEOUT, &mut child.task)
+                .await
+                .is_err()
+        {
+            if let Some(terminate) = child.terminate.take() {
+                let _ = terminate.send(());
+            }
+            if tokio::time::timeout(TERMINATE_TIMEOUT, &mut child.task)
+                .await
+                .is_err()
+            {
+                child.task.abort();
+                let _ = (&mut child.task).await;
+            }
+        }
         for task in self.tasks.lock().unwrap().drain(..) {
             task.abort();
         }
+        shutdown.child = None;
+        shutdown.complete = true;
     }
 }
 
 fn closed() -> RpcError {
     RpcError::closed("rpc client is shutting down")
+}
+
+fn before_write_error(method: &str, mut error: RpcError) -> RpcError {
+    if method == crate::protocol::METHOD_INPUT_PUSH {
+        error.acceptance = Some(crate::protocol::Acceptance::Rejected);
+    }
+    error
 }
 
 /// Methods that hold one of the Agent's read-query slots.
@@ -294,11 +383,11 @@ async fn reader_task<R: AsyncRead + Unpin>(
                 }
             }
             Ok(IncomingFrame::Event(event)) => {
-                if incoming
-                    .send(Incoming::Event(Box::new(event)))
-                    .await
-                    .is_err()
-                {
+                let event = Incoming::Event {
+                    event: Box::new(event),
+                    bytes: line.len(),
+                };
+                if incoming.send(event).await.is_err() {
                     return;
                 }
             }
@@ -374,12 +463,17 @@ async fn stderr_task<R: AsyncRead + Unpin>(stderr: R, tail: Arc<Mutex<VecDeque<S
 
 async fn waiter_task(
     mut child: Child,
+    termination: oneshot::Receiver<()>,
     closed: Arc<Mutex<Option<String>>>,
     pending: Arc<Mutex<HashMap<RequestId, oneshot::Sender<RpcResponse>>>>,
     incoming: mpsc::Sender<Incoming>,
 ) {
-    let status = match child.wait().await {
-        Ok(status) => format!("{}", status),
+    let result = tokio::select! {
+        result = child.wait() => result.map(|status|status.to_string()),
+        _ = termination => child.kill().await.map(|()|"terminated".to_owned()),
+    };
+    let status = match result {
+        Ok(status) => status,
         Err(error) => format!("wait failed: {error}"),
     };
     fail(
@@ -416,16 +510,247 @@ fn fail(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "e2e-observe")]
+    #[test]
+    fn acceptance_trace_and_application_gate_are_not_inherited_by_agent_tools() {
+        let command = super::agent_command(
+            Some(std::path::Path::new("test-agent")),
+            std::path::Path::new("config.toml"),
+        )
+        .unwrap();
+        let environment: std::collections::HashMap<_, _> = command.as_std().get_envs().collect();
+        for name in [
+            "MINICORE_E2E_TRACE",
+            "MINICORE_E2E_APPLY_GATE",
+            "MINICORE_E2E_PHONE_GATE",
+        ] {
+            assert_eq!(environment.get(std::ffi::OsStr::new(name)), Some(&None));
+        }
+    }
     use super::*;
     use serde_json::json;
 
+    #[tokio::test(start_paused = true)]
+    async fn shutdown_keeps_a_full_child_exit_grace_after_a_delayed_ack_application() {
+        use std::{future::Future, task::Poll};
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let (fake, _app) = crate::testing::FakeAgent::start(tx);
+        fake.script("agent.shutdown", json!({"shutdown":true}));
+        fake.script("test.fence", json!({"fenced":true}));
+        let (terminate, mut termination) = oneshot::channel();
+        let (release, released) = oneshot::channel();
+        let task = tokio::spawn(async move {
+            released.await.unwrap();
+        });
+        fake.client.shutdown.lock().await.child = Some(ChildOwner {
+            task,
+            terminate: Some(terminate),
+        });
+        let mut shutdown = Box::pin(fake.client.shutdown());
+        std::future::poll_fn(|context| {
+            assert!(shutdown.as_mut().poll(context).is_pending());
+            Poll::Ready(())
+        })
+        .await;
+        fake.wait_for_calls("agent.shutdown", 1).await;
+        let _: Value = fake.client.call("test.fence", &json!({})).await.unwrap();
+        tokio::time::advance(SHUTDOWN_TIMEOUT + Duration::from_millis(1)).await;
+        std::future::poll_fn(|context| {
+            assert!(shutdown.as_mut().poll(context).is_pending());
+            Poll::Ready(())
+        })
+        .await;
+        assert!(
+            matches!(
+                termination.try_recv(),
+                Err(oneshot::error::TryRecvError::Empty)
+            ),
+            "acknowledgement latency must not consume the actual child owner's exit grace"
+        );
+        release.send(()).unwrap();
+        shutdown.await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_push_closed_during_encoding_is_rejected_before_enqueue_without_an_orphaned_call() {
+        struct CloseWhileEncoding(Arc<Client>);
+        impl serde::Serialize for CloseWhileEncoding {
+            fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+                *self.0.closed.lock().unwrap() = Some("closed during encoding".into());
+                serde::Serialize::serialize(&json!({"text":"retained draft"}), serializer)
+            }
+        }
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let (fake, _app) = crate::testing::FakeAgent::start(tx);
+        let error = tokio::time::timeout(
+            Duration::from_secs(1),
+            fake.client.call_raw(
+                crate::protocol::METHOD_INPUT_PUSH,
+                &CloseWhileEncoding(fake.client.clone()),
+            ),
+        )
+        .await
+        .expect("closure before enqueue must not leave an orphaned pending call")
+        .unwrap_err();
+        assert_eq!(
+            error.acceptance,
+            Some(crate::protocol::Acceptance::Rejected)
+        );
+        assert!(fake.client.pending.lock().unwrap().is_empty());
+        assert!(fake.calls("input.push").is_empty());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn concurrent_shutdown_callers_share_one_ack_and_completed_shutdown_is_idempotent() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let (fake, _app) = crate::testing::FakeAgent::start(tx);
+        fake.script_held("agent.shutdown", json!({"shutdown":true}));
+        let first = fake.client.clone();
+        let second = first.clone();
+        let first = tokio::spawn(async move { first.shutdown().await });
+        let second = tokio::spawn(async move { second.shutdown().await });
+        fake.wait_for_calls("agent.shutdown", 1).await;
+        fake.release("agent.shutdown");
+        crate::testing::real_bounded(async {
+            first.await.unwrap();
+            second.await.unwrap();
+        })
+        .await;
+        fake.client.shutdown().await;
+        assert_eq!(fake.calls("agent.shutdown").len(), 1);
+        assert!(fake.client.tasks.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_acknowledged_child_is_only_forced_at_the_deadline_and_its_owner_is_joined() {
+        use std::{future::Future, task::Poll};
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let (fake, _app) = crate::testing::FakeAgent::start(tx);
+        fake.script("agent.shutdown", json!({"shutdown":true}));
+        fake.script("test.fence", json!({"fenced":true}));
+        let (terminate, termination) = oneshot::channel();
+        let (signalled, signal) = oneshot::channel();
+        let (release, released) = oneshot::channel();
+        let owner = tokio::spawn(async move {
+            termination.await.unwrap();
+            signalled.send(()).unwrap();
+            released.await.unwrap();
+        });
+        let owner_finished = owner.abort_handle();
+        fake.client.shutdown.lock().await.child = Some(ChildOwner {
+            task: owner,
+            terminate: Some(terminate),
+        });
+        let mut shutdown = Box::pin(fake.client.shutdown());
+        std::future::poll_fn(|context| {
+            assert!(shutdown.as_mut().poll(context).is_pending());
+            Poll::Ready(())
+        })
+        .await;
+        fake.wait_for_calls("agent.shutdown", 1).await;
+        let _: Value = fake.client.call("test.fence", &json!({})).await.unwrap();
+        std::future::poll_fn(|context| {
+            assert!(shutdown.as_mut().poll(context).is_pending());
+            Poll::Ready(())
+        })
+        .await;
+        assert!(!owner_finished.is_finished());
+        tokio::time::advance(SHUTDOWN_TIMEOUT).await;
+        std::future::poll_fn(|context| {
+            assert!(shutdown.as_mut().poll(context).is_pending());
+            Poll::Ready(())
+        })
+        .await;
+        crate::testing::real_bounded(signal).await.unwrap();
+        assert!(
+            !owner_finished.is_finished(),
+            "shutdown still owns the forced-exit join"
+        );
+        release.send(()).unwrap();
+        shutdown.await;
+        assert!(owner_finished.is_finished());
+        assert!(fake.client.tasks.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_child_owner_that_ignores_forced_exit_is_aborted_after_the_bounded_fallback() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let (fake, _app) = crate::testing::FakeAgent::start(tx);
+        fake.script("agent.shutdown", json!({"shutdown":true}));
+        let (terminate, _termination) = oneshot::channel();
+        let task = tokio::spawn(std::future::pending::<()>());
+        let finished = task.abort_handle();
+        fake.client.shutdown.lock().await.child = Some(ChildOwner {
+            task,
+            terminate: Some(terminate),
+        });
+        let started = tokio::time::Instant::now();
+        fake.client.shutdown().await;
+        assert!(finished.is_finished());
+        assert_eq!(started.elapsed(), SHUTDOWN_TIMEOUT + TERMINATE_TIMEOUT);
+    }
+
+    /// The escape-heavy input whose `input.push` frame integration measured at
+    /// 1,573,049 bytes: 262,144 NUL bytes, each escaped to `\u0000`.
+    fn maximum_input() -> String {
+        "\u{0}".repeat(262_144)
+    }
+
     #[test]
-    fn oversized_requests_are_refused_before_writing() {
-        let big = "x".repeat(MAX_REQUEST_BYTES);
+    fn a_legal_maximum_input_frame_is_written_in_full() {
+        let text = maximum_input();
+        let request = OutgoingRequest::new(
+            RequestId(7),
+            crate::protocol::METHOD_INPUT_PUSH,
+            json!({"session_id": "ses_1", "load": "load_1", "mode": "steer", "text": text}),
+        );
+        let line = encode_request(request).expect("a legal maximum input must be sendable");
+        // Integration measured a legal maximum push at 1,573,049 bytes; the
+        // bound must clear it with room for a richer envelope than this one.
+        // A legal maximum input must fit with room, not just barely.
+        let measured = 1_573_049;
+        assert!(
+            MAX_REQUEST_BYTES >= 2 * measured,
+            "headroom for the envelope"
+        );
+        assert_eq!(line.last(), Some(&b'\n'), "the line is LF-terminated");
+        assert!(
+            line.len() < MAX_REQUEST_BYTES,
+            "the bound must leave room for the line and its newline"
+        );
+        // Nothing sliced the body: the input survives whole.
+        let frame: serde_json::Value =
+            serde_json::from_slice(&line[..line.len() - 1]).expect("a JSON frame");
+        assert_eq!(frame["params"]["text"].as_str(), Some(text.as_str()));
+    }
+
+    #[test]
+    fn a_request_one_byte_over_the_bound_is_refused_before_writing() {
+        // The encoded frame is exactly the bound, so one more byte is illegal.
+        let envelope = serde_json::to_vec(&OutgoingRequest::new(
+            RequestId(7),
+            crate::protocol::METHOD_INPUT_PUSH,
+            json!({"text": ""}),
+        ))
+        .expect("a frame");
+        // `encode_request` counts the newline it appends, so the largest
+        // sendable frame is one byte under the bound before that newline.
+        let over = MAX_REQUEST_BYTES - 1 - envelope.len();
+        let request = OutgoingRequest::new(
+            RequestId(7),
+            crate::protocol::METHOD_INPUT_PUSH,
+            json!({"text": "x".repeat(over)}),
+        );
+        let line = serde_json::to_vec(&request).expect("a frame");
+        assert!(
+            line.len() < MAX_REQUEST_BYTES,
+            "the at-the-bound frame must be sendable"
+        );
+        encode_request(request).expect("a frame at the bound is written");
         let error = encode_request(OutgoingRequest::new(
-            RequestId(1),
-            "input.push",
-            json!({"text": big}),
+            RequestId(8),
+            crate::protocol::METHOD_INPUT_PUSH,
+            json!({"text": "x".repeat(over + 1)}),
         ))
         .unwrap_err();
         assert_eq!(error.kind, "request_too_large");
@@ -470,7 +795,7 @@ mod tests {
 
         let response = rx.await.unwrap();
         assert_eq!(response.id, RequestId(7));
-        let Some(Incoming::Event(event)) = event_rx.recv().await else {
+        let Some(Incoming::Event { event, .. }) = event_rx.recv().await else {
             panic!("expected an event");
         };
         assert!(matches!(*event, AgentEvent::SessionClosed { .. }));
@@ -506,5 +831,94 @@ mod tests {
                 .unwrap()
                 .contains("unreadable frame")
         );
+    }
+}
+
+#[cfg(test)]
+mod frame_limit_tests {
+    use super::*;
+    use serde_json::json;
+    use tokio::io::AsyncWriteExt;
+
+    /// Builds the control frame integration measured at 52,237,130 bytes: a
+    /// full snapshot with 32 queued maximum inputs, the execution input, a
+    /// maximum interaction and a 256-entry catalogue.
+    fn measured_snapshot_frame() -> Vec<u8> {
+        let text = "\u{0}".repeat(262_144);
+        let items: Vec<serde_json::Value> = (0..32)
+            .map(|index| json!({"id": format!("inp_{index}"), "mode": "steer", "text": text}))
+            .collect();
+        let entries: Vec<serde_json::Value> = (0..256)
+            .map(|seq| {
+                json!({"seq": seq, "loop_id": format!("lup_{seq}"),
+                       "input_id": format!("inp_{seq}"), "completion_kind": "reported",
+                       "outcome_kind": "completed", "persistence": "persisted",
+                       "availability": "stored"})
+            })
+            .collect();
+        let mut line = serde_json::to_vec(&json!({
+            "jsonrpc": "2.0", "method": "agent.event",
+            "params": {"type": "session_snapshot", "data": {
+                "meta": {"session_id": "ses_1", "load": "load_1", "dropped_before": 0},
+                "snapshot": {
+                    "session_id": "ses_1", "load": "load_1", "revision": 9,
+                    "execution": {"type": "running", "loop_id": "lup_1",
+                                  "input": {"id": "inp_1", "mode": "steer", "text": text},
+                                  "request_index": 0, "phase": "running_model"},
+                    "pending_interaction": {
+                        "loop_id": "lup_1", "request_index": 0,
+                        "interaction_id": "int_1", "tool_call_id": "cal_1",
+                        "tool_name": "bash", "kind": {"type": "approval",
+                                                      "data": {"prompt": text}}},
+                    "queue": {"items": items, "paused": false},
+                    "compaction": null, "block_reason": null,
+                    "completions": {"through_seq": 256, "retained_from_seq": 1,
+                                    "entries": entries, "truncated": false}
+                }
+            }}
+        }))
+        .expect("a frame");
+        line.push(b'\n');
+        line
+    }
+
+    #[tokio::test]
+    async fn a_full_control_frame_is_read_and_decoded_whole() {
+        let frame = measured_snapshot_frame();
+        // The measurement integration reported is what the bound must admit;
+        // this fixture adds the envelope fields the client itself writes.
+        assert!(
+            frame.len() >= 52_237_130,
+            "this fixture is smaller than the measured legal snapshot"
+        );
+        assert!(
+            frame.len() <= MAX_FRAME_BYTES,
+            "a measured legal control frame must fit the reader bound"
+        );
+        let (mut writer, reader) = tokio::io::duplex(64 * 1024);
+        let feed = frame.clone();
+        let pump = tokio::spawn(async move {
+            writer.write_all(&feed).await.expect("the frame is written");
+            writer.shutdown().await.expect("the stream ends");
+        });
+        let mut buffered = tokio::io::BufReader::new(reader);
+        let mut line = Vec::new();
+        let read = read_line(&mut buffered, &mut line)
+            .await
+            .expect("a readable line");
+        assert_eq!(read, frame.len(), "the whole line is read, not a prefix");
+        assert_eq!(line.len(), frame.len());
+        let decoded = crate::protocol::parse_frame(&line[..line.len() - 1])
+            .expect("the whole control frame decodes");
+        let crate::protocol::IncomingFrame::Event(event) = decoded else {
+            panic!("a snapshot notification must decode as an event");
+        };
+        let crate::protocol::AgentEvent::SessionSnapshot { snapshot, .. } = event else {
+            panic!("a snapshot event");
+        };
+        assert_eq!(snapshot.queue.items.len(), 32, "no queued input was lost");
+        assert_eq!(snapshot.queue.items[31].text.len(), 262_144);
+        assert_eq!(snapshot.completions.entries.len(), 256);
+        pump.await.expect("the pump finished");
     }
 }

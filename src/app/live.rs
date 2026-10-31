@@ -57,17 +57,29 @@ impl App {
     /// into the foreground with its own view state, so the code needs no
     /// second path and the foreground's view stays as it is.
     pub(super) fn with_background(&mut self, index: usize, op: impl FnOnce(&mut Self)) {
-        let mut session = self.background.remove(index);
-        std::mem::swap(&mut self.scroll, &mut session.scroll);
-        let foreground = self.session.replace(session);
-        self.background_op = true;
+        let scroll = self.scroll;
+        let displaced = self.session.is_some();
+        if let Some(foreground) = self.session.as_mut() {
+            foreground.scroll = scroll;
+            std::mem::swap(foreground, &mut self.background[index]);
+        } else {
+            self.session = Some(self.background.remove(index));
+        }
+        self.scroll = self.session.as_ref().unwrap().scroll;
+        let previous = std::mem::replace(&mut self.background_op, true);
         let id = self.session.as_ref().unwrap().info.session_id.clone();
         self.with_notice_for(&id, op);
-        self.background_op = false;
-        let mut session = std::mem::replace(&mut self.session, foreground)
-            .expect("reducer code keeps its session");
-        std::mem::swap(&mut self.scroll, &mut session.scroll);
-        self.background.insert(index, session);
+        self.background_op = previous;
+        self.session
+            .as_mut()
+            .expect("reducer code keeps its session")
+            .scroll = self.scroll;
+        if displaced {
+            std::mem::swap(self.session.as_mut().unwrap(), &mut self.background[index]);
+        } else {
+            self.background.insert(index, self.session.take().unwrap());
+        }
+        self.scroll = scroll;
     }
 
     /// Brings the background session at `index` to the screen at once: no
@@ -83,6 +95,9 @@ impl App {
     /// text and view it was left with; the foreground it replaces stays live,
     /// first in the background.
     pub(super) fn show_session(&mut self, mut session: Option<Session>) {
+        if self.opening_target.take().is_some() {
+            self.loading_session = false;
+        }
         let typed = self.composer.text().to_owned();
         match self.session.take() {
             Some(mut left) => {
@@ -118,7 +133,7 @@ impl App {
     }
 
     /// Announces a background turn end and marks it unseen unless a phone views it.
-    pub(super) fn background_turn_ended(&mut self) {
+    pub(super) fn background_turn_ended(&mut self, ended_loop: &str) {
         let label = self.session_label();
         let id = self.session.as_ref().unwrap().info.session_id.clone();
         let viewed = self.remote.viewing(&id);
@@ -126,7 +141,10 @@ impl App {
         session.unseen = !viewed;
         let Some(Block::TurnEnd {
             outcome, duration, ..
-        }) = session.transcript.blocks().last()
+        }) =
+            session.transcript.blocks().iter().find(
+                |block| matches!(block, Block::TurnEnd { loop_id, .. } if loop_id == ended_loop),
+            )
         else {
             unreachable!("ending a turn appends its turn-end line");
         };

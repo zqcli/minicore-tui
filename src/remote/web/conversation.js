@@ -1,5 +1,5 @@
 import * as MC from './core.js';
-import { HOST, S, ask, hostNow, intent, online, pendingKind, repaint, resend, sending, stampAt, takeBack, turnStatus, tz, viewed } from './net.js';
+import { HOST, S, ask, discard, hostNow, intent, newDraftVersion, online, pendingKind, repaint, resend, sending, stampAt, turnStatus, tz, viewed } from './net.js';
 import { compactNow, exportSession, openApprovals, openChanges, openContext, openHelp, openInfo, openModel, openNav, openNew, openOutput, openSettings, rename } from './sessions.js';
 import { $, actions, announce, apple, copyButton, copyText, diffView, findSheet, h, hover, icon, inField, keepFocus, kids, loading, menuRow, notify, part, prefs, reduced, set, share, sheet, spin, toast, topModal, wide } from './ui.js';
 
@@ -8,47 +8,66 @@ import { $, actions, announce, apple, copyButton, copyText, diffView, findSheet,
 const ALT = apple ? '⌥' : 'Alt+', tips = () => prefs.enter ? 'Enter' : (apple ? '⌘' : 'Ctrl+') + 'Enter';
 // ---- dock: status strip, queue and composer ----
 const ta = $('ta');
-const stripPart = part($('strip'), x => [spin('sm'), h('b', '', x.label),
+const stripPart = part($('strip'), x => [x.blocked ? icon('warn', 'sm') : spin('sm'), h('b', '', x.label),
   x.started != null && h('span', 'el', MC.fmtElapsed(hostNow() - x.started)),
   x.detail && h('span', 'mono', x.detail)]);
 function renderStrip() {
-  const s = turnStatus(), on = !!(s.busy || s.compacting || s.loading);
+  const s = turnStatus(), blocked = !!s.block_reason, on = blocked || !!(s.busy || s.compacting || s.loading);
   set($('strip'), 'hidden', !on);
-  if (on) stripPart({ ...MC.statusLine(S.state, S.blocks), started: s.started_ms });
+  $('strip').classList.toggle('warn', blocked);
+  if (on) stripPart({ ...MC.statusLine(S.state, S.blocks), blocked, started: blocked ? null : s.started_ms });
 }
-export function stop() { if (MC.canStop(turnStatus()) && !turnStatus().interrupting && !pendingKind('cancel')) intent(MC.intents.cancel()); }
+// The turn to stop is the one the phone was shown, never whichever runs when the tap lands.
+export function stop() {
+  const t = turnStatus(), loop = S.state && S.state.session && S.state.session.loop_id;
+  if (MC.canStop(t) && !t.interrupting && !pendingKind('cancel')) intent(MC.intents.cancel(loop, !loop && t.operation_id));
+}
 const trayPart = part($('tray'), t => [
+  t.uncertain && h('div', { class: 'lost', role: 'alert' }, icon('warn', 'sm'),
+    h('span', '', 'This edited draft may already have arrived. Sending asks before retrying; discarding this draft does not resolve the original message.'),
+    h('button', { class: 'btn sm', 'data-k': 'discardUnknownDraft' }, 'Discard draft')),
   t.lost.map(([id, text]) => h('div', { class: 'lost', role: 'alert' }, icon('warn', 'sm'),
-    h('div', '', h('div', '', 'Not sent · it may or may not have arrived'), h('div', 'lt', text)),
+    h('div', '', h('div', '', 'Not confirmed · it may or may not have arrived'), h('div', 'lt', text)),
     h('button', { class: 'btn sm', 'data-k': 'again' + id, disabled: !t.on }, icon('retry', 'xs'), 'Send again'),
-    h('button', { class: 'ib s', 'aria-label': 'Edit instead', 'data-k': 'edit' + id }, icon('edit', 'sm')))),
+    h('button', { class: 'ib s', 'aria-label': 'Edit instead', 'data-k': 'edit' + id }, icon('edit', 'sm')),
+    h('button', { class: 'btn sm', 'data-k': 'discardMessage' + id }, 'Discard message'))),
   t.q.items.length > 0 && h('div', 'qcap', 'Steers join this turn · follow-ups start the next'),
-  t.q.items.map(q => h('div', { class: 'qp ' + q.kind, 'data-index': q.index, 'data-text': q.text },
+  t.q.items.map(q => h('div', { class: 'qp ' + q.kind, 'data-input': q.id },
     h('div', 'qbody', h('div', 'qhead', h('span', 'qk', icon(q.kind, 'xs'), (q.kind === 'steer' ? 'Steer ' : 'Follow-up ') + q.n)), h('span', 'qt', q.text)),
     h('button', { class: 'ib', 'data-k': 'qedit', disabled: !t.on, 'aria-label': 'Edit in composer', title: 'Edit in composer' }, icon('edit', 'sm')),
     h('button', { class: 'ib', 'data-k': 'qdelete', disabled: !t.on, 'aria-label': 'Delete', title: 'Delete' }, icon('x', 'sm')))),
   t.q.long && h('button', { class: 'qmore', 'data-k': 'qmore', 'aria-expanded': String(qAll) }, t.q.hidden ? '+' + t.q.hidden + ' more' : 'Show less'),
 ]);
 let qAll = false;
+// The inputs whose text is waiting to come back for editing, by input identity: an entry removed
+// by another device or consumed by the turn simply never returns, and nothing else is retargeted.
 const edits = new Set();
-export const unqueueRefused = text => edits.delete(text);
+export const unqueueRefused = input_id => edits.delete(input_id);
 $('tray').addEventListener('click', e => {
   const button = e.target.closest('[data-k]');
   if (!button) return;
   const k = button.dataset.k;
   if (k === 'qmore') { qAll = !qAll; renderTray(); }
   else if (k === 'qedit' || k === 'qdelete') {
-    const row = button.closest('.qp'), edit = k === 'qedit', text = row.dataset.text;
+    const row = button.closest('.qp'), edit = k === 'qedit', id = row.dataset.input;
     if (online()) {
-      if (edit) edits.add(text);
-      intent(MC.intents.unqueue(+row.dataset.index, text, edit));
+      if (edit) edits.add(id);
+      intent(MC.intents.unqueue(id, edit));
     }
-  } else if (k.startsWith('again')) resend(k.slice(5));
-  else if (k.startsWith('edit')) { fillComposer(MC.mergeReturned(ta.value, takeBack(k.slice(4)))); repaint(); }
+  } else if (k === 'discardUnknownDraft') { fillComposer('', []); repaint(); }
+  else if (k.startsWith('discardMessage')) discard(k.slice('discardMessage'.length));
+  else if (k.startsWith('again')) resend(k.slice(5));
+  else if (k.startsWith('edit')) {
+    const operation = S.intents.get(k.slice(4));
+    if (!operation || operation.st !== 'unconfirmed') return;
+    operation.editToken = newDraftVersion();
+    fillComposer(MC.mergeReturned(ta.value, operation.text), [...draftOrigins.filter(origin => origin.id !== operation.id), { id: operation.id, token: operation.editToken }]);
+    repaint();
+  }
 });
 function renderTray() {
   const q = MC.queueView(S.state.queue, qAll);
-  trayPart({ lost: MC.unconfirmed(S).map(it => [it.id, it.text]), q, on: online() });
+  trayPart({ lost: MC.unconfirmed(S).map(it => [it.id, it.text]), uncertain: draftOrigins.length > 0, q, on: online() });
 }
 // The bottom row of the composer: + and the draft's folder and profile on the left, then the slot (the model as plain text,
 // or Follow-up while a turn runs with text typed) and the primary button, which keeps its place and changes face.
@@ -76,7 +95,7 @@ const chipsPart = part($('chips'), c => [h('div', 'cl',
 ]);
 function renderChips() {
   const s = turnStatus(), c = viewed(), d = S.state.draft, cs = composerState(), kind = MC.primaryKind(cs), typed = cs.text.trim() !== '';
-  set(ta, 'readOnly', cs.lock);
+  set(ta, 'readOnly', false);
   set(ta, 'placeholder', MC.placeholder(s.busy, !!S.state.session, hover.matches && { send: tips(), alt: ALT }));
   if (kind !== primary) {
     if (kind !== 'steer') closePriMenu();
@@ -129,15 +148,42 @@ function grow() {
   ta.style.height = ta.scrollHeight + 'px';
 }
 const draftKey = () => 'minicore.draft.' + (S.sid || 'new');
-function composerInput() {
+let draftVersion = null, draftOrigins = [];
+function storeOrigins(key, version, origins) {
+  if (origins.length) localStorage.setItem(key + '.unknown', JSON.stringify({ version, origins }));
+  else localStorage.removeItem(key + '.unknown');
+}
+function storedOrigins(key, version) {
+  const risk = JSON.parse(localStorage.getItem(key + '.unknown') || 'null');
+  return risk && risk.version === version ? risk.origins : [];
+}
+function composerInput(edited = true) {
+  if (edited || !draftVersion) draftVersion = newDraftVersion();
+  // A discarded card can still have an edited copy; keep one anonymous warning marker.
+  const retained = draftOrigins.filter(origin => { const operation = S.intents.get(origin.id); return operation && operation.editToken === origin.token; });
+  if (retained.length < draftOrigins.length) retained.push({ id: null });
+  draftOrigins = retained;
+  // Empty text can be undone; only an explicit draft boundary clears its origin.
+  storeOrigins(draftKey(), draftVersion, draftOrigins);
   grow(); renderChips(); updateMenu();
   const lit = MC.literal(ta.value);
   ta.setAttribute('autocorrect', lit ? 'off' : 'on');
   ta.spellcheck = !lit;
-  if (ta.value) localStorage.setItem(draftKey(), ta.value); else localStorage.removeItem(draftKey());
+  if (ta.value || draftOrigins.length) {
+    localStorage.setItem(draftKey(), ta.value);
+    localStorage.setItem(draftKey() + '.version', draftVersion);
+  } else {
+    localStorage.removeItem(draftKey());
+    localStorage.removeItem(draftKey() + '.version');
+  }
 }
-function loadDraft() { if (!sending()) { ta.value = localStorage.getItem(draftKey()) || ''; composerInput(); } }
-function fillComposer(text) { ta.value = text; recall = -1; composerInput(); ta.focus(); ta.setSelectionRange(text.length, text.length); }
+function loadDraft() {
+  ta.value = localStorage.getItem(draftKey()) || '';
+  draftVersion = localStorage.getItem(draftKey() + '.version') || newDraftVersion();
+  draftOrigins = storedOrigins(draftKey(), draftVersion);
+  composerInput(false);
+}
+function fillComposer(text, origins = draftOrigins) { ta.value = text; draftOrigins = origins; recall = -1; composerInput(); ta.focus(); ta.setSelectionRange(text.length, text.length); }
 function submit(kind) {
   const text = ta.value;
   if (!text.trim() || sending()) return;
@@ -145,7 +191,14 @@ function submit(kind) {
   if (c && c.builtin) { ta.value = ''; composerInput(); return builtin(c); }
   if (c && c.unknown) return toast('Unknown command /' + c.unknown, 'error');
   if (!online()) return;
-  intent(kind === 'queue' ? MC.intents.queue(text) : MC.intents.submit(text));
+  if (draftOrigins.length && !confirm('This draft comes from a message that may already have arrived. Send it again, possibly creating a duplicate?')) return;
+  if (intent(kind === 'queue' ? MC.intents.queue(text) : MC.intents.submit(text), undefined,
+    { key: draftKey(), version: draftVersion })) {
+    for (const origin of draftOrigins) {
+      const operation = S.intents.get(origin.id);
+      if (operation && operation.st === 'unconfirmed' && operation.editToken === origin.token) S.intents.delete(origin.id);
+    }
+  }
   setMenu(null);
 }
 function builtin(c) {
@@ -269,15 +322,38 @@ function openProfile() {
 }
 
 
-export function sent(text) { remember(text); ta.value = MC.retireText(ta.value, text); composerInput(); }
-export function returned(text) {
-  const mine = edits.delete(text);
-  fillComposer(MC.mergeReturned(ta.value, text));
+function retireSubmission(operation) {
+  const draft = operation.draft;
+  if (!draft) return;
+  const stored = localStorage.getItem(draft.key + '.version') === draft.version;
+  if (stored) {
+    localStorage.removeItem(draft.key);
+    localStorage.removeItem(draft.key + '.version');
+    localStorage.removeItem(draft.key + '.unknown');
+  }
+  if (draftVersion === draft.version && draftKey() === draft.key) {
+    if (stored) { ta.value = ''; draftOrigins = []; composerInput(); } else loadDraft();
+  }
+}
+export function settleSubmission(ack) {
+  if (ack.ok) remember(ack.text);
+  if (ack.ok || ack.unconfirmed) retireSubmission(ack);
+}
+export function returnedToDraft(session_id, text) {
+  const key = 'minicore.draft.' + (session_id || 'new');
+  const origins = storedOrigins(key, localStorage.getItem(key + '.version')), version = newDraftVersion();
+  localStorage.setItem(key, MC.mergeReturned(localStorage.getItem(key) || '', text));
+  localStorage.setItem(key + '.version', version);
+  storeOrigins(key, version, origins);
+}
+export function returned(input_id, text) {
+  const mine = edits.delete(input_id);
+  fillComposer(MC.mergeReturned(ta.value, text), draftOrigins);
   if (!mine) toast('Message returned to the composer');
 }
-// An unconfirmed send lives in its card only, so it is never in two places to send twice.
+// Retire only the submitted version; an edited copy keeps its own warned origin.
 export function unconfirmedHome() {
-  for (const it of MC.unconfirmed(S)) ta.value = MC.retireText(ta.value, it.text);
+  for (const it of MC.unconfirmed(S)) retireSubmission(it);
   edits.clear();
 }
 
@@ -417,16 +493,21 @@ function thinkUpdate(asst, b) {
   keepFocus(asst.think, () => asst.think.replaceWith(asst.think = n), n);
   if (thinking && o) n._text.scrollTop = n._text.scrollHeight;
 }
+function noteNode(labels) {
+  return labels.length ? h('div', { class: 'projection-note', 'data-chrome': 'true', role: 'note' }, labels.map(label => h('div', '', label))) : null;
+}
+function projectionNote(b) { return noteNode(MC.projectionLabels(b)); }
 function asstNode(b, i) {
-  const live = i === liveIdx, n = h('div', 'a');
-  n._asst = { key: b.loop_id + ':' + b.request, live, thinkSig: '', md: { cache: null, toks: [], els: [] }, body: h('div', 'md'), think: h('div') };
-  n.append(n._asst.think, n._asst.body);
+  const live = i === liveIdx, n = h('div', 'a'), note = h('div');
+  n._asst = { note: part(note, noteNode), key: b.loop_id + ':' + b.request, live, thinkSig: '', md: { cache: null, toks: [], els: [] }, body: h('div', 'md'), think: h('div') };
+  n.append(note, n._asst.think, n._asst.body);
   updateAsst(n, b);
   if (!live && b.text) n.append(answerActs(b, i));
   return n;
 }
 function updateAsst(n, b) {
   const asst = n._asst, m = asst.md, r = MC.mdInc(m.cache, b.text);
+  asst.note(MC.projectionLabels(b));
   n.hidden = MC.quiet(b);
   n.classList.toggle('thk', !b.text);
   thinkUpdate(asst, b);
@@ -488,13 +569,14 @@ function blockNode(b, i) {
   switch (b.type) {
     case 'user': return userNode(b, i);
     case 'assistant': return asstNode(b, i);
-    case 'tool': return toolNode(b);
+    case 'tool': return MC.projectionLabels(b).length ? h('div', '', projectionNote(b), toolNode(b)) : toolNode(b);
     case 'turn_end': {
       const t = MC.turnEnd(b, turnClock(i), tz()), f = t.failure;
       const head = h('div', 'te' + (t.ok ? '' : ' bad'), icon(t.ok ? 'check' : 'warn', 'xs'), h('span', 'oc', t.parts[0]), f && f.ids && h('span', 'fid', f.ids),
         t.parts.slice(1).map(p => h('span', '', '· ' + p)),
         t.changes && h('button', { class: 'chg', 'aria-label': 'Changes: ' + MC.changesText(t.changes), onclick: () => openChanges() }, icon('diff', 'xs'), MC.changesText(t.changes), icon('chev', 'xs')));
-      return f ? failureNode(head, f, i) : head;
+      if (b.saving) head.append(h('span', '', '· Record ' + b.saving));
+      return h('div', '', projectionNote(b), f ? failureNode(head, f, i) : head);
     }
     case 'compaction': {
       const k = 'c' + i, o = isOpen(k);
@@ -736,9 +818,10 @@ export function syncApproval() {
     renderApprBar();
     return;
   }
-  if (a.id !== apprId) {
-    apprId = a.id; apprAt = Date.now();
-    const t = [...S.blocks].reverse().find(b => b.type === 'tool' && b.state === 'pending');
+  const key = MC.interactionKey(S.state);
+  if (key !== apprId) {
+    apprId = key; apprAt = Date.now();
+    const t = a.kind === 'approval' && S.blocks.find(b => b.type === 'tool' && b.call_id === a.tool_call_id);
     reply.call = t ? t.call_id : null;
     announce(a.kind === 'approval' ? 'Approval needed' : 'Question: ' + (a.prompt || ''));
     notify(a.kind === 'approval' ? 'Approval needed: ' + MC.approvalLine(a) : a.prompt || 'A question is waiting', S.sid);
@@ -752,7 +835,7 @@ const reply = { deny: false, reason: '', call: null };
 function openApproval() {
   reply.deny = false; reply.reason = '';
   const m = sheet({
-    key: 'appr', closeIcon: 'chevd', closeLabel: 'Minimize', footCls: 'col', deps: () => [S.state.interaction, pendingKind('answer'), online(), reply.deny],
+    key: 'appr', closeIcon: 'chevd', closeLabel: 'Minimize', footCls: 'col', deps: () => [S.reply.key, S.state.interaction, !!MC.answerPending(S), online(), reply.deny],
     head: hid => {
       const a = S.state.interaction, t = a.kind === 'approval' && MC.approvalTitle(a);
       return h('div', 'ahead', h('div', 'eicon', icon(t ? 'shield' : 'info')), h('div', '',
@@ -760,14 +843,23 @@ function openApproval() {
         t && a.prompt && h('p', '', a.prompt)));
     },
     body: () => {
-      const a = S.state.interaction, p = MC.pending(S, 'answer');
+      const a = S.state.interaction, p = MC.answerPending(S), key = S.reply.key;
+      if (a.kind === 'text') return h('form', { id: 'text-answer', class: 'reason', onsubmit: e => {
+        e.preventDefault();
+        const spec = S.reply.key === key && MC.textAnswer(S);
+        if (spec) answer(spec.choice);
+      } }, h('input', { class: 'tf', 'data-k': 'text-answer', value: S.reply.text, 'aria-label': 'Answer',
+        autocomplete: 'off', enterKeyHint: 'send', disabled: !online() || !!p,
+        oninput: e => { if (S.reply.key !== key) return; S.reply.text = e.target.value; const button = m.el.querySelector('[data-k="send-answer"]'); button.disabled = !MC.validAnswerText(S.reply.text) || !online() || !!MC.answerPending(S); } }));
       if (a.kind !== 'approval') return h('div', 'opts', MC.approvalOptions(a).map(o => h('button', { class: 'btn', 'data-k': 'o' + o.n, disabled: !online() || !!p, onclick: () => answer(o.choice) },
         p && p.spec.choice === o.choice ? spin() : h('b', '', String(o.n)), h('span', '', o.label))));
       const x = MC.approvalBody(a);
       return [x.cmd && [h('pre', 'cmdbox', '$ ' + x.cmd), h('div', 'where2', 'in ' + MC.tilde(viewed().workspace))], x.diff && diffView(x.diff, prefs.wrap), x.text && h('pre', 'cmdbox', x.text)];
     },
     foot: () => {
-      const a = S.state.interaction, p = MC.pending(S, 'answer'), dis = !online() || !!p;
+      const a = S.state.interaction, p = MC.answerPending(S), dis = !online() || !!p;
+      if (a.kind === 'text') return h('button', { class: 'btn primary', 'data-k': 'send-answer', disabled: dis || !MC.validAnswerText(S.reply.text),
+        form: 'text-answer', type: 'submit' }, p && spin(), 'Send answer');
       if (a.kind !== 'approval') return hover.matches && h('div', 'akeys', 'Press 1–' + a.options.length + ' to answer');
       const ans = (o, cls, fn) => h('button', { class: 'btn ' + cls, 'data-k': o.choice, disabled: dis, onclick: fn || (() => answer(o.choice)) }, p && p.spec.choice === o.choice && spin(), o.label);
       const [allow, session, deny] = MC.approvalOptions(a);
@@ -783,8 +875,10 @@ function openApproval() {
 // Only a denial is recorded on its tool row, with the reason: it explains why the tool did not run.
 function answer(choice, message) {
   const a = S.state.interaction, call = reply.call;
-  if (!a || pendingKind('answer')) return;
-  intent(MC.intents.answer(a.id, choice, message || undefined), ack => {
+  if (!a || MC.answerPending(S)) return;
+  const key = MC.interactionKey(S.state);
+  intent(MC.intents.answer(a.loop_id, a.id, choice, message || undefined), ack => {
+    if (MC.interactionKey(S.state) !== key) return;
     if (!ack.ok) return toast(MC.errorText(ack.error), ack.error === 'stale' ? null : 'error');
     if (call && choice === 'deny') markDenied(call, 'Denied' + (message ? ': “' + message + '”' : ''));
   });

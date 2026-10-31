@@ -55,7 +55,7 @@ dock label before sending.
 | `Esc` | Close an open picker or view first; in the editor, cancel an active selection before interrupting a turn, cancelling a compaction or clearing the draft. |
 | `Ctrl+C` | Copy the editor selection when one exists; otherwise clear the draft, with a second press within 500 ms quitting. |
 | `Ctrl+D` | Quit when the draft is empty; otherwise delete the character after the cursor. |
-| `↑` / `↓` | Move between lines of a multi-line draft; on the first or last line, browse prompt history. The last 100 prompts, paste chips included, are kept in `history.jsonl` in the TUI directory and survive a restart; a prompt over 32 KiB stays in memory only. |
+| `↑` / `↓` | Move between lines of a multi-line draft; on the first or last line, browse prompt history. The last 100 accepted prompts, paste chips included, are kept in `history.jsonl` in the TUI directory and survive a restart; a prompt over 32 KiB stays in memory only. |
 | `Alt+↑` | Take every queued message back into an empty draft, in the order the Agent would have run them and separated by blank lines. A message the running turn already took cannot be taken back. |
 | `Ctrl+X` | Cut the editor selection when one exists; otherwise copy the last assistant answer, as `/copy` does. |
 | `Ctrl+G` | Edit the draft in `[ui] editor` from `config.toml`, else `$VISUAL`, else `$EDITOR`. |
@@ -133,6 +133,7 @@ shows `2 running · 1 needs approval` while any background session works. Comman
 | `Ctrl+T` | Collapse thinking to one `Thinking...` row, or show it again; the top of the view stays put. |
 | `Ctrl+F` | Find in the transcript. |
 | `F1` | Help view. |
+| `F8` | Review retained local input confirmations, also from the fatal screen. New conversation draft stays separate. |
 | `q` or `Esc` | Quit from the fatal screen. |
 
 Any upward scroll anchors the view to the content you are reading; new output
@@ -192,6 +193,17 @@ act.
 | `↑` / `↓`, `Enter` | Select a row and submit it. For an approval the rows are `Allow once`, `Deny` and `Allow <tool> this session`. An `edit` or patch approval shows its diff. |
 | `PageUp` / `PageDown`, `Ctrl+↑` / `Ctrl+↓`, `End`, `Ctrl+O`, `Ctrl+T` | Read the transcript while the prompt waits: scroll, jump between prompts, return to the latest, fold tool output and thinking. |
 
+### Text-input questions
+
+A tool's text question opens a separate answer editor beneath the prompt. Typing,
+pasting, cursor movement and undo act on that answer, not the conversation draft
+or prompt history. `y`, `a` and `n` are literal text. `Enter` submits after the
+same initial half-second arming window; `Esc` cancels the exact turn that asked.
+The Agent accepts 1–8192 UTF-8 bytes without control characters; whitespace is
+kept, not trimmed. Invalid answers remain editable and are not sent or truncated.
+Repeated snapshots of the same interaction preserve the editor. A different
+interaction starts a new editor, and a delayed old answer cannot replace it.
+
 ## Views
 
 `Esc` returns from a view to the transcript with its scroll position intact.
@@ -222,6 +234,8 @@ the name.
 | `/export [path]` | Write the conversation as Markdown; the default is `./minicore-<session>-<date>.md`. |
 | `/theme [dark\|light]` | Switch the palette and save it; without an argument, toggle. |
 | `/reload` | Compose the Agent config again from `config.toml`, `models.toml` and the prompt, reload the Agent and the templates. |
+| `/unconfirmed` | Review retained local input operations. `e`/Enter edits separately without deciding acceptance; `r` or Enter from the editor opens a possible-duplicate warning, only `y` resends. Enter/Esc cancels the warning. `c` copies; `d` then `y` forgets without cancelling Agent work. A resend uses a new ID and the original session/load/mode; unavailable old targets are not silently retargeted. |
+| `/recover` | Retry failed conversation reads or continue the missing range after a bounded history catch-up. Verified newer content stays visible; no input is resent and execution is not restarted. Older history also remains available through normal paging. |
 | `/remote [on\|off\|status\|password [text]]` | Phone control: start listening and show the status screen, stop and unfreeze local input, or set a new password (generated, or `<text>` of at least 8 characters), which signs phones out. `/remote` with remote control off says how to start it. See [Remote mode](#remote-mode). |
 | `/help` | Open the help view. |
 | `/quit` | Quit. |

@@ -165,6 +165,35 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, styles: Styles) {
     // transcript without being a block.
     let mut render = |state: &mut RenderState, index: usize, block: &Block| {
         let mut rows = state.render(block, key);
+        if let Block::TurnEnd { loop_id, .. } = block
+            && let Some(note) = session
+                .body_recovery
+                .iter()
+                .find(|note| note.loop_id == *loop_id)
+        {
+            let status = match note.status {
+                crate::app::recovery::RecoveryStatus::Partial => "partial",
+                crate::app::recovery::RecoveryStatus::Unavailable => "unavailable",
+                _ => "recovery failed",
+            };
+            let message = format!("{loop_id} · {status} · {}", note.message);
+            rows.prepend(
+                crate::wrap::wrap_line(&message, usize::from(width))
+                    .into_iter()
+                    .map(|text| crate::ui::rails::chrome(Line::styled(text, styles.failure())))
+                    .collect(),
+            );
+        }
+        // Text a reconcile kept because the canonical body omits it is told
+        // apart from the authoritative body rather than blended into it.
+        if session.transcript.is_preserved(index)
+            || matches!(block,Block::Assistant { key,.. } if session.transcript.is_preserved_channel(key,true) || session.transcript.is_preserved_channel(key,false))
+        {
+            rows.prepend(vec![crate::ui::rails::chrome(Line::from(Span::styled(
+                "kept from this session's live view",
+                styles.faint(),
+            )))]);
+        }
         if index == 0 {
             let header = welcome();
             state.header_rows = header.len();

@@ -37,6 +37,8 @@ const HEAD_LIMIT: usize = 8192;
 const FIRST: Duration = Duration::from_secs(10);
 const PING: Duration = Duration::from_secs(20);
 const IDLE: Duration = Duration::from_secs(60);
+pub const MAX_MESSAGE_BYTES: usize = crate::rpc::MAX_REQUEST_BYTES;
+pub const OUTBOUND_CAPACITY: usize = 512;
 pub const CSP: &str =
     "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'";
 const HEADERS: [(&str, &str); 3] = [
@@ -141,14 +143,21 @@ fn none_match(value: Option<&[u8]>, etag: &str) -> bool {
         })
 }
 
+#[derive(Clone)]
+pub struct Host {
+    pub auth: Arc<Mutex<Auth>>,
+    pub generation: u64,
+    pub roots: Arc<[PathBuf]>,
+    #[cfg(feature = "e2e-observe")]
+    pub phone_gate: Option<Arc<super::phone_gate::Gate>>,
+}
+
 pub async fn serve(
     listeners: Vec<TcpListener>,
     tls: Option<TlsAcceptor>,
-    auth: Arc<Mutex<Auth>>,
+    host: Host,
     tx: Tx,
     mut stop: oneshot::Receiver<()>,
-    generation: u64,
-    roots: Arc<[PathBuf]>,
 ) {
     let permits = Arc::new(Semaphore::new(32));
     let mut tasks = JoinSet::new();
@@ -171,16 +180,15 @@ pub async fn serve(
                     continue;
                 };
                 let Ok(permit) = permits.clone().try_acquire_owned() else { continue };
-                let auth = auth.clone();
+                let host = host.clone();
                 let tx = tx.clone();
-                let roots = roots.clone();
                 let tls = tls.clone();
                 tasks.spawn(async move {
                     let _ = match tls {
-                        None => connection(stream, auth, tx, permit, generation, roots).await,
+                        None => connection(stream, host, tx, permit).await,
                         // A failed handshake, such as plain HTTP to this port, just closes.
                         Some(tls) => match timeout(FIRST, tls.accept(stream)).await {
-                            Ok(Ok(stream)) => connection(stream, auth, tx, permit, generation, roots).await,
+                            Ok(Ok(stream)) => connection(stream, host, tx, permit).await,
                             _ => Ok(()),
                         },
                     };
@@ -393,12 +401,17 @@ fn route(request: &httparse::Request) -> Option<Reply> {
 
 async fn connection<S: AsyncRead + AsyncWrite + Unpin>(
     mut stream: S,
-    auth: Arc<Mutex<Auth>>,
+    host: Host,
     tx: Tx,
     permit: tokio::sync::OwnedSemaphorePermit,
-    generation: u64,
-    roots: Arc<[PathBuf]>,
 ) -> Result<(), String> {
+    let Host {
+        auth,
+        generation,
+        roots,
+        #[cfg(feature = "e2e-observe")]
+        phone_gate,
+    } = host;
     // Requests are served one after another on the connection until one asks for the socket; a client
     // that sends nothing for `FIRST` between them is dropped.
     let mut buffer = Vec::new();
@@ -426,8 +439,8 @@ async fn connection<S: AsyncRead + AsyncWrite + Unpin>(
         buffer.drain(..end);
     }
     let config = WebSocketConfig::default()
-        .max_message_size(Some(1024 * 1024))
-        .max_frame_size(Some(1024 * 1024));
+        .max_message_size(Some(MAX_MESSAGE_BYTES))
+        .max_frame_size(Some(MAX_MESSAGE_BYTES));
     // Tungstenite parses the request head itself.
     let stream = Replay {
         read: buffer,
@@ -512,8 +525,10 @@ async fn connection<S: AsyncRead + AsyncWrite + Unpin>(
         }
     };
     static NEXT: AtomicU64 = AtomicU64::new(1);
-    let id = NEXT.fetch_add(1, Ordering::Relaxed);
-    let (outbound, mut output) = mpsc::channel(512);
+    let id = NEXT
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+        .expect("phone connection identity exhausted");
+    let (outbound, mut output) = mpsc::channel(OUTBOUND_CAPACITY);
     let (close, mut closing) = watch::channel(None);
     let (accepted, admission) = oneshot::channel();
     let name = device.name.clone();
@@ -534,6 +549,8 @@ async fn connection<S: AsyncRead + AsyncWrite + Unpin>(
     }
     drop(permit);
     let revoked = closing.clone();
+    #[cfg(feature = "e2e-observe")]
+    let mut gate_identity = None;
     let result = tokio::select! {
         biased;
         _ = closing.changed() => Ok(()),
@@ -547,13 +564,43 @@ async fn connection<S: AsyncRead + AsyncWrite + Unpin>(
         send(&mut socket, json!({"t":"welcome", "v":wire::VERSION, "version":env!("CARGO_PKG_VERSION"), "device":name, "now_ms":crate::protocol::stamp::now_millis()})).await?;
         let mut ping = tokio::time::interval_at(Instant::now() + PING, PING);
         let mut last = Instant::now();
-        loop {
+        #[cfg(feature = "e2e-observe")]
+        let mut first_snapshot = true;
+        #[cfg(feature = "e2e-observe")]
+        let mut gate_deadline = None;
+        macro_rules! pump {
+        ($($gate_branch:tt)*) => { loop {
+            #[cfg(feature = "e2e-observe")]
+            let can_drain = gate_identity.is_none();
+            #[cfg(not(feature = "e2e-observe"))]
+            let can_drain = true;
             tokio::select! {
                 biased;
                 _ = tokio::time::sleep_until(last + IDLE) => break,
                 _ = ping.tick() => { socket.send(Message::Ping(Vec::new().into())).await.map_err(|e| e.to_string())?; }
-                message = output.recv() => match message {
-                    Some(value) => send(&mut socket, value).await?,
+                $($gate_branch)*
+                message = output.recv(), if can_drain => match message {
+                    Some(value) => {
+                        #[cfg(feature = "e2e-observe")]
+                        let snapshot = if phone_gate.is_some() && first_snapshot && value["t"] == "snapshot" {
+                            first_snapshot = false;
+                            Some(super::phone_gate::Identity::from_snapshot(id, &value)
+                                .map_err(|e| gate_failure(&tx, e))?)
+                        } else { None };
+                        send(&mut socket, value).await?;
+                        #[cfg(feature = "e2e-observe")]
+                        if let Some(identity) = snapshot {
+                            let gate = phone_gate.as_ref().unwrap();
+                            if gate.claim().map_err(|e| gate_failure(&tx, e))? {
+                                gate.ready(&identity).map_err(|e| gate_failure(&tx, e))?;
+                                gate_deadline = Some(Instant::now() + super::phone_gate::WAIT);
+                                tx.send(Msg::Remote(RemoteEvent::PhoneGate(super::phone_gate::Observation {
+                                    identity:identity.clone(), phase:super::phone_gate::Phase::Paused,
+                                }))).map_err(|_| "TUI closed")?;
+                                gate_identity = Some(identity);
+                            }
+                        }
+                    }
                     None => break,
                 },
                 frame = socket.next() => {
@@ -590,7 +637,20 @@ async fn connection<S: AsyncRead + AsyncWrite + Unpin>(
                     }
                 }
             }
+        } } }
+        #[cfg(feature = "e2e-observe")]
+        pump! {
+            released = async { phone_gate.as_ref().unwrap().wait_release(gate_deadline.unwrap()).await }, if gate_identity.is_some() => {
+                released.map_err(|e| gate_failure(&tx, e))?;
+                let identity = gate_identity.take().unwrap();
+                gate_deadline = None;
+                tx.send(Msg::Remote(RemoteEvent::PhoneGate(super::phone_gate::Observation {
+                    identity, phase:super::phone_gate::Phase::Resumed,
+                }))).map_err(|_| "TUI closed")?;
+            }
         }
+        #[cfg(not(feature = "e2e-observe"))]
+        pump! {}
         Ok(())
         } => result,
     };
@@ -612,8 +672,27 @@ async fn connection<S: AsyncRead + AsyncWrite + Unpin>(
         Ok::<_, tokio_tungstenite::tungstenite::Error>(())
     })
     .await;
+    #[cfg(feature = "e2e-observe")]
+    if let Some(identity) = gate_identity {
+        if reason == Some("overflow") {
+            let _ = tx.send(Msg::Remote(RemoteEvent::PhoneGate(
+                super::phone_gate::Observation {
+                    identity,
+                    phase: super::phone_gate::Phase::OverflowClosed,
+                },
+            )));
+        } else {
+            gate_failure(&tx, "phone gate ended without release or overflow".into());
+        }
+    }
     let _ = tx.send(Msg::Remote(RemoteEvent::Disconnected(id)));
     result
+}
+
+#[cfg(feature = "e2e-observe")]
+fn gate_failure(tx: &Tx, error: String) -> String {
+    let _ = tx.send(Msg::Remote(RemoteEvent::PhoneGateFailed(error.clone())));
+    error
 }
 
 async fn filesystem(
@@ -684,11 +763,17 @@ mod tests {
         mpsc::UnboundedReceiver<Msg>,
         tokio::task::JoinHandle<()>,
     ) {
-        serving(None).await
+        serving(
+            None,
+            #[cfg(feature = "e2e-observe")]
+            None,
+        )
+        .await
     }
 
     async fn serving(
         tls: Option<Arc<rustls::ServerConfig>>,
+        #[cfg(feature = "e2e-observe")] phone_gate: Option<Arc<super::super::phone_gate::Gate>>,
     ) -> (
         tempfile::TempDir,
         std::net::SocketAddr,
@@ -709,7 +794,20 @@ mod tests {
         let task = tokio::spawn(async move {
             let _stop = stop;
             let tls = tls.map(TlsAcceptor::from);
-            serve(vec![listener], tls, server_auth, tx, stopped, 0, roots).await;
+            serve(
+                vec![listener],
+                tls,
+                Host {
+                    auth: server_auth,
+                    generation: 0,
+                    roots,
+                    #[cfg(feature = "e2e-observe")]
+                    phone_gate,
+                },
+                tx,
+                stopped,
+            )
+            .await;
         });
         (dir, address, auth, rx, task)
     }
@@ -739,7 +837,10 @@ mod tests {
     }
 
     async fn receive<S: AsyncRead + AsyncWrite + Unpin>(socket: &mut WebSocketStream<S>) -> Value {
-        serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap()).unwrap()
+        let frame = timeout(FIRST, socket.next())
+            .await
+            .expect("no WebSocket frame before deadline");
+        serde_json::from_str(frame.unwrap().unwrap().to_text().unwrap()).unwrap()
     }
 
     /// One request on its own connection, read until the server closes it.
@@ -1002,7 +1103,18 @@ mod tests {
         let (tx, _rx) = mpsc::unbounded_channel();
         let permit = Arc::new(Semaphore::new(1)).try_acquire_owned().unwrap();
         let (server, mut client) = tokio::io::duplex(64 * 1024);
-        let task = tokio::spawn(connection(server, auth, tx, permit, 0, Vec::new().into()));
+        let task = tokio::spawn(connection(
+            server,
+            Host {
+                auth,
+                generation: 0,
+                roots: Vec::new().into(),
+                #[cfg(feature = "e2e-observe")]
+                phone_gate: None,
+            },
+            tx,
+            permit,
+        ));
         client
             .write_all(b"GET /icon.svg HTTP/1.1\r\nHost: localhost\r\n\r\n")
             .await
@@ -1177,7 +1289,12 @@ mod tests {
         let files = tempfile::tempdir().unwrap();
         let (cert, key) = super::super::tls::self_signed(files.path(), "server");
         let config = super::super::tls::load(&cert, &key).unwrap();
-        let (_dir, address, _auth, _rx, task) = serving(Some(config)).await;
+        let (_dir, address, _auth, _rx, task) = serving(
+            Some(config),
+            #[cfg(feature = "e2e-observe")]
+            None,
+        )
+        .await;
 
         let mut stream = tls_connect(address, &cert).await;
         stream
@@ -1361,7 +1478,7 @@ mod tests {
             panic!("admission")
         };
         accepted.send(true).unwrap();
-        connection.send(json!({"t":"snapshot", "state":{}, "blocks":[]}));
+        connection.send(json!({"t":"snapshot", "view_epoch":format!("view_{}_0", connection.id), "state":{"session":null}, "blocks":[]}));
         (socket, connection)
     }
 
@@ -1501,19 +1618,63 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_version_1_client_is_refused_before_sign_in_with_the_version_error() {
+    async fn old_protocol_clients_are_refused_before_sign_in_or_modifying_intents() {
         let (_dir, address, auth, mut rx, task) = start().await;
         let password = auth.lock().unwrap().password().to_owned();
         for request in [
             json!({"t":"login", "v":1, "password":password, "device":"phone"}),
             json!({"t":"hello", "v":1, "token":"unknown"}),
+            json!({"t":"login", "v":2, "password":password, "device":"phone"}),
+            json!({"t":"hello", "v":2, "token":"unknown"}),
         ] {
             let mut socket = connect(address).await;
             send(&mut socket, request).await.unwrap();
             assert_eq!(receive(&mut socket).await["code"], "version");
         }
-        assert_eq!(wire::VERSION, 2);
+        assert_eq!(wire::VERSION, 3);
         assert!(rx.try_recv().is_err(), "neither admitted nor counted");
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn a_maximum_input_with_json_escaping_reaches_the_reducer_without_truncation() {
+        let (_dir, address, auth, mut rx, task) = start().await;
+        let (mut socket, connection) = admitted(address, &auth, &mut rx).await;
+        for _ in 0..3 {
+            receive(&mut socket).await;
+        }
+        let text = "\0".repeat(256 * 1024);
+        let intent = json!({"t":"intent", "id":"large", "kind":"submit", "text":text,
+            "view_epoch":"view", "session_id":"s1", "load":"load_1"});
+        let encoded = intent.to_string();
+        assert!(encoded.len() > 1024 * 1024);
+        assert!(encoded.len() <= MAX_MESSAGE_BYTES);
+        let sending = tokio::spawn(async move {
+            socket.send(Message::Text(encoded.into())).await.unwrap();
+            receive(&mut socket).await
+        });
+        let event = timeout(FIRST, rx.recv()).await.unwrap().unwrap();
+        let Msg::Remote(RemoteEvent::Request {
+            id,
+            intent:
+                wire::Intent::Submit {
+                    text: received,
+                    target,
+                },
+            done,
+            ..
+        }) = event
+        else {
+            panic!("a legal input must reach the reducer");
+        };
+        assert_eq!(received, text);
+        assert_eq!(target.load.as_deref(), Some("load_1"));
+        done.send(()).unwrap();
+        assert!(connection.send(wire::ack(&id, Ok(None))));
+        assert_eq!(
+            timeout(FIRST, sending).await.unwrap().unwrap()["id"],
+            "large"
+        );
         task.abort();
     }
 
@@ -1546,6 +1707,120 @@ mod tests {
             }
         }
         assert_eq!(auth.lock().unwrap().verify(&token).unwrap().name, "phone");
+        task.abort();
+    }
+
+    #[cfg(feature = "e2e-observe")]
+    #[tokio::test]
+    async fn a_paused_real_socket_overflows_its_actual_queue_without_stalling_another_phone() {
+        use super::super::phone_gate::{Gate, Phase};
+        let directory = tempfile::tempdir().unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700))
+                .unwrap();
+        }
+        let gate = Arc::new(Gate::new(directory.path().into()).unwrap());
+        let (_root, address, auth, mut rx, task) = serving(None, Some(gate)).await;
+        let (mut fast, fast_connection) = admitted(address, &auth, &mut rx).await;
+        for _ in 0..3 {
+            receive(&mut fast).await;
+        }
+        std::fs::write(directory.path().join("arm"), "").unwrap();
+        let (mut slow, slow_connection) = admitted(address, &auth, &mut rx).await;
+        for _ in 0..3 {
+            receive(&mut slow).await;
+        }
+        let Some(Msg::Remote(RemoteEvent::PhoneGate(paused))) =
+            timeout(FIRST, rx.recv()).await.unwrap()
+        else {
+            panic!("pause observation")
+        };
+        assert_eq!(paused.phase, Phase::Paused);
+        assert_eq!(paused.identity.connection_id, slow_connection.id);
+        let ready: Value =
+            serde_json::from_slice(&std::fs::read(directory.path().join("ready")).unwrap())
+                .unwrap();
+        assert_eq!(ready, paused.row());
+        for index in 0..OUTBOUND_CAPACITY {
+            assert!(slow_connection.send(json!({"t":"notice", "index":index})));
+        }
+        assert!(!slow_connection.send(json!({"t":"notice", "index":"overflow"})));
+        assert_eq!(*slow_connection.close.borrow(), Some("overflow"));
+        assert!(fast_connection.send(json!({"t":"notice", "text":"fast still drains"})));
+        assert_eq!(receive(&mut fast).await["text"], "fast still drains");
+        assert!(matches!(
+            timeout(FIRST, slow.next()).await.unwrap(),
+            Some(Ok(Message::Close(_)))
+        ));
+        let _ = slow.flush().await;
+        let Some(Msg::Remote(RemoteEvent::PhoneGate(overflow))) =
+            timeout(FIRST, rx.recv()).await.unwrap()
+        else {
+            panic!("actual overflow observation")
+        };
+        assert_eq!(overflow.phase, Phase::OverflowClosed);
+        assert_eq!(overflow.identity, paused.identity);
+        assert_eq!(overflow.row()["reason"], "overflow");
+        assert!(
+            matches!(timeout(FIRST, rx.recv()).await.unwrap(), Some(Msg::Remote(RemoteEvent::Disconnected(id))) if id == slow_connection.id)
+        );
+        let (mut replacement, replacement_connection) = admitted(address, &auth, &mut rx).await;
+        for kind in ["authorized", "welcome", "snapshot"] {
+            assert_eq!(receive(&mut replacement).await["t"], kind);
+        }
+        assert_ne!(replacement_connection.id, slow_connection.id);
+        assert!(
+            rx.try_recv().is_err(),
+            "reconnect cannot inherit the old pause or ACKs"
+        );
+        task.abort();
+    }
+
+    #[cfg(feature = "e2e-observe")]
+    #[tokio::test]
+    async fn a_real_writer_release_preserves_queued_order_and_inbound_requests_stay_live() {
+        use super::super::phone_gate::{Gate, Phase};
+        let directory = tempfile::tempdir().unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700))
+                .unwrap();
+        }
+        let gate = Arc::new(Gate::new(directory.path().into()).unwrap());
+        let (_root, address, auth, mut rx, task) = serving(None, Some(gate)).await;
+        std::fs::write(directory.path().join("arm"), "").unwrap();
+        let (mut socket, connection) = admitted(address, &auth, &mut rx).await;
+        for _ in 0..3 {
+            receive(&mut socket).await;
+        }
+        let Some(Msg::Remote(RemoteEvent::PhoneGate(paused))) =
+            timeout(FIRST, rx.recv()).await.unwrap()
+        else {
+            panic!("pause observation")
+        };
+        assert_eq!(paused.phase, Phase::Paused);
+        for index in 0..3 {
+            assert!(connection.send(json!({"t":"notice", "index":index})));
+        }
+        send(&mut socket, json!({"t":"fs_roots", "id":"while_paused"}))
+            .await
+            .unwrap();
+        assert_eq!(receive(&mut socket).await["id"], "while_paused");
+        std::fs::write(directory.path().join("release"), "").unwrap();
+        let Some(Msg::Remote(RemoteEvent::PhoneGate(resumed))) =
+            timeout(FIRST, rx.recv()).await.unwrap()
+        else {
+            panic!("release observation")
+        };
+        assert_eq!(resumed.phase, Phase::Resumed);
+        assert_eq!(resumed.identity, paused.identity);
+        for index in 0..3 {
+            assert_eq!(receive(&mut socket).await["index"], index);
+        }
+        assert!(!directory.path().join("release").exists());
         task.abort();
     }
 }

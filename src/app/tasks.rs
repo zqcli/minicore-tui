@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 use tokio::sync::{OwnedSemaphorePermit, mpsc};
 
 use super::{App, BUSY_RETRY, Msg, NoticeLevel, SessionOp};
+use crate::protocol::UnavailableReason;
 use crate::protocol::changes::{ChangeList, DiffPage};
 use crate::protocol::read::{
     InterruptedRequest, MAX_AUTO_ITEM_BYTES, RawHistoryItem, ReadChunk, RuntimeItem,
@@ -25,9 +26,13 @@ pub type Tx = mpsc::UnboundedSender<Msg>;
 
 const READ_WORKSPACE_BYTES: usize = 64 * 1024 * 1024;
 const PAGE_WORKSPACE_RESERVE: usize = protocol::PAGE_MAX_BYTES * 8;
+pub const HISTORY_CATCHUP_MAX_PAGES: usize = 64;
+pub const HISTORY_CATCHUP_MAX_BYTES: usize = 16 * 1024 * 1024;
 
 #[derive(Debug)]
 struct ReadWorkspace {
+    #[cfg(feature = "e2e-observe")]
+    observation: crate::rpc::metrics::Workspace,
     _permit: OwnedSemaphorePermit,
     used: usize,
     limit: usize,
@@ -35,12 +40,15 @@ struct ReadWorkspace {
 
 impl ReadWorkspace {
     async fn acquire(client: &Client) -> Self {
+        let permit = client
+            .read_workspaces()
+            .acquire_owned()
+            .await
+            .expect("reader slots stay open");
         Self {
-            _permit: client
-                .read_workspaces()
-                .acquire_owned()
-                .await
-                .expect("reader slots stay open"),
+            _permit: permit,
+            #[cfg(feature = "e2e-observe")]
+            observation: client.metrics.workspace(PAGE_WORKSPACE_RESERVE),
             used: PAGE_WORKSPACE_RESERVE,
             limit: READ_WORKSPACE_BYTES,
         }
@@ -52,11 +60,19 @@ impl ReadWorkspace {
             .checked_add(bytes)
             .filter(|used| *used <= self.limit)
             .ok_or(ReadPartial::WorkspaceLimit)?;
+        #[cfg(feature = "e2e-observe")]
+        self.observation.charge(bytes);
         Ok(())
     }
 
     fn release(&mut self, bytes: usize) {
         self.used -= bytes;
+        #[cfg(feature = "e2e-observe")]
+        self.observation.release(bytes);
+    }
+
+    fn reset(&mut self) {
+        self.release(self.used - PAGE_WORKSPACE_RESERVE);
     }
 }
 
@@ -64,6 +80,7 @@ impl ReadWorkspace {
 pub enum ReadPartial {
     Oversized { index: usize, total_bytes: usize },
     WorkspaceLimit,
+    HistoryLimit,
 }
 
 impl ReadPartial {
@@ -75,6 +92,9 @@ impl ReadPartial {
             Self::WorkspaceLimit => {
                 "The read is too large to restore; existing content was kept".into()
             }
+            Self::HistoryLimit => {
+                "More history remains to recover; load older history to continue".into()
+            }
         }
     }
 }
@@ -82,26 +102,85 @@ impl ReadPartial {
 #[derive(Debug)]
 pub enum TurnRead {
     Pending,
-    Unavailable(RpcError),
-    Partial(ReadPartial),
-    Complete(TurnContent),
+    /// The result is known to exist but its body cannot be read; the reason
+    /// says why, and existing content stays as it is.
+    Unavailable(UnavailableRead),
+    /// The Agent answered with an error; nothing was installed.
+    Failed(RpcError),
+    Partial(Box<ReadPartial>),
+    Complete(Box<TurnContent>),
+}
+
+/// Why a completed turn's body cannot be read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UnavailableRead {
+    pub reason: UnavailableReason,
+    pub persistence: Option<TurnPersistence>,
+    pub persistence_uncertain: bool,
+}
+
+impl UnavailableRead {
+    pub fn message(self) -> String {
+        let reason = match self.reason {
+            UnavailableReason::Expired => "the retained result expired",
+            UnavailableReason::TooLarge => "it is too large to restore",
+            UnavailableReason::ResourceLimit => "the Agent is out of read budget",
+            UnavailableReason::InternalError => "the Agent hit an internal error",
+            UnavailableReason::NotRetained | UnavailableReason::Unknown => {
+                "the Agent no longer retains it"
+            }
+        };
+        let saving = match (self.persistence, self.persistence_uncertain) {
+            (Some(TurnPersistence::Persisted), _) => " · saved",
+            (Some(TurnPersistence::Failed), true) => " · its save is unconfirmed",
+            (Some(TurnPersistence::Failed), false) => " · not saved",
+            (None, _) => "",
+        };
+        format!("This turn's content is unavailable: {reason}{saving}")
+    }
 }
 
 #[derive(Debug)]
 pub struct TurnContent {
     pub turn: TurnRef,
     pub availability: TurnAvailability,
+    /// The immutable identity of the body, which every page must agree with.
+    pub result_id: String,
     pub outcome: crate::protocol::LoopOutcome,
     pub persistence: TurnPersistence,
+    pub persistence_uncertain: bool,
     pub items: Vec<RawHistoryItem>,
     pub interrupted: Option<InterruptedRequest>,
+    pub tool_facts: Vec<(crate::protocol::ToolRef, crate::protocol::ToolReadResult)>,
     _workspace: ReadWorkspace,
 }
 
 #[derive(Debug)]
 pub enum HistoryRead {
     Partial(ReadPartial),
+    Limited(Box<History>, ReadPartial),
     Complete(Box<History>),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HistoryCoverage {
+    pub captured_end: u64,
+    pub history_revision: String,
+    pub total: usize,
+    pub from: usize,
+    pub end: usize,
+}
+
+impl HistoryCoverage {
+    pub fn matches(&self, pin: &SnapshotPin) -> bool {
+        self.captured_end == pin.captured_end
+            && self.history_revision == pin.history_revision
+            && self.total == pin.total
+    }
+
+    pub fn complete(&self) -> bool {
+        self.from == 0 && self.end == self.total
+    }
 }
 
 /// An assembled history window.
@@ -126,14 +205,49 @@ pub struct History {
     _workspace: ReadWorkspace,
 }
 
+impl History {
+    pub fn coverage(&self) -> HistoryCoverage {
+        HistoryCoverage {
+            captured_end: self.pin.captured_end,
+            history_revision: self.pin.history_revision.clone(),
+            total: self.pin.total,
+            from: self.from,
+            end: self.end,
+        }
+    }
+}
+
 /// Which part of the history to read.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub enum Window {
     Tail,
+    CatchUp(Option<HistoryCoverage>),
     /// The display page just before this item.
     Before(usize),
     /// The canonical page just before this item, below the display floor.
     CanonicalBefore(usize),
+}
+
+struct HistoryBudget {
+    pages: usize,
+    bytes: usize,
+}
+
+fn history_page_bound(budget: &mut Option<HistoryBudget>, default: usize) -> Option<usize> {
+    let Some(budget) = budget else {
+        return Some(default);
+    };
+    if budget.pages == 0 || budget.bytes < protocol::PROBE_MAX_BYTES {
+        return None;
+    }
+    budget.pages -= 1;
+    Some(default.min(budget.bytes))
+}
+
+fn charge_history_bytes(budget: &mut Option<HistoryBudget>, bytes: usize) {
+    if let Some(budget) = budget {
+        budget.bytes -= bytes;
+    }
 }
 
 impl App {
@@ -158,6 +272,12 @@ impl App {
     ) {
         if let Some(session) = self.session.as_ref() {
             fields["session_id"] = json!(session.info.session_id);
+            // Every mutation of a loaded instance names the instance it means.
+            if method_needs_load(method)
+                && let Some(load) = &session.load
+            {
+                fields["load"] = json!(load);
+            }
         }
         let client = self.client.clone();
         self.spawn(async move { wrap(client.call(method, &fields).await) });
@@ -196,14 +316,50 @@ pub async fn bootstrap(client: Arc<Client>, tx: Tx) {
     });
 }
 
-/// `session.open` or `session.create`; both answer with the session.
+/// `session.open` or `session.create`; both answer with the session, the
+/// resident instance identity and its first control snapshot.
 pub async fn session(
     client: Arc<Client>,
     method: &'static str,
     params: Value,
-) -> Result<SessionInfo, RpcError> {
+) -> Result<Adopted, RpcError> {
     let result: SessionResult = client.call(method, &params).await?;
-    Ok(result.session)
+    let load = result
+        .load
+        .ok_or_else(|| invalid_read("the Agent did not name the loaded instance"))?;
+    let snapshot = result
+        .snapshot
+        .ok_or_else(|| invalid_read("the Agent did not provide the opened instance snapshot"))?;
+    if snapshot.session_id != result.session.session_id || snapshot.load != load {
+        return Err(invalid_read(
+            "the opened instance snapshot has another identity",
+        ));
+    }
+    Ok(Adopted {
+        info: result.session,
+        load,
+        snapshot: Some(snapshot),
+    })
+}
+
+/// The session a rename returned; a rename creates no instance of its own.
+pub async fn renamed_session(
+    client: Arc<Client>,
+    session_id: String,
+    title: String,
+) -> Result<SessionInfo, RpcError> {
+    let params = json!({ "session_id": session_id, "title": title.trim() });
+    client
+        .call::<_, SessionResult>(protocol::METHOD_SESSION_RENAME, &params)
+        .await
+        .map(|result| result.session)
+}
+
+/// A session this client just opened or created.
+pub struct Adopted {
+    pub info: SessionInfo,
+    pub load: String,
+    pub snapshot: Option<protocol::SessionSnapshot>,
 }
 
 /// Closes (when another client left it loaded) and deletes a stored session.
@@ -228,22 +384,29 @@ pub async fn delete_session(client: Arc<Client>, session_id: String) -> Msg {
 
 /// Waits for the turn to end. A full deferred queue or a busy session is a
 /// condition, not an outcome, so the wait is registered again.
-pub async fn wait_turn(client: Arc<Client>, turn: TurnRef) -> SessionOp {
+pub async fn wait_turn(client: Arc<Client>, turn: TurnRef, load: String) -> SessionOp {
     let params = json!({"session_id": turn.session_id, "loop_id": turn.loop_id});
+    let mut retries = 0;
     loop {
         match client
             .call::<_, TurnWaitResult>(protocol::METHOD_TURN_WAIT, &params)
             .await
         {
-            Err(error) if error.is_capacity() || error.is_busy() => {
+            Err(error) if (error.is_capacity() || error.is_busy()) && retries < 3 => {
+                retries += 1;
                 tokio::time::sleep(BUSY_RETRY).await;
             }
-            Ok(wait) => return SessionOp::Waited(Ok(wait)),
+            Ok(wait) if wait.turn == turn => return SessionOp::Waited(Ok(wait)),
+            Ok(_) => {
+                return SessionOp::Waited(Err(invalid_read(
+                    "wait response belongs to another turn",
+                )));
+            }
             // The waiter is gone but the turn may have ended: its stored result
             // ends it, so a lost wait never leaves the turn running.
-            Err(error) => match stored_outcome(&client, &turn).await {
+            Err(error) => match stored_outcome(&client, &turn, &load).await {
                 Ok(Some(wait)) => return SessionOp::Waited(Ok(wait)),
-                Ok(None) => tokio::time::sleep(BUSY_RETRY).await,
+                Ok(None) => return SessionOp::Waited(Err(error)),
                 Err(_) => return SessionOp::Waited(Err(error)),
             },
         }
@@ -253,24 +416,39 @@ pub async fn wait_turn(client: Arc<Client>, turn: TurnRef) -> SessionOp {
 async fn stored_outcome(
     client: &Client,
     turn: &TurnRef,
+    load: &str,
 ) -> Result<Option<TurnWaitResult>, RpcError> {
-    let params = json!({"session_id": turn.session_id, "loop_id": turn.loop_id, "limit": 1});
+    let params =
+        json!({"session_id": turn.session_id, "loop_id": turn.loop_id,"load":load, "limit": 1});
     let page: TurnResultPage = client.call(protocol::METHOD_TURN_RESULT, &params).await?;
     validate_page_chunks(&page.items, protocol::PAGE_MAX_BYTES)?;
     if page.turn != *turn {
         return Err(invalid_read("turn identity changed"));
     }
-    if page.availability == TurnAvailability::Pending {
-        if !page.items.is_empty()
-            || page.next_cursor.is_some()
-            || page.total != 0
-            || page.outcome.is_some()
-            || page.persistence.is_some()
-            || page.interrupted.is_some()
-        {
-            return Err(invalid_read("pending turn contains completed result data"));
+    if page.load.as_deref() != Some(load) {
+        return Err(invalid_read("the wait fallback belongs to another load"));
+    }
+    match page.availability {
+        TurnAvailability::Pending => {
+            if !page.items.is_empty()
+                || page.next_cursor.is_some()
+                || page.total != 0
+                || page.outcome.is_some()
+                || page.persistence.is_some()
+                || page.interrupted.is_some()
+                || page.result_id.is_some()
+            {
+                return Err(invalid_read("pending turn contains completed result data"));
+            }
+            return Ok(None);
         }
-        return Ok(None);
+        TurnAvailability::Unavailable => {
+            if !page.items.is_empty() || page.next_cursor.is_some() || page.total != 0 {
+                return Err(invalid_read("an unavailable turn carries a body"));
+            }
+            return Ok(None);
+        }
+        TurnAvailability::Live | TurnAvailability::Stored => {}
     }
     if page.outcome.is_none() || page.persistence.is_none() {
         return Err(invalid_read("completed turn metadata is missing"));
@@ -284,6 +462,33 @@ async fn stored_outcome(
         next: None,
         queue: None,
     }))
+}
+
+/// Methods that act on a resident instance rather than on stored history.
+fn method_needs_load(method: &str) -> bool {
+    matches!(
+        method,
+        protocol::METHOD_INPUT_PUSH
+            | protocol::METHOD_INPUT_REMOVE
+            | protocol::METHOD_INPUT_RECALL
+            | protocol::METHOD_INPUT_RESUME
+            | protocol::METHOD_TURN_CANCEL
+            | protocol::METHOD_INTERACTION_ANSWER
+            | protocol::METHOD_SESSION_CLOSE
+            | protocol::METHOD_SESSION_COMPACT
+            | protocol::METHOD_SESSION_COMPACT_CANCEL
+            | protocol::METHOD_SESSION_UPDATE
+            | protocol::METHOD_SESSION_RENAME
+            | protocol::METHOD_TURN_RESULT
+    )
+}
+
+/// Whether an error says this client's instance identity is out of date.
+pub fn is_stale_load(error: &RpcError) -> bool {
+    matches!(
+        error.code,
+        protocol::MISSING_LOAD | protocol::STALE_LOAD | protocol::STALE_RESULT
+    )
 }
 
 fn invalid_read(reason: impl Into<String>) -> RpcError {
@@ -482,13 +687,16 @@ fn charge_metadata<T: serde::Serialize>(
     workspace: &mut ReadWorkspace,
     value: &T,
 ) -> Result<(), ReadPartial> {
+    workspace.charge(metadata_charge(value))
+}
+
+fn metadata_charge<T: serde::Serialize>(value: &T) -> usize {
     let mut counter = JsonCounter::default();
     serde_json::to_writer(&mut counter, value).expect("decoded metadata serializes");
-    let bytes = counter
+    counter
         .bytes
         .saturating_mul(2)
-        .saturating_add(counter.structures.saturating_add(1).saturating_mul(512));
-    workspace.charge(bytes)
+        .saturating_add(counter.structures.saturating_add(1).saturating_mul(512))
 }
 
 /// Reads one history window and retries once when its pin becomes stale.
@@ -498,14 +706,24 @@ pub async fn read_history(
     window: Window,
 ) -> Result<HistoryRead, RpcError> {
     let mut workspace = ReadWorkspace::acquire(&client).await;
-    let read = async |workspace: &mut ReadWorkspace| -> Result<_, RpcError> {
-        let canonical = matches!(window, Window::CanonicalBefore(_));
+    let mut budget = matches!(&window, Window::CatchUp(_)).then_some(HistoryBudget {
+        pages: HISTORY_CATCHUP_MAX_PAGES,
+        bytes: HISTORY_CATCHUP_MAX_BYTES,
+    });
+    let read = async |workspace: &mut ReadWorkspace,
+                      budget: &mut Option<HistoryBudget>,
+                      probe_bound: usize|
+           -> Result<_, RpcError> {
+        let canonical = matches!(&window, Window::CanonicalBefore(_) | Window::CatchUp(_));
         let view = if canonical { "canonical" } else { "display" };
-        let pin = probe(&client, &session_id, view).await?;
+        let (pin, bytes) = probe(&client, &session_id, view, probe_bound).await?;
+        charge_history_bytes(budget, bytes);
         if let Err(partial) = charge_metadata(workspace, &pin) {
             return Ok((WindowRead::Partial(partial), 0, 0, pin, canonical));
         }
-        let (start, end) = match window {
+        let (start, end) = match &window {
+            Window::CatchUp(Some(covered)) if covered.matches(&pin) => (0, covered.from),
+            Window::CatchUp(_) => (0, pin.total),
             Window::Tail => (
                 pin.total
                     .saturating_sub(protocol::TAIL_ITEMS)
@@ -513,56 +731,89 @@ pub async fn read_history(
                 pin.total,
             ),
             Window::Before(end) => (
-                end.saturating_sub(protocol::PAGE_LIMIT).max(pin.first_item),
-                end,
+                end.saturating_sub(protocol::PAGE_LIMIT)
+                    .max(pin.first_item)
+                    .min(*end),
+                *end,
             ),
-            Window::CanonicalBefore(end) => (end.saturating_sub(protocol::PAGE_LIMIT), end),
+            Window::CanonicalBefore(end) => (end.saturating_sub(protocol::PAGE_LIMIT), *end),
         };
         if end > pin.total {
             return Err(invalid_read("history window exceeds its pinned total"));
         }
-        let result = read_window(&client, &session_id, view, &pin, start, end, workspace).await?;
+        let result = if matches!(&window, Window::CatchUp(_)) {
+            read_catchup(&client, &session_id, &pin, end, workspace, budget).await?
+        } else {
+            read_window(
+                &client,
+                &session_id,
+                view,
+                &pin,
+                start..end,
+                workspace,
+                budget,
+            )
+            .await?
+        };
         Ok((result, start, end, pin, canonical))
     };
-    let result = match read(&mut workspace).await {
+    let probe_bound = history_page_bound(&mut budget, protocol::PROBE_MAX_BYTES)
+        .expect("a new round admits its probe");
+    let result = match read(&mut workspace, &mut budget, probe_bound).await {
         Err(error) if error.is_stale_pin() => {
-            workspace.used = PAGE_WORKSPACE_RESERVE;
-            read(&mut workspace).await
+            workspace.reset();
+            let Some(bound) = history_page_bound(&mut budget, protocol::PROBE_MAX_BYTES) else {
+                return Ok(HistoryRead::Partial(ReadPartial::HistoryLimit));
+            };
+            read(&mut workspace, &mut budget, bound).await
         }
         result => result,
     }?;
     let (result, start, end, pin, canonical) = result;
-    match result {
-        WindowRead::Partial(partial) => Ok(HistoryRead::Partial(partial)),
-        WindowRead::Complete(items, records) => Ok(HistoryRead::Complete(Box::new(History {
-            items,
-            from: start,
-            end,
-            floor: pin.first_item,
-            has_more: start > pin.first_item,
-            canonical,
-            records,
-            covered_usage: pin
-                .covered_usage
-                .clone()
-                .filter(|covered| !covered.partial)
-                .map(|covered| covered.usage),
-            pin,
-            _workspace: workspace,
-        }))),
-    }
+    let (items, records, start, end, limit) = match result {
+        WindowRead::Partial(partial) => return Ok(HistoryRead::Partial(partial)),
+        WindowRead::Complete(items, records) => (items, records, start, end, None),
+        WindowRead::Limited(items, records, from, end, reason) => {
+            (items, records, from, end, Some(reason))
+        }
+    };
+    let page = Box::new(History {
+        items,
+        from: start,
+        end,
+        floor: pin.first_item,
+        has_more: start > pin.first_item,
+        canonical,
+        records,
+        covered_usage: pin
+            .covered_usage
+            .clone()
+            .filter(|covered| !covered.partial)
+            .map(|covered| covered.usage),
+        pin,
+        _workspace: workspace,
+    });
+    Ok(match limit {
+        Some(reason) => HistoryRead::Limited(page, reason),
+        None => HistoryRead::Complete(page),
+    })
 }
 
 /// A one-item read that pins the snapshot the window is read from.
-async fn probe(client: &Client, session_id: &str, view: &str) -> Result<SnapshotPin, RpcError> {
+async fn probe(
+    client: &Client,
+    session_id: &str,
+    view: &str,
+    max_bytes: usize,
+) -> Result<(SnapshotPin, usize), RpcError> {
     let params = json!({
         "session_id": session_id,
         "limit": protocol::PROBE_LIMIT,
-        "max_bytes": protocol::PROBE_MAX_BYTES,
+        "max_bytes": max_bytes,
         "view": view,
     });
     let page: ReadSessionResult = client.call(protocol::METHOD_SESSION_READ, &params).await?;
-    validate_page_chunks(&page.items, protocol::PROBE_MAX_BYTES)?;
+    validate_page_chunks(&page.items, max_bytes)?;
     if !page.records.is_empty() {
         let mut counter = JsonCounter::default();
         serde_json::to_writer(&mut counter, &page.records).expect("decoded metadata serializes");
@@ -600,12 +851,111 @@ async fn probe(client: &Client, session_id: &str, view: &str) -> Result<Snapshot
         }
         _ => {}
     }
-    Ok(page.pin())
+    let bytes = page.items.iter().map(|chunk| chunk.data.len()).sum();
+    Ok((page.pin(), bytes))
 }
 
 enum WindowRead {
     Complete(Vec<RawHistoryItem>, Vec<TurnRecord>),
+    Limited(
+        Vec<RawHistoryItem>,
+        Vec<TurnRecord>,
+        usize,
+        usize,
+        ReadPartial,
+    ),
     Partial(ReadPartial),
+}
+
+async fn read_catchup(
+    client: &Client,
+    session_id: &str,
+    pin: &SnapshotPin,
+    end: usize,
+    workspace: &mut ReadWorkspace,
+    budget: &mut Option<HistoryBudget>,
+) -> Result<WindowRead, RpcError> {
+    let mut items = Vec::new();
+    let count = budget.as_ref().expect("catch-up has a round budget").pages * protocol::PAGE_LIMIT;
+    if let Err(partial) = workspace.charge(count * std::mem::size_of::<RawHistoryItem>()) {
+        return Ok(WindowRead::Partial(partial));
+    }
+    if items.try_reserve_exact(count).is_err() {
+        return Ok(WindowRead::Partial(ReadPartial::WorkspaceLimit));
+    }
+    if let Err(partial) =
+        workspace.charge((items.capacity() - count) * std::mem::size_of::<RawHistoryItem>())
+    {
+        return Ok(WindowRead::Partial(partial));
+    }
+    let mut records: Vec<TurnRecord> = Vec::new();
+    let mut at = end;
+    while at > 0 {
+        let charged = workspace.used;
+        let available = budget.as_ref().unwrap().pages;
+        budget.as_mut().unwrap().pages = available.min(1);
+        let start = at.saturating_sub(protocol::PAGE_LIMIT);
+        let preview = read_window(
+            client,
+            session_id,
+            "canonical",
+            pin,
+            start..at,
+            workspace,
+            budget,
+        )
+        .await;
+        budget.as_mut().unwrap().pages += available - available.min(1);
+        let (window, start) = match preview? {
+            complete @ WindowRead::Complete(..) => (complete, start),
+            WindowRead::Limited(..) | WindowRead::Partial(_) => {
+                workspace.release(workspace.used - charged);
+                (
+                    read_window(
+                        client,
+                        session_id,
+                        "canonical",
+                        pin,
+                        at - 1..at,
+                        workspace,
+                        budget,
+                    )
+                    .await?,
+                    at - 1,
+                )
+            }
+        };
+        let (decoded, metadata) = match window {
+            WindowRead::Complete(items, records) => (items, records),
+            WindowRead::Limited(_, _, _, _, reason) | WindowRead::Partial(reason) => {
+                workspace.release(workspace.used - charged);
+                items.reverse();
+                return Ok(WindowRead::Limited(items, records, at, end, reason));
+            }
+        };
+        let mut retained = decoded
+            .iter()
+            .map(RawHistoryItem::heap_bytes)
+            .sum::<usize>();
+        for record in metadata {
+            if let Some(known) = records.iter().find(|known| known.loop_id == record.loop_id) {
+                if known != &record {
+                    return Err(invalid_read("history turn metadata changed between pages"));
+                }
+            } else {
+                retained += metadata_charge(&record);
+                records.push(record);
+            }
+        }
+        workspace.release(workspace.used - charged);
+        workspace
+            .charge(retained)
+            .expect("retained source item is a subset of its read workspace");
+        items.extend(decoded.into_iter().rev());
+        at = start;
+    }
+    items.reverse();
+    Ok(WindowRead::Complete(items, records))
 }
 
 async fn read_window(
@@ -613,21 +963,39 @@ async fn read_window(
     session_id: &str,
     view: &str,
     pin: &SnapshotPin,
-    start: usize,
-    end: usize,
+    range: std::ops::Range<usize>,
     workspace: &mut ReadWorkspace,
+    budget: &mut Option<HistoryBudget>,
 ) -> Result<WindowRead, RpcError> {
+    let (start, end) = (range.start, range.end);
     let mut assembly = Assembly::new(start);
-    if let Err(partial) = assembly.reserve_items(end.saturating_sub(start), workspace) {
+    let count = budget.as_ref().map_or(end - start, |budget| {
+        (end - start).min(budget.pages * protocol::PAGE_LIMIT)
+    });
+    if let Err(partial) = assembly.reserve_items(count, workspace) {
         return Ok(WindowRead::Partial(partial));
     }
     let mut records: Vec<TurnRecord> = Vec::new();
     while assembly.position.item < end {
+        let Some(max_bytes) = history_page_bound(budget, protocol::PAGE_MAX_BYTES) else {
+            if let Some(partial) = assembly.oversized {
+                return Ok(WindowRead::Partial(partial));
+            }
+            workspace.release(assembly.reserved_item);
+            let through = start + assembly.items.len();
+            return Ok(WindowRead::Limited(
+                assembly.items,
+                records,
+                start,
+                through,
+                ReadPartial::HistoryLimit,
+            ));
+        };
         let position = assembly.position;
         let mut params = json!({
             "session_id": session_id,
             "limit": protocol::PAGE_LIMIT.min(end - position.item),
-            "max_bytes": protocol::PAGE_MAX_BYTES,
+            "max_bytes": max_bytes,
             "view": view,
             "cursor": position.value(),
             "captured_end": pin.captured_end,
@@ -637,7 +1005,11 @@ async fn read_window(
             params["projection_revision"] = json!(projection);
         }
         let page: ReadSessionResult = client.call(protocol::METHOD_SESSION_READ, &params).await?;
-        validate_page_chunks(&page.items, protocol::PAGE_MAX_BYTES)?;
+        validate_page_chunks(&page.items, max_bytes)?;
+        charge_history_bytes(
+            budget,
+            page.items.iter().map(|chunk| chunk.data.len()).sum(),
+        );
         if page.session.session_id != session_id || page.pin() != *pin {
             return Err(invalid_read(
                 "history page does not match its pinned snapshot",
@@ -669,16 +1041,15 @@ async fn read_window(
     }
 }
 
-/// Reads and validates a turn before returning any installable content.
-pub async fn read_turn(client: Arc<Client>, turn: TurnRef) -> Result<TurnRead, RpcError> {
+/// Reads and validates a completion's whole result before returning installable content.
+pub async fn read_turn(
+    client: Arc<Client>,
+    turn: TurnRef,
+    load: Option<String>,
+) -> Result<TurnRead, RpcError> {
     let mut workspace = ReadWorkspace::acquire(&client).await;
     let mut assembly = Assembly::new(0);
-    let mut expected: Option<(
-        usize,
-        crate::protocol::LoopOutcome,
-        TurnPersistence,
-        Option<InterruptedRequest>,
-    )> = None;
+    let mut expected: Option<TurnContentMeta> = None;
     loop {
         let position = assembly.position;
         let mut params = json!({
@@ -687,12 +1058,30 @@ pub async fn read_turn(client: Arc<Client>, turn: TurnRef) -> Result<TurnRead, R
             "limit": protocol::PAGE_LIMIT,
             "max_bytes": protocol::PAGE_MAX_BYTES,
         });
+        if let Some(load) = &load {
+            params["load"] = json!(load);
+        }
         if position != ReadCursor::start() {
             params["cursor"] = position.value();
+            params["result_id"] = json!(
+                expected
+                    .as_ref()
+                    .expect("a continuation has a page identity")
+                    .result_id
+            );
         }
         let page: TurnResultPage = match client.call(protocol::METHOD_TURN_RESULT, &params).await {
-            Err(error) if error.kind == "turn_not_found" => {
-                return Ok(TurnRead::Unavailable(error));
+            // A result that expired or changed identity between pages is a
+            // terminal state for this read, not a retryable error.
+            Err(error) if error.kind == "turn_not_found" || error.kind == "not_retained" => {
+                return Ok(TurnRead::Unavailable(UnavailableRead {
+                    reason: UnavailableReason::NotRetained,
+                    persistence: None,
+                    persistence_uncertain: false,
+                }));
+            }
+            Err(error) if error.kind == "stale_result" => {
+                return Ok(TurnRead::Failed(error));
             }
             result => result?,
         };
@@ -700,18 +1089,45 @@ pub async fn read_turn(client: Arc<Client>, turn: TurnRef) -> Result<TurnRead, R
         if page.turn != turn {
             return Err(invalid_read("turn identity changed"));
         }
-        if page.availability == TurnAvailability::Pending {
-            if expected.is_some()
-                || !page.items.is_empty()
-                || page.next_cursor.is_some()
-                || page.outcome.is_some()
-                || page.persistence.is_some()
-                || page.interrupted.is_some()
-                || page.total != 0
-            {
-                return Err(invalid_read("pending turn contains completed result data"));
+        if page.load != load {
+            return Err(invalid_read("the result belongs to another load"));
+        }
+        match page.availability {
+            TurnAvailability::Pending => {
+                if expected.is_some()
+                    || !page.items.is_empty()
+                    || page.next_cursor.is_some()
+                    || page.outcome.is_some()
+                    || page.persistence.is_some()
+                    || page.interrupted.is_some()
+                    || page.total != 0
+                    || page.result_id.is_some()
+                {
+                    return Err(invalid_read("pending turn contains completed result data"));
+                }
+                return Ok(TurnRead::Pending);
             }
-            return Ok(TurnRead::Pending);
+            TurnAvailability::Unavailable => {
+                if !page.items.is_empty() || page.next_cursor.is_some() || page.total != 0 {
+                    return Err(invalid_read("an unavailable turn carries a body"));
+                }
+                if page.result_id.is_some() {
+                    return Err(invalid_read("an unavailable turn names a readable body"));
+                }
+                return Ok(TurnRead::Unavailable(UnavailableRead {
+                    reason: page
+                        .unavailable_reason
+                        .unwrap_or(UnavailableReason::NotRetained),
+                    persistence: page
+                        .persistence
+                        .or_else(|| expected.as_ref().map(|meta| meta.persistence)),
+                    persistence_uncertain: page.persistence_uncertain
+                        || expected
+                            .as_ref()
+                            .is_some_and(|meta| meta.persistence_uncertain),
+                }));
+            }
+            TurnAvailability::Live | TurnAvailability::Stored => {}
         }
         let outcome = page
             .outcome
@@ -719,25 +1135,44 @@ pub async fn read_turn(client: Arc<Client>, turn: TurnRef) -> Result<TurnRead, R
         let persistence = page
             .persistence
             .ok_or_else(|| invalid_read("completed turn persistence is missing"))?;
-        let metadata = (page.total, outcome, persistence, page.interrupted);
-        if let Some(expected) = &expected {
-            if expected != &metadata {
+        let result_id = page
+            .result_id
+            .clone()
+            .filter(|id| {
+                id.strip_prefix("r1:").is_some_and(|digest| {
+                    digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+                })
+            })
+            .ok_or_else(|| invalid_read("completed turn result identity is missing"))?;
+        let metadata = TurnContentMeta {
+            total: page.total,
+            outcome,
+            persistence,
+            persistence_uncertain: page.persistence_uncertain,
+            interrupted: page.interrupted,
+            result_id,
+        };
+        match &expected {
+            Some(expected) if expected != &metadata => {
                 return Err(invalid_read("turn metadata changed between pages"));
             }
-        } else {
-            if let Err(partial) =
-                charge_metadata(&mut workspace, &(&turn, &metadata.1, &metadata.3))
-            {
-                return Ok(TurnRead::Partial(partial));
+            Some(_) => {}
+            None => {
+                if let Err(partial) = charge_metadata(
+                    &mut workspace,
+                    &(&turn, &metadata.outcome, &metadata.interrupted),
+                ) {
+                    return Ok(TurnRead::Partial(Box::new(partial)));
+                }
+                if let Err(partial) = assembly.reserve_items(page.total, &mut workspace) {
+                    return Ok(TurnRead::Partial(Box::new(partial)));
+                }
+                expected = Some(metadata.clone());
             }
-            if let Err(partial) = assembly.reserve_items(page.total, &mut workspace) {
-                return Ok(TurnRead::Partial(partial));
-            }
-            expected = Some(metadata);
         }
         for chunk in page.items {
             if let Some(partial) = assembly.push(chunk, page.total, &mut workspace)? {
-                return Ok(TurnRead::Partial(partial));
+                return Ok(TurnRead::Partial(Box::new(partial)));
             }
         }
         assembly.page_end(position, page.next_cursor, page.total)?;
@@ -754,23 +1189,94 @@ pub async fn read_turn(client: Arc<Client>, turn: TurnRef) -> Result<TurnRead, R
                 }
             }
             if let Some(partial) = assembly.oversized {
-                return Ok(TurnRead::Partial(partial));
+                return Ok(TurnRead::Partial(Box::new(partial)));
             }
-            let (_, outcome, persistence, interrupted) =
-                expected.expect("completed pages have metadata");
-            return Ok(TurnRead::Complete(TurnContent {
+            let meta = expected.expect("completed pages have metadata");
+            let final_count = assembly
+                .items
+                .iter()
+                .filter(|item| matches!(item.item, RuntimeItem::ToolResult(_)))
+                .count();
+            if let Err(partial) = workspace.charge(final_count.saturating_mul(128)) {
+                return Ok(TurnRead::Partial(Box::new(partial)));
+            }
+            let final_calls: std::collections::BTreeSet<_> = assembly
+                .items
+                .iter()
+                .filter_map(|item| match &item.item {
+                    RuntimeItem::ToolResult(result) => {
+                        Some((result.request_index, result.call_id.as_str()))
+                    }
+                    _ => None,
+                })
+                .collect();
+            let mut tool_facts = Vec::new();
+            let mut asked = 0;
+            'tools: for item in &assembly.items {
+                let RuntimeItem::Assistant(assistant) = &item.item else {
+                    continue;
+                };
+                for part in &assistant.content {
+                    let crate::protocol::read::RuntimeAssistantPart::ToolCall {
+                        tool_call_id, ..
+                    } = part
+                    else {
+                        continue;
+                    };
+                    if final_calls.contains(&(assistant.request_index, tool_call_id.as_str())) {
+                        continue;
+                    }
+                    if asked == 64 {
+                        break 'tools;
+                    }
+                    asked += 1;
+                    let key = crate::protocol::ToolRef {
+                        session_id: turn.session_id.clone(),
+                        loop_id: turn.loop_id.clone(),
+                        request_index: assistant.request_index,
+                        tool_call_id: tool_call_id.clone(),
+                    };
+                    let params = json!({"session_id":turn.session_id,"loop_id":turn.loop_id,"load":load,"request_index":key.request_index,"tool_call_id":key.tool_call_id,"display":true});
+                    let Ok(facts) = client
+                        .call::<_, Value>(protocol::METHOD_TOOL_READ, &params)
+                        .await
+                    else {
+                        continue;
+                    };
+                    if let Err(partial) = charge_metadata(&mut workspace, &facts) {
+                        return Ok(TurnRead::Partial(Box::new(partial)));
+                    }
+                    let facts = serde_json::from_value(facts)
+                        .map_err(|error| invalid_read(format!("tool metadata: {error}")))?;
+                    tool_facts.push((key, facts));
+                }
+            }
+            return Ok(TurnRead::Complete(Box::new(TurnContent {
                 turn,
                 availability: page.availability,
-                outcome,
-                persistence,
+                result_id: meta.result_id,
+                outcome: meta.outcome,
+                persistence: meta.persistence,
+                persistence_uncertain: meta.persistence_uncertain,
                 items: assembly.items,
-                interrupted,
+                interrupted: meta.interrupted,
+                tool_facts,
                 _workspace: workspace,
-            }));
+            })));
         }
     }
 }
 
+/// The page metadata that must stay identical across a result's pages.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct TurnContentMeta {
+    total: usize,
+    outcome: crate::protocol::LoopOutcome,
+    persistence: TurnPersistence,
+    persistence_uncertain: bool,
+    interrupted: Option<InterruptedRequest>,
+    result_id: String,
+}
 /// How many files a turn changed and, when every diff can be counted, its
 /// added and removed lines.
 pub async fn turn_changes(
@@ -866,21 +1372,22 @@ pub async fn export(client: Arc<Client>, session_id: String, path: Option<String
     let written = async {
         let mut workspace = ReadWorkspace::acquire(&client).await;
         let items = async |workspace: &mut ReadWorkspace| {
-            let pin = probe(&client, &session_id, "canonical").await?;
+            let (pin, _) =
+                probe(&client, &session_id, "canonical", protocol::PROBE_MAX_BYTES).await?;
             read_window(
                 &client,
                 &session_id,
                 "canonical",
                 &pin,
-                0,
-                pin.total,
+                0..pin.total,
                 workspace,
+                &mut None,
             )
             .await
         };
         let items = match items(&mut workspace).await {
             Err(error) if error.is_stale_pin() => {
-                workspace.used = PAGE_WORKSPACE_RESERVE;
+                workspace.reset();
                 items(&mut workspace).await
             }
             result => result,
@@ -888,7 +1395,9 @@ pub async fn export(client: Arc<Client>, session_id: String, path: Option<String
         .map_err(|error| error.message)?;
         let items = match items {
             WindowRead::Complete(items, _) => items,
-            WindowRead::Partial(partial) => return Err(partial.message()),
+            WindowRead::Partial(partial) | WindowRead::Limited(_, _, _, _, partial) => {
+                return Err(partial.message());
+            }
         };
         std::fs::write(&path, crate::transcript::to_markdown(&items))
             .map_err(|error| format!("{path}: {error}"))
@@ -937,16 +1446,21 @@ mod tests {
 
     use super::{
         Assembly, HistoryRead, PAGE_WORKSPACE_RESERVE, ReadPartial, ReadWorkspace, TurnRead,
-        Window, read_history, read_turn,
+        UnavailableRead, Window, read_history, read_turn,
     };
-    use crate::protocol::{ReadChunk, TurnRef};
+    use crate::protocol::read::TurnAvailability;
+    use crate::protocol::{ReadChunk, TurnRef, UnavailableReason};
     use crate::testing::{FakeAgent, chunk, session_info};
 
     const TEST_TIMEOUT: Duration = Duration::from_secs(10);
 
+    const RESULT_ID: &str = "r1:0000000000000000000000000000000000000000000000000000000000000002";
+
     fn result_page(turn: Value, items: Vec<Value>, total: usize, next: Value) -> Value {
         json!({
             "turn": turn,
+            "load": crate::testing::LOAD,
+            "result_id": RESULT_ID,
             "availability": "stored",
             "outcome": {"type": "completed"},
             "persistence": "persisted",
@@ -987,7 +1501,11 @@ mod tests {
         fake.script_sequence("turn.result", pages);
         let result = tokio::time::timeout(
             TEST_TIMEOUT,
-            read_turn(fake.client.clone(), TurnRef::new("s1", "l1")),
+            read_turn(
+                fake.client.clone(),
+                TurnRef::new("s1", "l1"),
+                Some(crate::testing::LOAD.into()),
+            ),
         )
         .await
         .expect("turn read timed out");
@@ -1017,6 +1535,10 @@ mod tests {
         drop(content);
         assert_eq!(calls.len(), 2);
         assert_eq!(calls[1]["cursor"], json!({"item": 1, "offset": 0}));
+        assert_eq!(
+            calls[1]["result_id"], RESULT_ID,
+            "a continuation names the immutable body it continues"
+        );
 
         let empty = result_page(turn("s1", "l1"), vec![], 0, Value::Null);
         let (result, calls) = read_pages(vec![empty]).await;
@@ -1033,11 +1555,110 @@ mod tests {
         pending["availability"] = json!("pending");
         pending.as_object_mut().unwrap().remove("outcome");
         pending.as_object_mut().unwrap().remove("persistence");
+        pending.as_object_mut().unwrap().remove("result_id");
         let (result, _) = read_pages(vec![pending]).await;
         assert!(
             matches!(result, Ok(TurnRead::Pending)),
             "pending must not be returned as a complete turn: {result:?}"
         );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn immutable_pages_allow_live_to_stored_without_changing_body_identity() {
+        let mut first = result_page(
+            turn("s1", "l1"),
+            vec![user(0, "one")],
+            2,
+            json!({"item":1,"offset":0}),
+        );
+        first["availability"] = json!("live");
+        let last = result_page(turn("s1", "l1"), vec![assistant(1, "two")], 2, Value::Null);
+        let (result, calls) = read_pages(vec![first, last]).await;
+        let Ok(TurnRead::Complete(content)) = result else {
+            panic!("live-to-stored lost its immutable body: {result:?}");
+        };
+        assert_eq!(content.items.len(), 2);
+        assert_eq!(content.availability, TurnAvailability::Stored);
+        assert_eq!(calls[1]["result_id"], RESULT_ID);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_changed_result_identity_or_load_never_installs_a_verified_prefix() {
+        let first = result_page(
+            turn("s1", "l1"),
+            vec![user(0, "one")],
+            2,
+            json!({"item":1,"offset":0}),
+        );
+        for (field, value) in [
+            ("result_id", json!(format!("r1:{:064x}", 3))),
+            ("load", json!("reopened")),
+        ] {
+            let mut last = result_page(turn("s1", "l1"), vec![assistant(1, "two")], 2, Value::Null);
+            last[field] = value;
+            let (result, _) = read_pages(vec![first.clone(), last]).await;
+            assert!(
+                result.is_err(),
+                "changed {field} installed a prefix: {result:?}"
+            );
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn expiry_between_pages_is_unavailable_not_a_complete_prefix() {
+        let first = result_page(
+            turn("s1", "l1"),
+            vec![user(0, "one")],
+            2,
+            json!({"item":1,"offset":0}),
+        );
+        let last = json!({"turn":turn("s1","l1"),"load":crate::testing::LOAD,"availability":"unavailable","unavailable_reason":"expired","total":0,"items":[],"next_cursor":null});
+        let (result, calls) = read_pages(vec![first, last]).await;
+        assert!(
+            matches!(
+                result,
+                Ok(TurnRead::Unavailable(UnavailableRead {
+                    reason: UnavailableReason::Expired,
+                    ..
+                }))
+            ),
+            "{result:?}"
+        );
+        assert_eq!(calls.len(), 2);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn canonical_tools_without_final_results_use_bounded_metadata_reads_not_output_downloads()
+    {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let (fake, _app) = FakeAgent::start(tx);
+        let item = chunk(
+            0,
+            json!({"type":"assistant","data":{"loop_id":"l1","request_index":0,"content":[{"type":"tool_call","data":{"tool_call_id":"call1","name":"bash"}}]}}),
+        );
+        fake.script(
+            "turn.result",
+            result_page(turn("s1", "l1"), vec![item], 1, Value::Null),
+        );
+        fake.script("tool.read",json!({"execution":{"tool_ref":{"session_id":"s1","loop_id":"l1","request_index":0,"tool_call_id":"call1"},"state":"succeeded","result_truncated":false}}));
+        let result = read_turn(
+            fake.client.clone(),
+            TurnRef::new("s1", "l1"),
+            Some(crate::testing::LOAD.into()),
+        )
+        .await
+        .unwrap();
+        let TurnRead::Complete(content) = result else {
+            panic!("canonical tool body failed: {result:?}");
+        };
+        assert_eq!(content.tool_facts.len(), 1);
+        assert_eq!(
+            content.tool_facts[0].1.execution.as_ref().unwrap().state,
+            crate::protocol::ToolExecutionState::Succeeded
+        );
+        assert_eq!(fake.calls("tool.read").len(), 1);
+        assert_eq!(fake.calls("tool.read")[0]["display"], true);
+        assert!(fake.calls("tool.output").is_empty());
     }
 
     #[tokio::test(start_paused = true)]
@@ -1257,9 +1878,8 @@ mod tests {
     async fn a_turn_not_found_is_explicitly_unavailable() {
         let error = json!({"error": {"code": -32007, "message": "turn not found", "data": {"kind": "turn_not_found"}}});
         let (result, _) = read_pages(vec![error]).await;
-        assert!(
-            matches!(result, Ok(TurnRead::Unavailable(error)) if error.kind == "turn_not_found")
-        );
+        assert!(matches!(result, Ok(TurnRead::Unavailable(reason))
+                if reason.reason == crate::protocol::UnavailableReason::NotRetained));
     }
 
     #[tokio::test(start_paused = true)]
@@ -1287,7 +1907,7 @@ mod tests {
         let (result, calls) = read_pages(pages).await;
         assert!(calls.len() > 1);
         assert!(
-            matches!(result, Ok(TurnRead::Partial(ReadPartial::Oversized { index: 0, total_bytes })) if total_bytes == total)
+            matches!(result, Ok(TurnRead::Partial(partial)) if matches!(*partial, ReadPartial::Oversized { index: 0, total_bytes } if total_bytes == total))
         );
     }
 
@@ -1330,12 +1950,20 @@ mod tests {
                 "turn.result",
                 result_page(turn("s1", "l1"), vec![user(0, "one")], 1, Value::Null),
             );
-            let first = read_turn(fake.client.clone(), TurnRef::new("s1", "l1"))
-                .await
-                .unwrap();
-            let second = read_turn(fake.client.clone(), TurnRef::new("s1", "l1"))
-                .await
-                .unwrap();
+            let first = read_turn(
+                fake.client.clone(),
+                TurnRef::new("s1", "l1"),
+                Some(crate::testing::LOAD.into()),
+            )
+            .await
+            .unwrap();
+            let second = read_turn(
+                fake.client.clone(),
+                TurnRef::new("s1", "l1"),
+                Some(crate::testing::LOAD.into()),
+            )
+            .await
+            .unwrap();
             assert!(
                 matches!(first, TurnRead::Complete(_)) && matches!(second, TurnRead::Complete(_))
             );
@@ -1348,11 +1976,139 @@ mod tests {
         .expect("workspace test timed out");
     }
 
+    #[cfg(feature = "e2e-observe")]
+    #[tokio::test(start_paused = true)]
+    async fn recovery_metrics_follow_actual_queries_cancellation_and_result_workspace_ownership() {
+        crate::testing::real_bounded(async {
+            let (tx, _rx) = mpsc::unbounded_channel();
+            let (fake, _app) = FakeAgent::start(tx);
+            fake.script_held(
+                "turn.result",
+                result_page(turn("s1", "l1"), vec![user(0, "body")], 1, Value::Null),
+            );
+            let first = tokio::spawn(crate::rpc::metrics::recovery_scope(read_turn(
+                fake.client.clone(),
+                TurnRef::new("s1", "l1"),
+                Some(crate::testing::LOAD.into()),
+            )));
+            let second = tokio::spawn(crate::rpc::metrics::recovery_scope(read_turn(
+                fake.client.clone(),
+                TurnRef::new("s1", "l1"),
+                Some(crate::testing::LOAD.into()),
+            )));
+            fake.wait_for_calls("turn.result", 2).await;
+            let active = fake.client.metrics.snapshot();
+            assert_eq!(active.query_requests, 2);
+            assert_eq!(active.read_pages, 2);
+            assert_eq!(active.recovery_queries, 2);
+            assert_eq!(active.recovery_pages, 2);
+            assert_eq!(active.query_in_flight, 2);
+            assert_eq!(active.query_peak, 2);
+            assert_eq!(active.recovery_workspaces, 2);
+            assert_eq!(
+                active.recovery_workspace_reserved_bytes,
+                2 * PAGE_WORKSPACE_RESERVE
+            );
+            first.abort();
+            assert!(first.await.unwrap_err().is_cancelled());
+            let cancelled = fake.client.metrics.snapshot();
+            assert_eq!(cancelled.query_in_flight, 1);
+            assert_eq!(cancelled.recovery_workspaces, 1);
+            assert_eq!(
+                cancelled.recovery_workspace_reserved_bytes,
+                PAGE_WORKSPACE_RESERVE
+            );
+            fake.release("turn.result");
+            let result = second.await.unwrap().unwrap();
+            let TurnRead::Complete(content) = result else {
+                panic!("reader failed: {result:?}");
+            };
+            let assembled = fake.client.metrics.snapshot();
+            assert_eq!(assembled.query_in_flight, 0);
+            assert_eq!(
+                assembled.workspaces, 1,
+                "assembled body awaiting reducer still owns its workspace"
+            );
+            assert!(assembled.workspace_reserved_bytes > PAGE_WORKSPACE_RESERVE);
+            assert!(assembled.workspace_reserved_peak_bytes >= 2 * PAGE_WORKSPACE_RESERVE);
+            drop(content);
+            let settled = fake.client.metrics.snapshot();
+            assert_eq!(settled.workspaces, 0);
+            assert_eq!(settled.recovery_workspaces, 0);
+            assert_eq!(settled.workspace_reserved_bytes, 0);
+            assert_eq!(settled.recovery_workspace_reserved_bytes, 0);
+            assert_eq!(settled.query_requests, 2);
+            assert_eq!(settled.recovery_workspaces_peak, 2);
+        })
+        .await;
+    }
+
     fn history_page(total: usize, items: Vec<Value>, next: Value) -> Value {
         json!({"session": session_info("s1"), "items": items, "next_cursor": next,
             "total": total, "records": [], "history_revision": "h1", "captured_end": 1,
             "projection": {"revision":"p1", "first_item":0, "covered_item_count":0,
                 "covered_usage":{"usage":{}, "partial":true}}})
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn byte_limited_catchup_keeps_a_verified_suffix_and_continues_without_rereading_it() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let (fake, _app) = FakeAgent::start(tx);
+        let text = "x".repeat(200_000);
+        let items = (0..8).map(|index|chunk(index,json!({"type":"user","data":{"loop_id":format!("turn-{index}"),"kind":"prompt","input":{"text":format!("item-{index} {text}")}}}))).collect();
+        let mut fixture = history_page(8, items, Value::Null);
+        fixture["_fixture_history"] = json!(true);
+        fake.script("session.read", fixture);
+        let mut end = 8;
+        for round in 0..8 {
+            if end == 0 {
+                break;
+            }
+            let mut workspace = ReadWorkspace::acquire(&fake.client).await;
+            let mut budget = Some(super::HistoryBudget {
+                pages: super::HISTORY_CATCHUP_MAX_PAGES,
+                bytes: 1024 * 1024,
+            });
+            let bound =
+                super::history_page_bound(&mut budget, crate::protocol::PROBE_MAX_BYTES).unwrap();
+            let (pin, bytes) = super::probe(&fake.client, "s1", "canonical", bound)
+                .await
+                .unwrap();
+            super::charge_history_bytes(&mut budget, bytes);
+            let result =
+                super::read_catchup(&fake.client, "s1", &pin, end, &mut workspace, &mut budget)
+                    .await
+                    .unwrap();
+            let (items, from) = match result {
+                super::WindowRead::Limited(items, _, from, through, ReadPartial::HistoryLimit) => {
+                    assert_eq!(through, end);
+                    assert!(
+                        budget.as_ref().unwrap().pages > 0,
+                        "this round exhausted bytes, not pages"
+                    );
+                    (items, from)
+                }
+                super::WindowRead::Complete(items, _) => (items, 0),
+                _ => panic!("byte-bounded recovery must return its complete verified source range"),
+            };
+            assert_eq!(items.len(), end - from);
+            assert!(
+                !items.is_empty(),
+                "round {round} must make real coverage progress"
+            );
+            for (index, item) in (from..end).zip(items) {
+                let crate::protocol::read::RuntimeItem::User(item) = item.item else {
+                    panic!("a user item");
+                };
+                assert_eq!(item.loop_id, format!("turn-{index}"));
+                assert!(item.input.text.starts_with(&format!("item-{index} ")));
+            }
+            end = from;
+        }
+        assert_eq!(
+            end, 0,
+            "every missing range must be recoverable with bounded continuations"
+        );
     }
 
     async fn history_pages(

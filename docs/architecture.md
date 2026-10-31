@@ -10,7 +10,7 @@ document and the code win.
 `minicore-runtime`). The Agent crate is linked only to serve as this
 executable's `agent` subcommand: `main` hands those arguments to
 `minicore_agent::cli::run` before anything else. The TUI talks to that child over
-stdio NDJSON JSON-RPC (Protocol v1) and calls no other Agent API. It never reads the Agent store or
+stdio NDJSON JSON-RPC (Protocol v2) and calls no other Agent API. It never reads the Agent store or
 workspace file contents, runs a tool, calls a provider or keeps provider credentials;
 its two settings files name environment variables, never keys. Remote mode
 validates host directory paths and stores only hashes of phone tokens.
@@ -341,69 +341,211 @@ verbatim prefixes. The full phone protocol is specified in `design-remote.md`.
 
 `Client` is shared (`Arc`): `call::<P, R>(method, &params).await`, with
 responses routed by id to `oneshot` channels. Four tasks own the pipes: a writer
-(queue of 64), a stdout reader (32 MiB frame bound), a stderr reader (last 200
-lines) and a child waiter. A malformed frame or a child exit ends every pending
-call and posts `Incoming::Closed`, which becomes the fatal screen. A request line
-over 1 MiB is refused locally because the Agent exits on one.
+(queue of 64), a stdout reader, a stderr reader (last 200 lines) and a child
+waiter. A malformed frame or a child exit ends every pending call and posts
+`Incoming::Closed`, which becomes the fatal screen.
+
+Two bounds are derived from what the protocol can legally carry, never from what
+a frame happens to contain:
+
+- **From the Agent, `CONTROL_FRAME_MAX_BYTES` = 64 MiB.** A legal control frame — a
+  `session_snapshot` for a session whose queue holds 32 maximum inputs of 256 KiB
+  each, plus the execution input, a maximum approval and the 256-entry completion
+  catalogue, all JSON-escaped — measures 52,237,130 bytes. The reader admits the
+  whole frame, envelope and newline included, and the same constant bounds the
+  decoder's own tests.
+- **To the Agent, `MAX_REQUEST_BYTES` = 8 MiB**, matching the Agent's own
+  request ceiling. One `input.push` carrying a maximum
+  256 KiB input whose bytes all escape to six characters measures 1,573,049
+  bytes, so the local bound must clear it with room for the envelope. A larger
+  frame is refused before a byte is written, because the Agent terminates on an
+  oversized request line; nothing is truncated to fit.
+
+The reader accumulates a line until the newline or the bound and never stores a
+prefix, so a frame is either read whole or reported as unreadable.
 
 Read queries (`session.read`, `turn.result`, `tool.*`, `workspace.*`,
 `changes.*`) hold one of 3 client permits, under the Agent's cap of 4. Capacity
-refusals (`-32019`, `-32020`) are retried only in `turn.wait` (every 700 ms,
-indefinitely) and `changes.diff` (twice); elsewhere they become a notice.
+refusals (`-32019`, `-32020`) are retried in `turn.wait` (three retries, 700 ms
+apart), completion recovery (250 ms, 1 s, 4 s) and `changes.diff` (twice).
+Exhausted completion reads remain unsettled; an unrelated snapshot revision
+cannot restart their retry budget.
 
-The handshake requires `protocol_version == 1` and the ten capabilities in
+The handshake requires `protocol_version == 2` and the ten capabilities in
 `REQUIRED_CAPABILITIES` (`protocol/mod.rs`; `workspace.search` and
 `workspace.status` are not used). `session.presentation` has no capability
-string and is called unconditionally. Shutdown sends `agent.shutdown`, waits up
-to 3 s, then aborts the pipe tasks; the child is killed on drop.
+string and is called unconditionally. Shutdown serializes callers and sends
+`agent.shutdown` once; its ACK is not child-exit proof. The actual child owner is
+joined before pipe tasks are aborted, with a fresh 3 s exit grace after the
+separately bounded 3 s ACK wait. On a real timeout that owner kills and reaps the child; a final 1 s bounded fallback
+aborts a stuck owner. Cancellation retains the owner for a subsequent shutdown,
+and completed shutdown is idempotent.
+
+## Control state
+
+One observation decides what a session is doing. `session.state`, `session.open`
+and `session.create` each carry a `SessionSnapshot`, and the Agent pushes the
+same shape as the `session_snapshot` event. `App::apply_snapshot` is its only
+writer: `execution` (`none`/`starting`/`running`/`finishing`, with the input that
+started it), `queue`, `pending_interaction` (with loop/request identity, so a
+prompt works without its tool card), `compaction`, `block_reason` and the
+completion directory. An installed persistence block remains visible above the
+local dock even while idle; a still-actionable interaction keeps its question,
+editor and exact-target answer controls below that blocking status.
+
+Identity decides whether an observation applies. A snapshot for another live
+session is routed to it; one for a session this client has not loaded is
+ignored, because only an explicit open installs an instance. Within the
+installed `load` a `revision` equal to or below the applied one is a duplicate or
+a delayed observation and is dropped whole — never merged field by field.
+`session.open`/`session.create` name the `load`; every mutation of a loaded
+instance sends it back, and the Agent rejects a missing or stale one before the
+side effect.
+
+Command receipts still report their own result: a refusal returns the text, a
+removal hands the entry back to its requester, a push names the turn it started.
+They no longer set the queue or execution; each receipt asks for the current
+snapshot, so a delayed answer cannot resurrect a consumed entry.
+
+## Completion recovery
+
+The completion directory is what makes missed turns discoverable. Its entries
+are the load's contiguous suffix of finished turns, each with the outcome,
+persistence, availability and the anchors that place it: `next_loop_id` and
+`after_saved_loop_id`.
+
+A snapshot can arrive before an outstanding open/create has returned. Only
+while an installation is outstanding are such observations eligible for holding. Up to two such snapshots, totalling at most
+`PRE_INSTALL_BUDGET_BYTES` (two frame ceilings, 128 MiB, because two maximum
+snapshots exceed 64 MiB), are held and installed by the `session.open` that
+matches their session id. Past that budget the oldest are dropped, and because a
+dropped hold could otherwise leave control empty, installing a load always asks
+for one `session.state` afterwards.
+
+`RecoveryState` (in `app/recovery.rs`) keeps `observed_through` from the directory
+and `settled_through` for what has been read or explicitly declared
+unreadable. Every unsettled entry is read through `turn.result` with the
+load, at most two at a time. Only a complete, identity-checked body or an explicit
+unavailability settles an entry. A partial read is explicitly marked partial,
+not installed as canonical; pending and failed reads remain unsettled. A failure
+retries three times (250 ms, 1 s, 4 s), then retains an exhausted error instead of
+claiming the source is unavailable. Partial, unavailable and exhausted bodies
+keep a bounded per-turn annotation as well as a dock indicator. An unseen partial
+or unavailable completion also gets an identifiable terminal region, its known
+outcome and saving fact, without being installed as an empty canonical answer. A body is
+installed once, either over the region the turn streamed
+into or, for a turn the client never saw, after its `after_saved_loop_id` anchor;
+a missing anchor is shown as an ordering gap rather than guessed. A saved-history
+anchor is a lower bound even when an earlier unsaved completion was already
+reconciled; delayed result arrival cannot move a turn ahead of that anchor. Late
+deltas for an installed turn are dropped.
+
+The completion directory is a window. A missing prefix first schedules a saved
+history catch-up, bounded to 64 pages or 16 MiB per round. Discovery alone never
+advances `settled_through` across that hole. Each bounded round retains its
+verified newer suffix and its exact item range, captured end and history revision;
+`/recover` reads the adjacent missing range using a freshly validated probe, not
+a cached pin. Old-prefix pagination cannot settle an unread newer suffix. Only
+coverage of the complete pinned history permits settling the gap, with an explicit
+warning that expired unsaved identities may be missing. A failed or bounded-out
+read keeps the gap unresolved and `/recover` visible in the dock. Even after a
+successful saved fallback, the persistent dock explicitly warns that unknown
+unsaved turns may be missing outside the retained completion catalog.
+History metadata overlap is not full-body
+coverage: a replacement needs the prompt boundary and a verified end boundary;
+uncovered regions, later live output and session drafts stay intact.
+
+Recovery task ownership outlives catalog eviction: an in-flight read still owns
+its global slot until its outcome is applied, or its Session drops and aborts
+the task. One epoch cursor rotates admission among resident sessions; each gets
+one start per pass under the shared two-slot limit, including history catch-up.
+Continuous foreground work or availability changes cannot refill both slots
+ahead of other residents. An overdue retry cannot arm an idle wake while both slots are occupied.
+Missing final tool facts use up to 64 serial metadata reads within that same
+recovery slot/workspace, never raw output downloads; a tool with no final fact
+is not labeled succeeded. The remaining facts can still arrive as tool metadata.
+
+The non-default `e2e-observe` build feature observes accepted controls and actual
+installed canonical transcript regions on the production main path. Its opt-in
+trace hashes normalized installed channels, reads displayed saving markers and
+records a global ordered inventory of the actual transcript, not just per-loop
+hashes and turn-end order. The inventory includes unexpected loops, assistant
+channels, tools, user/steering hashes, actual source identities where available,
+terminal regions and explicit preserved provenance. User identities travel with
+transcript mutations in product source-identity metadata; absent source input IDs remain
+null, never guessed from text. Fetched content never filters that projection.
+Incomplete target regions emit their actual noncanonical classification and
+terminal saving/outcome. It never includes prompt/answer text or provider errors.
+The producer fails closed before exceeding 1 MiB per row, 20,000 events or 32 MiB
+per trace; it does not truncate a row or continue after dropping observations. Default builds have no observer
+state or work. Query counts increment on actual writer enqueue, query gauges
+follow permit ownership, and reader reservation gauges/peaks follow charged
+workspace ownership through assembled results, cancellation and drop. Reservation
+bytes are not allocator RSS. Recovery queries are distinguished by the actual
+recovery task's scope, not inferred from method names. Backend-only counters are
+not synthesized. A single feature-only application gate can hold one resident
+backend message before application while stdio reading and the Agent continue;
+it uses a private arm/ready/release handshake with a 30-second deadline. The
+feature-only phone drain gate uses the same observer through
+`App::observe_phone_gate`. All TUI acceptance variables (trace, application gate
+and phone gate) are removed from the Agent child environment.
+
+Text-input interactions follow the Agent's answer_kind, not whether choices are
+empty. Session.interaction_editor is separate from the conversation composer and
+resets only when the authoritative interaction identity changes. Local answers
+capture the exact loop/interaction/load and preserve the Agent's literal text
+boundary; neither a receipt nor an older resolution clears a newer editor.
+The Runtime's `input_provided` tool result is terminal: live events, canonical
+history, display summaries and hydrated execution records all project it as a
+done card, without ending the surrounding model turn.
 
 ## Turn lifecycle
 
-The `turn.wait` result is the only thing that ends a turn; events are display
-hints.
+The control snapshot says what is running; `turn.wait` reports terminal metadata
+for its named turn, including outcome, usage and the direct successor.
 
-1. **Submit.** `Enter` is `input.push` with mode `steer`, `Alt+Enter` the same
-   with `follow_up`; the answer names the turn this push started, if any. Every
-   turn is learned from an RPC answer, never from an event: `input.push`,
-   `input.resume`, the `next` of a `turn.wait` result and the `next` of the
-   deferred `session.compact` result each carry the turn the Agent started with
-   the entry that became its input (`StartedTurn`). `start_turn` makes it the `LiveTurn` and spawns `turn.wait`. It
-   is the only place a wait is registered and does nothing while a turn is live,
-   so a turn is never waited on twice. It also opens the turn's region with the
-   prompt block of that entry (see Steering). Opening a session reads
-   `session.state` once its tail is installed, so a turn still running in the
-   Agent is adopted and waited on; a manual compaction's end reads nothing, its
-   result names the turn started behind it. A refusal puts the text back in the
-   draft.
-2. **Events** (`output_delta`, `tool_*`, `request_started`, `input_queue`,
-   `input_delivered`, `session_state`, `interaction_*`) update the live turn's
-   blocks by key, so order does not matter. Deltas and tool starts for a loop
-   that is not live are ignored. `dropped_before > 0` marks the turn as having
-   a gap.
-3. **`turn.wait` resolves** and the turn is over. `wait_turn` retries capacity
-   and busy refusals. If the wait fails otherwise it asks `turn.result` (limit 1)
-   for the stored outcome; with none stored it waits again; only if that read
-   fails too does the turn end as `Unknown` with an error notice. `end_turn` then
-   closes streaming blocks, adds usage to the totals, appends the turn-end block
-   and takes the result's `queue`. If the outcome is not `completed`
-   or the turn had a gap, its durable items are read with `turn.result` (paged,
-   chunk-assembled) and **reconciled**: they replace the blocks the turn streamed,
-   up to its turn-end line and no further, so a follow-up already sent stays
-   after it, which is where a successor's prompt already sits. Cards keep the detail, input and output the live events knew,
+1. **Submit.** `Enter` pushes `steer`; `Alt+Enter` pushes `follow_up`. The receipt
+   reports acceptance and any start error, but only a snapshot opens or changes
+   the live execution region. `start_adopted_turn` registers its wait. A delayed
+   predecessor wait cannot keep a successor from becoming live. Only an explicit
+   rejection restores unsent text; an unknown or unclassified acceptance does
+   not offer an automatic duplicate submission.
+2. **Events** of body content (`output_delta`, `tool_*`, `request_started`,
+   `input_delivered`) update the live turn's blocks by key, so order does not
+   matter. Unknown loops enter an early-body cache (2 MiB and eight identities
+   per load, 8 MiB globally), including tools and delivered inputs. Another live
+   turn is not proof of identity. A confirmed execution replays its cache once;
+   overflow flags recovery rather than creating a visible speculative turn.
+   Installed canonical bodies reject late body appends, while tool auxiliary
+   metadata can still update an existing card. The Agent's auxiliary commit is a
+   `tool_execution` update with `recording: saved` or `failed`, not a new body
+   event. Its exact ToolRef/load updates the card after canonical installation;
+   a turn's saved marker never implies that auxiliary recording is saved.
+   `dropped_before > 0` marks the turn as having a gap. Control-shaped events
+   (`input_queue`, `session_state`, `interaction_*`) no longer write state; the
+   snapshot does.
+3. **`turn.wait` resolves** with terminal metadata for its named loop. A failed
+   wait makes one stored-outcome query, then reports an error if no outcome is
+   available; it neither invents a terminal result nor polls forever. This fallback
+   keeps the wait's captured resident load and checks the response against it,
+   rather than silently turning a late wait into an unbound history query. `end_turn`
+   updates that region's line and replaces only that turn's accounted usage
+   contribution, preserving a newer successor's usage. It never clears the
+   snapshot's live execution or applies the wait's queue/next. Every receipt refreshes control. The
+   completion directory then has the turn, so its body is recovered through
+   `turn.result` (paged, chunk-assembled) and **reconciled**: it replaces the
+   blocks the turn streamed, up to its turn-end line and no further, so a
+   follow-up already sent stays after it, which is where a successor's prompt
+   already sits. Cards keep the detail, input and output the live events knew,
    thinking and text the items lack stay, and so do blocks no item covers
    (compaction markers). The page's `interrupted` partial reply, when the
    cancel cut a request short, is the durable block of that request and
    replaces the streamed one in place; the streamed text stays only when the
-   Agent sent none. In every case `changes.list` for the turn fills the change
+   Agent sent none. The result's `persistence` and `persistence_uncertain` put
+   "not saved" or "save unconfirmed" on the turn-end line. In every case
+   `changes.list` for the turn fills the change
    summary, `session.presentation` and `session.context` are refreshed, and a
-   `next` turn gets its own wait.
-4. **`turn_finished`** only changes the phase text. A wait answer for another
-   loop leaves the live turn running.
-5. **Interrupt.** `Esc` sends `turn.cancel` once; the status line shows
-   `Interrupting` until `turn.wait` resolves. Only the user's own send, `End`
-   and the jump label follow the tail; a turn starting or ending leaves an
-   anchored view alone. Per-request `request_usage` events add to the footer
-   totals as they come; the wait's usage then replaces them.
+   background turn is announced.
 
 The `(+a −b)` counts of the turn-end line are not in `changes.list`; they come
 from paging `changes.diff` for each of the first 100 records. The turn-end line
@@ -421,24 +563,29 @@ unknown, and the line then shows only `N files changed`, never a zero.
 
 Input queue: the Agent owns one queue per session (`protocol::input`: entries
 with an id, a mode and a text; steers run before follow-ups; a `paused` flag
-after an interrupted or failed turn). `Session::queue` only mirrors it, from
-every `input.*` answer, the `queue` of each `turn.wait` result, the
-`input_queue` event and one `input.list` when a session opens. The mirror drives
+after an interrupted or failed turn). `Session::queue` only mirrors the snapshot:
+every `input.*` answer asks for the current control observation, and the queue
+it reports is the only one shown. The mirror drives
 the dock rows, the paused hint and the phone's `queue`; nothing in the TUI
 dispatches. `Alt+↑` and entering remote ask `input.recall`, and the answer's
 texts go back to the composer joined by blank lines. `Enter` on an empty draft
 asks `input.resume` while the mirror is paused. The phone's `unqueue` becomes
-`input.remove` with the id of the mirrored entry at its `index`, after the text
-matched; an entry the Agent handed over meanwhile answers `input_not_queued`,
-which shows as a notice.
+`input.remove` with stable session/load/input identities. Its ACK is delayed until
+the Agent result and returns edit text to that same operation/connection; an
+already-consumed entry returns `input_not_queued` without an index/text fallback.
 
-An `input_delivered` event is a running turn taking steers: they leave the
-mirror by id and become steering blocks after the turn's latest step, in
-delivery order. A successor can take steers before its predecessor's wait
-answers, so deliveries for a turn that is not live yet wait in the session and
-are placed when `start_turn` runs. A turn's prompt block comes from the `input`
-of the `StartedTurn` the Agent returned, which may be an older entry than the one
-pushed; it leaves the mirror with the answer's `queue`.
+An `input_delivered` event adds steering body blocks by its explicit input ID and
+candidate request index, never text equality or the currently active request. A
+steer precedes its request's assistant/tool blocks, or stays before its own
+terminal if that preparation was never issued; it never crosses into a successor.
+Late earlier request/tool events respect these same boundaries. Repeated IDs are
+boundedly deduplicated, identical-text IDs remain distinct, and a canonical-closed
+turn cannot be resurrected. Source identity/request metadata travels with copied
+or merged blocks in all builds; a historical source lacking IDs remains unknown.
+Delivery never removes queue entries; only a snapshot changes the mirror. Unknown deliveries
+share the bounded early-body cache with deltas and tools. A snapshot-confirmed
+execution opens its own prompt from execution.input (which may be null), not
+from the input most recently pushed or a delayed receipt's StartedTurn.
 Deleting a session that holds queued entries is refused, as the Agent does.
 The first prompt of an untitled session becomes its title through `session.rename`.
 
@@ -458,9 +605,12 @@ Turn and history reads check the response identity, chunk encoding and byte
 continuity, item JSON, cursor progress and the requested item range before any
 content is installed. A pending turn is not an empty result. A missing turn,
 invalid page, oversized item or exhausted read workspace leaves the existing
-transcript in place and reports the problem. The current RPC v1 does not supply
-an immutable result identity or load identity, so it cannot verify that two
-otherwise consistent turn pages came from the same immutable source.
+transcript in place and reports the problem. RPC v2 result pages repeat the
+requested load and immutable result_id. Later requests carry that result_id;
+changing identity is an error, expiry is explicit unavailable, and live-to-stored
+availability can change without changing the immutable body. Partial and
+unavailable bodies retain a bounded per-turn UI annotation, not a canonical
+success; exhausted errors remain unsettled and `/recover` starts a fresh round.
 
 At most two history, turn or export reads assemble at once per client. Each
 workspace has a 64 MiB budget, including conservative reservations for decoded
@@ -491,17 +641,14 @@ does not include the existing transcript or the RPC client's general buffers.
 
 ## Compaction
 
-`session_state.compaction` and `session.context.current_operation` drive the
-`Compacting context · <phase>` status and the `● compacting` footer state. The
+Only snapshot.compaction drives the `Compacting context · <phase>` status and
+the `● compacting` footer state; context and command replies cannot write it. The
 Agent has no completed event, so the one-line marker comes from the
 `session.compact` result of a compaction the TUI started, or from `last_result`
 in a `session.context` read (on open, after each turn, when a compaction ends,
-when the Context sheet opens). A compaction at the start of a turn (before its
-first request) reaches neither: it is only in `session.context.automatic.current`
-and `.last`,
-so the context is read every 2 s while a turn runs (`watch_context`, on the
-tick), and a `last` that differs from the one the first read of the session
-reported becomes a marker. All carry
+when the Context sheet opens). Automatic compaction progress also arrives through the snapshot. Context is
+read every 2 s while a turn runs (`watch_context`, on the tick) for its ledger;
+a new automatic.last operation becomes a transcript marker, never control. All carry
 an operation id and `push_compaction` skips one it already shows. `Esc` outside
 a turn sends `session.compact.cancel` for the operation shown; inside a turn it
 interrupts the turn, which ends the compaction too.
@@ -602,8 +749,8 @@ Turn-end change counts still read the turn's retained changes independently.
 ### Composer, templates, title
 
 The draft model is `app/composer.rs` (text, cursor, paste chips, undo, the
-prompt history); `ui/composer.rs` only draws it. Every submitted prompt is
-appended to `<home>/history.jsonl` (the last 100, written
+prompt history); `ui/composer.rs` only draws it. Only positively accepted local
+prompts are appended to `<home>/history.jsonl` (the last 100, written
 atomically by `prompt_history.rs`; over 32 KiB stays in memory) and loaded at
 start. `app/templates.rs` reads `prompt/commands/*.md` from the TUI directory at
 start and on `/reload`; a template is a command that expands `$1`, `$@` and
@@ -624,8 +771,28 @@ branch comes from the same answer, which only caches it after a complete
 `workspace.status`, so one runs on open and after each turn; until then the
 branch is omitted.
 
+Local sends use `app/unconfirmed.rs`: an operation ID owns the exact target
+session/load/epoch/mode and original submission. A global `Msg::LocalPushed`
+receipt survives view changes independently of session-body task epochs. Up to
+64 operations / 16 MiB are retained, including pending submission undo data; full
+capacity rejects before an Agent call. Unknown acceptance is never restored as
+unsent, entered into ordinary prompt history, or automatically resent. Rejected
+input restores only into the unchanged empty original draft; otherwise it remains
+separately reviewable. New equal-text edits are not used as correlation.
+
+F8 or `/unconfirmed` opens the existing sheet-style review. A separate bounded
+editor changes a possible retry without replacing the original uncertainty or
+new conversation draft. Confirmation modes bind an operation ID, not a list row;
+Enter/Esc cancels a possible-duplicate warning and only `y` sends a new-ID retry
+to the original live target. Forget is likewise an explicit local decision, not
+an Agent cancellation. Old unavailable loads are never silently retargeted.
+Retention is process-local, not a persistent ledger. Observer checkpoints expose
+hash-only current `local_input_state` and authoritative `delivered_inputs` beside
+the unchanged actual global inventory; no new event kind or counter is invented.
+
 On Agent exit or a protocol failure the screen becomes a fatal message with the
-reason and the last 20 stderr lines; `q` or `Esc` quits.
+reason and the last 20 stderr lines; `q` or `Esc` quits, while F8 still opens the
+retained local confirmations for review/copy without resending.
 
 ## Code and comment style
 

@@ -62,7 +62,16 @@ pub struct ToolExecution {
     pub finished_at: Option<String>,
     pub output_line_count: Option<usize>,
     pub result_truncated: bool,
+    pub recording: Option<ToolRecordingState>,
     pub command: Option<CommandResult>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolRecordingState {
+    MemoryOnly,
+    Saved,
+    Failed,
 }
 
 impl ToolExecution {

@@ -25,6 +25,53 @@ const COMPLETION_ROWS: usize = 5;
 /// The sheet for the current overlay; a pending interaction is one too, as it owns the keyboard.
 pub fn sheet(app: &App, styles: Styles) -> Option<Sheet> {
     Some(match &app.overlay {
+        Overlay::Unconfirmed { mode, .. } => {
+            use crate::app::unconfirmed::ReviewMode;
+            if matches!(mode, ReviewMode::Edit(_)) {
+                return None;
+            }
+            let mut sheet = Sheet::new(
+                "Local input confirmations",
+                "e edit · r resend · c copy · d forget · esc close",
+            )
+            .rows(
+                app.local_inputs
+                    .iter()
+                    .map(|input| {
+                        Row::new(
+                            format!("tui-{} · {}", input.id, input.status.label()),
+                            format!("{} · {}", input.target.session_id, input.target.load),
+                        )
+                    })
+                    .collect(),
+            )
+            .selected(app.selected_local_input().and_then(|input| {
+                app.local_inputs
+                    .iter()
+                    .position(|known| known.id == input.id)
+            }));
+            if let Some(input) = app.selected_local_input() {
+                sheet = sheet.notes(vec![Line::raw(crate::wrap::truncate(
+                    input.entry.text(),
+                    120,
+                ))]);
+            }
+            match mode {
+                ReviewMode::Resend(_)|ReviewMode::ResendEdited(_)=>sheet.hint="May already be accepted; sending again can duplicate input · y resend · enter/esc cancel".into(),
+                ReviewMode::Forget(_)=>sheet.hint="Forgetting does not cancel a possibly accepted input · y forget · enter/esc cancel".into(),
+                _=>{},
+            }
+            if matches!(mode, ReviewMode::Resend(_) | ReviewMode::ResendEdited(_))
+                && app
+                    .selected_local_input()
+                    .is_some_and(|input| input.status == crate::app::unconfirmed::Status::Rejected)
+            {
+                sheet.hint =
+                    "Rejected before acceptance · y send as a new operation · enter/esc cancel"
+                        .into();
+            }
+            sheet.status("Unconfirmed is not unsent; no automatic resend")
+        }
         Overlay::None => return interaction_sheet(app, styles),
         Overlay::Sessions {
             filter,
@@ -281,6 +328,9 @@ fn interaction_sheet(app: &App, styles: Styles) -> Option<Sheet> {
     }
     let session = app.session.as_ref()?;
     let interaction = session.interaction.as_ref()?;
+    if matches!(interaction.kind, InteractionKind::Text) {
+        return None;
+    }
     let options = interaction.options();
     // The card is read at draw time: its detail and input can arrive after
     // the prompt does.

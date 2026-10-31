@@ -116,7 +116,7 @@ function mdInc(c, src) {
 
 // ---- core ----
 
-const V = 2, WINDOW = 300, MAX_QUERIES = 4;
+const V = 3, WINDOW = 300, MAX_QUERIES = 4, VIEW_EPOCH_MAX = 64;
 const backoff = n => Math.min(15000, 1000 * 2 ** n);
 const basename = p => (p || '').split(/[\\/]/).filter(Boolean).pop() || p || '';
 const plural = (n, one, many) => n + ' ' + (n === 1 ? one : many || one + 's');
@@ -125,13 +125,6 @@ const titled = title => title || 'Untitled session';
 // "gpt-6-…-preview": long names keep both ends.
 const midTrunc = (s, n = 17) => s.length <= n ? s : s.slice(0, (n - 1) >> 1) + '…' + s.slice(-((n - 1) >> 1));
 
-// What is left in the editor once an acked submission is retired; text the user or `returned` added stays.
-function retireText(editor, sent) {
-  if (editor === sent) return '';
-  if (editor.startsWith(sent + '\n')) return editor.slice(sent.length + 1);
-  if (editor.endsWith('\n' + sent)) return editor.slice(0, -sent.length - 1);
-  return editor;
-}
 const mergeReturned = (cur, text) => cur ? cur + '\n' + text : text;
 function otherDevices(devices, me) {
   const rest = devices.slice(), i = rest.findIndex(d => d.name === me);
@@ -151,13 +144,14 @@ function deviceName(ua, touchPoints = 0) {
 // ---- messages ----
 const login = (password, device) => ({ t: 'login', v: V, password, device });
 const hello = token => ({ t: 'hello', v: V, token });
+// Intents name the projection they were built from; the server refuses one whose target moved on.
 const intents = {
   submit: text => ({ kind: 'submit', text }),
   queue: text => ({ kind: 'queue', text }),
-  cancel: () => ({ kind: 'cancel' }),
-  answer: (interaction_id, choice, message) => Object.assign({ kind: 'answer', interaction_id, choice }, message && { message }),
+  cancel: (loop_id, operation_id) => ({ kind: 'cancel', ...(loop_id && { loop_id }), ...(operation_id && { operation_id }) }),
+  answer: (loop_id, interaction_id, choice, message) => Object.assign({ kind: 'answer', loop_id, interaction_id, choice }, message && { message }),
   compact: () => ({ kind: 'compact' }),
-  unqueue: (index, text, edit) => ({ kind: 'unqueue', index, text, edit }),
+  unqueue: (input_id, edit) => ({ kind: 'unqueue', input_id, edit }),
   loadOlder: () => ({ kind: 'load_older' }),
   openSession: session_id => ({ kind: 'open_session', session_id }),
   newSession: (workspace, profile) => Object.assign({ kind: 'new_session' }, workspace && { workspace }, profile && { profile }),
@@ -183,20 +177,62 @@ const fs = {
 };
 
 // ---- store and reducer ----
-const createStore = () => ({ state: null, blocks: [], intents: new Map(), fs: new Set(), q: new Set(), sid: undefined, nid: 0, skew: 0, device: null, version: '' });
+// `view` is the projection identity the server named for what this client holds; an intent built
+// from an older one is refused rather than acting on whatever view came later. `unconfirmed`
+// sends keep their text here so a reconnect never resends them by itself.
+const createStore = () => ({ state: null, blocks: [], intents: new Map(), fs: new Set(), q: new Set(), sid: undefined, view: '', nid: 0, skew: 0, device: null, version: '', reply: { key: null, text: '' } });
 const nextId = s => 'c' + ++s.nid;
+const newDraftVersion = s => 'draft_' + nextId(s);
 const SENDS = { submit: 1, queue: 1 };
+// These bound retained operations and payload text, not the entire browser heap.
+const MAX_INTENTS = 64, MAX_INTENT_TEXT_BYTES = 16 * 1024 * 1024;
+// What an intent addresses: the projection it came from, and the session it names — the one in its
+// own spec (open, rename, delete) or else the one this client is looking at. A draft names none.
+const target = (s, spec) => {
+  const session = s.state && s.state.session, viewed = session ? session.id : undefined;
+  const session_id = spec.session_id !== undefined ? spec.session_id : viewed;
+  const load = session_id !== undefined && session_id === viewed ? session.load : undefined;
+  return { view_epoch: s.view, ...(session_id !== undefined && { session_id }), ...(load && { load }) };
+};
 // Records the intent as pending and returns the message to send; it is never sent again by itself.
-function intent(s, spec, own) {
+// The target is captured now, so a later view change cannot retarget an intent already on the wire.
+function intent(s, spec, own, draft) {
+  const textBytes = [spec.text, spec.message, spec.title, spec.choice && spec.choice.text]
+    .reduce((sum, text) => sum + (typeof text === 'string' ? new TextEncoder().encode(text).length : 0), 0);
+  const retained = [...s.intents.values()].reduce((sum, it) => sum + it.textBytes, textBytes);
+  if (s.intents.size >= MAX_INTENTS || retained > MAX_INTENT_TEXT_BYTES) return null;
   const id = nextId(s);
-  s.intents.set(id, { id, spec, own, kind: spec.kind, text: SENDS[spec.kind] ? spec.text : undefined, st: 'pending' });
-  return { t: 'intent', id, ...spec };
+  const messages = { ...spec, ...target(s, spec) };
+  s.intents.set(id, { id, spec, own, draft, textBytes, target: target(s, spec), kind: spec.kind, text: SENDS[spec.kind] ? spec.text : undefined, st: 'pending' });
+  return { t: 'intent', id, ...messages };
 }
 function request(s, body) { const id = nextId(s); s.fs.add(id); return { ...body, id }; }
 // At most MAX_QUERIES are in flight per connection; the caller waits for room.
 const queryRoom = s => s.q.size < MAX_QUERIES;
 function query(s, spec) { const id = nextId(s); s.q.add(id); return { t: 'query', id, ...spec }; }
 const pending = (s, kind) => { for (const it of s.intents.values()) if (it.st === 'pending' && (!kind || it.kind === kind)) return it; return null; };
+const interactionKey = state => {
+  const session = state && state.session, a = state && state.interaction;
+  return session && a ? JSON.stringify([session.id, session.load, a.loop_id, a.id]) : null;
+};
+function syncReply(s) {
+  const key = interactionKey(s.state);
+  if (s.reply.key !== key) s.reply = { key, text: '' };
+}
+const answerPending = s => {
+  const a = s.state && s.state.interaction, session = s.state && s.state.session;
+  if (!a || !session) return null;
+  for (const it of s.intents.values()) if (it.st === 'pending' && it.kind === 'answer'
+    && it.target.session_id === session.id && it.target.load === session.load
+    && it.spec.loop_id === a.loop_id && it.spec.interaction_id === a.id) return it;
+  return null;
+};
+// The Agent/Runtime text-answer rule is UTF-8 bytes, no controls, and no trimming.
+const ANSWER_TEXT_BYTES = 8192;
+const validAnswerText = text => text.length > 0 && new TextEncoder().encode(text).length <= ANSWER_TEXT_BYTES && !/[\u0000-\u001f\u007f-\u009f]/.test(text);
+const textAnswer = s => s.state && s.state.interaction && s.state.interaction.kind === 'text'
+  && s.reply.key === interactionKey(s.state) && validAnswerText(s.reply.text) && !answerPending(s)
+  ? intents.answer(s.state.interaction.loop_id, s.state.interaction.id, { text: s.reply.text }) : null;
 // A dropped socket leaves pending sends unconfirmed; other intents show in the next snapshot.
 function disconnect(s) {
   s.fs.clear(); s.q.clear();
@@ -208,8 +244,12 @@ function disconnect(s) {
 // An explicit user action: a new intent with a new id.
 function sendAgain(s, id) {
   const it = s.intents.get(id);
-  s.intents.delete(id);
-  return intent(s, it.spec);
+  const message = intent(s, it.spec);
+  if (message) s.intents.delete(id);
+  return message;
+}
+function discardUnconfirmed(s, id) {
+  return s.intents.get(id)?.st === 'unconfirmed' && s.intents.delete(id);
 }
 const unconfirmed = s => [...s.intents.values()].filter(it => it.st === 'unconfirmed');
 
@@ -251,21 +291,34 @@ function reduce(s, msg, nowMs) {
       const dirty = diffBlocks(s.blocks, msg.blocks), sid = msg.state.session ? msg.state.session.id : null;
       const newSession = sid !== s.sid;
       s.blocks = msg.blocks; s.state = msg.state; s.sid = sid;
+      s.view = msg.view_epoch;
+      syncReply(s);
       return { dirty, state: true, newSession, snapshot: true, events };
     }
     case 'blocks': return { dirty: applyBlocks(s.blocks, msg.len, msg.upserts) };
     case 'state': {
       const events = s.state ? sessionTransitions(s.state.sessions, msg.state.sessions) : [];
       s.state = msg.state;
+      syncReply(s);
       return { state: true, events };
     }
+    // The server answers an intent once the Agent result it depends on is in, so a phone never
+    // shows an accepted input that was in fact never accepted. A refusal that could not be proven
+    // to have happened before acceptance stays in the store as unconfirmed, with its text.
     case 'ack': {
       const it = s.intents.get(msg.id);
       if (!it) return {};
+      const acceptance = !msg.ok && it.text != null && msg.acceptance !== 'rejected' ? 'unknown' : msg.acceptance;
+      const current = it.target.view_epoch === s.view || (it.target.session_id == null && msg.session_id != null && msg.session_id === s.sid);
+      const fields = { ok: msg.ok, error: msg.error, acceptance, current,
+        input_id: msg.input_id, text: msg.text ?? it.text, accepted_at: msg.accepted_at, start_error: msg.start_error };
+      if (!msg.ok && acceptance === 'unknown' && it.text != null) {
+        it.st = 'unconfirmed';
+        return { ack: { ...it, ...fields, unconfirmed: true } };
+      }
       s.intents.delete(msg.id);
-      return { ack: { ...it, ok: msg.ok, error: msg.error } };
+      return { ack: { ...it, ...fields } };
     }
-    case 'returned': return { returned: msg.text };
     case 'result': return s.q.delete(msg.id) ? { result: msg } : {};
     case 'notice': return { notice: { level: msg.level === 'error' ? 'error' : 'info', text: msg.text } };
     case 'fs': return s.fs.delete(msg.id) ? { fs: msg } : {};
@@ -539,6 +592,7 @@ const changesText = c => plural(c.files, 'file') + (c.added != null ? ' +' + c.a
 const compactionText = b => 'Context compacted' + (b.before != null || b.after != null ? ' · ' + fmtTok(b.before) + ' → ' + fmtTok(b.after) + ' tokens' : '');
 function statusLine(state, blocks) {
   const st = state.status, last = blocks[blocks.length - 1];
+  if (st.block_reason) return { label: st.label, detail: '' };
   const label = st.loading ? 'Opening session…' : st.interrupting ? 'Stopping…' : st.compacting ? 'Compacting context' : st.label || 'Working';
   const tool = !st.interrupting && last && last.type === 'tool' && last.state === 'running' ? last : null;
   return {
@@ -587,6 +641,7 @@ function approvalLine(a) {
 // The host's labels come in the order [allow, deny, allow for session]; allow shows first and deny last.
 const APPROVAL_CHOICES = ['allow', 'deny', 'allow_session'];
 function approvalOptions(a) {
+  if (a.kind === 'text') return [];
   if (a.kind !== 'approval') return a.options.map((label, choice) => ({ choice, label, n: choice + 1 }));
   const o = a.options.map((label, k) => ({ choice: APPROVAL_CHOICES[k], label }));
   return [o[0], o[2], o[1]].filter(Boolean);
@@ -607,6 +662,7 @@ function approvalBody(a) {
 const ARM_MS = 600, APPROVAL_KEYS = { y: 'allow', a: 'allow_session', n: 'deny' };
 function approvalKey(interaction, key, mods, armedFrom, now, inField) {
   if (inField || mods || now - armedFrom < ARM_MS) return null;
+  if (interaction.kind === 'text') return null;
   if (interaction.kind === 'approval') return APPROVAL_KEYS[key.toLowerCase()] || null;
   const k = /^[1-9]$/.test(key) ? +key - 1 : -1;
   return k >= 0 && k < interaction.options.length ? k : null;
@@ -708,9 +764,10 @@ function composerKey(k, c) {
   if (k.alt && !k.mod) return c.busy && typed ? 'queue' : null;
   return k.mod || (c.enter && !k.shift && !k.alt) ? (c.busy ? 'steer' : 'send') : null;
 }
+// Rows are identified by the input's own id; the ordinal only labels them.
 function queueView(queue, all, max = 3) {
   const counts = { steer: 0, follow: 0 };
-  const items = queue.map((q, index) => ({ ...q, index, n: ++counts[q.kind] }));
+  const items = queue.map(q => ({ ...q, n: ++counts[q.kind] }));
   return { items: all ? items : items.slice(0, max), hidden: all ? 0 : Math.max(0, items.length - max), long: items.length > max };
 }
 
@@ -739,9 +796,20 @@ function contextView(d) {
     failure: d.failure || '', compacting: !!d.compacting,
   };
 }
+function projectionLabels(b) {
+  const labels = [];
+  if (b.recovery) labels.push((b.saving === 'saved' ? 'Saved record; body ' : 'Body ')
+    + b.recovery.status.replace(/_/g, ' ') + (b.recovery.reason ? ' · ' + b.recovery.reason : ''));
+  if (b.preserved || (b.preserved_channels && b.preserved_channels.length)) {
+    labels.push('Kept from this session\'s live view'
+      + (!b.preserved ? ' (' + b.preserved_channels.join(', ') + ')' : '') + ' · not canonical');
+  }
+  return labels;
+}
 function exportMd(state, blocks) {
   const s = state.session, out = ['# ' + titled(s.title), '', '`' + s.workspace + '`' + (s.model ? ' · ' + s.model : ''), ''];
   for (const b of blocks) {
+    for (const label of projectionLabels(b)) out.push('_' + label + '_', '');
     if (b.type === 'user') out.push(b.kind === 'steering' ? '**You (steer):** ' + b.text : '## You\n\n' + b.text, '');
     else if (b.type === 'assistant' && b.text) out.push(b.text, '');
     else if (b.type === 'tool') { const f = toolInfo(b); out.push('- ' + f.verb + ' `' + f.target + '`' + (f.exit ? ' (' + f.exit + ')' : f.note ? ' (' + f.note + ')' : ''), ''); }
@@ -762,12 +830,12 @@ function recentWorkspaces(sessions, max = 6) {
 }
 
 export {
-  V, WINDOW, inline, parseMd, mdInc, backoff, basename, plural, titled, quiet, midTrunc, retireText, mergeReturned, otherDevices, deviceName,
-  installOffer, login, hello, intents, queries, fs, createStore, intent, request, query, queryRoom, pending, disconnect,
-  sendAgain, unconfirmed, reduce, lockText, unreachable, fsError, errorText, stamp, relTime, sessionLayout, groupRows, PINNED_KEY, recent, finishedText, prunePins,
+  V, WINDOW, inline, parseMd, mdInc, backoff, basename, plural, titled, quiet, midTrunc, mergeReturned, otherDevices, deviceName,
+  installOffer, login, hello, intents, queries, fs, createStore, intent, newDraftVersion, request, query, queryRoom, pending, disconnect,
+  sendAgain, discardUnconfirmed, MAX_INTENTS, MAX_INTENT_TEXT_BYTES, unconfirmed, reduce, lockText, unreachable, fsError, errorText, stamp, relTime, sessionLayout, groupRows, PINNED_KEY, recent, finishedText, prunePins,
   fmtElapsed, fmtTok, fmtNum, groupTools, foldTurns, findBlocks, foldText, toolInfo, parseDiff, diffStats, liveBlock, turnEnd,
-  changesText, compactionText, statusLine, placeholder, allowedText, canStop, primaryKind, primaryTap, TAP_SLOP, approvalKey, approvalTitle,
-  approvalOptions, approvalBody, approvalLine, changeStatus, contextView, exportMd, slashMenu, parseSlash, atToken,
+  changesText, compactionText, statusLine, placeholder, allowedText, canStop, primaryKind, primaryTap, TAP_SLOP, approvalKey, approvalTitle, interactionKey, answerPending, validAnswerText, ANSWER_TEXT_BYTES, textAnswer,
+  approvalOptions, approvalBody, approvalLine, changeStatus, contextView, projectionLabels, exportMd, slashMenu, parseSlash, atToken,
   insertMention, pushRecent, literal, composerKey, commandList, queueView, thinkingPreview, splitPath, within, crumbs, tilde, isDrive,
   recentWorkspaces, sessionTransitions, noticeEvent, attentionCount,
 };

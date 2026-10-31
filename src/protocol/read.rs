@@ -449,6 +449,7 @@ pub enum TurnAvailability {
     Pending,
     Live,
     Stored,
+    Unavailable,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
@@ -461,18 +462,38 @@ pub enum TurnPersistence {
 #[derive(Clone, Debug, Deserialize)]
 pub struct TurnResultPage {
     pub turn: TurnRef,
+    /// The resident instance this read observed; null for a durable read.
+    #[serde(default)]
+    pub load: Option<String>,
+    /// The immutable identity of the result body, matching every page.
+    #[serde(default)]
+    pub result_id: Option<String>,
+    #[serde(default)]
+    pub persistence_uncertain: bool,
+    #[serde(default)]
+    pub unavailable_reason: Option<super::UnavailableReason>,
     pub availability: TurnAvailability,
     pub items: Vec<ReadChunk>,
     #[serde(deserialize_with = "required_option")]
     pub next_cursor: Option<ReadCursor>,
     pub total: usize,
-    /// Absent while the turn is still running.
+    /// Absent while the turn is still running, or when it cannot be read.
     pub outcome: Option<super::LoopOutcome>,
     pub persistence: Option<TurnPersistence>,
     pub usage: Option<super::Usage>,
     pub requests: Option<u32>,
     pub tool_rounds: Option<u64>,
     pub interrupted: Option<InterruptedRequest>,
+}
+
+impl TurnResultPage {
+    /// Whether the page states a readable, complete result body.
+    pub fn is_readable(&self) -> bool {
+        matches!(
+            self.availability,
+            TurnAvailability::Live | TurnAvailability::Stored
+        )
+    }
 }
 
 #[cfg(test)]

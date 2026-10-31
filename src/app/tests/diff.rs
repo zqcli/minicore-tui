@@ -233,6 +233,7 @@ async fn clicking_a_turn_end_line_lists_the_working_tree() {
                 files: 1,
                 lines: Some((2, 1)),
             }),
+            saving: None,
         });
     let screen = h.screen(100, 20);
     assert!(

@@ -23,6 +23,12 @@ async fn a_manual_compaction_adds_one_marker_and_keeps_what_is_loaded() {
                "covered_item_count": 12, "retained_item_count": 2}),
     );
     h.action(Action::Compact);
+    assert_eq!(
+        h.app.status_label(),
+        None,
+        "a local command is not a control observation"
+    );
+    h.until(|app| app.compacting()).await;
     assert_eq!(h.app.status_label(), Some("Compacting context"));
     h.settle().await;
     assert_eq!(h.calls("session.compact")[0]["operation_id"], "tui-1");
@@ -168,16 +174,14 @@ async fn a_request_refreshes_the_footer_context_at_most_once_per_window() {
 async fn the_end_of_a_compaction_refreshes_the_footer_context_inside_the_window() {
     let mut h = Harness::opened(display_read(0, 0)).await;
     h.settle().await;
-    let state = |compaction: serde_json::Value| json!({"state": {"session_id": "s1", "status": "idle", "compaction": compaction}});
     let working = json!({"operation_id": "tui-1", "phase": "merging",
                          "covered_item_count": 8, "retained_item_count": 2});
-    h.emit("session_state", state(working)).await;
+    h.control_event(json!({"compaction": working})).await;
     h.run_for(Duration::from_millis(100)).await;
     let before = h.calls("session.presentation").len();
 
     h.fake.script("session.presentation", presentation(7.0));
-    h.emit("session_state", state(serde_json::Value::Null))
-        .await;
+    h.control_event(json!({"compaction": null})).await;
     h.until(|app| {
         app.session
             .as_ref()
@@ -231,6 +235,7 @@ async fn a_compaction_at_turn_start_shows_its_phase_and_leaves_a_marker() {
     tokio::time::advance(Duration::from_secs(3)).await;
     h.app.tick();
     h.until(|app| !app.compacting()).await;
+    h.until(|app|app.transcript_blocks().iter().any(|block|matches!(block,Block::Compaction { operation_id, .. } if operation_id == "auto-boundary-l1-1"))).await;
     assert_eq!(h.compactions(), ["auto-boundary-l1-1"]);
     assert!(
         h.screen(100, 14)
@@ -259,10 +264,9 @@ async fn an_earlier_automatic_compaction_is_not_added_when_the_session_opens() {
 async fn a_compaction_seen_through_session_state_shows_its_phase_and_leaves_a_marker_when_it_ends()
 {
     let mut h = Harness::opened(display_read(0, 0)).await;
-    let state = |compaction: serde_json::Value| json!({"state": {"session_id": "s1", "status": "idle", "compaction": compaction}});
     let working = json!({"operation_id": "tui-1", "phase": "merging",
                          "covered_item_count": 8, "retained_item_count": 2});
-    h.emit("session_state", state(working)).await;
+    h.control_event(json!({"compaction": working})).await;
     h.until(|app| app.compacting()).await;
     let screen = h.screen(100, 14);
     assert!(
@@ -271,8 +275,7 @@ async fn a_compaction_seen_through_session_state_shows_its_phase_and_leaves_a_ma
     );
 
     h.fake.script("session.context", compacted("tui-1"));
-    h.emit("session_state", state(serde_json::Value::Null))
-        .await;
+    h.control_event(json!({"compaction": null})).await;
     h.until(|app| !app.compacting()).await;
     h.settle().await;
     assert_eq!(h.compactions(), ["tui-1"]);
@@ -283,11 +286,9 @@ async fn esc_cancels_the_compaction_that_owns_the_session() {
     let mut h = Harness::opened(display_read(0, 0)).await;
     h.fake
         .script("session.compact.cancel", json!({"cancelled": true}));
-    h.emit(
-        "session_state",
-        json!({"state": {"session_id": "s1", "status": "idle",
-                         "compaction": {"operation_id": "tui-1", "phase": "summarizing",
-                                        "covered_item_count": 8, "retained_item_count": 2}}}),
+    h.control_event(
+        json!({"compaction": {"operation_id": "tui-1", "phase": "summarizing",
+                                          "covered_item_count": 8, "retained_item_count": 2}}),
     )
     .await;
     h.until(|app| app.compacting()).await;
@@ -296,7 +297,8 @@ async fn esc_cancels_the_compaction_that_owns_the_session() {
     h.settle().await;
     assert_eq!(
         h.calls("session.compact.cancel"),
-        [json!({"session_id": "s1", "operation_id": "tui-1"})]
+        [json!({"session_id": "s1", "operation_id": "tui-1",
+                "load": crate::testing::LOAD})]
     );
     assert_eq!(h.app.composer.text(), "a draft", "esc did one thing");
 }
@@ -326,6 +328,7 @@ async fn a_cancelled_manual_compaction_says_so() {
     h.fake
         .script("session.compact.cancel", json!({"cancelled": true}));
     h.action(Action::Compact);
+    h.until(|app| app.compacting()).await;
     h.press(crossterm::event::KeyCode::Esc);
     h.run_for(Duration::from_millis(100)).await;
     assert_eq!(
@@ -353,6 +356,7 @@ async fn the_turn_the_agent_starts_when_a_compaction_ends_gets_its_wait_and_its_
                          "input": entry("i1", "follow_up", "asked meanwhile")}}),
     );
     h.fake.script_held("turn.wait", waited("l2", completed()));
+    let states_before = h.calls("session.state").len();
     h.action(Action::Compact);
     h.until(|app| app.compacting()).await;
     h.app.composer.set_text("asked meanwhile");
@@ -368,8 +372,12 @@ async fn the_turn_the_agent_starts_when_a_compaction_ends_gets_its_wait_and_its_
     assert_eq!(h.texts(), ["asked meanwhile"]);
     assert!(h.queue().is_empty(), "the started entry left the mirror");
     assert_eq!(h.calls("turn.wait")[0]["loop_id"], "l2");
+    // The turn is found from the compaction's own answer, not by polling: v2
+    // adds one coalesced read per control change, so a small fixed number of
+    // reads is expected and unbounded polling is not.
     assert!(
-        h.calls("session.state").len() <= 1,
-        "no state read to find it"
+        h.calls("session.state").len() == states_before + 2,
+        "state reads={}",
+        h.calls("session.state").len()
     );
 }

@@ -251,7 +251,16 @@ async fn a_template_is_a_command_that_sends_its_expansion() {
     )];
     h.type_text("/rev");
     let rows = h.app.palette_rows();
-    assert_eq!(rows, [("review".to_owned(), "Review code".to_owned())]);
+    assert_eq!(
+        rows,
+        [
+            ("review".to_owned(), "Review code".to_owned()),
+            (
+                "recover".to_owned(),
+                "Retry incomplete conversation recovery".to_owned()
+            )
+        ]
+    );
 
     h.type_text("iew parser");
     h.press(KeyCode::Enter);

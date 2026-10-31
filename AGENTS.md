@@ -10,7 +10,7 @@ file gets fixed.
 `minicore-tui` is a fullscreen terminal frontend (Rust, ratatui + crossterm) for
 [minicore-agent](https://github.com/zqcli/minicore-agent). The Agent is built
 into the same executable: the TUI starts itself as `minicore-tui agent` in one
-child process and talks to it over stdio NDJSON JSON-RPC (Protocol v1). The RPC
+child process and talks to it over stdio NDJSON JSON-RPC (Protocol v2). The RPC
 contract is the only interface; the only Agent Rust API used is
 `minicore_agent::cli::run` for that subcommand. The TUI never reads the Agent
 store or the workspace, runs no tool, calls no provider and holds no credential.
@@ -35,6 +35,7 @@ backend repository only after confirming that is where the behavior belongs.
 | `src/config/` | The TUI directory: `config.toml`, `models.toml`, prompts, scaffolding, the composed Agent config |
 | `src/rpc.rs`, `src/protocol/` | Agent child and JSON-RPC client; serde DTOs and constants only |
 | `src/app/` | The reducer: all mutable state, keys (`keys/`), mouse, selection, composer, overlays, async tasks |
+| `src/app/control.rs`, `recovery.rs` | Snapshot-only control writes, bounded completion discovery, retries and body installation |
 | `src/remote/` | Remote mode: listener, web client, password sign-in, the phone protocol, the projection and host directories |
 | `src/transcript/` | Blocks with revisions, tool calls, history mapping, the per-block layout cache |
 | `src/ui/` | Drawing from `&App`: transcript, blocks, rails, markdown, dock, sheets, views, theme |
@@ -92,7 +93,13 @@ prints draw counts and timings on exit of a live run.
   loop wakes only for input, Agent events, an armed animation tick or a known
   expiry; an idle TUI must not tick.
 - Bound everything that grows with a session: tool output tails, history
-  windows, queues, undo steps, caches.
+  windows, queues, undo steps, caches, held pre-install snapshots.
+- Size limits come from what the protocol can legally carry, and are exported
+  constants shared with their tests: `CONTROL_FRAME_MAX_BYTES` (64 MiB, admits a
+  full 52,237,130-byte snapshot), `MAX_REQUEST_BYTES` (8 MiB, the Agent's request
+  ceiling; admits a 1,573,049-byte maximum `input.push`) and `PRE_INSTALL_BUDGET_BYTES` (128 MiB,
+  two frame ceilings). Never truncate or reject a legal input or frame to fit a
+  bound, and never slice a body to a limit.
 - Platforms: CI tests Linux, macOS and Windows. Put Windows-only behavior behind
   `cfg(windows)` at the call site, keep its pure logic compiled and tested on
   every platform, and never add latency or escape sequences to platforms that
@@ -107,9 +114,23 @@ prints draw counts and timings on exit of a live run.
 
 Keep these unless the user asks to change them:
 
-- Turn lifecycle comes only from `turn.wait`. History pins are never cached.
-  Compaction inserts a marker and never removes transcript content. The footer
-  shows only the context figure the Agent reported, never an estimate.
+- Control state — execution, queue, pause, interaction, compaction, blocking —
+  is written only by `App::apply_snapshot` from `session.state`, `session.open`,
+  `session.create` and the `session_snapshot` event. Command receipts refresh it;
+  they never write it. `turn.wait` reports terminal metadata and its direct
+  successor, but never changes current execution. Unknown body identities are
+  bounded until a snapshot confirms their region; canonical installation closes
+  body appends while allowing auxiliary tool facts. History pins are never cached. Compaction inserts a marker and never
+  removes transcript content. The footer shows only the context figure the Agent
+  reported, never an estimate. Steering placement uses the delivered input ID and
+  authoritative candidate request index, before its turn's terminal and successor;
+  identical text never identifies an input or its boundary.
+- The snapshot's completion directory is the discovery source: every entry above
+  `settled_through` is read through `turn.result`, and only a fully verified body
+  or an explicit partial/unavailable terminal region settles it. History catch-up
+  settles a gap only after verified coverage of the entire newer pinned history,
+  never merely because older pagination reached zero. A turn's canonical body is installed
+  once; late deltas for it are dropped.
 - An anchored view does not move when content grows; when the dock grows it
   gives up rows at its top so the row being read stays visible. Folding a block
   (click, `Ctrl+O`, `Ctrl+T`) pins the top of the view (`App::pin_view`), so
@@ -117,6 +138,11 @@ Keep these unless the user asks to change them:
 - A selection takes only content. Rows and spans the UI adds around content
   (hints, spacers, timestamps, durations, turn-end lines, headers) are tagged
   with `rails::chrome` / `rails::chrome_span`; new UI rows must be tagged too.
+- Local input acceptance has a bounded operation owner (64 operations / 16 MiB),
+  separate from new drafts. Unknown acceptance is retained, never ordinary unsent
+  history or automatically resent. F8 review keeps its original target and requires
+  an explicit possible-duplicate confirmation before a new-ID resend; editing does
+  not resolve the original uncertainty. Only confirmed acceptance enters history.
 - Feedback that should not move the view uses the flash, not a dock notice.
 - Config errors read `file:line: [table] key: reason` and exit with status 2
   before the screen changes. The TUI composes the Agent config; the Agent schema
@@ -131,7 +157,8 @@ Keep these unless the user asks to change them:
   `FakeAgent`; pure logic gets an inline `mod tests` next to it; rendering goes
   in `ui/snapshots.rs`. Do not add a parallel test file for one module.
 - Tests are deterministic: use `#[tokio::test(start_paused = true)]`, scripted
-  Agent responses and explicit state, not sleeps or wall clocks.
+  Agent responses and explicit gates, not sleeps. `testing::real_bounded` is an
+  outer real-time failure watchdog only; correctness never depends on its timing.
 - Do not compute `Instant::now() - duration` in tests: Windows counts `Instant`
   from boot and a fresh CI runner underflows. Assert the rendered text instead.
 - Platform-neutral fixtures: no Windows reserved names (`nul`, `con`, `aux`),
@@ -140,6 +167,11 @@ Keep these unless the user asks to change them:
 - Snapshot changes are reviewed as diffs of `tests/snapshots/*.txt`. Only
   `tests/built_in_agent.rs` starts the real Agent, and no test needs a provider
   or credential; real-model runs are manual.
+- `e2e-observe` is a non-default acceptance build feature. Its opt-in trace
+  observes actual canonical installation, global transcript order and saving
+  markers. Its producer fails closed at row/event/file limits; default builds
+  must contain no observer work or production setting for it. Product user-source
+  identity metadata needed for request-boundary steering remains in default builds.
 
 ## Docs
 

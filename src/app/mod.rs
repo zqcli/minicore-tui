@@ -7,6 +7,7 @@
 pub mod actions;
 pub mod commands;
 pub mod composer;
+mod control;
 pub mod diff;
 mod draft;
 pub mod find;
@@ -14,9 +15,12 @@ pub mod keys;
 mod live;
 mod mouse;
 mod notify;
+#[cfg(feature = "e2e-observe")]
+pub mod observe;
 mod ops;
 pub mod overlay;
 pub mod picker;
+pub mod recovery;
 mod remote;
 pub mod scrollbar;
 pub mod selection;
@@ -26,6 +30,7 @@ pub mod templates;
 #[cfg(test)]
 mod tests;
 pub mod tool;
+pub mod unconfirmed;
 
 use std::collections::VecDeque;
 use std::ops::Range;
@@ -39,9 +44,8 @@ use crate::config::ThemeKind;
 use crate::protocol::changes::DiffPage;
 use crate::protocol::{
     AgentEvent, ChangeList, CompactionResult, InputPushResult, InputRecallResult,
-    InputRemoveResult, InputResumeResult, ModelInfo, ProfileInfo, Queue, Reasoning, RpcError,
-    SessionContext, SessionInfo, SessionPresentation, SessionState, ToolReadResult, ToolRef,
-    TurnWaitResult,
+    InputResumeResult, ModelInfo, ProfileInfo, Queue, Reasoning, RpcError, SessionContext,
+    SessionInfo, SessionPresentation, ToolReadResult, ToolRef, TurnWaitResult,
 };
 use crate::rpc::Client;
 use crate::transcript::layout::Layout;
@@ -59,16 +63,21 @@ pub use tasks::Tx;
 /// Everything the main loop can hand to the reducer.
 pub enum Msg {
     Remote(crate::remote::RemoteEvent),
-    Agent(Box<AgentEvent>),
+    Agent {
+        event: Box<AgentEvent>,
+        /// Encoded size of the frame that carried it.
+        bytes: usize,
+    },
     AgentClosed(String),
     Ready(Box<Ready>),
-    Opened(String, Result<SessionInfo, RpcError>),
-    Created(Result<SessionInfo, RpcError>),
+    Opened(u64, String, Result<tasks::Adopted, RpcError>),
+    Created(Result<tasks::Adopted, RpcError>),
     Deleted(String, Result<(), RpcError>),
     /// A `session.rename` from the sessions picker, which may name a closed session.
     Renamed(String, Result<SessionInfo, RpcError>),
     /// A result for the live session with epoch `.0`.
     Session(u64, Box<SessionOp>),
+    LocalPushed(u64, Result<InputPushResult, RpcError>),
     Notice(NoticeLevel, String),
     /// The external editor returned a draft.
     DraftEdited(Option<String>),
@@ -87,17 +96,12 @@ pub struct Ready {
 pub enum SessionOp {
     Tail(Result<tasks::HistoryRead, RpcError>),
     Page(Result<tasks::HistoryRead, RpcError>),
-    TurnItems(String, Result<tasks::TurnRead, RpcError>),
-    State(Result<SessionState, RpcError>),
+    State(Result<crate::protocol::SessionStateResult, RpcError>),
     Presentation(Result<SessionPresentation, RpcError>),
     /// A `workspace.status` answer, wanted only for the branch it caches in the presentation.
     WorkspaceStatus(Result<Value, RpcError>),
     Context(Result<SessionContext, RpcError>),
-    /// The push answer, with the text so a refusal can hand it back.
-    Pushed(String, Result<InputPushResult, RpcError>),
     Resumed(Result<InputResumeResult, RpcError>),
-    /// A removal; the connection is the phone that gets the text back to edit.
-    Removed(Option<u64>, Result<InputRemoveResult, RpcError>),
     Recalled(Result<InputRecallResult, RpcError>),
     Queue(Result<Queue, RpcError>),
     Waited(Result<TurnWaitResult, RpcError>),
@@ -108,6 +112,9 @@ pub enum SessionOp {
     /// The number of history items, for `/session`.
     ItemCount(Result<usize, RpcError>),
     Changes(String, Result<ChangeSummary, RpcError>),
+    /// One finished turn's verified body, or why it could not be read.
+    Recovered(recovery::RecoveryOutcome),
+    HistoryRecovered(u64, u64, Result<tasks::HistoryRead, RpcError>),
     /// The facts of a card loaded without its detail; `None` when the read failed.
     ToolHydrated(ToolRef, Option<ToolReadResult>),
     Files(Result<Vec<String>, RpcError>),
@@ -174,6 +181,10 @@ pub struct Press {
 }
 
 pub struct App {
+    #[cfg(feature = "e2e-observe")]
+    pub early_body_peak_bytes: usize,
+    #[cfg(feature = "e2e-observe")]
+    pub observer: Option<observe::Observer>,
     pub remote: crate::remote::Remote,
     pub client: Arc<Client>,
     pub tx: Tx,
@@ -198,6 +209,9 @@ pub struct App {
     /// The Agent's default profile, which a new session takes without a `--profile`.
     pub default_profile: Option<String>,
     pub composer: composer::Composer,
+    pub local_inputs: std::collections::VecDeque<unconfirmed::LocalInput>,
+    pub unconfirmed_editor: composer::Composer,
+    pub(super) first_submission: Option<composer::Entry>,
     /// Editor-only hit area from the last frame (not completion/sheet rows).
     pub composer_area: ratatui::layout::Rect,
     pub composer_max_rows: usize,
@@ -232,10 +246,20 @@ pub struct App {
     /// An open or create request is in flight, so no session yet means
     /// waiting rather than start one.
     pub loading_session: bool,
+    pub(super) open_generation: u64,
+    pub(super) opening_target: Option<(u64, String)>,
     /// The draft's text while its session is being created; sent once it exists.
     pub first_message: Option<String>,
     /// Numbers the live sessions, so a late result never reaches another one.
     pub epoch: u64,
+    /// Numbers recovery tasks; a read from an older generation is dropped.
+    pub recovery_generation: u64,
+    pub(super) recovery_after: Option<u64>,
+    /// A control read is outstanding.
+    /// Snapshots held for sessions this client has not opened yet.
+    pub pre_install: recovery::PreInstall,
+    /// The interaction the client already announced, so one approval rings once.
+    pub approval_seen: Option<String>,
     pub templates: Vec<templates::Template>,
     /// The TUI directory; `None` in tests, which touch no files.
     pub home: Option<crate::config::Home>,
@@ -265,6 +289,10 @@ pub const BUSY_RETRY: Duration = Duration::from_millis(700);
 impl App {
     pub fn new(client: Arc<Client>, tx: Tx, workspace: PathBuf) -> Self {
         Self {
+            #[cfg(feature = "e2e-observe")]
+            early_body_peak_bytes: 0,
+            #[cfg(feature = "e2e-observe")]
+            observer: None,
             remote: crate::remote::Remote::default(),
             client,
             tx,
@@ -281,6 +309,9 @@ impl App {
             launch: LaunchSettings::default(),
             default_profile: None,
             composer: composer::Composer::new(),
+            local_inputs: std::collections::VecDeque::new(),
+            unconfirmed_editor: composer::Composer::new(),
+            first_submission: None,
             composer_area: ratatui::layout::Rect::default(),
             composer_max_rows: crate::ui::composer::MIN_ROWS,
             composer_dragging: false,
@@ -305,8 +336,14 @@ impl App {
             layout: Layout::default(),
             edit_request: None,
             loading_session: false,
+            open_generation: 0,
+            opening_target: None,
             first_message: None,
             epoch: 0,
+            recovery_generation: 0,
+            recovery_after: None,
+            pre_install: recovery::PreInstall::default(),
+            approval_seen: None,
             templates: Vec::new(),
             home: None,
             composed: false,
@@ -318,8 +355,21 @@ impl App {
 
     pub fn on_msg(&mut self, msg: Msg) {
         match msg {
+            Msg::LocalPushed(id, result) => self.on_local_pushed(id, result),
             Msg::Remote(event) => self.on_remote(event),
-            Msg::Agent(event) => self.on_agent_event(*event),
+            Msg::Agent { event, bytes } => {
+                self.on_agent_event(*event, bytes);
+                #[cfg(feature = "e2e-observe")]
+                {
+                    self.early_body_peak_bytes = self.early_body_peak_bytes.max(
+                        self.session
+                            .iter()
+                            .chain(&self.background)
+                            .map(|session| session.early_bytes)
+                            .sum(),
+                    );
+                }
+            }
             Msg::AgentClosed(reason) => {
                 if self.fatal.is_none() {
                     self.fatal = Some(Fatal {
@@ -341,18 +391,28 @@ impl App {
                 self.templates = templates::load(self.home.as_ref());
                 self.ready = true;
             }
-            Msg::Opened(id, result) => self.with_notice_for(&id, |app| {
-                // Remote opens start from the catalog; deletion can finish before the open reply.
-                if app.remote.opening.is_some()
-                    && !app.sessions.iter().any(|info| info.session_id == id)
+            Msg::Opened(generation, id, result) => {
+                if !self
+                    .opening_target
+                    .as_ref()
+                    .is_some_and(|(current, target)| *current == generation && target == &id)
                 {
-                    app.loading_session = false;
-                    app.remote.opening = None;
-                    app.notice(NoticeLevel::Error, "Session deleted while opening");
-                } else {
-                    app.adopt(result, None);
+                    return;
                 }
-            }),
+                self.opening_target = None;
+                self.with_notice_for(&id, |app| {
+                    // Remote opens start from the catalog; deletion can finish before the open reply.
+                    if app.remote.opening.is_some()
+                        && !app.sessions.iter().any(|info| info.session_id == id)
+                    {
+                        app.loading_session = false;
+                        app.remote.opening = None;
+                        app.notice(NoticeLevel::Error, "Session deleted while opening");
+                    } else {
+                        app.adopt(result, None);
+                    }
+                });
+            }
             Msg::Created(result) => {
                 let first = self.first_message.take();
                 self.adopt(result, first);
@@ -403,6 +463,7 @@ impl App {
         self.flash = self.flash.take().filter(|(_, at)| at.elapsed() < FLASH_TTL);
         self.scrolled_at = self.scrolled_at.filter(|at| at.elapsed() < FLASH_TTL);
         self.watch_context();
+        self.recover_completions();
     }
 
     /// Whether the Working line's spinner changes with every frame.
@@ -420,7 +481,19 @@ impl App {
             .map(|notice| notice.at + NOTICE_TTL);
         let flash = self.flash.iter().map(|(_, at)| *at + FLASH_TTL);
         let scrollbar = self.scrolled_at.map(|at| at + FLASH_TTL);
-        notices.chain(flash).chain(scrollbar).min()
+        let room = self
+            .session
+            .iter()
+            .chain(&self.background)
+            .map(|session| session.recovery_tasks.len())
+            .sum::<usize>()
+            < recovery::CONCURRENT;
+        let recovery = self
+            .session
+            .iter()
+            .chain(&self.background)
+            .filter_map(|session| room.then(|| session.recovery.next_deadline()).flatten());
+        notices.chain(flash).chain(scrollbar).chain(recovery).min()
     }
 
     /// The scrollbar shows while its thumb is held and briefly after a scroll.
@@ -474,6 +547,11 @@ impl App {
     }
 
     pub fn error(&mut self, error: RpcError) {
+        // A stale or missing load says this client's instance identity is out
+        // of date; re-reading control is the answer, never a blind retry.
+        if crate::app::tasks::is_stale_load(&error) && self.session.is_some() {
+            self.refresh_control();
+        }
         self.notice(NoticeLevel::Error, error.message);
     }
 
@@ -491,6 +569,52 @@ impl App {
 
     pub fn is_busy(&self) -> bool {
         self.session.as_ref().is_some_and(Session::is_busy)
+    }
+
+    pub(crate) fn active_editor(&self) -> &composer::Composer {
+        if matches!(
+            self.overlay,
+            Overlay::Unconfirmed {
+                mode: unconfirmed::ReviewMode::Edit(_),
+                ..
+            }
+        ) {
+            return &self.unconfirmed_editor;
+        }
+        if !self.remote.active()
+            && self.overlay.is_none()
+            && let Some(session) = &self.session
+            && session
+                .interaction
+                .as_ref()
+                .is_some_and(|pending| matches!(pending.kind, InteractionKind::Text))
+        {
+            return &session.interaction_editor;
+        }
+        &self.composer
+    }
+
+    pub(crate) fn active_editor_mut(&mut self) -> &mut composer::Composer {
+        if matches!(
+            self.overlay,
+            Overlay::Unconfirmed {
+                mode: unconfirmed::ReviewMode::Edit(_),
+                ..
+            }
+        ) {
+            return &mut self.unconfirmed_editor;
+        }
+        if !self.remote.active()
+            && self.overlay.is_none()
+            && let Some(session) = &mut self.session
+            && session
+                .interaction
+                .as_ref()
+                .is_some_and(|pending| matches!(pending.kind, InteractionKind::Text))
+        {
+            return &mut session.interaction_editor;
+        }
+        &mut self.composer
     }
 
     pub fn has_interaction(&self) -> bool {

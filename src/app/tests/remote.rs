@@ -66,18 +66,104 @@ where
     panic!("no {t} frame within 100 frames");
 }
 
-pub(super) fn request(h: &mut Harness, intent: Value) {
-    request_from(h, 1, intent);
+/// Numbers test operations; an answer names only its operation id.
+static NEXT_OP: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+pub(super) async fn request(h: &mut Harness, intent: Value) -> String {
+    request_from(h, 1, intent).await
 }
 
-fn request_from(h: &mut Harness, connection: u64, intent: Value) {
+/// Delivers an intent the way the socket does, naming the view and instance
+/// this phone holds unless the test supplies its own.
+async fn request_from(h: &mut Harness, connection: u64, mut intent: Value) -> String {
+    let viewed = h
+        .app
+        .remote
+        .phones
+        .iter()
+        .find(|p| p.connection.id == connection)
+        .and_then(|p| p.view.session_id())
+        .map(str::to_owned);
+    let session = viewed.as_deref().and_then(|id| h.app.live(id));
+    let session_id = session.map(|s| s.info.session_id.clone());
+    let load = session.and_then(|s| s.load.clone());
+    let epoch = h
+        .app
+        .remote
+        .phones
+        .iter()
+        .find(|phone| phone.connection.id == connection)
+        .map(|phone| phone.projection.view_epoch().to_owned())
+        .unwrap_or_default();
+    intent["view_epoch"] = intent
+        .get("view_epoch")
+        .cloned()
+        .unwrap_or_else(|| json!(epoch));
+    // Mirror what core.js sends: an operation on the viewed session names it
+    // and its resident instance; one that addresses another session, or only
+    // changes this view, names just that.
+    let acts_on_view = !matches!(
+        intent["kind"].as_str(),
+        Some("open_session" | "new_session" | "rename_session" | "delete_session")
+    );
+    if acts_on_view && let Some(id) = &session_id {
+        intent["session_id"] = intent
+            .get("session_id")
+            .cloned()
+            .unwrap_or_else(|| json!(id));
+        if intent["session_id"] == json!(id)
+            && let Some(load) = &load
+        {
+            intent["load"] = intent.get("load").cloned().unwrap_or_else(|| json!(load));
+        }
+    }
+    // Like the client: the loop the phone was shown, when it showed one.
+    if let Some(kind) = intent["kind"].as_str()
+        && matches!(kind, "cancel" | "answer")
+        && intent.get("loop_id").is_none()
+        && h.app
+            .remote
+            .phones
+            .iter()
+            .any(|phone| phone.connection.id == connection && phone.view.session_id().is_some())
+    {
+        let cancel = kind == "cancel";
+        let turn = match kind {
+            "cancel" => session
+                .and_then(|session| session.live.as_ref())
+                .map(|live| live.turn.loop_id.clone()),
+            _ => session
+                .and_then(|session| session.interaction.as_ref())
+                .map(|interaction| interaction.turn.loop_id.clone()),
+        };
+        if let Some(turn) = turn {
+            intent["loop_id"] = json!(turn);
+        }
+        if cancel
+            && intent.get("operation_id").is_none()
+            && let Some(operation) = session.and_then(|s| s.compaction.as_ref())
+        {
+            intent["operation_id"] = json!(operation.operation_id);
+        }
+    }
+    // A fresh operation each time: an answer names only its operation, so a
+    // live id cannot be reused.
+    let id = format!(
+        "request{}",
+        NEXT_OP.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    );
     let (done, _finished) = oneshot::channel();
     h.app.on_msg(Msg::Remote(RemoteEvent::Request {
         connection,
-        id: "request".into(),
+        id: id.clone(),
         intent: serde_json::from_value::<Intent>(intent).unwrap(),
         done,
     }));
+    // A submit, queue or unqueue is answered from the Agent's own result, so the
+    // app must run before the answer exists. Nothing is drained here: the caller
+    // reads the frames this produces in order.
+    h.run_until_quiet().await;
+    id
 }
 
 pub(super) fn config(root: std::path::PathBuf) -> crate::config::Remote {
@@ -90,12 +176,15 @@ pub(super) fn config(root: std::path::PathBuf) -> crate::config::Remote {
     }
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_real_phone_signs_in_submits_through_the_agent_and_receives_the_user_block() {
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::tungstenite::Message;
     let mut h = Harness::opened(display_read(0, 0)).await;
-    h.fake.script("input.push", started("l1"));
+    // Harness quiet periods use virtual time; real socket deadlines start after setup.
+    tokio::time::resume();
+    h.fake.script("session.state", json!({}));
+    h.fake.script_held("input.push", started("l1"));
     h.fake.script_held("turn.wait", waited("l1", completed()));
     let root = tempfile::tempdir().unwrap();
     let config = config(root.path().canonicalize().unwrap());
@@ -107,6 +196,7 @@ async fn a_real_phone_signs_in_submits_through_the_agent_and_receives_the_user_b
     h.app.remote.config = Some(config);
     h.app.enter_remote(bound);
     h.app.composer.set_text("untouched");
+    let reconnect_password = password.clone();
     let client = tokio::spawn(async move {
         let stream = tokio::net::TcpStream::connect(address).await.unwrap();
         let (mut socket, _) = tokio_tungstenite::client_async(format!("ws://{address}/ws"), stream)
@@ -120,27 +210,48 @@ async fn a_real_phone_signs_in_submits_through_the_agent_and_receives_the_user_b
             ))
             .await
             .unwrap();
+        let mut snapshot = Value::Null;
         for kind in ["authorized", "welcome", "snapshot"] {
-            let reply: Value =
-                serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap())
-                    .unwrap();
+            let reply = frame_of_type(&mut socket, kind).await;
             assert_eq!(reply["t"], kind);
+            if kind == "snapshot" {
+                snapshot = reply;
+            }
         }
         socket
             .send(Message::Text(
-                json!({"t":"intent", "id":"send", "kind":"submit", "text":"real phone text"})
+                json!({"t":"intent", "id":"send", "kind":"submit", "text":"real phone text",
+                    "view_epoch":snapshot["view_epoch"], "session_id":snapshot["state"]["session"]["id"],
+                    "load":snapshot["state"]["session"]["load"]})
                     .to_string()
                     .into(),
             ))
             .await
             .unwrap();
+        let ack = frame_of_type(&mut socket, "ack").await;
+        assert_eq!(ack["id"], "send");
+        assert_eq!(ack["accepted"], true);
+        assert_eq!(ack["input_id"], "i1");
         let reply = frame_of_type(&mut socket, "blocks").await;
         assert_eq!(reply["upserts"][0]["block"]["text"], "real phone text");
         socket
     });
     h.until(|app| !app.remote.phones.is_empty()).await;
     h.app.sync_remote();
-    h.until(|app| app.is_busy()).await;
+    h.until(|app| {
+        app.remote
+            .holds_pending(app.remote.phones[0].connection.id, "send")
+    })
+    .await;
+    called(&h, "input.push", 1).await;
+    h.fake.release("input.push");
+    h.until(|app| {
+        app.is_busy()
+            && !app
+                .remote
+                .holds_pending(app.remote.phones[0].connection.id, "send")
+    })
+    .await;
     h.app.sync_remote();
     let mut socket = tokio::time::timeout(std::time::Duration::from_secs(5), client)
         .await
@@ -148,10 +259,76 @@ async fn a_real_phone_signs_in_submits_through_the_agent_and_receives_the_user_b
         .unwrap();
     assert_eq!(h.sends(), ["real phone text"]);
     assert_eq!(h.app.composer.text(), "untouched");
+    let original = h.app.remote.phones[0].connection.id;
+    for _ in 0..=512 {
+        h.app
+            .remote
+            .send(Some(original), json!({"t":"notice", "text":"slow link"}));
+    }
+    assert!(h.app.remote.phones.is_empty());
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        for _ in 0..1024 {
+            if matches!(socket.next().await, Some(Ok(Message::Close(_)))) {
+                return;
+            }
+        }
+        panic!("overflow did not close the WebSocket");
+    })
+    .await
+    .expect("overflow close timed out");
+    h.app
+        .session
+        .as_mut()
+        .unwrap()
+        .transcript
+        .push(crate::transcript::Block::User {
+            text: "while disconnected".into(),
+            kind: crate::protocol::read::UserKind::Prompt,
+            at: None,
+        });
+    let reconnect = tokio::spawn(async move {
+        let stream = tokio::net::TcpStream::connect(address).await.unwrap();
+        let (mut socket, _) = tokio_tungstenite::client_async(format!("ws://{address}/ws"), stream)
+            .await
+            .unwrap();
+        socket
+            .send(Message::Text(
+                json!({"t":"login", "v":3, "password":reconnect_password,
+            "device":"reconnected phone"})
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+        let snapshot = frame_of_type(&mut socket, "snapshot").await;
+        assert_eq!(
+            snapshot["blocks"].as_array().unwrap().last().unwrap()["text"],
+            "while disconnected"
+        );
+        assert_eq!(snapshot["state"]["session"]["load"], "load_1");
+        socket
+    });
+    h.until(|app| !app.remote.phones.is_empty()).await;
+    h.app.sync_remote();
+    let mut socket = tokio::time::timeout(std::time::Duration::from_secs(5), reconnect)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_ne!(h.app.remote.phones[0].connection.id, original);
+    assert_eq!(
+        h.sends(),
+        ["real phone text"],
+        "reconnection never resends input"
+    );
     h.action(Action::Remote("off".into()));
     let reply = frame_of_type(&mut socket, "bye").await;
     assert_eq!(reply["reason"], "remote_off");
-    assert!(matches!(socket.next().await, Some(Ok(Message::Close(_)))));
+    assert!(matches!(
+        tokio::time::timeout(std::time::Duration::from_secs(5), socket.next())
+            .await
+            .unwrap(),
+        Some(Ok(Message::Close(_)))
+    ));
 }
 
 #[tokio::test(start_paused = true)]
@@ -192,8 +369,9 @@ async fn answers_validate_prompt_kind_and_index_before_consuming_the_interaction
             request(
                 &mut h,
                 json!({"kind":"answer", "interaction_id":"interaction", "choice":choice}),
-            );
-            let ack = output.recv().await.unwrap();
+            )
+            .await;
+            let ack = ack_next(&mut h, &mut output).await;
             assert_eq!(ack["ok"], valid, "approval={approval} choice={choice}");
             assert_eq!(h.app.has_interaction(), !valid);
             h.settle().await;
@@ -226,6 +404,10 @@ fn pending(h: &mut Harness, approval: bool) {
         },
         selected: 0,
     });
+    // The phone must hold the interaction in its own projection, as it would
+    // after the snapshot that carried it.
+    h.app.remote.config = Some(config(h.app.workspace.clone()));
+    h.app.sync_remote();
 }
 
 #[tokio::test(start_paused = true)]
@@ -242,8 +424,8 @@ async fn a_deny_with_a_message_answers_first_then_pushes_the_reason_as_a_steer()
     request(
         &mut h,
         json!({"kind":"answer", "interaction_id":"interaction", "choice":"deny", "message":"Use the staging bucket  "}),
-    );
-    assert_eq!(output.recv().await.unwrap()["ok"], true);
+    ).await;
+    assert_eq!(ack_next(&mut h, &mut output).await["ok"], true);
     h.settle().await;
     let methods: Vec<String> = h
         .fake
@@ -267,8 +449,9 @@ async fn a_deny_with_a_message_answers_first_then_pushes_the_reason_as_a_steer()
     request(
         &mut h,
         json!({"kind":"answer", "interaction_id":"interaction", "choice":"deny"}),
-    );
-    assert_eq!(output.recv().await.unwrap()["ok"], true);
+    )
+    .await;
+    assert_eq!(ack_next(&mut h, &mut output).await["ok"], true);
     for (approval, choice, message) in [
         (true, json!("allow"), "why"),
         (true, json!("allow_session"), "why"),
@@ -279,8 +462,8 @@ async fn a_deny_with_a_message_answers_first_then_pushes_the_reason_as_a_steer()
         request(
             &mut h,
             json!({"kind":"answer", "interaction_id":"interaction", "choice":choice, "message":message}),
-        );
-        assert_eq!(output.recv().await.unwrap()["error"], "bad_request");
+        ).await;
+        assert_eq!(ack_next(&mut h, &mut output).await["error"], "bad_request");
         assert!(h.app.has_interaction());
     }
     h.settle().await;
@@ -302,8 +485,8 @@ async fn phone_text_expands_templates_refuses_commands_and_keeps_other_slashes_a
     h.app.remote.url = Some("http://localhost:8765".into());
     let (mut output, _closing, admission) = phone(&mut h, 1, "phone");
     assert!(admission.await.unwrap());
-    request(&mut h, json!({"kind":"submit", "text":"/review lib.rs"}));
-    assert_eq!(output.recv().await.unwrap()["ok"], true);
+    request(&mut h, json!({"kind":"submit", "text":"/review lib.rs"})).await;
+    assert_eq!(ack_next(&mut h, &mut output).await["ok"], true);
     h.until(|app| app.is_busy()).await;
     assert_eq!(h.sends(), ["Review lib.rs for bugs; all: lib.rs"]);
     let mut queued = Vec::new();
@@ -330,11 +513,11 @@ async fn phone_text_expands_templates_refuses_commands_and_keeps_other_slashes_a
         ("/reveiw", None),
         ("  /foo-bar  ", None),
     ] {
-        request(&mut h, json!({"kind":"queue", "text":text}));
-        let ack = output.recv().await.unwrap();
+        request(&mut h, json!({"kind":"queue", "text":text})).await;
+        let ack = ack_next(&mut h, &mut output).await;
         match sent {
             Some(sent) => {
-                assert_eq!(ack["ok"], true, "{text}");
+                assert_eq!(ack["ok"], true, "{text}: {ack}");
                 queued.push(sent);
             }
             None => assert_eq!(ack["error"], "unknown_command", "{text}"),
@@ -357,6 +540,10 @@ async fn phone_text_expands_templates_refuses_commands_and_keeps_other_slashes_a
 #[tokio::test(start_paused = true)]
 async fn compact_runs_for_the_viewed_idle_session_and_is_refused_while_busy_or_in_a_draft() {
     let mut h = Harness::opened(display_read(0, 0)).await;
+    h.fake.script(
+        "session.compact",
+        json!({"operation_id":"tui-1", "status":"noop"}),
+    );
     h.app.remote.url = Some("http://localhost:8765".into());
     let (mut output, _closing, admission) = phone(&mut h, 1, "phone");
     assert!(admission.await.unwrap());
@@ -368,12 +555,12 @@ async fn compact_runs_for_the_viewed_idle_session_and_is_refused_while_busy_or_i
         session.live =
             live.then(|| crate::app::LiveTurn::new(crate::protocol::TurnRef::new("s1", "l1"), 0));
         session.compaction = compacting.then(progress);
-        request(&mut h, json!({"kind":"compact"}));
-        assert_eq!(output.recv().await.unwrap()["error"], "busy");
+        request(&mut h, json!({"kind":"compact"})).await;
+        assert_eq!(ack_next(&mut h, &mut output).await["error"], "busy");
     }
     h.app.session.as_mut().unwrap().compaction = None;
-    request(&mut h, json!({"kind":"compact"}));
-    assert_eq!(output.recv().await.unwrap()["ok"], true);
+    request(&mut h, json!({"kind":"compact"})).await;
+    assert_eq!(ack_next(&mut h, &mut output).await["ok"], true);
     h.settle().await;
     let calls = h.calls("session.compact");
     assert_eq!(calls.len(), 1);
@@ -383,8 +570,11 @@ async fn compact_runs_for_the_viewed_idle_session_and_is_refused_while_busy_or_i
     draft.app.remote.url = Some("http://localhost:8765".into());
     let (mut output, _closing, admission) = phone(&mut draft, 1, "phone");
     assert!(admission.await.unwrap());
-    request(&mut draft, json!({"kind":"compact"}));
-    assert_eq!(output.recv().await.unwrap()["error"], "No session");
+    request(&mut draft, json!({"kind":"compact"})).await;
+    assert_eq!(
+        ack_next(&mut draft, &mut output).await["error"],
+        "No session"
+    );
     draft.settle().await;
     assert!(draft.calls("session.compact").is_empty());
 }
@@ -401,14 +591,20 @@ async fn unqueue_removes_the_mirrored_entry_by_id_and_returns_its_text_only_to_t
     let one = entry("b", "follow_up", "one");
     let two = entry("c", "follow_up", "two");
     h.mirror(vec![now.clone(), one, two.clone()], false);
-    for (index, text) in [(0, "one"), (3, "two"), (1, "two")] {
-        request(
+    for input_id in ["missing", "zzz"] {
+        let intent = phone_intent(
             &mut h,
-            json!({"kind":"unqueue", "index":index, "text":text, "edit":true}),
+            1,
+            json!({"kind":"unqueue", "input_id":input_id, "edit":true}),
         );
+        let id = request(&mut h, intent).await;
         assert_eq!(
             messages(&mut first),
-            [json!({"t":"ack", "id":"request", "ok":false, "error":"stale"})]
+            [
+                json!({"t":"ack", "id":id, "ok":false, "error":"input_not_queued",
+                    "acceptance":"rejected"})
+            ],
+            "the phone learns the row it named is gone"
         );
     }
     h.settle().await;
@@ -419,48 +615,171 @@ async fn unqueue_removes_the_mirrored_entry_by_id_and_returns_its_text_only_to_t
 
     h.fake.script(
         "input.remove",
-        json!({"text": "one", "queue": queue(vec![now.clone(), two], false)}),
+        json!({"text": "one", "queue": queue(vec![now.clone(), two.clone()], false)}),
     );
-    request_from(
+    let revision = h.app.session.as_ref().unwrap().recovery.revision;
+    let control = h.control(json!({"queue":queue(vec![now.clone(), two.clone()], false)}));
+    h.fake.script("session.state", json!({"snapshot":control}));
+    let intent = phone_intent(
         &mut h,
         2,
-        json!({"kind":"unqueue", "index":1, "text":"one", "edit":true}),
+        json!({"kind":"unqueue", "input_id":"b", "edit":true}),
     );
+    let id = request_from(&mut h, 2, intent).await;
     h.settle().await;
     assert_eq!(
         messages(&mut second),
-        [
-            json!({"t":"ack", "id":"request", "ok":true}),
-            json!({"t":"returned", "text":"one"})
-        ]
+        [json!({"t":"ack", "id":id, "ok":true, "input_id":"b", "text":"one"})]
     );
     assert!(messages(&mut first).is_empty());
     assert_eq!(
         h.calls("input.remove"),
-        [json!({"session_id":"s1", "id":"b"})]
+        [json!({"session_id":"s1", "load":"load_1", "id":"b"})]
     );
+    assert!(h.app.session.as_ref().unwrap().recovery.revision > revision);
     assert_eq!(h.queue(), ["now", "two"]);
 
     h.fake.script(
         "input.remove",
-        json!({"text": "two", "queue": queue(vec![now], false)}),
+        json!({"text": "two", "queue": queue(vec![now.clone()], false)}),
     );
-    request(
+    let revision = h.app.session.as_ref().unwrap().recovery.revision;
+    let control = h.control(json!({"queue":queue(vec![now], false)}));
+    h.fake.script("session.state", json!({"snapshot":control}));
+    let intent = phone_intent(
         &mut h,
-        json!({"kind":"unqueue", "index":1, "text":"two", "edit":false}),
+        1,
+        json!({"kind":"unqueue", "input_id":"c", "edit":false}),
     );
+    let id = request(&mut h, intent).await;
     h.settle().await;
     assert_eq!(
         messages(&mut first),
-        [json!({"t":"ack", "id":"request", "ok":true})]
+        [json!({"t":"ack", "id":id, "ok":true})]
     );
     assert!(messages(&mut second).is_empty());
-    assert_eq!(h.queue(), ["now"]);
+    assert!(h.app.session.as_ref().unwrap().recovery.revision > revision);
+    assert_eq!(
+        h.queue(),
+        ["now"],
+        "the newer authoritative snapshot preserves the survivor"
+    );
+    assert_eq!(h.app.session.as_ref().unwrap().queue.items[0].id, "a");
     assert!(h.app.composer.is_empty());
 }
 
+fn w0_phone_session() -> Harness {
+    let mut h = Harness::new();
+    let mut info: crate::protocol::SessionInfo =
+        serde_json::from_value(session_info("s1")).unwrap();
+    info.workspace = h.app.workspace.to_string_lossy().into_owned();
+    h.app.sessions.push(info.clone());
+    h.app.epoch = 1;
+    let mut session = crate::app::Session::new(info, 1);
+    session.load = Some("load_1".into());
+    h.app.session = Some(session);
+    h.app.install_load("load_1".into());
+    h.app.ready = true;
+    h
+}
+
+/// The projection identity the server sent this connection last.
+fn view_epoch(h: &mut Harness, connection: u64) -> String {
+    h.app
+        .remote
+        .phones
+        .iter()
+        .find(|phone| phone.connection.id == connection)
+        .expect("an admitted phone")
+        .projection
+        .view_epoch()
+        .to_owned()
+}
+
+/// A v3 intent naming the projection and resident instance the phone holds.
+fn phone_intent(h: &mut Harness, connection: u64, mut intent: Value) -> Value {
+    let epoch = view_epoch(h, connection);
+    intent["view_epoch"] = json!(epoch);
+    intent["session_id"] = json!("s1");
+    intent["load"] = json!("load_1");
+    intent
+}
+
 #[tokio::test(start_paused = true)]
-async fn unqueueing_an_entry_the_agent_already_handed_over_keeps_the_queue_and_says_so() {
+async fn w0_a_stale_phone_row_cannot_remove_a_different_input_with_the_same_text() {
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        let mut h = w0_phone_session();
+        h.app.remote.config = Some(config(h.app.workspace.clone()));
+        h.app.remote.url = Some("http://localhost:8765".into());
+        let (mut output, _closing, admission) = phone(&mut h, 1, "phone");
+        assert!(admission.await.unwrap());
+        let first = entry("a", "steer", "same");
+        let second = entry("b", "steer", "same");
+        h.mirror(vec![first, second.clone()], false);
+        h.app.sync_remote();
+        let snapshot = output.try_recv().expect("the phone's original view");
+        assert_eq!(snapshot["state"]["queue"][0]["text"], "same");
+        // The row went with `a`; naming the same text must not remove `b`.
+        let stale = phone_intent(
+            &mut h,
+            1,
+            json!({"kind":"unqueue", "input_id":"a", "edit":true}),
+        );
+
+        // The Agent handed `a` over; its queue now holds `b` alone.
+        h.mirror(vec![second], false);
+        request(&mut h, stale).await;
+        let ack = ack_next(&mut h, &mut output).await;
+        assert_eq!(ack["ok"], false, "the stale row must be rejected");
+        assert_eq!(
+            ack["error"], "input_not_queued",
+            "the phone learns the entry is not queued"
+        );
+        h.settle().await;
+        assert!(
+            h.calls("input.remove").is_empty(),
+            "a stale row must not dispatch removal of b: {:?}",
+            h.calls("input.remove")
+        );
+    })
+    .await
+    .expect("stale phone intent timed out");
+}
+
+#[tokio::test(start_paused = true)]
+async fn w0_a_phone_submit_is_not_acknowledged_before_the_agent_accepts_it() {
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        let mut h = w0_phone_session();
+        h.app.remote.url = Some("http://localhost:8765".into());
+        let (mut output, _closing, admission) = phone(&mut h, 1, "phone");
+        assert!(admission.await.unwrap());
+        h.fake.script_held("input.push", started("l1"));
+        h.fake.script_held("turn.wait", waited("l1", completed()));
+        request(&mut h, json!({"kind":"submit", "text":"phone input"})).await;
+        h.fake.wait_for_calls("input.push", 1).await;
+        assert_eq!(
+            h.calls("input.push").len(),
+            1,
+            "the Agent call is held in flight"
+        );
+        let premature = output.try_recv();
+        assert!(
+            premature.is_err(),
+            "no ACK is valid before the Agent answers: {premature:?}"
+        );
+
+        h.fake.release("input.push");
+        h.until(|app| app.is_busy()).await;
+        let ack = ack_next(&mut h, &mut output).await;
+        assert_eq!(ack["t"], "ack");
+        assert_eq!(ack["ok"], true);
+    })
+    .await
+    .expect("phone submit timed out");
+}
+
+#[tokio::test(start_paused = true)]
+async fn unqueueing_an_entry_the_agent_already_handed_over_is_refused_without_losing_the_queue() {
     let mut h = Harness::opened(display_read(0, 0)).await;
     h.app.remote.url = Some("http://localhost:8765".into());
     let (mut output, _close, admission) = phone(&mut h, 1, "phone");
@@ -472,18 +791,109 @@ async fn unqueueing_an_entry_the_agent_already_handed_over_keeps_the_queue_and_s
         "the input is no longer queued",
         "input_not_queued",
     );
-    request(
+    let intent = phone_intent(
         &mut h,
-        json!({"kind":"unqueue", "index":0, "text":"now", "edit":true}),
+        1,
+        json!({"kind":"unqueue", "input_id":"a", "edit":true}),
     );
+    request(&mut h, intent).await;
     h.settle().await;
-    assert_eq!(h.queue(), ["now"]);
-    assert_eq!(h.notices(), ["the input is no longer queued"]);
-    assert!(
-        messages(&mut output)
-            .iter()
-            .all(|message| message["t"] != "returned")
+    let ack = messages(&mut output);
+    assert_eq!(ack.len(), 1, "one answer for the one operation: {ack:?}");
+    assert_eq!(ack[0]["ok"], false);
+    assert_eq!(
+        ack[0]["acceptance"], "rejected",
+        "the text never became unsent work"
     );
+    assert_eq!(h.queue(), ["now"], "the mirrored queue stays as it was");
+    assert!(
+        ack.iter().all(|message| message["t"] != "returned"),
+        "a refused edit returns no text"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_phone_intent_from_another_view_epoch_or_load_is_refused_before_anything_runs() {
+    let mut h = w0_phone_session();
+    h.app.remote.config = Some(config(h.app.workspace.clone()));
+    h.app.remote.url = Some("http://localhost:8765".into());
+    let (mut output, _closing, admission) = phone(&mut h, 1, "phone");
+    assert!(admission.await.unwrap());
+    h.mirror(vec![entry("a", "steer", "now")], false);
+    h.app.sync_remote();
+    output.try_recv().expect("the phone's original view");
+
+    for (field, value) in [
+        ("view_epoch", json!("view_1_999")),
+        ("load", json!("load_other")),
+    ] {
+        let mut intent = phone_intent(
+            &mut h,
+            1,
+            json!({"kind":"unqueue", "input_id":"a", "edit":true}),
+        );
+        intent[field] = value;
+        request(&mut h, intent).await;
+        let ack = ack_next(&mut h, &mut output).await;
+        assert_eq!(ack["ok"], false, "{field}");
+        assert!(
+            ack["error"] == "stale" || ack["error"] == "stale_load",
+            "{field}: {ack}"
+        );
+    }
+    h.settle().await;
+    assert!(
+        h.calls("input.remove").is_empty(),
+        "a stale target never reaches the Agent: {:?}",
+        h.calls("input.remove")
+    );
+    assert_eq!(h.queue(), ["now"], "a stale target changed nothing");
+
+    // The projection the phone actually holds still works.
+    h.fake.script(
+        "input.remove",
+        json!({"text":"now", "queue":queue(vec![], false)}),
+    );
+    let intent = phone_intent(
+        &mut h,
+        1,
+        json!({"kind":"unqueue", "input_id":"a", "edit":false}),
+    );
+    request(&mut h, intent).await;
+    h.settle().await;
+    assert_eq!(ack_next(&mut h, &mut output).await["ok"], true);
+    assert_eq!(h.calls("input.remove").len(), 1, "the live row is removed");
+    assert!(
+        h.queue().is_empty(),
+        "the refreshed control snapshot confirms removal"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_cancel_or_answer_for_another_loop_is_refused_rather_than_acting_on_the_current_one() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.app.remote.url = Some("http://localhost:8765".into());
+    let (mut output, _closing, admission) = phone(&mut h, 1, "phone");
+    assert!(admission.await.unwrap());
+    h.app.session.as_mut().unwrap().live = Some(crate::app::LiveTurn::new(
+        crate::protocol::TurnRef::new("s1", "l_now"),
+        0,
+    ));
+    h.fake.script("turn.cancel", json!({}));
+    let stale = phone_intent(&mut h, 1, json!({"kind":"cancel", "loop_id":"l_old"}));
+    request(&mut h, stale).await;
+    assert_eq!(ack_next(&mut h, &mut output).await["error"], "stale");
+    h.settle().await;
+    assert!(
+        h.calls("turn.cancel").is_empty(),
+        "an old view never cancels the current turn"
+    );
+
+    let live = phone_intent(&mut h, 1, json!({"kind":"cancel", "loop_id":"l_now"}));
+    request(&mut h, live).await;
+    assert_eq!(ack_next(&mut h, &mut output).await["ok"], true);
+    h.settle().await;
+    assert_eq!(h.calls("turn.cancel")[0]["loop_id"], "l_now");
 }
 
 #[tokio::test(start_paused = true)]
@@ -500,8 +910,8 @@ async fn queue_cancel_and_history_intents_use_the_existing_reducer_operations() 
         "input.push",
         pushed(vec![entry("i1", "follow_up", "follow up")]),
     );
-    request(&mut h, json!({"kind":"queue", "text":"follow up  \n"}));
-    assert_eq!(output.recv().await.unwrap()["ok"], true);
+    request(&mut h, json!({"kind":"queue", "text":"follow up  \n"})).await;
+    assert_eq!(ack_next(&mut h, &mut output).await["ok"], true);
     h.settle().await;
     assert_eq!(h.queue(), ["follow up"]);
     assert_eq!(
@@ -512,8 +922,8 @@ async fn queue_cancel_and_history_intents_use_the_existing_reducer_operations() 
     let session = h.app.session.as_mut().unwrap();
     session.live = None;
     session.compaction = Some(serde_json::from_value(json!({"operation_id":"compact", "phase":"summarizing", "covered_item_count":0, "retained_item_count":0})).unwrap());
-    request(&mut h, json!({"kind":"cancel"}));
-    assert_eq!(output.recv().await.unwrap()["ok"], true);
+    request(&mut h, json!({"kind":"cancel"})).await;
+    assert_eq!(ack_next(&mut h, &mut output).await["ok"], true);
     h.settle().await;
     assert_eq!(
         h.calls("session.compact.cancel")[0]["operation_id"],
@@ -521,8 +931,8 @@ async fn queue_cancel_and_history_intents_use_the_existing_reducer_operations() 
     );
     let before = h.calls("session.read").len();
     h.app.session.as_mut().unwrap().loaded_from = 20;
-    request(&mut h, json!({"kind":"load_older"}));
-    assert_eq!(output.recv().await.unwrap()["ok"], true);
+    request(&mut h, json!({"kind":"load_older"})).await;
+    assert_eq!(ack_next(&mut h, &mut output).await["ok"], true);
     h.settle().await;
     assert!(h.calls("session.read").len() > before);
 }
@@ -542,8 +952,8 @@ async fn model_reasoning_and_absolute_workspace_are_validated_before_dispatch() 
         (json!({"kind":"set_reasoning", "level":"missing"}), false),
         (json!({"kind":"new_session", "workspace":"relative"}), false),
     ] {
-        request(&mut h, intent);
-        assert_eq!(output.recv().await.unwrap()["ok"], valid);
+        request(&mut h, intent).await;
+        assert_eq!(ack_next(&mut h, &mut output).await["ok"], valid);
         h.settle().await;
     }
     assert_eq!(h.calls("session.update").len(), 2);
@@ -583,11 +993,11 @@ async fn local_submit_is_refused_but_phone_submit_preserves_the_local_draft() {
     assert!(h.sends().is_empty());
     let (mut output, _close, admission) = phone(&mut h, 1, "phone");
     assert!(admission.await.unwrap());
-    request(&mut h, json!({"kind":"submit", "text":"phone prompt"}));
+    request(&mut h, json!({"kind":"submit", "text":"phone prompt"})).await;
     h.until(|app| app.is_busy()).await;
     assert_eq!(h.sends(), ["phone prompt"]);
     assert_eq!(h.app.composer.text(), "local draft");
-    assert_eq!(output.recv().await.unwrap()["ok"], true);
+    assert_eq!(ack_next(&mut h, &mut output).await["ok"], true);
     h.press(KeyCode::Esc);
     h.settle().await;
     assert_eq!(h.calls("turn.cancel").len(), 1);
@@ -633,13 +1043,25 @@ async fn entering_remote_recalls_the_queue_and_an_agent_refusal_returns_only_to_
     assert!(h.queue().is_empty());
     let (mut output, _close, admission) = phone(&mut h, 1, "phone");
     assert!(admission.await.unwrap());
-    let error = crate::protocol::RpcError::new(-1, "refused", "refused");
-    h.op(SessionOp::Pushed("remote rejected".into(), Err(error)));
-    assert_eq!(
-        output.recv().await.unwrap(),
-        json!({"t":"returned", "text":"remote rejected"})
+    // A refused push is answered to the operation that sent it, in its own terms.
+    h.fake.script_error_with(
+        "input.push",
+        -32031,
+        "refused",
+        "input_rejected",
+        Some("rejected"),
     );
-    assert_eq!(output.recv().await.unwrap()["t"], "notice");
+    let intent = phone_intent(
+        &mut h,
+        1,
+        json!({"kind":"submit", "text":"remote rejected"}),
+    );
+    request(&mut h, intent).await;
+    h.settle().await;
+    let ack = ack_next(&mut h, &mut output).await;
+    assert_eq!(ack["t"], "ack");
+    assert_eq!(ack["ok"], false);
+    assert_eq!(ack["acceptance"], "rejected");
     assert_eq!(h.app.composer.text(), "queued");
     h.action(Action::Remote("off".into()));
 }
@@ -744,7 +1166,7 @@ async fn an_intent_is_acked_only_to_its_sender_and_only_a_sign_in_attempt_reache
     assert!(admission.await.unwrap());
     let (mut b, _close2, admission) = phone(&mut h, 2, "second");
     assert!(admission.await.unwrap());
-    request_from(&mut h, 2, json!({"kind":"cancel"}));
+    request_from(&mut h, 2, json!({"kind":"cancel"})).await;
     assert_eq!(received(&mut a), Vec::<Value>::new());
     assert_eq!(received(&mut b), ["ack"]);
     h.app.notice(crate::app::NoticeLevel::Info, "TUI only");
@@ -783,7 +1205,7 @@ async fn a_tool_allowed_for_the_session_is_answered_without_telling_the_phone() 
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_refused_text_returns_to_its_session_sender_or_once_it_left_to_viewers() {
+async fn a_refused_input_answers_only_its_original_operation_and_never_other_viewers() {
     let mut h = Harness::opened(display_read(0, 0)).await;
     h.fake.script("input.push", started("l1"));
     h.fake.script_held("turn.wait", waited("l1", completed()));
@@ -794,19 +1216,45 @@ async fn a_refused_text_returns_to_its_session_sender_or_once_it_left_to_viewers
     assert!(admission.await.unwrap());
     let (mut c, _close3, admission) = phone(&mut h, 3, "third");
     assert!(admission.await.unwrap());
-    request_from(&mut h, 2, json!({"kind":"submit", "text":"from second"}));
-    h.until(|app| app.is_busy()).await;
-    let refused = || crate::protocol::RpcError::new(-1, "refused", "refused");
-    h.op(SessionOp::Pushed("from second".into(), Err(refused())));
-    assert_eq!(received(&mut a), ["notice"]);
-    assert_eq!(received(&mut b), ["ack", "returned", "notice"]);
-    assert_eq!(received(&mut c), ["notice"]);
-    h.app.on_msg(Msg::Remote(RemoteEvent::Disconnected(2)));
-    h.op(SessionOp::Pushed("again".into(), Err(refused())));
-    for output in [&mut a, &mut c] {
-        let returned = output.try_recv().unwrap();
-        assert_eq!(returned, json!({"t":"returned", "text":"again"}));
+    // A push the Agent rejects is answered only to the operation that made it.
+    h.fake.script_error_with(
+        "input.push",
+        -32030,
+        "refused",
+        "input_rejected",
+        Some("rejected"),
+    );
+    request_from(&mut h, 2, json!({"kind":"submit", "text":"from second"})).await;
+    let ack = ack_next(&mut h, &mut b).await;
+    assert_eq!(ack["ok"], false);
+    assert_eq!(ack["acceptance"], "rejected");
+    // The original browser still owns its draft; no separately routed text or notice is needed.
+    for output in [&mut a, &mut b, &mut c] {
+        assert!(messages(output).is_empty());
     }
+    assert!(
+        !messages(&mut a)
+            .iter()
+            .any(|message| message["t"] == "returned")
+            && !messages(&mut c)
+                .iter()
+                .any(|message| message["t"] == "returned")
+    );
+
+    // A connection that left keeps no claim on text its operation never sent.
+    h.app.on_msg(Msg::Remote(RemoteEvent::Disconnected(2)));
+    assert_eq!(h.app.composer.text(), "", "a gone phone returns no text");
+    h.fake.script_error_with(
+        "input.push",
+        -32030,
+        "refused",
+        "input_rejected",
+        Some("rejected"),
+    );
+    request_from(&mut h, 1, json!({"kind":"submit", "text":"still here"})).await;
+    let ack = ack_next(&mut h, &mut a).await;
+    assert_eq!(ack["ok"], false);
+    assert!(received(&mut c).is_empty());
 }
 
 #[tokio::test(start_paused = true)]
@@ -846,19 +1294,24 @@ async fn root_checks_and_stale_answers_refuse_before_dispatch_and_new_drafts_use
     h.app.remote.url = Some("http://localhost:8765".into());
     let (mut output, _close, admission) = phone(&mut h, 1, "phone");
     assert!(admission.await.unwrap());
-    request(&mut h, json!({"kind":"open_session", "session_id":"s1"}));
-    assert_eq!(output.recv().await.unwrap()["error"], "outside_roots");
+    request(&mut h, json!({"kind":"open_session", "session_id":"s1"})).await;
+    assert_eq!(
+        ack_next(&mut h, &mut output).await["error"],
+        "outside_roots"
+    );
     assert!(h.calls("session.open").is_empty());
     request(
         &mut h,
-        json!({"kind":"answer", "interaction_id":"stale", "choice":"allow"}),
-    );
-    assert_eq!(output.recv().await.unwrap()["error"], "stale");
+        json!({"kind":"answer", "loop_id":"old", "interaction_id":"stale", "choice":"allow"}),
+    )
+    .await;
+    assert_eq!(ack_next(&mut h, &mut output).await["error"], "stale");
     request(
         &mut h,
         json!({"kind":"new_session", "workspace":workspace, "profile":"coding"}),
-    );
-    assert_eq!(output.recv().await.unwrap()["ok"], true);
+    )
+    .await;
+    assert_eq!(ack_next(&mut h, &mut output).await["ok"], true);
     assert!(h.calls("session.create").is_empty());
     let mut info = session_info("s1");
     info["workspace"] = json!(workspace);
@@ -866,7 +1319,7 @@ async fn root_checks_and_stale_answers_refuse_before_dispatch_and_new_drafts_use
     h.fake.script("input.push", started("l1"));
     h.fake.script_held("turn.wait", waited("l1", completed()));
     h.app.composer.set_text("keep");
-    request(&mut h, json!({"kind":"submit", "text":"new work"}));
+    request(&mut h, json!({"kind":"submit", "text":"new work"})).await;
     h.until(|app| app.is_busy()).await;
     assert_eq!(h.calls("session.create")[0]["workspace"], json!(workspace));
     assert_eq!(h.sends(), ["new work"]);
@@ -1137,8 +1590,9 @@ async fn a_phone_renames_another_session_and_its_list_follows() {
     request(
         &mut h,
         json!({"kind":"rename_session", "session_id":"s2", "title":"  Parser fix  "}),
-    );
-    assert_eq!(output.recv().await.unwrap()["ok"], true);
+    )
+    .await;
+    assert_eq!(ack_next(&mut h, &mut output).await["ok"], true);
     h.settle().await;
     let calls = h.calls("session.rename");
     assert_eq!(calls.len(), before + 1);
@@ -1156,8 +1610,9 @@ async fn a_long_or_control_character_title_is_refused_before_any_rename() {
         request(
             &mut h,
             json!({"kind":"rename_session", "session_id":"s2", "title":title}),
-        );
-        let ack = output.recv().await.unwrap();
+        )
+        .await;
+        let ack = ack_next(&mut h, &mut output).await;
         assert_eq!(
             (ack["ok"].clone(), ack["error"].clone()),
             (json!(false), json!("bad_request"))
@@ -1172,10 +1627,13 @@ async fn a_phone_deletes_another_session_and_it_leaves_the_list() {
     let (mut h, mut output) = catalog().await;
     h.fake.script("session.close", json!({}));
     h.fake.script("session.delete", json!({}));
-    request(&mut h, json!({"kind":"delete_session", "session_id":"s2"}));
-    assert_eq!(output.recv().await.unwrap()["ok"], true);
+    request(&mut h, json!({"kind":"delete_session", "session_id":"s2"})).await;
+    assert_eq!(ack_next(&mut h, &mut output).await["ok"], true);
     h.settle().await;
-    assert_eq!(h.calls("session.close")[0]["session_id"], "s2");
+    assert!(
+        h.calls("session.close").is_empty(),
+        "a stored-only target has no load to close"
+    );
     assert_eq!(h.calls("session.delete")[0]["session_id"], "s2");
     let sessions = synced_sessions(&mut h, &mut output).expect("a new state");
     assert!(listed(&sessions, "s2").is_none());
@@ -1209,8 +1667,12 @@ async fn the_resident_unknown_and_outside_sessions_are_neither_renamed_nor_delet
             "outside_roots",
         ),
     ] {
-        request(&mut h, intent.clone());
-        assert_eq!(output.recv().await.unwrap()["error"], error, "{intent}");
+        request(&mut h, intent.clone()).await;
+        assert_eq!(
+            ack_next(&mut h, &mut output).await["error"],
+            error,
+            "{intent}"
+        );
     }
     h.settle().await;
     assert!(h.calls("session.close").is_empty());
@@ -1222,11 +1684,34 @@ fn messages(output: &mut mpsc::Receiver<Value>) -> Vec<Value> {
     std::iter::from_fn(|| output.try_recv().ok()).collect()
 }
 
-fn ack(output: &mut mpsc::Receiver<Value>) -> Value {
-    messages(output)
-        .into_iter()
-        .find(|message| message["t"] == "ack")
-        .expect("an ack")
+/// The next frame the phone receives, running the app until it is produced.
+///
+/// A frame that never comes fails the test instead of hanging the suite.
+async fn next(h: &mut Harness, output: &mut mpsc::Receiver<Value>) -> Value {
+    for _ in 0..64 {
+        if let Ok(message) = output.try_recv() {
+            return message;
+        }
+        if output.is_closed() {
+            break;
+        }
+        h.settle().await;
+    }
+    panic!("the phone never received the frame");
+}
+
+/// The phone's answer to an intent, skipping the projections that precede it.
+async fn ack_next(h: &mut Harness, output: &mut mpsc::Receiver<Value>) -> Value {
+    crate::testing::real_bounded(async {
+        loop {
+            let message = next(h, output).await;
+            if message["t"] == "ack" {
+                return message;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
 }
 
 fn projected(output: &mut mpsc::Receiver<Value>) -> Value {
@@ -1270,8 +1755,8 @@ async fn separate_views() -> (Harness, mpsc::Receiver<Value>, mpsc::Receiver<Val
     assert!(admission.await.unwrap());
     let (mut b, _close_b, admission) = phone(&mut h, 2, "second phone");
     assert!(admission.await.unwrap());
-    request_from(&mut h, 2, json!({"kind":"open_session", "session_id":"s2"}));
-    assert_eq!(ack(&mut b)["ok"], true);
+    request_from(&mut h, 2, json!({"kind":"open_session", "session_id":"s2"})).await;
+    assert_eq!(ack_next(&mut h, &mut b).await["ok"], true);
     h.until(|app| app.live("s2").is_some()).await;
     h.settle().await;
     (h, a, b)
@@ -1280,8 +1765,8 @@ async fn separate_views() -> (Harness, mpsc::Receiver<Value>, mpsc::Receiver<Val
 #[tokio::test(start_paused = true)]
 async fn phones_open_their_own_sessions_without_replacing_each_others_projection() {
     let (mut h, mut a, mut b) = separate_views().await;
-    request(&mut h, json!({"kind":"open_session", "session_id":"s1"}));
-    assert_eq!(ack(&mut a)["ok"], true);
+    request(&mut h, json!({"kind":"open_session", "session_id":"s1"})).await;
+    assert_eq!(ack_next(&mut h, &mut a).await["ok"], true);
     h.app.sync_remote();
     for (output, id) in [(&mut a, "s1"), (&mut b, "s2")] {
         let snapshot = output.try_recv().unwrap();
@@ -1292,7 +1777,7 @@ async fn phones_open_their_own_sessions_without_replacing_each_others_projection
             assert_eq!(listed["current"], listed["id"] == id);
         }
     }
-    request(&mut h, json!({"kind":"open_session", "session_id":"s3"}));
+    request(&mut h, json!({"kind":"open_session", "session_id":"s3"})).await;
     h.until(|app| app.live("s3").is_some()).await;
     h.settle().await;
     h.app.sync_remote();
@@ -1319,12 +1804,12 @@ async fn phones_send_and_stream_concurrently_only_to_their_sessions_viewers() {
         offset: 0,
     };
     h.app.scroll = anchored;
-    request(&mut h, json!({"kind":"submit", "text":"work in one"}));
+    request(&mut h, json!({"kind":"submit", "text":"work in one"})).await;
     assert_eq!(h.app.live("s2").unwrap().scroll, anchored);
     let (mut c, _close_c, admission) = phone(&mut h, 3, "also first");
     assert!(admission.await.unwrap());
     h.app.composer.set_text("local in one");
-    request_from(&mut h, 2, json!({"kind":"submit", "text":"work in two"}));
+    request_from(&mut h, 2, json!({"kind":"submit", "text":"work in two"})).await;
     h.until(|app| app.live("s1").unwrap().is_busy() && app.live("s2").unwrap().is_busy())
         .await;
     h.settle().await;
@@ -1367,35 +1852,40 @@ async fn phones_send_and_stream_concurrently_only_to_their_sessions_viewers() {
             }
         }
     }
-    request(&mut h, json!({"kind":"cancel"}));
+    request(&mut h, json!({"kind":"cancel"})).await;
     assert_eq!(h.app.composer.text(), "local in one");
-    assert_eq!(h.app.live("s2").unwrap().scroll, crate::app::Scroll::Follow);
+    assert_eq!(h.app.live("s2").unwrap().scroll, anchored);
 }
 
 #[tokio::test(start_paused = true)]
 async fn an_approval_is_shown_and_answered_only_in_the_viewed_session() {
     let (mut h, mut a, mut b) = separate_views().await;
-    request(&mut h, json!({"kind":"cancel"}));
+    request(&mut h, json!({"kind":"cancel"})).await;
     h.emit("interaction_requested", json!({"meta":{"session_id":"s2", "dropped_before":0}, "turn":{"session_id":"s2", "loop_id":"loop-s2"}, "interaction":{"interaction_id":"approve-two", "tool_call_id":"call-two", "tool_name":"bash", "kind":{"type":"approval", "data":{"prompt":"Allow?"}}}})).await;
     h.settle().await;
     h.app.sync_remote();
     let first = projected(&mut a);
     let second = projected(&mut b);
-    assert!(first["interaction"].is_null());
+    assert!(
+        first["interaction"].is_null(),
+        "a phone viewing s1 never sees s2's approval: {first}"
+    );
     assert_eq!(first["background"]["approval"], 1);
     assert_eq!(second["interaction"]["id"], "approve-two");
     assert_eq!(second["background"]["approval"], 0);
     request(
         &mut h,
-        json!({"kind":"answer", "interaction_id":"approve-two", "choice":"allow"}),
-    );
-    assert_eq!(ack(&mut a)["error"], "stale");
+        json!({"kind":"answer", "loop_id":"loop-s2", "interaction_id":"approve-two", "choice":"allow"}),
+    )
+    .await;
+    assert_eq!(ack_next(&mut h, &mut a).await["error"], "stale");
     request_from(
         &mut h,
         2,
         json!({"kind":"answer", "interaction_id":"approve-two", "choice":"allow"}),
-    );
-    assert_eq!(ack(&mut b)["ok"], true);
+    )
+    .await;
+    assert_eq!(ack_next(&mut h, &mut b).await["ok"], true);
     h.settle().await;
     let answers = h.calls("interaction.answer");
     assert_eq!(answers.len(), 1);
@@ -1429,9 +1919,10 @@ async fn each_draft_keeps_its_workspace_model_and_reasoning_through_creation() {
     request(
         &mut h,
         json!({"kind":"new_session", "workspace":one, "profile":"coding"}),
-    );
-    request(&mut h, json!({"kind":"set_model", "model":"chosen"}));
-    request(&mut h, json!({"kind":"set_reasoning", "level":"high"}));
+    )
+    .await;
+    request(&mut h, json!({"kind":"set_model", "model":"chosen"})).await;
+    request(&mut h, json!({"kind":"set_reasoning", "level":"high"})).await;
     h.app.sync_remote();
     let draft = projected(&mut a);
     let session = projected(&mut b);
@@ -1453,7 +1944,8 @@ async fn each_draft_keeps_its_workspace_model_and_reasoning_through_creation() {
         &mut h,
         2,
         json!({"kind":"new_session", "workspace":two, "profile":"coding"}),
-    );
+    )
+    .await;
     h.app.sync_remote();
     let other = projected(&mut b);
     assert_eq!(
@@ -1479,7 +1971,8 @@ async fn each_draft_keeps_its_workspace_model_and_reasoning_through_creation() {
     request(
         &mut h,
         json!({"kind":"submit", "text":"first in my workspace"}),
-    );
+    )
+    .await;
     h.until(|app| app.live("created").is_some_and(|session| session.is_busy()))
         .await;
     h.settle().await;
@@ -1504,7 +1997,7 @@ async fn each_draft_keeps_its_workspace_model_and_reasoning_through_creation() {
         "even an identical draft stays independent"
     );
     assert_eq!(shared_draft["draft"]["model"], "chosen");
-    request_from(&mut h, 2, json!({"kind":"set_reasoning", "level":"low"}));
+    request_from(&mut h, 2, json!({"kind":"set_reasoning", "level":"low"})).await;
     h.action(Action::Remote("off".into()));
     assert!(h.app.session.is_none());
     assert_eq!(h.app.workspace, two);
@@ -1527,11 +2020,11 @@ async fn opening_a_session_never_adopts_another_devices_draft_model() {
         serde_json::from_value(json!({"id":"draft-model", "supported_reasoning":["high"]}))
             .unwrap(),
     );
-    request(&mut h, json!({"kind":"new_session", "workspace":root}));
-    request(&mut h, json!({"kind":"set_model", "model":"draft-model"}));
-    request(&mut h, json!({"kind":"set_reasoning", "level":"high"}));
-    request_from(&mut h, 2, json!({"kind":"open_session", "session_id":"s3"}));
-    assert_eq!(ack(&mut b)["ok"], true);
+    request(&mut h, json!({"kind":"new_session", "workspace":root})).await;
+    request(&mut h, json!({"kind":"set_model", "model":"draft-model"})).await;
+    request(&mut h, json!({"kind":"set_reasoning", "level":"high"})).await;
+    request_from(&mut h, 2, json!({"kind":"open_session", "session_id":"s3"})).await;
+    assert_eq!(ack_next(&mut h, &mut b).await["ok"], true);
     h.until(|app| app.live("s3").is_some()).await;
     h.settle().await;
     assert!(
@@ -1553,7 +2046,7 @@ async fn opening_a_session_never_adopts_another_devices_draft_model() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_pending_create_blocks_other_intents_without_losing_its_first_message_or_draft() {
+async fn a_pending_create_keeps_its_original_input_while_other_devices_do_live_work() {
     let (mut h, mut a, mut b) = separate_views().await;
     let root = tempfile::tempdir().unwrap();
     let root = root.path().canonicalize().unwrap();
@@ -1567,8 +2060,9 @@ async fn a_pending_create_blocks_other_intents_without_losing_its_first_message_
     request(
         &mut h,
         json!({"kind":"new_session", "workspace":root, "profile":"coding"}),
-    );
-    request(&mut h, json!({"kind":"set_reasoning", "level":"high"}));
+    )
+    .await;
+    request(&mut h, json!({"kind":"set_reasoning", "level":"high"})).await;
     let (mut c, _close_c, admission) = phone(&mut h, 3, "another draft");
     assert!(admission.await.unwrap());
     let mut created = session_info("created");
@@ -1585,39 +2079,43 @@ async fn a_pending_create_blocks_other_intents_without_losing_its_first_message_
         "turn.wait@created",
         json!({"turn":{"session_id":"created", "loop_id":"first"}, "outcome":completed()}),
     );
-    request(&mut h, json!({"kind":"submit", "text":"my first message"}));
+    let creating = request(&mut h, json!({"kind":"submit", "text":"my first message"})).await;
     h.app.composer.set_text("typed while creating");
     h.settle().await;
     h.app.sync_remote();
     assert_eq!(projected(&mut a)["status"]["loading"], true);
     assert_eq!(projected(&mut b)["status"]["loading"], false);
     assert_eq!(projected(&mut c)["status"]["loading"], false);
-    for intent in [
-        json!({"kind":"open_session", "session_id":"s3"}),
-        json!({"kind":"new_session", "workspace":root}),
-        json!({"kind":"submit", "text":"live work"}),
-        json!({"kind":"cancel"}),
-        json!({"kind":"open_session", "session_id":"s1"}),
-    ] {
-        request_from(&mut h, 2, intent);
-        assert_eq!(ack(&mut b)["error"], "Another device is opening a session");
-    }
-    request_from(&mut h, 3, json!({"kind":"submit", "text":"another draft"}));
-    assert_eq!(ack(&mut c)["error"], "Another device is opening a session");
-    request(&mut h, json!({"kind":"submit", "text":"again"}));
+    request_from(&mut h, 2, json!({"kind":"open_session", "session_id":"s3"})).await;
     assert_eq!(
-        ack(&mut a)["error"],
+        ack_next(&mut h, &mut b).await["error"],
+        "Another device is opening a session"
+    );
+    request_from(&mut h, 3, json!({"kind":"submit", "text":"another draft"})).await;
+    assert_eq!(
+        ack_next(&mut h, &mut c).await["error"],
+        "Another device is opening a session"
+    );
+    request(&mut h, json!({"kind":"submit", "text":"again"})).await;
+    assert_eq!(
+        ack_next(&mut h, &mut a).await["error"],
         "A session is opening or being created"
     );
-    assert_eq!(h.app.first_message.as_deref(), Some("my first message"));
+    assert_eq!(
+        h.app.remote.pending(1, &creating).unwrap().kind.text(),
+        Some("my first message")
+    );
     assert!(h.sends().is_empty());
+    request_from(&mut h, 2, json!({"kind":"submit", "text":"live work"})).await;
+    assert_eq!(ack_next(&mut h, &mut b).await["ok"], true);
     h.fake.release("session.create");
     h.until(|app| app.live("created").is_some_and(|session| session.is_busy()))
         .await;
     h.settle().await;
-    assert_eq!(h.sends(), ["my first message"]);
-    assert_eq!(h.calls("input.push")[0]["session_id"], "created");
-    assert_eq!(h.app.composer.text(), "typed while creating");
+    assert_eq!(h.sends(), ["live work", "my first message"]);
+    assert_eq!(h.calls("input.push")[1]["session_id"], "created");
+    assert_eq!(h.app.draft_text, "typed while creating");
+    assert_eq!(h.app.session.as_ref().unwrap().info.session_id, "s2");
     assert_eq!(h.calls("session.create").len(), 1);
     assert_eq!(h.calls("session.open").len(), 2);
     h.app.sync_remote();
@@ -1633,24 +2131,28 @@ async fn a_pending_open_allows_live_work_but_only_its_owner_changes_view_on_adop
     third["title"] = json!("Third");
     h.fake
         .script_held("session.open@s3", json!({"session":third}));
-    request(&mut h, json!({"kind":"open_session", "session_id":"s3"}));
-    assert_eq!(ack(&mut a)["ok"], true);
+    let opening = request(&mut h, json!({"kind":"open_session", "session_id":"s3"})).await;
+    called(&h, "session.open", 3).await;
+    assert!(messages(&mut a).is_empty(), "open ACK waits for the Agent");
     request_from(
         &mut h,
         2,
         json!({"kind":"submit", "text":"work while opening"}),
-    );
-    assert_eq!(ack(&mut b)["ok"], true);
+    )
+    .await;
+    assert_eq!(ack_next(&mut h, &mut b).await["ok"], true);
     h.until(|app| app.live("s2").unwrap().is_busy()).await;
     h.app.sync_remote();
     assert_eq!(projected(&mut a)["status"]["loading"], true);
     assert_eq!(projected(&mut b)["status"]["loading"], false);
-    request_from(&mut h, 2, json!({"kind":"open_session", "session_id":"s1"}));
-    assert_eq!(ack(&mut b)["ok"], true);
+    request_from(&mut h, 2, json!({"kind":"open_session", "session_id":"s1"})).await;
+    assert_eq!(ack_next(&mut h, &mut b).await["ok"], true);
     assert_eq!(h.app.session.as_ref().unwrap().info.session_id, "s1");
     h.fake.release("session.open@s3");
     h.until(|app| app.live("s3").is_some()).await;
     h.settle().await;
+    assert_eq!(ack_next(&mut h, &mut a).await["id"], opening);
+    assert_eq!(h.app.session.as_ref().unwrap().info.session_id, "s1");
     h.app.sync_remote();
     assert_eq!(projected(&mut a)["session"]["id"], "s3");
     assert_eq!(projected(&mut b)["session"]["id"], "s1");
@@ -1660,23 +2162,27 @@ async fn a_pending_open_allows_live_work_but_only_its_owner_changes_view_on_adop
 #[tokio::test(start_paused = true)]
 async fn deletion_refuses_any_viewer_but_removes_an_unviewed_idle_live_session() {
     let (mut h, mut a, mut b) = separate_views().await;
-    request(&mut h, json!({"kind":"delete_session", "session_id":"s2"}));
-    assert_eq!(ack(&mut a)["error"], "Open on \"second phone\"");
+    request(&mut h, json!({"kind":"delete_session", "session_id":"s2"})).await;
+    assert_eq!(
+        ack_next(&mut h, &mut a).await["error"],
+        "Open on \"second phone\""
+    );
     request_from(
         &mut h,
         2,
         json!({"kind":"delete_session", "session_id":"s2"}),
-    );
+    )
+    .await;
     assert_eq!(
-        ack(&mut b)["error"],
+        ack_next(&mut h, &mut b).await["error"],
         "Open another session before deleting this one"
     );
     h.settle().await;
     assert!(h.calls("session.delete").is_empty());
-    request_from(&mut h, 2, json!({"kind":"open_session", "session_id":"s1"}));
-    assert_eq!(ack(&mut b)["ok"], true);
-    request(&mut h, json!({"kind":"delete_session", "session_id":"s2"}));
-    assert_eq!(ack(&mut a)["ok"], true);
+    request_from(&mut h, 2, json!({"kind":"open_session", "session_id":"s1"})).await;
+    assert_eq!(ack_next(&mut h, &mut b).await["ok"], true);
+    request(&mut h, json!({"kind":"delete_session", "session_id":"s2"})).await;
+    assert_eq!(ack_next(&mut h, &mut a).await["ok"], true);
     h.settle().await;
     assert!(h.app.live("s2").is_none());
     assert_eq!(h.calls("session.close")[0]["session_id"], "s2");
@@ -1693,24 +2199,27 @@ async fn deletion_refuses_any_viewer_but_removes_an_unviewed_idle_live_session()
 #[tokio::test(start_paused = true)]
 async fn opening_a_session_while_its_deletion_is_pending_falls_back_to_a_default_draft() {
     let (mut h, mut a, mut b) = separate_views().await;
-    request_from(&mut h, 2, json!({"kind":"open_session", "session_id":"s1"}));
+    request_from(&mut h, 2, json!({"kind":"open_session", "session_id":"s1"})).await;
+    assert_eq!(ack_next(&mut h, &mut b).await["ok"], true);
     h.fake.script_held("session.delete@s2", json!({}));
-    request(&mut h, json!({"kind":"delete_session", "session_id":"s2"}));
-    assert_eq!(ack(&mut a)["ok"], true);
+    let deleting = request(&mut h, json!({"kind":"delete_session", "session_id":"s2"})).await;
+    called(&h, "session.delete", 1).await;
+    assert!(messages(&mut a).is_empty());
     h.settle().await;
     assert!(h.app.live("s2").is_some());
-    request_from(&mut h, 2, json!({"kind":"open_session", "session_id":"s2"}));
-    assert_eq!(ack(&mut b)["ok"], true);
+    request_from(&mut h, 2, json!({"kind":"open_session", "session_id":"s2"})).await;
+    assert_eq!(ack_next(&mut h, &mut b).await["ok"], true);
     h.fake.release("session.delete@s2");
     h.until(|app| app.live("s2").is_none()).await;
+    assert_eq!(ack_next(&mut h, &mut a).await["id"], deleting);
     h.app.sync_remote();
     assert_eq!(projected(&mut a)["session"]["id"], "s1");
     let fallback = projected(&mut b);
     assert!(fallback["session"].is_null());
     assert_eq!(fallback["draft"]["model"], "mock");
     assert_eq!(fallback["draft"]["reasoning"], "medium");
-    request_from(&mut h, 2, json!({"kind":"set_reasoning", "level":"high"}));
-    assert_eq!(ack(&mut b)["ok"], true);
+    request_from(&mut h, 2, json!({"kind":"set_reasoning", "level":"high"})).await;
+    assert_eq!(ack_next(&mut h, &mut b).await["ok"], true);
     assert!(h.calls("session.update").is_empty());
 }
 
@@ -1726,7 +2235,7 @@ async fn notices_follow_the_intent_or_session_and_attention_excludes_its_viewers
     second["reasoning"] = json!("high");
     h.fake
         .script("session.update@s2", json!({"session":second}));
-    request_from(&mut h, 2, json!({"kind":"set_model", "model":"strict"}));
+    request_from(&mut h, 2, json!({"kind":"set_model", "model":"strict"})).await;
     assert!(messages(&mut a).is_empty());
     let own = messages(&mut b);
     assert_eq!(own[0]["t"], "notice");
@@ -1748,7 +2257,7 @@ async fn notices_follow_the_intent_or_session_and_attention_excludes_its_viewers
     assert_eq!(a.try_recv().unwrap()["text"], "async problem");
     assert_eq!(b.try_recv().unwrap()["text"], "\"First\": async problem");
     assert_eq!(h.notices().last().unwrap(), "\"First\": async problem");
-    request(&mut h, json!({"kind":"cancel"}));
+    request(&mut h, json!({"kind":"cancel"})).await;
     messages(&mut a);
     h.app.on_msg(Msg::Session(
         epoch,
@@ -1763,7 +2272,7 @@ async fn notices_follow_the_intent_or_session_and_attention_excludes_its_viewers
         b.try_recv().unwrap()["text"],
         "\"First\": foreground problem"
     );
-    request_from(&mut h, 2, json!({"kind":"cancel"}));
+    request_from(&mut h, 2, json!({"kind":"cancel"})).await;
     messages(&mut b);
     h.emit("interaction_requested", json!({"turn":{"session_id":"s1", "loop_id":"loop-s1"}, "interaction":{"interaction_id":"approval-one", "tool_call_id":"call-one", "tool_name":"bash", "kind":{"type":"approval", "data":{}}}})).await;
     h.settle().await;
@@ -1784,85 +2293,61 @@ async fn notices_follow_the_intent_or_session_and_attention_excludes_its_viewers
 }
 
 #[tokio::test(start_paused = true)]
-async fn refused_text_uses_its_session_sender_then_viewers_then_stays_with_the_session() {
+async fn a_refused_push_returns_its_text_only_to_the_operation_that_sent_it() {
     let (mut h, mut a, mut b) = separate_views().await;
-    request(&mut h, json!({"kind":"submit", "text":"one"}));
     let (mut c, _close_c, admission) = phone(&mut h, 3, "another viewer");
     assert!(admission.await.unwrap());
-    request_from(&mut h, 2, json!({"kind":"submit", "text":"two"}));
-    h.until(|app| app.live("s1").unwrap().is_busy() && app.live("s2").unwrap().is_busy())
-        .await;
-    h.settle().await;
-    messages(&mut a);
-    messages(&mut b);
-    let epoch = h.app.live("s1").unwrap().epoch;
-    let refused = |text: &str| {
-        Msg::Session(
-            epoch,
-            Box::new(SessionOp::Pushed(
-                text.into(),
-                Err(crate::protocol::RpcError::new(-1, "refused", "test")),
-            )),
-        )
-    };
-    h.app.on_msg(refused("one"));
-    assert_eq!(a.try_recv().unwrap(), json!({"t":"returned", "text":"one"}));
-    for output in [&mut b, &mut c] {
-        assert!(
-            messages(output)
-                .iter()
-                .all(|message| message["t"] != "returned")
-        );
-    }
-    messages(&mut a);
-    request(&mut h, json!({"kind":"open_session", "session_id":"s2"}));
-    messages(&mut a);
-    h.app.on_msg(refused("still to its sender"));
-    assert_eq!(a.try_recv().unwrap()["t"], "returned");
-    messages(&mut c);
-    h.app.on_msg(Msg::Remote(RemoteEvent::Disconnected(1)));
-    h.app.on_msg(refused("to its viewer"));
-    assert_eq!(
-        c.try_recv().unwrap(),
-        json!({"t":"returned", "text":"to its viewer"})
+    // Two phones submit to the same session; the Agent rejects one push only.
+    h.fake.script_sequence(
+        "input.push@s1",
+        vec![
+            json!({"error":{"code":-32030,"message":"no","data":{"kind":"input_rejected","acceptance":"rejected"}}}),
+            pushed(vec![]),
+        ],
+    );
+    request(&mut h, json!({"kind":"submit", "text":"first"})).await;
+    request_from(&mut h, 3, json!({"kind":"submit", "text":"second"})).await;
+    let refused = ack_next(&mut h, &mut a).await;
+    assert_eq!(refused["ok"], false);
+    assert_eq!(refused["acceptance"], "rejected");
+    assert!(
+        messages(&mut a).is_empty(),
+        "the original browser still owns its text"
     );
     assert!(
-        messages(&mut b)
+        messages(&mut b).is_empty(),
+        "another device receives no input feedback"
+    );
+    // The accepted one is answered for its own operation and keeps its text in the session.
+    let accepted = ack_next(&mut h, &mut c).await;
+    assert_eq!(accepted["ok"], true);
+    assert!(
+        messages(&mut c)
             .iter()
             .all(|message| message["t"] != "returned")
     );
-    request_from(&mut h, 3, json!({"kind":"open_session", "session_id":"s2"}));
-    messages(&mut c);
-    h.app.on_msg(refused("kept for local control"));
-    assert_eq!(
-        h.app.live("s1").unwrap().returned,
-        ["kept for local control"]
-    );
-    assert!(h.app.composer.is_empty());
-    request_from(&mut h, 2, json!({"kind":"open_session", "session_id":"s1"}));
-    assert_eq!(
-        h.app.live("s1").unwrap().returned,
-        ["kept for local control"]
-    );
-    assert!(h.app.composer.is_empty());
     h.action(Action::Remote("off".into()));
-    assert_eq!(h.app.composer.text(), "kept for local control");
+    // A text no operation owns stays with the session, not this TUI's composer.
+    assert_eq!(h.app.composer.text(), "");
 }
 
 #[tokio::test(start_paused = true)]
 async fn viewed_turn_ends_stay_seen_and_opening_a_session_clears_unseen() {
     let (mut h, mut a, mut b) = separate_views().await;
     for viewed in [true, false] {
-        h.fake.script_held(
-            "turn.wait@s1",
-            json!({"turn":{"session_id":"s1", "loop_id":"loop-s1"}, "outcome":completed()}),
-        );
-        request(&mut h, json!({"kind":"open_session", "session_id":"s1"}));
-        request(&mut h, json!({"kind":"submit", "text":"work"}));
+        let turn = json!({"session_id":"s1", "loop_id":format!("loop-s1-{viewed}")});
+        let mut push = started_in(turn.clone(), vec![]);
+        push["id"] = json!(format!("input-{viewed}"));
+        push["started"]["input"]["id"] = push["id"].clone();
+        h.fake.script("input.push@s1", push);
+        h.fake
+            .script_held("turn.wait@s1", json!({"turn":turn, "outcome":completed()}));
+        request(&mut h, json!({"kind":"open_session", "session_id":"s1"})).await;
+        request(&mut h, json!({"kind":"submit", "text":"work"})).await;
         h.until(|app| app.live("s1").unwrap().is_busy()).await;
-        request_from(&mut h, 2, json!({"kind":"cancel"}));
+        request_from(&mut h, 2, json!({"kind":"cancel"})).await;
         if !viewed {
-            request(&mut h, json!({"kind":"open_session", "session_id":"s2"}));
+            request(&mut h, json!({"kind":"open_session", "session_id":"s2"})).await;
         }
         messages(&mut a);
         messages(&mut b);
@@ -1883,7 +2368,7 @@ async fn viewed_turn_ends_stay_seen_and_opening_a_session_clears_unseen() {
             }));
         }
     }
-    request(&mut h, json!({"kind":"open_session", "session_id":"s1"}));
+    request(&mut h, json!({"kind":"open_session", "session_id":"s1"})).await;
     assert!(!h.app.live("s1").unwrap().unseen);
 }
 
@@ -1897,7 +2382,7 @@ async fn identical_views_share_one_state_build_and_all_unchanged_views_send_noth
     tokio::time::advance(std::time::Duration::from_secs(60)).await;
     h.app.sync_remote();
     assert!(messages(&mut a).is_empty() && messages(&mut b).is_empty());
-    request_from(&mut h, 2, json!({"kind":"open_session", "session_id":"s1"}));
+    request_from(&mut h, 2, json!({"kind":"open_session", "session_id":"s1"})).await;
     let groups = crate::remote::view::Shared::build(&mut h.app);
     assert_eq!(groups.len(), 1);
     assert_eq!(groups[0].connections, [1, 2]);
@@ -1924,23 +2409,21 @@ async fn a_failed_create_returns_only_to_its_creator_and_preserves_the_draft_set
     request(
         &mut h,
         json!({"kind":"new_session", "workspace":root, "profile":"coding"}),
-    );
-    request(&mut h, json!({"kind":"set_reasoning", "level":"high"}));
+    )
+    .await;
+    request(&mut h, json!({"kind":"set_reasoning", "level":"high"})).await;
     messages(&mut a);
     h.fake
         .script_error("session.create", -1, "cannot create", "test");
-    request(&mut h, json!({"kind":"submit", "text":"keep this text"}));
+    request(&mut h, json!({"kind":"submit", "text":"keep this text"})).await;
     h.until(|app| !app.loading_session).await;
-    let returned = messages(&mut a);
+    let ack = ack_next(&mut h, &mut a).await;
+    assert_eq!(ack["ok"], false);
+    assert_eq!(ack["error"], "cannot create");
+    assert_eq!(ack["acceptance"], "rejected");
     assert!(
-        returned
-            .iter()
-            .any(|message| message == &json!({"t":"returned", "text":"keep this text"}))
-    );
-    assert!(
-        returned
-            .iter()
-            .any(|message| message["t"] == "notice" && message["text"] == "cannot create")
+        messages(&mut a).is_empty(),
+        "the original operation owns its unsent text"
     );
     assert!(messages(&mut b).is_empty());
     assert!(h.app.composer.is_empty());
@@ -1971,12 +2454,12 @@ async fn model_and_reasoning_updates_persist_only_in_the_acting_devices_session(
     changed["reasoning"] = json!("high");
     h.fake
         .script("session.update@s1", json!({"session":changed}));
-    request(&mut h, json!({"kind":"set_model", "model":"chosen"}));
-    assert_eq!(ack(&mut a)["ok"], true);
+    request(&mut h, json!({"kind":"set_model", "model":"chosen"})).await;
+    assert_eq!(ack_next(&mut h, &mut a).await["ok"], true);
     h.settle().await;
-    request(&mut h, json!({"kind":"set_reasoning", "level":"high"}));
-    assert_eq!(ack(&mut a)["ok"], true);
-    request_from(&mut h, 2, json!({"kind":"cancel"}));
+    request(&mut h, json!({"kind":"set_reasoning", "level":"high"})).await;
+    assert_eq!(ack_next(&mut h, &mut a).await["ok"], true);
+    request_from(&mut h, 2, json!({"kind":"cancel"})).await;
     h.settle().await;
     let updates = h.calls("session.update");
     assert_eq!(updates.len(), 2);
@@ -1991,15 +2474,17 @@ async fn model_and_reasoning_updates_persist_only_in_the_acting_devices_session(
 }
 
 #[tokio::test(start_paused = true)]
-async fn failed_opens_keep_device_views_and_route_the_error_with_the_requested_session() {
+async fn failed_opens_keep_device_views_and_answer_only_the_original_operation() {
     let (mut h, mut a, mut b) = separate_views().await;
     h.fake
         .script_error("session.open@s3", -1, "cannot open", "test");
-    request(&mut h, json!({"kind":"open_session", "session_id":"s3"}));
-    assert_eq!(ack(&mut a)["ok"], true);
+    request(&mut h, json!({"kind":"open_session", "session_id":"s3"})).await;
+    let ack = ack_next(&mut h, &mut a).await;
+    assert_eq!(ack["ok"], false);
+    assert_eq!(ack["error"], "cannot open");
     h.until(|app| !app.loading_session).await;
-    assert_eq!(a.try_recv().unwrap()["text"], "\"Third\": cannot open");
-    assert_eq!(b.try_recv().unwrap()["text"], "\"Third\": cannot open");
+    assert!(a.try_recv().is_err());
+    assert!(b.try_recv().is_err());
     h.app.sync_remote();
     assert_eq!(projected(&mut a)["session"]["id"], "s1");
     assert_eq!(projected(&mut b)["session"]["id"], "s2");
@@ -2009,13 +2494,16 @@ async fn failed_opens_keep_device_views_and_route_the_error_with_the_requested_s
 #[tokio::test(start_paused = true)]
 async fn a_deletion_finishing_after_remote_off_keeps_the_local_draft_editable() {
     let (mut h, mut a, mut b) = separate_views().await;
-    request_from(&mut h, 2, json!({"kind":"open_session", "session_id":"s1"}));
+    request_from(&mut h, 2, json!({"kind":"open_session", "session_id":"s1"})).await;
+    assert_eq!(ack_next(&mut h, &mut b).await["ok"], true);
     h.fake.script_held("session.delete@s2", json!({}));
-    request(&mut h, json!({"kind":"delete_session", "session_id":"s2"}));
-    assert_eq!(ack(&mut a)["ok"], true);
+    let deleting = request(&mut h, json!({"kind":"delete_session", "session_id":"s2"})).await;
+    called(&h, "session.delete", 1).await;
+    assert!(h.app.remote.holds_pending(1, &deleting));
+    assert!(messages(&mut a).is_empty());
     h.settle().await;
-    request_from(&mut h, 2, json!({"kind":"open_session", "session_id":"s2"}));
-    assert_eq!(ack(&mut b)["ok"], true);
+    request_from(&mut h, 2, json!({"kind":"open_session", "session_id":"s2"})).await;
+    assert_eq!(ack_next(&mut h, &mut b).await["ok"], true);
     h.action(Action::Remote("off".into()));
     h.fake.release("session.delete@s2");
     h.until(|app| app.live("s2").is_none()).await;
@@ -2031,18 +2519,23 @@ async fn a_late_open_result_cannot_bring_back_a_session_deleted_by_another_devic
     third["title"] = json!("Third");
     h.fake
         .script_held("session.open@s3", json!({"session":third}));
-    request(&mut h, json!({"kind":"open_session", "session_id":"s3"}));
-    assert_eq!(ack(&mut a)["ok"], true);
+    let opening = request(&mut h, json!({"kind":"open_session", "session_id":"s3"})).await;
+    called(&h, "session.open", 3).await;
+    assert!(messages(&mut a).is_empty());
     request_from(
         &mut h,
         2,
         json!({"kind":"delete_session", "session_id":"s3"}),
-    );
-    assert_eq!(ack(&mut b)["ok"], true);
+    )
+    .await;
+    assert_eq!(ack_next(&mut h, &mut b).await["ok"], true);
     h.until(|app| !app.sessions.iter().any(|info| info.session_id == "s3"))
         .await;
     h.fake.release("session.open@s3");
     h.until(|app| !app.loading_session).await;
+    let ack = ack_next(&mut h, &mut a).await;
+    assert_eq!(ack["id"], opening);
+    assert_eq!(ack["ok"], false);
     assert!(h.app.live("s3").is_none());
     h.app.sync_remote();
     assert_eq!(projected(&mut a)["session"]["id"], "s1");
@@ -2292,4 +2785,1065 @@ async fn a_fifth_query_in_flight_is_busy_and_a_reply_after_the_phone_left_is_dro
     query_from(&mut h, 1, "again", json!({"kind":"context"}));
     h.settle().await;
     assert_eq!(results(&mut first)[0]["ok"], true);
+}
+
+async fn w4_phone() -> (Harness, mpsc::Receiver<Value>) {
+    let mut h = w0_phone_session();
+    h.app.remote.config = Some(config(h.app.workspace.clone()));
+    h.app.remote.url = Some("http://localhost:8765".into());
+    h.fake.script("session.state", json!({}));
+    let (mut output, _closing, admission) = phone(&mut h, 1, "first");
+    assert!(admission.await.unwrap());
+    h.app.sync_remote();
+    messages(&mut output);
+    (h, output)
+}
+
+#[tokio::test(start_paused = true)]
+async fn w4_snapshot_blocking_persists_across_phone_reconnect_and_keeps_the_question_actionable() {
+    let (mut h, mut output) = w4_phone().await;
+    let blocked = h.control(json!({"block_reason":"persistence"}));
+    h.snapshot_event(blocked.clone()).await;
+    h.settle().await;
+    h.app.sync_remote();
+    let state = projected(&mut output);
+    assert_eq!(state["status"]["block_reason"], "persistence");
+    assert_eq!(
+        state["status"]["label"],
+        crate::protocol::BlockReason::Persistence.label()
+    );
+    assert_eq!(state["status"]["busy"], false);
+    assert!(state["interaction"].is_null());
+    assert_eq!(
+        h.app.session.as_ref().unwrap().block_reason,
+        Some(crate::protocol::BlockReason::Persistence)
+    );
+    assert!(messages(&mut output).is_empty());
+    h.app.sync_remote();
+    assert!(
+        messages(&mut output).is_empty(),
+        "idle blocking needs no repeated projection"
+    );
+
+    h.app.on_msg(Msg::Remote(RemoteEvent::Disconnected(1)));
+    let (mut output, _closing, admission) = phone(&mut h, 2, "first");
+    assert!(admission.await.unwrap());
+    h.app.sync_remote();
+    assert_eq!(projected(&mut output)["status"], state["status"]);
+
+    h.fake
+        .script_held("turn.wait", waited("blocked_loop", completed()));
+    let waiting = h.control(json!({
+        "block_reason":"internal",
+        "execution":{"type":"running", "loop_id":"blocked_loop", "input":null,
+            "request_index":0, "phase":"waiting_for_input"},
+        "pending_interaction":{"loop_id":"blocked_loop", "request_index":0,
+            "interaction_id":"still_valid", "tool_call_id":"call", "tool_name":"ask",
+            "kind":{"type":"tool_input", "data":{"answer_kind":"text", "prompt":"Your answer?", "choices":[]}}}
+    }));
+    h.fake
+        .script("session.state", json!({"snapshot":waiting.clone()}));
+    h.snapshot_event(waiting).await;
+    h.settle().await;
+    h.app.sync_remote();
+    let waiting = projected(&mut output);
+    assert_eq!(waiting["status"]["block_reason"], "internal");
+    assert_eq!(
+        waiting["status"]["label"],
+        "Blocked: the Agent hit an internal error"
+    );
+    assert_eq!(waiting["status"]["busy"], true);
+    assert_eq!(waiting["interaction"]["id"], "still_valid");
+    assert_eq!(waiting["interaction"]["kind"], "text");
+    assert_eq!(waiting["interaction"]["prompt"], "Your answer?");
+    assert_eq!(waiting["interaction"]["options"], json!([]));
+
+    h.fake.script_held("interaction.answer", json!({"ok":true}));
+    let operation = request_from(
+        &mut h,
+        2,
+        json!({"kind":"answer", "loop_id":"blocked_loop",
+        "interaction_id":"still_valid", "choice":{"text":"yes"}}),
+    )
+    .await;
+    called(&h, "interaction.answer", 1).await;
+    assert!(messages(&mut output).is_empty());
+    h.fake.release("interaction.answer");
+    let ack = ack_next(&mut h, &mut output).await;
+    assert_eq!(ack["id"], operation);
+    assert_eq!(ack["ok"], true);
+    assert_eq!(
+        h.calls("interaction.answer")[0]["answer"],
+        json!({"type":"text", "text":"yes"})
+    );
+    assert_eq!(
+        h.app.session.as_ref().unwrap().block_reason,
+        Some(crate::protocol::BlockReason::Internal)
+    );
+    assert_eq!(
+        h.app
+            .session
+            .as_ref()
+            .unwrap()
+            .interaction
+            .as_ref()
+            .unwrap()
+            .interaction_id,
+        "still_valid"
+    );
+
+    h.snapshot_event(blocked).await;
+    h.settle().await;
+    h.app.sync_remote();
+    assert!(
+        messages(&mut output).is_empty(),
+        "an older control observation cannot replace the warning"
+    );
+    h.control_event(json!({})).await;
+    h.settle().await;
+    h.app.sync_remote();
+    let cleared = projected(&mut output);
+    assert!(cleared["status"]["block_reason"].is_null());
+    assert!(cleared["status"]["label"].is_null());
+    assert!(cleared["interaction"].is_null());
+}
+
+async fn called(h: &Harness, method: &str, count: usize) {
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        h.fake.wait_for_calls(method, count),
+    )
+    .await
+    .expect("the Agent call did not reach its gate");
+}
+
+async fn text_control(h: &mut Harness, loop_id: &str, interaction_id: Option<&str>) {
+    h.fake
+        .script_held("turn.wait", waited(loop_id, completed()));
+    let pending = interaction_id.map(|id| json!({"loop_id":loop_id, "request_index":0,
+        "interaction_id":id, "tool_call_id":"text_call", "tool_name":"ask",
+        "kind":{"type":"tool_input", "data":{"prompt":"Your answer?", "answer_kind":"text", "choices":[]}}}));
+    let control = h.control(json!({
+        "execution":{"type":"running", "loop_id":loop_id, "input":null, "request_index":0, "phase":"waiting_for_input"},
+        "pending_interaction":pending,
+    }));
+    h.fake
+        .script("session.state", json!({"snapshot":control.clone()}));
+    h.snapshot_event(control).await;
+    h.settle().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn w4_text_answers_use_the_snapshot_question_and_keep_literal_allowed_text_until_agent_ack() {
+    let (mut h, mut output) = w4_phone().await;
+    h.app.composer.set_text("conversation draft");
+    for (index, text) in [
+        "allow".to_owned(),
+        " deny ".into(),
+        " ".into(),
+        "é".repeat(4096),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let question = format!("text-{index}");
+        text_control(&mut h, "text_loop", Some(&question)).await;
+        h.app.sync_remote();
+        let projection = projected(&mut output);
+        assert_eq!(projection["interaction"]["kind"], "text");
+        assert_eq!(projection["interaction"]["options"], json!([]));
+        assert_eq!(projection["interaction"]["loop_id"], "text_loop");
+        h.fake.script_held("interaction.answer", json!({"ok":true}));
+        let operation = request(
+            &mut h,
+            json!({"kind":"answer", "loop_id":"text_loop", "interaction_id":question,
+            "choice":{"text":text}}),
+        )
+        .await;
+        called(&h, "interaction.answer", index + 1).await;
+        assert!(
+            messages(&mut output).is_empty(),
+            "a text answer waits on the Agent outcome"
+        );
+        assert_eq!(
+            h.calls("interaction.answer")[index],
+            json!({"session_id":"s1", "load":"load_1", "loop_id":"text_loop",
+            "interaction_id":question, "answer":{"type":"text", "text":text}})
+        );
+        h.fake.release("interaction.answer");
+        let ack = ack_next(&mut h, &mut output).await;
+        assert_eq!(ack["id"], operation);
+        assert_eq!(ack["ok"], true);
+        assert!(ack.get("input_id").is_none());
+        assert!(h.app.session.as_ref().unwrap().allowed_tools.is_empty());
+        assert!(
+            h.calls("input.push").is_empty(),
+            "text answers are not a deny-reason steer"
+        );
+        assert_eq!(h.app.composer.text(), "conversation draft");
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn w4_text_answers_validate_question_identity_and_kind_without_approval_or_steer_fallback() {
+    let (mut h, mut output) = w4_phone().await;
+    text_control(&mut h, "text_loop", Some("text_question")).await;
+    for (loop_id, question, choice, message, error) in [
+        (
+            "old_loop",
+            "text_question",
+            json!({"text":"answer"}),
+            Value::Null,
+            "stale",
+        ),
+        (
+            "text_loop",
+            "old_question",
+            json!({"text":"answer"}),
+            Value::Null,
+            "stale",
+        ),
+        (
+            "text_loop",
+            "text_question",
+            json!("allow"),
+            Value::Null,
+            "bad_request",
+        ),
+        (
+            "text_loop",
+            "text_question",
+            json!(0),
+            Value::Null,
+            "bad_request",
+        ),
+        (
+            "text_loop",
+            "text_question",
+            json!({"text":"answer"}),
+            json!("not a deny reason"),
+            "bad_request",
+        ),
+    ] {
+        request(
+            &mut h,
+            json!({"kind":"answer", "loop_id":loop_id, "interaction_id":question,
+            "choice":choice, "message":message}),
+        )
+        .await;
+        assert_eq!(ack_next(&mut h, &mut output).await["error"], error);
+    }
+    assert!(h.calls("interaction.answer").is_empty());
+    assert!(h.calls("input.push").is_empty());
+    for approval in [true, false] {
+        pending(&mut h, approval);
+        messages(&mut output);
+        request(&mut h, json!({"kind":"answer", "loop_id":"l1", "interaction_id":"interaction", "choice":{"text":"allow"}})).await;
+        assert_eq!(ack_next(&mut h, &mut output).await["error"], "bad_request");
+    }
+    assert!(h.calls("interaction.answer").is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn w4_a_late_text_reply_does_not_clear_a_replacement_or_retarget_a_cancelled_question() {
+    let (mut h, mut output) = w4_phone().await;
+    h.app.composer.set_text("untouched");
+    text_control(&mut h, "text_loop", Some("old_question")).await;
+    h.fake.script_held("interaction.answer", json!({"ok":true}));
+    let original = request(
+        &mut h,
+        json!({"kind":"answer", "loop_id":"text_loop", "interaction_id":"old_question",
+        "choice":{"text":"old answer"}}),
+    )
+    .await;
+    called(&h, "interaction.answer", 1).await;
+    text_control(&mut h, "text_loop", Some("replacement")).await;
+    h.fake.release("interaction.answer");
+    assert_eq!(ack_next(&mut h, &mut output).await["id"], original);
+    assert_eq!(
+        h.app
+            .session
+            .as_ref()
+            .unwrap()
+            .interaction
+            .as_ref()
+            .unwrap()
+            .interaction_id,
+        "replacement"
+    );
+    text_control(&mut h, "text_loop", None).await;
+    request(&mut h, json!({"kind":"answer", "loop_id":"text_loop", "interaction_id":"replacement", "choice":{"text":"too late"}})).await;
+    assert_eq!(ack_next(&mut h, &mut output).await["error"], "stale");
+    assert_eq!(h.calls("interaction.answer").len(), 1);
+    assert!(h.app.session.as_ref().unwrap().interaction.is_none());
+    assert_eq!(h.app.composer.text(), "untouched");
+    assert!(h.calls("input.push").is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn w4_disconnected_text_answers_stay_budgeted_and_never_acknowledge_the_replacement_phone() {
+    let (mut h, mut output) = w4_phone().await;
+    text_control(&mut h, "text_loop", Some("text_question")).await;
+    h.fake.script_held("interaction.answer", json!({"ok":true}));
+    let text = "é".repeat(4096);
+    let operation = request(
+        &mut h,
+        json!({"kind":"answer", "loop_id":"text_loop", "interaction_id":"text_question",
+        "choice":{"text":text}}),
+    )
+    .await;
+    called(&h, "interaction.answer", 1).await;
+    h.app.on_msg(Msg::Remote(RemoteEvent::Disconnected(1)));
+    let held = h.app.remote.pending(1, &operation).unwrap();
+    assert_eq!(held.kind.text().unwrap(), text);
+    let remaining = "x".repeat(crate::remote::Remote::MAX_PENDING_BYTES - text.len() + 1);
+    assert!(!h.app.remote.admits_pending(2, Some(&remaining)));
+    let (mut replacement, _closing, admission) = phone(&mut h, 2, "first");
+    assert!(admission.await.unwrap());
+    h.fake.release("interaction.answer");
+    h.settle().await;
+    assert!(messages(&mut output).is_empty());
+    assert!(messages(&mut replacement).is_empty());
+    assert!(h.app.remote.admits_pending(2, Some(&remaining)));
+    assert!(h.calls("input.push").is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn w4_real_websocket_reconnect_keeps_partial_saved_and_unavailable_bodies_and_live_provenance()
+ {
+    use crate::app::{recovery::RecoveryStatus, session::BodyRecovery};
+    use crate::transcript::{Block, PreservedKey, RequestKey, Saving};
+    use futures_util::SinkExt;
+    use tokio_tungstenite::tungstenite::Message;
+    let mut h = w0_phone_session();
+    text_control(&mut h, "question_loop", Some("still_actionable")).await;
+    let session = h.app.session.as_mut().unwrap();
+    for (id, saving, status, message) in [
+        (
+            "partial",
+            Saving::Saved,
+            RecoveryStatus::Partial,
+            "Item 1 is too large",
+        ),
+        (
+            "missing",
+            Saving::Unsaved,
+            RecoveryStatus::Unavailable,
+            "Result expired",
+        ),
+    ] {
+        session.transcript.push(Block::Assistant {
+            key: RequestKey {
+                loop_id: id.into(),
+                request_index: 0,
+            },
+            text: format!("received {id}"),
+            reasoning: "temporary thinking".into(),
+            streaming: true,
+            expanded: None,
+        });
+        session.transcript.push(Block::TurnEnd {
+            loop_id: id.into(),
+            outcome: crate::protocol::LoopOutcome::Completed,
+            duration: None,
+            requests: 1,
+            tools: 0,
+            usage: Default::default(),
+            changes: None,
+            saving: Some(saving),
+        });
+        session.body_recovery.push_back(BodyRecovery {
+            loop_id: id.into(),
+            status,
+            message: message.into(),
+        });
+    }
+    session
+        .transcript
+        .mark_preserved([PreservedKey::AssistantReasoning(RequestKey {
+            loop_id: "partial".into(),
+            request_index: 0,
+        })]);
+    let dir = tempfile::tempdir().unwrap();
+    let config = config(h.app.workspace.clone());
+    let bound = Bound::bind(&config, dir.path().join("remote.json"))
+        .await
+        .unwrap();
+    let address = bound.listening[0];
+    let password = bound.auth.lock().unwrap().password().to_owned();
+    h.app.remote.config = Some(config);
+    h.app.enter_remote(bound);
+    tokio::time::resume();
+    crate::testing::real_bounded(async {
+        let connect = |password: String| {
+            tokio::spawn(async move {
+                let stream = tokio::net::TcpStream::connect(address).await.unwrap();
+                let (mut socket, _) =
+                    tokio_tungstenite::client_async(format!("ws://{address}/ws"), stream)
+                        .await
+                        .unwrap();
+                socket
+                    .send(Message::Text(
+                        json!({"t":"login", "v":3, "password":password, "device":"recovery-phone"})
+                            .to_string()
+                            .into(),
+                    ))
+                    .await
+                    .unwrap();
+                let snapshot = frame_of_type(&mut socket, "snapshot").await;
+                (socket, snapshot)
+            })
+        };
+        let pending = connect(password.clone());
+        h.until(|app| !app.remote.phones.is_empty()).await;
+        h.app.sync_remote();
+        let (mut socket, snapshot) = pending.await.unwrap();
+        assert_eq!(snapshot["state"]["interaction"]["id"], "still_actionable");
+        assert_eq!(snapshot["blocks"][0]["text"], "received partial");
+        assert_eq!(
+            snapshot["blocks"][0]["preserved_channels"],
+            json!(["reasoning"])
+        );
+        assert_eq!(snapshot["blocks"][1]["saving"], "saved");
+        assert_eq!(
+            snapshot["blocks"][1]["recovery"],
+            json!({"status":"partial", "reason":"Item 1 is too large"})
+        );
+        assert_eq!(snapshot["blocks"][3]["saving"], "not saved");
+        assert_eq!(
+            snapshot["blocks"][3]["recovery"],
+            json!({"status":"unavailable", "reason":"Result expired"})
+        );
+        let session = h.app.session.as_mut().unwrap();
+        let revisions = session.transcript.revisions().to_vec();
+        session.body_recovery[0].message = "Larger item still missing".into();
+        session.body_recovery[1].message = "Only received fragments remain".into();
+        session
+            .transcript
+            .mark_preserved([PreservedKey::Assistant(RequestKey {
+                loop_id: "missing".into(),
+                request_index: 0,
+            })]);
+        assert_eq!(
+            session.transcript.revisions(),
+            revisions,
+            "metadata invalidation cannot rely on a body bump"
+        );
+        h.app.sync_remote();
+        let update = frame_of_type(&mut socket, "blocks").await;
+        assert_eq!(update["upserts"][0]["i"], 1);
+        assert_eq!(
+            update["upserts"][0]["block"]["recovery"]["reason"],
+            "Larger item still missing"
+        );
+        assert_eq!(update["upserts"][1]["block"]["preserved"], true);
+        assert_eq!(update["upserts"][1]["block"]["text"], "received missing");
+        assert_eq!(
+            update["upserts"][2]["block"]["recovery"]["status"],
+            "unavailable"
+        );
+        socket.close(None).await.unwrap();
+        h.until(|app| app.remote.phones.is_empty()).await;
+        let pending = connect(password);
+        h.until(|app| !app.remote.phones.is_empty()).await;
+        h.app.sync_remote();
+        let (mut socket, snapshot) = pending.await.unwrap();
+        assert_eq!(
+            snapshot["blocks"][1]["recovery"]["reason"],
+            "Larger item still missing"
+        );
+        assert_eq!(snapshot["blocks"][1]["saving"], "saved");
+        assert_eq!(snapshot["blocks"][2]["preserved"], true);
+        assert_eq!(snapshot["blocks"][2]["text"], "received missing");
+        assert_eq!(snapshot["blocks"][3]["recovery"]["status"], "unavailable");
+        assert_eq!(
+            snapshot["blocks"][3]["recovery"]["reason"],
+            "Only received fragments remain"
+        );
+        assert_eq!(snapshot["state"]["interaction"]["id"], "still_actionable");
+        h.app.on_action(Action::Remote("off".into()));
+        assert_eq!(
+            frame_of_type(&mut socket, "bye").await["reason"],
+            "remote_off"
+        );
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn w4_a_real_text_phone_keeps_original_answer_identity_through_a_replacement() {
+    use futures_util::SinkExt;
+    use tokio_tungstenite::tungstenite::Message;
+    let mut h = w0_phone_session();
+    text_control(&mut h, "text_loop", Some("original")).await;
+    h.app.composer.set_text("conversation draft");
+    h.fake.script_held("interaction.answer", json!({"ok":true}));
+    let dir = tempfile::tempdir().unwrap();
+    let config = config(h.app.workspace.clone());
+    let bound = Bound::bind(&config, dir.path().join("remote.json"))
+        .await
+        .unwrap();
+    let address = bound.listening[0];
+    let password = bound.auth.lock().unwrap().password().to_owned();
+    h.app.remote.config = Some(config);
+    h.app.enter_remote(bound);
+    tokio::time::resume();
+    crate::testing::real_bounded(async {
+        let connect = tokio::spawn(async move {
+            let stream = tokio::net::TcpStream::connect(address).await.unwrap();
+            let (mut socket, _) = tokio_tungstenite::client_async(format!("ws://{address}/ws"), stream).await.unwrap();
+            socket.send(Message::Text(json!({"t":"login", "v":3, "password":password, "device":"text phone"}).to_string().into())).await.unwrap();
+            let snapshot = frame_of_type(&mut socket, "snapshot").await;
+            assert_eq!(snapshot["state"]["interaction"]["kind"], "text");
+            assert_eq!(snapshot["state"]["interaction"]["options"], json!([]));
+            let target = json!({"view_epoch":snapshot["view_epoch"], "session_id":"s1", "load":"load_1",
+                "t":"intent", "kind":"answer", "loop_id":"text_loop", "interaction_id":"original",
+                "id":"original_op", "choice":{"text":" allow 中文 "}});
+            socket.send(Message::Text(target.to_string().into())).await.unwrap();
+            (socket, target)
+        });
+        h.until(|app| !app.remote.phones.is_empty()).await;
+        h.app.sync_remote();
+        h.until(|app| app.remote.holds_pending(app.remote.phones[0].connection.id, "original_op")).await;
+        called(&h, "interaction.answer", 1).await;
+        let (mut socket, mut target) = connect.await.unwrap();
+        assert_eq!(h.calls("interaction.answer")[0]["answer"], json!({"type":"text", "text":" allow 中文 "}));
+        let replacement = h.control(json!({"execution":{"type":"running", "loop_id":"text_loop", "input":null,
+            "request_index":0, "phase":"waiting_for_input"}, "pending_interaction":{"loop_id":"text_loop", "request_index":0,
+            "interaction_id":"replacement", "tool_call_id":"call2", "tool_name":"ask",
+            "kind":{"type":"tool_input", "data":{"answer_kind":"text", "prompt":"Replacement?", "choices":[]}}}}));
+        h.app.apply_snapshot(serde_json::from_value(replacement.clone()).unwrap());
+        h.fake.script("session.state", json!({"snapshot":replacement}));
+        h.fake.release("interaction.answer");
+        h.until(|app| !app.remote.holds_pending(app.remote.phones[0].connection.id, "original_op")).await;
+        h.app.sync_remote();
+        let ack = frame_of_type(&mut socket, "ack").await;
+        assert_eq!(ack["id"], "original_op");
+        assert_eq!(ack["ok"], true);
+        assert_eq!(h.app.session.as_ref().unwrap().interaction.as_ref().unwrap().interaction_id, "replacement");
+        target["id"] = json!("stale_op");
+        socket.send(Message::Text(target.to_string().into())).await.unwrap();
+        let answered = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let signal = answered.clone();
+        let reply = tokio::spawn(async move {
+            let ack = frame_of_type(&mut socket, "ack").await;
+            signal.store(true, std::sync::atomic::Ordering::SeqCst);
+            (socket, ack)
+        });
+        h.until(|_| answered.load(std::sync::atomic::Ordering::SeqCst)).await;
+        let (mut socket, ack) = reply.await.unwrap();
+        assert_eq!(ack["id"], "stale_op");
+        assert_eq!(ack["error"], "stale");
+        assert_eq!(h.calls("interaction.answer").len(), 1);
+        assert!(h.calls("input.push").is_empty());
+        assert_eq!(h.app.composer.text(), "conversation draft");
+        h.action(Action::Remote("off".into()));
+        assert_eq!(frame_of_type(&mut socket, "bye").await["reason"], "remote_off");
+    }).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn w4_an_accepted_start_failure_keeps_the_new_input_and_the_actual_failed_head() {
+    let (mut h, mut output) = w4_phone().await;
+    let mut receipt = pushed(vec![
+        entry("older", "follow_up", "old"),
+        entry("new", "follow_up", "same"),
+    ]);
+    receipt["id"] = json!("new");
+    receipt["accepted_at"] = json!("2026-10-30T10:00:00Z");
+    receipt["start_error"] = json!({"input_id":"older", "kind":"runtime_start_failed", "message":"The queued turn could not start"});
+    receipt["queue"]["paused"] = json!(true);
+    h.fake.script_held("input.push", receipt);
+    let id = request(&mut h, json!({"kind":"queue", "text":"same"})).await;
+    called(&h, "input.push", 1).await;
+    assert!(messages(&mut output).is_empty());
+    h.fake.release("input.push");
+    let ack = ack_next(&mut h, &mut output).await;
+    assert_eq!(ack["id"], id);
+    assert_eq!(ack["accepted"], true);
+    assert_eq!(ack["input_id"], "new");
+    assert_eq!(ack["session_id"], "s1");
+    assert_eq!(ack["load"], "load_1");
+    assert_eq!(ack["start_error"]["input_id"], "older");
+    assert_eq!(ack["accepted_at"], "2026-10-30T10:00:00Z");
+    assert!(h.app.composer.is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn w4_agent_backed_settings_and_compaction_share_the_pending_limit_and_wait_for_outcomes() {
+    let (mut h, mut output) = w4_phone().await;
+    h.fake
+        .script_held("session.update", json!({"session":session_info("s1")}));
+    let mut ids = Vec::new();
+    for _ in 0..crate::remote::PendingIntents::PER_CONNECTION {
+        ids.push(request(&mut h, json!({"kind":"set_reasoning", "level":"high"})).await);
+    }
+    called(&h, "session.update", 4).await;
+    assert!(messages(&mut output).is_empty());
+    request(&mut h, json!({"kind":"compact"})).await;
+    assert_eq!(ack_next(&mut h, &mut output).await["error"], "busy");
+    assert!(h.calls("session.compact").is_empty());
+    h.fake.release("session.update");
+    let mut answers = Vec::new();
+    for _ in 0..4 {
+        let ack = ack_next(&mut h, &mut output).await;
+        assert_eq!(ack["ok"], true);
+        answers.push(ack["id"].as_str().unwrap().to_owned());
+    }
+    ids.sort();
+    answers.sort();
+    assert_eq!(ids, answers);
+    h.fake.script_held(
+        "session.compact",
+        json!({"operation_id":"tui-1", "status":"noop"}),
+    );
+    let compact = "compact-operation".to_owned();
+    let intent = phone_intent(&mut h, 1, json!({"kind":"compact"}));
+    let (done, finished) = oneshot::channel();
+    h.app.on_msg(Msg::Remote(RemoteEvent::Request {
+        connection: 1,
+        id: compact.clone(),
+        intent: serde_json::from_value(intent).unwrap(),
+        done,
+    }));
+    assert!(
+        h.app.session.as_ref().unwrap().compaction.is_none(),
+        "dispatch cannot write compaction control"
+    );
+    finished.await.unwrap();
+    called(&h, "session.compact", 1).await;
+    h.settle().await;
+    assert!(messages(&mut output).is_empty());
+    assert_eq!(
+        h.app
+            .session
+            .as_ref()
+            .unwrap()
+            .compaction
+            .as_ref()
+            .unwrap()
+            .operation_id,
+        "tui-1"
+    );
+    h.fake.release("session.compact");
+    let ack = ack_next(&mut h, &mut output).await;
+    assert_eq!(ack["id"], compact);
+    assert_eq!(ack["ok"], true);
+    assert!(ack.get("input_id").is_none());
+}
+
+#[tokio::test(start_paused = true)]
+async fn w4_reusing_an_inflight_operation_id_revokes_delivery_instead_of_answering_the_wrong_operation()
+ {
+    let (mut h, mut output) = w4_phone().await;
+    let closing = h.app.remote.phones[0].connection.close.subscribe();
+    h.fake.script_held("input.push", pushed(vec![]));
+    let id = request(&mut h, json!({"kind":"submit", "text":"same"})).await;
+    let mut intent = phone_intent(&mut h, 1, json!({"kind":"new_session"}));
+    intent["view_epoch"] = json!("stale");
+    let (done, finished) = oneshot::channel();
+    h.app.on_msg(Msg::Remote(RemoteEvent::Request {
+        connection: 1,
+        id: id.clone(),
+        intent: serde_json::from_value(intent).unwrap(),
+        done,
+    }));
+    finished.await.unwrap();
+    assert_eq!(*closing.borrow(), Some("duplicate_id"));
+    assert!(h.app.remote.phones.is_empty());
+    assert!(h.app.remote.holds_pending(1, &id));
+    h.fake.release("input.push");
+    h.settle().await;
+    assert_eq!(h.calls("input.push").len(), 1);
+    assert!(messages(&mut output).is_empty());
+    assert!(!h.app.remote.holds_pending(1, &id));
+}
+
+#[tokio::test(start_paused = true)]
+async fn w4_a_receipt_for_another_load_is_unknown_not_a_success_for_the_current_operation() {
+    let (mut h, mut output) = w4_phone().await;
+    let mut wrong = pushed(vec![]);
+    wrong["session_id"] = json!("s1");
+    wrong["load"] = json!("another_load");
+    h.fake.script("input.push", wrong);
+    request(&mut h, json!({"kind":"submit", "text":"same"})).await;
+    let ack = ack_next(&mut h, &mut output).await;
+    assert_eq!(ack["ok"], false);
+    assert_eq!(ack["acceptance"], "unknown");
+    assert_eq!(h.calls("input.push").len(), 1);
+    assert!(h.app.composer.is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn w4_an_open_reply_for_another_known_session_never_adopts_or_refocuses_it() {
+    let (mut h, mut output) = w4_phone().await;
+    for id in ["wanted", "other"] {
+        let mut info = session_info(id);
+        info["workspace"] = json!(h.app.workspace);
+        h.app.sessions.push(serde_json::from_value(info).unwrap());
+    }
+    let mut other = session_info("other");
+    other["workspace"] = json!(h.app.workspace);
+    h.fake.script(
+        "session.open@wanted",
+        json!({"session":other, "load":"other_load",
+        "snapshot":snapshot("other", "other_load", 1)}),
+    );
+    let id = request(
+        &mut h,
+        json!({"kind":"open_session", "session_id":"wanted"}),
+    )
+    .await;
+    let ack = ack_next(&mut h, &mut output).await;
+    assert_eq!(ack["id"], id);
+    assert_eq!(ack["ok"], false);
+    assert!(h.app.live("other").is_none());
+    assert_eq!(h.app.session.as_ref().unwrap().info.session_id, "s1");
+    assert_eq!(h.app.remote.phones[0].view.session_id(), Some("s1"));
+    assert_eq!(h.calls("session.open")[0]["session_id"], "wanted");
+}
+
+#[tokio::test(start_paused = true)]
+async fn w4_accepted_inputs_coalesce_control_reads_without_waiting_for_them_to_ack() {
+    let (mut h, mut output) = w4_phone().await;
+    h.mirror(vec![], true);
+    h.fake.script_held("session.state", json!({}));
+    let mut queued = Vec::new();
+    for index in 0..4 {
+        let id = format!("input-{index}");
+        queued.push(entry(&id, "follow_up", "same"));
+        let mut receipt = pushed(queued.clone());
+        receipt["id"] = json!(id);
+        receipt["queue"]["paused"] = json!(true);
+        h.fake.script("input.push", receipt);
+        let operation = request(&mut h, json!({"kind":"queue", "text":"same"})).await;
+        let ack = ack_next(&mut h, &mut output).await;
+        assert_eq!(ack["id"], operation);
+        assert_eq!(ack["input_id"], id);
+    }
+    called(&h, "session.state", 1).await;
+    assert_eq!(h.calls("input.push").len(), 4);
+    assert_eq!(
+        h.calls("session.state").len(),
+        1,
+        "a slow read cannot accumulate one task per input"
+    );
+    h.fake.release("session.state");
+    h.settle().await;
+    assert!(
+        h.calls("session.state").len() <= 2,
+        "only one catch-up read is needed"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn w4_transport_errors_are_unknown_but_explicit_rejections_stay_rejected() {
+    let (mut h, mut output) = w4_phone().await;
+    for acceptance in [None, Some("unknown"), Some("rejected")] {
+        h.fake.script_error_with(
+            "input.push",
+            -32000,
+            "not confirmed",
+            "test_error",
+            acceptance,
+        );
+        let id = request(&mut h, json!({"kind":"submit", "text":"same"})).await;
+        let ack = ack_next(&mut h, &mut output).await;
+        assert_eq!(ack["id"], id);
+        assert_eq!(ack["ok"], false);
+        assert_eq!(ack["acceptance"], acceptance.unwrap_or("unknown"));
+        assert!(h.app.session.as_ref().unwrap().returned.is_empty());
+    }
+    assert_eq!(
+        h.calls("input.push").len(),
+        3,
+        "there is no automatic resend"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn w4_late_acceptance_names_the_original_load_without_touching_the_reopened_instance() {
+    let (mut h, mut output) = w4_phone().await;
+    h.fake.script_held("input.push", pushed(vec![]));
+    let id = request(&mut h, json!({"kind":"submit", "text":"same"})).await;
+    called(&h, "input.push", 1).await;
+    h.app.session.as_mut().unwrap().load = Some("reopened".into());
+    h.app.session.as_mut().unwrap().epoch += 1;
+    h.fake.release("input.push");
+    let ack = ack_next(&mut h, &mut output).await;
+    assert_eq!(ack["id"], id);
+    assert_eq!(ack["load"], "load_1");
+    assert_eq!(
+        h.app.session.as_ref().unwrap().load.as_deref(),
+        Some("reopened")
+    );
+    assert!(
+        h.calls("session.state").is_empty(),
+        "an old epoch cannot refresh the new instance"
+    );
+    assert!(!h.app.is_busy());
+}
+
+#[tokio::test(start_paused = true)]
+async fn w4_disconnected_late_ack_and_edit_text_never_reach_a_replacement_device() {
+    let (mut h, mut output) = w4_phone().await;
+    h.fake.script_held("input.push", pushed(vec![]));
+    let first = request(&mut h, json!({"kind":"submit", "text":"same"})).await;
+    h.mirror(vec![entry("old", "follow_up", "same")], false);
+    h.fake.script_held(
+        "input.remove",
+        json!({"text":"same", "queue":queue(vec![], false)}),
+    );
+    let edit = request(
+        &mut h,
+        json!({"kind":"unqueue", "input_id":"old", "edit":true}),
+    )
+    .await;
+    called(&h, "input.remove", 1).await;
+    h.app.on_msg(Msg::Remote(RemoteEvent::Disconnected(1)));
+    assert!(
+        h.app.remote.holds_pending(1, &first),
+        "an in-flight operation remains budgeted"
+    );
+    let (mut replacement, _closing, admission) = phone(&mut h, 2, "first");
+    assert!(admission.await.unwrap());
+    h.fake.release("input.push");
+    h.fake.release("input.remove");
+    h.settle().await;
+    assert!(messages(&mut output).is_empty());
+    assert!(messages(&mut replacement).is_empty());
+    assert!(!h.app.remote.holds_pending(1, &first));
+    assert!(!h.app.remote.holds_pending(1, &edit));
+    let second = request_from(&mut h, 2, json!({"kind":"submit", "text":"same"})).await;
+    assert_ne!(first, second);
+    assert_eq!(ack_next(&mut h, &mut replacement).await["id"], second);
+    assert!(h.app.composer.is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn w4_cancel_answer_and_recall_ack_only_after_the_exact_agent_operation() {
+    let (mut h, mut output) = w4_phone().await;
+    pending(&mut h, true);
+    messages(&mut output);
+    h.fake.script_held("turn.cancel", json!({"ok":true}));
+    let cancel = request(&mut h, json!({"kind":"cancel", "loop_id":"l1"})).await;
+    called(&h, "turn.cancel", 1).await;
+    assert!(messages(&mut output).is_empty());
+    h.fake.release("turn.cancel");
+    assert_eq!(ack_next(&mut h, &mut output).await["id"], cancel);
+    pending(&mut h, true);
+    messages(&mut output);
+    let wrong = request(
+        &mut h,
+        json!({"kind":"answer", "loop_id":"old", "interaction_id":"interaction", "choice":"allow"}),
+    )
+    .await;
+    assert_eq!(ack_next(&mut h, &mut output).await["id"], wrong);
+    assert!(h.calls("interaction.answer").is_empty());
+    h.fake.script_held("interaction.answer", json!({"ok":true}));
+    let answer = request(&mut h, json!({"kind":"answer", "loop_id":"l1", "interaction_id":"interaction", "choice":"allow_session"})).await;
+    called(&h, "interaction.answer", 1).await;
+    assert!(messages(&mut output).is_empty());
+    assert!(h.app.session.as_ref().unwrap().allowed_tools.is_empty());
+    h.fake.release("interaction.answer");
+    assert_eq!(ack_next(&mut h, &mut output).await["id"], answer);
+    assert!(
+        h.app
+            .session
+            .as_ref()
+            .unwrap()
+            .allowed_tools
+            .contains("bash")
+    );
+    h.mirror(vec![entry("recall", "steer", "same")], false);
+    h.fake.script_held(
+        "input.remove",
+        json!({"text":"same", "queue":queue(vec![], false)}),
+    );
+    let recall = request(
+        &mut h,
+        json!({"kind":"unqueue", "input_id":"recall", "edit":true}),
+    )
+    .await;
+    called(&h, "input.remove", 1).await;
+    assert!(messages(&mut output).is_empty());
+    h.fake.release("input.remove");
+    let ack = ack_next(&mut h, &mut output).await;
+    assert_eq!(ack["id"], recall);
+    assert_eq!(ack["input_id"], "recall");
+    assert_eq!(ack["text"], "same");
+    assert!(
+        messages(&mut output).is_empty(),
+        "edit text is part of the ACK, not a separately routed message"
+    );
+    for method in ["turn.cancel", "interaction.answer", "input.remove"] {
+        assert_eq!(h.calls(method)[0]["load"], "load_1");
+        assert_eq!(h.calls(method)[0]["session_id"], "s1");
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn w4_missing_load_and_stale_compaction_identity_are_refused_before_rpc() {
+    let (mut h, mut output) = w4_phone().await;
+    request(&mut h, json!({"kind":"submit", "text":"same", "load":null})).await;
+    assert_eq!(ack_next(&mut h, &mut output).await["error"], "missing_load");
+    assert!(h.calls("input.push").is_empty());
+    h.app.session.as_mut().unwrap().compaction = Some(serde_json::from_value(json!({
+        "operation_id":"new", "phase":"summarizing", "covered_item_count":0, "retained_item_count":0
+    })).unwrap());
+    request(&mut h, json!({"kind":"cancel", "operation_id":"old"})).await;
+    assert_eq!(ack_next(&mut h, &mut output).await["error"], "stale");
+    assert!(h.calls("session.compact.cancel").is_empty());
+    request(&mut h, json!({"kind":"cancel", "operation_id":"new"})).await;
+    assert_eq!(ack_next(&mut h, &mut output).await["ok"], true);
+    assert_eq!(h.calls("session.compact.cancel")[0]["operation_id"], "new");
+}
+
+#[tokio::test(start_paused = true)]
+async fn w4_pending_count_and_expanded_text_byte_limits_are_busy_before_side_effects() {
+    let (mut h, mut output) = w4_phone().await;
+    h.fake.script_held("input.push", pushed(vec![]));
+    for _ in 0..crate::remote::PendingIntents::PER_CONNECTION {
+        request(&mut h, json!({"kind":"submit", "text":"held"})).await;
+    }
+    called(&h, "input.push", 4).await;
+    request(&mut h, json!({"kind":"queue", "text":"must not send"})).await;
+    let ack = ack_next(&mut h, &mut output).await;
+    assert_eq!(ack["error"], "busy");
+    assert_eq!(ack["acceptance"], "rejected");
+    assert_eq!(h.calls("input.push").len(), 4);
+    h.fake.release("input.push");
+    h.settle().await;
+    messages(&mut output);
+    let large = "x".repeat(crate::remote::Remote::MAX_PENDING_BYTES + 1);
+    h.app.templates = vec![crate::app::templates::Template::parse(
+        "large".into(),
+        &large,
+    )];
+    request(&mut h, json!({"kind":"submit", "text":"/large"})).await;
+    let ack = ack_next(&mut h, &mut output).await;
+    assert_eq!(ack["error"], "busy");
+    assert_eq!(ack["acceptance"], "rejected");
+    assert_eq!(h.calls("input.push").len(), 4);
+    assert!(!h.app.loading_session);
+}
+
+#[tokio::test(start_paused = true)]
+async fn w4_global_count_and_byte_budgets_remain_charged_after_disconnect_and_precede_create() {
+    let (mut h, mut output) = w4_phone().await;
+    let held = |id: usize, text: String| crate::remote::PendingIntent {
+        id: id.to_string(),
+        view_epoch: "old".into(),
+        session_id: Some("s1".into()),
+        load: Some("load_1".into()),
+        epoch: Some(1),
+        focus_generation: 0,
+        kind: crate::remote::PendingKind::Input { text },
+    };
+    for id in 0..crate::remote::Remote::MAX_PENDING {
+        h.app
+            .remote
+            .hold_pending(2 + id as u64 / 4, held(id, String::new()));
+    }
+    request(&mut h, json!({"kind":"submit", "text":"must not run"})).await;
+    assert_eq!(ack_next(&mut h, &mut output).await["error"], "busy");
+    assert!(h.calls("input.push").is_empty());
+    for id in 0..crate::remote::Remote::MAX_PENDING {
+        h.app
+            .remote
+            .release_pending(2 + id as u64 / 4, &id.to_string())
+            .unwrap();
+    }
+    h.app.remote.hold_pending(
+        2,
+        held(0, "x".repeat(crate::remote::Remote::MAX_PENDING_BYTES)),
+    );
+    h.app.remote.disconnected(2);
+    assert!(h.app.remote.admits_pending(1, None));
+    assert!(!h.app.remote.admits_pending(1, Some("x")));
+    request(&mut h, json!({"kind":"new_session"})).await;
+    assert_eq!(ack_next(&mut h, &mut output).await["ok"], true);
+    request(&mut h, json!({"kind":"submit", "text":"must not create"})).await;
+    let ack = ack_next(&mut h, &mut output).await;
+    assert_eq!(ack["error"], "busy");
+    assert_eq!(ack["acceptance"], "rejected");
+    assert!(h.calls("session.create").is_empty());
+    assert!(h.calls("input.push").is_empty());
+    h.app.remote.release_pending(2, "0").unwrap();
+    assert!(h.app.remote.admits_pending(1, Some("x")));
+}
+
+#[tokio::test(start_paused = true)]
+async fn w4_overflow_reconnect_replaces_the_whole_projection_and_view_epochs_never_repeat() {
+    let (mut h, mut output) = w4_phone().await;
+    let original = view_epoch(&mut h, 1);
+    let draft = crate::remote::PhoneView::Draft(crate::remote::DraftSettings {
+        workspace: h.app.workspace.clone(),
+        launch: Default::default(),
+    });
+    h.app.set_phone_view(1, draft);
+    h.app.sync_remote();
+    h.app
+        .set_phone_view(1, crate::remote::PhoneView::Session("s1".into()));
+    h.app.sync_remote();
+    assert_ne!(view_epoch(&mut h, 1), original);
+    messages(&mut output);
+    for _ in 0..=512 {
+        h.app
+            .remote
+            .send(Some(1), json!({"t":"notice", "text":"full"}));
+    }
+    assert!(h.app.remote.phones.is_empty());
+    h.app
+        .session
+        .as_mut()
+        .unwrap()
+        .transcript
+        .push(crate::transcript::Block::User {
+            text: "while disconnected".into(),
+            kind: crate::protocol::read::UserKind::Prompt,
+            at: None,
+        });
+    h.mirror(vec![entry("still_queued", "follow_up", "same")], false);
+    let (mut replacement, _close, admission) = phone(&mut h, 2, "first");
+    assert!(admission.await.unwrap());
+    h.app.sync_remote();
+    let snapshot = replacement.try_recv().unwrap();
+    assert_eq!(snapshot["t"], "snapshot");
+    assert_eq!(snapshot["blocks"][0]["text"], "while disconnected");
+    assert_eq!(snapshot["state"]["session"]["load"], "load_1");
+    assert_eq!(snapshot["state"]["queue"][0]["id"], "still_queued");
+    assert!(replacement.try_recv().is_err());
+}
+
+#[tokio::test(start_paused = true)]
+async fn w4_a_stale_draft_create_sends_to_its_created_session_without_refocusing_the_phone() {
+    let (mut h, mut output) = w4_phone().await;
+    request(&mut h, json!({"kind":"new_session"})).await;
+    h.app.sync_remote();
+    messages(&mut output);
+    let mut info = session_info("created");
+    info["workspace"] = json!(h.app.workspace);
+    h.fake.script_held(
+        "session.create",
+        json!({"session":info, "load":"created_load",
+        "snapshot":snapshot("created", "created_load", 1)}),
+    );
+    h.fake.script("input.push", pushed(vec![]));
+    let create = request(&mut h, json!({"kind":"submit", "text":"original"})).await;
+    called(&h, "session.create", 1).await;
+    request(&mut h, json!({"kind":"open_session", "session_id":"s1"})).await;
+    assert_eq!(ack_next(&mut h, &mut output).await["ok"], true);
+    h.app.sync_remote();
+    messages(&mut output);
+    h.fake.release("session.create");
+    let ack = ack_next(&mut h, &mut output).await;
+    assert_eq!(ack["id"], create);
+    assert_eq!(ack["session_id"], "created");
+    assert_eq!(ack["load"], "created_load");
+    assert_eq!(h.app.remote.phones[0].view.session_id(), Some("s1"));
+    assert_eq!(h.app.session.as_ref().unwrap().info.session_id, "s1");
+    assert_eq!(h.calls("input.push")[0]["session_id"], "created");
+    assert_eq!(h.calls("input.push")[0]["load"], "created_load");
+    assert_eq!(h.calls("input.push")[0]["text"], "original");
 }

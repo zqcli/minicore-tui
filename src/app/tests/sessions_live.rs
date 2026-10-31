@@ -84,6 +84,161 @@ fn texts_of(session: &Session) -> Vec<String> {
 }
 
 #[tokio::test(start_paused = true)]
+async fn two_global_recovery_slots_rotate_busy_residents_when_snapshot_availability_changes() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    for id in ["s2", "s3"] {
+        h.fake.script(
+            &format!("session.open@{id}"),
+            json!({"session":session_info(id)}),
+        );
+        h.fake
+            .script(&format!("session.read@{id}"), display_read(0, 0));
+        show(&mut h, id).await;
+    }
+    for id in ["s1", "s2", "s3"] {
+        h.fake.script(
+            &format!("session.rename@{id}"),
+            json!({"session":session_info(id)}),
+        );
+    }
+    let snapshot_for = |id: &str, revision: u64, pressure: bool| {
+        let mut state = crate::testing::snapshot_running(
+            id,
+            crate::testing::LOAD,
+            revision,
+            &format!("{id}-running"),
+            entry(
+                &format!("{id}-input"),
+                "steer",
+                &format!("{id} still working"),
+            ),
+        );
+        state["completions"] = json!({"through_seq":4,"retained_from_seq":1,"truncated":false,"entries":(1..=4).map(|seq|json!({"seq":seq,"loop_id":format!("{id}-finished-{seq}"),"completion_kind":"reported","outcome_kind":"completed","persistence":"failed","availability":if pressure && id=="s2" && seq==1 {"unavailable"}else{"live"},"unavailable_reason":if pressure && id=="s2" && seq==1 {json!("resource_limit")}else{Value::Null}})).collect::<Vec<_>>()});
+        state
+    };
+    for id in ["s1", "s2", "s3"] {
+        h.fake.script_held(
+            &format!("turn.wait@{id}"),
+            waited_in(id, &format!("{id}-running")),
+        );
+        for seq in 1..=4 {
+            let loop_id = format!("{id}-finished-{seq}");
+            let response = if id == "s2" && seq == 1 {
+                json!({"turn":turn_in(id,&loop_id),"load":crate::testing::LOAD,"availability":"unavailable","unavailable_reason":"resource_limit","persistence":"failed","items":[],"total":0,"next_cursor":null})
+            } else {
+                let mut result = turn_result(
+                    &loop_id,
+                    vec![
+                        user(0, &loop_id, &format!("{id} prompt {seq}")),
+                        assistant(1, &loop_id, &format!("{id} answer {seq}")),
+                    ],
+                );
+                result["turn"] = turn_in(id, &loop_id);
+                result["outcome"] = completed();
+                result["persistence"] = json!("failed");
+                result["availability"] = json!("live");
+                result
+            };
+            h.fake
+                .script_held(&format!("turn.result@{id}/{loop_id}"), response);
+        }
+        h.snapshot_event(snapshot_for(id, 100, false)).await;
+        h.until(|app| app.live(id).unwrap().recovery.revision == 100)
+            .await;
+    }
+    h.fake.wait_for_calls("turn.result", 2).await;
+    assert_eq!(
+        h.calls("turn.result")
+            .iter()
+            .map(|call| call["session_id"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>(),
+        ["s1", "s1"]
+    );
+    h.snapshot_event(snapshot_for("s2", 101, true)).await;
+    h.until(|app| app.live("s2").unwrap().recovery.revision == 101)
+        .await;
+    for seq in 1..=2 {
+        h.fake.release(&format!("turn.result@s1/s1-finished-{seq}"));
+    }
+    h.until(|app| app.live("s1").unwrap().recovery.settled_through >= 2)
+        .await;
+    h.fake.wait_for_calls("turn.result", 4).await;
+    let admitted = h
+        .calls("turn.result")
+        .iter()
+        .skip(2)
+        .map(|call| call["session_id"].as_str().unwrap().to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        admitted,
+        ["s2", "s3"],
+        "a busy resident's backlog cannot take both freed slots ahead of another resident"
+    );
+    for revision in 102..=110 {
+        for id in ["s1", "s2", "s3"] {
+            h.snapshot_event(snapshot_for(id, revision, true)).await;
+        }
+        h.until(|app| {
+            ["s1", "s2", "s3"]
+                .iter()
+                .all(|id| app.live(id).unwrap().recovery.revision == revision)
+        })
+        .await;
+        let sessions = h
+            .app
+            .session
+            .iter()
+            .chain(&h.app.background)
+            .collect::<Vec<_>>();
+        assert!(sessions.iter().all(|session| session.is_busy()));
+        assert!(
+            sessions
+                .iter()
+                .map(|session| session.recovery_tasks.len())
+                .sum::<usize>()
+                <= 2
+        );
+        let settled = sessions
+            .iter()
+            .map(|session| session.recovery.settled_through)
+            .sum::<u64>();
+        if settled == 12 {
+            break;
+        }
+        for call in h.calls("turn.result") {
+            h.fake.release(&format!(
+                "turn.result@{}/{}",
+                call["session_id"].as_str().unwrap(),
+                call["loop_id"].as_str().unwrap()
+            ));
+        }
+        h.until(|app| {
+            app.session
+                .iter()
+                .chain(&app.background)
+                .map(|session| session.recovery.settled_through)
+                .sum::<u64>()
+                > settled
+        })
+        .await;
+    }
+    h.until(|app| {
+        ["s1", "s2", "s3"]
+            .iter()
+            .all(|id| app.live(id).unwrap().recovery.settled_through == 4)
+    })
+    .await;
+    assert_eq!(h.calls("turn.result").len(), 12);
+    assert_eq!(
+        h.app.live("s2").unwrap().body_recovery[0].status,
+        crate::app::recovery::RecoveryStatus::Unavailable
+    );
+    for id in ["s1", "s2", "s3"] {
+        assert_eq!(h.app.live(id).unwrap().recovery_tasks.len(), 0);
+    }
+}
+
+#[tokio::test(start_paused = true)]
 async fn two_sessions_run_at_once_and_switching_back_needs_no_reload() {
     let mut h = running_first().await;
     h.app.scroll = Scroll::Anchor {
@@ -338,7 +493,7 @@ async fn a_young_turn_asking_for_approval_does_not_ring() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn text_refused_after_leaving_a_session_returns_with_that_session() {
+async fn text_refused_after_leaving_a_session_is_retained_without_overwriting_either_draft() {
     let mut h = running_first().await;
     h.fake
         .script_error_held("input.push@s1", -32000, "refused", "invalid_state");
@@ -348,11 +503,24 @@ async fn text_refused_after_leaving_a_session_returns_with_that_session() {
     assert_eq!(h.app.composer.text(), "");
     h.app.composer.set_text("draft in two");
     h.fake.release("input.push@s1");
-    h.until(|app| app.live("s1").is_some_and(|s| !s.returned.is_empty()))
-        .await;
+    h.until(|app| {
+        app.local_inputs.iter().any(|input| {
+            input.target.session_id == "s1"
+                && input.status == crate::app::unconfirmed::Status::Rejected
+        })
+    })
+    .await;
     assert_eq!(h.app.composer.text(), "draft in two");
     show(&mut h, "s1").await;
-    assert_eq!(h.app.composer.text(), "draft in one\n\nnext for one");
+    assert_eq!(h.app.composer.text(), "draft in one");
+    let rejected = h
+        .app
+        .local_inputs
+        .iter()
+        .find(|input| input.target.session_id == "s1")
+        .unwrap();
+    assert_eq!(rejected.entry.text(), "next for one");
+    assert_eq!(rejected.status, crate::app::unconfirmed::Status::Rejected);
     show(&mut h, "s2").await;
     assert_eq!(h.app.composer.text(), "draft in two");
 }
@@ -674,7 +842,7 @@ async fn the_phone_sees_live_sessions_and_switches_to_one_at_once() {
     assert_eq!(state["background"], json!({"running": 0, "approval": 1}));
 
     let opens = h.calls("session.open").len();
-    request(&mut h, json!({"kind":"open_session", "session_id":"s1"}));
+    request(&mut h, json!({"kind":"open_session", "session_id":"s1"})).await;
     while let Ok(message) = output.try_recv() {
         if message["t"] == "ack" {
             assert_eq!(message["ok"], true);
