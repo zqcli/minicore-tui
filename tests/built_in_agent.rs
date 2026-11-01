@@ -116,19 +116,16 @@ async fn acceptance_helpers_check_observations_and_fixture_cleanup() {
     let mut command = Command::new("python3");
     command
         .current_dir(&support)
-        .args(["-m", "unittest", "discover", "-p", "test_*.py"])
+        .args(["-m", "unittest", "discover", "-v", "-p", "test_*.py"])
         .env("PYTHONDONTWRITEBYTECODE", "1")
         .kill_on_drop(true);
-    let output = tokio::time::timeout(std::time::Duration::from_secs(30), command.output())
+    let status = tokio::time::timeout(std::time::Duration::from_secs(30), command.status())
         .await
         .expect("bounded observer consumer regressions")
         .expect("python3 observer consumer regressions");
     assert!(
-        output.status.success(),
-        "strict observer consumers failed ({}):\n{}{}",
-        output.status,
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
+        status.success(),
+        "strict observer consumers failed ({status})"
     );
 }
 

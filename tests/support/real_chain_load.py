@@ -360,11 +360,6 @@ def fixture_hash(answers):
     return digest.hexdigest()
 
 
-def child_tty():
-    os.setsid()
-    fcntl.ioctl(0, termios.TIOCSCTTY, 0)
-
-
 def rss_kib(pid):
     """Resident set size of one process in KiB, or 0 when it is gone."""
     try:
@@ -535,14 +530,15 @@ class Chain:
                 (Path(evidence) / "fault-plan.json").write_bytes(plan_path.read_bytes())
         env.update(self.extra_env)
         self.process = subprocess.Popen(
-            [self.binary, "--home", str(self.home), "--workspace", str(self.workspace)]
+            [sys.executable, str(Path(__file__).with_name("process_support.py")),
+             self.binary, "--home", str(self.home), "--workspace", str(self.workspace)]
             + (["--remote"] if self.remote_enabled else []),
             cwd=self.workspace,
             env=env,
             stdin=slave,
             stdout=slave,
             stderr=slave,
-            preexec_fn=child_tty,
+            start_new_session=True,
             close_fds=True,
         )
         register_group(self.process)

@@ -96,7 +96,7 @@ jobs:
           # The built-in Agent and its Runtime, as Cargo.lock pins them.
           {
             echo "minicore-tui $version $GITHUB_SHA"
-            sed -n 's|^source = "git+.*/\(minicore-[a-z]*\)?tag=\(.*\)#\([0-9a-f]*\)"$|\1 \2 \3|p' Cargo.lock
+            sed -En 's@^source = "git\+.*/(minicore-[a-z]+)[?](tag|rev)=([^#]+)#([0-9a-f]+)"$@\1 \3 \4@p' Cargo.lock
           } > "$name/BUILD.txt"
           # A tarball keeps the executable bits, which artifact zips drop.
           if [ -z "$EXE" ]; then

@@ -66,11 +66,43 @@ class HarnessTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             chain = Chain("/does/not/exist", root, Plan(), screen_only=True)
             temporary = chain.temporary.name
-            with self.assertRaises(FileNotFoundError):
+            with self.assertRaises(AssertionError):
                 with chain:
                     self.fail("unreachable")
             self.assertFalse(Path(temporary).exists())
             self.assertFalse(chain.provider.thread.is_alive())
+
+    def test_pty_launcher_executes_with_a_controlling_terminal_and_owned_group(self):
+        master, slave = os.openpty()
+        code = "import os; fd=os.open('/dev/tty', os.O_RDWR); print(os.getsid(0)==os.getpid(), os.tcgetpgrp(fd)==os.getpgrp())"
+        process = None
+        try:
+            process = subprocess.Popen(
+                [sys.executable, str(Path(__file__).with_name('process_support.py')),
+                 sys.executable, '-c', code], start_new_session=True, stdin=slave,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            )
+            output, errors = process.communicate(timeout=5)
+            self.assertEqual(process.returncode, 0, errors)
+            self.assertEqual(output, 'True True\n')
+        finally:
+            cleanup_group(process)
+            os.close(master)
+            os.close(slave)
+
+    def test_darwin_zombie_group_requires_actual_disappearance(self):
+        with patch('process_support.sys.platform', 'darwin'), \
+             patch('process_support.os.kill', side_effect=ProcessLookupError), \
+             patch('process_support.os.killpg', side_effect=[PermissionError, ProcessLookupError]) as probe, \
+             patch('process_support.time.sleep'):
+            assert_group_exited(123, 124)
+            self.assertEqual(probe.call_count, 2)
+
+        with patch('process_support.sys.platform', 'darwin'), \
+             patch('process_support.os.kill', side_effect=ProcessLookupError), \
+             patch('process_support.os.killpg', side_effect=PermissionError):
+            with self.assertRaisesRegex(AssertionError, 'TUI process group remained'):
+                assert_group_exited(123, 124, timeout=0)
 
     @unittest.skipUnless(hasattr(signal, "SIGALRM"), "Unix helper signals")
     def test_helper_termination_runs_cleanup_and_exits_unsuccessfully(self):
