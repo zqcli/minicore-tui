@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Overlapping history recovery and pagination keep each source row once,
+  including result-only pages and the compaction summary's shared item position.
+  Rebuilt history retains scroll anchors, live output and canonical tool details.
+- A delayed predecessor wait settles and counts only its own tools; late body
+  events no longer change the successor's working line or trim its output.
 - Local inputs whose acceptance is unknown remain separately reviewable with F8
   or `/unconfirmed`, without replacing a new draft or entering ordinary prompt
   history. Editing keeps that uncertainty; resending warns about possible

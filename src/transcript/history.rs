@@ -1,11 +1,98 @@
 //! Durable history items as blocks, and the Markdown export of them.
 
-use super::{Block, RequestKey, ToolCall, ToolState, Transcript};
+use super::{Block, HistorySource, RequestKey, ToolCall, ToolState, Transcript};
 use crate::protocol::ToolRef;
 use crate::protocol::read::{
     InterruptedRequest, RawHistoryItem, RuntimeAssistantPart, RuntimeItem, TurnRecord, UserKind,
 };
 use crate::protocol::stamp::unix_millis;
+
+// Records and the display summary share an item position, but are not that raw item.
+const INTERRUPTED_PART: usize = usize::MAX - 2;
+const TERMINAL_PART: usize = usize::MAX - 1;
+const SUMMARY_PART: usize = usize::MAX;
+
+impl Transcript {
+    /// Maps a verified history window, keeping its source items separate from turn-result indices.
+    pub fn from_history(
+        items: &[RawHistoryItem],
+        records: &[TurnRecord],
+        session_id: &str,
+        from: usize,
+    ) -> Self {
+        let mut transcript = Self::default();
+        append_history_from(&mut transcript, items, records, session_id, Some(from));
+        transcript
+    }
+
+    /// Keeps previously displayed source rows outside the incoming verified window.
+    pub fn with_previous_history(self, previous: &Self, covered: std::ops::Range<usize>) -> Self {
+        let mut rows: Vec<_> = previous
+            .origins
+            .iter()
+            .enumerate()
+            .filter_map(|(at, origin)| {
+                origin
+                    .history
+                    .filter(|source| {
+                        !covered.contains(&source.item) || source.part >= INTERRUPTED_PART
+                    })
+                    .map(|source| (source, false, at))
+            })
+            .chain(
+                self.origins
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(at, origin)| origin.history.map(|source| (source, true, at))),
+            )
+            .collect();
+        let mut last_items = std::collections::HashMap::new();
+        for (source, fresh, at) in &rows {
+            let transcript = if *fresh { &self } else { previous };
+            let loop_id = transcript.blocks[*at].loop_id().or_else(|| {
+                transcript
+                    .user_identity(*at)
+                    .map(|user| user.loop_id.as_str())
+            });
+            if let Some(id) = loop_id {
+                let last = last_items.entry(id).or_insert(source.item);
+                *last = (*last).max(source.item);
+            }
+        }
+        for (source, fresh, at) in &mut rows {
+            if let Block::TurnEnd { loop_id, .. } =
+                &if *fresh { &self } else { previous }.blocks[*at]
+            {
+                source.item = last_items[loop_id.as_str()];
+            }
+        }
+        rows.sort_by_key(|(source, _, _)| *source);
+        let mut ends = std::collections::HashSet::new();
+        let mut replies = std::collections::HashSet::new();
+        let mut tools = std::collections::HashSet::new();
+        let mut summaries = std::collections::BTreeSet::new();
+        // A page's record can repeat the interrupted reply and terminal of a turn it cuts.
+        rows.reverse();
+        rows.retain(|(source, fresh, at)| {
+            match &if *fresh { &self } else { previous }.blocks[*at] {
+                Block::TurnEnd { loop_id, .. } => ends.insert(loop_id.clone()),
+                Block::Assistant { key, .. } => replies.insert(key.clone()),
+                Block::Tool(call) => tools.insert(call.key.clone()),
+                Block::Compaction { .. } => summaries.insert(*source),
+                _ => true,
+            }
+        });
+        rows.reverse();
+        let mut result = Self::default();
+        for (history, fresh, at) in rows {
+            let source = if fresh { &self } else { previous };
+            let inserted = result.len();
+            result.splice_copy(inserted..inserted, source, at..at + 1);
+            result.origins[inserted].history = Some(history);
+        }
+        result
+    }
+}
 
 /// Identifies a block a reconcile kept although the canonical body omits it, so
 /// the reader is told that text is temporary rather than authoritative.
@@ -43,7 +130,10 @@ impl PreservedKey {
 /// The blocks of a turn's durable items with what only the live turn showed
 /// put back: card facts, thinking and text the items lack, and the blocks no
 /// item covers, such as the request an interrupt cut short.
-pub fn merge_live(mut durable: Vec<Block>, live: &[Block]) -> (Vec<Block>, Vec<PreservedKey>) {
+pub fn merge_live(
+    mut durable: Vec<Block>,
+    live: &[Block],
+) -> (Vec<Block>, Vec<PreservedKey>, Vec<usize>) {
     let mut preserved = Vec::new();
     for block in &mut durable {
         match block {
@@ -99,9 +189,11 @@ pub fn merge_live(mut durable: Vec<Block>, live: &[Block]) -> (Vec<Block>, Vec<P
             _ => {}
         }
     }
-    let uncovered: Vec<Block> = live
+    let mut sources: Vec<usize> = (0..durable.len()).collect();
+    let uncovered: Vec<(usize, Block)> = live
         .iter()
-        .filter(|block| match block {
+        .enumerate()
+        .filter(|(_, block)| match block {
             Block::Tool(call) => !durable
                 .iter()
                 .any(|kept| matches!(kept, Block::Tool(kept) if kept.key == call.key)),
@@ -114,15 +206,24 @@ pub fn merge_live(mut durable: Vec<Block>, live: &[Block]) -> (Vec<Block>, Vec<P
             Block::Compaction { .. } => true,
             _ => false,
         })
-        .cloned()
+        .map(|(index, block)| (durable.len() + index, block.clone()))
         .collect();
-    // What no canonical item covers is text only the live turn had, so it is
-    // kept but marked as temporary rather than authoritative.
-    preserved.extend(uncovered.iter().filter_map(PreservedKey::of));
-    durable.extend(uncovered);
-    // Blank blocks stayed until now so live text could fill them in place.
-    durable.retain(|block| !block.is_blank_assistant());
-    (durable, preserved)
+    // What no canonical item covers is text only the live turn had.
+    preserved.extend(
+        uncovered
+            .iter()
+            .filter_map(|(_, block)| PreservedKey::of(block)),
+    );
+    for (source, block) in uncovered {
+        sources.push(source);
+        durable.push(block);
+    }
+    let (durable, sources) = durable
+        .into_iter()
+        .zip(sources)
+        .filter(|(block, _)| !block.is_blank_assistant())
+        .unzip();
+    (durable, preserved, sources)
 }
 
 /// Appends history items, closing each turn that has a record with its
@@ -134,39 +235,60 @@ pub fn append_history(
     records: &[TurnRecord],
     session_id: &str,
 ) {
-    let close = |transcript: &mut Transcript, loop_id: Option<&str>, whole: bool| {
-        let Some(record) = loop_id.and_then(|id| records.iter().find(|r| r.loop_id == id)) else {
-            return;
+    append_history_from(transcript, items, records, session_id, None);
+}
+
+fn append_history_from(
+    transcript: &mut Transcript,
+    items: &[RawHistoryItem],
+    records: &[TurnRecord],
+    session_id: &str,
+    from: Option<usize>,
+) {
+    let close =
+        |transcript: &mut Transcript, loop_id: Option<&str>, whole: bool, item: Option<usize>| {
+            let Some(record) = loop_id.and_then(|id| records.iter().find(|r| r.loop_id == id))
+            else {
+                return;
+            };
+            let tools = match whole {
+                true => transcript
+                    .tool_calls()
+                    .filter(|call| call.key.loop_id == record.loop_id)
+                    .count() as u64,
+                false => 0,
+            };
+            if let Some(partial) = &record.interrupted {
+                push_interrupted(transcript, &record.loop_id, partial);
+                transcript.origins.last_mut().unwrap().history = item.map(|item| HistorySource {
+                    item,
+                    part: INTERRUPTED_PART,
+                });
+            }
+            let terminal = transcript.push(Block::TurnEnd {
+                loop_id: record.loop_id.clone(),
+                outcome: record.outcome.clone(),
+                duration: None,
+                requests: record.requests,
+                tools,
+                usage: record.usage.clone(),
+                changes: None,
+                // A stored record exists, so the turn is in committed history.
+                saving: Some(crate::transcript::Saving::Saved),
+            });
+            transcript.origins[terminal].history = item.map(|item| HistorySource {
+                item,
+                part: TERMINAL_PART,
+            });
         };
-        let tools = match whole {
-            true => transcript
-                .tool_calls()
-                .filter(|call| call.key.loop_id == record.loop_id)
-                .count() as u64,
-            false => 0,
-        };
-        if let Some(partial) = &record.interrupted {
-            push_interrupted(transcript, &record.loop_id, partial);
-        }
-        transcript.push(Block::TurnEnd {
-            loop_id: record.loop_id.clone(),
-            outcome: record.outcome.clone(),
-            duration: None,
-            requests: record.requests,
-            tools,
-            usage: record.usage.clone(),
-            changes: None,
-            // A stored record exists, so the turn is in committed history.
-            saving: Some(crate::transcript::Saving::Saved),
-        });
-    };
     let mut open: Option<&str> = None;
     // Whether the open turn's prompt is among `items`, so its cards are all here.
     let mut whole = false;
-    for item in items {
+    let mut last = None;
+    for (offset, item) in items.iter().enumerate() {
         match &item.item {
             RuntimeItem::User(user) if user.kind != UserKind::Steering => {
-                close(transcript, open.take(), whole);
+                close(transcript, open.take(), whole, last);
                 whole = true;
                 // A turn cut in its first request has no assistant item to open it.
                 open = records
@@ -175,7 +297,7 @@ pub fn append_history(
                     .map(|r| r.loop_id.as_str());
             }
             RuntimeItem::Summary(_) => {
-                close(transcript, open.take(), whole);
+                close(transcript, open.take(), whole, last);
                 whole = false;
             }
             RuntimeItem::Assistant(assistant) => open = Some(&assistant.loop_id),
@@ -183,6 +305,19 @@ pub fn append_history(
         }
         let first = transcript.len();
         append_history_item(transcript, item, session_id);
+        last = from.map(|from| from + offset);
+        if let Some(index) = last {
+            for (part, origin) in transcript.origins[first..].iter_mut().enumerate() {
+                origin.history = Some(HistorySource {
+                    item: index,
+                    part: if matches!(item.item, RuntimeItem::Summary(_)) {
+                        SUMMARY_PART
+                    } else {
+                        part
+                    },
+                });
+            }
+        }
         // A request that only called tools would add a second separator row.
         if transcript
             .blocks()
@@ -192,7 +327,7 @@ pub fn append_history(
             transcript.remove(first);
         }
     }
-    close(transcript, open, whole);
+    close(transcript, open, whole, last);
 }
 
 /// Appends the partial reply of a cancelled request as an assistant block.
@@ -412,7 +547,7 @@ mod tests {
             kind: UserKind::Prompt,
             at: Some(42),
         }];
-        let (merged, _) = merge_live(durable.into_blocks(), &live);
+        let (merged, _, _) = merge_live(durable.into_blocks(), &live);
         assert!(matches!(
             merged.as_slice(),
             [Block::User { at: Some(42), .. }]
@@ -523,7 +658,7 @@ mod tests {
                 expanded: None,
             },
         ];
-        let (merged, preserved) = merge_live(durable, &live);
+        let (merged, preserved, _) = merge_live(durable, &live);
         assert_eq!(merged.len(), 2, "the live-only text is kept");
         assert_eq!(
             preserved,
@@ -548,7 +683,7 @@ mod tests {
             streaming: false,
             expanded: None,
         };
-        let (blocks, preserved) = merge_live(
+        let (blocks, preserved, _) = merge_live(
             vec![block("", "canonical")],
             &[block("live-only reasoning", "streamed")],
         );
@@ -602,7 +737,7 @@ mod tests {
             streaming: false,
             expanded: None,
         }];
-        let (merged, _) = merge_live(durable.into_blocks(), &live);
+        let (merged, _, _) = merge_live(durable.into_blocks(), &live);
         let shape: Vec<String> = merged
             .iter()
             .map(|block| match block {

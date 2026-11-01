@@ -113,6 +113,388 @@ async fn a_bounded_history_catchup_keeps_its_verified_window_and_continues_the_m
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_catchup_continuation_replaces_retained_saved_regions_without_repeating_their_body() {
+    let history = |turns: usize| {
+        let mut items = Vec::new();
+        let mut records = Vec::new();
+        for index in 0..turns {
+            let id = format!("saved-{index}");
+            items.push(user(index * 2, &id, &format!("prompt {index}")));
+            items.push(assistant(index * 2 + 1, &id, &format!("answer {index}")));
+            records.push(json!({"loop_id":id,"outcome":completed()}));
+        }
+        let mut page = page(turns * 2, 0, items);
+        page["records"] = json!(records);
+        page
+    };
+    let mut h = Harness::opened(history(1)).await;
+    h.fake
+        .script_held("session.state", json!({"session_id":"s1"}));
+    let mut appended = history(80);
+    appended["_fixture_one_item"] = json!(true);
+    appended["history_revision"] = json!("appended-history");
+    appended["captured_end"] = json!(160_000);
+    h.fake.script("session.read", appended);
+    h.control_event(json!({"completions":{"through_seq":1,"retained_from_seq":2,
+        "entries":[],"truncated":true}}))
+        .await;
+    h.until(|app| {
+        app.session.as_ref().unwrap().recovery.history_status
+            == Some(crate::app::recovery::RecoveryStatus::Exhausted)
+    })
+    .await;
+    assert_eq!(
+        h.texts().iter().filter(|text| *text == "prompt 0").count(),
+        1
+    );
+    for _ in 0..8 {
+        if h.app.session.as_ref().unwrap().recovery.settled_through == 1 {
+            break;
+        }
+        h.action(Action::RetryRecovery);
+        h.until(|app| {
+            app.session.as_ref().unwrap().recovery.settled_through == 1
+                || app.session.as_ref().unwrap().recovery.history_status
+                    == Some(crate::app::recovery::RecoveryStatus::Exhausted)
+        })
+        .await;
+    }
+    assert_eq!(h.app.session.as_ref().unwrap().recovery.settled_through, 1);
+    let expected: Vec<String> = (0..80)
+        .flat_map(|index| [format!("prompt {index}"), format!("answer {index}")])
+        .collect();
+    assert_eq!(h.texts(), expected);
+    assert_eq!(
+        h.blocks()
+            .iter()
+            .filter(|block| matches!(block, Block::TurnEnd { .. }))
+            .count(),
+        80
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn overlapping_partial_turn_windows_keep_source_order_tools_and_live_content() {
+    use crate::app::SessionOp;
+    use crate::app::tasks::{self, Window};
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.fake
+        .script_held("session.state", json!({"session_id":"s1"}));
+    h.fake.script_held("turn.wait", waited("C", completed()));
+    h.running_state("C", entry("input-C", "steer", "prompt C"));
+    h.emit(
+        "output_delta",
+        json!({"turn":turn("C"),"request_index":0,
+        "channel":"text","delta":"current C"}),
+    )
+    .await;
+    h.until(|app| {
+        app.transcript_blocks()
+            .iter()
+            .any(|block| matches!(block, Block::Assistant {text,..} if text == "current C"))
+    })
+    .await;
+    let mut items = vec![user(0, "A", "prompt A")];
+    for index in 1..80 {
+        let item = if index == 40 {
+            json!({"type":"tool_result","data":{"loop_id":"A","request_index":10,
+                "call_id":"retained-tool","outcome":"success","output":{"content":"finished"}}})
+        } else if index % 2 == 0 {
+            json!({"type":"user","data":{"loop_id":"A","kind":"steering","input":{"text":"same steer"}}})
+        } else {
+            let mut content = vec![json!({"type":"text","data":format!("answer {}",index / 2)})];
+            if index == 21 {
+                content.push(json!({"type":"tool_call","data":{"tool_call_id":"retained-tool","name":"bash"}}));
+            }
+            json!({"type":"assistant","data":{"loop_id":"A","request_index":index / 2,"content":content}})
+        };
+        items.push(chunk(index, item));
+    }
+    let mut saved = page(80, 0, items);
+    saved["records"] = json!([{"loop_id":"A","outcome":completed()}]);
+    h.fake.script("session.read", saved);
+    let old = tasks::read_history(h.fake.client.clone(), "s1".into(), Window::Before(40))
+        .await
+        .unwrap();
+    h.op(SessionOp::Tail(Ok(old)));
+    let anchored = h.blocks().iter().position(|block|
+        matches!(block, Block::Assistant {key,..} if key.loop_id == "A" && key.request_index == 15)).unwrap();
+    h.app.scroll = Scroll::Anchor {
+        block: anchored,
+        offset: 2,
+    };
+    h.app.composer.set_text("draft C");
+    let new = tasks::read_history(h.fake.client.clone(), "s1".into(), Window::Before(50))
+        .await
+        .unwrap();
+    h.op(SessionOp::Tail(Ok(new)));
+    let mut expected: Vec<String> = (20..50)
+        .filter(|index| *index != 40)
+        .map(|index| {
+            if index % 2 == 0 {
+                "same steer".into()
+            } else {
+                format!("answer {}", index / 2)
+            }
+        })
+        .collect();
+    expected.extend(["prompt C".into(), "current C".into()]);
+    assert_eq!(
+        h.texts(),
+        expected,
+        "equal steering text identifies no source row"
+    );
+    assert_eq!(h.app.composer.text(), "draft C");
+    let Scroll::Anchor { block, offset } = h.app.scroll else {
+        panic!("the view stays anchored")
+    };
+    assert_eq!(offset, 2);
+    assert!(
+        matches!(&h.blocks()[block], Block::Assistant {key,..} if key.loop_id == "A" && key.request_index == 15)
+    );
+    let tool = h
+        .app
+        .session
+        .as_ref()
+        .unwrap()
+        .transcript
+        .tool_calls()
+        .next()
+        .unwrap();
+    assert_eq!(tool.state, crate::transcript::ToolState::Succeeded);
+    assert_eq!(tool.output_content(), ["finished"]);
+    assert_eq!(
+        h.blocks()
+            .iter()
+            .filter(|block| matches!(block,Block::TurnEnd {loop_id,..} if loop_id == "A"))
+            .count(),
+        1
+    );
+    assert_eq!(h.app.session.as_ref().unwrap().observed_loop(), Some("C"));
+    assert_eq!(h.app.session.as_ref().unwrap().loaded_from, 20);
+
+    // A later disjoint window keeps the older island, then ordinary pages join them.
+    let later = tasks::read_history(h.fake.client.clone(), "s1".into(), Window::Before(80))
+        .await
+        .unwrap();
+    h.op(SessionOp::Tail(Ok(later)));
+    assert_eq!(h.app.session.as_ref().unwrap().loaded_from, 60);
+    for from in [40, 20, 0] {
+        h.action(Action::LoadOlder);
+        h.settle().await;
+        assert_eq!(h.app.session.as_ref().unwrap().loaded_from, from);
+    }
+    let mut all = vec!["prompt A".to_owned()];
+    all.extend((1..80).filter(|index| *index != 40).map(|index| {
+        if index % 2 == 0 {
+            "same steer".into()
+        } else {
+            format!("answer {}", index / 2)
+        }
+    }));
+    all.extend(["prompt C".into(), "current C".into()]);
+    assert_eq!(
+        h.texts(),
+        all,
+        "overlapping ordinary pages share the same source merge"
+    );
+    assert_eq!(h.app.composer.text(), "draft C");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_tool_result_only_window_updates_retained_cards_without_copying_their_turn_again() {
+    use crate::app::SessionOp;
+    use crate::app::tasks::{self, Window};
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.fake
+        .script_held("session.state", json!({"session_id":"s1"}));
+    let mut items = vec![user(0, "A", "prompt A")];
+    for request in 0..10 {
+        let call = format!("earlier-{request}");
+        items.push(chunk(
+            request * 2 + 1,
+            json!({"type":"assistant","data":{
+            "loop_id":"A","request_index":request,"content":[
+                {"type":"tool_call","data":{"tool_call_id":call,"name":"bash"}}]}}),
+        ));
+        items.push(chunk(
+            request * 2 + 2,
+            json!({"type":"tool_result","data":{
+            "loop_id":"A","request_index":request,"call_id":call,"outcome":"success"}}),
+        ));
+    }
+    let mut content = vec![json!({"type":"text","data":"large batch"})];
+    content.extend((22..50).map(|index| {
+        json!({"type":"tool_call","data":{
+        "tool_call_id":format!("batch-{index}"),"name":"bash"}})
+    }));
+    items.push(chunk(
+        21,
+        json!({"type":"assistant","data":{
+        "loop_id":"A","request_index":10,"content":content}}),
+    ));
+    items.extend((22..50).map(|index| {
+        chunk(
+            index,
+            json!({"type":"tool_result","data":{
+        "loop_id":"A","request_index":10,"call_id":format!("batch-{index}"),
+        "outcome":"success","output":{"content":format!("finished-{index}")}}}),
+        )
+    }));
+    items.push(chunk(
+        50,
+        json!({"type":"assistant","data":{
+        "loop_id":"A","request_index":11,"content":[{"type":"text","data":"done"}]}}),
+    ));
+    let mut saved = page(51, 0, items);
+    saved["records"] = json!([{"loop_id":"A","outcome":completed()}]);
+    h.fake.script("session.read", saved);
+    for before in [40, 50] {
+        let read = tasks::read_history(h.fake.client.clone(), "s1".into(), Window::Before(before))
+            .await
+            .unwrap();
+        h.op(SessionOp::Tail(Ok(read)));
+    }
+    let cards: Vec<_> = h
+        .app
+        .session
+        .as_ref()
+        .unwrap()
+        .transcript
+        .tool_calls()
+        .collect();
+    assert_eq!(
+        cards.len(),
+        28,
+        "a result-only page does not create a second region"
+    );
+    for (index, card) in (22..50).zip(cards) {
+        assert_eq!(card.key.tool_call_id, format!("batch-{index}"));
+        assert_eq!(card.state, crate::transcript::ToolState::Succeeded);
+        assert_eq!(card.output_content(), [format!("finished-{index}")]);
+    }
+    assert_eq!(h.texts(), ["large batch"]);
+    assert_eq!(
+        h.blocks()
+            .iter()
+            .filter(|block| matches!(block, Block::TurnEnd {loop_id,..} if loop_id == "A"))
+            .count(),
+        1
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_summary_anchor_stays_on_its_projection_when_canonical_history_fills_its_source_slot() {
+    use crate::app::SessionOp;
+    use crate::app::tasks::{self, Window};
+    let mut display = page(
+        42,
+        39,
+        vec![
+            summary(39),
+            user(40, "B", "prompt B"),
+            assistant(41, "B", "answer B"),
+        ],
+    );
+    display["records"] = json!([{"loop_id":"B","outcome":completed()}]);
+    let mut h = Harness::opened(display).await;
+    h.fake
+        .script_held("session.state", json!({"session_id":"s1"}));
+    let mut items = vec![user(0, "A", "prompt A")];
+    items.extend((1..40).map(|index| chunk(index,json!({"type":"assistant","data":{
+        "loop_id":"A","request_index":index-1,"content":[{"type":"text","data":format!("answer {index}")}]}}))));
+    items.extend([user(40, "B", "prompt B"), assistant(41, "B", "answer B")]);
+    let mut canonical = page(42, 39, items);
+    canonical["records"] =
+        json!([{"loop_id":"A","outcome":completed()},{"loop_id":"B","outcome":completed()}]);
+    h.fake.script("session.read", canonical);
+    let summary = h
+        .blocks()
+        .iter()
+        .position(|block| matches!(block, Block::Compaction { .. }))
+        .unwrap();
+    h.app.scroll = Scroll::Anchor {
+        block: summary,
+        offset: 1,
+    };
+    h.action(Action::LoadOlder);
+    h.settle().await;
+    let read = tasks::read_history(h.fake.client.clone(), "s1".into(), Window::CatchUp(None))
+        .await
+        .unwrap();
+    h.op(SessionOp::Tail(Ok(read)));
+    let Scroll::Anchor { block, offset } = h.app.scroll else {
+        panic!("the summary remains anchored")
+    };
+    assert_eq!(offset, 1);
+    assert!(
+        matches!(h.blocks()[block], Block::Compaction { .. }),
+        "the canonical item shares an index, not the summary's identity"
+    );
+    assert_eq!(
+        h.blocks()
+            .iter()
+            .filter(|block| matches!(block, Block::Compaction { .. }))
+            .count(),
+        1
+    );
+    assert!(matches!(&h.blocks()[block-1],Block::TurnEnd {loop_id,..} if loop_id == "A"));
+    assert!(matches!(&h.blocks()[block+1],Block::User {text,..} if text == "prompt B"));
+}
+
+#[tokio::test(start_paused = true)]
+async fn canonical_older_cards_are_hydrated_after_a_limited_history_recovery() {
+    let mut h = Harness::opened(page(
+        160,
+        150,
+        vec![summary(150), assistant(159, "saved-79", "answer 159")],
+    ))
+    .await;
+    h.fake
+        .script_held("session.state", json!({"session_id":"s1"}));
+    let items = (0..160)
+        .map(|index| {
+            if index == 119 {
+                assistant_tool(index, "l1", "c1", "bash")
+            } else if index % 2 == 0 {
+                user(
+                    index,
+                    &format!("saved-{}", index / 2),
+                    &format!("prompt {index}"),
+                )
+            } else {
+                assistant(
+                    index,
+                    &format!("saved-{}", index / 2),
+                    &format!("answer {index}"),
+                )
+            }
+        })
+        .collect();
+    let mut saved = page(160, 150, items);
+    saved["_fixture_one_item"] = json!(true);
+    h.fake.script("session.read", saved);
+    h.control_event(json!({"completions":{"through_seq":1,"retained_from_seq":2,
+        "entries":[],"truncated":true}}))
+        .await;
+    h.until(|app| {
+        app.session.as_ref().unwrap().recovery.history_status
+            == Some(crate::app::recovery::RecoveryStatus::Exhausted)
+    })
+    .await;
+    assert_eq!(h.app.session.as_ref().unwrap().loaded_from, 129);
+    assert_eq!(h.app.session.as_ref().unwrap().first_item, 150);
+    h.fake.script("tool.read", tool_read("failed", 2));
+    h.action(Action::LoadOlder);
+    h.settle().await;
+    assert_eq!(h.calls("tool.read").len(), 1);
+    let card = cards(&h)[0];
+    assert_eq!(card.detail, "ls -la");
+    assert_eq!(card.state, crate::transcript::ToolState::Failed);
+    assert_eq!(card.exit_code, Some(2));
+}
+
+#[tokio::test(start_paused = true)]
 async fn older_pagination_to_zero_cannot_settle_an_unread_newer_history_suffix() {
     let mut h = history_catchup_at_its_page_limit().await;
     let mut old = page(80, 0, vec![user(0, "old-history", "older visible content")]);

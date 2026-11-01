@@ -51,18 +51,7 @@ impl App {
                 };
                 if let Some(page) = page {
                     let covered = page.coverage();
-                    let prepend = self
-                        .session_mut()
-                        .recovery
-                        .history_coverage
-                        .as_ref()
-                        .is_some_and(|known| known.matches(&page.pin) && page.end == known.from);
-                    if prepend {
-                        let (grown, _) = self.session_mut().prepend_page(*page);
-                        self.blocks_moved(0, grown);
-                    } else {
-                        self.install_history(*page);
-                    }
+                    self.install_history(*page);
                     self.session_mut().recovery.cover_history(covered, true);
                     if superseded {
                         self.session_mut().recovery.history_status =
@@ -269,7 +258,21 @@ impl App {
     }
 
     fn install_history(&mut self, page: tasks::History) {
+        let source = match self.scroll {
+            Scroll::Anchor { block, offset } => self
+                .session_mut()
+                .transcript
+                .history_source(block)
+                .map(|source| (source, offset)),
+            Scroll::Follow => None,
+        };
         let mapping = self.session_mut().install_tail(page);
+        if let Some((source, offset)) = source
+            && let Some(block) = self.session_mut().transcript.find_history_source(source)
+        {
+            self.scroll = Scroll::Anchor { block, offset };
+            return;
+        }
         if let Scroll::Anchor { block, offset } = self.scroll
             && let Some((old, start, replaced)) =
                 mapping.iter().find(|(range, _, _)| range.contains(&block))
@@ -340,8 +343,44 @@ impl App {
             return;
         }
         let covered = page.coverage();
-        let (grown, cards) = self.session_mut().prepend_page(page);
-        self.blocks_moved(0, grown);
+        let overlaps = {
+            let transcript = &self.session_mut().transcript;
+            (0..transcript.len()).any(|at| {
+                transcript
+                    .history_source(at)
+                    .is_some_and(|source| (page.from..page.end).contains(&source.item))
+            })
+        };
+        let cards = if overlaps || self.session_mut().recovery.history_coverage.is_some() {
+            let window = page.from..page.end;
+            let canonical = page.canonical;
+            self.session_mut().loading_older = false;
+            self.install_history(page);
+            let transcript = &self.session_mut().transcript;
+            if canonical {
+                transcript
+                    .blocks()
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(at, block)| match block {
+                        Block::Tool(call)
+                            if transcript
+                                .history_source(at)
+                                .is_some_and(|source| window.contains(&source.item)) =>
+                        {
+                            Some(call.key.clone())
+                        }
+                        _ => None,
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            }
+        } else {
+            let (grown, cards) = self.session_mut().prepend_page(page);
+            self.blocks_moved(0, grown);
+            cards
+        };
         self.session_mut().recovery.cover_history(covered, false);
         if self.session_mut().recovery.gap_through > self.session_mut().recovery.settled_through
             && self.session_mut().recovery.settle_history_gap()

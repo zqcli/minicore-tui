@@ -28,7 +28,7 @@ fn next_revision() -> u64 {
 pub struct Transcript {
     blocks: Vec<Block>,
     revisions: Vec<u64>,
-    user_identities: Vec<Option<UserIdentity>>,
+    origins: Vec<Origin>,
     /// Keys of blocks a reconcile kept although the canonical body omits them.
     preserved: Vec<PreservedKey>,
 }
@@ -40,10 +40,22 @@ pub struct UserIdentity {
     pub request_index: Option<u32>,
 }
 
+#[derive(Clone, Debug, Default)]
+struct Origin {
+    user: Option<UserIdentity>,
+    history: Option<HistorySource>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct HistorySource {
+    pub item: usize,
+    part: usize,
+}
+
 pub struct MergedRegion {
     pub blocks: Vec<Block>,
     preserved: Vec<PreservedKey>,
-    user_identities: Vec<Option<UserIdentity>>,
+    origins: Vec<Origin>,
 }
 
 impl Transcript {
@@ -72,7 +84,7 @@ impl Transcript {
     pub fn push(&mut self, block: Block) -> usize {
         self.blocks.push(block);
         self.revisions.push(next_revision());
-        self.user_identities.push(None);
+        self.origins.push(Origin::default());
         self.blocks.len() - 1
     }
 
@@ -80,13 +92,13 @@ impl Transcript {
         let index = index.min(self.blocks.len());
         self.blocks.insert(index, block);
         self.revisions.insert(index, next_revision());
-        self.user_identities.insert(index, None);
+        self.origins.insert(index, Origin::default());
     }
 
     pub fn clear(&mut self) {
         self.blocks.clear();
         self.revisions.clear();
-        self.user_identities.clear();
+        self.origins.clear();
         self.preserved.clear();
     }
 
@@ -96,7 +108,7 @@ impl Transcript {
                 .retain(|key| !key.belongs_to(&self.blocks[index]));
             self.blocks.remove(index);
             self.revisions.remove(index);
-            self.user_identities.remove(index);
+            self.origins.remove(index);
         }
     }
 
@@ -108,8 +120,8 @@ impl Transcript {
                 .any(|block| key.belongs_to(block))
         });
         let revisions: Vec<u64> = blocks.iter().map(|_| next_revision()).collect();
-        self.user_identities
-            .splice(range.clone(), vec![None; blocks.len()]);
+        self.origins
+            .splice(range.clone(), vec![Origin::default(); blocks.len()]);
         self.blocks.splice(range.clone(), blocks);
         self.revisions.splice(range, revisions);
     }
@@ -123,7 +135,7 @@ impl Transcript {
         });
         self.blocks.drain(..count);
         self.revisions.drain(..count);
-        self.user_identities.drain(..count);
+        self.origins.drain(..count);
     }
 
     pub fn into_blocks(self) -> Vec<Block> {
@@ -133,8 +145,8 @@ impl Transcript {
     pub fn splice_copy(&mut self, range: Range<usize>, source: &Self, copied: Range<usize>) {
         let start = range.start;
         self.splice(range, source.blocks[copied.clone()].to_vec());
-        self.user_identities[start..start + copied.len()]
-            .clone_from_slice(&source.user_identities[copied]);
+        self.origins[start..start + copied.len()].clone_from_slice(&source.origins[copied.clone()]);
+        self.mark_preserved(source.preserved_in(copied));
     }
 
     pub fn splice_transcript(&mut self, range: Range<usize>, source: Self) {
@@ -143,7 +155,7 @@ impl Transcript {
             MergedRegion {
                 blocks: source.blocks,
                 preserved: source.preserved,
-                user_identities: source.user_identities,
+                origins: source.origins,
             },
         );
     }
@@ -151,38 +163,50 @@ impl Transcript {
     pub fn splice_merged(&mut self, range: Range<usize>, source: MergedRegion) {
         let start = range.start;
         self.splice(range, source.blocks);
-        self.user_identities[start..start + source.user_identities.len()]
-            .clone_from_slice(&source.user_identities);
+        self.origins[start..start + source.origins.len()].clone_from_slice(&source.origins);
         self.mark_preserved(source.preserved);
     }
 
     pub fn merged(mut durable: Self, live: &Self, range: Range<usize>) -> MergedRegion {
         durable.keep_delivered_rows(live, range.clone());
-        let users: Vec<_> = durable.blocks.iter().enumerate()
-            .filter(|(_, block)| matches!(block, Block::User { .. }))
-            .map(|(index, _)| durable.user_identities[index].clone())
-            .chain(live.blocks[range.clone()].iter().enumerate().filter_map(|(index, block)| {
-            let Block::User { text, .. } = block else { return None; };
-            (!durable.blocks.iter().any(|block| matches!(block, Block::User { text: known, .. } if known == text)))
-                .then(|| live.user_identities[range.start + index].clone())
-        })).collect();
-        let (blocks, preserved) = merge_live(durable.blocks, &live.blocks[range]);
-        let user_identities = {
-            let mut identities = vec![None; blocks.len()];
-            let mut users = users.into_iter();
-            for (index, block) in blocks.iter().enumerate() {
-                if matches!(block, Block::User { .. }) {
-                    identities[index] = users.next().expect("merged user provenance");
+        let (blocks, mut preserved, sources) =
+            merge_live(durable.blocks, &live.blocks[range.clone()]);
+        preserved.extend(durable.preserved);
+        let mut summaries = std::collections::BTreeSet::new();
+        let (blocks, origins) = blocks
+            .into_iter()
+            .zip(sources)
+            .filter_map(|(block, source)| {
+                let origin = if source < durable.origins.len() {
+                    durable.origins[source].clone()
+                } else {
+                    live.origins[range.start + source - durable.origins.len()].clone()
+                };
+                if matches!(block, Block::Compaction { .. })
+                    && origin
+                        .history
+                        .is_some_and(|source| !summaries.insert(source))
+                {
+                    return None;
                 }
-            }
-            assert!(users.next().is_none(), "merged user provenance length");
-            identities
-        };
+                Some((block, origin))
+            })
+            .unzip();
         MergedRegion {
             blocks,
             preserved,
-            user_identities,
+            origins,
         }
+    }
+
+    pub fn history_source(&self, index: usize) -> Option<HistorySource> {
+        self.origins.get(index).and_then(|origin| origin.history)
+    }
+
+    pub fn find_history_source(&self, source: HistorySource) -> Option<usize> {
+        self.origins
+            .iter()
+            .position(|origin| origin.history == Some(source))
     }
 
     fn keep_delivered_rows(&mut self, live: &Self, range: Range<usize>) {
@@ -278,14 +302,14 @@ impl Transcript {
         for (at, source) in plan.into_iter().enumerate() {
             if let Source::Delivered(index) = source {
                 self.blocks[at] = live.blocks[index].clone();
-                self.user_identities[at] = live.user_identities[index].clone();
+                self.origins[at].user = live.origins[index].user.clone();
             }
         }
     }
 
     pub fn identify_user(&mut self, index: usize, loop_id: &str, input_id: Option<&str>) {
         assert!(matches!(self.blocks[index], Block::User { .. }));
-        self.user_identities[index] = Some(UserIdentity {
+        self.origins[index].user = Some(UserIdentity {
             loop_id: loop_id.to_owned(),
             input_id: input_id.map(str::to_owned),
             request_index: None,
@@ -300,11 +324,11 @@ impl Transcript {
         request_index: u32,
     ) {
         self.identify_user(index, loop_id, Some(input_id));
-        self.user_identities[index].as_mut().unwrap().request_index = Some(request_index);
+        self.origins[index].user.as_mut().unwrap().request_index = Some(request_index);
     }
 
     pub fn user_identity(&self, index: usize) -> Option<&UserIdentity> {
-        self.user_identities[index].as_ref()
+        self.origins[index].user.as_ref()
     }
 
     /// Marks live-only content without clearing another region's provenance.

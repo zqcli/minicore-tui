@@ -751,3 +751,125 @@ async fn held_history_and_result_replies_after_same_session_reopen_cannot_mutate
     assert!(!session.is_closed("old-loop"));
     assert!(h.notices().is_empty());
 }
+
+mod snapshot_control {
+    use crate::app::{LiveStatus, Phase, Session};
+    use crate::protocol::SessionSnapshot;
+    use crate::protocol::read::UserKind;
+    use crate::transcript::Block;
+    use serde_json::json;
+
+    fn session() -> Session {
+        Session::new(
+            serde_json::from_value(crate::testing::session_info("s")).unwrap(),
+            1,
+        )
+    }
+
+    fn snapshot(execution: serde_json::Value, queue: serde_json::Value) -> SessionSnapshot {
+        serde_json::from_value(json!({
+            "session_id": "s", "load": "load_1", "revision": 1,
+            "execution": execution, "queue": queue,
+            "completions": {"through_seq": 0, "retained_from_seq": 1, "entries": [],
+                            "truncated": false}
+        }))
+        .unwrap()
+    }
+
+    fn item(id: &str, text: &str) -> serde_json::Value {
+        json!({"id": id, "mode": "steer", "text": text})
+    }
+
+    #[test]
+    fn execution_retains_its_region_through_finishing_until_a_successor_arrives() {
+        let mut session = session();
+        let observed = snapshot(
+            json!({"type": "running", "loop_id": "l1", "input": item("i1", "first"),
+                   "request_index": 0, "phase": "running_model"}),
+            json!({"items": [], "paused": false}),
+        );
+        session.apply_control(&observed);
+        let live = session.live.as_ref().unwrap();
+        assert_eq!(live.turn.loop_id, "l1");
+        assert_eq!(live.phase, Phase::Waiting);
+        assert!(matches!(
+            session.transcript.blocks().first(),
+            Some(Block::User { text, kind: UserKind::Prompt, .. }) if text == "first"
+        ));
+        assert_eq!(session.control_status(), LiveStatus::Running);
+        session.apply_control(&snapshot(
+            json!({"type":"finishing","loop_id":"l1","input":item("i1","first"),"request_index":1}),
+            json!({"items":[],"paused":false}),
+        ));
+        assert_eq!(session.live.as_ref().unwrap().turn.loop_id, "l1");
+        assert_eq!(session.transcript.len(), 1);
+        session.apply_control(&snapshot(
+            json!({"type":"running","loop_id":"l2","input":item("i2","second"),"request_index":0,"phase":"running_tools"}),
+            json!({"items":[],"paused":false}),
+        ));
+        assert_eq!(session.observed_loop(), Some("l2"));
+        assert_eq!(session.live.as_ref().unwrap().start, 1);
+        assert!(
+            matches!(&session.transcript.blocks()[1], Block::User {text,..} if text == "second")
+        );
+    }
+
+    #[test]
+    fn a_claimed_input_is_busy_without_creating_a_speculative_loop_or_queue_entry() {
+        let mut session = session();
+        session.apply_control(&snapshot(
+            json!({"type":"starting","input":item("claimed","older input")}),
+            json!({"items":[],"paused":false}),
+        ));
+        assert!(session.is_busy());
+        assert!(session.live.is_none());
+        assert_eq!(session.status_label(), Some("Thinking"));
+        assert!(session.queue.items.is_empty());
+        assert!(session.transcript.is_empty());
+    }
+
+    #[test]
+    fn a_snapshot_interaction_is_operable_without_a_tool_card() {
+        let mut session = session();
+        let snapshot: SessionSnapshot = serde_json::from_value(json!({
+            "session_id": "s", "load": "load_1", "revision": 1,
+            "execution": {"type": "running", "loop_id": "l1",
+                          "input": item("i1", "go"), "request_index": 2,
+                          "phase": "waiting_for_input"},
+            "pending_interaction": {
+                "loop_id": "l1", "request_index": 2, "interaction_id": "int_1",
+                "tool_call_id": "call_1", "tool_name": "shell",
+                "kind": {"type": "tool_input", "data": {
+                    "prompt": "Which branch?", "answer_kind": "single_choice",
+                    "choices": [{"index": 0, "text": "main"}, {"index": 1, "text": "next"}]
+                }}
+            },
+            "queue": {"items": [], "paused": false},
+            "completions": {"through_seq": 0, "retained_from_seq": 1, "entries": [],
+                            "truncated": false}
+        }))
+        .unwrap();
+        session.apply_control(&snapshot);
+        let interaction = session.interaction.as_ref().unwrap();
+        assert_eq!(interaction.turn.loop_id, "l1");
+        assert_eq!(interaction.prompt, "Which branch?");
+        assert_eq!(interaction.options(), ["main", "next"]);
+        assert_eq!(session.control_status(), LiveStatus::Approval);
+        // A later snapshot without the interaction resolves it.
+        session.apply_control(&snapshot_json_without_interaction());
+        assert!(session.interaction.is_none());
+    }
+
+    fn snapshot_json_without_interaction() -> SessionSnapshot {
+        serde_json::from_value(json!({
+            "session_id": "s", "load": "load_1", "revision": 2,
+            "execution": {"type": "running", "loop_id": "l1",
+                          "input": item("i1", "go"), "request_index": 2,
+                          "phase": "running_tools"},
+            "queue": {"items": [], "paused": false},
+            "completions": {"through_seq": 0, "retained_from_seq": 1, "entries": [],
+                            "truncated": false}
+        }))
+        .unwrap()
+    }
+}

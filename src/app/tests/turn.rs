@@ -427,6 +427,133 @@ fn turn_ends(h: &Harness) -> Vec<String> {
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_late_wait_finishes_only_its_turn_while_the_successor_runs_a_tool() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.fake
+        .script_held("session.state", json!({"session_id":"s1"}));
+    h.fake.script_held("turn.wait", waited("A", completed()));
+    h.running_state("A", entry("input-A", "steer", "prompt A"));
+    h.running_state("B", entry("input-B", "follow_up", "prompt B"));
+    h.emit(
+        "tool_started",
+        json!({"turn":turn("B"),"request_index":0,
+        "tool_call_id":"tool-B","tool_name":"bash"}),
+    )
+    .await;
+    let rows = crate::transcript::EXPANDED_ROWS + 20;
+    let output = (0..rows)
+        .map(|row| format!("line {row}\n"))
+        .collect::<String>();
+    h.emit(
+        "tool_process",
+        json!({"turn":turn("B"),"data":{
+        "tool_ref":{"session_id":"s1","loop_id":"B","request_index":0,"tool_call_id":"tool-B"},
+        "chunk":{"stream":"stdout","encoding":"utf8","data":output,
+            "base_offset":0,"next_offset":output.len(),"expired":false}}}),
+    )
+    .await;
+    h.until(|app| {
+        app.session
+            .as_ref()
+            .unwrap()
+            .transcript
+            .tool_calls()
+            .any(|call| call.output_content().len() == rows)
+    })
+    .await;
+    let before = h
+        .app
+        .session
+        .as_ref()
+        .unwrap()
+        .transcript
+        .tool_calls()
+        .next()
+        .unwrap()
+        .output
+        .clone();
+
+    h.op(SessionOp::Waited(Ok(serde_json::from_value(waited(
+        "A",
+        completed(),
+    ))
+    .unwrap())));
+
+    let session = h.app.session.as_ref().unwrap();
+    let call = session.transcript.tool_calls().next().unwrap();
+    assert_eq!(
+        call.output, before,
+        "finishing A cannot trim B's running output"
+    );
+    assert_eq!(call.state, ToolState::Running);
+    assert_eq!(session.observed_loop(), Some("B"));
+    assert!(h.blocks().iter().any(|block| matches!(block,
+        Block::TurnEnd {loop_id, tools:0, ..} if loop_id == "A")));
+}
+
+#[tokio::test(start_paused = true)]
+async fn late_body_updates_its_region_without_changing_the_successors_working_line() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.fake
+        .script_held("session.state", json!({"session_id":"s1"}));
+    h.fake.script_held("turn.wait", waited("A", completed()));
+    h.running_state("A", entry("input-A", "steer", "prompt A"));
+    h.running_state("B", entry("input-B", "follow_up", "prompt B"));
+    h.emit(
+        "tool_started",
+        json!({"turn":turn("B"),"request_index":0,
+        "tool_call_id":"tool-B","tool_name":"bash"}),
+    )
+    .await;
+    h.emit("tool_presentation", json!({"turn":turn("B"),"request_index":0,
+        "tool_call_id":"tool-B","tool_name":"bash","display":{"detail":"B command","truncated":false}})).await;
+    h.emit(
+        "output_delta",
+        json!({"turn":turn("A"),"request_index":0,
+        "channel":"text","delta":"late A"}),
+    )
+    .await;
+    h.until(|app| {
+        app.transcript_blocks()
+            .iter()
+            .any(|block| matches!(block,Block::Assistant {text,..} if text == "late A"))
+    })
+    .await;
+    assert_eq!(
+        h.app.session.as_ref().unwrap().live.as_ref().unwrap().phase,
+        crate::app::Phase::Thinking
+    );
+    h.emit(
+        "tool_started",
+        json!({"turn":turn("A"),"request_index":0,
+        "tool_call_id":"tool-A","tool_name":"write"}),
+    )
+    .await;
+    h.emit("tool_presentation", json!({"turn":turn("A"),"request_index":0,
+        "tool_call_id":"tool-A","tool_name":"write","display":{"detail":"A file","truncated":false}})).await;
+    h.until(|app| {
+        app.session
+            .as_ref()
+            .unwrap()
+            .transcript
+            .tool_calls()
+            .any(|call| call.key.loop_id == "A" && call.detail == "A file")
+    })
+    .await;
+    assert_eq!(
+        h.app
+            .session
+            .as_ref()
+            .unwrap()
+            .live
+            .as_ref()
+            .unwrap()
+            .running_tool,
+        Some(("bash".into(), "B command".into()))
+    );
+}
+
+#[tokio::test(start_paused = true)]
 async fn a_turn_streams_tool_facts_and_ends_on_its_wait() {
     let mut h = Harness::opened(display_read(0, 0)).await;
     h.fake.script("input.push", started("l1"));
@@ -2605,4 +2732,184 @@ async fn a_late_wait_fallback_reads_the_original_load_instead_of_unbound_history
         crate::testing::LOAD,
         "the resident wait fallback must retain its original load identity"
     );
+}
+
+mod body_recovery {
+    use crate::app::session::{EARLY_BYTES, EARLY_TURNS};
+    use crate::app::{LiveTurn, Session};
+    use crate::protocol::{
+        AgentEvent, TurnRef, Usage,
+        read::{RawHistoryItem, TurnPersistence, UserKind},
+    };
+    use crate::transcript::{Block, append_history_item};
+
+    fn session() -> Session {
+        Session::new(
+            serde_json::from_value(crate::testing::session_info("s")).unwrap(),
+            1,
+        )
+    }
+
+    fn delta(loop_id: &str, text: &str) -> AgentEvent {
+        serde_json::from_value(serde_json::json!({"type":"output_delta","data":{
+            "meta":{"session_id":"s","load":"load_1","dropped_before":0},
+            "turn":{"session_id":"s","loop_id":loop_id},"request_index":0,
+            "channel":"text","delta":text
+        }}))
+        .unwrap()
+    }
+
+    #[test]
+    fn another_live_turn_does_not_authorize_an_unknown_body() {
+        let mut session = session();
+        session.live = Some(LiveTurn::new(TurnRef::new("s", "A"), 0));
+        session.record_region("A", 0);
+        session.apply_body_event(delta("B", "early"), 256);
+        assert!(session.transcript.is_empty());
+        assert_eq!(session.early_bytes, 256);
+        session.record_region("B", 0);
+        session.replay_early();
+        assert!(
+            matches!(&session.transcript.blocks()[0], Block::Assistant { key, text, .. } if key.loop_id == "B" && text == "early")
+        );
+        assert_eq!(session.early_bytes, 0);
+        session.replay_early();
+        assert_eq!(session.transcript.len(), 1);
+    }
+
+    #[test]
+    fn unknown_body_overflow_is_bounded_and_marks_recovery_without_creating_turns() {
+        let mut session = session();
+        for index in 0..(EARLY_TURNS + 2) {
+            session.apply_body_event(delta(&format!("unknown-{index}"), "x"), 128);
+        }
+        assert!(session.early_gap);
+        assert!(session.recovery.behind);
+        assert_eq!(session.early_bytes, EARLY_TURNS * 128);
+        assert!(session.transcript.is_empty());
+        session.apply_body_event(delta("huge", "x"), EARLY_BYTES + 1);
+        assert!(session.early_bytes <= EARLY_BYTES);
+        assert!(session.transcript.is_empty());
+    }
+
+    #[test]
+    fn unsaved_a_saved_b_and_live_c_keep_order_body_and_draft_in_either_recovery_order() {
+        use crate::protocol::{CompletedTurn, LoopOutcome};
+        use serde_json::json;
+        for order in [["A", "B"], ["B", "A"]] {
+            let mut session = session();
+            session.draft = Some("unfinished draft".into());
+            let b: Vec<RawHistoryItem> = [
+                json!({"type":"user","data":{"loop_id":"B","kind":"prompt","input":{"text":"prompt B"}}}),
+                json!({"type":"assistant","data":{"loop_id":"B","request_index":0,"content":[{"type":"text","data":"answer B"}]}}),
+            ].into_iter().map(|item| crate::protocol::read::decode_item(&json!({"item":item}).to_string()).unwrap()).collect();
+            for item in &b {
+                append_history_item(&mut session.transcript, item, "s");
+            }
+            session.transcript.push(Block::TurnEnd {
+                loop_id: "B".into(),
+                outcome: LoopOutcome::Completed,
+                duration: None,
+                requests: 1,
+                tools: 0,
+                usage: Usage::default(),
+                changes: None,
+                saving: None,
+            });
+            session.record_region("B", 0);
+            let c = session.transcript.len();
+            session.transcript.push(Block::User {
+                text: "prompt C".into(),
+                kind: UserKind::Prompt,
+                at: None,
+            });
+            session.record_region("C", c);
+            session.live = Some(LiveTurn::new(TurnRef::new("s", "C"), c));
+            session.apply_body_event(delta("C", "new live text"), 256);
+            let descriptions: Vec<CompletedTurn> = ["A", "B"].into_iter().enumerate().map(|(i, id)| serde_json::from_value(json!({
+                "seq":i+1,"loop_id":id,"completion_kind":"reported","outcome_kind":"completed",
+                "persistence":if id == "A" {"failed"} else {"persisted"},"availability":if id == "A" {"live"} else {"stored"}
+            })).unwrap()).collect();
+            session.recovery.begin("load_1", 1);
+            session
+                .recovery
+                .discover(&crate::protocol::CompletionDirectory {
+                    through_seq: 2,
+                    retained_from_seq: 1,
+                    entries: descriptions.clone(),
+                    truncated: false,
+                });
+            for id in order {
+                let description = &descriptions[usize::from(id == "B")];
+                if id == "B" {
+                    // Metadata alone does not claim coverage; the verified body uses its exact region.
+                    session
+                        .reconcile_completion(
+                            description,
+                            &LoopOutcome::Completed,
+                            &b,
+                            None,
+                            TurnPersistence::Persisted,
+                            false,
+                        )
+                        .unwrap();
+                } else {
+                    let a: Vec<RawHistoryItem> = [
+                        json!({"type":"user","data":{"loop_id":"A","kind":"prompt","input":{"text":"prompt A"}}}),
+                        json!({"type":"assistant","data":{"loop_id":"A","request_index":0,"content":[{"type":"text","data":"answer A"}]}}),
+                    ].into_iter().map(|item| crate::protocol::read::decode_item(&json!({"item":item}).to_string()).unwrap()).collect();
+                    session
+                        .reconcile_completion(
+                            description,
+                            &LoopOutcome::Completed,
+                            &a,
+                            None,
+                            TurnPersistence::Failed,
+                            false,
+                        )
+                        .unwrap();
+                }
+            }
+            let texts: Vec<&str> = session
+                .transcript
+                .blocks()
+                .iter()
+                .filter_map(|block| match block {
+                    Block::User { text, .. } | Block::Assistant { text, .. } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                texts,
+                [
+                    "prompt A",
+                    "answer A",
+                    "prompt B",
+                    "answer B",
+                    "prompt C",
+                    "new live text"
+                ],
+                "order {order:?}"
+            );
+            assert_eq!(session.draft.as_deref(), Some("unfinished draft"));
+            let ends: Vec<&str> = session
+                .transcript
+                .blocks()
+                .iter()
+                .filter_map(|block| match block {
+                    Block::TurnEnd { loop_id, .. } => Some(loop_id.as_str()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                ends,
+                ["A", "B"],
+                "both recovered regions must keep their own terminal boundary: {order:?}"
+            );
+            assert!(session.transcript.blocks().iter().any(|block|matches!(block,Block::TurnEnd { loop_id,saving:Some(crate::transcript::Saving::Saved),.. } if loop_id == "B")));
+            assert!(
+                matches!(&session.transcript.blocks()[session.live.as_ref().unwrap().start], Block::User { text, .. } if text == "prompt C")
+            );
+        }
+    }
 }

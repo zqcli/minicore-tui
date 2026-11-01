@@ -2789,7 +2789,7 @@ async fn a_fifth_query_in_flight_is_busy_and_a_reply_after_the_phone_left_is_dro
 
 async fn w4_phone() -> (Harness, mpsc::Receiver<Value>) {
     let mut h = w0_phone_session();
-    h.app.remote.config = Some(config(h.app.workspace.clone()));
+    h.app.remote.config = Some(config(h.app.workspace.canonicalize().unwrap()));
     h.app.remote.url = Some("http://localhost:8765".into());
     h.fake.script("session.state", json!({}));
     let (mut output, _closing, admission) = phone(&mut h, 1, "first");
@@ -3820,6 +3820,7 @@ async fn w4_overflow_reconnect_replaces_the_whole_projection_and_view_epochs_nev
 async fn w4_a_stale_draft_create_sends_to_its_created_session_without_refocusing_the_phone() {
     let (mut h, mut output) = w4_phone().await;
     request(&mut h, json!({"kind":"new_session"})).await;
+    assert_eq!(ack_next(&mut h, &mut output).await["ok"], true);
     h.app.sync_remote();
     messages(&mut output);
     let mut info = session_info("created");

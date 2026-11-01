@@ -14,7 +14,7 @@ use crate::protocol::{
     SnapshotInteraction, ToolRef, TurnRef, TurnWaitResult, Usage, UsageTotals,
 };
 use crate::transcript::{Block, EXPANDED_ROWS, RequestKey, ToolCall, ToolState, Transcript};
-use crate::transcript::{append_history, append_history_item, push_interrupted};
+use crate::transcript::{append_history_item, push_interrupted};
 
 use super::Scroll;
 use super::tasks::History;
@@ -93,6 +93,8 @@ pub struct Session {
     pub first_item: usize,
     /// The oldest source item loaded.
     pub loaded_from: usize,
+    /// The exclusive end of the contiguous window that starts at `loaded_from`.
+    loaded_end: usize,
     pub loading_older: bool,
     /// Pages still to load behind the summary until the latest answer shows.
     pub backfill: u8,
@@ -314,6 +316,7 @@ impl Session {
             allowed_tools: BTreeSet::new(),
             first_item: 0,
             loaded_from: 0,
+            loaded_end: 0,
             loading_older: false,
             backfill: 0,
             reconcile_from: Vec::new(),
@@ -596,7 +599,11 @@ impl Session {
                     }
                     *streaming = true;
                 }
-                if let Some(live) = self.live.as_mut() {
+                if let Some(live) = self
+                    .live
+                    .as_mut()
+                    .filter(|live| live.turn.loop_id == key.loop_id)
+                {
                     live.phase = match reasoning {
                         true => Phase::Thinking,
                         false => Phase::Writing,
@@ -613,6 +620,7 @@ impl Session {
                 tool_name,
                 ..
             } if self.knows_turn(&turn.loop_id) => {
+                let active = self.is_live(&turn);
                 let key = ToolRef {
                     session_id: turn.session_id,
                     loop_id: turn.loop_id,
@@ -626,7 +634,7 @@ impl Session {
                     }
                     None => self.push_running_tool(key, tool_name.clone()),
                 }
-                if let Some(live) = self.live.as_mut() {
+                if active && let Some(live) = self.live.as_mut() {
                     live.phase = Phase::Thinking;
                     live.running_tool = Some((tool_name, String::new()));
                 }
@@ -647,6 +655,7 @@ impl Session {
                 if let Some((_, detail)) = self
                     .live
                     .as_mut()
+                    .filter(|live| live.turn.loop_id == key.loop_id)
                     .and_then(|live| live.running_tool.as_mut())
                 {
                     *detail = display.detail;
@@ -836,12 +845,19 @@ impl Session {
             .unwrap_or_else(|| live.map_or(0, |live| live.requests));
         let gap = live.is_some_and(|live| live.gap);
         let accounted_usage = live.map(|live| live.accounted_usage.clone());
-        let streaming: Vec<usize> = (start..self.region_end(loop_id))
-            .filter(|index| self.transcript.blocks()[*index].is_streaming())
+        let end = self.region_end(loop_id);
+        let finishing: Vec<usize> = (start..end)
+            .filter(|index| {
+                self.transcript.blocks()[*index].is_streaming()
+                    || matches!(&self.transcript.blocks()[*index], Block::Tool(call)
+                        if call.output_content().len() > EXPANDED_ROWS)
+            })
             .collect();
-        for index in streaming {
-            if let Some(Block::Assistant { streaming, .. }) = self.transcript.block_mut(index) {
-                *streaming = false;
+        for index in finishing {
+            match self.transcript.block_mut(index) {
+                Some(Block::Assistant { streaming, .. }) => *streaming = false,
+                Some(Block::Tool(call)) => call.settle(),
+                _ => {}
             }
         }
         let usage = wait
@@ -863,8 +879,10 @@ impl Session {
                 live.usage_final = true;
             }
         }
-        self.settle_cards(start);
-        let tools = self.tools_since(start);
+        let tools = self.transcript.blocks()[start..end]
+            .iter()
+            .filter(|block| matches!(block, Block::Tool(_)))
+            .count() as u64;
         // A completion that arrived before this wait already closed the turn
         // with its own line; the wait only fills in what it alone knows.
         match self.transcript.blocks().iter().rposition(
@@ -1319,7 +1337,9 @@ impl Session {
             .reconcile_from
             .iter()
             .find(|(id, _)| id == loop_id)
-            .map_or(self.transcript.len(), |(_, start)| *start);
+            .map(|(_, start)| *start)
+            .or_else(|| turn_bounds(self.transcript.blocks(), loop_id).map(|range| range.start))
+            .unwrap_or(self.transcript.len());
         self.reconcile_from
             .iter()
             .filter(|(id, at)| id != loop_id && *at >= start)
@@ -1485,7 +1505,8 @@ impl Session {
     /// Replaces the transcript with the history tail.
     pub fn install_tail(&mut self, page: History) -> Vec<(std::ops::Range<usize>, usize, bool)> {
         let old = std::mem::take(&mut self.transcript);
-        let mut regions = self.reconcile_from.clone();
+        let pending = std::mem::take(&mut self.reconcile_from);
+        let mut regions = pending.clone();
         let mut from = 0;
         for (at, block) in old.blocks().iter().enumerate() {
             if let Block::TurnEnd { loop_id, .. } = block {
@@ -1517,15 +1538,24 @@ impl Session {
                 }
             }
         }
-        self.transcript.clear();
-        self.first_item = page.floor;
-        self.loaded_from = page.from;
-        append_history(
-            &mut self.transcript,
-            &page.items,
-            &page.records,
-            &self.info.session_id,
-        );
+        if !page.canonical {
+            self.first_item = page.floor;
+        }
+        if page.from <= self.loaded_end && self.loaded_from <= page.end {
+            self.loaded_from = self.loaded_from.min(page.from);
+            self.loaded_end = self.loaded_end.max(page.end);
+        } else {
+            self.loaded_from = page.from;
+            self.loaded_end = page.end;
+        }
+        self.transcript =
+            Transcript::from_history(&page.items, &page.records, &self.info.session_id, page.from)
+                .with_previous_history(&old, page.from..page.end);
+        for item in &page.items {
+            if matches!(item.item, RuntimeItem::ToolResult(_)) {
+                append_history_item(&mut self.transcript, item, &self.info.session_id);
+            }
+        }
         // With the whole display window loaded, its turns and the summary's
         // cover are every turn there is; anything less would be a wrong total.
         let covered = match page.floor {
@@ -1546,19 +1576,19 @@ impl Session {
         }
         // `from` counts even when an automatic compaction covers the whole
         // display tail: the history behind it is still there to read.
-        if page.from > 0 {
+        if self.loaded_from > 0 {
             let hidden_items = self.hidden_items();
             self.transcript
                 .insert(0, Block::EarlierHistory { hidden_items });
         }
-        let mut preserved = Vec::new();
         let mut placements: Vec<(String, usize)> = Vec::new();
         for (index, (loop_id, start)) in regions.iter().enumerate() {
             let end = regions
                 .get(index + 1)
                 .map_or(old.len(), |(_, start)| *start);
             let existing = turn_bounds(self.transcript.blocks(), loop_id);
-            if full_turns.contains(loop_id)
+            if (full_turns.contains(loop_id)
+                || (*start..end).any(|at| old.history_source(at).is_some()))
                 && let Some(range) = existing
             {
                 let mut durable = Transcript::default();
@@ -1573,7 +1603,6 @@ impl Session {
                 placements.push((loop_id.clone(), range.start));
                 self.transcript.splice_merged(range, merged);
             } else {
-                preserved.extend(old.preserved_in(*start..end));
                 if let Some(range) = existing {
                     for (_, at) in &mut placements {
                         if *at >= range.end {
@@ -1635,7 +1664,6 @@ impl Session {
             let merged = Transcript::merged(durable, &old, 0..old.len());
             self.transcript.splice_merged(0..0, merged);
         }
-        self.transcript.mark_preserved(preserved);
         let mut mapping = Vec::new();
         for (index, (loop_id, start)) in regions.iter().enumerate() {
             let end = regions
@@ -1656,13 +1684,19 @@ impl Session {
                     live.start = new_start;
                 }
             }
-            for (id, at) in &mut self.reconcile_from {
-                if id == loop_id {
-                    *at = new_start;
-                }
-            }
             mapping.push((*start..end, new_start, full_turns.contains(loop_id)));
         }
+        self.reconcile_from = pending
+            .into_iter()
+            .map(|(id, _)| {
+                let start = placements
+                    .iter()
+                    .find(|(placed, _)| placed == &id)
+                    .expect("every pending region was placed")
+                    .1;
+                (id, start)
+            })
+            .collect();
         mapping
     }
 
@@ -1671,7 +1705,6 @@ impl Session {
     /// and the cards of a canonical page, which carry no detail of their own.
     pub fn prepend_page(&mut self, page: History) -> (isize, Vec<ToolRef>) {
         self.loading_older = false;
-        let mut scratch = Transcript::default();
         // A turn cut by the page's end already has its line from the later window.
         let records: Vec<TurnRecord> = page
             .records
@@ -1683,7 +1716,8 @@ impl Session {
             })
             .cloned()
             .collect();
-        append_history(&mut scratch, &page.items, &records, &self.info.session_id);
+        let scratch =
+            Transcript::from_history(&page.items, &records, &self.info.session_id, page.from);
         let bare_cards = match page.canonical {
             true => scratch.tool_calls().map(|call| call.key.clone()).collect(),
             false => Vec::new(),
@@ -2025,168 +2059,5 @@ mod tests {
         assert_eq!(session.auto_title(), None);
         session.info.title = Some("  ".into());
         assert_eq!(session.auto_title().as_deref(), Some("fix it"));
-    }
-
-    fn delta(loop_id: &str, text: &str) -> AgentEvent {
-        serde_json::from_value(serde_json::json!({"type":"output_delta","data":{
-            "meta":{"session_id":"s","load":"load_1","dropped_before":0},
-            "turn":{"session_id":"s","loop_id":loop_id},"request_index":0,
-            "channel":"text","delta":text
-        }}))
-        .unwrap()
-    }
-
-    #[test]
-    fn another_live_turn_does_not_authorize_an_unknown_body() {
-        let mut session = session();
-        session.live = Some(LiveTurn::new(TurnRef::new("s", "A"), 0));
-        session.record_region("A", 0);
-        session.apply_body_event(delta("B", "early"), 256);
-        assert!(session.transcript.is_empty());
-        assert_eq!(session.early_bytes, 256);
-        session.record_region("B", 0);
-        session.replay_early();
-        assert!(
-            matches!(&session.transcript.blocks()[0], Block::Assistant { key, text, .. } if key.loop_id == "B" && text == "early")
-        );
-        assert_eq!(session.early_bytes, 0);
-        session.replay_early();
-        assert_eq!(session.transcript.len(), 1);
-    }
-
-    #[test]
-    fn unknown_body_overflow_is_bounded_and_marks_recovery_without_creating_turns() {
-        let mut session = session();
-        for index in 0..(EARLY_TURNS + 2) {
-            session.apply_body_event(delta(&format!("unknown-{index}"), "x"), 128);
-        }
-        assert!(session.early_gap);
-        assert!(session.recovery.behind);
-        assert_eq!(session.early.len(), EARLY_TURNS);
-        assert!(session.transcript.is_empty());
-        session.apply_body_event(delta("huge", "x"), EARLY_BYTES + 1);
-        assert!(session.early_bytes <= EARLY_BYTES);
-        assert!(session.transcript.is_empty());
-    }
-
-    #[test]
-    fn unsaved_a_saved_b_and_live_c_keep_order_body_and_draft_in_either_recovery_order() {
-        use crate::protocol::{CompletedTurn, LoopOutcome};
-        use serde_json::json;
-        for order in [["A", "B"], ["B", "A"]] {
-            let mut session = session();
-            session.draft = Some("unfinished draft".into());
-            let b: Vec<RawHistoryItem> = [
-                json!({"type":"user","data":{"loop_id":"B","kind":"prompt","input":{"text":"prompt B"}}}),
-                json!({"type":"assistant","data":{"loop_id":"B","request_index":0,"content":[{"type":"text","data":"answer B"}]}}),
-            ].into_iter().map(|item| crate::protocol::read::decode_item(&json!({"item":item}).to_string()).unwrap()).collect();
-            for item in &b {
-                append_history_item(&mut session.transcript, item, "s");
-            }
-            session.transcript.push(Block::TurnEnd {
-                loop_id: "B".into(),
-                outcome: LoopOutcome::Completed,
-                duration: None,
-                requests: 1,
-                tools: 0,
-                usage: Usage::default(),
-                changes: None,
-                saving: None,
-            });
-            session.record_region("B", 0);
-            let c = session.transcript.len();
-            session.transcript.push(Block::User {
-                text: "prompt C".into(),
-                kind: UserKind::Prompt,
-                at: None,
-            });
-            session.record_region("C", c);
-            session.live = Some(LiveTurn::new(TurnRef::new("s", "C"), c));
-            session.apply_body_event(delta("C", "new live text"), 256);
-            let descriptions: Vec<CompletedTurn> = ["A", "B"].into_iter().enumerate().map(|(i, id)| serde_json::from_value(json!({
-                "seq":i+1,"loop_id":id,"completion_kind":"reported","outcome_kind":"completed",
-                "persistence":if id == "A" {"failed"} else {"persisted"},"availability":if id == "A" {"live"} else {"stored"}
-            })).unwrap()).collect();
-            session.recovery.begin("load_1", 1);
-            session
-                .recovery
-                .discover(&crate::protocol::CompletionDirectory {
-                    through_seq: 2,
-                    retained_from_seq: 1,
-                    entries: descriptions.clone(),
-                    truncated: false,
-                });
-            for id in order {
-                let description = &descriptions[usize::from(id == "B")];
-                if id == "B" {
-                    // Metadata alone does not claim coverage; the verified body uses its exact region.
-                    session
-                        .reconcile_completion(
-                            description,
-                            &LoopOutcome::Completed,
-                            &b,
-                            None,
-                            TurnPersistence::Persisted,
-                            false,
-                        )
-                        .unwrap();
-                } else {
-                    let a: Vec<RawHistoryItem> = [
-                        json!({"type":"user","data":{"loop_id":"A","kind":"prompt","input":{"text":"prompt A"}}}),
-                        json!({"type":"assistant","data":{"loop_id":"A","request_index":0,"content":[{"type":"text","data":"answer A"}]}}),
-                    ].into_iter().map(|item| crate::protocol::read::decode_item(&json!({"item":item}).to_string()).unwrap()).collect();
-                    session
-                        .reconcile_completion(
-                            description,
-                            &LoopOutcome::Completed,
-                            &a,
-                            None,
-                            TurnPersistence::Failed,
-                            false,
-                        )
-                        .unwrap();
-                }
-            }
-            let texts: Vec<&str> = session
-                .transcript
-                .blocks()
-                .iter()
-                .filter_map(|block| match block {
-                    Block::User { text, .. } | Block::Assistant { text, .. } => Some(text.as_str()),
-                    _ => None,
-                })
-                .collect();
-            assert_eq!(
-                texts,
-                [
-                    "prompt A",
-                    "answer A",
-                    "prompt B",
-                    "answer B",
-                    "prompt C",
-                    "new live text"
-                ],
-                "order {order:?}"
-            );
-            assert_eq!(session.draft.as_deref(), Some("unfinished draft"));
-            let ends: Vec<&str> = session
-                .transcript
-                .blocks()
-                .iter()
-                .filter_map(|block| match block {
-                    Block::TurnEnd { loop_id, .. } => Some(loop_id.as_str()),
-                    _ => None,
-                })
-                .collect();
-            assert_eq!(
-                ends,
-                ["A", "B"],
-                "both recovered regions must keep their own terminal boundary: {order:?}"
-            );
-            assert!(session.transcript.blocks().iter().any(|block|matches!(block,Block::TurnEnd { loop_id,saving:Some(crate::transcript::Saving::Saved),.. } if loop_id == "B")));
-            assert!(
-                matches!(&session.transcript.blocks()[session.live.as_ref().unwrap().start], Block::User { text, .. } if text == "prompt C")
-            );
-        }
     }
 }

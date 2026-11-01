@@ -523,14 +523,16 @@ for its named turn, including outcome, usage and the direct successor.
    a turn's saved marker never implies that auxiliary recording is saved.
    `dropped_before > 0` marks the turn as having a gap. Control-shaped events
    (`input_queue`, `session_state`, `interaction_*`) no longer write state; the
-   snapshot does.
+   snapshot does. Late body updates change their own region; only events for
+   the current live loop change its working phase and tool label.
 3. **`turn.wait` resolves** with terminal metadata for its named loop. A failed
    wait makes one stored-outcome query, then reports an error if no outcome is
    available; it neither invents a terminal result nor polls forever. This fallback
    keeps the wait's captured resident load and checks the response against it,
    rather than silently turning a late wait into an unbound history query. `end_turn`
-   updates that region's line and replaces only that turn's accounted usage
-   contribution, preserving a newer successor's usage. It never clears the
+   updates that region's line, settles and counts only its cards, and replaces
+   only that turn's accounted usage contribution, preserving a newer successor's
+   streaming output and usage. It never clears the
    snapshot's live execution or applies the wait's queue/next. Every receipt refreshes control. The
    completion directory then has the turn, so its body is recovered through
    `turn.result` (paged, chunk-assembled) and **reconciled**: it replaces the
@@ -618,6 +620,21 @@ data, metadata and page copies; a completed result holds its slot until the
 reducer finishes installing it. An item above the 8 MiB automatic decode limit
 produces a partial-read notice rather than an incomplete replacement. This bound
 does not include the existing transcript or the RPC client's general buffers.
+
+Each block has one `Origin`, combining the user identity with an optional history
+item and part. The history mapper assigns that source as it emits rows; result
+reads do not reuse their turn-local item indices as history positions. Record
+terminals and the display summary have distinct parts, so a result-only page
+keeps an existing terminal and the summary remains separate from the raw item
+at the same index. Copied and reconciled rows retain their origins.
+
+Catch-up and ordinary pages overlapping retained source rows use the same
+history installation path. Source positions combine partial windows without
+deduplicating equal steering text. `loaded_from..loaded_end` records one
+continuous loaded window: adjoining windows extend it, while a disjoint newer
+window keeps the old rows without claiming the hole is loaded. This display
+boundary does not replace the pinned coverage needed to settle a recovery gap.
+Source identities also keep scroll anchors on their row through a rebuild.
 
 - **Display floor.** `first_item` is the oldest item the display view serves; the
   item there is the compaction summary, standing in for the original one. Older
