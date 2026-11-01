@@ -18,7 +18,7 @@ file is the whole program. Version 0.4 is a rewrite of the v0.3 frontend; see
 
 Built-in backend: Agent 0.9.1 (development), which links Runtime 0.9.0;
 `Cargo.toml` pins the matching RPC v2 Agent by an immutable Git revision and
-`Cargo.lock` fixes both. The `0.9.5` TUI performance branch keeps these backend
+`Cargo.lock` fixes both. The `0.9.6` web performance branch keeps these backend
 revisions; it does not create or move release tags. An
 external Agent can still be named with `--agent`. At startup the TUI requires
 Protocol v2 and these Agent capabilities, and refuses an Agent that lacks one: `session.read`, `session.read.display`, `session.context`,
@@ -122,7 +122,7 @@ history is `history.jsonl` in the TUI directory.
 
 ```text
 
- minicore-tui v0.9.5                                  (welcome header)
+ minicore-tui v0.9.6                                  (welcome header)
 
  esc interrupt · ctrl+c clear · / commands · @ files · ctrl+o expand · ctrl+r sessions
 

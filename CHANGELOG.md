@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.9.6 — 2026-11-01
+
+- Reduce web Markdown parsing work for ordinary text, code fences and streaming
+  checkpoints while preserving the rendered content.
+- Reuse answer DOM during reasoning and recovery-label updates, avoid rebuilding
+  already-visible search matches, and compute fold/group signatures once per group.
+- Share prepared state and body annotations across connections viewing the
+  same session, preserving independent snapshots and recovery updates.
+
 ## 0.9.5 — 2026-11-01
 
 - Reduce per-delta work in long conversations and repeated scans when early
