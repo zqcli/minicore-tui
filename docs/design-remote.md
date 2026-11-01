@@ -781,8 +781,11 @@ Assistant `text` is raw Markdown; clients render it.
 - Each connection has its own tracker (`view::View`): the revisions, streaming
   offsets and serialized `State` last sent to it. One sync refreshes the shared
   catalog cache, groups devices by session id or equal draft settings (and
-  loading ownership), then builds and serializes `State` once per distinct
-  view. Each tracker diffs the viewed session found through `App::live`, whether
+  loading ownership), then builds body annotations and serializes `State` once
+  per distinct view. Trackers share these immutable values and keep their own
+  revisions and streaming offsets. Annotations are observed again on each sync,
+  so recovery and preservation changes do not depend on a block revision.
+  Each tracker diffs the viewed session found through `App::live`, whether
   foreground or background; draft views have no blocks.
 - A device view change resets its tracker. A viewed session epoch change or a
   newly admitted connection also sends a fresh `snapshot`. Another device's

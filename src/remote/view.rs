@@ -2,6 +2,7 @@
 
 use std::hash::{Hash, Hasher};
 use std::path::Path;
+use std::sync::Arc;
 
 use serde_json::{Value, json};
 
@@ -19,8 +20,8 @@ pub struct View {
     /// `None` until the first snapshot, then the viewed session's epoch.
     epoch: Option<Option<u64>>,
     revisions: Vec<u64>,
-    annotations: Vec<Value>,
-    state: String,
+    annotations: Arc<Vec<Value>>,
+    state: Arc<str>,
     streaming: Vec<Option<Streaming>>,
     /// The projection identity; renewed with every snapshot and view change.
     view_epoch: String,
@@ -73,13 +74,14 @@ impl Catalog {
     }
 }
 
-/// This sync's `State`, shared by connections viewing the same session or draft settings.
+/// This sync's state and annotations, shared by connections viewing the same session or draft settings.
 pub struct Shared {
     pub connections: Vec<u64>,
     view: PhoneView,
     loading: bool,
     state: Value,
-    serialized: String,
+    serialized: Arc<str>,
+    annotations: Arc<Vec<Value>>,
 }
 
 impl Shared {
@@ -110,12 +112,26 @@ impl Shared {
 
     fn new(app: &App, view: PhoneView, loading: bool) -> Self {
         let state = state(app, &app.remote.catalog.value, &view, loading);
+        let annotations = view
+            .session_id()
+            .into_iter()
+            .flat_map(|id| {
+                let session = app.live(id).expect("a phone views a live session");
+                session
+                    .transcript
+                    .blocks()
+                    .iter()
+                    .enumerate()
+                    .map(move |(index, block)| annotation(session, index, block))
+            })
+            .collect();
         Self {
             connections: Vec::new(),
             view,
             loading,
-            serialized: state.to_string(),
+            serialized: state.to_string().into(),
             state,
+            annotations: Arc::new(annotations),
         }
     }
 }
@@ -248,15 +264,7 @@ impl View {
             .into_iter()
             .flat_map(|session| session.transcript.revisions());
         let blocks = session.map_or(&[][..], |session| session.transcript.blocks());
-        let annotations: Vec<_> = session
-            .into_iter()
-            .flat_map(|session| {
-                blocks
-                    .iter()
-                    .enumerate()
-                    .map(move |(index, block)| annotation(session, index, block))
-            })
-            .collect();
+        let annotations = &shared.annotations;
         let project = |index: usize| {
             let mut value = block(&blocks[index]);
             if let Some(fields) = annotations[index].as_object() {
@@ -304,7 +312,7 @@ impl View {
         self.epoch = Some(epoch);
         self.revisions.clear();
         self.revisions.extend(revisions);
-        self.annotations = annotations;
+        self.annotations.clone_from(&shared.annotations);
         self.state.clone_from(&shared.serialized);
         messages
     }
@@ -562,7 +570,12 @@ mod tests {
             saving: Some(crate::transcript::Saving::Saved),
         });
         let mut view = View::default();
-        sync(&mut view, &mut app);
+        let snapshot = sync(&mut view, &mut app);
+        let mut peer = View::default();
+        let shared = Shared::new(&app, PhoneView::foreground(&app), false);
+        let peer_snapshot = peer.sync(2, app.resident.current(), &shared);
+        assert_eq!(snapshot[0]["blocks"], peer_snapshot[0]["blocks"]);
+        assert_ne!(snapshot[0]["view_epoch"], peer_snapshot[0]["view_epoch"]);
         let session = app.resident.current_mut().unwrap();
         let revisions = session.transcript.revisions().collect::<Vec<_>>();
         session
@@ -579,7 +592,9 @@ mod tests {
             session.transcript.revisions().collect::<Vec<_>>(),
             revisions
         );
-        let update = sync(&mut view, &mut app);
+        let shared = Shared::new(&app, PhoneView::foreground(&app), false);
+        let update = view.sync(1, app.resident.current(), &shared);
+        assert_eq!(peer.sync(2, app.resident.current(), &shared), update);
         assert_eq!(update[0]["t"], "blocks");
         assert_eq!(
             update[0]["upserts"][0]["block"]["preserved_channels"],
@@ -595,7 +610,11 @@ mod tests {
         app.resident.current_mut().unwrap().body_recovery.clear();
         let cleared = sync(&mut view, &mut app);
         assert!(cleared[0]["upserts"][0]["block"].get("recovery").is_none());
-        let full = sync(&mut View::default(), &mut app);
+        let shared = Shared::new(&app, PhoneView::foreground(&app), false);
+        assert_eq!(peer.sync(2, app.resident.current(), &shared), cleared);
+        peer.invalidate(2);
+        let full = peer.sync(2, app.resident.current(), &shared);
+        assert!(view.sync(1, app.resident.current(), &shared).is_empty());
         assert_eq!(
             full[0]["blocks"][0]["preserved_channels"],
             json!(["reasoning"])
