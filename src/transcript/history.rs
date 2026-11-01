@@ -112,9 +112,19 @@ impl PreservedKey {
                 Self::AssistantText(key) | Self::AssistantReasoning(key),
                 Block::Assistant { key: other, .. },
             ) => key == other,
-            _ => Self::of(block).as_ref() == Some(self),
+            _ => self.matches_block(block),
         }
     }
+
+    pub(super) fn matches_block(&self, block: &Block) -> bool {
+        match (self, block) {
+            (Self::Assistant(key), Block::Assistant { key: other, .. }) => key == other,
+            (Self::User(text), Block::User { text: other, .. }) => text == other,
+            (Self::Tool(key), Block::Tool(call)) => key == &call.key,
+            _ => false,
+        }
+    }
+
     pub fn of(block: &Block) -> Option<Self> {
         match block {
             Block::Assistant { key, .. } => Some(Self::Assistant(key.clone())),

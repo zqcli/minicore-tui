@@ -393,14 +393,11 @@ impl Transcript {
         }
     }
 
-    /// One block for an in-place change, marked as changed.
-    /// Whether the block at `index` is text a reconcile preserved from the live
-    /// turn because the canonical body does not contain it.
+    /// Whether a reconcile preserved the whole block because the canonical body lacks it.
     pub fn is_preserved(&self, index: usize) -> bool {
         self.blocks
             .get(index)
-            .and_then(PreservedKey::of)
-            .is_some_and(|key| self.preserved.contains(&key))
+            .is_some_and(|block| self.preserved.iter().any(|key| key.matches_block(block)))
     }
 
     pub fn is_preserved_channel(&self, key: &RequestKey, reasoning: bool) -> bool {
@@ -423,6 +420,7 @@ impl Transcript {
             .collect()
     }
 
+    /// One block for an in-place change, marked as changed.
     pub fn block_mut(&mut self, index: usize) -> Option<&mut Block> {
         self.bump(index);
         self.blocks.get_mut(index)
