@@ -228,6 +228,8 @@ pub fn render(
     let mut body: Vec<Vec<Span<'static>>> = g
         .rows
         .iter()
+        .skip(g.top)
+        .take(g.target)
         .map(|range| {
             let text = &g.shown.text[range.start..visible_end(&g.shown.text, range, g.limit)];
             let end = range.start + text.len();
@@ -286,12 +288,7 @@ pub fn render(
     let mut lines: Vec<_> = (0..g.blank)
         .map(|_| row(Vec::new(), width, styles))
         .collect();
-    lines.extend(
-        body.into_iter()
-            .skip(g.top)
-            .take(g.target)
-            .map(|spans| row(spans, width, styles)),
-    );
+    lines.extend(body.into_iter().map(|spans| row(spans, width, styles)));
     lines.resize_with(g.target, || row(Vec::new(), width, styles));
     if editor == Editor::View {
         for span in lines.iter_mut().flat_map(|line| &mut line.spans) {
