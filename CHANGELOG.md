@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.9.5 — 2026-11-01
+
+- Reduce per-delta work in long conversations and repeated scans when early
+  body events become known, preserving their turn boundaries and cache limits.
+- Reduce allocations when synchronizing retained conversation content to phones.
+- Render only the visible composer rows and avoid invalidating unchanged search
+  matches, preserving selection, cursor and expansion behavior.
+- Reuse parsed streaming Markdown across fold changes and reduce wrapping work
+  for long paragraphs with many styled spans.
+
 - Share local and phone request preparation while keeping their original drafts,
   acknowledgements and focus behavior. Pending phone operations retain an explicit
   draft, stored-session or resident target through delayed replies.
