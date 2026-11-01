@@ -728,7 +728,6 @@ mod tests {
                     persistence_uncertain: false,
                     availability: ResultAvailability::Stored,
                     unavailable_reason: None,
-                    next_loop_id: None,
                     after_saved_loop_id: None,
                 })
                 .collect(),

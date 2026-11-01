@@ -200,7 +200,7 @@ async fn new_returns_to_the_draft_without_creating_and_records_the_profile() {
     h.fake.script(
         "input.push@s2",
         after_snapshot(
-            started_in(json!({"session_id":"s2","loop_id":"l1"}), vec![]),
+            accepted("s2", "i1"),
             crate::testing::snapshot_running(
                 "s2",
                 crate::testing::LOAD,

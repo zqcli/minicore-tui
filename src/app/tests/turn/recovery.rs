@@ -246,9 +246,11 @@ async fn dropped_events_make_the_durable_items_replace_only_that_turn() {
     .await;
     let mut starting = running_snapshot(h.next_revision(), "l1", "$text");
     starting["execution"]["input"]["accepted_at"] = json!("2026-10-20T21:38:00Z");
+    let mut receipt = accepted("s1", "i1");
+    receipt["accepted_at"] = json!("2026-10-20T21:38:00Z");
     h.fake.script(
         "input.push",
-        after_snapshot(started_at("l1", "2026-10-20T21:38:00Z"), starting).with_request_text(),
+        after_snapshot(receipt, starting).with_request_text(),
     );
     h.fake.script_held(
         "turn.wait",
@@ -459,7 +461,7 @@ async fn a_successor_started_before_the_finished_turn_reconciles_stays_after_it(
         vec![
             starting_reply("l1", 2),
             after_snapshot(
-                pushed(vec![next.clone()]),
+                accepted("s1", "i2"),
                 running_queue(3, "l1", "start", vec![next]),
             ),
         ],
@@ -468,15 +470,7 @@ async fn a_successor_started_before_the_finished_turn_reconciles_stays_after_it(
     successor["execution"] = running_snapshot(4, "l2", "next")["execution"].clone();
     h.fake.script_held(
         "turn.wait@s1/l1",
-        after_snapshot(
-            waited_then(
-                "l1",
-                completed(),
-                Some(next_turn("l2", "next")),
-                queue(vec![], false),
-            ),
-            successor,
-        ),
+        after_snapshot(waited("l1", completed()), successor),
     );
     h.fake.script_held(
         "turn.wait@s1/l2",

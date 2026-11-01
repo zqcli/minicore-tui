@@ -63,8 +63,8 @@ def save_failure(binary, unknown=False):
                        and latest_control(chain)['queue_ids'] == [queued_id])
         chain.wait_for('actual Agent failure completion', lambda: completion(chain, a))
         fact = completion(chain, a)
-        if fact['persistence'] != 'failed' or fact['persistence_uncertain'] != unknown or fact.get('next_loop_id') is not None:
-            raise ObservationError('save failure changed actual successor/Saving facts')
+        if fact['persistence'] != 'failed' or fact['persistence_uncertain'] != unknown:
+            raise ObservationError('save failure changed actual Saving facts')
         if unknown:
             if latest_control(chain).get('block_reason') != 'persistence':
                 raise ObservationError('Unknown append lost actual installed Persistence block')

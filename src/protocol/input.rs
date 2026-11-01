@@ -3,8 +3,6 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::TurnRef;
-
 /// How a pushed input reaches the session.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -30,26 +28,16 @@ pub struct Queue {
     pub paused: bool,
 }
 
-/// A turn the Agent started from the queue, with the entry that became its first input.
-#[derive(Clone, Debug, Deserialize)]
-pub struct StartedTurn {
-    pub turn: TurnRef,
-    pub input: QueueItem,
-}
-
 #[derive(Clone, Debug, Deserialize)]
 pub struct InputPushResult {
     pub session_id: String,
     pub load: String,
     pub accepted: bool,
-    /// The turn this push started, whose input is an older entry when queue order requires.
-    pub started: Option<StartedTurn>,
     /// The entry this push accepted; the Agent always states it.
     pub id: String,
     pub accepted_at: Option<String>,
     /// The input whose start failed after acceptance; `accepted` stays true.
     pub start_error: Option<InputStartError>,
-    pub queue: Queue,
 }
 
 /// A claimed input that could not start its turn, after it was accepted.
@@ -63,20 +51,16 @@ pub struct InputStartError {
 #[derive(Clone, Debug, Deserialize)]
 pub struct InputRemoveResult {
     pub text: String,
-    pub queue: Queue,
 }
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct InputRecallResult {
     pub texts: Vec<String>,
-    pub queue: Queue,
 }
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct InputResumeResult {
-    pub started: Option<StartedTurn>,
     pub start_error: Option<InputStartError>,
-    pub queue: Queue,
 }
 
 /// An input a running turn took, as `input_delivered` reports it.
@@ -123,27 +107,21 @@ mod tests {
     fn a_push_receipt_states_acceptance_and_an_older_heads_start_failure() {
         let push: InputPushResult = serde_json::from_value(json!({
             "session_id": "ses_1", "load": "load_1", "accepted": true,
-            "id": "inp_new", "accepted_at": "2026-10-30T10:00:00Z", "started": null,
+            "id": "inp_new", "accepted_at": "2026-10-30T10:00:00Z",
             "start_error": {"input_id": "inp_older", "kind": "runtime_start_failed",
-                            "message": "The queued turn could not start"},
-            "queue": {"items": [
-                {"id": "inp_older", "mode": "follow_up", "text": "Older"},
-                {"id": "inp_new", "mode": "follow_up", "text": "New"}
-            ], "paused": true}
+                            "message": "The queued turn could not start"}
         }))
         .unwrap();
         assert_eq!(push.id, "inp_new");
         let error = push.start_error.unwrap();
         assert_eq!(error.input_id, "inp_older");
-        assert!(push.queue.paused);
-        assert!(push.started.is_none());
+        assert!(push.accepted);
     }
 
     #[test]
     fn a_push_receipt_requires_identity_and_explicit_acceptance() {
         let receipt = json!({
-            "session_id": "ses_1", "load": "load_1", "accepted": true, "id": "inp_1",
-            "queue": {"items": [], "paused": false}
+            "session_id": "ses_1", "load": "load_1", "accepted": true, "id": "inp_1"
         });
         for key in ["session_id", "load", "accepted", "id"] {
             let mut incomplete = receipt.clone();
@@ -158,10 +136,8 @@ mod tests {
     #[test]
     fn a_resume_receipt_may_report_a_start_failure() {
         let resume: InputResumeResult = serde_json::from_value(json!({
-            "started": null,
             "start_error": {"input_id": "inp_1", "kind": "runtime_start_failed",
-                            "message": "The queued turn could not start"},
-            "queue": {"items": [], "paused": true}
+                            "message": "The queued turn could not start"}
         }))
         .unwrap();
         assert_eq!(resume.start_error.unwrap().input_id, "inp_1");

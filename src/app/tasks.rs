@@ -10,7 +10,7 @@ use tokio::sync::mpsc;
 use super::operation::{Operation, Outcome};
 use super::read::{export_text, invalid_read, stored_outcome};
 use super::{App, BUSY_RETRY, Msg, NoticeLevel, SessionOp};
-use crate::protocol::changes::{ChangeList, DiffPage};
+use crate::protocol::changes::{ChangeList, ChangeRef, DiffPage};
 use crate::protocol::{
     self, ModelListResult, OpenedSession, PingResult, ProfileListResult, RpcError, SessionInfo,
     SessionListResult, TurnRef, TurnWaitResult,
@@ -254,7 +254,7 @@ pub async fn turn_changes(
 pub async fn read_diffs(
     client: Arc<Client>,
     session_id: String,
-    change_refs: Vec<String>,
+    change_refs: Vec<ChangeRef>,
 ) -> Result<Vec<DiffPage>, RpcError> {
     let mut pages = Vec::with_capacity(change_refs.len());
     for change_ref in change_refs {
@@ -268,7 +268,7 @@ pub async fn read_diffs(
 async fn read_diff(
     client: &Client,
     session_id: &str,
-    change_ref: &str,
+    change_ref: &ChangeRef,
 ) -> Result<DiffPage, RpcError> {
     let mut hunks = Vec::new();
     let mut cursor: Option<Value> = None;

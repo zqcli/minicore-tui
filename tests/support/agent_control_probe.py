@@ -188,8 +188,9 @@ def main():
                 except json.JSONDecodeError:
                     continue
                 frames.append(frame)
-                if frame.get("method") == "session_snapshot":
-                    snapshots.append(frame.get("params") or {})
+                event = frame.get("params") or {}
+                if frame.get("method") == "agent.event" and event.get("type") == "session_snapshot":
+                    snapshots.append(event["data"])
 
         reader = threading.Thread(target=read_frames, daemon=True)
         reader.start()
@@ -219,6 +220,8 @@ def main():
             "ping",
         )
         ping = next(f for f in frames if f.get("id") == 1)["result"]
+        if ping["protocol_version"] != 3:
+            raise AssertionError("probe requires Agent RPC protocol 3")
 
         send(2, "session.create", {"profile": "coding", "workspace": str(workspace)})
         wait_for(
@@ -227,14 +230,9 @@ def main():
         )
         created = next(f for f in frames if f.get("id") == 2)["result"]
         session_id = created["session"]["session_id"]
-        load = created.get("load")
-        create_snapshot = created.get("snapshot")
-
-        # v1 has no load; v2 requires it. Send what this Agent speaks so the
-        # probe measures the snapshot producer rather than a params rejection.
-        push = {"session_id": session_id, "mode": "follow_up", "text": "probe"}
-        if ping.get("protocol_version", 1) >= 2:
-            push["load"] = load
+        create_snapshot = created["snapshot"]
+        load = create_snapshot["load"]
+        push = {"session_id": session_id, "load": load, "mode": "follow_up", "text": "probe"}
         send(3, "input.push", push)
         try:
             wait_for(lambda: provider.requests, "provider request", 8)
@@ -268,9 +266,7 @@ def main():
                     return True
             return False
 
-        event_names = sorted(
-            {f.get("method") for f in frames if f.get("method")}
-        )
+        event_names = sorted({f["params"]["type"] for f in frames if f.get("method") == "agent.event"})
         if not snapshots:
             outcome = "no_snapshot_event"
         elif not control_observed():

@@ -10,7 +10,7 @@ document and the code win.
 `minicore-runtime`). The Agent crate is linked only to serve as this
 executable's `agent` subcommand: `main` hands those arguments to
 `minicore_agent::cli::run` before anything else. The TUI talks to that child over
-stdio NDJSON JSON-RPC (Protocol v2) and calls no other Agent API. It never reads the Agent store or
+stdio NDJSON JSON-RPC (Protocol v3) and calls no other Agent API. It never reads the Agent store or
 workspace file contents, runs a tool, calls a provider or keeps provider credentials;
 its two settings files name environment variables, never keys. Remote mode
 validates host directory paths and stores only hashes of phone tokens.
@@ -131,7 +131,7 @@ Agent config is never parsed back: `AgentFile` only serializes.
 
 ### Protocol and transport ownership
 
-The handshake requires RPC v2. Open/create responses include a required load and
+The handshake requires RPC v3. Open/create responses include a required load and
 snapshot, while rename responses contain session information only. Input receipts
 must name the requested session/load and an accepted input ID. A malformed receipt
 leaves acceptance unknown and cannot trigger an automatic resend.
@@ -408,7 +408,7 @@ apart), completion recovery (250 ms, 1 s, 4 s) and `changes.diff` (twice).
 Exhausted completion reads remain unsettled; an unrelated snapshot revision
 cannot restart their retry budget.
 
-The handshake requires `protocol_version == 2` and the ten capabilities in
+The handshake requires `protocol_version == 3` and the ten capabilities in
 `REQUIRED_CAPABILITIES` (`protocol/mod.rs`; `workspace.search` and
 `workspace.status` are not used). `session.presentation` has no capability
 string and is called unconditionally. Shutdown serializes callers and sends
@@ -439,8 +439,8 @@ a delayed observation and is dropped whole — never merged field by field.
 instance sends it back, and the Agent rejects a missing or stale one before the
 side effect.
 
-Command receipts still report their own result: a refusal returns the text, a
-removal hands the entry back to its requester, a push names the turn it started.
+Command receipts report their own result: a refusal returns the text, a removal
+hands the entry back to its requester, and a push names the accepted input.
 They no longer set the queue or execution; each receipt asks for the current
 snapshot, so a delayed answer cannot resurrect a consumed entry.
 
@@ -448,8 +448,8 @@ snapshot, so a delayed answer cannot resurrect a consumed entry.
 
 The completion directory is what makes missed turns discoverable. Its entries
 are the load's contiguous suffix of finished turns, each with the outcome,
-persistence, availability and the anchors that place it: `next_loop_id` and
-`after_saved_loop_id`.
+persistence, availability and `after_saved_loop_id`. Completion sequence numbers
+order retained turns, and the saved-history anchor places them beside durable history.
 
 A snapshot can arrive before an outstanding open/create has returned. Only
 while an installation is outstanding are such observations eligible for holding. Up to two such snapshots, totalling at most
@@ -539,7 +539,8 @@ done card, without ending the surrounding model turn.
 ## Turn lifecycle
 
 The control snapshot says what is running; `turn.wait` reports terminal metadata
-for its named turn, including outcome, usage and the direct successor.
+for its named turn, including outcome, usage and request counts. Successors are
+discovered from snapshot execution and completion identities.
 
 1. **Submit.** `Enter` pushes `steer`; `Alt+Enter` pushes `follow_up`. The receipt
    reports acceptance and any start error, but only a snapshot opens or changes
@@ -558,9 +559,8 @@ for its named turn, including outcome, usage and the direct successor.
    `tool_execution` update with `recording: saved` or `failed`, not a new body
    event. Its exact ToolRef/load updates the card after canonical installation;
    a turn's saved marker never implies that auxiliary recording is saved.
-   `dropped_before > 0` marks the turn as having a gap. Control-shaped events
-   (`input_queue`, `session_state`, `interaction_*`) no longer write state; the
-   snapshot does. Late body updates change their own region; only events for
+   `dropped_before > 0` marks the turn as having a gap. Control changes arrive
+   through `session_snapshot`. Late body updates change their own region; only events for
    the current live loop change its working phase and tool label.
 3. **`turn.wait` resolves** with terminal metadata for its named loop. A failed
    wait makes one stored-outcome query, then reports an error if no outcome is
@@ -570,7 +570,7 @@ for its named turn, including outcome, usage and the direct successor.
    updates that region's line, settles and counts only its cards, and replaces
    only that turn's accounted usage contribution, preserving a newer successor's
    streaming output and usage. It never clears the
-   snapshot's live execution or applies the wait's queue/next. Every receipt refreshes control. The
+   snapshot's live execution. Mutation receipts refresh control. The
    completion directory then has the turn, so its body is recovered through
    `turn.result` (paged, chunk-assembled) and **reconciled**: it replaces the
    blocks the turn streamed, up to its turn-end line and no further, so a
@@ -623,8 +623,7 @@ turn cannot be resurrected. Source identity/request metadata travels with copied
 or merged blocks in all builds; a historical source lacking IDs remains unknown.
 Delivery never removes queue entries; only a snapshot changes the mirror. Unknown deliveries
 share the bounded early-body cache with deltas and tools. A snapshot-confirmed
-execution opens its own prompt from execution.input (which may be null), not
-from the input most recently pushed or a delayed receipt's StartedTurn.
+execution opens its own prompt from execution.input (which may be null).
 Deleting a session that holds queued entries is refused, as the Agent does.
 The first prompt of an untitled session becomes its title through `session.rename`.
 
@@ -644,7 +643,7 @@ Turn and history reads check the response identity, chunk encoding and byte
 continuity, item JSON, cursor progress and the requested item range before any
 content is installed. A pending turn is not an empty result. A missing turn,
 invalid page, oversized item or exhausted read workspace leaves the existing
-transcript in place and reports the problem. RPC v2 result pages repeat the
+transcript in place and reports the problem. RPC v3 result pages repeat the
 requested load and immutable result_id. Later requests carry that result_id;
 changing identity is an error, expiry is explicit unavailable, and live-to-stored
 availability can change without changing the immutable body. Partial and
@@ -792,7 +791,8 @@ transcript area. A view owns the keys, so the editor under it is drawn dimmed
 with the placeholder `view open · esc to return`.
 
 The Git diff view reads `changes.list` with `scope: "workspace"` on open and
-passes each opaque `workspace:` reference to `changes.diff`, paging its hunks
+passes each structured `workspace` change reference to `changes.diff`, preserving
+its HEAD and entry identity while paging its hunks
 without a `comparison` override. The Agent chooses index-to-worktree for
 unstaged or untracked entries, otherwise HEAD-to-index. `/diff` takes no
 argument; a turn-end click opens the same working-tree view. It needs a loaded

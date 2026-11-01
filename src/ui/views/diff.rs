@@ -231,7 +231,7 @@ mod tests {
     fn page() -> DiffPage {
         serde_json::from_value(json!({
             "binary": false, "stale": false, "truncated": false,
-            "change_ref": "tool:abc", "path": "src/main.rs", "complete": true,
+            "path": "src/main.rs", "complete": true,
             "hunks": [{"old_start": 9, "old_count": 2, "new_start": 9, "new_count": 3,
                        "lines": [
                          {"kind": "context", "old_index": 9, "new_index": 9,
@@ -294,7 +294,7 @@ mod tests {
         let styles = Styles::of(Palette::dark());
         let page: DiffPage = serde_json::from_value(json!({
             "binary": false, "stale": false, "truncated": false,
-            "change_ref": "tool:a", "path": "a.py", "complete": true,
+            "path": "a.py", "complete": true,
             "hunks": [
                 {"old_start": 0, "old_count": 2, "new_start": 0, "new_count": 2, "lines": []},
                 {"old_start": 5, "old_count": 0, "new_start": 5, "new_count": 1, "lines": []}
@@ -310,7 +310,7 @@ mod tests {
         let styles = Styles::of(Palette::dark());
         let page: DiffPage = serde_json::from_value(json!({
             "binary": false, "stale": false, "truncated": false,
-            "change_ref": "tool:a", "path": "a.py", "complete": true,
+            "path": "a.py", "complete": true,
             "hunks": [{"old_start": 0, "old_count": 0, "new_start": 0, "new_count": 1,
                        "lines": [
                          {"kind": "added", "new_index": 0, "text": "long ", "line_complete": false},
@@ -355,7 +355,7 @@ mod tests {
         let styles = Styles::of(Palette::dark());
         let page: DiffPage = serde_json::from_value(json!({
             "binary": false, "stale": false, "truncated": false,
-            "change_ref": "tool:abc", "path": "a.rs", "complete": true,
+            "path": "a.rs", "complete": true,
             "hunks": [{"old_start": 1, "old_count": 0, "new_start": 1, "new_count": 2,
                        "lines": [
                          {"kind": "added", "text": "added();\n", "line_complete": true},

@@ -20,16 +20,6 @@ impl Session {
     /// Applies one event to a live session: body content only. Control state
     /// arrives through [`Session::apply_control`].
     pub fn apply_body_event(&mut self, event: AgentEvent, bytes: usize) {
-        if matches!(
-            event,
-            AgentEvent::InteractionRequested { .. }
-                | AgentEvent::InteractionResolved { .. }
-                | AgentEvent::TurnStarted { .. }
-                | AgentEvent::TurnFinished { .. }
-        ) {
-            self.apply_event(event);
-            return;
-        }
         if let Some(loop_id) = event.loop_id() {
             if self.is_closed(loop_id) && !event.is_tool_metadata() {
                 return;
@@ -52,8 +42,6 @@ impl Session {
     pub fn apply_event(&mut self, event: AgentEvent) {
         match event {
             AgentEvent::SessionOpened { session, .. } => self.info = *session,
-            // Control state arrives only through `apply_control`.
-            AgentEvent::SessionState { .. } => {}
             AgentEvent::RequestUsage { turn, usage, .. } if self.is_live(&turn) => {
                 let live = self.live.as_mut().unwrap();
                 if !live.usage_final {
@@ -113,8 +101,6 @@ impl Session {
                     };
                 }
             }
-            // The queue arrives only through `apply_control`.
-            AgentEvent::InputQueue { .. } => {}
             AgentEvent::InputDelivered { turn, items, .. } => self.deliver(turn, items),
             AgentEvent::ToolStarted {
                 turn,
@@ -249,14 +235,6 @@ impl Session {
                     if let Some(content) = result.content {
                         card.apply_result(&content);
                     }
-                }
-            }
-            // An interaction arrives and resolves with the control snapshot; an
-            // older resolution must not clear a newer interaction.
-            AgentEvent::InteractionRequested { .. } | AgentEvent::InteractionResolved { .. } => {}
-            AgentEvent::TurnFinished { turn, .. } if self.is_live(&turn) => {
-                if let Some(live) = self.live.as_mut() {
-                    live.phase = Phase::Waiting;
                 }
             }
             _ => {}

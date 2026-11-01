@@ -648,25 +648,11 @@ impl App {
                     .get(epoch)
                     .is_some_and(|session| !session.compacting())
             {
-                // The context report holds the finished compaction's marker,
-                // and the footer's figure moved too.
                 self.refresh_context_for(epoch);
                 self.refresh_presentation_for(epoch);
             }
             return;
         }
-        // These events only say control changed. Until the Agent pushes the
-        // change itself, one coalesced read fetches the snapshot behind them.
-        if matches!(
-            event,
-            AgentEvent::InteractionRequested { .. }
-                | AgentEvent::InteractionResolved { .. }
-                | AgentEvent::InputQueue { .. }
-                | AgentEvent::SessionState { .. }
-        ) {
-            self.session_mut(epoch).control_due = true;
-        }
-        let seen = self.resident.get(epoch).unwrap().approval_seen.clone();
         let delivered = matches!(event, AgentEvent::InputDelivered { .. });
         let delivery_anchor = if delivered {
             match self.scroll_for(epoch) {
@@ -681,17 +667,8 @@ impl App {
             None
         };
         let session = self.session_mut(epoch);
-        let was_compacting = session.compacting();
         let usage = matches!(event, AgentEvent::RequestUsage { .. });
-        // The interaction itself comes from the control snapshot, but the
-        // announcement runs once per interaction whichever arrived first.
-        let requested = session
-            .interaction
-            .as_ref()
-            .map(|interaction| interaction.interaction_id.clone())
-            .filter(|id| seen.as_ref() != Some(id));
         session.apply_body_event(event, bytes);
-        let compaction_ended = was_compacting && session.compaction.is_none();
         let anchor = delivery_anchor.and_then(|(revision, offset)| {
             session
                 .transcript
@@ -702,18 +679,8 @@ impl App {
         if let Some(anchor) = anchor {
             self.set_scroll_for(epoch, anchor);
         }
-        if requested.is_some() {
-            self.session_mut(epoch).approval_seen = requested;
-            self.on_approval_requested(epoch);
-        }
-        // The footer's context figure moves with each request and each
-        // compaction, not only at the turn's end.
-        if compaction_ended || (usage && self.session_mut(epoch).presentation_due()) {
+        if usage && self.session_mut(epoch).presentation_due() {
             self.refresh_presentation_for(epoch);
-        }
-        // The context report holds the finished compaction's marker.
-        if compaction_ended {
-            self.refresh_context_for(epoch);
         }
         self.pull_control_for(epoch);
         #[cfg(feature = "e2e-observe")]

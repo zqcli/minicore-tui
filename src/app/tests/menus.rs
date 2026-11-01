@@ -324,7 +324,8 @@ async fn ask(h: &mut Harness, id: &str, tool: &str) {
     waiting["pending_interaction"] = json!({"loop_id":"l1","request_index":0,"interaction_id":id,
         "tool_call_id":format!("c-{id}"),"tool_name":tool,
         "kind":{"type":"approval","data":{"prompt":format!("Allow {tool}?")}}});
-    h.fake.script("session.state@s1", state_response(waiting));
+    h.fake
+        .script("session.state@s1", state_response(waiting.clone()));
     h.fake.script(
         "interaction.answer",
         after_snapshot(
@@ -332,13 +333,7 @@ async fn ask(h: &mut Harness, id: &str, tool: &str) {
             running_snapshot(h.next_revision() + 1, "l1", "work"),
         ),
     );
-    h.emit(
-        "interaction_requested",
-        json!({"turn": turn("l1"), "interaction": {
-            "interaction_id": id, "tool_call_id": format!("c-{id}"), "tool_name": tool,
-            "kind": {"type": "approval", "data": {"prompt": format!("Allow {tool}?")}}}}),
-    )
-    .await;
+    h.snapshot_event(waiting).await;
     h.run_for(Duration::from_millis(50)).await;
 }
 

@@ -248,7 +248,7 @@ async fn entering_remote_recalls_the_queue_and_an_agent_refusal_returns_only_to_
     h.fake.script(
         "input.recall",
         after_snapshot(
-            json!({"texts": ["queued"], "queue": queue(vec![], false)}),
+            json!({"texts": ["queued"]}),
             h.control(json!({"queue":queue(vec![], false)})),
         ),
     );
@@ -464,7 +464,7 @@ async fn remote_off_restores_local_submit_and_quit_requires_two_requests_within_
     assert!(h.app.quit);
     h.app.quit = false;
     h.action(Action::Remote("off".into()));
-    h.fake.script("input.push", pushed(vec![]));
+    h.fake.script("input.push", accepted("s1", "i1"));
     h.submit("local again");
     h.settle().await;
     assert_eq!(h.sends(), ["local again"]);

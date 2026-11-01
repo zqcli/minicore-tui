@@ -172,8 +172,7 @@ impl super::App {
             #[cfg(feature = "e2e-observe")]
             self.observe_control(&snapshot);
             self.start_adopted_turn_for(epoch);
-            // A newly observed approval is announced from the snapshot itself,
-            // whether or not its event reached the client first.
+            // Each interaction is announced once from its authoritative snapshot.
             let pending = self
                 .live(&id)
                 .and_then(|session| session.interaction.as_ref())
@@ -229,7 +228,7 @@ impl super::App {
         }
     }
 
-    /// Fetches the snapshot behind control hints, at most one read at a time.
+    /// Fetches a pending control refresh, at most one read at a time.
     pub(super) fn pull_control_for(&mut self, epoch: u64) {
         if self
             .resident

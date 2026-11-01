@@ -26,13 +26,6 @@ pub enum AgentEvent {
     SessionClosed {
         meta: EventMeta,
     },
-    SessionState {
-        meta: EventMeta,
-    },
-    TurnStarted {
-        meta: EventMeta,
-        turn: TurnRef,
-    },
     RequestStarted {
         meta: EventMeta,
         turn: TurnRef,
@@ -51,9 +44,6 @@ pub enum AgentEvent {
         #[serde(rename = "channel", deserialize_with = "reasoning_channel")]
         reasoning: bool,
         delta: String,
-    },
-    InputQueue {
-        meta: EventMeta,
     },
     InputDelivered {
         meta: EventMeta,
@@ -102,18 +92,6 @@ pub enum AgentEvent {
         call: EventToolCall,
         result: ToolResult,
     },
-    InteractionRequested {
-        meta: EventMeta,
-        turn: TurnRef,
-    },
-    InteractionResolved {
-        meta: EventMeta,
-        turn: TurnRef,
-    },
-    TurnFinished {
-        meta: EventMeta,
-        turn: TurnRef,
-    },
     /// The authoritative control state of one resident instance.
     SessionSnapshot {
         meta: EventMeta,
@@ -160,15 +138,11 @@ impl AgentEvent {
 
     pub fn turn(&self) -> Option<&TurnRef> {
         match self {
-            Self::TurnStarted { turn, .. }
-            | Self::RequestStarted { turn, .. }
+            Self::RequestStarted { turn, .. }
             | Self::RequestUsage { turn, .. }
             | Self::OutputDelta { turn, .. }
             | Self::InputDelivered { turn, .. }
-            | Self::ToolStarted { turn, .. }
-            | Self::InteractionRequested { turn, .. }
-            | Self::InteractionResolved { turn, .. }
-            | Self::TurnFinished { turn, .. } => Some(turn),
+            | Self::ToolStarted { turn, .. } => Some(turn),
             Self::ToolPresentation { call, .. }
             | Self::ToolArgumentsPreview { call, .. }
             | Self::ToolFinished { call, .. } => Some(&call.turn),
@@ -200,12 +174,9 @@ impl AgentEvent {
         match self {
             Self::SessionOpened { meta, .. }
             | Self::SessionClosed { meta }
-            | Self::SessionState { meta, .. }
-            | Self::TurnStarted { meta, .. }
             | Self::RequestStarted { meta, .. }
             | Self::RequestUsage { meta, .. }
             | Self::OutputDelta { meta, .. }
-            | Self::InputQueue { meta, .. }
             | Self::InputDelivered { meta, .. }
             | Self::ToolStarted { meta, .. }
             | Self::ToolPresentation { meta, .. }
@@ -214,9 +185,6 @@ impl AgentEvent {
             | Self::ToolExecution { meta, .. }
             | Self::ToolProcess { meta, .. }
             | Self::ToolFinished { meta, .. }
-            | Self::InteractionRequested { meta, .. }
-            | Self::InteractionResolved { meta, .. }
-            | Self::TurnFinished { meta, .. }
             | Self::SessionSnapshot { meta, .. } => Some(meta),
             Self::Unknown => None,
         }
@@ -340,7 +308,7 @@ mod tests {
             .lines()
             .map(|line| decode(serde_json::from_str(line).unwrap()))
             .collect();
-        assert_eq!(events.len(), 20);
+        assert_eq!(events.len(), 15);
         let unknown: Vec<&str> = AGENT_EVENTS
             .lines()
             .zip(&events)
@@ -456,7 +424,7 @@ mod tests {
             AgentEvent::Unknown
         ));
         assert!(matches!(
-            decode(json!({"type": "turn_started", "data": 7})),
+            decode(json!({"type": "request_started", "data": 7})),
             AgentEvent::Unknown
         ));
     }

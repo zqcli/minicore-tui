@@ -73,7 +73,6 @@ pub struct CompletedTurn {
     pub persistence_uncertain: bool,
     pub availability: ResultAvailability,
     pub unavailable_reason: Option<UnavailableReason>,
-    pub next_loop_id: Option<String>,
     /// The last committed-history turn before this one, for unsaved ordering.
     pub after_saved_loop_id: Option<String>,
 }
@@ -390,18 +389,19 @@ mod tests {
     }
 
     #[test]
-    fn a_completed_turn_carries_its_saved_and_unsaved_anchors() {
+    fn a_completed_turn_carries_its_unsaved_order_anchor() {
         let turn: CompletedTurn = serde_json::from_value(json!({
             "seq": 7, "loop_id": "lup_a", "input_id": "inp_1",
             "completion_kind": "reported", "outcome_kind": "cancelled",
             "persistence": "failed", "availability": "live",
-            "next_loop_id": "lup_b", "after_saved_loop_id": "lup_z"
+            "after_saved_loop_id": "lup_z"
         }))
         .unwrap();
         assert_eq!(turn.seq, 7);
         assert!(!turn.persistence_uncertain);
         assert_eq!(turn.availability, ResultAvailability::Live);
         assert_eq!(turn.unavailable_reason, None);
+        assert_eq!(turn.after_saved_loop_id.as_deref(), Some("lup_z"));
 
         let expired: CompletedTurn = serde_json::from_value(json!({
             "seq": 8, "loop_id": "lup_c", "completion_kind": "reported",

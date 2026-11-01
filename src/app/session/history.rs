@@ -286,7 +286,6 @@ impl Session {
                     covered_item_count: None,
                     retained_item_count: None,
                     failure_kind: None,
-                    next: None,
                 };
                 self.push_compaction(&result, None);
             } else if !last.outcome.starts_with("compacted") && last.outcome != "cancelled" {

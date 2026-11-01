@@ -1,4 +1,4 @@
-//! Wire DTOs for minicore-agent Protocol v2. Unknown fields are
+//! Wire DTOs for minicore-agent Protocol v3. Unknown fields are
 //! ignored, and enums the Agent documents as non-exhaustive decode future values
 //! to `Unknown` instead of failing the frame.
 
@@ -18,12 +18,12 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub use changes::{ChangeKind, ChangeList};
+pub use changes::{ChangeKind, ChangeList, ChangeRef};
 pub use event::AgentEvent;
 pub use failure::Failure;
 pub use input::{
     DeliveredInput, InputMode, InputPushResult, InputRecallResult, InputRemoveResult,
-    InputResumeResult, InputStartError, Queue, QueueItem, StartedTurn,
+    InputResumeResult, InputStartError, Queue, QueueItem,
 };
 pub use read::{
     ChunkAssembler, ChunkOutcome, DisplayProjection, RawHistoryItem, ReadChunk, ReadCursor,
@@ -42,7 +42,7 @@ pub use tool::{
 pub use workspace::{FileEntry, FileKind, FilesPage};
 
 pub const JSONRPC_VERSION: &str = "2.0";
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 
 pub const METHOD_PING: &str = "agent.ping";
 pub const METHOD_RELOAD: &str = "agent.reload";
@@ -624,8 +624,6 @@ pub struct CompactionResult {
     pub covered_item_count: Option<usize>,
     pub retained_item_count: Option<usize>,
     pub failure_kind: Option<String>,
-    /// The turn the Agent started from the queue when a manual compaction ended.
-    pub next: Option<StartedTurn>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -818,10 +816,6 @@ pub struct TurnWaitResult {
     pub usage: Option<Usage>,
     pub requests: Option<u32>,
     pub tool_rounds: Option<u64>,
-    /// The turn the Agent started from the queue when this one ended.
-    pub next: Option<StartedTurn>,
-    /// The queue after the turn ended; `None` for an outcome the TUI made up.
-    pub queue: Option<Queue>,
 }
 
 #[cfg(test)]
@@ -948,10 +942,10 @@ mod tests {
     }
 
     #[test]
-    fn handshake_requires_protocol_two_and_used_capabilities() {
+    fn handshake_requires_protocol_three_and_used_capabilities() {
         let ping = |capabilities: &[&str]| PingResult {
-            version: "0.7.0".into(),
-            protocol_version: 2,
+            version: "0.9.3".into(),
+            protocol_version: 3,
             capabilities: capabilities.iter().map(|c| (*c).to_owned()).collect(),
         };
         assert_eq!(validate_backend(&ping(REQUIRED_CAPABILITIES)), Ok(()));
@@ -960,10 +954,13 @@ mod tests {
             Err(BackendError::MissingCapabilities { .. })
         ));
         let mut wrong = ping(REQUIRED_CAPABILITIES);
-        wrong.protocol_version = 1;
+        wrong.protocol_version = 2;
         assert!(matches!(
             validate_backend(&wrong),
-            Err(BackendError::ProtocolVersion { found: 1, .. })
+            Err(BackendError::ProtocolVersion {
+                found: 2,
+                required: 3
+            })
         ));
     }
 

@@ -142,14 +142,9 @@ pub fn summary(index: usize) -> Value {
     )
 }
 
-/// A `turn.wait` answer for `loop_id` with nothing queued and no successor.
+/// A terminal `turn.wait` summary for `loop_id`.
 pub fn waited(loop_id: &str, outcome: Value) -> Value {
-    waited_then(loop_id, outcome, None, queue(vec![], false))
-}
-
-/// A `turn.wait` answer for `loop_id` that also says which turn the Agent started next and what still waits.
-pub fn waited_then(loop_id: &str, outcome: Value, next: Option<Value>, queued: Value) -> Value {
-    json!({"turn": turn(loop_id), "outcome": outcome, "next": next, "queue": queued})
+    json!({"turn": turn(loop_id), "outcome": outcome})
 }
 
 pub fn completed() -> Value {
@@ -191,38 +186,10 @@ pub fn queue(items: Vec<Value>, paused: bool) -> Value {
     json!({"items": items, "paused": paused})
 }
 
-/// An `input.push` answer for an entry that waits in `queued`.
-pub fn pushed(queued: Vec<Value>) -> Value {
-    json!({"session_id":"s1","load":crate::testing::LOAD,"accepted":true,"id": "i1", "started": null, "queue": queue(queued, false)})
-}
-
-/// A turn the Agent started from the queue with `text` as its input.
-pub fn started_turn(turn: Value, text: &str) -> Value {
-    json!({"turn": turn, "input": entry("n1", "follow_up", text)})
-}
-
-/// `started_turn` for `loop_id` of `s1`.
-pub fn next_turn(loop_id: &str, text: &str) -> Value {
-    started_turn(turn(loop_id), text)
-}
-
-/// An `input.push` answer for an entry that started `loop_id` with nothing else waiting.
-pub fn started(loop_id: &str) -> Value {
-    started_in(turn(loop_id), vec![])
-}
-
-/// `started` with the time the Agent accepted the entry.
-pub fn started_at(loop_id: &str, accepted_at: &str) -> Value {
-    let mut push = started(loop_id);
-    push["started"]["input"]["accepted_at"] = json!(accepted_at);
-    push
-}
-
-/// An `input.push` answer that started `turn` with the pushed text and left `queued` waiting.
-pub fn started_in(turn: Value, queued: Vec<Value>) -> Value {
-    let started = json!({"turn": turn, "input": entry("i1", "steer", "")});
-    json!({"session_id":started["turn"]["session_id"],"load":crate::testing::LOAD,"accepted":true,
-           "id": "i1", "started": started, "queue": queue(queued, false)})
+/// An accepted input receipt, independent of execution and queue observations.
+pub fn accepted(session_id: &str, id: &str) -> Value {
+    json!({"session_id":session_id,"load":crate::testing::LOAD,"accepted":true,
+           "id":id,"start_error":null})
 }
 
 /// A refusal in the shape `FakeAgent::script_sequence` accepts.
@@ -236,7 +203,7 @@ pub fn history(page: Value) -> Reply {
 }
 
 pub fn state_response(snapshot: Value) -> Value {
-    json!({"session_id":snapshot["session_id"], "snapshot":snapshot})
+    json!({"snapshot":snapshot})
 }
 
 pub fn opened_session(session: Value) -> Value {
@@ -283,9 +250,11 @@ pub fn finished_snapshot(revision: u64, entries: Vec<Value>) -> Value {
 
 /// An explicit running snapshot published with an accepted push.
 pub fn starting_reply(loop_id: &str, revision: u64) -> Reply {
-    let mut receipt = started(loop_id);
-    receipt["started"]["input"]["text"] = json!("$text");
-    after_snapshot(receipt, running_snapshot(revision, loop_id, "$text")).with_request_text()
+    after_snapshot(
+        accepted("s1", "i1"),
+        running_snapshot(revision, loop_id, "$text"),
+    )
+    .with_request_text()
 }
 
 /// A running turn and the explicitly ordered queue observed beside it.
@@ -311,4 +280,22 @@ pub fn completed_reply(loop_id: &str, revision: u64, items: Vec<Value>) -> Reply
         format!("turn.result@s1/{loop_id}"),
         completed_result(loop_id, items),
     )
+}
+
+pub fn tool_change_ref(call_id: &str) -> Value {
+    json!({
+        "kind": "tool",
+        "tool_ref": {"session_id": "s1", "loop_id": "l1", "request_index": 0,
+                     "tool_call_id": call_id},
+        "revision": "a".repeat(64),
+    })
+}
+
+pub fn workspace_change_ref(path: &str, kind: &str) -> Value {
+    json!({
+        "kind": "workspace", "session_id": "s1", "head_oid": "b".repeat(40),
+        "entry": {"path": path, "kind": kind, "original_path": null,
+                  "index_status": (kind != "untracked").then_some("."),
+                  "worktree_status": (kind != "untracked").then_some("M")},
+    })
 }

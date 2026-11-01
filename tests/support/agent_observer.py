@@ -72,7 +72,7 @@ def turn_key(row):
 class AgentTrace:
     EVENTS = {'observer_ready', 'observer_end', 'counters', 'gauge', 'snapshot_sample', 'snapshot_encoded',
               'snapshot_sent', 'load_registered', 'load_unregistered', 'loop_installed',
-              'completion_registered', 'report_refs', 'result_query', 'work', 'fault_ready',
+              'completion_registered', 'result_query', 'work', 'fault_ready',
               'fault_applied', 'fault_released', 'runtime_tail_dropped',
               'input_fixture_request', 'input_fixture_answer', 'responsiveness_probe'}
     MAX_BYTES, MAX_ROW, MAX_ROWS = 16 * 1024 * 1024, 8192, 65536

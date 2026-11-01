@@ -1,6 +1,24 @@
-//! `workspace.files` DTOs for the `@` picker.
+//! Workspace file listings and Git entry identities.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WorkspaceStatusEntry {
+    pub path: String,
+    pub kind: WorkspaceStatusEntryKind,
+    pub index_status: Option<String>,
+    pub worktree_status: Option<String>,
+    pub original_path: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceStatusEntryKind {
+    Ordinary,
+    Renamed,
+    Unmerged,
+    Untracked,
+}
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct FilesPage {

@@ -1,10 +1,27 @@
-//! `changes.list` / `changes.diff` DTOs. Change references are opaque: a
-//! `workspace:` token is minted by the Agent and must be passed back verbatim.
+//! `changes.list` / `changes.diff` DTOs and round-trip change identities.
 
 use std::collections::HashSet;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+use super::ToolRef;
+use super::workspace::WorkspaceStatusEntry;
+
+/// The address and revision returned by the Agent, passed back unchanged to read a diff.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ChangeRef {
+    Tool {
+        tool_ref: ToolRef,
+        revision: String,
+    },
+    Workspace {
+        session_id: String,
+        head_oid: String,
+        entry: WorkspaceStatusEntry,
+    },
+}
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct ChangeList {
@@ -25,7 +42,7 @@ impl ChangeList {
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct ChangeRecord {
-    pub change_ref: String,
+    pub change_ref: ChangeRef,
     pub path: String,
     pub kind: ChangeKind,
     pub details_available: bool,
@@ -45,7 +62,7 @@ pub enum ChangeKind {
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct DiffPage {
-    /// The tool call that made a `tool:` change; absent for workspace records.
+    /// The tool call that made the change; absent for workspace records.
     pub tool_ref: Option<super::ToolRef>,
     pub hunks: Vec<DiffHunk>,
     pub next_cursor: Option<Value>,
@@ -120,7 +137,7 @@ mod tests {
 
     fn page(lines: Value) -> DiffPage {
         serde_json::from_value(json!({
-            "change_ref": "tool:a", "path": "a.rs", "kind": "modified", "complete": true,
+            "path": "a.rs", "kind": "modified", "complete": true,
             "binary": false, "stale": false, "truncated": false, "availability": "available",
             "hunks": [{"old_start": 1, "old_count": 1, "new_start": 1, "new_count": 1,
                        "lines": lines}]
@@ -133,12 +150,31 @@ mod tests {
             .iter()
             .enumerate()
             .map(|(index, path)| {
-                json!({"change_ref": format!("tool:{index}"), "path": path, "kind": "modified",
+                json!({"change_ref": {"kind":"tool", "tool_ref": {
+                    "session_id":"s1", "loop_id":"l1", "request_index":0,
+                    "tool_call_id":format!("call_{index}")}, "revision":"a".repeat(64)},
+                    "path": path, "kind": "modified",
                        "details_available": true})
             })
             .collect();
         serde_json::from_value(json!({"records": records, "total": records.len(), "warnings": []}))
             .unwrap()
+    }
+
+    #[test]
+    fn change_references_round_trip_the_full_agent_identity() {
+        for value in [
+            json!({"kind":"tool", "tool_ref": {
+                "session_id":"s1", "loop_id":"l1", "request_index":2,
+                "tool_call_id":"call_1"}, "revision":"a".repeat(64)}),
+            json!({"kind":"workspace", "session_id":"s1", "head_oid":"b".repeat(40),
+                "entry":{"kind":"renamed", "path":"new.rs", "original_path":"old.rs",
+                         "index_status":"R", "worktree_status":"M"}}),
+        ] {
+            let reference: ChangeRef = serde_json::from_value(value.clone()).unwrap();
+            assert_eq!(serde_json::to_value(reference).unwrap(), value);
+        }
+        assert!(serde_json::from_value::<ChangeRef>(json!("tool:old")).is_err());
     }
 
     #[test]

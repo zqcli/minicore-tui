@@ -4,7 +4,7 @@ use serde_json::json;
 
 use super::{App, Overlay, SessionOp, tasks};
 use crate::protocol::changes::{DiffLine, DiffPage, LineKind};
-use crate::protocol::{self, ChangeKind, ChangeList, RpcError};
+use crate::protocol::{self, ChangeKind, ChangeList, ChangeRef, RpcError};
 use crate::wrap::sanitize;
 
 /// Which path's hunks a read is for.
@@ -192,8 +192,8 @@ pub struct DiffFile {
     pub lines: Option<(usize, usize)>,
     /// The read failed, so the row is not left looking unmeasured.
     pub failed: bool,
-    /// Opaque change references for this path.
-    pub change_refs: Vec<String>,
+    /// Agent-issued change references for this path.
+    pub change_refs: Vec<ChangeRef>,
 }
 
 /// The open diff view: the file list from `changes.list` and, for the selected
@@ -208,7 +208,7 @@ pub struct DiffState {
     /// Why there is nothing to show, or what failed.
     pub status: String,
     /// Files still to be measured, so each is read once.
-    pending: Vec<(DiffQuery, Vec<String>)>,
+    pending: Vec<(DiffQuery, Vec<ChangeRef>)>,
     /// The one read in flight.
     in_flight: Option<DiffQuery>,
 }
@@ -277,7 +277,9 @@ impl App {
                     let measured = previous
                         .iter()
                         .find(|file| file.path == record.path)
-                        .filter(|file| file.change_refs == [record.change_ref.clone()]);
+                        .filter(|file| {
+                            file.change_refs.as_slice() == std::slice::from_ref(&record.change_ref)
+                        });
                     files.push(DiffFile {
                         path: record.path.clone(),
                         kind: record.kind,
@@ -363,7 +365,7 @@ impl App {
         self.read_diff(query, refs);
     }
 
-    fn read_diff(&self, query: DiffQuery, refs: Vec<String>) {
+    fn read_diff(&self, query: DiffQuery, refs: Vec<ChangeRef>) {
         let Some(session) = self.resident.current() else {
             return;
         };

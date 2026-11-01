@@ -54,7 +54,7 @@ async fn running_first_with(wait: Value, finished: Value) -> Harness {
     h.fake.script(
         "input.push@s2",
         after_snapshot(
-            started_in(turn_in("s2", "l2"), vec![]),
+            accepted("s2", "i1"),
             crate::testing::snapshot_running(
                 "s2",
                 crate::testing::LOAD,
@@ -327,15 +327,7 @@ async fn a_background_turn_ends_there_and_waits_for_the_successor_the_agent_star
         "l3",
         entry("n1", "follow_up", "next for one"),
     );
-    let mut h = running_first_with(
-        json!({
-            "turn": turn_in("s1", "l1"), "outcome": completed(),
-            "next": started_turn(turn_in("s1", "l3"), "next for one"),
-            "queue": queue(vec![], false),
-        }),
-        successor,
-    )
-    .await;
+    let mut h = running_first_with(waited_in("s1", "l1"), successor).await;
     h.mirror(vec![entry("f1", "follow_up", "next for one")], false);
     show(&mut h, "s2").await;
     h.fake.release("turn.wait@s1");
@@ -442,7 +434,6 @@ async fn ask_approval(h: &mut Harness, asked: Value) {
         state_response(running.clone()),
     );
     h.snapshot_event(running).await;
-    h.emit("interaction_requested", asked).await;
 }
 
 #[tokio::test(start_paused = true)]
@@ -679,7 +670,7 @@ async fn an_idle_background_session_with_queued_messages_cannot_be_deleted() {
     let queued = queue(vec![entry("i2", "follow_up", "after the stop")], true);
     let mut finished = crate::testing::snapshot("s1", crate::testing::LOAD, 100);
     finished["queue"] = queued.clone();
-    let mut h = running_first_with(waited_then("l1", cancelled(), None, queued), finished).await;
+    let mut h = running_first_with(waited("l1", cancelled()), finished).await;
     h.fake.script("turn.result", turn_result("l1", vec![]));
     show(&mut h, "s2").await;
     h.fake.release("turn.wait@s1");

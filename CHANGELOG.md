@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+## 0.9.7 — 2026-11-02
+
+- Adopt Agent 0.9.3 and require Agent RPC v3 before starting session operations.
+  Control snapshots own execution, queues and interactions; input receipts and
+  lightweight turn results no longer carry duplicate control state.
+- Pass structured tool and workspace change references through terminal and
+  phone diff queries, preserving their revision and workspace identity.
+- Preserve terminal and phone layouts, input behavior, history recovery and
+  completed-result reconciliation while removing the obsolete control events.
+- Start acceptance-test PTYs without a threaded pre-exec callback, reap owned
+  leaders before group checks, and require actual disappearance of macOS zombie
+  groups. Failed helpers retain their full diagnostics within the existing bounds.
+- Include revision-pinned backends in packaged `BUILD.txt` manifests.
+
 ## 0.9.6 — 2026-11-01
 
 - Reduce web Markdown parsing work for ordinary text, code fences and streaming

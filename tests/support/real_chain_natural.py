@@ -2,9 +2,9 @@
 """Ungated automatic-successor observations through real main and phone server.
 
 Real tool requests keep an ordinary turn active; submit/queue frames are sent
-back-to-back without waiting for either ACK. The Agent's actual completion
-next_loop_id MUST identify the queued successor. No sleeps, holds, releases,
-apply gates, small limits or fault plans establish natural execution order.
+back-to-back without waiting for either ACK. Actual Agent start/completion
+identities establish consecutive turns without another frontend operation.
+No holds, apply gates, small limits or fault plans establish execution order.
 """
 
 import argparse
@@ -67,12 +67,20 @@ def run_batch(binary, pairs):
                 expected_a.append(text_part(provider.answer(start + 3), 3))
                 verify_install(chain, row_a['loop_id'], expected_a)
                 verify_install(chain, row_b['loop_id'], [text_part(provider.answer(start + 4))])
-                def completion_a():
-                    return next((row for row in chain.agent_trace.completed() if row['loop_id'] == row_a['loop_id']), None)
-                chain.wait_for('actual completion boundary next identity', completion_a)
-                completed = completion_a()
-                if completed.get('next_loop_id') != row_b['loop_id'] or completed.get('persistence') != 'persisted':
-                    raise ObservationError('not an automatic successor: actual predecessor next does not name queued B')
+                def successor_events():
+                    events = {(row['event'], row.get('loop_id')): row for row in chain.agent_trace.records()
+                              if row['event'] in ('loop_installed', 'completion_registered')}
+                    keys = [(kind, installed['loop_id']) for installed in (row_a, row_b)
+                            for kind in ('loop_installed', 'completion_registered')]
+                    return [events[key] for key in keys] if all(key in events for key in keys) else None
+                chain.wait_for('actual consecutive Agent start and completion identities', successor_events)
+                start_a, done_a, start_b, done_b = successor_events()
+                for actual, installed in ((start_a, row_a), (done_a, row_a), (start_b, row_b), (done_b, row_b)):
+                    if any(actual[key] != installed[key] for key in ('session_id', 'load', 'loop_id', 'input_id')):
+                        raise ObservationError('actual successor changed accepted input identity')
+                if (start_b['turn'] != start_a['turn'] + 1 or done_b['seq'] != done_a['seq'] + 1
+                        or start_b['event_seq'] <= done_a['event_seq'] or done_a['persistence'] != 'persisted'):
+                    raise ObservationError('actual Agent did not install B directly after A completed')
                 if row_b['completion_seq'] != row_a['completion_seq'] + 1 or peer.seq != operation_count:
                     raise ObservationError('successor order required another frontend operation')
                 links.append({'predecessor': row_a['loop_id'], 'successor': row_b['loop_id'],
@@ -84,7 +92,7 @@ def run_batch(binary, pairs):
                 raise ObservationError('natural successor run unexpectedly activated a fault hook')
             return {'automatic_successors': pairs, 'logical_completions': pairs * 2 + 1,
                     'provider_requests': provider.request_limit, 'latency_seconds': latencies,
-                    'actual_direct_successor_links': links, **report}
+                    'actual_consecutive_turns': links, **report}
         finally:
             peer.close()
 

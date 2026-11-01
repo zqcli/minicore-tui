@@ -234,7 +234,7 @@ async fn local_unknown_input_retains_its_owner_and_requires_a_duplicate_warning_
     h.press(KeyCode::Home);
     h.type_text("edited ");
     h.press(KeyCode::Enter);
-    h.fake.script_held("input.push", pushed(vec![]));
+    h.fake.script_held("input.push", accepted("s1", "i1"));
     h.press(KeyCode::Char('y'));
     h.fake.wait_for_calls("input.push", 2).await;
     assert_eq!(h.app.local_inputs.len(), 2);
@@ -287,7 +287,7 @@ async fn local_unknown_inputs_survive_view_and_load_changes_without_retargeting_
     h.fake.script("session.open",json!({"session":session_info("s1"),"load":"new-load","snapshot":snapshot("s1","new-load",1)}));
     h.fake.script(
         "session.state@s1",
-        json!({"session_id":"s1","status":"idle","snapshot":snapshot("s1","new-load",2)}),
+        state_response(snapshot("s1", "new-load", 2)),
     );
     h.action(Action::OpenSession("s1".into()));
     h.until(|app| {
@@ -323,7 +323,7 @@ async fn unknown_input_confirmation_keeps_the_same_operation_when_an_earlier_rec
 {
     use crate::app::{Action, unconfirmed::Status};
     let mut h = Harness::opened(display_read(0, 0)).await;
-    h.fake.script_held("input.push@s1", pushed(vec![]));
+    h.fake.script_held("input.push@s1", accepted("s1", "i1"));
     h.submit("same");
     let first = h.app.local_inputs[0].id;
     h.fake
@@ -359,7 +359,7 @@ async fn unknown_input_confirmation_keeps_the_same_operation_when_an_earlier_rec
         Some(original),
         "the confirmation owns an ID, not a shifted list index or matching text"
     );
-    h.fake.script_held("input.push@s2", pushed(vec![]));
+    h.fake.script_held("input.push@s2", accepted("s2", "i1"));
     h.press(KeyCode::Char('y'));
     h.fake.wait_for_calls("input.push", 3).await;
     let retry = h.app.local_inputs.back().unwrap();
@@ -408,7 +408,7 @@ async fn local_start_failure_is_accepted_history_but_a_rejection_never_overwrite
  {
     use crate::app::{Action, unconfirmed::Status};
     let mut h = Harness::opened(display_read(0, 0)).await;
-    h.fake.script("input.push",json!({"session_id":"s1","load":crate::testing::LOAD,"accepted":true,"id":"accepted-input","started":null,"start_error":{"input_id":"older-input","kind":"runtime_start_failed","message":"The older queued input could not start"},"queue":queue(vec![],true)}));
+    h.fake.script("input.push",json!({"session_id":"s1","load":crate::testing::LOAD,"accepted":true,"id":"accepted-input","start_error":{"input_id":"older-input","kind":"runtime_start_failed","message":"The older queued input could not start"}}));
     let payload = "accepted paste\n".repeat(12);
     h.app.on_paste(&payload);
     h.action(Action::Submit);
@@ -611,11 +611,7 @@ async fn text_editor_is_preserved_by_same_id_revisions_but_old_answers_cannot_re
     assert!(h.session().interaction_editor.is_empty());
     h.type_text("new answer");
     h.fake.release("interaction.answer");
-    h.emit(
-        "interaction_resolved",
-        json!({"turn":turn("l1"),"interaction_id":"first"}),
-    )
-    .await;
+
     h.settle().await;
     let session = h.session();
     assert_eq!(
@@ -704,7 +700,8 @@ async fn asking() -> Harness {
     waiting["pending_interaction"] = json!({"loop_id":"l1","request_index":0,
         "interaction_id":"i1","tool_call_id":"c1","tool_name":"bash",
         "kind":{"type":"approval","data":{"prompt":"Allow bash?"}}});
-    h.fake.script("session.state@s1", state_response(waiting));
+    h.fake
+        .script("session.state@s1", state_response(waiting.clone()));
     h.fake.script(
         "interaction.answer",
         after_snapshot(
@@ -712,13 +709,7 @@ async fn asking() -> Harness {
             running_snapshot(h.next_revision() + 1, "l1", "write a file"),
         ),
     );
-    h.emit(
-        "interaction_requested",
-        json!({"turn": turn("l1"), "interaction": {
-            "interaction_id": "i1", "tool_call_id": "c1", "tool_name": "bash",
-            "kind": {"type": "approval", "data": {"prompt": "Allow bash?"}}}}),
-    )
-    .await;
+    h.snapshot_event(waiting).await;
     h.until(|app| app.has_interaction()).await;
     h
 }
@@ -843,11 +834,11 @@ async fn shift_enter_adds_a_line_and_alt_enter_queues_follow_ups_behind_a_runnin
         vec![
             starting_reply("l1", 2),
             after_snapshot(
-                pushed(vec![one.clone()]),
+                accepted("s1", "i2"),
                 running_queue(3, "l1", "first line\nxy", vec![one.clone()]),
             ),
             after_snapshot(
-                pushed(vec![one.clone(), two.clone()]),
+                accepted("s1", "i3"),
                 running_queue(4, "l1", "first line\nxy", vec![one, two]),
             ),
         ],
@@ -889,16 +880,16 @@ async fn enter_pushes_a_steer_alt_and_ctrl_enter_a_follow_up_and_the_dock_follow
         vec![
             starting_reply("l1", 2),
             after_snapshot(
-                pushed(vec![alt.clone()]),
+                accepted("s1", "i2"),
                 running_queue(3, "l1", "start", vec![alt.clone()]),
             ),
             after_snapshot(
-                pushed(vec![alt.clone(), ctrl.clone()]),
+                accepted("s1", "i3"),
                 running_queue(4, "l1", "start", vec![alt.clone(), ctrl.clone()]),
             ),
             // The Agent runs steers first.
             after_snapshot(
-                pushed(vec![now.clone(), alt.clone(), ctrl.clone()]),
+                accepted("s1", "i4"),
                 running_queue(5, "l1", "start", vec![now, alt, ctrl]),
             ),
         ],
@@ -973,10 +964,7 @@ async fn tab_with_a_completion_list_open_completes() {
 #[tokio::test(start_paused = true)]
 async fn a_message_sent_during_a_compaction_waits_in_the_agents_queue_without_a_turn() {
     let mut h = Harness::opened(display_read(0, 0)).await;
-    h.fake.script(
-        "input.push",
-        pushed(vec![entry("i1", "follow_up", "later")]),
-    );
+    h.fake.script("input.push", accepted("s1", "i1"));
     h.control_event(json!({"compaction": {
         "operation_id": "auto-boundary-l1-1", "phase": "summarizing",
         "covered_item_count": 8, "retained_item_count": 2,
@@ -985,10 +973,8 @@ async fn a_message_sent_during_a_compaction_waits_in_the_agents_queue_without_a_
     h.until(|app| app.compacting()).await;
     let observed = h.control(json!({"queue":queue(vec![entry("i1","follow_up","later")],false),
         "compaction":{"operation_id":"auto-boundary-l1-1","phase":"summarizing","covered_item_count":8,"retained_item_count":2}}));
-    h.fake.script(
-        "input.push",
-        after_snapshot(pushed(vec![entry("i1", "follow_up", "later")]), observed),
-    );
+    h.fake
+        .script("input.push", after_snapshot(accepted("s1", "i1"), observed));
     h.app.composer.set_text("later");
     h.action(crate::app::Action::QueueFollowUp);
     h.settle().await;
@@ -1058,7 +1044,7 @@ async fn a_slash_line_that_names_no_command_is_a_prompt() {
         vec![
             starting_reply("l1", 2),
             after_snapshot(
-                pushed(vec![entry("i2", "steer", "/var/log is huge")]),
+                accepted("s1", "i2"),
                 running_queue(
                     3,
                     "l1",

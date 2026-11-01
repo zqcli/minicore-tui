@@ -367,20 +367,13 @@ async fn the_turn_the_agent_starts_when_a_compaction_ends_gets_its_wait_and_its_
     let mut queued = snapshot("s1", crate::testing::LOAD, 3);
     queued["compaction"] = json!({"operation_id":"tui-1","phase":"preparing","covered_item_count":0,"retained_item_count":0});
     queued["queue"] = queue(vec![entry("i1", "follow_up", "asked meanwhile")], false);
-    h.fake.script(
-        "input.push",
-        after_snapshot(
-            pushed(vec![entry("i1", "follow_up", "asked meanwhile")]),
-            queued,
-        ),
-    );
+    h.fake
+        .script("input.push", after_snapshot(accepted("s1", "i1"), queued));
     h.fake.script_held(
         "session.compact",
         after_snapshot(
             json!({"operation_id": "tui-1", "status": "compacted", "before_tokens": 9000,
-               "after_tokens": 2000,
-               "next": {"turn": turn("l2"),
-                         "input": entry("i1", "follow_up", "asked meanwhile")}}),
+               "after_tokens": 2000}),
             crate::testing::snapshot_running(
                 "s1",
                 crate::testing::LOAD,

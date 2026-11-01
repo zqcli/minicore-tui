@@ -63,7 +63,7 @@ async fn a_deny_with_a_message_answers_first_then_pushes_the_reason_as_a_steer()
     h.fake.script(
         "input.push",
         after_snapshot(
-            pushed(queued.clone()),
+            accepted("s1", "i1"),
             h.control(json!({"queue":queue(queued, false)})),
         ),
     );
@@ -126,7 +126,7 @@ async fn phone_text_expands_templates_refuses_commands_and_keeps_other_slashes_a
     let mut h = Harness::opened(display_read(0, 0)).await;
     h.fake
         .script_sequence("input.push", vec![starting_reply("l1", 2)]);
-    h.fake.script("input.push", pushed(vec![]));
+    h.fake.script("input.push", accepted("s1", "i1"));
     h.fake.script_held("turn.wait", waited("l1", completed()));
     h.app.templates = vec![crate::app::templates::Template::parse(
         "review".into(),
@@ -258,10 +258,7 @@ async fn unqueue_removes_the_mirrored_entry_by_id_and_returns_its_text_only_to_t
         "a stale row asks nothing"
     );
 
-    h.fake.script(
-        "input.remove",
-        json!({"text": "one", "queue": queue(vec![now.clone(), two.clone()], false)}),
-    );
+    h.fake.script("input.remove", json!({"text": "one"}));
     let revision = h.session().recovery.revision;
     let control = h.control(json!({"queue":queue(vec![now.clone(), two.clone()], false)}));
     h.fake
@@ -285,10 +282,7 @@ async fn unqueue_removes_the_mirrored_entry_by_id_and_returns_its_text_only_to_t
     assert!(h.session().recovery.revision > revision);
     assert_eq!(h.queue(), ["now", "two"]);
 
-    h.fake.script(
-        "input.remove",
-        json!({"text": "two", "queue": queue(vec![now.clone()], false)}),
-    );
+    h.fake.script("input.remove", json!({"text": "two"}));
     let revision = h.session().recovery.revision;
     let control = h.control(json!({"queue":queue(vec![now], false)}));
     h.fake
@@ -457,7 +451,7 @@ async fn a_phone_intent_from_another_view_epoch_or_load_is_refused_before_anythi
     h.fake.script(
         "input.remove",
         after_snapshot(
-            json!({"text":"now", "queue":queue(vec![], false)}),
+            json!({"text":"now"}),
             h.control(json!({"queue":queue(vec![], false)})),
         ),
     );
@@ -514,7 +508,7 @@ async fn queue_cancel_and_history_intents_use_the_existing_reducer_operations() 
     h.fake.script(
         "input.push",
         after_snapshot(
-            pushed(vec![entry("i1", "follow_up", "follow up")]),
+            accepted("s1", "i1"),
             h.control(json!({"queue":queue(vec![entry("i1", "follow_up", "follow up")], false)})),
         ),
     );
@@ -578,7 +572,8 @@ async fn a_tool_allowed_for_the_session_is_answered_without_telling_the_phone() 
     waiting["pending_interaction"] = json!({"loop_id":"l1", "request_index":0,
         "interaction_id":"i1", "tool_call_id":"c1", "tool_name":"bash",
         "kind":{"type":"approval", "data":{"prompt":"Allow bash?"}}});
-    h.fake.script("session.state@s1", state_response(waiting));
+    h.fake
+        .script("session.state@s1", state_response(waiting.clone()));
     h.fake.script_held("turn.wait", waited("l1", completed()));
     h.fake.script(
         "interaction.answer",
@@ -588,13 +583,7 @@ async fn a_tool_allowed_for_the_session_is_answered_without_telling_the_phone() 
     let (mut a, _close) = connect_phone(&mut h, 1, "first").await;
     received(&mut a);
     h.session_mut().allowed_tools.insert("bash".into());
-    h.emit(
-        "interaction_requested",
-        json!({"turn": turn("l1"), "interaction": {
-            "interaction_id": "i1", "tool_call_id": "c1", "tool_name": "bash",
-            "kind": {"type": "approval", "data": {"prompt": "Allow bash?"}}}}),
-    )
-    .await;
+    h.snapshot_event(waiting).await;
     h.settle().await;
     assert_eq!(h.calls("interaction.answer").len(), 1);
     assert!(h.notices().is_empty());
@@ -821,14 +810,10 @@ async fn disconnected_text_answers_stay_budgeted_and_never_acknowledge_the_repla
 #[tokio::test(start_paused = true)]
 async fn an_accepted_start_failure_keeps_the_new_input_and_the_actual_failed_head() {
     let (mut h, mut output) = connected_session().await;
-    let mut receipt = pushed(vec![
-        entry("older", "follow_up", "old"),
-        entry("new", "follow_up", "same"),
-    ]);
-    receipt["id"] = json!("new");
+    let mut receipt = accepted("s1", "new");
     receipt["accepted_at"] = json!("2026-10-30T10:00:00Z");
     receipt["start_error"] = json!({"input_id":"older", "kind":"runtime_start_failed", "message":"The queued turn could not start"});
-    receipt["queue"]["paused"] = json!(true);
+
     h.fake.script_held("input.push", receipt);
     let id = request(&mut h, json!({"kind":"queue", "text":"same"})).await;
     called(&h, "input.push", 1).await;
@@ -914,7 +899,7 @@ async fn reusing_an_inflight_operation_id_revokes_delivery_instead_of_answering_
  {
     let (mut h, mut output) = connected_session().await;
     let closing = h.app.remote.phones[0].connection.close.subscribe();
-    h.fake.script_held("input.push", pushed(vec![]));
+    h.fake.script_held("input.push", accepted("s1", "i1"));
     let id = request(&mut h, json!({"kind":"submit", "text":"same"})).await;
     let mut intent = phone_intent(&mut h, 1, json!({"kind":"new_session"}));
     intent["view_epoch"] = json!("stale");
@@ -939,7 +924,7 @@ async fn reusing_an_inflight_operation_id_revokes_delivery_instead_of_answering_
 #[tokio::test(start_paused = true)]
 async fn a_receipt_for_another_load_is_unknown_not_a_success_for_the_current_operation() {
     let (mut h, mut output) = connected_session().await;
-    let mut wrong = pushed(vec![]);
+    let mut wrong = accepted("s1", "i1");
     wrong["session_id"] = json!("s1");
     wrong["load"] = json!("another_load");
     h.fake.script("input.push", wrong);
@@ -962,9 +947,9 @@ async fn accepted_inputs_coalesce_control_reads_without_waiting_for_them_to_ack(
     for index in 0..4 {
         let id = format!("input-{index}");
         queued.push(entry(&id, "follow_up", "same"));
-        let mut receipt = pushed(queued.clone());
+        let mut receipt = accepted("s1", "i1");
         receipt["id"] = json!(id);
-        receipt["queue"]["paused"] = json!(true);
+
         h.fake.script("input.push", receipt);
         let operation = request(&mut h, json!({"kind":"queue", "text":"same"})).await;
         let ack = ack_next(&mut h, &mut output).await;
@@ -1018,7 +1003,7 @@ async fn transport_errors_are_unknown_but_explicit_rejections_stay_rejected() {
 #[tokio::test(start_paused = true)]
 async fn late_acceptance_names_the_original_load_without_touching_the_reopened_instance() {
     let (mut h, mut output) = connected_session().await;
-    h.fake.script_held("input.push", pushed(vec![]));
+    h.fake.script_held("input.push", accepted("s1", "i1"));
     let id = request(&mut h, json!({"kind":"submit", "text":"same"})).await;
     called(&h, "input.push", 1).await;
     let old = h.session();
@@ -1040,13 +1025,10 @@ async fn late_acceptance_names_the_original_load_without_touching_the_reopened_i
 #[tokio::test(start_paused = true)]
 async fn disconnected_late_ack_and_edit_text_never_reach_a_replacement_device() {
     let (mut h, mut output) = connected_session().await;
-    h.fake.script_held("input.push", pushed(vec![]));
+    h.fake.script_held("input.push", accepted("s1", "i1"));
     let first = request(&mut h, json!({"kind":"submit", "text":"same"})).await;
     h.mirror(vec![entry("old", "follow_up", "same")], false);
-    h.fake.script_held(
-        "input.remove",
-        json!({"text":"same", "queue":queue(vec![], false)}),
-    );
+    h.fake.script_held("input.remove", json!({"text":"same"}));
     let edit = request(
         &mut h,
         json!({"kind":"unqueue", "input_id":"old", "edit":true}),
@@ -1101,10 +1083,7 @@ async fn cancel_answer_and_recall_ack_only_after_the_exact_agent_operation() {
     assert_eq!(ack_next(&mut h, &mut output).await["id"], answer);
     assert!(h.session().allowed_tools.contains("bash"));
     h.mirror(vec![entry("recall", "steer", "same")], false);
-    h.fake.script_held(
-        "input.remove",
-        json!({"text":"same", "queue":queue(vec![], false)}),
-    );
+    h.fake.script_held("input.remove", json!({"text":"same"}));
     let recall = request(
         &mut h,
         json!({"kind":"unqueue", "input_id":"recall", "edit":true}),
@@ -1148,7 +1127,7 @@ async fn missing_load_and_stale_compaction_identity_are_refused_before_rpc() {
 #[tokio::test(start_paused = true)]
 async fn pending_count_and_expanded_text_byte_limits_are_busy_before_side_effects() {
     let (mut h, mut output) = connected_session().await;
-    h.fake.script_held("input.push", pushed(vec![]));
+    h.fake.script_held("input.push", accepted("s1", "i1"));
     for _ in 0..crate::remote::Remote::MAX_PENDING_PER_CONNECTION {
         request(&mut h, json!({"kind":"submit", "text":"held"})).await;
     }

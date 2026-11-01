@@ -53,7 +53,7 @@ async fn separate_views() -> (Harness, mpsc::Receiver<Value>, mpsc::Receiver<Val
         h.fake.script(
             &format!("input.push@{id}"),
             after_snapshot(
-                started_in(turn.clone(), vec![]),
+                accepted(id, "i1"),
                 crate::testing::snapshot_running(
                     id,
                     crate::testing::LOAD,
@@ -375,7 +375,8 @@ async fn an_approval_is_shown_and_answered_only_in_the_viewed_session() {
     waiting["pending_interaction"] = json!({"loop_id":"loop-s2", "request_index":0,
         "interaction_id":"approve-two", "tool_call_id":"call-two", "tool_name":"bash",
         "kind":{"type":"approval", "data":{"prompt":"Allow?"}}});
-    h.fake.script("session.state@s2", state_response(waiting));
+    h.fake
+        .script("session.state@s2", state_response(waiting.clone()));
     h.fake.script(
         "interaction.answer@s2",
         after_snapshot(
@@ -383,7 +384,7 @@ async fn an_approval_is_shown_and_answered_only_in_the_viewed_session() {
             crate::testing::snapshot_running("s2", crate::testing::LOAD, 3, "loop-s2", Value::Null),
         ),
     );
-    h.emit("interaction_requested", json!({"meta":{"session_id":"s2", "dropped_before":0}, "turn":{"session_id":"s2", "loop_id":"loop-s2"}, "interaction":{"interaction_id":"approve-two", "tool_call_id":"call-two", "tool_name":"bash", "kind":{"type":"approval", "data":{"prompt":"Allow?"}}}})).await;
+    h.snapshot_event(waiting).await;
     h.settle().await;
     h.app.sync_remote();
     let first = projected(&mut a);
@@ -484,7 +485,7 @@ async fn each_draft_keeps_its_workspace_model_and_reasoning_through_creation() {
     h.fake.script(
         "input.push@created",
         after_snapshot(
-            started_in(json!({"session_id":"created", "loop_id":"first"}), vec![]),
+            accepted("created", "i1"),
             crate::testing::snapshot_running(
                 "created",
                 crate::testing::LOAD,
@@ -604,7 +605,7 @@ async fn a_pending_create_keeps_its_original_input_while_other_devices_do_live_w
     h.fake.script(
         "input.push@created",
         after_snapshot(
-            started_in(json!({"session_id":"created", "loop_id":"first"}), vec![]),
+            accepted("created", "i1"),
             crate::testing::snapshot_running(
                 "created",
                 crate::testing::LOAD,
@@ -821,8 +822,9 @@ async fn notices_follow_the_intent_or_session_and_attention_excludes_its_viewers
     waiting["pending_interaction"] = json!({"loop_id":"loop-s1", "request_index":0,
         "interaction_id":"approval-one", "tool_call_id":"call-one", "tool_name":"bash",
         "kind":{"type":"approval", "data":{}}});
-    h.fake.script("session.state@s1", state_response(waiting));
-    h.emit("interaction_requested", json!({"turn":{"session_id":"s1", "loop_id":"loop-s1"}, "interaction":{"interaction_id":"approval-one", "tool_call_id":"call-one", "tool_name":"bash", "kind":{"type":"approval", "data":{}}}})).await;
+    h.fake
+        .script("session.state@s1", state_response(waiting.clone()));
+    h.snapshot_event(waiting).await;
     h.settle().await;
     assert!(
         messages(&mut a).is_empty(),
@@ -849,7 +851,7 @@ async fn a_refused_push_returns_its_text_only_to_the_operation_that_sent_it() {
         "input.push@s1",
         vec![
             json!({"error":{"code":-32030,"message":"no","data":{"kind":"input_rejected","acceptance":"rejected"}}}),
-            pushed(vec![]),
+            accepted("s1", "i1"),
         ],
     );
     request(&mut h, json!({"kind":"submit", "text":"first"})).await;
@@ -886,9 +888,7 @@ async fn viewed_turn_ends_stay_seen_and_opening_a_session_clears_unseen() {
         let loop_id = format!("loop-s1-{viewed}");
         let turn = json!({"session_id":"s1", "loop_id":loop_id});
         let revision = h.app.live("s1").unwrap().recovery.revision + 1;
-        let mut push = started_in(turn.clone(), vec![]);
-        push["id"] = json!(format!("input-{viewed}"));
-        push["started"]["input"]["id"] = push["id"].clone();
+        let push = accepted("s1", &format!("input-{viewed}"));
         let mut running = running_snapshot(revision, &loop_id, "work");
         running["execution"]["input"]["id"] = push["id"].clone();
         if !completions.is_empty() {
@@ -1178,9 +1178,9 @@ async fn changes_and_diff_queries_list_the_workspace_like_the_diff_view_and_refu
     h.fake.script(
         "changes.list@s1",
         json!({"records":[
-            {"change_ref":"workspace:a", "path":"src/a.rs", "kind":"modified", "details_available":true},
-            {"change_ref":"workspace:b", "path":"new.txt", "kind":"added", "details_available":true},
-            {"change_ref":"workspace:c", "path":"src/a.rs", "kind":"modified", "details_available":true}],
+            {"change_ref":workspace_change_ref("src/a.rs", "ordinary"), "path":"src/a.rs", "kind":"modified", "details_available":true},
+            {"change_ref":workspace_change_ref("new.txt", "untracked"), "path":"new.txt", "kind":"added", "details_available":true},
+            {"change_ref":workspace_change_ref("src/a.rs", "ordinary"), "path":"src/a.rs", "kind":"modified", "details_available":true}],
             "next_cursor":{"offset":3}, "total":4, "warnings":[]}),
     );
     h.fake.script(
@@ -1224,7 +1224,7 @@ async fn changes_and_diff_queries_list_the_workspace_like_the_diff_view_and_refu
     assert_eq!(diffs.len(), 1);
     assert_eq!(
         (&diffs[0]["session_id"], &diffs[0]["change_ref"]),
-        (&json!("s1"), &json!("workspace:b"))
+        (&json!("s1"), &workspace_change_ref("new.txt", "untracked"))
     );
     let mut answers = results(&mut a);
     answers.sort_by_key(|answer| answer["id"].as_str().unwrap().to_owned());
@@ -1367,7 +1367,7 @@ async fn a_stale_draft_create_sends_to_its_created_session_without_refocusing_th
         json!({"session":info, "load":"created_load",
         "snapshot":snapshot("created", "created_load", 1)}),
     );
-    let mut receipt = pushed(vec![]);
+    let mut receipt = accepted("s1", "i1");
     receipt["session_id"] = json!("created");
     receipt["load"] = json!("created_load");
     h.fake.script(

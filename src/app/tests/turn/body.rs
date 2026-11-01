@@ -7,7 +7,7 @@ fn diff_with(added: usize, removed: usize) -> Value {
             |index| json!({"kind": "added", "new_index": index, "text": "new", "line_complete": true}),
         ))
         .collect();
-    json!({"change_ref": "tool:a", "path": "app.py", "availability": "available",
+    json!({"path": "app.py", "availability": "available",
            "complete": true, "binary": false, "stale": false, "truncated": false,
            "next_cursor": null,
            "hunks": [{"old_start": 0, "old_count": removed, "new_start": 0,
@@ -60,11 +60,11 @@ async fn steers_a_running_turn_took_become_steering_blocks_in_the_agents_order()
             vec![
                 starting_reply("l1", 2),
                 after_snapshot(
-                    pushed(vec![first.clone()]),
+                    accepted("s1", "i2"),
                     running_queue(3, "l1", "start", vec![first.clone()]),
                 ),
                 after_snapshot(
-                    pushed(vec![first.clone(), second.clone()]),
+                    accepted("s1", "i3"),
                     running_queue(4, "l1", "start", vec![first.clone(), second.clone()]),
                 ),
             ],
@@ -137,7 +137,7 @@ async fn inputs_taken_by_a_successor_before_its_wait_starts_still_become_steerin
         vec![
             starting_reply("A", 2),
             after_snapshot(
-                pushed(vec![next.clone()]),
+                accepted("s1", "i2"),
                 running_queue(3, "A", "start", vec![next]),
             ),
         ],
@@ -153,15 +153,7 @@ async fn inputs_taken_by_a_successor_before_its_wait_starts_still_become_steerin
         .clone();
     h.fake.script_held(
         "turn.wait",
-        after_snapshot(
-            waited_then(
-                "A",
-                completed(),
-                Some(next_turn("B", "next up")),
-                queue(vec![], false),
-            ),
-            successor,
-        ),
+        after_snapshot(waited("A", completed()), successor),
     );
     let result = completed_result("A", vec![user(0, "A", "start")]);
     h.fake.script("turn.result@s1/A", result);
@@ -337,7 +329,8 @@ async fn a_turn_streams_tool_facts_and_ends_on_its_wait() {
     h.submit("fix the greeting");
     h.until(|app| app.is_busy()).await;
 
-    h.emit("turn_started", json!({"turn": turn("l1")})).await;
+    h.snapshot_event(running_snapshot(2, "l1", "fix the greeting"))
+        .await;
     h.emit(
         "output_delta",
         json!({"turn": turn("l1"), "request_index": 0, "channel": "text", "delta": "Fixed."}),
@@ -403,7 +396,11 @@ async fn a_turn_streams_tool_facts_and_ends_on_its_wait() {
     assert_eq!(end, Some((true, 2, 1)));
     assert_eq!(h.session().usage.output, 20);
     let waits = h.calls("turn.wait");
-    assert_eq!(waits.len(), 1, "turn_started registers no second wait");
+    assert_eq!(
+        waits.len(),
+        1,
+        "a repeated snapshot registers no second wait"
+    );
     assert_eq!(waits[0]["loop_id"], "l1");
 }
 
@@ -541,9 +538,11 @@ async fn a_prompt_shows_the_time_the_agent_accepted_it() {
     let mut h = Harness::opened(display_read(0, 0)).await;
     let mut starting = running_snapshot(h.next_revision(), "l1", "$text");
     starting["execution"]["input"]["accepted_at"] = json!("2026-10-20T21:38:00Z");
+    let mut receipt = accepted("s1", "i1");
+    receipt["accepted_at"] = json!("2026-10-20T21:38:00Z");
     h.fake.script(
         "input.push",
-        after_snapshot(started_at("l1", "2026-10-20T21:38:00Z"), starting).with_request_text(),
+        after_snapshot(receipt, starting).with_request_text(),
     );
     h.fake.script_held("turn.wait", waited("l1", completed()));
     h.submit("with a time");
@@ -577,7 +576,7 @@ async fn a_pushed_steer_waits_in_the_dock_until_the_turn_takes_it_and_shows_its_
         vec![
             starting_reply("l1", 2),
             after_snapshot(
-                pushed(vec![entry("i2", "steer", "also the tests")]),
+                accepted("s1", "i2"),
                 running_queue(
                     3,
                     "l1",
@@ -638,7 +637,7 @@ async fn rows_added_to_the_dock_never_cover_the_running_card() {
                     h.fake.script(
                         "input.push",
                         after_snapshot(
-                            pushed(vec![entry("i2", "steer", "more")]),
+                            accepted("s1", "i2"),
                             running_queue(
                                 h.next_revision(),
                                 "l1",
@@ -654,7 +653,7 @@ async fn rows_added_to_the_dock_never_cover_the_running_card() {
                     h.fake.script(
                         "input.push",
                         after_snapshot(
-                            pushed(vec![entry("i2", "follow_up", "later")]),
+                            accepted("s1", "i2"),
                             running_queue(
                                 h.next_revision(),
                                 "l1",
@@ -673,14 +672,9 @@ async fn rows_added_to_the_dock_never_cover_the_running_card() {
                     waiting["pending_interaction"] = json!({"loop_id":"l1","request_index":0,
                         "interaction_id":"i1","tool_call_id":"c1","tool_name":"bash",
                         "kind":{"type":"approval","data":{"prompt":"Allow bash?"}}});
-                    h.fake.script("session.state@s1", state_response(waiting));
-                    h.emit(
-                        "interaction_requested",
-                        json!({"turn": turn("l1"), "interaction": {
-                            "interaction_id": "i1", "tool_call_id": "c1", "tool_name": "bash",
-                            "kind": {"type": "approval", "data": {"prompt": "Allow bash?"}}}}),
-                    )
-                    .await;
+                    h.fake
+                        .script("session.state@s1", state_response(waiting.clone()));
+                    h.snapshot_event(waiting).await;
                     h.until(|app| app.has_interaction()).await;
                 }
             }
@@ -696,27 +690,19 @@ async fn rows_added_to_the_dock_never_cover_the_running_card() {
 
 #[tokio::test(start_paused = true)]
 async fn the_turn_end_line_counts_changed_files_and_lines() {
-    let record = |change_ref: &str, details: bool| {
-        json!({"change_ref": change_ref, "path": "app.py", "kind": "modified",
+    let record = |call_id: &str, details: bool| {
+        json!({"change_ref": tool_change_ref(call_id), "path": "app.py", "kind": "modified",
                "details_available": details})
     };
     let cases = [
         (
-            vec![record("tool:a", true)],
+            vec![record("a", true)],
             diff_with(40, 7),
             "1 file changed (+40 −7)",
         ),
+        (vec![record("a", false)], diff_with(1, 1), "1 file changed"),
         (
-            vec![record("tool:a", false)],
-            diff_with(1, 1),
-            "1 file changed",
-        ),
-        (
-            vec![
-                record("tool:w", true),
-                record("tool:e", true),
-                record("tool:p", true),
-            ],
+            vec![record("w", true), record("e", true), record("p", true)],
             diff_with(2, 1),
             "1 file changed (+6 −3)",
         ),
@@ -781,7 +767,7 @@ async fn the_turn_start_and_end_leave_an_anchored_view_where_it_is() {
         vec![
             starting_reply("l1", 2),
             after_snapshot(
-                pushed(vec![entry("i2", "follow_up", "two")]),
+                accepted("s1", "i2"),
                 running_queue(3, "l1", "one", vec![entry("i2", "follow_up", "two")]),
             ),
         ],
@@ -790,15 +776,7 @@ async fn the_turn_start_and_end_leave_an_anchored_view_where_it_is() {
     successor["execution"] = running_snapshot(4, "l2", "two")["execution"].clone();
     h.fake.script_held(
         "turn.wait@s1/l1",
-        after_snapshot(
-            waited_then(
-                "l1",
-                completed(),
-                Some(next_turn("l2", "two")),
-                queue(vec![], false),
-            ),
-            successor,
-        ),
+        after_snapshot(waited("l1", completed()), successor),
     );
     h.fake.script_held(
         "turn.wait@s1/l2",

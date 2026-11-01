@@ -10,7 +10,7 @@ file gets fixed.
 `minicore-tui` is a fullscreen terminal frontend (Rust, ratatui + crossterm) for
 [minicore-agent](https://github.com/zqcli/minicore-agent). The Agent is built
 into the same executable: the TUI starts itself as `minicore-tui agent` in one
-child process and talks to it over stdio NDJSON JSON-RPC (Protocol v2). The RPC
+child process and talks to it over stdio NDJSON JSON-RPC (Protocol v3). The RPC
 contract is the only interface; the only Agent Rust API used is
 `minicore_agent::cli::run` for that subcommand. The TUI never reads the Agent
 store or the workspace, runs no tool, calls no provider and holds no credential.
@@ -124,8 +124,8 @@ Keep these unless the user asks to change them:
 - Control state — execution, queue, pause, interaction, compaction, blocking —
   is written only by `App::apply_snapshot` from `session.state`, `session.open`,
   `session.create` and the `session_snapshot` event. Command receipts refresh it;
-  they never write it. `turn.wait` reports terminal metadata and its direct
-  successor, but never changes current execution. Unknown body identities are
+  they never write it. `turn.wait` reports terminal metadata for its named turn;
+  executions and successors come from snapshots. Unknown body identities are
   bounded until a snapshot confirms their region; canonical installation closes
   body appends while allowing auxiliary tool facts. History pins are never cached. Compaction inserts a marker and never
   removes transcript content. The footer shows only the context figure the Agent
@@ -193,10 +193,11 @@ to it. Do not rewrite released changelog sections.
 
 ## Backends, CI And Releases
 
-- `Cargo.toml` pins `minicore-agent` by its release tag (`tag = "vX.Y.Z"`);
-  `Cargo.lock` then fixes the Runtime the Agent pins. To adopt an Agent
-  release, move the `tag` and `version`, run `cargo update`, and update the
-  README backend line. Tags are never moved.
+- Formal releases pin `minicore-agent` by its release tag (`tag = "vX.Y.Z"`).
+  The current 0.9.7 development branch pins Agent 0.9.3 by immutable Git revision;
+  `Cargo.lock` also fixes its Runtime dependency. To adopt an Agent version,
+  update its ref and version, run `cargo update`, and update the README backend
+  line. Tags are never moved.
 - CI runs Clippy and the tests on Linux, macOS and Windows with stable Rust and
   uploads a package per platform (`minicore-tui-<version>-<target>`) holding
   `bin/minicore-tui`,

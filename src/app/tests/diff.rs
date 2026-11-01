@@ -8,7 +8,7 @@ use crate::protocol::ToolRef;
 use crate::transcript::{Block, ToolCall};
 use crate::ui::theme::{Palette, Styles};
 
-fn record(change_ref: &str, path: &str, kind: &str) -> Value {
+fn record(change_ref: Value, path: &str, kind: &str) -> Value {
     json!({"change_ref": change_ref, "path": path, "kind": kind, "details_available": true})
 }
 
@@ -57,9 +57,9 @@ fn rows_naming(screen: &str, path: &str) -> Vec<String> {
 #[tokio::test(start_paused = true)]
 async fn the_diff_view_lists_one_row_per_path_and_counts_every_record() {
     let mut h = diff_view(vec![
-        record("r1", "app.py", "modified"),
-        record("r2", "app.py", "modified"),
-        record("r3", "notes.txt", "added"),
+        record(tool_change_ref("r1"), "app.py", "modified"),
+        record(tool_change_ref("r2"), "app.py", "modified"),
+        record(tool_change_ref("r3"), "notes.txt", "added"),
     ])
     .await;
     let mut first = diff("app.py", &[('-', "old"), ('+', "new")]);
@@ -106,14 +106,22 @@ async fn the_diff_view_lists_one_row_per_path_and_counts_every_record() {
         .iter()
         .map(|params| params["change_ref"].clone())
         .collect();
-    assert_eq!(reads, ["r1", "r2", "r3"], "every record is read once");
+    assert_eq!(
+        reads,
+        [
+            tool_change_ref("r1"),
+            tool_change_ref("r2"),
+            tool_change_ref("r3")
+        ],
+        "every complete reference is passed back once"
+    );
 }
 
 #[tokio::test(start_paused = true)]
 async fn a_late_answer_lands_on_its_own_row_and_never_paints_another_file() {
     let mut h = diff_view(vec![
-        record("ra", "a.py", "modified"),
-        record("rb", "b.py", "modified"),
+        record(tool_change_ref("ra"), "a.py", "modified"),
+        record(tool_change_ref("rb"), "b.py", "modified"),
     ])
     .await;
     h.fake.script_sequence_later(
@@ -149,8 +157,8 @@ async fn a_late_answer_lands_on_its_own_row_and_never_paints_another_file() {
 #[tokio::test(start_paused = true)]
 async fn selecting_another_file_clears_the_pane_before_its_answer() {
     let mut h = diff_view(vec![
-        record("ra", "a.py", "modified"),
-        record("rb", "b.py", "modified"),
+        record(tool_change_ref("ra"), "a.py", "modified"),
+        record(tool_change_ref("rb"), "b.py", "modified"),
     ])
     .await;
     h.fake.script_sequence_later(
@@ -180,8 +188,12 @@ async fn selecting_another_file_clears_the_pane_before_its_answer() {
 #[tokio::test(start_paused = true)]
 async fn slash_diff_lists_the_working_tree_without_a_turn() {
     let mut h = diff_view(vec![
-        record("workspace:tracked", "a.py", "modified"),
-        record("workspace:untracked", "new.txt", "added"),
+        record(workspace_change_ref("a.py", "ordinary"), "a.py", "modified"),
+        record(
+            workspace_change_ref("new.txt", "untracked"),
+            "new.txt",
+            "added",
+        ),
     ])
     .await;
     h.fake.script_sequence(
@@ -204,8 +216,14 @@ async fn slash_diff_lists_the_working_tree_without_a_turn() {
     assert!(screen.contains("A +1 −0 new.txt"), "{screen}");
     let reads = h.calls("changes.diff");
     assert_eq!(reads.len(), 2);
-    assert_eq!(reads[0]["change_ref"], "workspace:tracked");
-    assert_eq!(reads[1]["change_ref"], "workspace:untracked");
+    assert_eq!(
+        reads[0]["change_ref"],
+        workspace_change_ref("a.py", "ordinary")
+    );
+    assert_eq!(
+        reads[1]["change_ref"],
+        workspace_change_ref("new.txt", "untracked")
+    );
     assert!(
         reads
             .iter()
@@ -259,7 +277,12 @@ async fn clicking_a_turn_end_line_lists_the_working_tree() {
 
 #[tokio::test(start_paused = true)]
 async fn tab_does_not_change_the_diff_scope() {
-    let mut h = diff_view(vec![record("workspace:a", "a.py", "modified")]).await;
+    let mut h = diff_view(vec![record(
+        workspace_change_ref("a.py", "ordinary"),
+        "a.py",
+        "modified",
+    )])
+    .await;
     h.fake.script("changes.diff", diff("a.py", &[('+', "new")]));
     open_diff(&mut h);
     h.settle().await;
@@ -327,7 +350,7 @@ async fn the_git_diff_shows_the_agents_list_error() {
 
 #[tokio::test(start_paused = true)]
 async fn switching_the_theme_recolors_an_open_diff() {
-    let mut h = diff_view(vec![record("r1", "a.py", "modified")]).await;
+    let mut h = diff_view(vec![record(tool_change_ref("r1"), "a.py", "modified")]).await;
     h.fake.script("changes.diff", diff("a.py", &[('+', "new")]));
     open_diff(&mut h);
     h.settle().await;

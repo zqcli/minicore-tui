@@ -54,7 +54,7 @@ pub fn start(client: Arc<Client>, session: Option<&Session>, query: Query) -> Re
             Box::pin(async move {
                 // Only a path the Agent lists has change references to diff.
                 let list: ChangeList = call(&client, protocol::METHOD_CHANGES_LIST, params).await?;
-                let refs: Vec<String> = list
+                let refs: Vec<_> = list
                     .records
                     .into_iter()
                     .filter(|record| record.path == path)

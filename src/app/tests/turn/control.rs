@@ -10,11 +10,11 @@ async fn queued_follow_ups_run_one_per_turn_as_the_agent_starts_them() {
         vec![
             starting_reply("l1", 2),
             after_snapshot(
-                pushed(vec![first.clone()]),
+                accepted("s1", "i2"),
                 running_queue(3, "l1", "start", vec![first.clone()]),
             ),
             after_snapshot(
-                pushed(vec![first.clone(), second.clone()]),
+                accepted("s1", "i3"),
                 running_queue(4, "l1", "start", vec![first.clone(), second.clone()]),
             ),
         ],
@@ -28,15 +28,7 @@ async fn queued_follow_ups_run_one_per_turn_as_the_agent_starts_them() {
     after_first["queue"] = queue(vec![second.clone()], false);
     h.fake.script_held(
         "turn.wait@s1/l1",
-        after_snapshot(
-            waited_then(
-                "l1",
-                completed(),
-                Some(next_turn("l2", "first")),
-                queue(vec![second], false),
-            ),
-            after_first,
-        ),
+        after_snapshot(waited("l1", completed()), after_first),
     );
     let mut after_second = finished_snapshot(
         6,
@@ -48,15 +40,7 @@ async fn queued_follow_ups_run_one_per_turn_as_the_agent_starts_them() {
     after_second["execution"] = running_snapshot(6, "l3", "second")["execution"].clone();
     h.fake.script(
         "turn.wait@s1/l2",
-        after_snapshot(
-            waited_then(
-                "l2",
-                completed(),
-                Some(next_turn("l3", "second")),
-                queue(vec![], false),
-            ),
-            after_second,
-        ),
+        after_snapshot(waited("l2", completed()), after_second),
     );
     h.fake.script(
         "turn.wait@s1/l3",
@@ -116,9 +100,7 @@ async fn a_push_into_a_paused_queue_shows_the_older_entry_the_agent_started_with
     h.fake.script(
         "input.push",
         after_snapshot(
-            json!({"session_id":"s1","load":crate::testing::LOAD,"accepted":true,
-               "id": "i2", "started": next_turn("l2", "older"),
-               "queue": queue(vec![entry("i2", "follow_up", "newer")], false)}),
+            accepted("s1", "i2"),
             running_queue(
                 h.next_revision(),
                 "l2",
@@ -137,14 +119,12 @@ async fn a_push_into_a_paused_queue_shows_the_older_entry_the_agent_started_with
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_wait_answer_without_a_queue_asks_for_the_control_once_and_nothing_else() {
+async fn a_wait_answer_refreshes_control_once_and_nothing_else() {
     let mut h = Harness::new();
     // The state names the loop that just ended, as a stale Agent could.
     h.fake.script(
         "session.state@s1",
-        json!({"session_id": "s1", "status": "running",
-               "active_loop": {"loop_id": "l9"},
-               "snapshot": running_snapshot(2, "l9", "running")}),
+        state_response(running_snapshot(2, "l9", "running")),
     );
     h.fake.script_held(
         "turn.wait",
@@ -175,7 +155,7 @@ async fn a_wait_answer_without_a_queue_asks_for_the_control_once_and_nothing_els
 }
 
 #[tokio::test(start_paused = true)]
-async fn an_input_queue_event_replaces_the_mirrored_queue_and_its_paused_flag() {
+async fn a_snapshot_replaces_the_mirrored_queue_and_its_paused_flag() {
     let mut h = Harness::opened(display_read(0, 0)).await;
     let items = vec![
         entry("i1", "steer", "now"),
@@ -198,10 +178,7 @@ async fn opening_a_session_takes_the_queued_entries_the_agent_reports() {
     let mut h = Harness::new();
     let mut state = crate::testing::snapshot("s1", crate::testing::LOAD, 2);
     state["queue"] = queue(vec![entry("i1", "follow_up", "waiting")], true);
-    h.fake.script(
-        "session.state@s1",
-        json!({"session_id": "s1", "status": "idle", "snapshot": state}),
-    );
+    h.fake.script("session.state@s1", state_response(state));
     h.open().await;
     assert_eq!(h.queue(), ["waiting"]);
     assert!(h.session().queue.paused);
@@ -216,15 +193,7 @@ async fn a_paused_queue_shows_how_to_go_on_and_enter_without_a_draft_resumes_it(
     paused["queue"] = queue(vec![entry("i2", "follow_up", "after the stop")], true);
     h.fake.script_sequence(
         "turn.wait",
-        vec![after_snapshot(
-            waited_then(
-                "l1",
-                cancelled(),
-                None,
-                queue(vec![entry("i2", "follow_up", "after the stop")], true),
-            ),
-            paused,
-        )],
+        vec![after_snapshot(waited("l1", cancelled()), paused)],
     );
     h.fake.script(
         "turn.result",
@@ -251,7 +220,7 @@ async fn a_paused_queue_shows_how_to_go_on_and_enter_without_a_draft_resumes_it(
     h.fake.script(
         "input.resume",
         after_snapshot(
-            json!({"started": next_turn("l2", "after the stop"), "queue": queue(vec![], false)}),
+            json!({"start_error": null}),
             running_snapshot(h.next_revision(), "l2", "after the stop"),
         ),
     );
@@ -300,8 +269,10 @@ async fn alt_up_takes_every_queued_message_back_in_the_agents_order_into_an_empt
     );
     h.fake.script(
         "input.recall",
-        after_snapshot(json!({"texts": ["waiting steer", "follow1", "follow2"], "queue": queue(vec![], false)}),
-            running_snapshot(h.next_revision(),"l1","start")),
+        after_snapshot(
+            json!({"texts": ["waiting steer", "follow1", "follow2"]}),
+            running_snapshot(h.next_revision(), "l1", "start"),
+        ),
     );
     h.app.composer.set_text("draft");
     h.key(KeyCode::Up, KeyModifiers::ALT);
@@ -347,7 +318,7 @@ async fn a_push_the_agent_refuses_returns_its_text_and_leaves_the_queue_as_it_wa
         vec![
             starting_reply("l1", 2),
             after_snapshot(
-                pushed(vec![waiting.clone()]),
+                accepted("s1", "i2"),
                 running_queue(3, "l1", "start", vec![waiting]),
             ),
             refusal(-32030, "input_queue_full").into(),
@@ -427,9 +398,7 @@ async fn opening_a_session_mid_turn_adopts_the_running_loop() {
     let mut h = Harness::new();
     h.fake.script(
         "session.state@s1",
-        json!({"session_id": "s1", "status": "running",
-               "active_loop": {"loop_id": "l9"},
-               "snapshot": running_snapshot(2, "l9", "running")}),
+        state_response(running_snapshot(2, "l9", "running")),
     );
     h.fake.script_held(
         "turn.wait",
@@ -485,8 +454,7 @@ async fn a_receipt_for_another_instance_does_not_start_or_queue_anything() {
     h.fake.script(
         "input.push",
         json!({"session_id": "s1", "load": "load_00000000000000000000000000000000",
-               "accepted": true, "id": "inp_1", "started": null,
-               "queue": {"items": [], "paused": false}}),
+               "accepted": true, "id": "inp_1", "start_error": null}),
     );
     h.submit("stale instance");
     h.settle().await;
@@ -503,11 +471,9 @@ async fn a_start_failure_keeps_the_entry_queued_and_reports_its_reason() {
         "input.push",
         after_snapshot(
             json!({"session_id": "s1", "load": crate::testing::LOAD, "accepted": true,
-               "id": "inp_1", "started": null,
+               "id": "inp_1",
                "start_error": {"input_id": "inp_0", "kind": "provider_unavailable",
-                               "message": "no provider is configured"},
-               "queue": {"items": [{"id": "inp_1", "mode": "steer", "text": "later"}],
-                         "paused": false}}),
+                               "message": "no provider is configured"}}),
             h.control(json!({"queue":queue(vec![entry("inp_1","steer","later")],false)})),
         ),
     );
@@ -533,28 +499,23 @@ async fn receipts_wait_delivery_and_context_cannot_overwrite_snapshot_control() 
     }));
     h.app
         .apply_snapshot(serde_json::from_value(authoritative.clone()).unwrap());
-    h.fake.script_held("input.push", pushed(vec![]));
+    h.fake.script_held("input.push", accepted("s1", "i1"));
     h.app.submit_text("accepted".into(), false);
     let operation = h.app.local_inputs.back().unwrap().id;
     h.app.on_msg(crate::app::Msg::LocalPushed(
         operation,
-        Ok(serde_json::from_value(json!({
-            "session_id":"s1","id":"new","accepted":true,"load":crate::testing::LOAD,
-            "started":next_turn("B","not authoritative"),"queue":queue(vec![],false)
-        }))
-        .unwrap()),
+        Ok(serde_json::from_value(accepted("s1", "new")).unwrap()),
     ));
-    h.op(SessionOp::Waited(Ok(serde_json::from_value(waited_then(
+    h.op(SessionOp::Waited(Ok(serde_json::from_value(waited(
         "A",
         completed(),
-        Some(next_turn("B", "not authoritative")),
-        queue(vec![], false),
     ))
     .unwrap())));
-    h.op(SessionOp::Operated(Ok(crate::app::operation::Outcome::Compacted(serde_json::from_value(
-        json!({"operation_id":"old","status":"noop","next":next_turn("B","not authoritative")}),
-    )
-    .unwrap()))));
+    h.op(SessionOp::Operated(Ok(
+        crate::app::operation::Outcome::Compacted(
+            serde_json::from_value(json!({"operation_id":"old","status":"noop"})).unwrap(),
+        ),
+    )));
     h.context(json!({"session_id":"s1"}));
     let session = h.session_mut();
     session.apply_body_event(serde_json::from_value(json!({"type":"input_delivered","data":{

@@ -86,7 +86,7 @@ impl SplitDispatch {
             let id = request["id"].clone();
             self.control["revision"] = json!(self.control["revision"].as_u64().unwrap() + 1);
             self.send(json!({"jsonrpc": "2.0", "id": id, "result": {
-                "session_id": "s1", "status": "idle", "snapshot":self.control
+                "snapshot":self.control
             }}))
             .await;
         }
@@ -168,8 +168,8 @@ async fn dispatch_keeps_event_priority_and_disables_a_closed_agent() {
         let (incoming_tx, mut incoming) = mpsc::channel(4);
         let (message_tx, mut messages) = mpsc::unbounded_channel();
         let event: AgentEvent = serde_json::from_value(json!({
-            "type": "input_queue", "data": {
-                "meta": {"session_id": "s1", "dropped_before": 0}, "queue": queue(vec![])
+            "type": "session_closed", "data": {
+                "meta": {"session_id": "s1", "load":"load_1", "dropped_before": 0}
             }
         }))
         .unwrap();
@@ -214,9 +214,7 @@ async fn receipts_cannot_restore_consumed_inputs_or_completed_execution_in_eithe
             let push = h.request("input.push").await;
             assert_eq!(push["params"]["text"], "accepted then finished");
             let receipt = json!({"jsonrpc":"2.0","id":push["id"],"result":{
-                "id":"i1","accepted":true,"load":"load_1",
-                "started":{"turn":{"session_id":"s1","loop_id":"A"},"input":entry("i1","accepted then finished")},
-                "queue":queue(vec![entry("i1","accepted then finished")])
+                "session_id":"s1","id":"i1","accepted":true,"load":"load_1","start_error":null
             }});
             h.control["revision"] = json!(2);
             h.control["queue"] = queue(vec![]);
@@ -313,8 +311,7 @@ async fn a_successors_first_delta_survives_dispatch_before_the_wait_reply() {
         h.app.on_action(Action::Submit);
         let push = h.request("input.push").await;
         h.send(json!({"jsonrpc": "2.0", "id": push["id"], "result": {
-            "id": "i1", "queue": queue(vec![]),
-            "started": {"turn": {"session_id": "s1", "loop_id": "A"}, "input": entry("i1", "first prompt")}
+            "session_id":"s1", "id":"i1", "accepted":true,"load":"load_1","start_error":null
         }})).await;
         h.posted().await;
         let started = h.select().await;
@@ -325,10 +322,7 @@ async fn a_successors_first_delta_survives_dispatch_before_the_wait_reply() {
         let wait = h.request("turn.wait").await;
         assert_eq!(wait["params"]["loop_id"], "A");
         let response = json!({"jsonrpc": "2.0", "id": wait["id"], "result": {
-            "turn": {"session_id": "s1", "loop_id": "A"}, "outcome": {"type": "completed"},
-            "queue": queue(vec![]), "next": {
-                "turn": {"session_id": "s1", "loop_id": "B"}, "input": entry("i2", "second prompt")
-            }
+            "turn": {"session_id": "s1", "loop_id": "A"}, "outcome": {"type": "completed"}
         }});
         let event = event("output_delta", json!({
             "meta": {"session_id": "s1", "dropped_before": 0},
@@ -353,7 +347,7 @@ async fn a_successors_first_delta_survives_dispatch_before_the_wait_reply() {
             h.app.on_msg(next);
         };
         h.app.on_msg(second);
-        h.control["completions"] = json!({"through_seq":1,"retained_from_seq":1,"truncated":false,"entries":[{"seq":1,"loop_id":"A","completion_kind":"reported","outcome_kind":"completed","persistence":"persisted","availability":"stored","next_loop_id":"B"}]});
+        h.control["completions"] = json!({"through_seq":1,"retained_from_seq":1,"truncated":false,"entries":[{"seq":1,"loop_id":"A","completion_kind":"reported","outcome_kind":"completed","persistence":"persisted","availability":"stored"}]});
         h.install(json!({"type":"running","loop_id":"B","input":entry("i2","second prompt"),"request_index":0,"phase":"running_model"}));
         assert!(h.app.transcript_blocks().iter().any(|block| matches!(block,
             Block::Assistant { key, text, .. } if key.loop_id == "B" && text == "first part of B"

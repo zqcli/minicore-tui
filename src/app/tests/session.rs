@@ -141,7 +141,7 @@ async fn copy_never_takes_the_answer_of_the_previous_session() {
     h.fake.script(
         "input.push@s2",
         after_snapshot(
-            started_in(json!({"session_id":"s2","loop_id":"l2"}), vec![]),
+            accepted("s2", "i1"),
             crate::testing::snapshot_running(
                 "s2",
                 crate::testing::LOAD,
@@ -378,7 +378,7 @@ async fn a_snapshot_that_arrives_before_its_open_is_applied_by_that_open() {
     // higher revision, exactly as the real one would.
     h.fake.script(
         "session.state@s1",
-        json!({"session_id": "s1", "status": "idle", "snapshot": {
+        json!({"snapshot": {
             "session_id": "s1", "load": crate::testing::LOAD, "revision": 5,
             "execution": {"type": "none"},
             "pending_interaction": {
@@ -430,7 +430,7 @@ async fn an_open_applies_the_snapshot_it_held_before_the_refresh_answers() {
     // The refresh is held, so what is on screen is what the open installed.
     h.fake.script_held(
         "session.state@s1",
-        json!({"session_id": "s1", "status": "idle"}),
+        state_response(snapshot("s1", crate::testing::LOAD, 1)),
     );
     h.fake.release("session.open");
     h.until(|app| app.resident.current().is_some()).await;
@@ -520,10 +520,8 @@ async fn a_delayed_older_state_sample_cannot_regress_a_newer_snapshot_without_le
         entry("iA", "steer", "old input"),
     );
     older["queue"] = queue(vec![entry("old-queued", "follow_up", "old queue")], false);
-    h.fake.script_held(
-        "session.state@s1",
-        json!({"session_id":"s1","status":"running","snapshot":older}),
-    );
+    h.fake
+        .script_held("session.state@s1", state_response(older));
     h.app.refresh_control();
     let calls = h.calls("session.state").len();
     h.fake.wait_for_calls("session.state", calls + 1).await;
@@ -690,10 +688,7 @@ async fn queued_old_load_results_cannot_mutate_a_reopened_instance_and_pending_w
     );
     let mut refreshed = reopened.clone();
     refreshed["revision"] = json!(2);
-    h.fake.script(
-        "session.state@s1",
-        json!({"session_id":"s1","status":"running","snapshot":refreshed}),
-    );
+    h.fake.script("session.state@s1", state_response(refreshed));
     h.fake.script_held(
         "turn.wait",
         json!({"turn":turn("new-loop"),"outcome":completed()}),
