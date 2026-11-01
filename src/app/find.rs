@@ -1,5 +1,7 @@
 //! Find in the transcript.
 
+use std::borrow::Cow;
+
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
@@ -27,21 +29,21 @@ pub struct FindMatch {
 }
 
 /// The texts of a block that find reads, in the order the block shows them.
-fn searchable(block: &Block, show_reasoning: bool) -> Vec<(Field, String)> {
+fn searchable(block: &Block, show_reasoning: bool) -> Vec<(Field, Cow<'_, str>)> {
     match block {
-        Block::User { text, .. } => vec![(Field::Text, text.clone())],
+        Block::User { text, .. } => vec![(Field::Text, text.as_str().into())],
         Block::Assistant {
             reasoning, text, ..
         } => {
-            let thinking = show_reasoning.then(|| (Field::Thinking, reasoning.clone()));
+            let thinking = show_reasoning.then_some((Field::Thinking, reasoning.as_str().into()));
             thinking
                 .into_iter()
-                .chain([(Field::Text, text.clone())])
+                .chain([(Field::Text, text.as_str().into())])
                 .collect()
         }
         Block::Tool(call) => vec![
-            (Field::Detail, call.detail.clone()),
-            (Field::Output, call.output_content().join("\n")),
+            (Field::Detail, call.detail.as_str().into()),
+            (Field::Output, call.output_content().join("\n").into()),
         ],
         Block::Compaction {
             before,
@@ -52,9 +54,9 @@ fn searchable(block: &Block, show_reasoning: bool) -> Vec<(Field, String)> {
         } => {
             let label = blocks::compaction_label(*before, *after, *coverage);
             let label = format!("[compaction] {label}");
-            [label]
+            [Cow::Owned(label)]
                 .into_iter()
-                .chain(summary.clone())
+                .chain(summary.as_deref().map(Cow::Borrowed))
                 .map(|text| (Field::Text, text))
                 .collect()
         }
@@ -204,16 +206,17 @@ impl App {
         let Some(session) = self.resident.current_mut() else {
             return;
         };
-        match (found.field, session.transcript.block_mut(found.block)) {
-            (Field::Thinking, Some(Block::Assistant { expanded, .. }))
-                if !expanded.unwrap_or(all) =>
-            {
-                *expanded = Some(true);
+        let folded = match (found.field, session.transcript.blocks().get(found.block)) {
+            (Field::Thinking, Some(Block::Assistant { expanded, .. })) => !expanded.unwrap_or(all),
+            (Field::Output, Some(Block::Tool(call))) => !call.is_expanded(all),
+            _ => false,
+        };
+        if folded {
+            match session.transcript.block_mut(found.block) {
+                Some(Block::Assistant { expanded, .. }) => *expanded = Some(true),
+                Some(Block::Tool(call)) => call.expanded = Some(true),
+                _ => unreachable!("a folded match has a thinking or tool block"),
             }
-            (Field::Output, Some(Block::Tool(call))) if !call.is_expanded(all) => {
-                call.expanded = Some(true);
-            }
-            _ => {}
         }
     }
 }

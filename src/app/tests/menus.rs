@@ -722,13 +722,31 @@ async fn find_opens_folded_thinking_and_tool_output_that_hold_the_match() {
         assert!(!h.screen(80, 24).contains(hidden), "{hidden} starts folded");
     }
 
-    open_find(&mut h, "thought 22");
-    let screen = h.screen(80, 24);
-    assert!(screen.contains("thought 22"), "{screen}");
+    let revisions: Vec<_> = h.session().transcript.revisions().collect();
+    for query in ["done", "cargo"] {
+        open_find(&mut h, query);
+        assert_eq!(
+            h.session().transcript.revisions().collect::<Vec<_>>(),
+            revisions,
+            "visible matches leave the block cache valid"
+        );
+    }
 
-    open_find(&mut h, "deepneedle");
-    let screen = h.screen(80, 24);
-    assert!(screen.contains("test deepneedle ... ok"), "{screen}");
+    for (query, visible) in [
+        ("thought 22", "thought 22"),
+        ("deepneedle", "test deepneedle ... ok"),
+    ] {
+        open_find(&mut h, query);
+        let screen = h.screen(80, 24);
+        assert!(screen.contains(visible), "{screen}");
+        let revisions: Vec<_> = h.session().transcript.revisions().collect();
+        h.app.show_match();
+        assert_eq!(
+            h.session().transcript.revisions().collect::<Vec<_>>(),
+            revisions,
+            "revisiting an open block leaves the cache valid"
+        );
+    }
 }
 
 #[tokio::test(start_paused = true)]
