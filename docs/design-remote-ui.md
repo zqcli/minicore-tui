@@ -493,6 +493,10 @@ Rules:
 - Rendering is incremental: a `part` re-renders its region only when its input
   changed, and the transcript renders only blocks marked dirty, appending to
   an open assistant block instead of rebuilding it.
+  Reasoning and recovery-label updates keep unchanged answer DOM. Fold/group
+  signatures are shared by their member blocks; search redraws only matches
+  whose bodies need opening. Markdown scans ordinary text in runs and retains
+  only the last safe parsing checkpoint before its unfinished tail.
   Renders that run on every state or frame write only what changed (`part`,
   `set`), and lists of rows share one delegated listener keyed by `data-k`.
 - Nothing is inline: styles come from classes, scripts from files.

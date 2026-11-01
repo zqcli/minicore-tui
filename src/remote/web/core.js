@@ -2,10 +2,14 @@
 // Markdown as plain token trees, never HTML; the UI builds DOM nodes from them.
 const SAFE_URL = /^https?:\/\//i;
 function inline(s) {
-  const out = [];
+  const out = [], special = /[\\`*_~[h]/g;
   let buf = '', i = 0, m;
   const flush = () => { if (buf) out.push({ t: 'text', s: buf }); buf = ''; };
   while (i < s.length) {
+    special.lastIndex = i;
+    const end = special.exec(s)?.index ?? s.length;
+    buf += s.slice(i, end);
+    if ((i = end) === s.length) break;
     const c = s[i];
     if (c === '\\' && /^[\\`*_{}[\]()#+\-.!|<>~]$/.test(s[i + 1] || '')) { buf += s[i + 1]; i += 2; }
     else if (c === '`') {
@@ -43,20 +47,20 @@ function nest(items, k, ind) {
   }
   return { list, k };
 }
-function parseLines(lines, cps) {
+function parseLines(lines, cut) {
   const out = [], LI = /^(\s*)([-*+]|\d{1,9}[.)])\s+(.*)/;
   let para = [], i = 0, m;
   const li = k => { const x = LI.exec(lines[k] || ''); return x && (k < lines.length - 1 || x[3].trim()) ? x : null; };
   const flush = () => { if (para.length) out.push({ t: 'p', c: inline(para.join('\n')) }); para = []; };
   while (i < lines.length) {
     const l = lines[i];
-    if (cps && !para.length) cps.push([i, out.length]);
+    if (cut && !para.length && i > 0 && i + 2 < lines.length) { cut[0] = i; cut[1] = out.length; }
     if ((m = /^ {0,3}(`{3,}|~{3,})\s*([^\s`]*)/.exec(l))) {
       flush();
       const fence = m[1], body = [];
       for (i++; i < lines.length; i++) {
         const t = lines[i].trim();
-        if (t.length >= fence.length && t === fence[0].repeat(t.length)) break;
+        if (t.startsWith(fence) && t === fence[0].repeat(t.length)) break;
         body.push(lines[i]);
       }
       out.push({ t: 'code', lang: m[2], text: body.join('\n') });
@@ -100,11 +104,9 @@ const parseMd = src => parseLines(norm(src).split('\n'), null);
 function mdInc(c, src) {
   src = norm(src);
   if (!c || !src.startsWith(c.src)) c = { src: '', at: 0, head: [] };
-  const lines = src.slice(c.at).split('\n'), cps = [], tail = parseLines(lines, cps);
-  let cut = null;
-  for (const cp of cps) if (cp[0] > 0 && cp[0] + 2 <= lines.length - 1) cut = cp;
+  const lines = src.slice(c.at).split('\n'), cut = [], tail = parseLines(lines, cut);
   const next = { src, at: c.at, head: c.head };
-  if (cut) {
+  if (cut.length) {
     let off = 0;
     for (let k = 0; k < cut[0]; k++) off += lines[k].length + 1;
     next.at += off;

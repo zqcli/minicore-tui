@@ -895,10 +895,16 @@ test('production recovery labels survive snapshots and metadata replacements wit
     actions[0].props.onclick(); actions[1].props.onclick();
     assert.equal(ui.copies.at(-1), asst.text, 'Copy answer never includes provenance chrome');
     assert.equal(ui.shares.at(-1), asst.text, 'Share answer never includes recovery/provenance labels');
+    const paragraph = node._asst.md.els[0];
     ui.updateAssistant(node, { ...asst, preserved_channels: [] });
     assert.equal(node.children[0].rendered, null, 'incremental assistant reuse clears obsolete annotations');
     ui.updateAssistant(node, { ...asst, preserved: true });
     assert.match(textOf(node.children[0].rendered), /not canonical/);
+    ui.updateAssistant(node, { ...asst, reasoning: 'updated thought' });
+    assert.equal(node._asst.md.els[0], paragraph, 'metadata and reasoning updates retain the answer DOM');
+    ui.updateAssistant(node, { ...asst, text: 'canonical replacement' });
+    assert.notEqual(node._asst.md.els[0], paragraph, 'changed answer text still replaces the Markdown tail');
+    assert.match(textOf(node._asst.body), /canonical replacement/);
     assert.match(textOf(ui.block(S.blocks[1], 1)), new RegExp('Saved record; body ' + recovery.status));
     assert.ok(textOf(ui.block(S.blocks[1], 1)).includes(recovery.reason));
     assert.equal(S.blocks[0].text, 'received text');
@@ -1095,6 +1101,11 @@ test('markdown tokens keep HTML and unsafe links as plain text', () => {
     assert.ok(tokens.every(t => t.t === 'text'), src);
     assert.ok(!tokens.map(t => t.s).join('').toLowerCase().includes('javascript:') && !tokens.map(t => t.s).join('').includes('data:'), src);
   }
+  const words = '中文👩🏽‍💻 é and ordinary words with h ';
+  assert.deepEqual(plain(MC.inline(words + '**bold _nested_** \\*plain\\* [link](https://example.com) ' + words)), [
+    { t: 'text', s: words }, { t: 'b', c: [{ t: 'text', s: 'bold ' }, { t: 'i', c: [{ t: 'text', s: 'nested' }] }] },
+    { t: 'text', s: ' *plain* ' }, { t: 'a', href: 'https://example.com', c: [{ t: 'text', s: 'link' }] }, { t: 'text', s: ' ' + words },
+  ]);
 });
 
 test('markdown parses headings nested lists code tables and quotes', () => {
@@ -1109,6 +1120,9 @@ test('markdown parses headings nested lists code tables and quotes', () => {
   assert.equal(tree[4].rows[0][1][0].t, 'b');
   // A streaming list marker without text stays a paragraph until its text arrives.
   assert.equal(plain(MC.parseMd('intro\n- '))[0].t, 'p');
+  assert.deepEqual(plain(MC.parseMd('````rust\nordinary code\n~~~\n```short\n```\n  `````  ')), [
+    { t: 'code', lang: 'rust', text: 'ordinary code\n~~~\n```short\n```' },
+  ]);
 });
 
 test('breadcrumbs preserve Unix drive and UNC paths and start at the root', () => {
@@ -1499,6 +1513,7 @@ const SAMPLES = [
   'Para one\nstill one\n\n- item\n\n- loose item\n  continued\n\nafter\n\n```\nunclosed fence\n\nwith blank lines',
   'Text\r\n\r\n- crlf list\r\n- two\r\n\r\n## Heading\r\nbody',
   '1. one\n2. two\n\n   indented para\n\n~~~\ntilde fence\n~~~\n\n- \n- x\n\n> q\n\nplain\n|not|a table\n\n|a|b|\n|-|-|\n|1|2|\n\nend',
+  '## Unicode\r\n\r\n中文👩🏽‍💻 é **bold _nested_** \\*plain\\* http://example.com.\r\n\r\n````rust\r\nordinary code\r\n~~~\r\n```short\r\n```\r\n  `````  \r\n\r\nend',
 ];
 
 test('incremental markdown equals a full parse for random splits and keeps finished blocks', () => {
@@ -1573,6 +1588,24 @@ test('find matches messages, answers, thinking, tool targets and output case-ins
   assert.deepEqual(plain(MC.findBlocks(bl, 'parser', 0, 4)), [0, 1, 2]);
   assert.deepEqual(plain(MC.findBlocks(bl, 'cargo', 1, 4)), [2]);
   assert.deepEqual(plain(MC.findBlocks(bl, '', 0, 4)), []);
+
+  const source = read('conversation.js'), opened = new Map(), dirty = new Set(), draws = [];
+  const context = { MC, S: { blocks: bl }, finder: { q: 'parser' }, lo: 0, hi: bl.length,
+    roles: [null, null, { fold: { key: 'fold' }, group: { key: 'group' } }], opened, dirty,
+    isOpen: (key, b) => opened.has(key) ? opened.get(key) : key[0] === 't' && b.state === 'failed',
+    flush: () => { draws.push([...dirty]); dirty.clear(); }, paintFind() {}, box: {}, NodeFilter: { SHOW_TEXT: 4 },
+    document: { createTreeWalker: () => ({ nextNode: () => false }) },
+  };
+  vm.runInNewContext(source.slice(source.indexOf('function runFind('), source.indexOf('function findStep(')), context);
+  context.runFind();
+  assert.deepEqual([...opened], [['fold', true], ['group', true], ['ta', true]]);
+  assert.deepEqual(draws.pop(), [2], 'only the hidden match needs its body redrawn');
+  context.runFind();
+  assert.deepEqual(draws.pop(), [], 'already-visible matches keep their DOM');
+  context.roles = []; opened.clear(); bl[2].state = 'failed';
+  context.runFind();
+  assert.deepEqual(draws.pop(), [], 'a failed tool already shows its output');
+  assert.equal(opened.get('ta'), true, 'the search keeps the tool open if its default later changes');
 });
 
 test('approvals are titled by what is asked and show the command, diff or content first', () => {

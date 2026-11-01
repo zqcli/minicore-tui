@@ -422,8 +422,9 @@ function codeBlock(lang, text) {
 function caretInto(body) {
   let t = body;
   while (t.lastElementChild && t.lastElementChild.matches('ul,ol,li,blockquote')) t = t.lastElementChild;
-  const last = t.lastElementChild;
-  (last && last.matches('p,h1,h2,h3,h4,h5,h6') ? last : t).append(h('span', { class: 'caret', 'aria-hidden': 'true' }));
+  const last = t.lastElementChild, caret = h('span', { class: 'caret', 'aria-hidden': 'true' });
+  (last && last.matches('p,h1,h2,h3,h4,h5,h6') ? last : t).append(caret);
+  return caret;
 }
 const KIND_ICON = { cmd: 'term', edit: 'edit', write: 'edit', read: 'file', search: 'search', web: 'search', ask: 'info', other: 'tool' };
 function stateIcon(b, f) {
@@ -506,21 +507,23 @@ function asstNode(b, i) {
   return n;
 }
 function updateAsst(n, b) {
-  const asst = n._asst, m = asst.md, r = MC.mdInc(m.cache, b.text);
+  const asst = n._asst, m = asst.md;
   asst.note(MC.projectionLabels(b));
   n.hidden = MC.quiet(b);
   n.classList.toggle('thk', !b.text);
   thinkUpdate(asst, b);
+  if (m.text === b.text && m.wrap === prefs.wrap) return;
+  m.text = b.text; m.wrap = prefs.wrap;
+  const r = MC.mdInc(m.cache, b.text);
   m.cache = r.cache;
   let k = 0;
   while (k < m.toks.length && k < r.blocks.length && m.toks[k] === r.blocks[k]) k++;
   for (let j = m.els.length - 1; j >= k; j--) m.els[j].remove();
-  m.els.length = m.toks.length = k;
-  const old = asst.body.querySelector('.caret');
-  if (old) old.remove();
-  for (let j = k; j < r.blocks.length; j++) { const e = mdToNode(r.blocks[j]); asst.body.append(e); m.els.push(e); m.toks.push(r.blocks[j]); }
+  m.els.length = k; m.toks = r.blocks;
+  if (asst.caret) asst.caret.remove();
+  for (let j = k; j < r.blocks.length; j++) { const e = mdToNode(r.blocks[j]); asst.body.append(e); m.els.push(e); }
   asst.body.hidden = !b.text;
-  if (asst.live && b.text) caretInto(asst.body);
+  asst.caret = asst.live && b.text ? caretInto(asst.body) : null;
 }
 function answerActs(b, i) {
   const c = h('button', { class: 'ib', 'aria-label': 'Copy answer', onclick: () => copyText(b.text, c) }, icon('copy', 'sm'));
@@ -615,14 +618,21 @@ function groupRow(g, open) {
     g.run ? h('span', 'si run', spin('sm')) : h('span', 'si', icon('search', 'sm')), h('span', 'vb', g.label), h('span', 'tg', open ? '' : last.detail), icon('chev', 'xs cv'));
 }
 // Fold and group roles of the mounted blocks; a block whose role changed is rendered again.
-let roles = [], roleSigs = [];
+let roles = [];
 function relayout() {
   const bl = S.blocks, next = [];
-  for (const f of MC.foldTurns(bl, lo, hi)) for (const j of f.hidden) (next[j - lo] = next[j - lo] || {}).fold = f;
-  for (const g of MC.groupTools(bl, lo, hi)) for (const j of g.members) (next[j - lo] = next[j - lo] || {}).group = g;
-  const sigs = next.map(({ fold: f, group: g }) => JSON.stringify([f && [f.key, f.at, f.last, isOpen(f.key), f.tools, f.failed], g && [g.key, g.head, g.label, g.run, isOpen(g.key), g.members.length]]));
-  for (let k = 0; k < Math.max(sigs.length, roleSigs.length); k++) if (sigs[k] !== roleSigs[k]) dirty.add(lo + k);
-  roles = next; roleSigs = sigs;
+  for (const f of MC.foldTurns(bl, lo, hi)) {
+    f.sig = JSON.stringify([f.key, f.at, f.last, isOpen(f.key), f.tools, f.failed]);
+    for (const j of f.hidden) (next[j - lo] = next[j - lo] || {}).fold = f;
+  }
+  for (const g of MC.groupTools(bl, lo, hi)) {
+    g.sig = JSON.stringify([g.key, g.head, g.label, g.run, isOpen(g.key), g.members.length]);
+    for (const j of g.members) (next[j - lo] = next[j - lo] || {}).group = g;
+  }
+  for (let k = 0; k < Math.max(next.length, roles.length); k++) {
+    if (next[k]?.fold?.sig !== roles[k]?.fold?.sig || next[k]?.group?.sig !== roles[k]?.group?.sig) dirty.add(lo + k);
+  }
+  roles = next;
 }
 function place(n, old) {
   if (old) keepFocus(old, () => old.replaceWith(n), n);
@@ -658,7 +668,7 @@ function flush() {
   // The mounted window [lo, hi): the newest `win` blocks while pinned to the end.
   const newHi = pinned ? n : Math.min(hi, n), newLo = Math.max(0, newHi - win);
   mountWindow(newLo, newHi);
-  if (lo !== lo0) roleSigs = [];
+  if (lo !== lo0) roles = [];
   relayout();
   for (let i = lo; i < hi; i++) {
     if (!dirty.has(i) && nodes[i - lo]) continue;
@@ -773,15 +783,15 @@ function findBar() {
     h('button', { class: 'ib s', 'aria-label': 'Close find', onclick: closeFind }, icon('x', 'sm')));
 }
 function runFind() {
+  const q = finder.q.toLowerCase(), ranges = [];
   for (const i of MC.findBlocks(S.blocks, finder.q, lo, hi)) {
     const r = roles[i - lo], b = S.blocks[i];
-    if (r && r.fold) opened.set(r.fold.key, true);
-    if (r && r.group) opened.set(r.group.key, true);
-    if (b.type === 'tool' && !b.detail.toLowerCase().includes(finder.q.toLowerCase())) opened.set('t' + b.call_id, true);
-    dirty.add(i);
+    const open = key => { if (!isOpen(key, b)) dirty.add(i); opened.set(key, true); };
+    if (r && r.fold) open(r.fold.key);
+    if (r && r.group) open(r.group.key);
+    if (b.type === 'tool' && !b.detail.toLowerCase().includes(q)) open('t' + b.call_id);
   }
   flush();
-  const q = finder.q.toLowerCase(), ranges = [];
   if (q) {
     const w = document.createTreeWalker(box, NodeFilter.SHOW_TEXT, { acceptNode: t => t.parentElement.closest('[hidden],.tp') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT });
     while (w.nextNode()) {

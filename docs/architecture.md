@@ -867,9 +867,9 @@ layout cache, config, CLI). `src/app/tests` drives a real `App` through
 `testing::FakeAgent` over an in-memory pipe with paused time. `ui/snapshots.rs`
 compares `TestBackend` frames with `tests/snapshots/*.txt` (`UPDATE_SNAPSHOTS=1`
 rewrites them); `tests/fixtures/agent-events.jsonl` feeds the event decoder test.
-`node --test tests/remote_web.mjs` imports the client's pure modules (`core.js`,
-`markdown.js`) and runs `theme.js` in a sandbox, so protocol handlers, Markdown
-and path helpers are tested without browser rendering or a network. Socket tests
+`node --test tests/remote_web.mjs` imports the client's pure logic (`core.js`)
+and runs production UI functions in a sandbox, so protocol handlers, Markdown,
+DOM reuse and path helpers are tested without a browser or a network. Socket tests
 exercise the actual listener and the embedded files with in-process clients on
 loopback port 0.
 Real-model runs are manual.
