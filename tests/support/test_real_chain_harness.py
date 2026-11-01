@@ -1,5 +1,6 @@
 """Fixture/gate/cleanup tests; these do not claim canonical chain acceptance."""
 
+import faulthandler
 import os
 import signal
 import subprocess
@@ -63,6 +64,8 @@ class HarnessTests(unittest.TestCase):
             self.assertIsNone(process_cpu_ticks(7))
 
     def test_failed_enter_closes_provider_and_temp_directory(self):
+        faulthandler.dump_traceback_later(5, repeat=True)
+        self.addCleanup(faulthandler.cancel_dump_traceback_later)
         with tempfile.TemporaryDirectory() as root:
             chain = Chain("/does/not/exist", root, Plan(), screen_only=True)
             temporary = chain.temporary.name
