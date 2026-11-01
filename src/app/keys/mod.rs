@@ -117,36 +117,44 @@ impl App {
             }
             KeyCode::Enter => {}
             KeyCode::Esc => return Some(Action::Answer(Answer::Deny)),
-            KeyCode::Char('j') if ctrl => editor.newline(),
-            KeyCode::Char('a') if ctrl => editor.move_home(),
-            KeyCode::Char('e') if ctrl => editor.move_end(),
-            KeyCode::Char('u') if ctrl => editor.delete_to_line_start(),
-            KeyCode::Char('k') if ctrl => editor.delete_to_line_end(),
-            KeyCode::Char('w' | 'h') if ctrl => editor.delete_word_left(),
-            KeyCode::Char('z') if ctrl => {
-                editor.undo();
-            }
-            KeyCode::Char('y') if ctrl => {
-                editor.redo();
-            }
-            KeyCode::Char(_) if ctrl => {}
-            KeyCode::Char(ch) => editor.type_char(ch),
-            KeyCode::Backspace => editor.backspace(),
-            KeyCode::Delete => editor.delete(),
-            KeyCode::Left if ctrl => editor.move_word_left(),
-            KeyCode::Right if ctrl => editor.move_word_right(),
-            KeyCode::Left => editor.move_left(),
-            KeyCode::Right => editor.move_right(),
-            KeyCode::Home => editor.move_home(),
-            KeyCode::End => editor.move_end(),
-            KeyCode::Up => {
-                editor.move_up();
-            }
-            KeyCode::Down => {
-                editor.move_down();
-            }
-            _ => {}
+            _ => edit_text(editor, key),
         }
         None
+    }
+}
+
+pub(super) fn edit_text(editor: &mut super::composer::Composer, key: KeyEvent) {
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    match key.code {
+        KeyCode::Enter => editor.newline(),
+        KeyCode::Char('j') if ctrl => editor.newline(),
+        KeyCode::Char('a') if ctrl => editor.move_home(),
+        KeyCode::Char('e') if ctrl => editor.move_end(),
+        KeyCode::Char('u') if ctrl => editor.delete_to_line_start(),
+        KeyCode::Char('k') if ctrl => editor.delete_to_line_end(),
+        KeyCode::Char('w' | 'h') if ctrl => editor.delete_word_left(),
+        KeyCode::Char('z') if ctrl => {
+            editor.undo();
+        }
+        KeyCode::Char('y') if ctrl => {
+            editor.redo();
+        }
+        KeyCode::Char(_) if ctrl => {}
+        KeyCode::Char(ch) => editor.type_char(ch),
+        KeyCode::Backspace => editor.backspace(),
+        KeyCode::Delete => editor.delete(),
+        KeyCode::Left if ctrl => editor.move_word_left(),
+        KeyCode::Right if ctrl => editor.move_word_right(),
+        KeyCode::Left => editor.move_left(),
+        KeyCode::Right => editor.move_right(),
+        KeyCode::Home => editor.move_home(),
+        KeyCode::End => editor.move_end(),
+        KeyCode::Up => {
+            editor.move_up();
+        }
+        KeyCode::Down => {
+            editor.move_down();
+        }
+        _ => {}
     }
 }
