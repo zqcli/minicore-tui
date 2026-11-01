@@ -293,12 +293,7 @@ async fn an_unreleased_application_gate_times_out_without_applying_the_held_mess
     let path = directory.path().to_path_buf();
     let mut gate = application_gate::ApplicationGate::new(path.clone()).unwrap();
     std::fs::write(path.join("arm"), b"").unwrap();
-    let held = Msg::Session(
-        1,
-        Box::new(SessionOp::Operated(Ok(
-            minicore_tui::app::operation::Outcome::Done,
-        ))),
-    );
+    let held = Msg::Session(1, Box::new(SessionOp::ItemCount(Ok(0))));
     let error = gate.before_apply(&held, &mut h.app).await.unwrap_err();
     assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
     assert!(path.join("ready").exists());

@@ -35,7 +35,9 @@ backend repository only after confirming that is where the behavior belongs.
 | `src/config/` | The TUI directory: `config.toml`, `models.toml`, prompts, scaffolding, the composed Agent config |
 | `src/rpc.rs`, `src/protocol/` | Agent child and JSON-RPC client; serde DTOs and constants only |
 | `src/app/` | The reducer: all mutable state, keys (`keys/`), mouse, selection, composer, overlays, async tasks |
-| `src/app/resident.rs`, `live.rs` | Resident session collection and terminal navigation; operations carry explicit epochs |
+| `src/app/resident.rs`, `live.rs` | Resident collection, captured operation targets and terminal navigation |
+| `src/app/session/` | One Session: shared state, streamed body, canonical completions and history installation |
+| `src/app/remote/` | Remote mode and device views, phone intent admission and pending operation outcomes |
 | `src/app/operation.rs` | Typed mutations and receipt validation shared by terminal and phone adapters |
 | `src/app/control.rs`, `recovery.rs`, `read.rs` | Snapshot-only control writes, bounded completion discovery, verified paginated reads and body installation |
 | `src/app/local_files.rs` | Serialized, coalesced local writes and reload composition off the reducer |
@@ -43,8 +45,8 @@ backend repository only after confirming that is where the behavior belongs.
 | `src/transcript/` | Blocks with revisions, tool calls, history mapping, the per-block layout cache |
 | `src/ui/` | Drawing from `&App`: transcript, blocks, rails, markdown, dock, sheets, views, theme |
 | `src/terminal.rs`, `src/terminal/` | Terminal guard and frame drawing; Windows paste decoding (`input.rs`) and frame batching (`windows_frames.rs`) |
-| `src/testing.rs` | `FakeAgent`: a scripted in-process Agent behind a real client (tests only) |
-| `src/app/tests/` | Reducer tests through `FakeAgent` with paused time |
+| `src/testing.rs`, `src/testing/fixtures.rs` | Scripted Agent transport and literal wire fixtures (tests only) |
+| `src/app/tests/` | Reducer behavior through Harness; `phone.rs` shares phone setup, requests and frame assertions |
 | `src/ui/snapshots.rs`, `tests/snapshots/` | `TestBackend` frame tests and checked-in frames |
 | `src/ui/perf_tests.rs` | Frame-cost benches (`#[ignore]`) |
 | `tests/local_timezone.rs`, `tests/built_in_agent.rs` | Integration tests: the production local-time path; the built-in Agent serving a composed config |

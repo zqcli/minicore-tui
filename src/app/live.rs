@@ -8,6 +8,25 @@ use super::{App, LiveStatus, NoticeLevel, Overlay, Scroll, Session};
 use crate::transcript::Block;
 
 impl App {
+    /// Shows session `id`: at once when it is live, else opened in the Agent.
+    pub fn open_session(&mut self, id: String) {
+        if self
+            .resident
+            .current()
+            .is_some_and(|session| session.info.session_id == id)
+        {
+            return;
+        }
+        if let Some(epoch) = self.live(&id).map(|session| session.epoch) {
+            // The session being created takes the screen when it arrives.
+            if self.first_message.is_none() {
+                self.switch_to(epoch);
+            }
+            return;
+        }
+        self.request_session_open(id);
+    }
+
     /// The loaded session, independently of which view is selected.
     pub fn live(&self, id: &str) -> Option<&Session> {
         self.resident.find(id)

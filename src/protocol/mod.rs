@@ -65,7 +65,6 @@ pub const METHOD_INPUT_PUSH: &str = "input.push";
 pub const METHOD_INPUT_REMOVE: &str = "input.remove";
 pub const METHOD_INPUT_RECALL: &str = "input.recall";
 pub const METHOD_INPUT_RESUME: &str = "input.resume";
-pub const METHOD_INPUT_LIST: &str = "input.list";
 pub const METHOD_TURN_CANCEL: &str = "turn.cancel";
 pub const METHOD_TURN_WAIT: &str = "turn.wait";
 pub const METHOD_TURN_RESULT: &str = "turn.result";
@@ -79,10 +78,8 @@ pub const METHOD_INTERACTION_ANSWER: &str = "interaction.answer";
 /// The notification that carries the authoritative control snapshot.
 pub const EVENT_SESSION_SNAPSHOT: &str = "session_snapshot";
 
-pub const INVALID_REQUEST: i64 = -32_600;
 pub const INVALID_PARAMS: i64 = -32_602;
 pub const INTERNAL_ERROR: i64 = -32_603;
-pub const SESSION_NOT_LOADED: i64 = -32_002;
 pub const SESSION_BUSY: i64 = -32_003;
 pub const INVALID_STATE: i64 = -32_005;
 pub const RESOURCE_EXHAUSTED: i64 = -32_019;

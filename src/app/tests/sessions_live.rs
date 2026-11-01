@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 use tokio::sync::{mpsc, watch};
 
 use super::harness::*;
-use super::remote::{config, phone, request, synced_state};
+use super::phone::{connect_phone, enable_remote, request, synced_state};
 use crate::app::{Action, LiveStatus, Msg, Overlay, Scroll, Session, SessionOp};
 use crate::protocol::read::UserKind;
 use crate::title::LONG_TURN;
@@ -379,9 +379,9 @@ async fn a_background_turn_ends_there_and_waits_for_the_successor_the_agent_star
         ["work in one"],
         "the Agent started it, not the TUI"
     );
-    assert_eq!(h.app.resident.current().unwrap().info.session_id, "s2");
+    assert_eq!(h.session().info.session_id, "s2");
     show(&mut h, "s1").await;
-    assert!(!h.app.resident.current().unwrap().unseen);
+    assert!(!h.session().unseen);
 }
 
 #[tokio::test(start_paused = true)]
@@ -499,7 +499,7 @@ async fn a_background_approval_notifies_and_is_answered_only_once_shown() {
         "{:?}",
         h.notices()
     );
-    assert_eq!(h.app.resident.current().unwrap().info.session_id, "s2");
+    assert_eq!(h.session().info.session_id, "s2");
 }
 
 #[tokio::test(start_paused = true)]
@@ -739,16 +739,11 @@ async fn an_idle_background_session_is_deleted_and_a_late_result_for_it_goes_now
     assert!(h.app.live("s1").is_none());
     assert!(h.app.resident.others().next().is_none());
 
-    h.app
-        .resident
-        .current_mut()
-        .unwrap()
-        .transcript
-        .push(Block::User {
-            text: "kept".into(),
-            kind: UserKind::Prompt,
-            at: None,
-        });
+    h.session_mut().transcript.push(Block::User {
+        text: "kept".into(),
+        kind: UserKind::Prompt,
+        at: None,
+    });
     let late = crate::app::read::read_history(
         h.fake.client.clone(),
         "s1".into(),
@@ -829,10 +824,8 @@ async fn connected_phone(
     watch::Receiver<Option<&'static str>>,
     Value,
 ) {
-    h.app.remote.config = Some(config(h.app.workspace.clone()));
-    h.app.remote.url = Some("http://localhost:8765".into());
-    let (mut output, closing, admission) = phone(h, 1, "phone");
-    assert!(admission.await.unwrap());
+    enable_remote(h);
+    let (mut output, closing) = connect_phone(h, 1, "phone").await;
     let state = synced_state(h, &mut output).expect("a snapshot");
     (output, closing, state)
 }
@@ -945,7 +938,7 @@ async fn the_phone_sees_live_sessions_and_switches_to_one_at_once() {
             assert_eq!(message["ok"], true);
         }
     }
-    assert_eq!(h.app.resident.current().unwrap().info.session_id, "s1");
+    assert_eq!(h.session().info.session_id, "s1");
     assert_eq!(h.calls("session.open").len(), opens);
 }
 

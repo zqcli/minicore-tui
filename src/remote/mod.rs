@@ -217,12 +217,33 @@ pub struct PendingIntent {
     pub id: String,
     /// The projection the client built it from; a later view makes it stale.
     pub view_epoch: String,
-    /// The session it named, absent for an intent that creates one.
-    pub session_id: Option<String>,
-    pub load: Option<String>,
-    pub epoch: Option<u64>,
+    pub target: PendingTarget,
     pub focus_generation: u64,
     pub kind: PendingKind,
+}
+
+#[derive(Debug)]
+pub enum PendingTarget {
+    Draft,
+    Stored(String),
+    Resident(crate::app::resident::Target),
+}
+
+impl PendingTarget {
+    pub fn session_id(&self) -> Option<&str> {
+        match self {
+            Self::Draft => None,
+            Self::Stored(id) => Some(id),
+            Self::Resident(target) => Some(&target.session_id),
+        }
+    }
+
+    pub fn resident(&self) -> Option<&crate::app::resident::Target> {
+        match self {
+            Self::Resident(target) => Some(target),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -255,42 +276,6 @@ impl PendingKind {
             Self::Command { text, .. } => text.as_deref(),
             Self::Unqueue { .. } | Self::Open => None,
         }
-    }
-}
-
-/// The bounded modifications one connection may have waiting on the Agent.
-///
-/// A phone that exceeds a bound is refused before anything runs, so a refused
-/// operation can never have had a side effect.
-#[derive(Default)]
-pub struct PendingIntents {
-    items: Vec<PendingIntent>,
-}
-
-impl PendingIntents {
-    /// Modifying operations one connection may have waiting at once.
-    pub const PER_CONNECTION: usize = 4;
-
-    pub fn len(&self) -> usize {
-        self.items.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.items.is_empty()
-    }
-
-    pub fn get(&self, id: &str) -> Option<&PendingIntent> {
-        self.items.iter().find(|intent| intent.id == id)
-    }
-
-    pub fn push(&mut self, intent: PendingIntent) {
-        self.items.push(intent);
-    }
-
-    /// Forgets the operation `id`, whatever its outcome; the answer carries it on.
-    pub fn take(&mut self, id: &str) -> Option<PendingIntent> {
-        let index = self.items.iter().position(|intent| intent.id == id)?;
-        Some(self.items.remove(index))
     }
 }
 
@@ -328,7 +313,7 @@ pub struct Remote {
     pub failed_logins: u32,
     pub paused_until: Option<tokio::time::Instant>,
     /// Modifications waiting on their Agent answer, per connection, oldest first.
-    pending: std::collections::BTreeMap<u64, PendingIntents>,
+    pending: std::collections::BTreeMap<u64, Vec<PendingIntent>>,
     /// Text those modifications hold.
     pending_text_bytes: usize,
     stop: Option<oneshot::Sender<()>>,
@@ -347,6 +332,18 @@ impl Drop for Remote {
 }
 
 impl Remote {
+    pub fn phone(&self, connection: u64) -> Option<&Phone> {
+        self.phones
+            .iter()
+            .find(|phone| phone.connection.id == connection)
+    }
+
+    pub fn phone_mut(&mut self, connection: u64) -> Option<&mut Phone> {
+        self.phones
+            .iter_mut()
+            .find(|phone| phone.connection.id == connection)
+    }
+
     pub fn viewing(&self, id: &str) -> bool {
         self.phones
             .iter()
@@ -410,6 +407,8 @@ impl Remote {
         self.mode() != RemoteMode::Off
     }
 
+    /// Modifying operations one connection may have waiting at once.
+    pub const MAX_PENDING_PER_CONNECTION: usize = 4;
     /// Modifications waiting across the whole TUI.
     pub const MAX_PENDING: usize = 64;
     /// Text those modifications hold, across the whole TUI.
@@ -420,20 +419,12 @@ impl Remote {
     ///
     /// A phone that does not fit is refused before anything runs.
     pub fn admits_pending(&self, connection: u64, text: Option<&str>) -> bool {
-        let own = self.pending.get(&connection).map_or(0, PendingIntents::len);
-        let total: usize = self.pending.values().map(PendingIntents::len).sum();
+        let own = self.pending.get(&connection).map_or(0, Vec::len);
+        let total: usize = self.pending.values().map(Vec::len).sum();
         let bytes = self.pending_text_bytes + text.map_or(0, str::len);
-        own < PendingIntents::PER_CONNECTION
+        own < Self::MAX_PENDING_PER_CONNECTION
             && total < Self::MAX_PENDING
             && bytes <= Self::MAX_PENDING_BYTES
-    }
-
-    /// Whether `id` already waits on `connection`; a live id must not be reused,
-    /// or its answer would be attributed to the wrong operation.
-    pub fn holds_pending(&self, connection: u64, id: &str) -> bool {
-        self.pending
-            .get(&connection)
-            .is_some_and(|pending| pending.get(id).is_some())
     }
 
     /// Records an operation as waiting, charging its text to the budget.
@@ -445,12 +436,10 @@ impl Remote {
     /// Answers an operation: its text leaves the budget and the ack goes to the
     /// connection that made it, while that connection is still admitted.
     pub fn release_pending(&mut self, connection: u64, id: &str) -> Option<PendingIntent> {
-        let intent = self.pending.get_mut(&connection)?.take(id)?;
-        if self
-            .pending
-            .get(&connection)
-            .is_some_and(PendingIntents::is_empty)
-        {
+        let pending = self.pending.get_mut(&connection)?;
+        let index = pending.iter().position(|intent| intent.id == id)?;
+        let intent = pending.remove(index);
+        if pending.is_empty() {
             self.pending.remove(&connection);
         }
         self.pending_text_bytes -= intent.kind.text().map_or(0, str::len);
@@ -459,7 +448,10 @@ impl Remote {
 
     /// The operation `id` waiting on `connection`.
     pub fn pending(&self, connection: u64, id: &str) -> Option<&PendingIntent> {
-        self.pending.get(&connection)?.get(id)
+        self.pending
+            .get(&connection)?
+            .iter()
+            .find(|intent| intent.id == id)
     }
 
     pub fn roots(&self) -> &[PathBuf] {
@@ -586,7 +578,7 @@ pub enum RemoteEvent {
     Created {
         connection: u64,
         id: String,
-        result: Box<Result<crate::app::tasks::Adopted, crate::protocol::RpcError>>,
+        result: Box<Result<crate::protocol::OpenedSession, crate::protocol::RpcError>>,
     },
     Finished {
         connection: u64,

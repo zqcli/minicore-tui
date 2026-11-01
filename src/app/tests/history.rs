@@ -87,17 +87,14 @@ async fn a_bounded_history_catchup_keeps_its_verified_window_and_continues_the_m
         h.texts().iter().any(|text| text == "new-prefix-159"),
         "the verified newer window must not be discarded at the round limit"
     );
-    assert_eq!(
-        h.app.resident.current().unwrap().recovery.settled_through,
-        0
-    );
+    assert_eq!(h.session().recovery.settled_through, 0);
     h.app.notices.clear();
     assert!(
         h.screen(120, 30).contains("/recover"),
         "the continuation is persistent, not a transient notice"
     );
     for _ in 0..8 {
-        if h.app.resident.current().unwrap().recovery.settled_through == 1 {
+        if h.session().recovery.settled_through == 1 {
             break;
         }
         h.action(Action::RetryRecovery);
@@ -109,7 +106,7 @@ async fn a_bounded_history_catchup_keeps_its_verified_window_and_continues_the_m
         .await;
     }
     assert_eq!(
-        h.app.resident.current().unwrap().recovery.settled_through,
+        h.session().recovery.settled_through,
         1,
         "every bounded continuation must make real coverage progress"
     );
@@ -153,7 +150,7 @@ async fn a_catchup_continuation_replaces_retained_saved_regions_without_repeatin
         1
     );
     for _ in 0..8 {
-        if h.app.resident.current().unwrap().recovery.settled_through == 1 {
+        if h.session().recovery.settled_through == 1 {
             break;
         }
         h.action(Action::RetryRecovery);
@@ -164,10 +161,7 @@ async fn a_catchup_continuation_replaces_retained_saved_regions_without_repeatin
         })
         .await;
     }
-    assert_eq!(
-        h.app.resident.current().unwrap().recovery.settled_through,
-        1
-    );
+    assert_eq!(h.session().recovery.settled_through, 1);
     let expected: Vec<String> = (0..80)
         .flat_map(|index| [format!("prompt {index}"), format!("answer {index}")])
         .collect();
@@ -260,15 +254,7 @@ async fn overlapping_partial_turn_windows_keep_source_order_tools_and_live_conte
     assert!(
         matches!(&h.blocks()[block], Block::Assistant {key,..} if key.loop_id == "A" && key.request_index == 15)
     );
-    let tool = h
-        .app
-        .resident
-        .current()
-        .unwrap()
-        .transcript
-        .tool_calls()
-        .next()
-        .unwrap();
+    let tool = h.session().transcript.tool_calls().next().unwrap();
     assert_eq!(tool.state, crate::transcript::ToolState::Succeeded);
     assert_eq!(tool.output_content(), ["finished"]);
     assert_eq!(
@@ -278,19 +264,19 @@ async fn overlapping_partial_turn_windows_keep_source_order_tools_and_live_conte
             .count(),
         1
     );
-    assert_eq!(h.app.resident.current().unwrap().observed_loop(), Some("C"));
-    assert_eq!(h.app.resident.current().unwrap().loaded_from, 20);
+    assert_eq!(h.session().observed_loop(), Some("C"));
+    assert_eq!(h.session().loaded_from, 20);
 
     // A later disjoint window keeps the older island, then ordinary pages join them.
     let later = read::read_history(h.fake.client.clone(), "s1".into(), Window::Before(80))
         .await
         .unwrap();
     h.op(SessionOp::Tail(Ok(later)));
-    assert_eq!(h.app.resident.current().unwrap().loaded_from, 60);
+    assert_eq!(h.session().loaded_from, 60);
     for from in [40, 20, 0] {
         h.action(Action::LoadOlder);
         h.settle().await;
-        assert_eq!(h.app.resident.current().unwrap().loaded_from, from);
+        assert_eq!(h.session().loaded_from, from);
     }
     let mut all = vec!["prompt A".to_owned()];
     all.extend((1..80).filter(|index| *index != 40).map(|index| {
@@ -363,14 +349,7 @@ async fn a_tool_result_only_window_updates_retained_cards_without_copying_their_
             .unwrap();
         h.op(SessionOp::Tail(Ok(read)));
     }
-    let cards: Vec<_> = h
-        .app
-        .resident
-        .current()
-        .unwrap()
-        .transcript
-        .tool_calls()
-        .collect();
+    let cards: Vec<_> = h.session().transcript.tool_calls().collect();
     assert_eq!(
         cards.len(),
         28,
@@ -490,8 +469,8 @@ async fn canonical_older_cards_are_hydrated_after_a_limited_history_recovery() {
             == Some(crate::app::recovery::RecoveryStatus::Exhausted)
     })
     .await;
-    assert_eq!(h.app.resident.current().unwrap().loaded_from, 129);
-    assert_eq!(h.app.resident.current().unwrap().first_item, 150);
+    assert_eq!(h.session().loaded_from, 129);
+    assert_eq!(h.session().first_item, 150);
     h.fake.script("tool.read", tool_read("failed", 2));
     h.action(Action::LoadOlder);
     h.settle().await;
@@ -520,7 +499,7 @@ async fn older_pagination_to_zero_cannot_settle_an_unread_newer_history_suffix()
     assert!(matches!(&read,crate::app::read::HistoryRead::Complete(page) if page.from == 0));
     h.op(crate::app::SessionOp::Page(Ok(read)));
     assert_eq!(
-        h.app.resident.current().unwrap().recovery.settled_through,
+        h.session().recovery.settled_through,
         0,
         "old H0 coverage cannot stand in for the unread H1 suffix"
     );
@@ -550,7 +529,7 @@ async fn saved_fallback_for_a_truncated_catalog_keeps_unknown_unsaved_turns_visi
     })
     .await;
     assert_eq!(h.texts(), ["saved prompt B", "saved answer B"]);
-    let session = h.app.resident.current().unwrap();
+    let session = h.session();
     assert_eq!(
         (
             session.recovery.observed_through,
@@ -908,7 +887,7 @@ async fn a_saved_history_tail_preserves_unsaved_a_live_c_new_output_draft_and_an
     h.running_state("C", entry("iC", "steer", "prompt C"));
     let entries:Vec<CompletedTurn> = ["A","B"].into_iter().enumerate().map(|(i,id)|serde_json::from_value(json!({"seq":i+1,"loop_id":id,"completion_kind":"reported","outcome_kind":"completed","persistence":if id == "A" {"failed"} else {"persisted"},"availability":if id == "A" {"live"} else {"stored"}})).unwrap()).collect();
     let a = [json!({"item":{"type":"user","data":{"loop_id":"A","kind":"prompt","input":{"text":"prompt A"}}}}),json!({"item":{"type":"assistant","data":{"loop_id":"A","request_index":0,"content":[{"type":"text","data":"answer A"}]}}})].into_iter().map(|item|decode_item(&item.to_string()).unwrap()).collect::<Vec<_>>();
-    let session = h.app.resident.current_mut().unwrap();
+    let session = h.session_mut();
     session.catalog = CompletionDirectory {
         through_seq: 2,
         retained_from_seq: 1,
@@ -953,15 +932,7 @@ async fn a_saved_history_tail_preserves_unsaved_a_live_c_new_output_draft_and_an
     })
     .await;
     h.app.composer.set_text("keep this draft");
-    let c = h
-        .app
-        .resident
-        .current()
-        .unwrap()
-        .live
-        .as_ref()
-        .unwrap()
-        .start;
+    let c = h.session().live.as_ref().unwrap().start;
     h.app.scroll = Scroll::Anchor {
         block: c + 1,
         offset: 1,
@@ -979,17 +950,7 @@ async fn a_saved_history_tail_preserves_unsaved_a_live_c_new_output_draft_and_an
         ]
     );
     assert_eq!(h.app.composer.text(), "keep this draft");
-    assert_eq!(
-        h.app
-            .resident
-            .current()
-            .unwrap()
-            .live
-            .as_ref()
-            .unwrap()
-            .start,
-        6
-    );
+    assert_eq!(h.session().live.as_ref().unwrap().start, 6);
     assert_eq!(
         h.app.scroll,
         Scroll::Anchor {
@@ -1402,7 +1363,7 @@ async fn a_reopened_session_gets_its_turn_end_lines_and_totals_from_the_read() {
         turn_end_lines(&mut h),
         ["completed · 2 requests · 1 tool", "interrupted"]
     );
-    let usage = &h.app.resident.current().unwrap().usage;
+    let usage = &h.session().usage;
     assert_eq!((usage.input, usage.output, usage.cached), (150, 15, 40));
 }
 
@@ -1503,19 +1464,19 @@ async fn totals_are_left_out_when_the_window_does_not_reach_the_summary() {
     read["projection"]["first_item"] = json!(0);
     let h = Harness::opened(read).await;
     assert_eq!(h.marker(), Some(20));
-    assert_eq!(h.app.resident.current().unwrap().usage.input, 0);
+    assert_eq!(h.session().usage.input, 0);
 
     let mut summarised = with_records(page(5, 3, vec![summary(3), user(4, "l1", "q")]), json!([]));
     summarised["projection"]["covered_usage"] =
         json!({"usage": {"input_tokens": 900, "output_tokens": 90}, "partial": false});
     let h = Harness::opened(summarised).await;
-    assert_eq!(h.app.resident.current().unwrap().usage.input, 900);
+    assert_eq!(h.session().usage.input, 900);
 
     let mut partial = page(5, 3, vec![summary(3), user(4, "l1", "q")]);
     partial["projection"]["covered_usage"] =
         json!({"usage": {"input_tokens": 900}, "partial": true});
     let h = Harness::opened(partial).await;
-    assert_eq!(h.app.resident.current().unwrap().usage.input, 0);
+    assert_eq!(h.session().usage.input, 0);
 }
 
 #[tokio::test(start_paused = true)]

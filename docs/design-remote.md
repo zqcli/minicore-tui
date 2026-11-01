@@ -867,7 +867,7 @@ workspace.
 | `src/remote/fs.rs` | Host directory functions |
 | `src/remote/query.rs` | Query relays: the Agent reads per kind and the `data` mapping, run off the reducer |
 | `src/remote/web/` | The client: `index.html`, `app.css`, `theme.js`, the ES modules, `sw.js`, `manifest.webmanifest` and the icons, embedded with `include_bytes!` (layout in [design-remote-ui.md](design-remote-ui.md#code-layout)) |
-| `src/app/remote.rs` | `App` side: `/remote` commands, mode changes, local gating, intents, `sync_remote` |
+| `src/app/remote/` | `mod`: mode, connections and device views; `intent`: admission and dispatch; `pending`: captured operation targets, calls and acknowledgements |
 | `src/ui/views/remote.rs` | The remote status screen; composer placeholder and footer mark live with the composer and footer |
 
 `remote` depends on `app` and `protocol`, never on `ui`. Remote messages reach

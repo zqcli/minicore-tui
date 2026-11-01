@@ -146,6 +146,18 @@ fn malformed(message: &str) -> RpcError {
 }
 
 impl App {
+    pub(super) fn next_operation(&mut self) -> u64 {
+        self.op_seq = self
+            .op_seq
+            .checked_add(1)
+            .expect("operation identity exhausted");
+        self.op_seq
+    }
+
+    pub(super) fn new_compaction(&mut self) -> Operation {
+        Operation::Compact(format!("tui-{}", self.next_operation()))
+    }
+
     pub(super) fn operate(&self, epoch: u64, operation: Operation) {
         let session = self
             .resident

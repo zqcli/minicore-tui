@@ -29,7 +29,7 @@ the current fields below.
 - **Phone first, then iPad and desktop**, which get a persistent sidebar and
   keyboard shortcuts.
 
-## Protocol v3 (server, `src/remote/*`, `src/app/remote.rs`)
+## Protocol v3 (server, `src/remote/*`, `src/app/remote/`)
 
 `wire::VERSION` is 3; v1 and v2 clients receive `version` before sign-in or
 side effects and show "Update needed · Reload". Every intent carries the

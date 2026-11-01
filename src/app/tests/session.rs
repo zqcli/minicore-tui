@@ -57,7 +57,7 @@ async fn launch_flags_apply_to_an_opened_session_once() {
     assert_eq!(update.len(), 1);
     assert_eq!(update[0]["model"], "deep");
     assert_eq!(update[0]["reasoning"], "max");
-    assert_eq!(h.app.resident.current().unwrap().info.model, "deep");
+    assert_eq!(h.session().info.model, "deep");
 }
 
 #[tokio::test(start_paused = true)]
@@ -271,7 +271,7 @@ async fn the_sessions_picker_lists_this_workspace_first_then_newest() {
 #[tokio::test(start_paused = true)]
 async fn an_event_from_a_previous_load_never_reaches_this_instance() {
     let mut h = Harness::opened(display_read(0, 0)).await;
-    let installed = h.app.resident.current().unwrap().load.clone();
+    let installed = h.session().load.clone();
     h.fake
         .script("input.push", starting_reply("l1", h.next_revision()));
     h.fake.script_held("turn.wait", waited("l1", completed()));
@@ -311,7 +311,7 @@ async fn installing_a_load_refreshes_control_after_the_initial_snapshot() {
         !h.calls("session.state").is_empty(),
         "installing a load must ask for the current control snapshot"
     );
-    assert_eq!(h.app.resident.current().unwrap().load, crate::testing::LOAD);
+    assert_eq!(h.session().load, crate::testing::LOAD);
 }
 
 #[tokio::test(start_paused = true)]
@@ -456,7 +456,7 @@ async fn a_superseded_same_session_open_cannot_replace_the_newer_load() {
     h.action(Action::OpenSession("s1".into()));
     h.settle().await;
     assert_eq!(h.calls("session.open").len(), 2);
-    assert_eq!(h.app.resident.current().unwrap().load, "load_second");
+    assert_eq!(h.session().load, "load_second");
     assert!(!h.app.loading_session);
 }
 
@@ -541,16 +541,13 @@ async fn a_delayed_older_state_sample_cannot_regress_a_newer_snapshot_without_le
     h.snapshot_event(newer).await;
     h.until(|app| app.resident.current().unwrap().recovery.revision == 101)
         .await;
-    h.app
-        .resident
-        .current_mut()
-        .unwrap()
+    h.session_mut()
         .interaction_editor
         .set_text("keep this answer");
     h.fake.release("session.state@s1");
     h.until(|app| !app.resident.current().unwrap().control_in_flight)
         .await;
-    let session = h.app.resident.current().unwrap();
+    let session = h.session();
     assert_eq!(session.recovery.revision, 101);
     assert_eq!(session.observed_loop(), Some("B"));
     assert_eq!(h.queue(), ["new queue"]);
@@ -616,7 +613,7 @@ async fn queued_old_load_results_cannot_mutate_a_reopened_instance_and_pending_w
     );
     result["outcome"] = completed();
     h.fake.script_held("turn.result", result);
-    let old = h.app.resident.current().unwrap();
+    let old = h.session();
     let epoch = old.epoch;
 
     let old_load = old.load.clone();
@@ -719,7 +716,7 @@ async fn queued_old_load_results_cannot_mutate_a_reopened_instance_and_pending_w
     h.emit_no_meta("output_delta",json!({"meta":{"session_id":"s1","load":"load_reopened","dropped_before":0},"turn":turn("new-loop"),"request_index":0,"channel":"text","delta":"new answer"})).await;
     h.until(|app| app.resident.current().unwrap().transcript.last_answer() == Some("new answer"))
         .await;
-    assert!(h.app.resident.current().unwrap().epoch > epoch);
+    assert!(h.session().epoch > epoch);
     h.app.composer.set_text("new draft");
     let before = format!("{:?}", h.blocks());
     for message in stale {
@@ -729,10 +726,7 @@ async fn queued_old_load_results_cannot_mutate_a_reopened_instance_and_pending_w
             before,
             "an already queued old result must not mutate the new view even transiently"
         );
-        assert_eq!(
-            h.app.resident.current().unwrap().recovery.settled_through,
-            0
-        );
+        assert_eq!(h.session().recovery.settled_through, 0);
     }
     h.settle().await;
     assert!(
@@ -741,7 +735,7 @@ async fn queued_old_load_results_cannot_mutate_a_reopened_instance_and_pending_w
     );
     assert_eq!(format!("{:?}", h.blocks()), before);
     assert_eq!(h.app.composer.text(), "new draft");
-    let session = h.app.resident.current().unwrap();
+    let session = h.session();
     assert_eq!(session.load, "load_reopened");
     assert_eq!(session.recovery.revision, 2);
     assert_eq!(

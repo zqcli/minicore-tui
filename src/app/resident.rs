@@ -2,6 +2,23 @@
 
 use super::Session;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Target {
+    pub session_id: String,
+    pub load: String,
+    pub epoch: u64,
+}
+
+impl Session {
+    pub fn target(&self) -> Target {
+        Target {
+            session_id: self.info.session_id.clone(),
+            load: self.load.clone(),
+            epoch: self.epoch,
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct Sessions {
     items: Vec<Session>,

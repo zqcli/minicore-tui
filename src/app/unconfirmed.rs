@@ -3,6 +3,7 @@
 use super::{
     App, Msg, NoticeLevel, Overlay,
     composer::{Composer, Entry},
+    resident::Target,
 };
 use crate::protocol::{self, Acceptance, InputMode, InputPushResult, RpcError};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -11,13 +12,6 @@ use serde_json::json;
 pub const MAX_OPERATIONS: usize = 64;
 pub const MAX_BYTES: usize = 16 * 1024 * 1024;
 pub const EDIT_BYTES: usize = crate::rpc::MAX_REQUEST_BYTES;
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Target {
-    pub session_id: String,
-    pub load: String,
-    pub epoch: u64,
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Status {
@@ -115,16 +109,8 @@ impl App {
             .resident
             .get(epoch)
             .expect("local input has a resident session");
-        let target = Target {
-            session_id: session.info.session_id.clone(),
-            load: session.load.clone(),
-            epoch: session.epoch,
-        };
-        self.op_seq = self
-            .op_seq
-            .checked_add(1)
-            .expect("operation identity exhausted");
-        let id = self.op_seq;
+        let target = session.target();
+        let id = self.next_operation();
         let params = json!({"session_id":target.session_id,"load":target.load,"mode":mode,"text":entry.text().trim_end()});
         self.local_inputs.push_back(LocalInput {
             id,

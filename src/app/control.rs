@@ -4,9 +4,7 @@
 //! blocking: command receipts may notify, return text and schedule reads, but
 //! they no longer decide control state.
 
-use crate::protocol::{
-    AgentEvent, BlockReason, ExecutionPhase, SessionExecution, SessionSnapshot, TurnRef,
-};
+use crate::protocol::{BlockReason, ExecutionPhase, SessionExecution, SessionSnapshot, TurnRef};
 
 use super::{LiveStatus, LiveTurn, PendingInteraction, Phase, Session};
 use crate::protocol::read::UserKind;
@@ -109,31 +107,6 @@ impl Session {
     /// Why the session cannot start a turn, for the status line.
     pub fn block_label(&self) -> Option<&'static str> {
         self.block_reason.map(BlockReason::label)
-    }
-
-    /// Applies one event to a live session: body content only. Control state
-    /// arrives through [`Session::apply_control`].
-    pub fn apply_body_event(&mut self, event: AgentEvent, bytes: usize) {
-        if matches!(
-            event,
-            AgentEvent::InteractionRequested { .. }
-                | AgentEvent::InteractionResolved { .. }
-                | AgentEvent::TurnStarted { .. }
-                | AgentEvent::TurnFinished { .. }
-        ) {
-            self.apply_event(event);
-            return;
-        }
-        if let Some(loop_id) = event.loop_id().map(str::to_owned) {
-            if self.is_closed(&loop_id) && !event.is_tool_metadata() {
-                return;
-            }
-            if !self.knows_turn(&loop_id) {
-                self.cache_early(event, bytes);
-                return;
-            }
-        }
-        self.apply_event(event);
     }
 }
 

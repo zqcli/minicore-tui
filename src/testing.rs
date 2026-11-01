@@ -13,6 +13,9 @@ use tokio::sync::{Notify, mpsc, oneshot};
 use crate::app::{App, Msg};
 use crate::rpc::{Client, Incoming};
 
+pub(crate) mod fixtures;
+pub use fixtures::*;
+
 /// Bounds a test wait even when Tokio's clock is paused or kept runnable.
 pub async fn real_bounded<T>(work: impl Future<Output = T>) -> T {
     let (cancel, cancelled) = std::sync::mpsc::channel::<()>();
@@ -594,94 +597,6 @@ impl Drop for FakeAgent {
     fn drop(&mut self) {
         self.close();
     }
-}
-
-/// A session catalog entry the fake Agent returns.
-pub fn session_info(session_id: &str) -> Value {
-    json!({
-        "session_id": session_id,
-        "title": null,
-        "profile": "coding",
-        "workspace": "/tmp/ws",
-        "model": "mock",
-        "reasoning": "medium",
-        "loaded": true,
-        "created_at": "2024-01-01T00:00:00Z",
-        "updated_at": "2024-01-01T00:00:00Z",
-    })
-}
-
-pub fn turn(loop_id: &str) -> Value {
-    json!({"session_id": "s1", "loop_id": loop_id})
-}
-
-/// A control snapshot with nothing running and an empty queue.
-pub fn snapshot(session_id: &str, load: &str, revision: u64) -> Value {
-    json!({
-        "session_id": session_id,
-        "load": load,
-        "revision": revision,
-        "execution": {"type": "none"},
-        "queue": {"items": [], "paused": false},
-        "pending_interaction": null, "compaction": null, "block_reason": null,
-        "completions": {
-            "through_seq": 0, "retained_from_seq": 1, "entries": [], "truncated": false
-        }
-    })
-}
-
-/// A control snapshot with one running turn.
-pub fn snapshot_running(
-    session_id: &str,
-    load: &str,
-    revision: u64,
-    loop_id: &str,
-    input: Value,
-) -> Value {
-    let mut state = snapshot(session_id, load, revision);
-    state["execution"] = json!({
-        "type": "running", "loop_id": loop_id, "input": input, "request_index": 0,
-        "phase": "running_model"
-    });
-    state
-}
-
-/// One history chunk as the Agent frames it: the item JSON lives in `data`, and
-/// a small item is a single complete chunk.
-pub fn chunk(index: usize, item: Value) -> Value {
-    chunk_envelope(index, json!({"item": item}))
-}
-
-/// A history chunk whose item JSON is the whole `envelope`, e.g. with a timestamp.
-pub fn chunk_envelope(index: usize, envelope: Value) -> Value {
-    let data = envelope.to_string();
-    json!({
-        "index": index,
-        "offset": 0,
-        "total_bytes": data.len(),
-        "encoding": "utf8_json",
-        "data": data,
-        "complete": true,
-    })
-}
-
-/// A history projection with `first_item` older items covered by its summary.
-pub fn display_read(total: usize, first_item: usize) -> Value {
-    json!({
-        "session": session_info("s1"),
-        "items": [],
-        "next_cursor": null,
-        "total": total,
-        "records": [],
-        "history_revision": "h1",
-        "captured_end": 1,
-        "projection": {
-            "revision": "p1",
-            "first_item": first_item,
-            "covered_item_count": first_item,
-            "covered_usage": {"usage": {}, "partial": true},
-        },
-    })
 }
 
 #[cfg(test)]

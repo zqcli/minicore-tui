@@ -18,18 +18,18 @@ mod mouse;
 mod notify;
 #[cfg(feature = "e2e-observe")]
 pub mod observe;
-pub mod operation;
+pub(crate) mod operation;
 mod ops;
 pub mod overlay;
 pub mod picker;
-pub mod read;
-pub mod recovery;
+pub(crate) mod read;
+pub(crate) mod recovery;
 mod remote;
-pub mod resident;
+pub(crate) mod resident;
 pub mod scrollbar;
 pub mod selection;
 pub mod session;
-pub mod tasks;
+pub(crate) mod tasks;
 pub mod templates;
 #[cfg(test)]
 mod tests;
@@ -62,7 +62,7 @@ pub use actions::{Action, Answer};
 pub use diff::DiffQuery;
 pub use overlay::{Overlay, Panel};
 pub use session::{InteractionKind, LiveStatus, LiveTurn, PendingInteraction, Phase, Session};
-pub use tasks::Tx;
+pub use tasks::{Tx, bootstrap};
 
 /// Everything the main loop can hand to the reducer.
 pub enum Msg {
@@ -74,8 +74,12 @@ pub enum Msg {
     },
     AgentClosed(String),
     Ready(Box<Ready>),
-    Opened(u64, String, Result<tasks::Adopted, RpcError>),
-    Created(Result<tasks::Adopted, RpcError>),
+    Opened(
+        u64,
+        String,
+        Result<crate::protocol::OpenedSession, RpcError>,
+    ),
+    Created(Result<crate::protocol::OpenedSession, RpcError>),
     Deleted(String, Result<(), RpcError>),
     /// A `session.rename` from the sessions picker, which may name a closed session.
     Renamed(String, Result<SessionInfo, RpcError>),
@@ -97,7 +101,7 @@ pub struct Ready {
     pub sessions: Vec<SessionInfo>,
 }
 
-/// What an async operation on the foreground session produced.
+/// What an async operation on a resident session produced.
 pub enum SessionOp {
     Tail(Result<read::HistoryRead, RpcError>),
     Page(Result<read::HistoryRead, RpcError>),
@@ -251,7 +255,6 @@ pub struct App {
     /// Numbers the live sessions, so a late result never reaches another one.
     pub epoch: u64,
     pub(super) recovery_after: Option<u64>,
-    /// A control read is outstanding.
     /// Snapshots held for sessions this client has not opened yet.
     pub pre_install: recovery::PreInstall,
     pub templates: Vec<templates::Template>,

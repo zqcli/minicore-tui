@@ -26,56 +26,7 @@ impl App {
             SessionOp::Page(result) => self.on_page(epoch, result),
             SessionOp::Recovered(outcome) => self.on_recovered(epoch, outcome),
             SessionOp::HistoryRecovered(through, result) => {
-                self.session_mut(epoch).recovery_tasks.finish(None);
-                let superseded = through != self.session_mut(epoch).recovery.gap_through;
-                let (page, limit) = match result {
-                    Ok(HistoryRead::Complete(page)) => (Some(page), None),
-                    Ok(HistoryRead::Limited(page, limit)) => (Some(page), Some(limit)),
-                    Ok(HistoryRead::Partial(partial)) => {
-                        self.session_mut(epoch).recovery.history_status =
-                            Some(super::recovery::RecoveryStatus::Exhausted);
-                        self.notice(NoticeLevel::Error, partial.message());
-                        (None, None)
-                    }
-                    Err(error) => {
-                        self.session_mut(epoch).recovery.retry_history();
-                        if self.session_mut(epoch).recovery.history_status
-                            == Some(super::recovery::RecoveryStatus::Exhausted)
-                        {
-                            self.error(error);
-                        }
-                        (None, None)
-                    }
-                };
-                if let Some(page) = page {
-                    let covered = page.coverage();
-                    self.install_history(epoch, *page);
-                    self.session_mut(epoch)
-                        .recovery
-                        .cover_history(covered, true);
-                    if superseded {
-                        self.session_mut(epoch).recovery.history_status =
-                            Some(super::recovery::RecoveryStatus::Pending);
-                    } else if !self.session_mut(epoch).recovery.settle_history_gap() {
-                        self.session_mut(epoch).recovery.history_status =
-                            Some(super::recovery::RecoveryStatus::Exhausted);
-                        self.notice(
-                            NoticeLevel::Info,
-                            limit.map_or_else(
-                                || "More history remains to recover; /recover to continue".into(),
-                                |limit| limit.message(),
-                            ),
-                        );
-                    } else {
-                        let gap = self.session_mut(epoch).recovery.gap_through > 0;
-                        if gap {
-                            self.notice(NoticeLevel::Error, "Saved history recovered; unsaved turns outside the completion catalog may be missing");
-                        }
-                        self.session_mut(epoch).recovery.retry_failed();
-                        self.session_mut(epoch).ordering_gap = false;
-                    }
-                }
-                self.recover_completions();
+                self.on_history_recovered(epoch, through, result);
             }
             SessionOp::State(result) => self.on_state(epoch, result),
             SessionOp::Presentation(result) => {
@@ -137,7 +88,7 @@ impl App {
     /// Adopts a session and assigns its remote creator or opener's view without moving other devices.
     pub(super) fn adopt(
         &mut self,
-        result: Result<tasks::Adopted, RpcError>,
+        result: Result<crate::protocol::OpenedSession, RpcError>,
         first: Option<String>,
     ) {
         let opening = self.remote.opening.take();
@@ -161,7 +112,7 @@ impl App {
 
     fn adopt_session(
         &mut self,
-        result: Result<tasks::Adopted, RpcError>,
+        result: Result<crate::protocol::OpenedSession, RpcError>,
         first: Option<String>,
     ) -> Option<String> {
         self.loading_session = false;
@@ -198,12 +149,12 @@ impl App {
 
     pub(super) fn install_session(
         &mut self,
-        adopted: tasks::Adopted,
+        adopted: crate::protocol::OpenedSession,
         select: bool,
         history: bool,
     ) -> Result<u64, RpcError> {
-        let tasks::Adopted {
-            info,
+        let crate::protocol::OpenedSession {
+            session: info,
             load,
             snapshot,
         } = adopted;
@@ -263,7 +214,7 @@ impl App {
         self.backfill(epoch);
     }
 
-    fn install_history(&mut self, epoch: u64, page: History) {
+    pub(super) fn install_history(&mut self, epoch: u64, page: History) {
         let source = match self.scroll_for(epoch) {
             Scroll::Anchor { block, offset } => self
                 .session_mut(epoch)

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Share local and phone request preparation while keeping their original drafts,
+  acknowledgements and focus behavior. Pending phone operations retain an explicit
+  draft, stored-session or resident target through delayed replies.
+- Simplify recovery errors, retry state and read metadata, and group session body,
+  completion and history handling by responsibility. Existing control snapshots,
+  body recovery limits and terminal/web interactions remain unchanged.
+
 - Background work and delayed replies target their original resident session
   without changing the selected view or another session's draft and scroll.
 - Local and phone mutations share typed execution and receipt validation. A

@@ -19,14 +19,7 @@ async fn answering_an_interaction_keeps_it_until_the_authoritative_snapshot_reso
     h.until(|app| app.has_interaction()).await;
     h.action(crate::app::Action::Answer(crate::app::Answer::Allow));
     assert_eq!(
-        h.app
-            .resident
-            .current()
-            .unwrap()
-            .interaction
-            .as_ref()
-            .unwrap()
-            .interaction_id,
+        h.session().interaction.as_ref().unwrap().interaction_id,
         "first"
     );
     h.control_event(json!({"pending_interaction":{"loop_id":"l1","request_index":0,"interaction_id":"newer","tool_call_id":"call2","tool_name":"bash","kind":{"type":"approval","data":{"prompt":"New approval?"}}}})).await;
@@ -44,14 +37,7 @@ async fn answering_an_interaction_keeps_it_until_the_authoritative_snapshot_reso
     h.fake.release("interaction.answer");
     h.settle().await;
     assert_eq!(
-        h.app
-            .resident
-            .current()
-            .unwrap()
-            .interaction
-            .as_ref()
-            .unwrap()
-            .interaction_id,
+        h.session().interaction.as_ref().unwrap().interaction_id,
         "newer"
     );
 }
@@ -151,10 +137,7 @@ async fn local_unknown_input_retains_its_owner_and_requires_a_duplicate_warning_
     assert_eq!(original.entry.text(), "original unknown");
     assert_eq!(original.target.session_id, "s1");
     assert_eq!(original.target.load, crate::testing::LOAD);
-    assert_eq!(
-        original.target.epoch,
-        h.app.resident.current().unwrap().epoch
-    );
+    assert_eq!(original.target.epoch, h.session().epoch);
     assert_eq!(original.mode, crate::protocol::InputMode::FollowUp);
     assert!(
         !h.app.composer.history_prev(),
@@ -559,14 +542,7 @@ async fn text_input_uses_its_own_editor_and_explicit_answer_kind_without_consumi
         .await;
     h.until(|app| app.has_interaction()).await;
     assert!(matches!(
-        h.app
-            .resident
-            .current()
-            .unwrap()
-            .interaction
-            .as_ref()
-            .unwrap()
-            .kind,
+        h.session().interaction.as_ref().unwrap().kind,
         crate::app::InteractionKind::Text
     ));
     h.type_text("y an answer n");
@@ -576,14 +552,7 @@ async fn text_input_uses_its_own_editor_and_explicit_answer_kind_without_consumi
     h.press(KeyCode::End);
     assert_eq!(h.app.composer.text(), "conversation draft stays here");
     assert!(h.calls("interaction.answer").is_empty());
-    let expected = h
-        .app
-        .resident
-        .current()
-        .unwrap()
-        .interaction_editor
-        .text()
-        .to_owned();
+    let expected = h.session().interaction_editor.text().to_owned();
     assert!(expected.starts_with("y an answer n "));
     let screen = h.screen(100, 25);
     assert!(screen.contains("Describe the branch to use"), "{screen}");
@@ -622,10 +591,7 @@ async fn text_editor_is_preserved_by_same_id_revisions_but_old_answers_cannot_re
     h.control_event(json!({"pending_interaction":text_interaction("first")}))
         .await;
     h.settle().await;
-    assert_eq!(
-        h.app.resident.current().unwrap().interaction_editor.text(),
-        "first answer"
-    );
+    assert_eq!(h.session().interaction_editor.text(), "first answer");
     arm_prompt().await;
     h.press(KeyCode::Enter);
     h.fake.wait_for_calls("interaction.answer", 1).await;
@@ -642,14 +608,7 @@ async fn text_editor_is_preserved_by_same_id_revisions_but_old_answers_cannot_re
             == "second"
     })
     .await;
-    assert!(
-        h.app
-            .resident
-            .current()
-            .unwrap()
-            .interaction_editor
-            .is_empty()
-    );
+    assert!(h.session().interaction_editor.is_empty());
     h.type_text("new answer");
     h.fake.release("interaction.answer");
     h.emit(
@@ -658,7 +617,7 @@ async fn text_editor_is_preserved_by_same_id_revisions_but_old_answers_cannot_re
     )
     .await;
     h.settle().await;
-    let session = h.app.resident.current().unwrap();
+    let session = h.session();
     assert_eq!(
         session.interaction.as_ref().unwrap().interaction_id,
         "second"
@@ -699,7 +658,7 @@ async fn empty_or_oversized_text_answers_are_rejected_without_truncating_or_send
 
 /// `count` prompts, each followed by a three-line answer.
 fn conversation(h: &mut Harness, count: usize) {
-    let transcript = &mut h.app.resident.current_mut().unwrap().transcript;
+    let transcript = &mut h.session_mut().transcript;
     for index in 0..count {
         transcript.push(Block::User {
             text: format!("prompt {index}"),
@@ -1511,20 +1470,12 @@ async fn a_local_session_tool_grant_is_recorded_only_after_a_successful_answer()
         h.action(crate::app::Action::Answer(crate::app::Answer::AllowTool));
         h.fake.wait_for_calls("interaction.answer", 1).await;
         assert!(
-            h.app.resident.current().unwrap().allowed_tools.is_empty(),
+            h.session().allowed_tools.is_empty(),
             "sending is not acceptance"
         );
         h.fake.release("interaction.answer");
         h.settle().await;
-        assert_eq!(
-            h.app
-                .resident
-                .current()
-                .unwrap()
-                .allowed_tools
-                .contains("bash"),
-            accepted
-        );
+        assert_eq!(h.session().allowed_tools.contains("bash"), accepted);
         assert_eq!(h.calls("interaction.answer").len(), 1);
     }
 }

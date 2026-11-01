@@ -135,20 +135,16 @@ pub async fn session(
     client: Arc<Client>,
     method: &'static str,
     params: Value,
-) -> Result<Adopted, RpcError> {
+) -> Result<OpenedSession, RpcError> {
     let result: OpenedSession = client.call(method, &params).await?;
-    let load = result.load;
-    let snapshot = result.snapshot;
-    if snapshot.session_id != result.session.session_id || snapshot.load != load {
+    if result.snapshot.session_id != result.session.session_id
+        || result.snapshot.load != result.load
+    {
         return Err(invalid_read(
             "the opened instance snapshot has another identity",
         ));
     }
-    Ok(Adopted {
-        info: result.session,
-        load,
-        snapshot,
-    })
+    Ok(result)
 }
 
 /// The session a rename returned; a rename creates no instance of its own.
@@ -165,13 +161,6 @@ pub async fn renamed_session(
         unreachable!("a rename returns session info")
     };
     Ok(info)
-}
-
-/// A session this client just opened or created.
-pub struct Adopted {
-    pub info: SessionInfo,
-    pub load: String,
-    pub snapshot: protocol::SessionSnapshot,
 }
 
 /// Closes a resident instance before deleting its stored session.
@@ -331,30 +320,10 @@ pub async fn export(client: Arc<Client>, session_id: String, path: Option<String
 /// `minicore-<session>-<date>.md`, in the directory the user started from.
 fn default_export_path(session_id: &str) -> String {
     let short = session_id.strip_prefix("ses_").unwrap_or(session_id);
-    format!("minicore-{short}-{}.md", today())
-}
-
-/// Today as `YYYY-MM-DD` in UTC.
-fn today() -> String {
-    let seconds = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |elapsed| elapsed.as_secs());
-    let (year, month, day) = civil_from_days((seconds / 86_400) as i64);
-    format!("{year:04}-{month:02}-{day:02}")
-}
-
-/// Days since the Unix epoch to a civil date (Howard Hinnant's algorithm).
-fn civil_from_days(days: i64) -> (i64, u32, u32) {
-    let z = days + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = (z - era * 146_097) as u64;
-    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe as i64 + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
-    (if m <= 2 { y + 1 } else { y }, m, d)
+    format!(
+        "minicore-{short}-{}.md",
+        jiff::Timestamp::now().strftime("%F")
+    )
 }
 
 /// An accepted input must name the exact instance that received the request.
@@ -382,8 +351,6 @@ pub(super) fn accepted_input(
 mod tests {
     #[test]
     fn the_default_export_path_names_the_session_and_the_day() {
-        assert_eq!(super::civil_from_days(0), (1970, 1, 1));
-        assert_eq!(super::civil_from_days(20_454), (2026, 1, 1));
         let path = super::default_export_path("ses_abc123");
         assert!(path.starts_with("minicore-abc123-20"), "{path}");
         assert!(path.ends_with(".md"), "{path}");

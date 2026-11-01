@@ -1,7 +1,7 @@
 //! The draft: the welcome screen before any session exists. A session is
 //! created by the first message and takes the settings picked meanwhile.
 
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::{App, LaunchSettings, NoticeLevel};
 use crate::protocol::{ProfileInfo, Reasoning};
@@ -45,6 +45,12 @@ impl LaunchSettings {
 }
 
 impl App {
+    pub(super) fn create_fields(&self) -> Value {
+        let mut fields = self.launch.fields(true);
+        fields["workspace"] = json!(self.workspace);
+        fields
+    }
+
     pub fn draft_launch(&self) -> &LaunchSettings {
         self.remote
             .draft
@@ -76,26 +82,25 @@ impl App {
     /// model lacks moves to the nearest one it has in the same request.
     pub(super) fn set_model(&mut self, id: String) {
         if self.resident.current().is_some() {
-            let mut fields = json!({ "model": id });
-            if let Some(level) = self.reasoning_for(&id) {
-                fields["reasoning"] = json!(level);
-            }
+            let fields = self.model_fields(&id, self.reasoning());
             self.update_session(fields);
         } else {
-            if let Some(level) = self.reasoning_for(&id) {
+            if let Some(level) = self.reasoning_for_level(&id, self.reasoning()) {
                 self.launch.reasoning = Some(level);
             }
             self.launch.model = Some(id);
         }
     }
 
-    /// The level to switch to when `model` does not support the current one,
-    /// with a notice saying so.
-    pub(super) fn reasoning_for(&mut self, model: &str) -> Option<Reasoning> {
-        self.reasoning_for_level(model, self.reasoning())
+    pub(super) fn model_fields(&mut self, model: &str, current: Option<Reasoning>) -> Value {
+        let mut fields = json!({"model": model});
+        if let Some(level) = self.reasoning_for_level(model, current) {
+            fields["reasoning"] = json!(level);
+        }
+        fields
     }
 
-    pub(super) fn reasoning_for_level(
+    fn reasoning_for_level(
         &mut self,
         model: &str,
         current: Option<Reasoning>,

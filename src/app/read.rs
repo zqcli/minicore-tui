@@ -97,8 +97,7 @@ pub enum TurnRead {
     /// The result is known to exist but its body cannot be read; the reason
     /// says why, and existing content stays as it is.
     Unavailable(UnavailableRead),
-    /// The Agent answered with an error; nothing was installed.
-    Failed(RpcError),
+    /// The read exceeded its budget; nothing was installed.
     Partial(Box<ReadPartial>),
     Complete(Box<TurnContent>),
 }
@@ -205,15 +204,9 @@ pub struct History {
     /// The exclusive end of the verified source range.
     pub end: usize,
     pub pin: SnapshotPin,
-    /// The display projection's `first_item`: older items are behind the
-    /// compaction summary.
-    pub floor: usize,
-    pub has_more: bool,
     pub canonical: bool,
     /// How the turns with items in the window ended.
     pub records: Vec<TurnRecord>,
-    /// The usage behind the summary, when the Agent counted all of it.
-    pub covered_usage: Option<Usage>,
     _workspace: ReadWorkspace,
 }
 
@@ -614,15 +607,8 @@ pub async fn read_history(
         items,
         from: start,
         end,
-        floor: pin.first_item,
-        has_more: start > pin.first_item,
         canonical,
         records,
-        covered_usage: pin
-            .covered_usage
-            .clone()
-            .filter(|covered| !covered.partial)
-            .map(|covered| covered.usage),
         pin,
         _workspace: workspace,
     });
@@ -903,17 +889,13 @@ pub async fn read_turn(
             );
         }
         let page: TurnResultPage = match client.call(protocol::METHOD_TURN_RESULT, &params).await {
-            // A result that expired or changed identity between pages is a
-            // terminal state for this read, not a retryable error.
+            // An expired result cannot install the prefix already read.
             Err(error) if error.kind == "turn_not_found" || error.kind == "not_retained" => {
                 return Ok(TurnRead::Unavailable(UnavailableRead {
                     reason: UnavailableReason::NotRetained,
                     persistence: None,
                     persistence_uncertain: false,
                 }));
-            }
-            Err(error) if error.kind == "stale_result" => {
-                return Ok(TurnRead::Failed(error));
             }
             result => result?,
         };
@@ -1145,25 +1127,9 @@ mod tests {
     };
     use crate::protocol::read::TurnAvailability;
     use crate::protocol::{ReadChunk, TurnRef, UnavailableReason};
-    use crate::testing::{FakeAgent, chunk, session_info};
+    use crate::testing::{FakeAgent, RESULT_ID, chunk, result_page, session_info};
 
     const TEST_TIMEOUT: Duration = Duration::from_secs(10);
-
-    const RESULT_ID: &str = "r1:0000000000000000000000000000000000000000000000000000000000000002";
-
-    fn result_page(turn: Value, items: Vec<Value>, total: usize, next: Value) -> Value {
-        json!({
-            "turn": turn,
-            "load": crate::testing::LOAD,
-            "result_id": RESULT_ID,
-            "availability": "stored",
-            "outcome": {"type": "completed"},
-            "persistence": "persisted",
-            "items": items,
-            "total": total,
-            "next_cursor": next,
-        })
-    }
 
     fn user(index: usize, text: &str) -> Value {
         chunk(
@@ -1256,7 +1222,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn w0_read_turn_does_not_accept_pending_as_a_complete_empty_turn() {
+    async fn read_turn_does_not_accept_pending_as_a_complete_empty_turn() {
         let mut pending = result_page(turn("s1", "l1"), vec![], 0, Value::Null);
         pending["availability"] = json!("pending");
         pending.as_object_mut().unwrap().remove("outcome");
@@ -1384,106 +1350,52 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn w0_read_turn_rejects_an_invalid_chunk_offset() {
-        let page = result_page(
-            turn("s1", "l1"),
-            vec![malformed_chunk("x", 1, 2, true)],
-            1,
-            Value::Null,
-        );
-        let (result, _) = read_pages(vec![page]).await;
-        assert!(
-            result.is_err(),
-            "a discontinuous chunk must fail: {result:?}"
-        );
+    async fn a_result_rejects_invalid_chunks_ranges_and_turn_identities() {
+        let mut encoding = user(0, "one");
+        encoding["encoding"] = json!("base64");
+        for (name, identity, items, total) in [
+            (
+                "discontinuous offset",
+                turn("s1", "l1"),
+                vec![malformed_chunk("x", 1, 2, true)],
+                1,
+            ),
+            ("unsupported encoding", turn("s1", "l1"), vec![encoding], 1),
+            (
+                "invalid JSON",
+                turn("s1", "l1"),
+                vec![malformed_chunk("{", 0, 1, true)],
+                1,
+            ),
+            (
+                "unfinished item",
+                turn("s1", "l1"),
+                vec![malformed_chunk("{", 0, 2, false)],
+                1,
+            ),
+            ("short body", turn("s1", "l1"), vec![user(0, "one")], 2),
+            (
+                "missing item",
+                turn("s1", "l1"),
+                vec![user(0, "one"), assistant(2, "three")],
+                2,
+            ),
+            ("another loop", turn("s1", "other"), vec![user(0, "one")], 1),
+            (
+                "another session",
+                turn("other", "l1"),
+                vec![user(0, "one")],
+                1,
+            ),
+        ] {
+            let page = result_page(identity, items, total, Value::Null);
+            let (result, _) = read_pages(vec![page]).await;
+            assert!(result.is_err(), "{name} must fail: {result:?}");
+        }
     }
 
     #[tokio::test(start_paused = true)]
-    async fn w0_read_turn_rejects_an_invalid_chunk_encoding() {
-        let mut item = user(0, "one");
-        item["encoding"] = json!("base64");
-        let page = result_page(turn("s1", "l1"), vec![item], 1, Value::Null);
-        let (result, _) = read_pages(vec![page]).await;
-        assert!(
-            result.is_err(),
-            "an unsupported encoding must fail: {result:?}"
-        );
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn w0_read_turn_rejects_invalid_item_json() {
-        let page = result_page(
-            turn("s1", "l1"),
-            vec![malformed_chunk("{", 0, 1, true)],
-            1,
-            Value::Null,
-        );
-        let (result, _) = read_pages(vec![page]).await;
-        assert!(result.is_err(), "invalid item JSON must fail: {result:?}");
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn w0_read_turn_rejects_an_unfinished_last_item() {
-        let page = result_page(
-            turn("s1", "l1"),
-            vec![malformed_chunk("{", 0, 2, false)],
-            1,
-            Value::Null,
-        );
-        let (result, _) = read_pages(vec![page]).await;
-        assert!(
-            result.is_err(),
-            "an unfinished item must not be installed: {result:?}"
-        );
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn w0_read_turn_rejects_a_total_that_exceeds_the_read_items() {
-        let page = result_page(turn("s1", "l1"), vec![user(0, "one")], 2, Value::Null);
-        let (result, _) = read_pages(vec![page]).await;
-        assert!(
-            result.is_err(),
-            "a short result must not be called complete: {result:?}"
-        );
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn w0_read_turn_rejects_a_gap_between_complete_item_indices() {
-        let page = result_page(
-            turn("s1", "l1"),
-            vec![user(0, "one"), assistant(2, "three")],
-            2,
-            Value::Null,
-        );
-        let (result, _) = read_pages(vec![page]).await;
-        assert!(
-            result.is_err(),
-            "a missing item index must fail: {result:?}"
-        );
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn w0_read_turn_rejects_another_loop() {
-        let page = result_page(turn("s1", "other"), vec![user(0, "one")], 1, Value::Null);
-        let (result, _) = read_pages(vec![page]).await;
-        assert!(
-            result.is_err(),
-            "a page from another loop must fail: {result:?}"
-        );
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn w0_read_turn_rejects_another_session() {
-        let page = result_page(turn("other", "l1"), vec![user(0, "one")], 1, Value::Null);
-        let (result, _) = read_pages(vec![page]).await;
-        assert!(
-            result.is_err(),
-            "a page from another session must fail: {result:?}"
-        );
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn w0_read_turn_rejects_a_different_turn_on_a_later_page() {
+    async fn read_turn_rejects_a_different_turn_on_a_later_page() {
         let first = result_page(
             turn("s1", "l1"),
             vec![user(0, "one")],
@@ -1504,7 +1416,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn w0_read_turn_stops_before_repeating_a_cursor() {
+    async fn read_turn_stops_before_repeating_a_cursor() {
         let cursor = json!({"item": 1, "offset": 0});
         let first = result_page(turn("s1", "l1"), vec![user(0, "one")], 2, cursor.clone());
         let stuck = result_page(turn("s1", "l1"), vec![], 2, cursor);

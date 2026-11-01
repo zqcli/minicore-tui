@@ -192,7 +192,7 @@ async fn new_returns_to_the_draft_without_creating_and_records_the_profile() {
     );
     h.open().await;
     assert_eq!(h.texts(), ["an old question"]);
-    let old = h.app.resident.current().unwrap().epoch;
+    let old = h.session().epoch;
     script_first_message(&h);
     // The session left for the draft stays live, so the new one has its own id.
     h.fake
@@ -239,7 +239,7 @@ async fn new_returns_to_the_draft_without_creating_and_records_the_profile() {
     assert_eq!(create.len(), 1);
     assert_eq!(create[0]["profile"], "ask");
     assert_ne!(
-        h.app.resident.current().unwrap().epoch,
+        h.session().epoch,
         old,
         "results for the old session cannot reach the new one"
     );
@@ -369,7 +369,7 @@ async fn the_sessions_picker_opens_an_existing_session_from_the_draft() {
     h.ctrl(KeyCode::Char('r'));
     h.press(KeyCode::Enter);
     h.until(|app| app.resident.current().is_some()).await;
-    assert_eq!(h.app.resident.current().unwrap().info.session_id, "s1");
+    assert_eq!(h.session().info.session_id, "s1");
     assert!(h.calls("session.create").is_empty());
 }
 

@@ -40,16 +40,18 @@ src/
   prompt_history.rs  the prompt history file (JSON lines, atomic rewrite)
   app/          the reducer; all mutable application state
     mod.rs        App, Msg, SessionOp, Scroll, notices, scrolling
-    resident.rs   loaded session collection and selected epoch
-    session.rs    Session: transcript, live turn, queue, usage, history window
+    resident.rs   loaded session collection, captured Target and selected epoch
+    session/      one Session: mod (state and coordinates), body (streamed events),
+                  completion (terminal facts and canonical bodies), history (window installation)
     operation.rs  typed mutations shared by terminal and phone adapters
     control.rs    authoritative snapshot application and coalesced control reads
-    recovery.rs   bounded completion discovery and recovery scheduling
+    recovery.rs   bounded completion/history discovery, scheduling and result handling
     read.rs       verified history/result paging, assembly and budgets
     local_files.rs serial coalesced history/theme writes and reload composition
     actions.rs    Action (keys and commands land here) and the IO each starts
     ops.rs        applies SessionOp results and Agent events
-    remote.rs     remote commands, local authorization, intents, projection sync
+    remote/       mod (mode, connections and device views), intent (admission and dispatch),
+                  pending (captured targets, Agent calls and acknowledgements)
     tasks.rs      task ownership, bootstrap, waits, changes and export
     keys/         on_key and the per-surface key handlers: mod (approval prompt),
                   composer, completion (the / and @ lists), overlay (pickers, views)
@@ -64,7 +66,9 @@ src/
     overlay.rs    Overlay (the one open picker or view), Panel, the filters behind
                   the pickers (sessions, models, files)
     diff.rs, tool.rs, find.rs   diff state and reads, card hydration, transcript find
-    tests/        reducer tests through the scripted Agent
+    tests/        reducer tests through Harness, with shared phone support
+  testing.rs    scripted Agent transport (tests only)
+  testing/fixtures.rs  literal wire data shared by tests
   transcript/   mod (Transcript: blocks with a revision each)
                 block.rs (Block, RequestKey, ChangeSummary)
                 tool_call.rs (ToolCall, ToolState, the bounded output tail)
@@ -197,12 +201,22 @@ are applied only when their target remains selected. Notices still identify
 background sessions, and completion/approval notifications keep their existing
 bell and unseen rules.
 
-Local and phone mutations use `operation::Operation`, whose executor decodes and
-checks the Agent reply once. `Outcome` is applied by the reducer; adapters retain
+Local and phone mutations share model/create request preparation and operation
+identity allocation. `operation::Operation` executes the request and validates
+its reply once. `Outcome` is applied by the reducer; adapters retain
 their own draft ownership, feedback and acknowledgement identities. The terminal
 continues to follow phone navigation, but operation targets do not depend on that
 policy. A phone open/create installs its resident before deciding whether its
-unchanged view still owns focus; no temporary selection needs to be undone.
+unchanged view still owns focus; no temporary selection needs to be undone. Pending phone operations distinguish a
+draft, a stored session ID and a captured resident `Target` (session ID, load,
+epoch); a delayed result never recaptures a newer resident as its target.
+
+`Session` remains one state owner. Its body module owns early events and request
+ordering; completion owns canonical replacement and terminal facts; history owns
+window installation and preserved regions. Recovery chooses one ready completion
+per scheduler slot and keeps both result and history recovery handling together.
+Verified reads carry their original history pin instead of copying its derived
+fields, and RPC errors use the read's outer `Result`.
 
 History, theme and reload composition use one coalescing local-file worker.
 Only the latest pending history/theme value is retained, blocking filesystem

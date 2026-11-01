@@ -283,7 +283,7 @@ async fn run() -> i32 {
     let boot = {
         let client = client.clone();
         let tx = msg_tx.clone();
-        tokio::spawn(async move { minicore_tui::app::tasks::bootstrap(client, tx).await })
+        tokio::spawn(async move { minicore_tui::app::bootstrap(client, tx).await })
     };
     // The loop must not poll `EventStream` itself: every poll fights the stream's
     // reader thread for the event lock and spins on `sched_yield` about 15 times.

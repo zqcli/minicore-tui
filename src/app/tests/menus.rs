@@ -178,7 +178,7 @@ async fn model_takes_a_direct_argument_with_completion() {
     let updates = h.calls("session.update");
     assert_eq!(updates.len(), 1);
     assert_eq!(updates[0]["model"], "luna");
-    assert_eq!(h.app.resident.current().unwrap().info.model, "luna");
+    assert_eq!(h.session().info.model, "luna");
 
     h.type_text("/model zzz");
     h.press(KeyCode::Enter);
@@ -193,7 +193,7 @@ async fn ctrl_p_cycles_the_models_and_shift_ctrl_p_goes_back() {
     two_models(&h);
     h.fake.script("session.update", updated_to("luna"));
     h.open().await;
-    assert_eq!(h.app.resident.current().unwrap().info.model, "mock");
+    assert_eq!(h.session().info.model, "mock");
 
     h.ctrl(KeyCode::Char('p'));
     h.settle().await;
@@ -406,7 +406,7 @@ async fn the_third_row_allows_the_tool_for_the_session() {
     h.press(KeyCode::Enter);
     h.run_for(Duration::from_millis(50)).await;
     assert_eq!(answers(&h), [("i1".to_owned(), "allow_once".to_owned())]);
-    let allowed = &h.app.resident.current().unwrap().allowed_tools;
+    let allowed = &h.session().allowed_tools;
     assert!(allowed.contains("edit"));
 }
 
@@ -459,7 +459,7 @@ async fn profile_and_approval_stay_out_of_the_footer_but_approval_is_visible() {
     assert!(screen.contains("Waiting for approval"), "{screen}");
     assert!(screen.contains("Allow bash?"), "{screen}");
     assert!(h.app.has_interaction(), "approval is still required");
-    assert_eq!(h.app.resident.current().unwrap().info.profile, "ask");
+    assert_eq!(h.session().info.profile, "ask");
 }
 
 #[tokio::test(start_paused = true)]
@@ -583,7 +583,7 @@ async fn a_session_is_renamed_from_the_picker_without_opening_it() {
     let screen = h.screen(100, 30);
     assert!(screen.contains("Renamed"), "{screen}");
     assert!(matches!(h.app.overlay, Overlay::Sessions { .. }));
-    let foreground = h.app.resident.current().unwrap();
+    let foreground = h.session();
     assert_eq!(
         foreground.info.title.as_deref(),
         Some("Same title"),
@@ -592,7 +592,7 @@ async fn a_session_is_renamed_from_the_picker_without_opening_it() {
 }
 
 fn push_blocks(h: &mut Harness, blocks: Vec<Block>) {
-    let transcript = &mut h.app.resident.current_mut().unwrap().transcript;
+    let transcript = &mut h.session_mut().transcript;
     for block in blocks {
         transcript.push(block);
     }
@@ -744,7 +744,7 @@ async fn the_title_follows_the_session_and_the_exit_prints_the_resume_command() 
         "an empty session has nothing to resume"
     );
 
-    h.app.resident.current_mut().unwrap().info.title = Some("Fix parser".into());
+    h.session_mut().info.title = Some("Fix parser".into());
     assert!(h.app.terminal_bytes().contains("proj · Fix parser · idle"));
     push_blocks(
         &mut h,

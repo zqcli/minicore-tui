@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use crate::protocol::{CompletedTurn, CompletionDirectory, SessionSnapshot, TurnRef};
 
-use super::read::TurnRead;
+use super::read::{HistoryRead, TurnRead};
 use super::{App, NoticeLevel, Session, SessionOp};
 use crate::protocol::RpcError;
 
@@ -62,7 +62,6 @@ pub enum RecoveryStatus {
     Unavailable,
     /// The read failed in a way worth retrying.
     Retryable {
-        attempts: u32,
         due: tokio::time::Instant,
     },
     Exhausted,
@@ -82,7 +81,6 @@ pub struct Recovery {
     attempts: u32,
 }
 
-/// What a snapshot's revision means for the client.
 /// The bounded recovery state of one resident instance.
 #[derive(Default)]
 pub struct RecoveryState {
@@ -257,19 +255,16 @@ impl RecoveryState {
         true
     }
 
-    /// Bounded work ready now; `in_flight` reads already hold a slot.
-    pub fn ready(&self, now: tokio::time::Instant, in_flight: usize) -> Vec<CompletedTurn> {
-        let room = CONCURRENT.saturating_sub(in_flight);
+    /// The oldest completion ready to use the scheduler's next slot.
+    fn ready(&self, now: tokio::time::Instant) -> Option<CompletedTurn> {
         self.entries
             .values()
-            .filter(|entry| match entry.status {
+            .find(|entry| match entry.status {
                 RecoveryStatus::Pending => true,
                 RecoveryStatus::Retryable { due, .. } => due <= now,
                 _ => false,
             })
-            .take(room)
             .map(|entry| entry.turn.clone())
-            .collect()
     }
 
     /// The next retry deadline, for the loop's wake-up.
@@ -288,21 +283,20 @@ impl RecoveryState {
     }
 
     /// Schedules another attempt, or gives up after the bounded rounds.
-    pub fn retry_later(&mut self, seq: u64) {
-        let Some(entry) = self.entries.get_mut(&seq) else {
-            return;
-        };
+    pub fn retry_later(&mut self, seq: u64) -> Option<RecoveryStatus> {
+        let entry = self.entries.get_mut(&seq)?;
         entry.attempts += 1;
         let attempts = entry.attempts;
         if attempts > MAX_RETRIES {
             entry.status = RecoveryStatus::Exhausted;
         } else {
             entry.status = RecoveryStatus::Retryable {
-                attempts,
                 due: tokio::time::Instant::now() + backoff(attempts),
             };
         }
+        let status = entry.status;
         self.settle_prefix();
+        Some(status)
     }
 
     /// Opens one new round of retries for every failed entry, for a user
@@ -332,7 +326,6 @@ impl RecoveryState {
             RecoveryStatus::Exhausted
         } else {
             RecoveryStatus::Retryable {
-                attempts: self.history_attempts,
                 due: tokio::time::Instant::now() + backoff(self.history_attempts),
             }
         });
@@ -454,7 +447,7 @@ impl App {
                 if slots == 0 {
                     return;
                 }
-                let started = self.recover_resident(*epoch, CONCURRENT - slots);
+                let started = self.recover_resident(*epoch);
                 if started {
                     slots -= 1;
                     self.recovery_after = Some(*epoch);
@@ -466,7 +459,7 @@ impl App {
         }
     }
 
-    fn recover_resident(&mut self, epoch: u64, in_flight: usize) -> bool {
+    fn recover_resident(&mut self, epoch: u64) -> bool {
         let Some(session) = self.resident.get(epoch) else {
             return false;
         };
@@ -504,9 +497,9 @@ impl App {
         }
         let session = self.resident.get(epoch).unwrap();
         let now = tokio::time::Instant::now();
-        let ready = session.recovery.ready(now, in_flight);
+        let ready = session.recovery.ready(now);
         let session_id = session.info.session_id.clone();
-        if let Some(turn) = ready.into_iter().next() {
+        if let Some(turn) = ready {
             self.session_mut(epoch)
                 .recovery
                 .record(turn.seq, RecoveryStatus::Fetching);
@@ -527,6 +520,61 @@ impl App {
         false
     }
 
+    pub(super) fn on_history_recovered(
+        &mut self,
+        epoch: u64,
+        through: u64,
+        result: Result<HistoryRead, RpcError>,
+    ) {
+        self.session_mut(epoch).recovery_tasks.finish(None);
+        let superseded = through != self.session_mut(epoch).recovery.gap_through;
+        let (page, limit) = match result {
+            Ok(HistoryRead::Complete(page)) => (Some(page), None),
+            Ok(HistoryRead::Limited(page, limit)) => (Some(page), Some(limit)),
+            Ok(HistoryRead::Partial(partial)) => {
+                self.session_mut(epoch).recovery.history_status = Some(RecoveryStatus::Exhausted);
+                self.notice(NoticeLevel::Error, partial.message());
+                (None, None)
+            }
+            Err(error) => {
+                self.session_mut(epoch).recovery.retry_history();
+                if self.session_mut(epoch).recovery.history_status
+                    == Some(RecoveryStatus::Exhausted)
+                {
+                    self.error(error);
+                }
+                (None, None)
+            }
+        };
+        if let Some(page) = page {
+            let covered = page.coverage();
+            self.install_history(epoch, *page);
+            self.session_mut(epoch)
+                .recovery
+                .cover_history(covered, true);
+            if superseded {
+                self.session_mut(epoch).recovery.history_status = Some(RecoveryStatus::Pending);
+            } else if !self.session_mut(epoch).recovery.settle_history_gap() {
+                self.session_mut(epoch).recovery.history_status = Some(RecoveryStatus::Exhausted);
+                self.notice(
+                    NoticeLevel::Info,
+                    limit.map_or_else(
+                        || "More history remains to recover; /recover to continue".into(),
+                        |limit| limit.message(),
+                    ),
+                );
+            } else {
+                let gap = self.session_mut(epoch).recovery.gap_through > 0;
+                if gap {
+                    self.notice(NoticeLevel::Error, "Saved history recovered; unsaved turns outside the completion catalog may be missing");
+                }
+                self.session_mut(epoch).recovery.retry_failed();
+                self.session_mut(epoch).ordering_gap = false;
+            }
+        }
+        self.recover_completions();
+    }
+
     /// Settles one recovered completion; the watermark moves only when the
     /// body is complete or explicitly unavailable.
     pub(super) fn on_recovered(&mut self, epoch: u64, outcome: RecoveryOutcome) {
@@ -543,32 +591,26 @@ impl App {
             let session = self.session_mut(epoch);
             match outcome.result {
                 Ok(TurnRead::Complete(content)) => {
-                    let directory = session
-                        .recovery
-                        .entries
-                        .get(&outcome.seq)
-                        .map(|entry| entry.turn.clone());
-                    let loop_id = directory
-                        .as_ref()
-                        .map_or_else(|| outcome.turn.loop_id.clone(), |turn| turn.loop_id.clone());
-                    moved = directory.as_ref().and_then(|turn| {
-                        session.reconcile_completion(
-                            turn,
-                            &content.details,
-                            &content.items,
-                            content.interrupted.as_ref(),
-                            content.persistence,
-                            content.persistence_uncertain,
-                        )
-                    });
+                    let directory = session.recovery.entries[&outcome.seq].turn.clone();
+                    let loop_id = &directory.loop_id;
+                    moved = session.reconcile_completion(
+                        &directory,
+                        &content.details,
+                        &content.items,
+                        content.interrupted.as_ref(),
+                        content.persistence,
+                        content.persistence_uncertain,
+                    );
                     // A body that installed nothing (its streamed region was
                     // evicted) is not settled: the descriptor stays retryable
                     // so the turn can still be repaired.
-                    match moved.is_some() || session.is_closed(&loop_id) {
+                    match moved.is_some() || session.is_closed(loop_id) {
                         true => session
                             .recovery
                             .record(outcome.seq, RecoveryStatus::Complete),
-                        false => session.recovery.retry_later(outcome.seq),
+                        false => {
+                            session.recovery.retry_later(outcome.seq);
+                        }
                     }
                     if moved.is_none()
                         && session.ordering_gap
@@ -577,7 +619,9 @@ impl App {
                         session.recovery.history_status = Some(RecoveryStatus::Pending);
                     }
                     if moved.is_some() {
-                        session.body_recovery.retain(|note| note.loop_id != loop_id);
+                        session
+                            .body_recovery
+                            .retain(|note| note.loop_id != *loop_id);
                         for (key, facts) in &content.tool_facts {
                             if let Some(card) = session.transcript.find_tool_mut(key) {
                                 card.apply_read(facts);
@@ -586,7 +630,7 @@ impl App {
                     }
                     #[cfg(feature = "e2e-observe")]
                     if moved.is_some() {
-                        self.observe_install(epoch, &content, directory.as_ref());
+                        self.observe_install(epoch, &content, Some(&directory));
                     }
                     None
                 }
@@ -619,12 +663,7 @@ impl App {
                 }
                 // A pending answer is not a completed turn: retry within bounds.
                 Ok(TurnRead::Pending) => {
-                    session.recovery.retry_later(outcome.seq);
-                    if session
-                        .recovery
-                        .entries
-                        .get(&outcome.seq)
-                        .is_some_and(|entry| entry.status == RecoveryStatus::Exhausted)
+                    if session.recovery.retry_later(outcome.seq) == Some(RecoveryStatus::Exhausted)
                     {
                         session.note_body_recovery(
                             &outcome.turn.loop_id,
@@ -634,23 +673,17 @@ impl App {
                     }
                     None
                 }
-                Ok(TurnRead::Failed(error)) | Err(error) => {
-                    session.recovery.retry_later(outcome.seq);
-                    if session
-                        .recovery
-                        .entries
-                        .get(&outcome.seq)
-                        .is_some_and(|entry| entry.status == RecoveryStatus::Exhausted)
+                Err(error) => {
+                    if session.recovery.retry_later(outcome.seq) == Some(RecoveryStatus::Exhausted)
                     {
                         session.note_body_recovery(
                             &outcome.turn.loop_id,
                             RecoveryStatus::Exhausted,
                             format!("Recovery failed; /recover to retry: {}", error.message),
                         );
-                    }
-                    match session.recovery.entries.get(&outcome.seq).map(|e| e.status) {
-                        Some(RecoveryStatus::Exhausted) => Some(error.message),
-                        _ => None,
+                        Some(error.message)
+                    } else {
+                        None
                     }
                 }
             }
@@ -800,12 +833,13 @@ mod tests {
     }
 
     #[test]
-    fn recovery_bounds_retries_and_the_concurrent_reads() {
+    fn recovery_selects_the_oldest_ready_completion_and_bounds_retries() {
         let mut state = RecoveryState::default();
         state.discover(&directory(6, 1, &[1, 2, 3, 4], false));
         let now = tokio::time::Instant::now();
-        assert_eq!(state.ready(now, 0).len(), CONCURRENT);
-        assert!(state.ready(now, CONCURRENT).is_empty());
+        assert_eq!(state.ready(now).unwrap().seq, 1);
+        state.record(1, RecoveryStatus::Fetching);
+        assert_eq!(state.ready(now).unwrap().seq, 2);
         // Entry 2 has an unsettled predecessor, so its retries cannot retire
         // the prefix and stay observable.
         for attempt in 1..=MAX_RETRIES {
@@ -814,8 +848,9 @@ mod tests {
             let entry = &state.entries[&2];
             assert!(matches!(
                 entry.status,
-                RecoveryStatus::Retryable { attempts, .. } if attempts == attempt
+                RecoveryStatus::Retryable { due } if due > now
             ));
+            assert_eq!(entry.attempts, attempt);
         }
         state.retry_later(2);
         assert_eq!(state.entries[&2].status, RecoveryStatus::Exhausted);

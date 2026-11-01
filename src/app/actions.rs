@@ -269,8 +269,7 @@ impl App {
         self.loading_session = true;
         // Without a profile the Agent picks its configured default; choosing
         // one here would override that.
-        let mut params = self.launch.fields(true);
-        params["workspace"] = json!(self.workspace);
+        let params = self.create_fields();
         let client = self.client.clone();
         self.spawn_msg(async move {
             Msg::Created(tasks::session(client, protocol::METHOD_SESSION_CREATE, params).await)
@@ -340,15 +339,9 @@ impl App {
             self.notice(NoticeLevel::Error, "Finish the running turn first");
             return;
         }
-        self.op_seq = self
-            .op_seq
-            .checked_add(1)
-            .expect("operation identity exhausted");
-        let operation_id = format!("tui-{}", self.op_seq);
-        self.operate(
-            self.resident.current().unwrap().epoch,
-            Operation::Compact(operation_id),
-        );
+        let epoch = session.epoch;
+        let operation = self.new_compaction();
+        self.operate(epoch, operation);
     }
 
     fn copy_last_answer(&mut self) {

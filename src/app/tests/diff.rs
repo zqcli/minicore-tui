@@ -82,7 +82,7 @@ async fn the_diff_view_lists_one_row_per_path_and_counts_every_record() {
         },
         "edit",
     );
-    let session = h.app.resident.current_mut().unwrap();
+    let session = h.session_mut();
     session.transcript.push(Block::Tool(Box::new(edit)));
 
     open_diff(&mut h);
@@ -217,24 +217,19 @@ async fn slash_diff_lists_the_working_tree_without_a_turn() {
 async fn clicking_a_turn_end_line_lists_the_working_tree() {
     use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
     let mut h = Harness::opened(display_read(0, 0)).await;
-    h.app
-        .resident
-        .current_mut()
-        .unwrap()
-        .transcript
-        .push(Block::TurnEnd {
-            loop_id: "l7".into(),
-            outcome: crate::protocol::LoopOutcome::Completed,
-            duration: None,
-            requests: 1,
-            tools: 0,
-            usage: Default::default(),
-            changes: Some(crate::transcript::ChangeSummary {
-                files: 1,
-                lines: Some((2, 1)),
-            }),
-            saving: None,
-        });
+    h.session_mut().transcript.push(Block::TurnEnd {
+        loop_id: "l7".into(),
+        outcome: crate::protocol::LoopOutcome::Completed,
+        duration: None,
+        requests: 1,
+        tools: 0,
+        usage: Default::default(),
+        changes: Some(crate::transcript::ChangeSummary {
+            files: 1,
+            lines: Some((2, 1)),
+        }),
+        saving: None,
+    });
     let screen = h.screen(100, 20);
     assert!(
         screen.contains("1 file changed (+2 −1) · /diff"),
