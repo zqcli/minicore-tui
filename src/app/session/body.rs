@@ -347,17 +347,20 @@ impl Session {
             self.recovery.behind = true;
             return;
         }
-        while self.early_bytes + bytes > EARLY_BYTES || {
-            let loops: BTreeSet<_> = self
+        while self.early_bytes + bytes > EARLY_BYTES
+            || (!event.loop_id().is_some_and(|loop_id| {
+                self.early
+                    .iter()
+                    .rev()
+                    .any(|(held, _)| held.loop_id() == Some(loop_id))
+            }) && self
                 .early
                 .iter()
                 .filter_map(|(event, _)| event.loop_id())
-                .collect();
-            !event
-                .loop_id()
-                .is_some_and(|loop_id| loops.contains(loop_id))
-                && loops.len() >= EARLY_TURNS
-        } {
+                .collect::<BTreeSet<_>>()
+                .len()
+                >= EARLY_TURNS)
+        {
             self.evict_early();
         }
         self.early_bytes += bytes;
@@ -377,11 +380,12 @@ impl Session {
     }
 
     pub(in crate::app) fn replay_early(&mut self) {
+        let mut seen = BTreeSet::new();
         let loops: Vec<String> = self
             .early
             .iter()
             .filter_map(|(event, _)| event.loop_id())
-            .filter(|id| self.knows_turn(id))
+            .filter(|id| seen.insert(*id) && self.knows_turn(id))
             .map(str::to_owned)
             .collect();
         for loop_id in loops {
@@ -447,17 +451,17 @@ impl Session {
     }
 
     fn ensure_assistant(&mut self, loop_id: &str, request_index: u32) {
-        let key = RequestKey {
-            loop_id: loop_id.to_owned(),
-            request_index,
-        };
-        if !self.transcript.blocks().iter().any(
-            |block| matches!(block, Block::Assistant { key: existing, .. } if *existing == key),
-        ) {
+        if !self.transcript.blocks().iter().rev().any(|block| {
+            matches!(block, Block::Assistant { key, .. }
+                if key.loop_id == loop_id && key.request_index == request_index)
+        }) {
             self.push_in_turn(
                 loop_id,
                 Block::Assistant {
-                    key,
+                    key: RequestKey {
+                        loop_id: loop_id.to_owned(),
+                        request_index,
+                    },
                     text: String::new(),
                     reasoning: String::new(),
                     streaming: true,

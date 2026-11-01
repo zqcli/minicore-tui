@@ -27,36 +27,78 @@ mod body_recovery {
     }
 
     #[test]
-    fn another_live_turn_does_not_authorize_an_unknown_body() {
+    fn early_body_waits_for_its_turn_and_replays_in_first_seen_order() {
         let mut session = session();
         session.live = Some(LiveTurn::new(TurnRef::new("s", "A"), 0));
         session.record_region("A", 0);
-        session.apply_body_event(delta("B", "early"), 256);
+        for (id, text) in [
+            ("Z", "first "),
+            ("B", "held "),
+            ("C", "other "),
+            ("Z", "answer"),
+            ("B", "answer"),
+            ("C", "answer"),
+        ] {
+            session.apply_body_event(delta(id, text), 128);
+        }
         assert!(session.transcript.is_empty());
-        assert_eq!(session.early_bytes, 256);
-        session.record_region("B", 0);
+        assert_eq!(session.early_bytes, 6 * 128);
+        session.record_region("Z", 0);
+        session.record_region("C", 0);
+        session.replay_early();
+        assert_eq!(
+            session
+                .transcript
+                .blocks()
+                .iter()
+                .filter_map(|block| match block {
+                    Block::Assistant { key, text, .. } => {
+                        Some((key.loop_id.as_str(), text.as_str()))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            [("Z", "first answer"), ("C", "other answer")]
+        );
+        assert_eq!(session.early_bytes, 2 * 128);
+        session.replay_early();
+        assert_eq!(session.transcript.len(), 2);
+        session.record_region("B", session.transcript.len());
         session.replay_early();
         assert!(
-            matches!(&session.transcript.blocks()[0], Block::Assistant { key, text, .. } if key.loop_id == "B" && text == "early")
+            matches!(&session.transcript.blocks()[2], Block::Assistant { key, text, .. } if key.loop_id == "B" && text == "held answer")
         );
         assert_eq!(session.early_bytes, 0);
-        session.replay_early();
-        assert_eq!(session.transcript.len(), 1);
     }
 
     #[test]
     fn unknown_body_overflow_is_bounded_and_marks_recovery_without_creating_turns() {
         let mut session = session();
-        for index in 0..(EARLY_TURNS + 2) {
+        for index in 0..EARLY_TURNS {
+            session.apply_body_event(delta(&format!("unknown-{index}"), "x"), 128);
+        }
+        let held = format!("unknown-{}", EARLY_TURNS - 1);
+        session.apply_body_event(delta(&held, "more"), 128);
+        assert!(!session.early_gap);
+        assert_eq!(session.early_bytes, (EARLY_TURNS + 1) * 128);
+        for index in EARLY_TURNS..EARLY_TURNS + 2 {
             session.apply_body_event(delta(&format!("unknown-{index}"), "x"), 128);
         }
         assert!(session.early_gap);
         assert!(session.recovery.behind);
-        assert_eq!(session.early_bytes, EARLY_TURNS * 128);
+        assert_eq!(session.early_bytes, (EARLY_TURNS + 1) * 128);
         assert!(session.transcript.is_empty());
+        session.apply_body_event(delta(&held, "retained"), EARLY_BYTES);
+        assert_eq!(session.early_bytes, EARLY_BYTES);
         session.apply_body_event(delta("huge", "x"), EARLY_BYTES + 1);
-        assert!(session.early_bytes <= EARLY_BYTES);
+        assert_eq!(session.early_bytes, EARLY_BYTES);
         assert!(session.transcript.is_empty());
+        session.record_region(&held, 0);
+        session.replay_early();
+        assert!(
+            matches!(&session.transcript.blocks()[0], Block::Assistant { text, .. } if text == "retained")
+        );
+        assert_eq!(session.early_bytes, 0);
     }
 
     #[test]
