@@ -13,7 +13,7 @@ use crate::protocol::ToolRef;
 pub use block::{Block, ChangeSummary, RequestKey, Saving};
 pub use history::{PreservedKey, merge_live};
 
-pub use history::{append_history, append_history_item, push_interrupted, to_markdown};
+pub use history::{append_history_item, push_interrupted, to_markdown};
 pub use tool_call::{EXPANDED_ROWS, TRUNCATED_MARKER, ToolCall, ToolState};
 
 /// Revisions come from one counter, so no two blocks of any session share one and
@@ -27,10 +27,24 @@ fn next_revision() -> u64 {
 #[derive(Clone, Debug, Default)]
 pub struct Transcript {
     blocks: Vec<Block>,
-    revisions: Vec<u64>,
-    origins: Vec<Origin>,
+    metadata: Vec<BlockMeta>,
     /// Keys of blocks a reconcile kept although the canonical body omits them.
     preserved: Vec<PreservedKey>,
+}
+
+#[derive(Clone, Debug)]
+struct BlockMeta {
+    revision: u64,
+    origin: Origin,
+}
+
+impl BlockMeta {
+    fn new(origin: Origin) -> Self {
+        Self {
+            revision: next_revision(),
+            origin,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -63,13 +77,13 @@ impl Transcript {
         &self.blocks
     }
 
-    pub fn revisions(&self) -> &[u64] {
-        &self.revisions
+    pub fn revisions(&self) -> impl ExactSizeIterator<Item = u64> + DoubleEndedIterator + Clone {
+        self.metadata.iter().map(|meta| meta.revision)
     }
 
     fn bump(&mut self, index: usize) {
-        if let Some(revision) = self.revisions.get_mut(index) {
-            *revision = next_revision();
+        if let Some(meta) = self.metadata.get_mut(index) {
+            meta.revision = next_revision();
         }
     }
 
@@ -83,22 +97,20 @@ impl Transcript {
 
     pub fn push(&mut self, block: Block) -> usize {
         self.blocks.push(block);
-        self.revisions.push(next_revision());
-        self.origins.push(Origin::default());
+        self.metadata.push(BlockMeta::new(Origin::default()));
         self.blocks.len() - 1
     }
 
     pub fn insert(&mut self, index: usize, block: Block) {
         let index = index.min(self.blocks.len());
         self.blocks.insert(index, block);
-        self.revisions.insert(index, next_revision());
-        self.origins.insert(index, Origin::default());
+        self.metadata
+            .insert(index, BlockMeta::new(Origin::default()));
     }
 
     pub fn clear(&mut self) {
         self.blocks.clear();
-        self.revisions.clear();
-        self.origins.clear();
+        self.metadata.clear();
         self.preserved.clear();
     }
 
@@ -107,8 +119,7 @@ impl Transcript {
             self.preserved
                 .retain(|key| !key.belongs_to(&self.blocks[index]));
             self.blocks.remove(index);
-            self.revisions.remove(index);
-            self.origins.remove(index);
+            self.metadata.remove(index);
         }
     }
 
@@ -119,11 +130,9 @@ impl Transcript {
                 .iter()
                 .any(|block| key.belongs_to(block))
         });
-        let revisions: Vec<u64> = blocks.iter().map(|_| next_revision()).collect();
-        self.origins
-            .splice(range.clone(), vec![Origin::default(); blocks.len()]);
-        self.blocks.splice(range.clone(), blocks);
-        self.revisions.splice(range, revisions);
+        let metadata = (0..blocks.len()).map(|_| BlockMeta::new(Origin::default()));
+        self.metadata.splice(range.clone(), metadata);
+        self.blocks.splice(range, blocks);
     }
 
     pub fn remove_front(&mut self, count: usize) {
@@ -134,18 +143,18 @@ impl Transcript {
                 .any(|block| key.belongs_to(block))
         });
         self.blocks.drain(..count);
-        self.revisions.drain(..count);
-        self.origins.drain(..count);
-    }
-
-    pub fn into_blocks(self) -> Vec<Block> {
-        self.blocks
+        self.metadata.drain(..count);
     }
 
     pub fn splice_copy(&mut self, range: Range<usize>, source: &Self, copied: Range<usize>) {
         let start = range.start;
         self.splice(range, source.blocks[copied.clone()].to_vec());
-        self.origins[start..start + copied.len()].clone_from_slice(&source.origins[copied.clone()]);
+        for (target, source) in self.metadata[start..]
+            .iter_mut()
+            .zip(&source.metadata[copied.clone()])
+        {
+            target.origin.clone_from(&source.origin);
+        }
         self.mark_preserved(source.preserved_in(copied));
     }
 
@@ -155,7 +164,11 @@ impl Transcript {
             MergedRegion {
                 blocks: source.blocks,
                 preserved: source.preserved,
-                origins: source.origins,
+                origins: source
+                    .metadata
+                    .into_iter()
+                    .map(|meta| meta.origin)
+                    .collect(),
             },
         );
     }
@@ -163,7 +176,9 @@ impl Transcript {
     pub fn splice_merged(&mut self, range: Range<usize>, source: MergedRegion) {
         let start = range.start;
         self.splice(range, source.blocks);
-        self.origins[start..start + source.origins.len()].clone_from_slice(&source.origins);
+        for (target, origin) in self.metadata[start..].iter_mut().zip(source.origins) {
+            target.origin = origin;
+        }
         self.mark_preserved(source.preserved);
     }
 
@@ -177,10 +192,12 @@ impl Transcript {
             .into_iter()
             .zip(sources)
             .filter_map(|(block, source)| {
-                let origin = if source < durable.origins.len() {
-                    durable.origins[source].clone()
+                let origin = if source < durable.metadata.len() {
+                    durable.metadata[source].origin.clone()
                 } else {
-                    live.origins[range.start + source - durable.origins.len()].clone()
+                    live.metadata[range.start + source - durable.metadata.len()]
+                        .origin
+                        .clone()
                 };
                 if matches!(block, Block::Compaction { .. })
                     && origin
@@ -200,13 +217,15 @@ impl Transcript {
     }
 
     pub fn history_source(&self, index: usize) -> Option<HistorySource> {
-        self.origins.get(index).and_then(|origin| origin.history)
+        self.metadata
+            .get(index)
+            .and_then(|meta| meta.origin.history)
     }
 
     pub fn find_history_source(&self, source: HistorySource) -> Option<usize> {
-        self.origins
+        self.metadata
             .iter()
-            .position(|origin| origin.history == Some(source))
+            .position(|meta| meta.origin.history == Some(source))
     }
 
     fn keep_delivered_rows(&mut self, live: &Self, range: Range<usize>) {
@@ -302,14 +321,14 @@ impl Transcript {
         for (at, source) in plan.into_iter().enumerate() {
             if let Source::Delivered(index) = source {
                 self.blocks[at] = live.blocks[index].clone();
-                self.origins[at].user = live.origins[index].user.clone();
+                self.metadata[at].origin.user = live.metadata[index].origin.user.clone();
             }
         }
     }
 
     pub fn identify_user(&mut self, index: usize, loop_id: &str, input_id: Option<&str>) {
         assert!(matches!(self.blocks[index], Block::User { .. }));
-        self.origins[index].user = Some(UserIdentity {
+        self.metadata[index].origin.user = Some(UserIdentity {
             loop_id: loop_id.to_owned(),
             input_id: input_id.map(str::to_owned),
             request_index: None,
@@ -324,11 +343,16 @@ impl Transcript {
         request_index: u32,
     ) {
         self.identify_user(index, loop_id, Some(input_id));
-        self.origins[index].user.as_mut().unwrap().request_index = Some(request_index);
+        self.metadata[index]
+            .origin
+            .user
+            .as_mut()
+            .unwrap()
+            .request_index = Some(request_index);
     }
 
     pub fn user_identity(&self, index: usize) -> Option<&UserIdentity> {
-        self.origins[index].user.as_ref()
+        self.metadata[index].origin.user.as_ref()
     }
 
     /// Marks live-only content without clearing another region's provenance.
@@ -513,8 +537,8 @@ mod tests {
         let mut second = Transcript::default();
         first.push(user());
         second.push(user());
-        assert_ne!(first.revisions(), second.revisions());
+        assert_ne!(first.revisions().next(), second.revisions().next());
         first.block_mut(0);
-        assert_ne!(first.revisions(), second.revisions());
+        assert_ne!(first.revisions().next(), second.revisions().next());
     }
 }

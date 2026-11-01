@@ -49,10 +49,8 @@ impl SplitDispatch {
             "loaded": true, "updated_at": "2026-01-01T00:00:00Z"
         }))
         .unwrap();
-        app.session = Some(Session::new(info, 1));
-        let session = app.session.as_mut().unwrap();
-        session.load = Some("load_1".into());
-        session.recovery.begin("load_1", 1);
+        app.resident.insert(Session::new(info, 1, "load_1".into()));
+        app.resident.select(Some(1));
         app.ready = true;
         Self {
             app,
@@ -237,7 +235,7 @@ async fn receipts_cannot_restore_consumed_inputs_or_completed_execution_in_eithe
             let receipt = h.select().await;
             assert!(matches!(&receipt, Msg::LocalPushed(..)));
             h.app.on_msg(receipt);
-            let session = h.app.session.as_ref().unwrap();
+            let session = h.app.resident.current().unwrap();
             assert!(session.queue.items.is_empty());
             assert!(session.live.is_none());
             assert_eq!(session.observed_loop(), None);
@@ -278,11 +276,11 @@ async fn application_pause_leaves_the_stdio_reader_running_and_applies_fifo_afte
         read_while_paused
         };
         h.app.on_msg(held);
-        assert_eq!(h.app.session.as_ref().unwrap().queue.items[0].id,"first");
+        assert_eq!(h.app.resident.current().unwrap().queue.items[0].id,"first");
         let Incoming::Event { event,bytes } = read_while_paused else { unreachable!() };
         h.app.on_msg(Msg::Agent { event,bytes });
-        assert_eq!(h.app.session.as_ref().unwrap().recovery.revision,3);
-        assert!(h.app.session.as_ref().unwrap().queue.items.is_empty());
+        assert_eq!(h.app.resident.current().unwrap().recovery.revision,3);
+        assert!(h.app.resident.current().unwrap().queue.items.is_empty());
     }).await.expect("application gate did not release");
 }
 
@@ -295,11 +293,16 @@ async fn an_unreleased_application_gate_times_out_without_applying_the_held_mess
     let path = directory.path().to_path_buf();
     let mut gate = application_gate::ApplicationGate::new(path.clone()).unwrap();
     std::fs::write(path.join("arm"), b"").unwrap();
-    let held = Msg::Session(1, Box::new(SessionOp::Done(Ok(json!({})))));
+    let held = Msg::Session(
+        1,
+        Box::new(SessionOp::Operated(Ok(
+            minicore_tui::app::operation::Outcome::Done,
+        ))),
+    );
     let error = gate.before_apply(&held, &mut h.app).await.unwrap_err();
     assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
     assert!(path.join("ready").exists());
-    assert_eq!(h.app.session.as_ref().unwrap().recovery.revision, 1);
+    assert_eq!(h.app.resident.current().unwrap().recovery.revision, 1);
     std::fs::write(path.join("release"), b"").unwrap();
     assert!(
         application_gate::ApplicationGate::new(path).is_err(),
@@ -321,9 +324,9 @@ async fn a_successors_first_delta_survives_dispatch_before_the_wait_reply() {
         h.posted().await;
         let started = h.select().await;
         h.app.on_msg(started);
-        assert!(h.app.session.as_ref().unwrap().live.is_none(), "a receipt is not execution authority");
+        assert!(h.app.resident.current().unwrap().live.is_none(), "a receipt is not execution authority");
         h.install(json!({"type":"running","loop_id":"A","input":entry("i1","first prompt"),"request_index":0,"phase":"running_model"}));
-        assert_eq!(h.app.session.as_ref().unwrap().live.as_ref().unwrap().turn.loop_id, "A");
+        assert_eq!(h.app.resident.current().unwrap().live.as_ref().unwrap().turn.loop_id, "A");
         let wait = h.request("turn.wait").await;
         assert_eq!(wait["params"]["loop_id"], "A");
         let response = json!({"jsonrpc": "2.0", "id": wait["id"], "result": {
@@ -345,7 +348,7 @@ async fn a_successors_first_delta_survives_dispatch_before_the_wait_reply() {
         );
         h.app.on_msg(first);
         assert!(!h.app.transcript_blocks().iter().any(|block|block.loop_id() == Some("B")), "unknown B stays invisible until identity confirmation");
-        assert!(h.app.session.as_ref().unwrap().early_bytes > 0);
+        assert!(h.app.resident.current().unwrap().early_bytes > 0);
         // A receipt's control refresh may arrive before the wait reply.
         let second = loop {
             let next = h.select().await;

@@ -18,7 +18,8 @@ use crate::ui::theme::Palette;
 
 /// A turn that stays running once sent.
 fn script_turn(h: &Harness) {
-    h.fake.script("input.push", started("l1"));
+    h.fake
+        .script("input.push", starting_reply("l1", h.next_revision()));
     h.fake.script_held("turn.wait", waited("l1", completed()));
 }
 
@@ -114,7 +115,7 @@ async fn xhigh_session() -> Harness {
     let mut info = session_info("s1");
     info["model"] = json!("gpt-6.1-sol");
     info["reasoning"] = json!("xhigh");
-    h.fake.script("session.open", json!({"session": info}));
+    h.fake.script("session.open", opened_session(info));
     h.open().await;
     h
 }
@@ -177,7 +178,7 @@ async fn model_takes_a_direct_argument_with_completion() {
     let updates = h.calls("session.update");
     assert_eq!(updates.len(), 1);
     assert_eq!(updates[0]["model"], "luna");
-    assert_eq!(h.app.session.as_ref().unwrap().info.model, "luna");
+    assert_eq!(h.app.resident.current().unwrap().info.model, "luna");
 
     h.type_text("/model zzz");
     h.press(KeyCode::Enter);
@@ -192,7 +193,7 @@ async fn ctrl_p_cycles_the_models_and_shift_ctrl_p_goes_back() {
     two_models(&h);
     h.fake.script("session.update", updated_to("luna"));
     h.open().await;
-    assert_eq!(h.app.session.as_ref().unwrap().info.model, "mock");
+    assert_eq!(h.app.resident.current().unwrap().info.model, "mock");
 
     h.ctrl(KeyCode::Char('p'));
     h.settle().await;
@@ -271,7 +272,7 @@ async fn a_template_is_a_command_that_sends_its_expansion() {
 #[tokio::test(start_paused = true)]
 async fn session_shows_the_facts_and_the_item_count() {
     let mut h = Harness::opened(display_read(0, 0)).await;
-    h.fake.script("session.read", display_read(42, 0));
+    h.fake.script("session.read", history(display_read(42, 0)));
     h.type_text("/session");
     h.press(KeyCode::Enter);
     h.settle().await;
@@ -318,6 +319,19 @@ async fn context_opens_as_a_sheet_below_the_transcript() {
 }
 
 async fn ask(h: &mut Harness, id: &str, tool: &str) {
+    let mut waiting = running_snapshot(h.next_revision(), "l1", "work");
+    waiting["execution"]["phase"] = json!("waiting_for_input");
+    waiting["pending_interaction"] = json!({"loop_id":"l1","request_index":0,"interaction_id":id,
+        "tool_call_id":format!("c-{id}"),"tool_name":tool,
+        "kind":{"type":"approval","data":{"prompt":format!("Allow {tool}?")}}});
+    h.fake.script("session.state@s1", state_response(waiting));
+    h.fake.script(
+        "interaction.answer",
+        after_snapshot(
+            json!({"ok":true}),
+            running_snapshot(h.next_revision() + 1, "l1", "work"),
+        ),
+    );
     h.emit(
         "interaction_requested",
         json!({"turn": turn("l1"), "interaction": {
@@ -392,7 +406,7 @@ async fn the_third_row_allows_the_tool_for_the_session() {
     h.press(KeyCode::Enter);
     h.run_for(Duration::from_millis(50)).await;
     assert_eq!(answers(&h), [("i1".to_owned(), "allow_once".to_owned())]);
-    let allowed = &h.app.session.as_ref().unwrap().allowed_tools;
+    let allowed = &h.app.resident.current().unwrap().allowed_tools;
     assert!(allowed.contains("edit"));
 }
 
@@ -419,8 +433,7 @@ async fn profile_and_approval_stay_out_of_the_footer_but_approval_is_visible() {
     h.fake.script("interaction.answer", json!({"ok": true}));
     let mut info = session_info("s1");
     info["profile"] = json!("ask");
-    h.fake
-        .script("session.open", json!({"session": info.clone()}));
+    h.fake.script("session.open", opened_session(info.clone()));
     // The auto-title rename answers with the session as the Agent has it.
     h.fake.script("session.rename", json!({"session": info}));
     profiles(&h);
@@ -446,7 +459,7 @@ async fn profile_and_approval_stay_out_of_the_footer_but_approval_is_visible() {
     assert!(screen.contains("Waiting for approval"), "{screen}");
     assert!(screen.contains("Allow bash?"), "{screen}");
     assert!(h.app.has_interaction(), "approval is still required");
-    assert_eq!(h.app.session.as_ref().unwrap().info.profile, "ask");
+    assert_eq!(h.app.resident.current().unwrap().info.profile, "ask");
 }
 
 #[tokio::test(start_paused = true)]
@@ -497,10 +510,8 @@ fn sessions_listing(h: &Harness) {
             titled("s3", "Other work"),
         ]}),
     );
-    h.fake.script(
-        "session.open",
-        json!({"session": titled("s1", "Same title")}),
-    );
+    h.fake
+        .script("session.open", opened_session(titled("s1", "Same title")));
 }
 
 #[tokio::test(start_paused = true)]
@@ -572,7 +583,7 @@ async fn a_session_is_renamed_from_the_picker_without_opening_it() {
     let screen = h.screen(100, 30);
     assert!(screen.contains("Renamed"), "{screen}");
     assert!(matches!(h.app.overlay, Overlay::Sessions { .. }));
-    let foreground = h.app.session.as_ref().unwrap();
+    let foreground = h.app.resident.current().unwrap();
     assert_eq!(
         foreground.info.title.as_deref(),
         Some("Same title"),
@@ -581,7 +592,7 @@ async fn a_session_is_renamed_from_the_picker_without_opening_it() {
 }
 
 fn push_blocks(h: &mut Harness, blocks: Vec<Block>) {
-    let transcript = &mut h.app.session.as_mut().unwrap().transcript;
+    let transcript = &mut h.app.resident.current_mut().unwrap().transcript;
     for block in blocks {
         transcript.push(block);
     }
@@ -733,7 +744,7 @@ async fn the_title_follows_the_session_and_the_exit_prints_the_resume_command() 
         "an empty session has nothing to resume"
     );
 
-    h.app.session.as_mut().unwrap().info.title = Some("Fix parser".into());
+    h.app.resident.current_mut().unwrap().info.title = Some("Fix parser".into());
     assert!(h.app.terminal_bytes().contains("proj · Fix parser · idle"));
     push_blocks(
         &mut h,

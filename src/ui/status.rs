@@ -43,7 +43,7 @@ pub fn dock(app: &App, styles: Styles, width: u16, height: u16) -> Dock {
         if unresolved > 0 {
             above.push(padded(&format!("{unresolved} retained local inputs · F8 review · unconfirmed may already be accepted"),width,styles.failure()));
         }
-        if let Some(session) = app.session.as_ref().filter(|s| !s.queue.items.is_empty()) {
+        if let Some(session) = app.resident.current().filter(|s| !s.queue.items.is_empty()) {
             above.push(Line::default());
             above.extend(queued_rows(session, styles, width));
         }
@@ -65,7 +65,7 @@ pub fn dock(app: &App, styles: Styles, width: u16, height: u16) -> Dock {
     above.push(Line::default());
 
     let text_input = local
-        .then_some(app.session.as_ref())
+        .then_some(app.resident.current())
         .flatten()
         .filter(|session| {
             !matches!(app.overlay, crate::app::Overlay::Unconfirmed { .. })
@@ -108,7 +108,7 @@ pub fn dock(app: &App, styles: Styles, width: u16, height: u16) -> Dock {
         };
         above.push(padded(label, width, styles.failure()));
     }
-    if local && let Some(label) = app.session.as_ref().and_then(Session::block_label) {
+    if local && let Some(label) = app.resident.current().and_then(Session::block_label) {
         above.push(padded(label, width, styles.failure()));
     }
     let (mut editor, cursor) = composer::render(
@@ -209,7 +209,7 @@ fn queued_rows(session: &Session, styles: Styles, width: u16) -> Vec<Line<'stati
 /// The keys that act on the queue now: Enter steers and Alt+Enter queues while a
 /// draft waits, `alt+↑` takes the queued messages back. A paused queue says how to go on.
 fn key_hint(app: &App, styles: Styles, width: u16) -> Option<Line<'static>> {
-    let session = app.session.as_ref().filter(|_| !app.has_interaction())?;
+    let session = app.resident.current().filter(|_| !app.has_interaction())?;
     let drafting = !app.composer.is_empty();
     let mut keys = Vec::new();
     if session.queue.paused {
@@ -241,7 +241,7 @@ fn key_hint(app: &App, styles: Styles, width: u16) -> Option<Line<'static>> {
 /// `⠋ Working (esc to interrupt) · Running bash … · request 3` while
 /// something is in flight.
 fn working_line(app: &App, styles: Styles, width: u16) -> Option<Line<'static>> {
-    let session = app.session.as_ref();
+    let session = app.resident.current();
     let live = session.and_then(|session| session.live.as_ref());
     let interrupting = live.is_some_and(|live| live.interrupting);
     let compaction = session.and_then(Session::compaction_label);
@@ -249,8 +249,8 @@ fn working_line(app: &App, styles: Styles, width: u16) -> Option<Line<'static>> 
         label.as_str()
     } else if app.has_interaction() {
         if app
-            .session
-            .as_ref()
+            .resident
+            .current()
             .and_then(|session| session.interaction.as_ref())
             .is_some_and(|pending| matches!(pending.kind, crate::app::InteractionKind::Text))
         {
@@ -304,7 +304,7 @@ fn working_line(app: &App, styles: Styles, width: u16) -> Option<Line<'static>> 
 
 /// Says what the client could not recover, so a computed gap is never silent.
 fn gap_line(app: &App, styles: Styles, width: u16) -> Option<Line<'static>> {
-    let session = app.session.as_ref()?;
+    let session = app.resident.current()?;
     let text = if session.recovery.gap_through > session.recovery.settled_through
         || matches!(
             session.recovery.history_status,
@@ -352,7 +352,7 @@ fn notice_line(notice: &Notice, styles: Styles, width: u16) -> Line<'static> {
 /// the reasoning level stays.
 fn footer(app: &App, styles: Styles, width: u16) -> Line<'static> {
     let width = usize::from(width);
-    let session = app.session.as_ref();
+    let session = app.resident.current();
 
     let workspace = app
         .workspace

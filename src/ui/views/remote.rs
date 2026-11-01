@@ -24,7 +24,7 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App, styles: Styles) {
     let area = transcript::inner(area);
     let width = usize::from(area.width);
     let remote = &app.remote;
-    let session = app.session.as_ref();
+    let session = app.resident.current();
 
     let (state, state_style) = match remote.phones.as_slice() {
         [] => ("○ waiting for a phone".to_owned(), styles.warning()),
@@ -197,7 +197,7 @@ fn row(
 
 /// What the Agent is doing, with the Working line's spinner while it works.
 fn activity(app: &App) -> String {
-    let session = app.session.as_ref();
+    let session = app.resident.current();
     let spinner = status::spinner(app.started.elapsed());
     let elapsed = app
         .busy_elapsed()

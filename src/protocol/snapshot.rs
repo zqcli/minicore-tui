@@ -17,15 +17,6 @@ pub struct CompletionDirectory {
     pub truncated: bool,
 }
 
-impl CompletionDirectory {
-    /// The entries the client has not settled yet, bounded by `limit`.
-    pub fn unsettled(&self, settled_through: u64) -> impl Iterator<Item = &CompletedTurn> {
-        self.entries
-            .iter()
-            .filter(move |entry| entry.seq > settled_through)
-    }
-}
-
 /// What one turn did when it reached the Agent's completion boundary.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -221,7 +212,7 @@ mod tests {
             "params": {
                 "type": "session_snapshot",
                 "data": {
-                    "meta": {"session_id": "ses_1", "dropped_before": 0},
+                    "meta": {"session_id": "ses_1", "load": "load_1", "dropped_before": 0},
                     "snapshot": {
                         "session_id": "ses_1", "load": "load_1", "revision": 7,
                         "execution": {"type": "running", "loop_id": "lop_1",
@@ -433,26 +424,6 @@ mod tests {
         assert_eq!(turn.completion_kind, CompletionKind::Unknown);
         assert_eq!(turn.availability, ResultAvailability::Unknown);
         assert_eq!(turn.unavailable_reason, Some(UnavailableReason::Unknown));
-    }
-
-    #[test]
-    fn unsettled_entries_follow_the_settled_watermark() {
-        let directory: CompletionDirectory = serde_json::from_value(json!({
-            "through_seq": 4, "retained_from_seq": 2, "truncated": true,
-            "entries": [
-                {"seq": 2, "loop_id": "a", "completion_kind": "reported",
-                 "availability": "stored"},
-                {"seq": 3, "loop_id": "b", "completion_kind": "reported",
-                 "availability": "stored"}
-            ]
-        }))
-        .unwrap();
-        let pending: Vec<&str> = directory
-            .unsettled(2)
-            .map(|entry| entry.loop_id.as_str())
-            .collect();
-        assert_eq!(pending, ["b"]);
-        assert!(directory.truncated);
     }
 
     #[test]

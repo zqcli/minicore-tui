@@ -150,11 +150,6 @@ impl Intent {
         }
     }
 
-    /// Whether the reply carries an accepted input's identity.
-    pub fn is_input(&self) -> bool {
-        matches!(self, Self::Submit { .. } | Self::Queue { .. })
-    }
-
     /// Whether the intent acts on the session this phone is viewing.
     ///
     /// The others address another session (open, rename, delete) or only change
@@ -356,7 +351,6 @@ mod tests {
         assert!(
             matches!(&unqueue, Intent::Unqueue { input_id, edit: true, .. } if input_id == "inp_1")
         );
-        assert!(!unqueue.is_input());
     }
 
     #[test]

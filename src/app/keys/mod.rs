@@ -47,15 +47,15 @@ impl App {
     /// swallowed rather than reaching the draft behind the prompt.
     fn on_interaction_key(&mut self, key: KeyEvent) -> Option<Action> {
         if self
-            .session
-            .as_ref()
+            .resident
+            .current()
             .and_then(|session| session.interaction.as_ref())
             .is_some_and(|pending| matches!(pending.kind, InteractionKind::Text))
         {
             return self.on_text_interaction_key(key);
         }
         let now = tokio::time::Instant::now();
-        let session = self.session.as_mut()?;
+        let session = self.resident.current_mut()?;
         // Answer keys wait for the arming, so typing under way cannot answer.
         let armed = now >= session.armed_at;
         let interaction = session.interaction.as_mut()?;
@@ -107,7 +107,7 @@ impl App {
         {
             return self.on_composer_key(key);
         }
-        let session = self.session.as_mut()?;
+        let session = self.resident.current_mut()?;
         let armed = tokio::time::Instant::now() >= session.armed_at;
         let editor = &mut session.interaction_editor;
         match key.code {

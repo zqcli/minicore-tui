@@ -236,7 +236,7 @@ impl App {
         if !self.remote.active()
             && self.overlay.is_none()
             && self.fatal.is_none()
-            && let Some(session) = self.session.as_mut()
+            && let Some(session) = self.resident.current_mut()
             && session
                 .interaction
                 .as_ref()

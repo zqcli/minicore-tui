@@ -16,7 +16,7 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
-use tokio::sync::{Semaphore, mpsc, oneshot};
+use tokio::sync::{Semaphore, mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 
 use crate::protocol::{
@@ -33,7 +33,7 @@ pub enum Incoming {
         /// Encoded size of the line this event was decoded from.
         bytes: usize,
     },
-    /// The child is gone: no further frames will arrive.
+    /// The RPC stream is closed: no further events will arrive.
     Closed { status: Option<String> },
 }
 
@@ -67,6 +67,17 @@ struct ChildOwner {
     terminate: Option<oneshot::Sender<()>>,
 }
 
+struct PendingCall<'a> {
+    id: RequestId,
+    pending: &'a Mutex<HashMap<RequestId, oneshot::Sender<RpcResponse>>>,
+}
+
+impl Drop for PendingCall<'_> {
+    fn drop(&mut self) {
+        self.pending.lock().unwrap().remove(&self.id);
+    }
+}
+
 pub struct Client {
     #[cfg(feature = "e2e-observe")]
     pub metrics: Arc<metrics::Metrics>,
@@ -76,8 +87,7 @@ pub struct Client {
     queries: Arc<Semaphore>,
     read_workspaces: Arc<Semaphore>,
     stderr_tail: Arc<Mutex<VecDeque<String>>>,
-    closed: Arc<Mutex<Option<String>>>,
-    incoming: mpsc::Sender<Incoming>,
+    closed: watch::Sender<Option<String>>,
     tasks: Mutex<Vec<JoinHandle<()>>>,
     shutdown: tokio::sync::Mutex<Shutdown>,
 }
@@ -142,7 +152,6 @@ impl Client {
             termination,
             client.closed.clone(),
             client.pending.clone(),
-            client.incoming.clone(),
         ));
         client.shutdown.try_lock().unwrap().child = Some(ChildOwner {
             task,
@@ -167,12 +176,17 @@ impl Client {
         let (outbound, outbound_rx) = mpsc::channel::<Vec<u8>>(OUTBOUND_CAPACITY);
         let pending: Arc<Mutex<HashMap<RequestId, oneshot::Sender<RpcResponse>>>> = Arc::default();
         let stderr_tail: Arc<Mutex<VecDeque<String>>> = Arc::default();
-        let closed: Arc<Mutex<Option<String>>> = Arc::default();
-        let writer = tokio::spawn(writer_task(stdin, outbound_rx));
+        let (closed, _) = watch::channel(None);
+        let writer = tokio::spawn(writer_task(
+            stdin,
+            outbound_rx,
+            pending.clone(),
+            closed.clone(),
+        ));
         let reader = tokio::spawn(reader_task(
             stdout,
             pending.clone(),
-            incoming.clone(),
+            incoming,
             closed.clone(),
         ));
         let stderr_reader = tokio::spawn(stderr_task(stderr, stderr_tail.clone()));
@@ -186,7 +200,6 @@ impl Client {
             read_workspaces: Arc::new(Semaphore::new(2)),
             stderr_tail,
             closed,
-            incoming,
             tasks: Mutex::new(vec![writer, reader, stderr_reader]),
             shutdown: tokio::sync::Mutex::new(Shutdown::default()),
         })
@@ -229,13 +242,17 @@ impl Client {
         let line = encode_request(OutgoingRequest::new(id, method, params))
             .map_err(|error| before_write_error(method, error))?;
         let rx = {
-            let closed = self.closed.lock().unwrap();
+            let closed = self.closed.borrow();
             if let Some(reason) = closed.as_ref() {
                 return Err(before_write_error(method, RpcError::closed(reason.clone())));
             }
             let (tx, rx) = oneshot::channel();
             self.pending.lock().unwrap().insert(id, tx);
             rx
+        };
+        let _pending = PendingCall {
+            id,
+            pending: &self.pending,
         };
         match self.outbound.send(line).await {
             Ok(()) =>
@@ -246,7 +263,6 @@ impl Client {
                 }
             }
             Err(_) => {
-                self.pending.lock().unwrap().remove(&id);
                 return Err(before_write_error(
                     method,
                     RpcError::closed("agent is not accepting requests"),
@@ -254,8 +270,12 @@ impl Client {
             }
         }
         rx.await.map_err(|_| {
-            self.pending.lock().unwrap().remove(&id);
-            RpcError::closed("agent closed before answering")
+            RpcError::closed(
+                self.closed
+                    .borrow()
+                    .as_deref()
+                    .unwrap_or("agent closed before answering"),
+            )
         })
     }
 
@@ -295,10 +315,15 @@ impl Client {
                 let _ = (&mut child.task).await;
             }
         }
-        for task in self.tasks.lock().unwrap().drain(..) {
+        shutdown.child = None;
+        fail(&self.closed, &self.pending, "rpc client is shutting down");
+        let tasks = std::mem::take(&mut *self.tasks.lock().unwrap());
+        for task in &tasks {
             task.abort();
         }
-        shutdown.child = None;
+        for task in tasks {
+            let _ = task.await;
+        }
         shutdown.complete = true;
     }
 }
@@ -340,14 +365,30 @@ fn encode_request(request: OutgoingRequest) -> Result<Vec<u8>, RpcError> {
     Ok(line)
 }
 
-async fn writer_task<W: AsyncWrite + Unpin>(mut stdin: W, mut outbound: mpsc::Receiver<Vec<u8>>) {
-    while let Some(line) = outbound.recv().await {
-        if stdin.write_all(&line).await.is_err() {
-            break;
-        }
-        if stdin.flush().await.is_err() {
-            break;
-        }
+async fn writer_task<W: AsyncWrite + Unpin>(
+    mut stdin: W,
+    mut outbound: mpsc::Receiver<Vec<u8>>,
+    pending: Arc<Mutex<HashMap<RequestId, oneshot::Sender<RpcResponse>>>>,
+    closed: watch::Sender<Option<String>>,
+) {
+    let mut closure = closed.subscribe();
+    let result: std::io::Result<()> = tokio::select! {
+        biased;
+        _ = closure.wait_for(Option::is_some) => return,
+        result = async {
+            while let Some(line) = outbound.recv().await {
+                stdin.write_all(&line).await?;
+                stdin.flush().await?;
+            }
+            Ok(())
+        } => result,
+    };
+    if let Err(error) = result {
+        fail(
+            &closed,
+            &pending,
+            &format!("agent stdin write failed: {error}"),
+        );
     }
 }
 
@@ -355,22 +396,32 @@ async fn reader_task<R: AsyncRead + Unpin>(
     stdout: R,
     pending: Arc<Mutex<HashMap<RequestId, oneshot::Sender<RpcResponse>>>>,
     incoming: mpsc::Sender<Incoming>,
-    closed: Arc<Mutex<Option<String>>>,
+    closed: watch::Sender<Option<String>>,
 ) {
+    let mut closure = closed.subscribe();
+    let reason = tokio::select! {
+        biased;
+        reason = closure.wait_for(Option::is_some) => reason.unwrap().clone().unwrap(),
+        reason = read_frames(stdout, &pending, &incoming) => reason,
+    };
+    fail(&closed, &pending, &reason);
+    let status = closed.borrow().clone();
+    let _ = incoming.send(Incoming::Closed { status }).await;
+}
+
+async fn read_frames<R: AsyncRead + Unpin>(
+    stdout: R,
+    pending: &Mutex<HashMap<RequestId, oneshot::Sender<RpcResponse>>>,
+    incoming: &mpsc::Sender<Incoming>,
+) -> String {
     let mut reader = BufReader::with_capacity(64 * 1024, stdout);
     let mut line = Vec::new();
     loop {
         line.clear();
         match read_line(&mut reader, &mut line).await {
-            Ok(0) => {
-                fail(&closed, &pending, &incoming, "agent closed its stdout");
-                return;
-            }
+            Ok(0) => return "agent closed its stdout".into(),
             Ok(_) => {}
-            Err(reason) => {
-                fail(&closed, &pending, &incoming, &reason);
-                return;
-            }
+            Err(reason) => return reason,
         }
         if line.last() == Some(&b'\n') {
             line.pop();
@@ -388,20 +439,14 @@ async fn reader_task<R: AsyncRead + Unpin>(
                     bytes: line.len(),
                 };
                 if incoming.send(event).await.is_err() {
-                    return;
+                    return "TUI stopped receiving Agent events".into();
                 }
             }
             Ok(IncomingFrame::UnknownNotification(_)) => {}
             Err(error) => {
                 // A malformed frame means the stream cannot be trusted; the
                 // child is stopped rather than decoded around.
-                fail(
-                    &closed,
-                    &pending,
-                    &incoming,
-                    &format!("agent sent an unreadable frame: {error}"),
-                );
-                return;
+                return format!("agent sent an unreadable frame: {error}");
             }
         }
     }
@@ -420,22 +465,17 @@ async fn read_line<R: AsyncBufReadExt + Unpin>(
         if available.is_empty() {
             return Ok(line.len());
         }
-        match available.iter().position(|byte| *byte == b'\n') {
-            Some(end) => {
-                line.extend_from_slice(&available[..=end]);
-                reader.consume(end + 1);
-                return Ok(line.len());
-            }
-            None => {
-                line.extend_from_slice(available);
-                let consumed = available.len();
-                reader.consume(consumed);
-                if line.len() > MAX_FRAME_BYTES {
-                    return Err(format!(
-                        "agent frame exceeded the {MAX_FRAME_BYTES} byte limit"
-                    ));
-                }
-            }
+        let end = available.iter().position(|byte| *byte == b'\n');
+        let consumed = end.map_or(available.len(), |end| end + 1);
+        if consumed > MAX_FRAME_BYTES - line.len() {
+            return Err(format!(
+                "agent frame exceeded the {MAX_FRAME_BYTES} byte limit"
+            ));
+        }
+        line.extend_from_slice(&available[..consumed]);
+        reader.consume(consumed);
+        if end.is_some() {
+            return Ok(line.len());
         }
     }
 }
@@ -464,9 +504,8 @@ async fn stderr_task<R: AsyncRead + Unpin>(stderr: R, tail: Arc<Mutex<VecDeque<S
 async fn waiter_task(
     mut child: Child,
     termination: oneshot::Receiver<()>,
-    closed: Arc<Mutex<Option<String>>>,
+    closed: watch::Sender<Option<String>>,
     pending: Arc<Mutex<HashMap<RequestId, oneshot::Sender<RpcResponse>>>>,
-    incoming: mpsc::Sender<Incoming>,
 ) {
     let result = tokio::select! {
         result = child.wait() => result.map(|status|status.to_string()),
@@ -476,36 +515,25 @@ async fn waiter_task(
         Ok(status) => status,
         Err(error) => format!("wait failed: {error}"),
     };
-    fail(
-        &closed,
-        &pending,
-        &incoming,
-        &format!("agent exited ({status})"),
-    );
+    fail(&closed, &pending, &format!("agent exited ({status})"));
 }
 
 fn fail(
-    closed: &Arc<Mutex<Option<String>>>,
-    pending: &Arc<Mutex<HashMap<RequestId, oneshot::Sender<RpcResponse>>>>,
-    incoming: &mpsc::Sender<Incoming>,
+    closed: &watch::Sender<Option<String>>,
+    pending: &Mutex<HashMap<RequestId, oneshot::Sender<RpcResponse>>>,
     reason: &str,
 ) {
-    let first = {
-        let mut slot = closed.lock().unwrap();
+    let first = closed.send_if_modified(|slot| {
         if slot.is_some() {
             false
         } else {
             *slot = Some(reason.to_owned());
             true
         }
-    };
-    if !first {
-        return;
-    }
-    pending.lock().unwrap().clear();
-    let _ = incoming.try_send(Incoming::Closed {
-        status: Some(reason.to_owned()),
     });
+    if first {
+        pending.lock().unwrap().clear();
+    }
 }
 
 #[cfg(test)]
@@ -576,7 +604,9 @@ mod tests {
         struct CloseWhileEncoding(Arc<Client>);
         impl serde::Serialize for CloseWhileEncoding {
             fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-                *self.0.closed.lock().unwrap() = Some("closed during encoding".into());
+                self.0
+                    .closed
+                    .send_replace(Some("closed during encoding".into()));
                 serde::Serialize::serialize(&json!({"text":"retained draft"}), serializer)
             }
         }
@@ -758,20 +788,78 @@ mod tests {
 
     #[test]
     fn a_failure_keeps_the_first_honest_reason() {
-        let closed: Arc<Mutex<Option<String>>> = Arc::default();
+        let (closed, _) = watch::channel(None);
         let pending: Arc<Mutex<HashMap<RequestId, oneshot::Sender<RpcResponse>>>> = Arc::default();
-        let (tx, mut rx) = mpsc::channel(4);
-        fail(&closed, &pending, &tx, "agent exited (0)");
-        fail(&closed, &pending, &tx, "agent closed its stdout");
-        assert_eq!(closed.lock().unwrap().as_deref(), Some("agent exited (0)"));
-        assert!(matches!(rx.try_recv(), Ok(Incoming::Closed { .. })));
+        fail(&closed, &pending, "agent exited (0)");
+        fail(&closed, &pending, "agent closed its stdout");
+        assert_eq!(closed.borrow().as_deref(), Some("agent exited (0)"));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn cancelling_a_call_releases_its_pending_response_owner() {
+        use std::{future::Future, task::Poll};
+        let (stdout, _agent_stdout) = tokio::io::duplex(1);
+        let (incoming, _events) = mpsc::channel(1);
+        let client = Client::start(tokio::io::sink(), stdout, tokio::io::empty(), incoming);
+        let mut call = Box::pin(client.call::<_, Value>("test.pending", &()));
+        std::future::poll_fn(|context| {
+            assert!(call.as_mut().poll(context).is_pending());
+            Poll::Ready(())
+        })
+        .await;
+        assert_eq!(client.pending.lock().unwrap().len(), 1);
+        drop(call);
+        assert!(client.pending.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn stdin_failure_wakes_calls_and_closes_even_when_stdout_stays_open() {
+        let (stdin, agent_stdin) = tokio::io::duplex(1);
+        drop(agent_stdin);
+        let (stdout, _agent_stdout) = tokio::io::duplex(1);
+        let (incoming, mut events) = mpsc::channel(1);
+        let client = Client::start(stdin, stdout, tokio::io::empty(), incoming);
+        let error = tokio::time::timeout(
+            Duration::from_secs(1),
+            client.call::<_, Value>(crate::protocol::METHOD_INPUT_PUSH, &json!({"text": "x"})),
+        )
+        .await
+        .expect("stdin failure must wake the pending request")
+        .unwrap_err();
+        assert!(error.message.contains("stdin write failed"));
+        assert_eq!(error.acceptance, None);
+        assert!(client.pending.lock().unwrap().is_empty());
+        let Some(Incoming::Closed { status }) = events.recv().await else {
+            panic!("stdin failure must also close the app's event stream");
+        };
+        assert_eq!(status.as_deref(), Some(error.message.as_str()));
+        assert!(events.recv().await.is_none());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_full_event_queue_cannot_discard_the_final_close() {
+        let (closed, mut observed) = watch::channel(None);
+        let pending = Arc::default();
+        let (incoming, mut events) = mpsc::channel(1);
+        incoming
+            .try_send(Incoming::Event {
+                event: Box::new(AgentEvent::Unknown),
+                bytes: 1,
+            })
+            .unwrap();
+        let reader = tokio::spawn(reader_task(tokio::io::empty(), pending, incoming, closed));
+        observed.wait_for(Option::is_some).await.unwrap();
+        assert!(matches!(events.recv().await, Some(Incoming::Event { .. })));
+        assert!(matches!(events.recv().await, Some(Incoming::Closed { .. })));
+        reader.await.unwrap();
+        assert!(events.recv().await.is_none());
     }
 
     #[tokio::test]
     async fn reader_routes_responses_by_id_and_forwards_events() {
         let (client_side, mut agent_side) = tokio::io::duplex(64 * 1024);
         let pending: Arc<Mutex<HashMap<RequestId, oneshot::Sender<RpcResponse>>>> = Arc::default();
-        let closed: Arc<Mutex<Option<String>>> = Arc::default();
+        let (closed, _) = watch::channel(None);
         let (events, mut event_rx) = mpsc::channel(8);
         let reader = tokio::spawn(reader_task(
             client_side,
@@ -805,7 +893,7 @@ mod tests {
         pending.lock().unwrap().insert(RequestId(8), waiting);
         drop(agent_side);
         reader.await.unwrap();
-        assert!(closed.lock().unwrap().is_some());
+        assert!(closed.borrow().is_some());
         assert!(pending.lock().unwrap().is_empty());
         assert!(matches!(
             event_rx.recv().await,
@@ -817,7 +905,7 @@ mod tests {
     async fn a_malformed_frame_stops_the_stream() {
         let (client_side, mut agent_side) = tokio::io::duplex(4096);
         let pending: Arc<Mutex<HashMap<RequestId, oneshot::Sender<RpcResponse>>>> = Arc::default();
-        let closed: Arc<Mutex<Option<String>>> = Arc::default();
+        let (closed, _) = watch::channel(None);
         let (events, _event_rx) = mpsc::channel(8);
         let reader = tokio::spawn(reader_task(client_side, pending, events, closed.clone()));
         agent_side.write_all(b"not json\n").await.unwrap();
@@ -825,12 +913,24 @@ mod tests {
         reader.await.unwrap();
         assert!(
             closed
-                .lock()
-                .unwrap()
+                .borrow()
                 .as_deref()
                 .unwrap()
                 .contains("unreadable frame")
         );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_frame_limit_includes_a_newline_in_the_last_buffer() {
+        let mut reader = &b"\n"[..];
+        let mut line = vec![b' '; MAX_FRAME_BYTES - 1];
+        assert_eq!(
+            read_line(&mut reader, &mut line).await.unwrap(),
+            MAX_FRAME_BYTES
+        );
+        let mut reader = &b"\n"[..];
+        assert!(read_line(&mut reader, &mut line).await.is_err());
+        assert_eq!(line.len(), MAX_FRAME_BYTES);
     }
 }
 

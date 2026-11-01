@@ -17,6 +17,8 @@ impl App {
             "loop_id": key.loop_id, "request_index": key.request_index,
             "tool_call_id": key.tool_call_id, "display": true,
         });
-        self.call(protocol::METHOD_TOOL_READ, fields, wrap);
+        if let Some(session) = self.live(&key.session_id) {
+            self.call_for(session.epoch, protocol::METHOD_TOOL_READ, fields, wrap);
+        }
     }
 }

@@ -1,6 +1,7 @@
 //! Applying the results of async operations and the Agent's events.
 
-use super::tasks::{self, HistoryRead, Window};
+use super::read::{History, HistoryRead, Window};
+use super::tasks;
 use super::{App, NoticeLevel, Overlay, Scroll, Session, SessionOp, find};
 use crate::protocol::{
     self, AgentEvent, CompactStatus, CompactionResult, InputRecallResult, InputResumeResult,
@@ -13,35 +14,32 @@ use crate::transcript::{Block, ChangeSummary};
 const BACKFILL_PAGES: u8 = 4;
 
 impl App {
-    pub(super) fn on_op(&mut self, op: SessionOp) {
+    pub(super) fn on_op(&mut self, epoch: u64, op: SessionOp) {
         match op {
             // These answer pickers and views of the foreground only.
             SessionOp::ItemCount(_)
             | SessionOp::Files(_)
             | SessionOp::ChangeFiles(_)
             | SessionOp::DiffFile(..)
-                if self.background_op => {}
-            SessionOp::Tail(result) => self.on_tail(result),
-            SessionOp::Page(result) => self.on_page(result),
-            SessionOp::Recovered(outcome) => self.on_recovered(outcome),
-            SessionOp::HistoryRecovered(generation, through, result) => {
-                if !self.session_mut().recovery.accepts(generation) {
-                    return;
-                }
-                self.session_mut().recovery_tasks.finish(None);
-                let superseded = through != self.session_mut().recovery.gap_through;
+                if !self.resident.is_current(epoch) => {}
+            SessionOp::Tail(result) => self.on_tail(epoch, result),
+            SessionOp::Page(result) => self.on_page(epoch, result),
+            SessionOp::Recovered(outcome) => self.on_recovered(epoch, outcome),
+            SessionOp::HistoryRecovered(through, result) => {
+                self.session_mut(epoch).recovery_tasks.finish(None);
+                let superseded = through != self.session_mut(epoch).recovery.gap_through;
                 let (page, limit) = match result {
                     Ok(HistoryRead::Complete(page)) => (Some(page), None),
                     Ok(HistoryRead::Limited(page, limit)) => (Some(page), Some(limit)),
                     Ok(HistoryRead::Partial(partial)) => {
-                        self.session_mut().recovery.history_status =
+                        self.session_mut(epoch).recovery.history_status =
                             Some(super::recovery::RecoveryStatus::Exhausted);
                         self.notice(NoticeLevel::Error, partial.message());
                         (None, None)
                     }
                     Err(error) => {
-                        self.session_mut().recovery.retry_history();
-                        if self.session_mut().recovery.history_status
+                        self.session_mut(epoch).recovery.retry_history();
+                        if self.session_mut(epoch).recovery.history_status
                             == Some(super::recovery::RecoveryStatus::Exhausted)
                         {
                             self.error(error);
@@ -51,13 +49,15 @@ impl App {
                 };
                 if let Some(page) = page {
                     let covered = page.coverage();
-                    self.install_history(*page);
-                    self.session_mut().recovery.cover_history(covered, true);
+                    self.install_history(epoch, *page);
+                    self.session_mut(epoch)
+                        .recovery
+                        .cover_history(covered, true);
                     if superseded {
-                        self.session_mut().recovery.history_status =
+                        self.session_mut(epoch).recovery.history_status =
                             Some(super::recovery::RecoveryStatus::Pending);
-                    } else if !self.session_mut().recovery.settle_history_gap() {
-                        self.session_mut().recovery.history_status =
+                    } else if !self.session_mut(epoch).recovery.settle_history_gap() {
+                        self.session_mut(epoch).recovery.history_status =
                             Some(super::recovery::RecoveryStatus::Exhausted);
                         self.notice(
                             NoticeLevel::Info,
@@ -67,28 +67,28 @@ impl App {
                             ),
                         );
                     } else {
-                        let gap = self.session_mut().recovery.gap_through > 0;
+                        let gap = self.session_mut(epoch).recovery.gap_through > 0;
                         if gap {
                             self.notice(NoticeLevel::Error, "Saved history recovered; unsaved turns outside the completion catalog may be missing");
                         }
-                        self.session_mut().recovery.retry_failed();
-                        self.session_mut().ordering_gap = false;
+                        self.session_mut(epoch).recovery.retry_failed();
+                        self.session_mut(epoch).ordering_gap = false;
                     }
                 }
                 self.recover_completions();
             }
-            SessionOp::State(result) => self.on_state(result),
+            SessionOp::State(result) => self.on_state(epoch, result),
             SessionOp::Presentation(result) => {
-                self.session_mut().presentation_in_flight = false;
+                self.session_mut(epoch).presentation_in_flight = false;
                 if let Some(presentation) = self.ok(result) {
-                    self.session_mut().presentation = Some(presentation);
+                    self.session_mut(epoch).presentation = Some(presentation);
                 }
             }
             // A failed status still leaves the footer's other figures to read.
-            SessionOp::WorkspaceStatus(_) => self.refresh_presentation(),
+            SessionOp::WorkspaceStatus(_) => self.refresh_presentation_for(epoch),
             SessionOp::Context(result) => {
                 if let Some(context) = self.ok(result)
-                    && let Some(reason) = self.session_mut().apply_context(context)
+                    && let Some(reason) = self.session_mut(epoch).apply_context(context)
                 {
                     self.notice(
                         NoticeLevel::Error,
@@ -96,22 +96,14 @@ impl App {
                     );
                 }
             }
-            SessionOp::Resumed(result) => self.on_resumed(result),
-            SessionOp::Recalled(result) => self.on_recalled(result),
-            SessionOp::Queue(result) => {
-                self.ok(result);
-                self.refresh_control();
-            }
-            SessionOp::Waited(result) => self.on_waited(result),
-            SessionOp::Done(result) => {
-                self.ok(result);
-            }
-            SessionOp::Compacted(result) => self.on_compacted(result),
-            SessionOp::Info(result) => {
-                if let Some(info) = self.ok(result) {
-                    self.session_mut().info = info.clone();
-                    self.merge_catalog_info(info);
+            SessionOp::Resumed(result) => self.on_resumed(epoch, result),
+            SessionOp::Recalled(result) => self.on_recalled(epoch, result),
+            SessionOp::Waited(result) => self.on_waited(epoch, result),
+            SessionOp::Operated(result) => {
+                if let Some(outcome) = self.ok(result) {
+                    self.apply_operation(Some(epoch), outcome);
                 }
+                self.refresh_control_for(epoch);
             }
             SessionOp::ItemCount(result) => {
                 if let Some(total) = self.ok(result)
@@ -120,11 +112,11 @@ impl App {
                     *items = Some(total);
                 }
             }
-            SessionOp::Changes(loop_id, result) => self.on_changes(&loop_id, result),
+            SessionOp::Changes(loop_id, result) => self.on_changes(epoch, &loop_id, result),
             // A call the Agent no longer knows keeps its card as it is.
             SessionOp::ToolHydrated(key, read) => {
                 if let Some(read) = read
-                    && let Some(card) = self.session_mut().transcript.find_tool_mut(&key)
+                    && let Some(card) = self.session_mut(epoch).transcript.find_tool_mut(&key)
                 {
                     card.apply_read(&read);
                 }
@@ -150,18 +142,13 @@ impl App {
     ) {
         let opening = self.remote.opening.take();
         let created = first.is_some();
-        let id = result
-            .as_ref()
-            .ok()
-            .map(|adopted| adopted.info.session_id.clone());
         let previous = opening.filter(|_| created).map(|connection| {
             std::mem::replace(
                 &mut self.remote.notice_target,
                 crate::remote::NoticeTarget::Phone(connection),
             )
         });
-        self.adopt_session(result, first);
-        if let Some(id) = id {
+        if let Some(id) = self.adopt_session(result, first) {
             self.remote.draft = None;
             if let Some(connection) = opening {
                 self.set_phone_view(connection, crate::remote::PhoneView::Session(id));
@@ -172,58 +159,27 @@ impl App {
         }
     }
 
-    fn adopt_session(&mut self, result: Result<tasks::Adopted, RpcError>, first: Option<String>) {
+    fn adopt_session(
+        &mut self,
+        result: Result<tasks::Adopted, RpcError>,
+        first: Option<String>,
+    ) -> Option<String> {
         self.loading_session = false;
-        let Some(tasks::Adopted {
-            info,
-            load,
-            snapshot,
-        }) = self.ok(result)
-        else {
+        let typed = first.is_some().then(|| self.composer.text().to_owned());
+        let installed =
+            result.and_then(|adopted| self.install_session(adopted, true, first.is_none()));
+        let Some(epoch) = self.ok(installed) else {
             if let Some(text) = first {
                 self.first_submission = None;
                 self.restore_draft(&text);
             }
-            return;
+            return None;
         };
-        self.merge_catalog_info(info.clone());
-        // A second open of the same session: it is live already.
-        if self.live(&info.session_id).is_some() {
-            return;
-        }
-        self.epoch = self.epoch.checked_add(1).expect("session epoch exhausted");
-        // What was typed while the draft's session was created belongs to it.
-        let typed = first.is_some().then(|| self.composer.text().to_owned());
-        let session_id = info.session_id.clone();
-        self.show_session(Some(Session::new(info, self.epoch)));
-        // The instance identity comes from the open itself; its snapshot then
-        // supplies the current control state.
-        self.install_load(load);
-        // The open's own snapshot is newest; a held early one is the fallback,
-        // and a dropped hold is why the refresh below is unconditional.
-        // The open's own snapshot is the same observation the Agent would have
-        // pushed, so a held one that is newer is the better state to install.
-        let held = self.pre_install.take(&session_id);
-        let snapshot = match (snapshot, held) {
-            (Some(own), Some(held)) if held.load == own.load && held.revision > own.revision => {
-                Some(held)
-            }
-            (own, held) => own.or(held),
-        };
-        if let Some(snapshot) = snapshot {
-            self.apply_snapshot(snapshot);
-        }
+        let id = self.resident.get(epoch).unwrap().info.session_id.clone();
         if let Some(typed) = typed {
             self.draft_text.clear();
             self.composer.set_text(&typed);
         }
-        // A new session has no history to read.
-        if first.is_none() {
-            self.read_history(Window::Tail);
-        }
-        self.refresh_control();
-        self.refresh_branch();
-        self.refresh_context();
         // A new session already carries its settings; an opened one takes them
         // through `session.update`, so a flag is never silently dropped.
         let launch = std::mem::take(&mut self.launch);
@@ -237,9 +193,59 @@ impl App {
             }
             None => {}
         }
+        Some(id)
     }
 
-    fn on_tail(&mut self, result: Result<HistoryRead, RpcError>) {
+    pub(super) fn install_session(
+        &mut self,
+        adopted: tasks::Adopted,
+        select: bool,
+        history: bool,
+    ) -> Result<u64, RpcError> {
+        let tasks::Adopted {
+            info,
+            load,
+            snapshot,
+        } = adopted;
+        if let Some(session) = self.live(&info.session_id) {
+            if session.load != load {
+                return Err(RpcError::new(
+                    protocol::INVALID_PARAMS,
+                    "stale_load",
+                    "The open response belongs to another loaded instance",
+                ));
+            }
+            let epoch = session.epoch;
+            self.merge_catalog_info(info);
+            if select && !self.resident.is_current(epoch) {
+                self.select_session(Some(epoch));
+            }
+            self.apply_snapshot(snapshot);
+            return Ok(epoch);
+        }
+        self.merge_catalog_info(info.clone());
+        self.epoch = self.epoch.checked_add(1).expect("session epoch exhausted");
+        let epoch = self.epoch;
+        let id = info.session_id.clone();
+        self.resident.insert(Session::new(info, epoch, load));
+        if select {
+            self.select_session(Some(epoch));
+        }
+        let snapshot = match self.pre_install.take(&id) {
+            Some(held) if held.load == snapshot.load && held.revision > snapshot.revision => held,
+            _ => snapshot,
+        };
+        self.apply_snapshot(snapshot);
+        if history {
+            self.read_history_for(epoch, Window::Tail);
+        }
+        self.refresh_control_for(epoch);
+        self.refresh_branch_for(epoch);
+        self.refresh_context_for(epoch);
+        Ok(epoch)
+    }
+
+    fn on_tail(&mut self, epoch: u64, result: Result<HistoryRead, RpcError>) {
         let page = match result {
             Ok(HistoryRead::Complete(page)) => *page,
             Ok(HistoryRead::Partial(partial) | HistoryRead::Limited(_, partial)) => {
@@ -251,68 +257,74 @@ impl App {
                 return;
             }
         };
-        self.install_history(page);
-        self.session_mut().backfill = BACKFILL_PAGES;
-        self.read_state();
-        self.backfill();
+        self.install_history(epoch, page);
+        self.session_mut(epoch).backfill = BACKFILL_PAGES;
+        self.refresh_control_for(epoch);
+        self.backfill(epoch);
     }
 
-    fn install_history(&mut self, page: tasks::History) {
-        let source = match self.scroll {
+    fn install_history(&mut self, epoch: u64, page: History) {
+        let source = match self.scroll_for(epoch) {
             Scroll::Anchor { block, offset } => self
-                .session_mut()
+                .session_mut(epoch)
                 .transcript
                 .history_source(block)
                 .map(|source| (source, offset)),
             Scroll::Follow => None,
         };
-        let mapping = self.session_mut().install_tail(page);
+        let mapping = self.session_mut(epoch).install_tail(page);
         if let Some((source, offset)) = source
-            && let Some(block) = self.session_mut().transcript.find_history_source(source)
+            && let Some(block) = self
+                .session_mut(epoch)
+                .transcript
+                .find_history_source(source)
         {
-            self.scroll = Scroll::Anchor { block, offset };
+            self.set_scroll_for(epoch, Scroll::Anchor { block, offset });
             return;
         }
-        if let Scroll::Anchor { block, offset } = self.scroll
+        if let Scroll::Anchor { block, offset } = self.scroll_for(epoch)
             && let Some((old, start, replaced)) =
                 mapping.iter().find(|(range, _, _)| range.contains(&block))
         {
-            self.scroll = Scroll::Anchor {
-                block: if *replaced {
-                    *start
-                } else {
-                    start + block - old.start
+            self.set_scroll_for(
+                epoch,
+                Scroll::Anchor {
+                    block: if *replaced {
+                        *start
+                    } else {
+                        start + block - old.start
+                    },
+                    offset,
                 },
-                offset,
-            };
+            );
         }
     }
 
     /// Reads on behind the summary until the latest answer is loaded, so a
     /// session that opens on its compaction marker does not look empty.
-    fn backfill(&mut self) {
-        let session = self.session_mut();
+    fn backfill(&mut self, epoch: u64) {
+        let session = self.session_mut(epoch);
         if session.transcript.last_answer().is_some() {
             session.backfill = 0;
         }
         if let Some(left) = session.backfill.checked_sub(1) {
             session.backfill = left;
-            self.load_older();
+            self.load_older_for(epoch);
         }
     }
 
-    fn on_page(&mut self, result: Result<HistoryRead, RpcError>) {
+    fn on_page(&mut self, epoch: u64, result: Result<HistoryRead, RpcError>) {
         let page = match result {
             Ok(HistoryRead::Complete(page)) => *page,
             Ok(HistoryRead::Partial(partial) | HistoryRead::Limited(_, partial)) => {
-                let session = self.session_mut();
+                let session = self.session_mut(epoch);
                 session.loading_older = false;
                 session.backfill = 0;
                 self.notice(NoticeLevel::Error, partial.message());
                 return;
             }
             Err(error) => {
-                let session = self.session_mut();
+                let session = self.session_mut(epoch);
                 session.loading_older = false;
                 session.backfill = 0;
                 // The read already restarted once on a fresh pin.
@@ -328,14 +340,14 @@ impl App {
             }
         };
         if self
-            .session_mut()
+            .session_mut(epoch)
             .recovery
             .history_coverage
             .as_ref()
             .is_some_and(|known| !known.complete() && !known.matches(&page.pin))
         {
-            self.session_mut().loading_older = false;
-            self.session_mut().backfill = 0;
+            self.session_mut(epoch).loading_older = false;
+            self.session_mut(epoch).backfill = 0;
             self.notice(
                 NoticeLevel::Info,
                 "History changed; existing recovery coverage was kept",
@@ -344,19 +356,19 @@ impl App {
         }
         let covered = page.coverage();
         let overlaps = {
-            let transcript = &self.session_mut().transcript;
+            let transcript = &self.session_mut(epoch).transcript;
             (0..transcript.len()).any(|at| {
                 transcript
                     .history_source(at)
                     .is_some_and(|source| (page.from..page.end).contains(&source.item))
             })
         };
-        let cards = if overlaps || self.session_mut().recovery.history_coverage.is_some() {
+        let cards = if overlaps || self.session_mut(epoch).recovery.history_coverage.is_some() {
             let window = page.from..page.end;
             let canonical = page.canonical;
-            self.session_mut().loading_older = false;
-            self.install_history(page);
-            let transcript = &self.session_mut().transcript;
+            self.session_mut(epoch).loading_older = false;
+            self.install_history(epoch, page);
+            let transcript = &self.session_mut(epoch).transcript;
             if canonical {
                 transcript
                     .blocks()
@@ -377,13 +389,16 @@ impl App {
                 Vec::new()
             }
         } else {
-            let (grown, cards) = self.session_mut().prepend_page(page);
-            self.blocks_moved(0, grown);
+            let (grown, cards) = self.session_mut(epoch).prepend_page(page);
+            self.blocks_moved(epoch, 0, grown);
             cards
         };
-        self.session_mut().recovery.cover_history(covered, false);
-        if self.session_mut().recovery.gap_through > self.session_mut().recovery.settled_through
-            && self.session_mut().recovery.settle_history_gap()
+        self.session_mut(epoch)
+            .recovery
+            .cover_history(covered, false);
+        if self.session_mut(epoch).recovery.gap_through
+            > self.session_mut(epoch).recovery.settled_through
+            && self.session_mut(epoch).recovery.settle_history_gap()
         {
             self.notice(NoticeLevel::Error,"Saved history recovered; unsaved turns outside the completion catalog may be missing");
             self.recover_completions();
@@ -394,38 +409,44 @@ impl App {
                 SessionOp::ToolHydrated(hydrated, read.ok())
             });
         }
-        self.backfill();
+        self.backfill(epoch);
     }
 
     /// Keeps a view anchored inside a replaced region on that region's start,
     /// and one anchored after it on its block, after `grown` more blocks.
-    pub(super) fn moved_region(&mut self, start: usize, end: usize, grown: isize) {
-        if let Scroll::Anchor { block, offset } = self.scroll
+    pub(super) fn moved_region(&mut self, epoch: u64, start: usize, end: usize, grown: isize) {
+        if let Scroll::Anchor { block, offset } = self.scroll_for(epoch)
             && block >= start
             && block < end
         {
-            self.scroll = Scroll::Anchor {
-                block: start,
-                offset,
-            };
+            self.set_scroll_for(
+                epoch,
+                Scroll::Anchor {
+                    block: start,
+                    offset,
+                },
+            );
         }
-        self.blocks_moved(end, grown);
+        self.blocks_moved(epoch, end, grown);
     }
 
     /// Keeps the anchored view and the find matches on their blocks after
     /// `delta` blocks were added or removed in front of block `at`.
-    pub(super) fn blocks_moved(&mut self, at: usize, delta: isize) {
+    pub(super) fn blocks_moved(&mut self, epoch: u64, at: usize, delta: isize) {
         let moved = |block: usize| match block >= at {
             true => block.saturating_add_signed(delta),
             false => block,
         };
-        if let Scroll::Anchor { block, offset } = self.scroll {
-            self.scroll = Scroll::Anchor {
-                block: moved(block),
-                offset,
-            };
+        if let Scroll::Anchor { block, offset } = self.scroll_for(epoch) {
+            self.set_scroll_for(
+                epoch,
+                Scroll::Anchor {
+                    block: moved(block),
+                    offset,
+                },
+            );
         }
-        if self.background_op {
+        if !self.resident.is_current(epoch) {
             return;
         }
         if let Overlay::Find {
@@ -436,8 +457,8 @@ impl App {
         {
             let shown = matches.get(*current).map(|found| moved(found.block));
             *matches = find::find_matches(
-                self.session
-                    .as_ref()
+                self.resident
+                    .get(epoch)
                     .map_or(&[][..], |session| session.transcript.blocks()),
                 query,
                 self.show_reasoning,
@@ -448,15 +469,19 @@ impl App {
         }
     }
 
-    fn on_state(&mut self, result: Result<crate::protocol::SessionStateResult, RpcError>) {
-        self.session_mut().control_in_flight = false;
-        let again = std::mem::take(&mut self.session_mut().control_due);
+    fn on_state(
+        &mut self,
+        epoch: u64,
+        result: Result<crate::protocol::SessionStateResult, RpcError>,
+    ) {
+        self.session_mut(epoch).control_in_flight = false;
+        let again = std::mem::take(&mut self.session_mut(epoch).control_due);
         let Some(state) = self.ok(result) else {
             // A failed read must not lose the change it was fetched for.
-            self.session_mut().control_due = true;
+            self.session_mut(epoch).control_due = true;
             return;
         };
-        if state.snapshot.session_id != self.session_mut().info.session_id {
+        if state.snapshot.session_id != self.session_mut(epoch).info.session_id {
             self.notice(
                 NoticeLevel::Error,
                 "The control response belongs to another session",
@@ -464,108 +489,99 @@ impl App {
             return;
         }
         let was_compacting = self
-            .session
-            .as_ref()
+            .resident
+            .get(epoch)
             .is_some_and(|session| session.compacting());
         self.apply_snapshot(state.snapshot);
         // The snapshot just read answers every hint that was outstanding when
         // it was asked for; only a hint that arrived since needs another read.
         if again {
-            self.refresh_control();
+            self.refresh_control_for(epoch);
         }
         let compacting = self
-            .session
-            .as_ref()
+            .resident
+            .get(epoch)
             .is_some_and(|session| session.compacting());
         if was_compacting && !compacting {
-            self.refresh_context();
+            self.refresh_context_for(epoch);
         }
-        self.start_adopted_turn();
+        self.start_adopted_turn_for(epoch);
     }
 
-    fn on_resumed(&mut self, result: Result<InputResumeResult, RpcError>) {
+    fn on_resumed(&mut self, epoch: u64, result: Result<InputResumeResult, RpcError>) {
         let Some(resumed) = self.ok(result) else {
             return;
         };
         if let Some(error) = resumed.start_error {
             self.notice(NoticeLevel::Error, error.message);
         }
-        self.refresh_control();
+        self.refresh_control_for(epoch);
     }
 
     /// Every queued message back as one draft, in the order they would have run.
-    fn on_recalled(&mut self, result: Result<InputRecallResult, RpcError>) {
+    fn on_recalled(&mut self, epoch: u64, result: Result<InputRecallResult, RpcError>) {
         let Some(recalled) = self.ok(result) else {
             return;
         };
-        self.refresh_control();
+        self.refresh_control_for(epoch);
         if recalled.texts.is_empty() {
             return;
         }
         let text = recalled.texts.join("\n\n");
         // A session left meanwhile shows it when it comes back.
-        match self.background_op {
-            true => self.session_mut().returned.push(text),
+        match !self.resident.is_current(epoch) {
+            true => self.session_mut(epoch).returned.push(text),
             false => self.restore_to_composer(&text),
         }
     }
 
-    fn on_waited(&mut self, result: Result<TurnWaitResult, RpcError>) {
+    fn on_waited(&mut self, epoch: u64, result: Result<TurnWaitResult, RpcError>) {
         let wait = match result {
             Ok(wait) => wait,
             Err(error) => {
                 self.error(error);
-                self.refresh_control();
+                self.refresh_control_for(epoch);
                 return;
             }
         };
-        let background = self.background_op;
+        let background = !self.resident.is_current(epoch);
         let mut completion_background = None;
         let mut busy = None;
-        let session = self.session_mut();
-        if let Some(live) = session
-            .live
-            .iter_mut()
-            .chain(&mut session.ended_live)
-            .find(|live| live.turn.loop_id == wait.turn.loop_id)
-        {
+        let session = self.session_mut(epoch);
+        if let Some(live) = session.tracked_turn_mut(&wait.turn.loop_id) {
             completion_background = live.completion_background;
             busy = Some(live.started.elapsed());
             live.completion_background = Some(background);
         }
-        let Some(_) = self.session_mut().end_turn(&wait) else {
+        if !self.session_mut(epoch).end_turn(&wait) {
             return;
-        };
+        }
         let turn = wait.turn;
-        self.refresh_control();
+        self.refresh_control_for(epoch);
         if completion_background.is_none() {
             self.ring |= busy >= Some(LONG_TURN);
         }
-        self.stamp_activity();
-        if self.background_op && completion_background != Some(false) {
-            self.background_turn_ended(&turn.loop_id);
+        self.stamp_activity(epoch);
+        if !self.resident.is_current(epoch) && completion_background != Some(false) {
+            self.background_turn_ended(epoch, &turn.loop_id);
         }
         let client = self.client.clone();
-        self.spawn(async move {
+        self.spawn_for(epoch, async move {
             let changes = tasks::turn_changes(client, turn.session_id, turn.loop_id.clone()).await;
             SessionOp::Changes(turn.loop_id, changes)
         });
         // A turn-start compaction has no response of its own: `session.context`
         // is where it is reported, and the footer's figure moved too. The turn
         // may also have switched branches.
-        self.refresh_branch();
-        self.refresh_context();
+        self.refresh_branch_for(epoch);
+        self.refresh_context_for(epoch);
     }
 
-    fn on_compacted(&mut self, result: Result<CompactionResult, RpcError>) {
-        self.refresh_control();
-        let Some(result) = self.ok(result) else {
-            return;
-        };
+    pub(super) fn on_compacted(&mut self, epoch: u64, result: CompactionResult) {
         match result.status {
             CompactStatus::Compacted => {
-                self.session_mut().push_compaction(&result, None);
-                self.refresh_presentation();
+                self.session_mut(epoch).push_compaction(&result, None);
+                self.refresh_presentation_for(epoch);
             }
             CompactStatus::Noop => self.notice(NoticeLevel::Info, "Nothing to compact yet"),
             CompactStatus::Failed if result.failure_kind.as_deref() == Some("cancelled") => {
@@ -585,11 +601,11 @@ impl App {
         }
     }
 
-    fn on_changes(&mut self, loop_id: &str, result: Result<ChangeSummary, RpcError>) {
+    fn on_changes(&mut self, epoch: u64, loop_id: &str, result: Result<ChangeSummary, RpcError>) {
         let Ok(summary) = result else {
             return;
         };
-        let transcript = &mut self.session_mut().transcript;
+        let transcript = &mut self.session_mut(epoch).transcript;
         let end = transcript.blocks().iter().rposition(
             |block| matches!(block, Block::TurnEnd { loop_id: id, .. } if id == loop_id),
         );
@@ -611,14 +627,9 @@ impl App {
             return;
         }
         let bytes = event.retained_bytes(bytes);
-        if let AgentEvent::SessionSnapshot { snapshot, .. } = &event
-            && (snapshot.session_id != id || meta.load.as_deref() != Some(snapshot.load.as_str()))
-        {
-            return;
-        }
         if self
             .live(&id)
-            .and_then(|session| session.load.as_deref())
+            .map(|session| session.load.as_str())
             .is_some_and(|installed| meta.load.as_deref() != Some(installed))
         {
             return;
@@ -632,18 +643,16 @@ impl App {
             .filter(|_| bytes <= super::session::EARLY_BYTES)
             .map_or(0, |_| bytes);
         while self
-            .session
+            .resident
             .iter()
-            .chain(&self.background)
             .map(|session| session.early_bytes)
             .sum::<usize>()
             + extra
             > 8 * 1024 * 1024
         {
             let Some(session) = self
-                .session
+                .resident
                 .iter_mut()
-                .chain(&mut self.background)
                 .find(|session| session.early_bytes > 0)
             else {
                 break;
@@ -665,39 +674,33 @@ impl App {
             }
             return;
         }
-        if self
-            .session
-            .as_ref()
-            .is_some_and(|session| session.info.session_id == id)
-        {
-            self.with_notice_for(&id, |app| app.apply_agent_event(event, bytes));
-        } else if let Some(index) = self.live_index(&id) {
-            self.with_background(index, |app| app.apply_agent_event(event, bytes));
+        if let Some(epoch) = self.live(&id).map(|session| session.epoch) {
+            self.with_notice_for(&id, |app| app.apply_agent_event(epoch, event, bytes));
         } else if let AgentEvent::SessionOpened { session, .. } = event {
             self.merge_catalog_info(*session);
         }
     }
 
-    fn apply_agent_event(&mut self, event: AgentEvent, bytes: usize) {
+    fn apply_agent_event(&mut self, epoch: u64, event: AgentEvent, bytes: usize) {
         // The control snapshot is the one event that writes control state.
         if let AgentEvent::SessionSnapshot { snapshot, .. } = event {
             let was_compacting = self
-                .session
-                .as_ref()
+                .resident
+                .get(epoch)
                 .is_some_and(|session| session.compacting());
             self.apply_snapshot(*snapshot);
             // The context report holds the finished compaction's marker, and
             // the footer's figure moved with it.
             if was_compacting
                 && self
-                    .session
-                    .as_ref()
+                    .resident
+                    .get(epoch)
                     .is_some_and(|session| !session.compacting())
             {
                 // The context report holds the finished compaction's marker,
                 // and the footer's figure moved too.
-                self.refresh_context();
-                self.refresh_presentation();
+                self.refresh_context_for(epoch);
+                self.refresh_presentation_for(epoch);
             }
             return;
         }
@@ -710,23 +713,23 @@ impl App {
                 | AgentEvent::InputQueue { .. }
                 | AgentEvent::SessionState { .. }
         ) {
-            self.session_mut().control_due = true;
+            self.session_mut(epoch).control_due = true;
         }
-        let seen = self.approval_seen.clone();
+        let seen = self.resident.get(epoch).unwrap().approval_seen.clone();
         let delivered = matches!(event, AgentEvent::InputDelivered { .. });
         let delivery_anchor = if delivered {
-            match self.scroll {
+            match self.scroll_for(epoch) {
                 Scroll::Anchor { block, offset } => self
-                    .session
-                    .as_ref()
-                    .and_then(|session| session.transcript.revisions().get(block))
-                    .map(|revision| (*revision, offset)),
+                    .resident
+                    .get(epoch)
+                    .and_then(|session| session.transcript.revisions().nth(block))
+                    .map(|revision| (revision, offset)),
                 Scroll::Follow => None,
             }
         } else {
             None
         };
-        let session = self.session_mut();
+        let session = self.session_mut(epoch);
         let was_compacting = session.compacting();
         let usage = matches!(event, AgentEvent::RequestUsage { .. });
         // The interaction itself comes from the control snapshot, but the
@@ -738,29 +741,30 @@ impl App {
             .filter(|id| seen.as_ref() != Some(id));
         session.apply_body_event(event, bytes);
         let compaction_ended = was_compacting && session.compaction.is_none();
-        if let Some((revision, offset)) = delivery_anchor
-            && let Some(block) = session
+        let anchor = delivery_anchor.and_then(|(revision, offset)| {
+            session
                 .transcript
                 .revisions()
-                .iter()
-                .position(|known| *known == revision)
-        {
-            self.scroll = Scroll::Anchor { block, offset };
+                .position(|known| known == revision)
+                .map(|block| Scroll::Anchor { block, offset })
+        });
+        if let Some(anchor) = anchor {
+            self.set_scroll_for(epoch, anchor);
         }
         if requested.is_some() {
-            self.approval_seen = requested;
-            self.on_approval_requested();
+            self.session_mut(epoch).approval_seen = requested;
+            self.on_approval_requested(epoch);
         }
         // The footer's context figure moves with each request and each
         // compaction, not only at the turn's end.
-        if compaction_ended || (usage && self.session_mut().presentation_due()) {
-            self.refresh_presentation();
+        if compaction_ended || (usage && self.session_mut(epoch).presentation_due()) {
+            self.refresh_presentation_for(epoch);
         }
         // The context report holds the finished compaction's marker.
         if compaction_ended {
-            self.refresh_context();
+            self.refresh_context_for(epoch);
         }
-        self.pull_control();
+        self.pull_control_for(epoch);
         #[cfg(feature = "e2e-observe")]
         if delivered {
             self.observe_checkpoint(false);
@@ -768,8 +772,8 @@ impl App {
     }
 
     /// Dates the session's latest activity now; the Agent's own stamp replaces it on the next info read.
-    pub(super) fn stamp_activity(&mut self) {
-        let session = self.session_mut();
+    pub(super) fn stamp_activity(&mut self, epoch: u64) {
+        let session = self.session_mut(epoch);
         session.info.updated_at = protocol::stamp::rfc3339_millis(protocol::stamp::now_millis());
         let info = session.info.clone();
         self.merge_catalog_info(info);

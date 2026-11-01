@@ -56,9 +56,10 @@ fn app() -> Fixture {
     let mut app = App::new(client, tx, PathBuf::from("/work/minicore-tui"));
     app.styles = Styles::of(Palette::dark());
     app.ready = true;
-    let mut session = Session::new(info(), 1);
+    let mut session = Session::new(info(), 1, crate::testing::LOAD.into());
     session.transcript = Transcript::default();
-    app.session = Some(session);
+    app.resident.insert(session);
+    app.resident.select(Some(1));
     Fixture {
         app,
         _runtime: runtime,
@@ -98,7 +99,7 @@ fn tool() -> ToolCall {
 }
 
 fn conversation(app: &mut App) {
-    let session = app.session.as_mut().expect("session");
+    let session = app.resident.current_mut().expect("session");
     let transcript = &mut session.transcript;
     transcript.push(Block::User {
         text: "Why does the parser re-parse the whole message on every delta?".into(),
@@ -182,7 +183,7 @@ fn expanded_cards_show_hidden_lines_at_the_cut() {
     read.output = vec!["1: fn main() {".into(), "2:     run();".into()];
     read.output_dropped = 0;
     read.output_lines = Some(40);
-    let transcript = &mut app.session.as_mut().unwrap().transcript;
+    let transcript = &mut app.resident.current_mut().unwrap().transcript;
     transcript.push(Block::Tool(Box::new(tool())));
     transcript.push(Block::Tool(Box::new(read)));
     app.tools_expanded = true;
@@ -192,7 +193,7 @@ fn expanded_cards_show_hidden_lines_at_the_cut() {
 #[test]
 fn the_draft_is_the_welcome_header_over_the_editor_and_the_footer() {
     let mut app = app();
-    app.session = None;
+    app.resident = Default::default();
     app.profiles = vec![
         serde_json::from_value(
             serde_json::json!({"id": "coding", "model": "gpt-6-luna", "reasoning": "max"}),
@@ -214,7 +215,7 @@ fn the_draft_is_the_welcome_header_over_the_editor_and_the_footer() {
 fn the_screen_shows_earlier_content_while_streaming() {
     let mut app = app();
     conversation(&mut app);
-    let session = app.session.as_mut().expect("session");
+    let session = app.resident.current_mut().expect("session");
     session.transcript.push(Block::User {
         text: "Now stream a longer answer.".into(),
         kind: UserKind::Prompt,
@@ -243,7 +244,7 @@ fn an_anchored_view_does_not_move_when_content_grows() {
         offset: 0,
     };
     let before = render(&mut app, 70, 20);
-    let session = app.session.as_mut().expect("session");
+    let session = app.resident.current_mut().expect("session");
     session.transcript.push(Block::Assistant {
         key: RequestKey {
             loop_id: "loop_3".into(),
@@ -323,7 +324,7 @@ fn the_footer_reports_model_and_reasoning_without_duplicate_status() {
 #[test]
 fn the_footer_names_the_branch_and_right_aligns_the_totals() {
     let mut app = app();
-    let session = app.session.as_mut().expect("session");
+    let session = app.resident.current_mut().expect("session");
     session.presentation = Some(
         serde_json::from_value(serde_json::json!({
             "session_id": "ses_0123456789abcdef", "git_branch": "main",
@@ -366,8 +367,8 @@ fn the_footer_names_the_branch_and_right_aligns_the_totals() {
 fn a_blank_row_separates_the_transcript_and_the_composer_band_is_full_width() {
     let mut app = app();
     for index in 0..40 {
-        app.session
-            .as_mut()
+        app.resident
+            .current_mut()
             .expect("session")
             .transcript
             .push(Block::User {
@@ -500,8 +501,8 @@ fn the_session_view_lists_the_tools_allowed_for_the_session_only_when_there_are_
     let mut app = app();
     app.overlay = Overlay::SessionInfo { items: Some(4) };
     assert!(!render(&mut app, 80, 24).contains("allowed"));
-    app.session
-        .as_mut()
+    app.resident
+        .current_mut()
         .unwrap()
         .allowed_tools
         .extend(["edit".to_owned(), "bash".to_owned()]);
@@ -529,7 +530,7 @@ fn a_view_dims_the_composer_and_keys_typed_in_it_do_not_edit_the_draft() {
 
 /// Mirrors the Agent's queue, which lists the entries in the order they run.
 fn queue(app: &mut App, messages: &[(&str, InputMode)]) {
-    let queue = &mut app.session.as_mut().expect("session").queue;
+    let queue = &mut app.resident.current_mut().expect("session").queue;
     for (text, mode) in messages {
         queue.items.push(crate::protocol::QueueItem {
             id: format!("inp_{}", queue.items.len()),
@@ -571,7 +572,12 @@ fn the_dock_lists_queued_messages_in_the_order_the_agent_runs_them_with_the_keys
 fn an_unrecoverable_gap_is_said_in_the_dock_rather_than_silently_computed() {
     let mut fixture = app();
     conversation(&mut fixture);
-    fixture.session.as_mut().unwrap().recovery.truncated_gap = true;
+    fixture
+        .resident
+        .current_mut()
+        .unwrap()
+        .recovery
+        .truncated_gap = true;
     assert!(
         render(&mut fixture, 70, 14)
             .contains("Some unsaved turns may be missing outside the completion catalog"),
@@ -579,7 +585,7 @@ fn an_unrecoverable_gap_is_said_in_the_dock_rather_than_silently_computed() {
     );
     let mut fixture = app();
     conversation(&mut fixture);
-    fixture.session.as_mut().unwrap().ordering_gap = true;
+    fixture.resident.current_mut().unwrap().ordering_gap = true;
     assert!(
         render(&mut fixture, 70, 14)
             .contains("Turn order is incomplete; reload the session to read it in order"),
@@ -591,7 +597,7 @@ fn an_unrecoverable_gap_is_said_in_the_dock_rather_than_silently_computed() {
 fn a_paused_queue_says_how_to_go_on() {
     let mut app = app();
     queue(&mut app, &[("after the stop", FollowUp)]);
-    app.session.as_mut().unwrap().queue.paused = true;
+    app.resident.current_mut().unwrap().queue.paused = true;
     assert_eq!(
         hint_row(&render(&mut app, 70, 12)),
         Some("paused · enter resumes · alt+↑ edit")
@@ -660,7 +666,7 @@ fn a_running_turn_keeps_elapsed_time_only_in_the_footer() {
         ),
     ] {
         let mut app = app();
-        let session = app.session.as_mut().expect("session");
+        let session = app.resident.current_mut().expect("session");
         let mut live = crate::app::LiveTurn::new(
             TurnRef {
                 session_id: session.info.session_id.clone(),
@@ -774,7 +780,7 @@ fn a_card_opens_downward_from_its_header_by_click_or_ctrl_o() {
         let mut fixture = app();
         let app = &mut fixture.app;
         conversation(app);
-        let session = app.session.as_mut().unwrap();
+        let session = app.resident.current_mut().unwrap();
         let mut call = tool();
         call.state = ToolState::Running;
         call.duration = None;
@@ -838,7 +844,7 @@ fn collapsing_a_card_while_following_leaves_no_blank_rows_under_the_content() {
 
 /// A prompt and its turn end, which `outcome` made a failure.
 fn failed_turn(app: &mut App, outcome: serde_json::Value) {
-    let transcript = &mut app.session.as_mut().expect("session").transcript;
+    let transcript = &mut app.resident.current_mut().expect("session").transcript;
     transcript.push(Block::User {
         text: "Summarise the changes".into(),
         kind: UserKind::Prompt,
@@ -961,13 +967,13 @@ fn a_drag_over_a_card_header_selects_instead_of_toggling() {
 fn emit(app: &mut App, kind: &str, mut data: serde_json::Value) {
     data["meta"] = serde_json::json!({"session_id": "ses_0123456789abcdef", "dropped_before": 0});
     let event = serde_json::from_value(serde_json::json!({"type": kind, "data": data})).unwrap();
-    app.session.as_mut().unwrap().apply_event(event);
+    app.resident.current_mut().unwrap().apply_event(event);
 }
 
 /// A live turn whose bash call is announced by a preview, the way the Agent does.
 fn previewed_bash(app: &mut App) -> ToolRef {
     let turn = TurnRef::new("ses_0123456789abcdef", "loop_1");
-    app.session.as_mut().unwrap().live = Some(crate::app::LiveTurn::new(turn.clone(), 0));
+    app.resident.current_mut().unwrap().live = Some(crate::app::LiveTurn::new(turn.clone(), 0));
     emit(
         app,
         "tool_arguments_preview",
@@ -1012,7 +1018,7 @@ fn a_running_card_without_output_shows_running_until_output_arrives() {
     click(app, 10, row_of(&open, " ▎ running…"));
     assert!(render(app, 70, 30).contains(" ▎ running…"));
 
-    let session = app.session.as_mut().unwrap();
+    let session = app.resident.current_mut().unwrap();
     session
         .transcript
         .find_tool_mut(&key)
@@ -1025,7 +1031,7 @@ fn a_running_card_without_output_shows_running_until_output_arrives() {
     );
     assert!(!streaming.contains("running…"), "{streaming}");
 
-    let session = app.session.as_mut().unwrap();
+    let session = app.resident.current_mut().unwrap();
     session
         .transcript
         .find_tool_mut(&key)
@@ -1056,7 +1062,7 @@ fn a_card_waiting_for_approval_does_not_say_running() {
             "data": {"tool_ref": key, "state": "awaiting_policy", "result_truncated": false},
         }),
     );
-    let call = app.session.as_ref().unwrap().transcript.find_tool(&key);
+    let call = app.resident.current().unwrap().transcript.find_tool(&key);
     assert_eq!(call.unwrap().state, ToolState::Running);
     assert!(!render(app, 70, 20).contains("running…"));
 }
@@ -1115,7 +1121,7 @@ fn the_gutter_column_stays_blank_and_ignores_clicks() {
 
 /// A transcript whose block 0 is the card, so the welcome header sits in front of it.
 fn card_first(app: &mut App) {
-    let session = app.session.as_mut().expect("session");
+    let session = app.resident.current_mut().expect("session");
     session.transcript.push(Block::Tool(Box::new(tool())));
 }
 
@@ -1265,7 +1271,7 @@ fn the_scrollbar_shows_after_a_scroll_and_its_track_jumps() {
 #[test]
 fn an_approval_shows_the_tool_its_target_and_its_input() {
     let mut app = app();
-    let session = app.session.as_mut().expect("session");
+    let session = app.resident.current_mut().expect("session");
     let turn = TurnRef {
         session_id: "ses_0123456789abcdef".into(),
         loop_id: "loop_9".into(),
@@ -1309,7 +1315,7 @@ fn an_approval_shows_the_tool_its_target_and_its_input() {
 fn a_text_question_shows_its_separate_editor_without_exposing_the_conversation_draft() {
     let mut app = app();
     app.composer.set_text("unsent conversation draft");
-    let session = app.session.as_mut().unwrap();
+    let session = app.resident.current_mut().unwrap();
     session.interaction = Some(crate::app::PendingInteraction {
         turn: TurnRef::new(&session.info.session_id, "text-loop"),
         interaction_id: "text-question".into(),
@@ -1383,7 +1389,7 @@ fn connected(app: &mut App) {
 
 /// A turn running `bash` in the foreground session, its spinner on its first frame.
 fn running_bash(app: &mut App) {
-    let session = app.session.as_mut().expect("session");
+    let session = app.resident.current_mut().expect("session");
     let mut live = crate::app::LiveTurn::new(
         TurnRef {
             session_id: "ses_0123456789abcdef".into(),
@@ -1399,7 +1405,7 @@ fn running_bash(app: &mut App) {
 #[test]
 fn the_remote_status_screen_waits_for_a_phone_on_a_draft() {
     let mut app = app();
-    app.session = None;
+    app.resident = Default::default();
     app.profiles = vec![
         serde_json::from_value(
             serde_json::json!({"id": "coding", "model": "gpt-6-luna", "reasoning": "max"}),
@@ -1501,7 +1507,7 @@ fn the_remote_status_screen_and_footer_count_several_phones_and_list_each() {
 fn a_remote_approval_waits_on_the_phone() {
     let mut app = app();
     listening(&mut app);
-    let session = app.session.as_mut().expect("session");
+    let session = app.resident.current_mut().expect("session");
     let mut call = tool();
     call.key.tool_call_id = "call_rm".into();
     call.detail = "rm -rf build".into();
@@ -1548,7 +1554,7 @@ fn the_remote_status_screen_counts_busy_background_sessions() {
         session_id: "ses_other".into(),
         ..info()
     };
-    let mut session = Session::new(other, 2);
+    let mut session = Session::new(other, 2, crate::testing::LOAD.into());
     session.live = Some(crate::app::LiveTurn::new(
         TurnRef {
             session_id: "ses_other".into(),
@@ -1556,7 +1562,7 @@ fn the_remote_status_screen_counts_busy_background_sessions() {
         },
         0,
     ));
-    app.background.push(session);
+    app.resident.insert(session);
     let screen = render(&mut app, 80, 24);
     assert!(screen.contains("    Others     1 running"), "{screen}");
 }
@@ -1616,9 +1622,17 @@ fn the_sessions_picker_shows_what_live_sessions_are_doing() {
         session_id: id.into(),
         loop_id: "loop_1".into(),
     };
-    let mut running = Session::new(catalog("ses_running", "Port the lexer"), 2);
+    let mut running = Session::new(
+        catalog("ses_running", "Port the lexer"),
+        2,
+        crate::testing::LOAD.into(),
+    );
     running.live = Some(crate::app::LiveTurn::new(turn("ses_running"), 0));
-    let mut asking = Session::new(catalog("ses_asking", "Clean the build"), 3);
+    let mut asking = Session::new(
+        catalog("ses_asking", "Clean the build"),
+        3,
+        crate::testing::LOAD.into(),
+    );
     asking.live = Some(crate::app::LiveTurn::new(turn("ses_asking"), 0));
     asking.interaction = Some(crate::app::PendingInteraction {
         turn: turn("ses_asking"),
@@ -1629,9 +1643,17 @@ fn the_sessions_picker_shows_what_live_sessions_are_doing() {
         kind: crate::app::InteractionKind::Approval,
         selected: 0,
     });
-    let mut done = Session::new(catalog("ses_done", "Write the docs"), 4);
+    let mut done = Session::new(
+        catalog("ses_done", "Write the docs"),
+        4,
+        crate::testing::LOAD.into(),
+    );
     done.unseen = true;
-    let mut failed = Session::new(catalog("ses_failed", "Fix the flaky test"), 5);
+    let mut failed = Session::new(
+        catalog("ses_failed", "Fix the flaky test"),
+        5,
+        crate::testing::LOAD.into(),
+    );
     failed.unseen = true;
     failed.transcript.push(Block::TurnEnd {
         loop_id: "loop_1".into(),
@@ -1654,7 +1676,9 @@ fn the_sessions_picker_shows_what_live_sessions_are_doing() {
         running.info.clone(),
         info(),
     ];
-    app.background = vec![running, asking, done, failed];
+    for session in [running, asking, done, failed] {
+        app.resident.insert(session);
+    }
     app.open_panel(crate::app::Panel::Sessions);
     snapshot("sessions-picker-live", render(&mut app, 80, 20));
 }

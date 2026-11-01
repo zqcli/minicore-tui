@@ -486,16 +486,6 @@ pub struct TurnResultPage {
     pub interrupted: Option<InterruptedRequest>,
 }
 
-impl TurnResultPage {
-    /// Whether the page states a readable, complete result body.
-    pub fn is_readable(&self) -> bool {
-        matches!(
-            self.availability,
-            TurnAvailability::Live | TurnAvailability::Stored
-        )
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

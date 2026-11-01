@@ -197,7 +197,7 @@ impl<S> Layout<S> {
     pub fn prepare<F, R>(
         &mut self,
         blocks: &[Block],
-        revisions: &[u64],
+        revisions: impl IntoIterator<Item = u64> + Clone,
         width: u16,
         fold: Fold,
         render_block: &mut F,
@@ -211,8 +211,8 @@ impl<S> Layout<S> {
         let kept = self
             .cached
             .iter()
-            .zip(revisions)
-            .take_while(|(cached, revision)| cached.revision == **revision)
+            .zip(revisions.clone())
+            .take_while(|(cached, revision)| cached.revision == *revision)
             .count();
         let moved = self.cached.split_off(kept);
         let by_revision: HashMap<u64, &Cached> = moved
@@ -221,8 +221,7 @@ impl<S> Layout<S> {
             .filter(|(offset, _)| kept + offset > 0)
             .map(|(_, cached)| (cached.revision, cached))
             .collect();
-        for (index, block) in blocks.iter().enumerate().skip(kept) {
-            let revision = revisions[index];
+        for (index, (block, revision)) in blocks.iter().zip(revisions).enumerate().skip(kept) {
             let entry = match by_revision.get(&revision) {
                 Some(cached) if index > 0 => (*cached).clone(),
                 _ => self.render_entry(index, block, revision, render_block),
@@ -462,13 +461,13 @@ mod tests {
         let blocks = [user("a"), user("b"), user("c")];
         let revisions = [1, 2, 3];
         let mut rendered: Vec<usize> = vec![];
-        layout.prepare(&blocks, &revisions, 40, fold(), &mut |_, index, _| {
+        layout.prepare(&blocks, revisions, 40, fold(), &mut |_, index, _| {
             rendered.push(index);
             lines(2)
         });
         assert_eq!(rendered, vec![0, 1, 2]);
         rendered.clear();
-        layout.prepare(&blocks, &revisions, 40, fold(), &mut |_, index, _| {
+        layout.prepare(&blocks, revisions, 40, fold(), &mut |_, index, _| {
             rendered.push(index);
             lines(2)
         });
@@ -485,10 +484,10 @@ mod tests {
         let mut layout = Layout::<()>::default();
         let blocks = [user("a"), user("b")];
         let revisions = [1, 2];
-        layout.prepare(&blocks, &revisions, 40, fold(), &mut |_, _, _| lines(2));
+        layout.prepare(&blocks, revisions, 40, fold(), &mut |_, _, _| lines(2));
         let revisions = [1, 9];
         let mut rendered: Vec<usize> = vec![];
-        layout.prepare(&blocks, &revisions, 40, fold(), &mut |_, index, _| {
+        layout.prepare(&blocks, revisions, 40, fold(), &mut |_, index, _| {
             rendered.push(index);
             lines(3)
         });
@@ -537,7 +536,7 @@ mod tests {
             rendered.push(index);
             lines(2)
         };
-        layout.prepare(blocks, revisions, 40, fold, &mut render);
+        layout.prepare(blocks, revisions.iter().copied(), 40, fold, &mut render);
         while layout.settle(blocks, 0, 1000, &mut render) {}
         rendered.sort();
         rendered
@@ -547,13 +546,13 @@ mod tests {
     fn a_width_change_renders_every_block_again() {
         let mut layout = Layout::<()>::default();
         let blocks = [user("a"), user("b")];
-        layout.prepare(&blocks, &[1, 2], 40, fold(), &mut |_, _, _| lines(1));
+        layout.prepare(&blocks, [1, 2], 40, fold(), &mut |_, _, _| lines(1));
         let mut count = 0;
         let mut render = |_: &mut (), _: usize, _: &Block| {
             count += 1;
             lines(1)
         };
-        layout.prepare(&blocks, &[1, 2], 50, fold(), &mut render);
+        layout.prepare(&blocks, [1, 2], 50, fold(), &mut render);
         while layout.settle(&blocks, 0, 10, &mut render) {}
         assert_eq!(count, 2);
     }
@@ -563,7 +562,13 @@ mod tests {
         let mut layout = Layout::<()>::default();
         let blocks: Vec<Block> = (0..30).map(|_| card(None)).collect();
         let revisions: Vec<u64> = (1..=30).collect();
-        layout.prepare(&blocks, &revisions, 40, fold(), &mut |_, _, _| lines(1));
+        layout.prepare(
+            &blocks,
+            revisions.iter().copied(),
+            40,
+            fold(),
+            &mut |_, _, _| lines(1),
+        );
         assert_eq!(layout.total_rows(), 30 + 29);
         let expanded = Fold {
             expanded: true,
@@ -574,7 +579,13 @@ mod tests {
             rendered.push(index);
             lines(5)
         };
-        layout.prepare(&blocks, &revisions, 40, expanded, &mut render);
+        layout.prepare(
+            &blocks,
+            revisions.iter().copied(),
+            40,
+            expanded,
+            &mut render,
+        );
         assert_eq!(layout.total_rows(), 30 + 29, "nothing rendered yet");
         // Following the tail: each pass resolves the top again, as a frame does.
         while layout.settle(&blocks, layout.total_rows() - 10, 10, &mut render) {}
@@ -651,7 +662,7 @@ mod tests {
         let blocks = [user("a"), user("c"), user("d")];
         assert!(rendered_by(&mut layout, &blocks, &[1, 3, 4], fold()).is_empty());
         assert_eq!(layout.total_rows(), 3 * 2 + 2);
-        layout.prepare(&blocks[..1], &[1], 40, fold(), &mut |_, _, _| lines(9));
+        layout.prepare(&blocks[..1], [1], 40, fold(), &mut |_, _, _| lines(9));
         assert_eq!(
             layout.total_rows(),
             2,
@@ -664,14 +675,26 @@ mod tests {
         let mut layout = Layout::<()>::default();
         let mut blocks = vec![user("a")];
         let mut revisions = vec![1];
-        layout.prepare(&blocks, &revisions, 40, fold(), &mut |_, _, _| lines(2));
+        layout.prepare(
+            &blocks,
+            revisions.iter().copied(),
+            40,
+            fold(),
+            &mut |_, _, _| lines(2),
+        );
         blocks.push(user("b"));
         revisions.push(2);
         let mut rendered: Vec<usize> = vec![];
-        layout.prepare(&blocks, &revisions, 40, fold(), &mut |_, index, _| {
-            rendered.push(index);
-            lines(4)
-        });
+        layout.prepare(
+            &blocks,
+            revisions.iter().copied(),
+            40,
+            fold(),
+            &mut |_, index, _| {
+                rendered.push(index);
+                lines(4)
+            },
+        );
         assert_eq!(rendered, vec![1]);
         assert_eq!(layout.total_rows(), 7);
         assert_eq!(layout.row_of(1), 2);
@@ -682,7 +705,7 @@ mod tests {
         let mut layout = Layout::<()>::default();
         let blocks = [user("a"), user("b"), user("c")];
         let revisions = [1, 2, 3];
-        layout.prepare(&blocks, &revisions, 40, fold(), &mut |_, _, _| lines(3));
+        layout.prepare(&blocks, revisions, 40, fold(), &mut |_, _, _| lines(3));
         assert_eq!(layout.block_at(0), (0, 0));
         assert_eq!(layout.block_at(2), (0, 2));
         assert_eq!(
@@ -704,12 +727,12 @@ mod tests {
         let mut layout = Layout::<()>::default();
         let blocks = [user("a"), user("b")];
         let revisions = [1, 2];
-        layout.prepare(&blocks, &revisions, 40, fold(), &mut |_, index, _| {
+        layout.prepare(&blocks, revisions, 40, fold(), &mut |_, index, _| {
             lines(if index == 1 { 10 } else { 1 })
         });
         assert_eq!(layout.anchor_row(1, 8), 9);
         let revisions = [1, 3];
-        layout.prepare(&blocks, &revisions, 40, fold(), &mut |_, _, _| lines(1));
+        layout.prepare(&blocks, revisions, 40, fold(), &mut |_, _, _| lines(1));
         assert_eq!(
             layout.anchor_row(1, 8),
             2,
@@ -722,7 +745,7 @@ mod tests {
         let mut layout = Layout::<()>::default();
         let blocks = [user("a"), user("b"), user("c")];
         let revisions = [1, 2, 3];
-        layout.prepare(&blocks, &revisions, 40, fold(), &mut |_, index, _| {
+        layout.prepare(&blocks, revisions, 40, fold(), &mut |_, index, _| {
             lines(index + 1)
         });
         let window: Vec<String> = layout
@@ -738,7 +761,7 @@ mod tests {
     fn a_click_maps_to_the_block_row_it_landed_on() {
         let mut layout = Layout::<()>::default();
         let blocks = [user("a"), user("b")];
-        layout.prepare(&blocks, &[1, 2], 40, fold(), &mut |_, _, _| lines(2));
+        layout.prepare(&blocks, [1, 2], 40, fold(), &mut |_, _, _| lines(2));
         layout.viewport = Viewport {
             top: 1,
             height: 4,
@@ -758,12 +781,12 @@ mod tests {
         let mut layout = Layout::<usize>::default();
         let blocks = [user("a")];
         let revisions = [1];
-        layout.prepare(&blocks, &revisions, 40, fold(), &mut |state, _, _| {
+        layout.prepare(&blocks, revisions, 40, fold(), &mut |state, _, _| {
             *state += 1;
             lines(1)
         });
         assert_eq!(layout.state, 1);
-        layout.prepare(&blocks, &revisions, 40, fold(), &mut |state, _, _| {
+        layout.prepare(&blocks, revisions, 40, fold(), &mut |state, _, _| {
             *state += 1;
             lines(1)
         });
@@ -772,7 +795,7 @@ mod tests {
             *state += 1;
             lines(1)
         };
-        layout.prepare(&blocks, &revisions, 44, fold(), &mut render);
+        layout.prepare(&blocks, revisions, 44, fold(), &mut render);
         layout.settle(&blocks, 0, 10, &mut render);
         assert_eq!(layout.state, 2);
     }

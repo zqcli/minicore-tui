@@ -47,9 +47,10 @@ impl Bench {
         let mut app = App::new(client, tx, PathBuf::from("/work/minicore-tui"));
         app.styles = Styles::of(Palette::dark());
         app.ready = true;
-        let mut session = Session::new(info(), 1);
+        let mut session = Session::new(info(), 1, crate::testing::LOAD.into());
         session.transcript = Transcript::default();
-        app.session = Some(session);
+        app.resident.insert(session);
+        app.resident.select(Some(1));
         Self {
             app,
             terminal: Terminal::new(TestBackend::new(WIDTH, HEIGHT)).expect("terminal"),
@@ -58,7 +59,7 @@ impl Bench {
     }
 
     fn transcript(&mut self) -> &mut Transcript {
-        &mut self.app.session.as_mut().expect("session").transcript
+        &mut self.app.resident.current_mut().expect("session").transcript
     }
 
     fn draw(&mut self) -> Duration {
@@ -291,7 +292,15 @@ fn perf() {
         "retained tool output: {} bytes",
         retained_output(bench.transcript())
     );
-    bench.app.session.as_mut().expect("session").settle_cards(0);
+    let transcript = bench.transcript();
+    let long: Vec<_> = (0..transcript.len()).filter(|at| {
+        matches!(&transcript.blocks()[*at], Block::Tool(call) if call.output_content().len() > crate::transcript::EXPANDED_ROWS)
+    }).collect();
+    for at in long {
+        if let Some(Block::Tool(call)) = transcript.block_mut(at) {
+            call.settle();
+        }
+    }
     println!(
         "retained tool output after settling: {} bytes",
         retained_output(bench.transcript())
@@ -337,7 +346,7 @@ fn busy_session() -> Bench {
     live.phase = Phase::Writing;
     live.requests = 2;
     live.running_tool = Some(("bash".into(), "cargo test --lib module_60".into()));
-    let session = bench.app.session.as_mut().expect("session");
+    let session = bench.app.resident.current_mut().expect("session");
     session.live = Some(live);
     session.usage = UsageTotals {
         input: 1_234_567,

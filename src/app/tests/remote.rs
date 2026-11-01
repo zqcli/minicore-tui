@@ -86,7 +86,7 @@ async fn request_from(h: &mut Harness, connection: u64, mut intent: Value) -> St
         .map(str::to_owned);
     let session = viewed.as_deref().and_then(|id| h.app.live(id));
     let session_id = session.map(|s| s.info.session_id.clone());
-    let load = session.and_then(|s| s.load.clone());
+    let load = session.map(|s| s.load.clone());
     let epoch = h
         .app
         .remote
@@ -162,7 +162,7 @@ async fn request_from(h: &mut Harness, connection: u64, mut intent: Value) -> St
     // A submit, queue or unqueue is answered from the Agent's own result, so the
     // app must run before the answer exists. Nothing is drained here: the caller
     // reads the frames this produces in order.
-    h.run_until_quiet().await;
+    h.settle().await;
     id
 }
 
@@ -183,8 +183,11 @@ async fn a_real_phone_signs_in_submits_through_the_agent_and_receives_the_user_b
     let mut h = Harness::opened(display_read(0, 0)).await;
     // Harness quiet periods use virtual time; real socket deadlines start after setup.
     tokio::time::resume();
-    h.fake.script("session.state", json!({}));
-    h.fake.script_held("input.push", started("l1"));
+    h.fake.script(
+        "session.state@s1",
+        state_response(snapshot("s1", crate::testing::LOAD, 1)),
+    );
+    h.fake.script_held("input.push", starting_reply("l1", 2));
     h.fake.script_held("turn.wait", waited("l1", completed()));
     let root = tempfile::tempdir().unwrap();
     let config = config(root.path().canonicalize().unwrap());
@@ -277,8 +280,8 @@ async fn a_real_phone_signs_in_submits_through_the_agent_and_receives_the_user_b
     .await
     .expect("overflow close timed out");
     h.app
-        .session
-        .as_mut()
+        .resident
+        .current_mut()
         .unwrap()
         .transcript
         .push(crate::transcript::Block::User {
@@ -348,24 +351,29 @@ async fn answers_validate_prompt_kind_and_index_before_consuming_the_interaction
             h.app.remote.url = Some("http://localhost:8765".into());
             let (mut output, _closing, admission) = phone(&mut h, 1, "phone");
             assert!(admission.await.unwrap());
-            h.app.session.as_mut().unwrap().interaction = Some(crate::app::PendingInteraction {
-                turn: crate::protocol::TurnRef::new("s1", "l1"),
-                interaction_id: "interaction".into(),
-                tool_call_id: "call".into(),
-                tool_name: "bash".into(),
-                prompt: "choose".into(),
-                kind: if approval {
-                    crate::app::InteractionKind::Approval
-                } else {
-                    crate::app::InteractionKind::Choice(vec!["one".into(), "two".into()])
-                },
-                selected: 0,
-            });
+            h.app.resident.current_mut().unwrap().interaction =
+                Some(crate::app::PendingInteraction {
+                    turn: crate::protocol::TurnRef::new("s1", "l1"),
+                    interaction_id: "interaction".into(),
+                    tool_call_id: "call".into(),
+                    tool_name: "bash".into(),
+                    prompt: "choose".into(),
+                    kind: if approval {
+                        crate::app::InteractionKind::Approval
+                    } else {
+                        crate::app::InteractionKind::Choice(vec!["one".into(), "two".into()])
+                    },
+                    selected: 0,
+                });
             let valid = if approval {
                 matches!(choice.as_str(), Some("allow" | "allow_session" | "deny"))
             } else {
                 choice.as_u64().is_some_and(|index| index < 2)
             };
+            h.fake.script(
+                "interaction.answer",
+                after_snapshot(json!({}), h.control(json!({}))),
+            );
             request(
                 &mut h,
                 json!({"kind":"answer", "interaction_id":"interaction", "choice":choice}),
@@ -378,7 +386,7 @@ async fn answers_validate_prompt_kind_and_index_before_consuming_the_interaction
             assert_eq!(h.calls("interaction.answer").len(), usize::from(valid));
             if !valid {
                 assert_eq!(ack["error"], "bad_request");
-                assert!(h.app.session.as_ref().unwrap().allowed_tools.is_empty());
+                assert!(h.app.resident.current().unwrap().allowed_tools.is_empty());
             }
         }
     }
@@ -386,7 +394,7 @@ async fn answers_validate_prompt_kind_and_index_before_consuming_the_interaction
 
 /// A running turn `l1` in the foreground waiting on an approval or a choice.
 fn pending(h: &mut Harness, approval: bool) {
-    let session = h.app.session.as_mut().unwrap();
+    let session = h.app.resident.current_mut().unwrap();
     session.live = Some(crate::app::LiveTurn::new(
         crate::protocol::TurnRef::new("s1", "l1"),
         0,
@@ -413,9 +421,13 @@ fn pending(h: &mut Harness, approval: bool) {
 #[tokio::test(start_paused = true)]
 async fn a_deny_with_a_message_answers_first_then_pushes_the_reason_as_a_steer() {
     let mut h = Harness::opened(display_read(0, 0)).await;
+    let queued = vec![entry("i1", "steer", "Use the staging bucket")];
     h.fake.script(
         "input.push",
-        pushed(vec![entry("i1", "steer", "Use the staging bucket")]),
+        after_snapshot(
+            pushed(queued.clone()),
+            h.control(json!({"queue":queue(queued, false)})),
+        ),
     );
     h.app.remote.url = Some("http://localhost:8765".into());
     let (mut output, _closing, admission) = phone(&mut h, 1, "phone");
@@ -475,7 +487,8 @@ async fn a_deny_with_a_message_answers_first_then_pushes_the_reason_as_a_steer()
 async fn phone_text_expands_templates_refuses_commands_and_keeps_other_slashes_as_the_composer_does()
  {
     let mut h = Harness::opened(display_read(0, 0)).await;
-    h.fake.script_sequence("input.push", vec![started("l1")]);
+    h.fake
+        .script_sequence("input.push", vec![starting_reply("l1", 2)]);
     h.fake.script("input.push", pushed(vec![]));
     h.fake.script_held("turn.wait", waited("l1", completed()));
     h.app.templates = vec![crate::app::templates::Template::parse(
@@ -551,14 +564,14 @@ async fn compact_runs_for_the_viewed_idle_session_and_is_refused_while_busy_or_i
         serde_json::from_value(json!({"operation_id":"auto-1", "phase":"summarizing", "covered_item_count":0, "retained_item_count":0})).unwrap()
     };
     for (live, compacting) in [(true, false), (false, true)] {
-        let session = h.app.session.as_mut().unwrap();
+        let session = h.app.resident.current_mut().unwrap();
         session.live =
             live.then(|| crate::app::LiveTurn::new(crate::protocol::TurnRef::new("s1", "l1"), 0));
         session.compaction = compacting.then(progress);
         request(&mut h, json!({"kind":"compact"})).await;
         assert_eq!(ack_next(&mut h, &mut output).await["error"], "busy");
     }
-    h.app.session.as_mut().unwrap().compaction = None;
+    h.app.resident.current_mut().unwrap().compaction = None;
     request(&mut h, json!({"kind":"compact"})).await;
     assert_eq!(ack_next(&mut h, &mut output).await["ok"], true);
     h.settle().await;
@@ -617,9 +630,10 @@ async fn unqueue_removes_the_mirrored_entry_by_id_and_returns_its_text_only_to_t
         "input.remove",
         json!({"text": "one", "queue": queue(vec![now.clone(), two.clone()], false)}),
     );
-    let revision = h.app.session.as_ref().unwrap().recovery.revision;
+    let revision = h.app.resident.current().unwrap().recovery.revision;
     let control = h.control(json!({"queue":queue(vec![now.clone(), two.clone()], false)}));
-    h.fake.script("session.state", json!({"snapshot":control}));
+    h.fake
+        .script("session.state@s1", json!({"snapshot":control}));
     let intent = phone_intent(
         &mut h,
         2,
@@ -636,16 +650,17 @@ async fn unqueue_removes_the_mirrored_entry_by_id_and_returns_its_text_only_to_t
         h.calls("input.remove"),
         [json!({"session_id":"s1", "load":"load_1", "id":"b"})]
     );
-    assert!(h.app.session.as_ref().unwrap().recovery.revision > revision);
+    assert!(h.app.resident.current().unwrap().recovery.revision > revision);
     assert_eq!(h.queue(), ["now", "two"]);
 
     h.fake.script(
         "input.remove",
         json!({"text": "two", "queue": queue(vec![now.clone()], false)}),
     );
-    let revision = h.app.session.as_ref().unwrap().recovery.revision;
+    let revision = h.app.resident.current().unwrap().recovery.revision;
     let control = h.control(json!({"queue":queue(vec![now], false)}));
-    h.fake.script("session.state", json!({"snapshot":control}));
+    h.fake
+        .script("session.state@s1", json!({"snapshot":control}));
     let intent = phone_intent(
         &mut h,
         1,
@@ -658,13 +673,13 @@ async fn unqueue_removes_the_mirrored_entry_by_id_and_returns_its_text_only_to_t
         [json!({"t":"ack", "id":id, "ok":true})]
     );
     assert!(messages(&mut second).is_empty());
-    assert!(h.app.session.as_ref().unwrap().recovery.revision > revision);
+    assert!(h.app.resident.current().unwrap().recovery.revision > revision);
     assert_eq!(
         h.queue(),
         ["now"],
         "the newer authoritative snapshot preserves the survivor"
     );
-    assert_eq!(h.app.session.as_ref().unwrap().queue.items[0].id, "a");
+    assert_eq!(h.app.resident.current().unwrap().queue.items[0].id, "a");
     assert!(h.app.composer.is_empty());
 }
 
@@ -675,10 +690,8 @@ fn w0_phone_session() -> Harness {
     info.workspace = h.app.workspace.to_string_lossy().into_owned();
     h.app.sessions.push(info.clone());
     h.app.epoch = 1;
-    let mut session = crate::app::Session::new(info, 1);
-    session.load = Some("load_1".into());
-    h.app.session = Some(session);
-    h.app.install_load("load_1".into());
+    let session = crate::app::Session::new(info, 1, crate::testing::LOAD.into());
+    h.app.show_session(Some(session));
     h.app.ready = true;
     h
 }
@@ -753,7 +766,7 @@ async fn w0_a_phone_submit_is_not_acknowledged_before_the_agent_accepts_it() {
         h.app.remote.url = Some("http://localhost:8765".into());
         let (mut output, _closing, admission) = phone(&mut h, 1, "phone");
         assert!(admission.await.unwrap());
-        h.fake.script_held("input.push", started("l1"));
+        h.fake.script_held("input.push", starting_reply("l1", 2));
         h.fake.script_held("turn.wait", waited("l1", completed()));
         request(&mut h, json!({"kind":"submit", "text":"phone input"})).await;
         h.fake.wait_for_calls("input.push", 1).await;
@@ -852,7 +865,10 @@ async fn a_phone_intent_from_another_view_epoch_or_load_is_refused_before_anythi
     // The projection the phone actually holds still works.
     h.fake.script(
         "input.remove",
-        json!({"text":"now", "queue":queue(vec![], false)}),
+        after_snapshot(
+            json!({"text":"now", "queue":queue(vec![], false)}),
+            h.control(json!({"queue":queue(vec![], false)})),
+        ),
     );
     let intent = phone_intent(
         &mut h,
@@ -875,7 +891,7 @@ async fn a_cancel_or_answer_for_another_loop_is_refused_rather_than_acting_on_th
     h.app.remote.url = Some("http://localhost:8765".into());
     let (mut output, _closing, admission) = phone(&mut h, 1, "phone");
     assert!(admission.await.unwrap());
-    h.app.session.as_mut().unwrap().live = Some(crate::app::LiveTurn::new(
+    h.app.resident.current_mut().unwrap().live = Some(crate::app::LiveTurn::new(
         crate::protocol::TurnRef::new("s1", "l_now"),
         0,
     ));
@@ -902,14 +918,18 @@ async fn queue_cancel_and_history_intents_use_the_existing_reducer_operations() 
     h.app.remote.url = Some("http://localhost:8765".into());
     let (mut output, _closing, admission) = phone(&mut h, 1, "phone");
     assert!(admission.await.unwrap());
-    h.app.session.as_mut().unwrap().live = Some(crate::app::LiveTurn::new(
+    h.app.resident.current_mut().unwrap().live = Some(crate::app::LiveTurn::new(
         crate::protocol::TurnRef::new("s1", "l1"),
         0,
     ));
     h.fake.script(
         "input.push",
-        pushed(vec![entry("i1", "follow_up", "follow up")]),
+        after_snapshot(
+            pushed(vec![entry("i1", "follow_up", "follow up")]),
+            h.control(json!({"queue":queue(vec![entry("i1", "follow_up", "follow up")], false)})),
+        ),
     );
+    h.fake.script("session.compact.cancel", json!({}));
     request(&mut h, json!({"kind":"queue", "text":"follow up  \n"})).await;
     assert_eq!(ack_next(&mut h, &mut output).await["ok"], true);
     h.settle().await;
@@ -919,7 +939,7 @@ async fn queue_cancel_and_history_intents_use_the_existing_reducer_operations() 
         [("follow_up".to_owned(), "follow up".to_owned())]
     );
     assert!(h.calls("turn.wait").is_empty());
-    let session = h.app.session.as_mut().unwrap();
+    let session = h.app.resident.current_mut().unwrap();
     session.live = None;
     session.compaction = Some(serde_json::from_value(json!({"operation_id":"compact", "phase":"summarizing", "covered_item_count":0, "retained_item_count":0})).unwrap());
     request(&mut h, json!({"kind":"cancel"})).await;
@@ -930,7 +950,7 @@ async fn queue_cancel_and_history_intents_use_the_existing_reducer_operations() 
         "compact"
     );
     let before = h.calls("session.read").len();
-    h.app.session.as_mut().unwrap().loaded_from = 20;
+    h.app.resident.current_mut().unwrap().loaded_from = 20;
     request(&mut h, json!({"kind":"load_older"})).await;
     assert_eq!(ack_next(&mut h, &mut output).await["ok"], true);
     h.settle().await;
@@ -980,7 +1000,7 @@ async fn a_full_outbound_queue_drops_the_only_phone_and_returns_to_waiting() {
 #[tokio::test(start_paused = true)]
 async fn local_submit_is_refused_but_phone_submit_preserves_the_local_draft() {
     let mut h = Harness::opened(display_read(0, 0)).await;
-    h.fake.script("input.push", started("l1"));
+    h.fake.script("input.push", starting_reply("l1", 2));
     h.fake.script_held("turn.wait", waited("l1", completed()));
     h.app.remote.url = Some("http://localhost:8765".into());
     h.app.composer.set_text("local draft");
@@ -1029,7 +1049,10 @@ async fn entering_remote_recalls_the_queue_and_an_agent_refusal_returns_only_to_
     h.mirror(vec![entry("i1", "follow_up", "queued")], false);
     h.fake.script(
         "input.recall",
-        json!({"texts": ["queued"], "queue": queue(vec![], false)}),
+        after_snapshot(
+            json!({"texts": ["queued"], "queue": queue(vec![], false)}),
+            h.control(json!({"queue":queue(vec![], false)})),
+        ),
     );
     let dir = tempfile::tempdir().unwrap();
     let config = config(dir.path().canonicalize().unwrap());
@@ -1130,7 +1153,7 @@ async fn every_phone_gets_its_snapshot_then_the_changes_and_sees_who_is_connecte
             json!([{"name":"iPhone Safari", "session":"s1"}, {"name":"Mac Edge", "session":"s1"}])
         );
     }
-    let session = h.app.session.as_mut().unwrap();
+    let session = h.app.resident.current_mut().unwrap();
     session.transcript.push(crate::transcript::Block::User {
         text: "hello".into(),
         kind: crate::protocol::read::UserKind::Prompt,
@@ -1180,14 +1203,23 @@ async fn an_intent_is_acked_only_to_its_sender_and_only_a_sign_in_attempt_reache
 #[tokio::test(start_paused = true)]
 async fn a_tool_allowed_for_the_session_is_answered_without_telling_the_phone() {
     let mut h = Harness::opened(display_read(0, 0)).await;
-    h.fake.script("interaction.answer", json!({"ok": true}));
+    let mut waiting = running_snapshot(2, "l1", "");
+    waiting["pending_interaction"] = json!({"loop_id":"l1", "request_index":0,
+        "interaction_id":"i1", "tool_call_id":"c1", "tool_name":"bash",
+        "kind":{"type":"approval", "data":{"prompt":"Allow bash?"}}});
+    h.fake.script("session.state@s1", state_response(waiting));
+    h.fake.script_held("turn.wait", waited("l1", completed()));
+    h.fake.script(
+        "interaction.answer",
+        after_snapshot(json!({"ok":true}), running_snapshot(3, "l1", "")),
+    );
     h.app.remote.url = Some("http://localhost:8765".into());
     let (mut a, _close, admission) = phone(&mut h, 1, "first");
     assert!(admission.await.unwrap());
     received(&mut a);
     h.app
-        .session
-        .as_mut()
+        .resident
+        .current_mut()
         .unwrap()
         .allowed_tools
         .insert("bash".into());
@@ -1207,7 +1239,7 @@ async fn a_tool_allowed_for_the_session_is_answered_without_telling_the_phone() 
 #[tokio::test(start_paused = true)]
 async fn a_refused_input_answers_only_its_original_operation_and_never_other_viewers() {
     let mut h = Harness::opened(display_read(0, 0)).await;
-    h.fake.script("input.push", started("l1"));
+    h.fake.script("input.push", starting_reply("l1", 2));
     h.fake.script_held("turn.wait", waited("l1", completed()));
     h.app.remote.url = Some("http://localhost:8765".into());
     let (mut a, _close, admission) = phone(&mut h, 1, "first");
@@ -1315,8 +1347,8 @@ async fn root_checks_and_stale_answers_refuse_before_dispatch_and_new_drafts_use
     assert!(h.calls("session.create").is_empty());
     let mut info = session_info("s1");
     info["workspace"] = json!(workspace);
-    h.fake.script("session.create", json!({"session":info}));
-    h.fake.script("input.push", started("l1"));
+    h.fake.script("session.create", opened_session(info));
+    h.fake.script("input.push", starting_reply("l1", 2));
     h.fake.script_held("turn.wait", waited("l1", completed()));
     h.app.composer.set_text("keep");
     request(&mut h, json!({"kind":"submit", "text":"new work"})).await;
@@ -1357,7 +1389,7 @@ async fn a_handshake_from_a_stopped_listener_cannot_take_control_after_restart()
 async fn remote_approval_keeps_the_local_keyboard_and_denied_commands_keep_the_draft() {
     let mut h = Harness::opened(display_read(0, 0)).await;
     h.app.remote.url = Some("http://localhost:8765".into());
-    h.app.session.as_mut().unwrap().interaction = Some(crate::app::PendingInteraction {
+    h.app.resident.current_mut().unwrap().interaction = Some(crate::app::PendingInteraction {
         turn: crate::protocol::TurnRef::new("s1", "l1"),
         interaction_id: "approval".into(),
         tool_call_id: "call".into(),
@@ -1375,7 +1407,7 @@ async fn remote_approval_keeps_the_local_keyboard_and_denied_commands_keep_the_d
         h.app.overlay = Overlay::None;
         h.press(KeyCode::Enter);
         assert_eq!(h.app.composer.text(), command);
-        assert!(h.app.session.is_some());
+        assert!(h.app.resident.current().is_some());
     }
 }
 
@@ -1397,6 +1429,7 @@ async fn remote_off_restores_local_submit_and_quit_requires_two_requests_within_
     assert!(h.app.quit);
     h.app.quit = false;
     h.action(Action::Remote("off".into()));
+    h.fake.script("input.push", pushed(vec![]));
     h.submit("local again");
     h.settle().await;
     assert_eq!(h.sends(), ["local again"]);
@@ -1472,7 +1505,7 @@ async fn a_short_password_is_refused_and_changes_nothing() {
 #[tokio::test(start_paused = true)]
 async fn a_password_command_never_reaches_the_prompt_history() {
     let mut h = Harness::opened(display_read(0, 0)).await;
-    h.fake.script("input.push", started("l1"));
+    h.fake.script("input.push", starting_reply("l1", 2));
     h.fake.script_held("turn.wait", waited("l1", completed()));
     h.submit("earlier prompt");
     h.settle().await;
@@ -1727,7 +1760,7 @@ async fn separate_views() -> (Harness, mpsc::Receiver<Value>, mpsc::Receiver<Val
     h.app.remote.config = Some(config(h.app.workspace.clone()));
     h.app.remote.url = Some("http://localhost:8765".into());
     h.app.default_profile = Some("coding".into());
-    h.app.session.as_mut().unwrap().info.title = Some("First".into());
+    h.app.resident.current_mut().unwrap().info.title = Some("First".into());
     h.app.sessions[0].title = Some("First".into());
     for (id, title) in [("s1", "First"), ("s2", "Second"), ("s3", "Third")] {
         let mut info = session_info(id);
@@ -1739,11 +1772,25 @@ async fn separate_views() -> (Harness, mpsc::Receiver<Value>, mpsc::Receiver<Val
                 .push(serde_json::from_value(info.clone()).unwrap());
         }
         h.fake
-            .script(&format!("session.open@{id}"), json!({"session":info}));
+            .script(&format!("session.open@{id}"), opened_session(info));
+        h.fake.script(
+            &format!("session.state@{id}"),
+            state_response(snapshot(id, crate::testing::LOAD, 1)),
+        );
         let turn = json!({"session_id":id, "loop_id":format!("loop-{id}")});
         h.fake.script(
             &format!("input.push@{id}"),
-            started_in(turn.clone(), vec![]),
+            after_snapshot(
+                started_in(turn.clone(), vec![]),
+                crate::testing::snapshot_running(
+                    id,
+                    crate::testing::LOAD,
+                    2,
+                    &format!("loop-{id}"),
+                    entry("i1", "steer", "$text"),
+                ),
+            )
+            .with_request_text(),
         );
         h.fake.script_held(
             &format!("turn.wait@{id}"),
@@ -1790,9 +1837,9 @@ async fn phones_open_their_own_sessions_without_replacing_each_others_projection
     let unchanged = messages(&mut b);
     assert!(!unchanged.iter().any(|message| message["t"] == "snapshot"));
     assert_eq!(unchanged.last().unwrap()["state"]["session"]["id"], "s2");
-    assert_eq!(h.app.session.as_ref().unwrap().info.session_id, "s3");
+    assert_eq!(h.app.resident.current().unwrap().info.session_id, "s3");
     h.action(Action::Remote("off".into()));
-    assert_eq!(h.app.session.as_ref().unwrap().info.session_id, "s3");
+    assert_eq!(h.app.resident.current().unwrap().info.session_id, "s3");
 }
 
 #[tokio::test(start_paused = true)]
@@ -1861,6 +1908,19 @@ async fn phones_send_and_stream_concurrently_only_to_their_sessions_viewers() {
 async fn an_approval_is_shown_and_answered_only_in_the_viewed_session() {
     let (mut h, mut a, mut b) = separate_views().await;
     request(&mut h, json!({"kind":"cancel"})).await;
+    let mut waiting =
+        crate::testing::snapshot_running("s2", crate::testing::LOAD, 2, "loop-s2", Value::Null);
+    waiting["pending_interaction"] = json!({"loop_id":"loop-s2", "request_index":0,
+        "interaction_id":"approve-two", "tool_call_id":"call-two", "tool_name":"bash",
+        "kind":{"type":"approval", "data":{"prompt":"Allow?"}}});
+    h.fake.script("session.state@s2", state_response(waiting));
+    h.fake.script(
+        "interaction.answer@s2",
+        after_snapshot(
+            json!({}),
+            crate::testing::snapshot_running("s2", crate::testing::LOAD, 3, "loop-s2", Value::Null),
+        ),
+    );
     h.emit("interaction_requested", json!({"meta":{"session_id":"s2", "dropped_before":0}, "turn":{"session_id":"s2", "loop_id":"loop-s2"}, "interaction":{"interaction_id":"approve-two", "tool_call_id":"call-two", "tool_name":"bash", "kind":{"type":"approval", "data":{"prompt":"Allow?"}}}})).await;
     h.settle().await;
     h.app.sync_remote();
@@ -1959,10 +2019,20 @@ async fn each_draft_keeps_its_workspace_model_and_reasoning_through_creation() {
     info["workspace"] = json!(one);
     info["model"] = json!("chosen");
     info["reasoning"] = json!("high");
-    h.fake.script("session.create", json!({"session":info}));
+    h.fake.script("session.create", opened_session(info));
     h.fake.script(
         "input.push@created",
-        started_in(json!({"session_id":"created", "loop_id":"first"}), vec![]),
+        after_snapshot(
+            started_in(json!({"session_id":"created", "loop_id":"first"}), vec![]),
+            crate::testing::snapshot_running(
+                "created",
+                crate::testing::LOAD,
+                2,
+                "first",
+                entry("i1", "steer", "$text"),
+            ),
+        )
+        .with_request_text(),
     );
     h.fake.script_held(
         "turn.wait@created",
@@ -1999,7 +2069,7 @@ async fn each_draft_keeps_its_workspace_model_and_reasoning_through_creation() {
     assert_eq!(shared_draft["draft"]["model"], "chosen");
     request_from(&mut h, 2, json!({"kind":"set_reasoning", "level":"low"})).await;
     h.action(Action::Remote("off".into()));
-    assert!(h.app.session.is_none());
+    assert!(h.app.resident.current().is_none());
     assert_eq!(h.app.workspace, two);
     assert_eq!(h.app.reasoning(), Some(crate::protocol::Reasoning::Low));
 }
@@ -2070,10 +2140,20 @@ async fn a_pending_create_keeps_its_original_input_while_other_devices_do_live_w
     created["workspace"] = json!(root);
     created["reasoning"] = json!("high");
     h.fake
-        .script_held("session.create", json!({"session":created}));
+        .script_held("session.create", opened_session(created));
     h.fake.script(
         "input.push@created",
-        started_in(json!({"session_id":"created", "loop_id":"first"}), vec![]),
+        after_snapshot(
+            started_in(json!({"session_id":"created", "loop_id":"first"}), vec![]),
+            crate::testing::snapshot_running(
+                "created",
+                crate::testing::LOAD,
+                2,
+                "first",
+                entry("i1", "steer", "$text"),
+            ),
+        )
+        .with_request_text(),
     );
     h.fake.script_held(
         "turn.wait@created",
@@ -2115,7 +2195,7 @@ async fn a_pending_create_keeps_its_original_input_while_other_devices_do_live_w
     assert_eq!(h.sends(), ["live work", "my first message"]);
     assert_eq!(h.calls("input.push")[1]["session_id"], "created");
     assert_eq!(h.app.draft_text, "typed while creating");
-    assert_eq!(h.app.session.as_ref().unwrap().info.session_id, "s2");
+    assert_eq!(h.app.resident.current().unwrap().info.session_id, "s2");
     assert_eq!(h.calls("session.create").len(), 1);
     assert_eq!(h.calls("session.open").len(), 2);
     h.app.sync_remote();
@@ -2129,8 +2209,7 @@ async fn a_pending_open_allows_live_work_but_only_its_owner_changes_view_on_adop
     let (mut h, mut a, mut b) = separate_views().await;
     let mut third = session_info("s3");
     third["title"] = json!("Third");
-    h.fake
-        .script_held("session.open@s3", json!({"session":third}));
+    h.fake.script_held("session.open@s3", opened_session(third));
     let opening = request(&mut h, json!({"kind":"open_session", "session_id":"s3"})).await;
     called(&h, "session.open", 3).await;
     assert!(messages(&mut a).is_empty(), "open ACK waits for the Agent");
@@ -2147,12 +2226,12 @@ async fn a_pending_open_allows_live_work_but_only_its_owner_changes_view_on_adop
     assert_eq!(projected(&mut b)["status"]["loading"], false);
     request_from(&mut h, 2, json!({"kind":"open_session", "session_id":"s1"})).await;
     assert_eq!(ack_next(&mut h, &mut b).await["ok"], true);
-    assert_eq!(h.app.session.as_ref().unwrap().info.session_id, "s1");
+    assert_eq!(h.app.resident.current().unwrap().info.session_id, "s1");
     h.fake.release("session.open@s3");
     h.until(|app| app.live("s3").is_some()).await;
     h.settle().await;
     assert_eq!(ack_next(&mut h, &mut a).await["id"], opening);
-    assert_eq!(h.app.session.as_ref().unwrap().info.session_id, "s1");
+    assert_eq!(h.app.resident.current().unwrap().info.session_id, "s1");
     h.app.sync_remote();
     assert_eq!(projected(&mut a)["session"]["id"], "s3");
     assert_eq!(projected(&mut b)["session"]["id"], "s1");
@@ -2185,8 +2264,11 @@ async fn deletion_refuses_any_viewer_but_removes_an_unviewed_idle_live_session()
     assert_eq!(ack_next(&mut h, &mut a).await["ok"], true);
     h.settle().await;
     assert!(h.app.live("s2").is_none());
-    assert_eq!(h.calls("session.close")[0]["session_id"], "s2");
-    assert_eq!(h.calls("session.delete")[0]["session_id"], "s2");
+    assert_eq!(
+        h.calls("session.close"),
+        [json!({"session_id":"s2", "load":"load_1"})]
+    );
+    assert_eq!(h.calls("session.delete"), [json!({"session_id":"s2"})]);
     assert!(
         h.app
             .remote
@@ -2248,7 +2330,7 @@ async fn notices_follow_the_intent_or_session_and_attention_excludes_its_viewers
     let epoch = h.app.live("s1").unwrap().epoch;
     h.app.on_msg(Msg::Session(
         epoch,
-        Box::new(SessionOp::Done(Err(crate::protocol::RpcError::new(
+        Box::new(SessionOp::Operated(Err(crate::protocol::RpcError::new(
             -1,
             "test",
             "async problem",
@@ -2261,7 +2343,7 @@ async fn notices_follow_the_intent_or_session_and_attention_excludes_its_viewers
     messages(&mut a);
     h.app.on_msg(Msg::Session(
         epoch,
-        Box::new(SessionOp::Done(Err(crate::protocol::RpcError::new(
+        Box::new(SessionOp::Operated(Err(crate::protocol::RpcError::new(
             -1,
             "test",
             "foreground problem",
@@ -2274,6 +2356,12 @@ async fn notices_follow_the_intent_or_session_and_attention_excludes_its_viewers
     );
     request_from(&mut h, 2, json!({"kind":"cancel"})).await;
     messages(&mut b);
+    let mut waiting =
+        crate::testing::snapshot_running("s1", crate::testing::LOAD, 2, "loop-s1", Value::Null);
+    waiting["pending_interaction"] = json!({"loop_id":"loop-s1", "request_index":0,
+        "interaction_id":"approval-one", "tool_call_id":"call-one", "tool_name":"bash",
+        "kind":{"type":"approval", "data":{}}});
+    h.fake.script("session.state@s1", state_response(waiting));
     h.emit("interaction_requested", json!({"turn":{"session_id":"s1", "loop_id":"loop-s1"}, "interaction":{"interaction_id":"approval-one", "tool_call_id":"call-one", "tool_name":"bash", "kind":{"type":"approval", "data":{}}}})).await;
     h.settle().await;
     assert!(
@@ -2334,14 +2422,37 @@ async fn a_refused_push_returns_its_text_only_to_the_operation_that_sent_it() {
 #[tokio::test(start_paused = true)]
 async fn viewed_turn_ends_stay_seen_and_opening_a_session_clears_unseen() {
     let (mut h, mut a, mut b) = separate_views().await;
+    let mut completions = Vec::new();
     for viewed in [true, false] {
-        let turn = json!({"session_id":"s1", "loop_id":format!("loop-s1-{viewed}")});
+        let loop_id = format!("loop-s1-{viewed}");
+        let turn = json!({"session_id":"s1", "loop_id":loop_id});
+        let revision = h.app.live("s1").unwrap().recovery.revision + 1;
         let mut push = started_in(turn.clone(), vec![]);
         push["id"] = json!(format!("input-{viewed}"));
         push["started"]["input"]["id"] = push["id"].clone();
-        h.fake.script("input.push@s1", push);
+        let mut running = running_snapshot(revision, &loop_id, "work");
+        running["execution"]["input"]["id"] = push["id"].clone();
+        if !completions.is_empty() {
+            running["completions"] =
+                finished_snapshot(revision, completions.clone())["completions"].clone();
+        }
         h.fake
-            .script_held("turn.wait@s1", json!({"turn":turn, "outcome":completed()}));
+            .script("input.push@s1", after_snapshot(push, running));
+        completions.push(completion(
+            completions.len() as u64 + 1,
+            &loop_id,
+            "completed",
+        ));
+        h.fake.script_held(
+            "turn.wait@s1",
+            after_snapshot(
+                json!({"turn":turn, "outcome":completed()}),
+                finished_snapshot(revision + 1, completions.clone()),
+            ),
+        );
+        let mut result = turn_result(&loop_id, vec![user(0, &loop_id, "work")]);
+        result["outcome"] = completed();
+        h.fake.script(&format!("turn.result@s1/{loop_id}"), result);
         request(&mut h, json!({"kind":"open_session", "session_id":"s1"})).await;
         request(&mut h, json!({"kind":"submit", "text":"work"})).await;
         h.until(|app| app.live("s1").unwrap().is_busy()).await;
@@ -2508,7 +2619,7 @@ async fn a_deletion_finishing_after_remote_off_keeps_the_local_draft_editable() 
     h.fake.release("session.delete@s2");
     h.until(|app| app.live("s2").is_none()).await;
     h.app.set_reasoning(crate::protocol::Reasoning::High);
-    assert!(h.app.session.is_none());
+    assert!(h.app.resident.current().is_none());
     assert_eq!(h.app.reasoning(), Some(crate::protocol::Reasoning::High));
 }
 
@@ -2517,8 +2628,7 @@ async fn a_late_open_result_cannot_bring_back_a_session_deleted_by_another_devic
     let (mut h, mut a, mut b) = separate_views().await;
     let mut third = session_info("s3");
     third["title"] = json!("Third");
-    h.fake
-        .script_held("session.open@s3", json!({"session":third}));
+    h.fake.script_held("session.open@s3", opened_session(third));
     let opening = request(&mut h, json!({"kind":"open_session", "session_id":"s3"})).await;
     called(&h, "session.open", 3).await;
     assert!(messages(&mut a).is_empty());
@@ -2564,9 +2674,8 @@ fn results(output: &mut mpsc::Receiver<Value>) -> Vec<Value> {
 
 fn live_mut<'a>(h: &'a mut Harness, id: &str) -> &'a mut crate::app::Session {
     let app = &mut h.app;
-    app.session
+    app.resident
         .iter_mut()
-        .chain(app.background.iter_mut())
         .find(|session| session.info.session_id == id)
         .unwrap()
 }
@@ -2791,7 +2900,10 @@ async fn w4_phone() -> (Harness, mpsc::Receiver<Value>) {
     let mut h = w0_phone_session();
     h.app.remote.config = Some(config(h.app.workspace.canonicalize().unwrap()));
     h.app.remote.url = Some("http://localhost:8765".into());
-    h.fake.script("session.state", json!({}));
+    h.fake.script(
+        "session.state@s1",
+        state_response(snapshot("s1", crate::testing::LOAD, 1)),
+    );
     let (mut output, _closing, admission) = phone(&mut h, 1, "first");
     assert!(admission.await.unwrap());
     h.app.sync_remote();
@@ -2815,7 +2927,7 @@ async fn w4_snapshot_blocking_persists_across_phone_reconnect_and_keeps_the_ques
     assert_eq!(state["status"]["busy"], false);
     assert!(state["interaction"].is_null());
     assert_eq!(
-        h.app.session.as_ref().unwrap().block_reason,
+        h.app.resident.current().unwrap().block_reason,
         Some(crate::protocol::BlockReason::Persistence)
     );
     assert!(messages(&mut output).is_empty());
@@ -2842,7 +2954,7 @@ async fn w4_snapshot_blocking_persists_across_phone_reconnect_and_keeps_the_ques
             "kind":{"type":"tool_input", "data":{"answer_kind":"text", "prompt":"Your answer?", "choices":[]}}}
     }));
     h.fake
-        .script("session.state", json!({"snapshot":waiting.clone()}));
+        .script("session.state@s1", json!({"snapshot":waiting.clone()}));
     h.snapshot_event(waiting).await;
     h.settle().await;
     h.app.sync_remote();
@@ -2877,13 +2989,13 @@ async fn w4_snapshot_blocking_persists_across_phone_reconnect_and_keeps_the_ques
         json!({"type":"text", "text":"yes"})
     );
     assert_eq!(
-        h.app.session.as_ref().unwrap().block_reason,
+        h.app.resident.current().unwrap().block_reason,
         Some(crate::protocol::BlockReason::Internal)
     );
     assert_eq!(
         h.app
-            .session
-            .as_ref()
+            .resident
+            .current()
             .unwrap()
             .interaction
             .as_ref()
@@ -2895,9 +3007,10 @@ async fn w4_snapshot_blocking_persists_across_phone_reconnect_and_keeps_the_ques
     h.snapshot_event(blocked).await;
     h.settle().await;
     h.app.sync_remote();
+    let messages = messages(&mut output);
     assert!(
-        messages(&mut output).is_empty(),
-        "an older control observation cannot replace the warning"
+        messages.is_empty(),
+        "an older control observation cannot replace the warning: {messages:?}"
     );
     h.control_event(json!({})).await;
     h.settle().await;
@@ -2928,7 +3041,7 @@ async fn text_control(h: &mut Harness, loop_id: &str, interaction_id: Option<&st
         "pending_interaction":pending,
     }));
     h.fake
-        .script("session.state", json!({"snapshot":control.clone()}));
+        .script("session.state@s1", json!({"snapshot":control.clone()}));
     h.snapshot_event(control).await;
     h.settle().await;
 }
@@ -2975,7 +3088,7 @@ async fn w4_text_answers_use_the_snapshot_question_and_keep_literal_allowed_text
         assert_eq!(ack["id"], operation);
         assert_eq!(ack["ok"], true);
         assert!(ack.get("input_id").is_none());
-        assert!(h.app.session.as_ref().unwrap().allowed_tools.is_empty());
+        assert!(h.app.resident.current().unwrap().allowed_tools.is_empty());
         assert!(
             h.calls("input.push").is_empty(),
             "text answers are not a deny-reason steer"
@@ -3062,8 +3175,8 @@ async fn w4_a_late_text_reply_does_not_clear_a_replacement_or_retarget_a_cancell
     assert_eq!(ack_next(&mut h, &mut output).await["id"], original);
     assert_eq!(
         h.app
-            .session
-            .as_ref()
+            .resident
+            .current()
             .unwrap()
             .interaction
             .as_ref()
@@ -3075,7 +3188,7 @@ async fn w4_a_late_text_reply_does_not_clear_a_replacement_or_retarget_a_cancell
     request(&mut h, json!({"kind":"answer", "loop_id":"text_loop", "interaction_id":"replacement", "choice":{"text":"too late"}})).await;
     assert_eq!(ack_next(&mut h, &mut output).await["error"], "stale");
     assert_eq!(h.calls("interaction.answer").len(), 1);
-    assert!(h.app.session.as_ref().unwrap().interaction.is_none());
+    assert!(h.app.resident.current().unwrap().interaction.is_none());
     assert_eq!(h.app.composer.text(), "untouched");
     assert!(h.calls("input.push").is_empty());
 }
@@ -3117,7 +3230,7 @@ async fn w4_real_websocket_reconnect_keeps_partial_saved_and_unavailable_bodies_
     use tokio_tungstenite::tungstenite::Message;
     let mut h = w0_phone_session();
     text_control(&mut h, "question_loop", Some("still_actionable")).await;
-    let session = h.app.session.as_mut().unwrap();
+    let session = h.app.resident.current_mut().unwrap();
     for (id, saving, status, message) in [
         (
             "partial",
@@ -3214,8 +3327,8 @@ async fn w4_real_websocket_reconnect_keeps_partial_saved_and_unavailable_bodies_
             snapshot["blocks"][3]["recovery"],
             json!({"status":"unavailable", "reason":"Result expired"})
         );
-        let session = h.app.session.as_mut().unwrap();
-        let revisions = session.transcript.revisions().to_vec();
+        let session = h.app.resident.current_mut().unwrap();
+        let revisions = session.transcript.revisions().collect::<Vec<_>>();
         session.body_recovery[0].message = "Larger item still missing".into();
         session.body_recovery[1].message = "Only received fragments remain".into();
         session
@@ -3225,7 +3338,7 @@ async fn w4_real_websocket_reconnect_keeps_partial_saved_and_unavailable_bodies_
                 request_index: 0,
             })]);
         assert_eq!(
-            session.transcript.revisions(),
+            session.transcript.revisions().collect::<Vec<_>>(),
             revisions,
             "metadata invalidation cannot rely on a body bump"
         );
@@ -3313,14 +3426,14 @@ async fn w4_a_real_text_phone_keeps_original_answer_identity_through_a_replaceme
             "interaction_id":"replacement", "tool_call_id":"call2", "tool_name":"ask",
             "kind":{"type":"tool_input", "data":{"answer_kind":"text", "prompt":"Replacement?", "choices":[]}}}}));
         h.app.apply_snapshot(serde_json::from_value(replacement.clone()).unwrap());
-        h.fake.script("session.state", json!({"snapshot":replacement}));
+        h.fake.script("session.state@s1", json!({"snapshot":replacement}));
         h.fake.release("interaction.answer");
         h.until(|app| !app.remote.holds_pending(app.remote.phones[0].connection.id, "original_op")).await;
         h.app.sync_remote();
         let ack = frame_of_type(&mut socket, "ack").await;
         assert_eq!(ack["id"], "original_op");
         assert_eq!(ack["ok"], true);
-        assert_eq!(h.app.session.as_ref().unwrap().interaction.as_ref().unwrap().interaction_id, "replacement");
+        assert_eq!(h.app.resident.current().unwrap().interaction.as_ref().unwrap().interaction_id, "replacement");
         target["id"] = json!("stale_op");
         socket.send(Message::Text(target.to_string().into())).await.unwrap();
         let answered = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -3393,9 +3506,16 @@ async fn w4_agent_backed_settings_and_compaction_share_the_pending_limit_and_wai
     ids.sort();
     answers.sort();
     assert_eq!(ids, answers);
+    let compacting = h.control(
+        json!({"compaction":{"operation_id":"tui-1", "phase":"summarizing",
+        "covered_item_count":0, "retained_item_count":0}}),
+    );
+    let mut compacted = compacting.clone();
+    compacted["compaction"] = Value::Null;
+    compacted["revision"] = json!(compacting["revision"].as_u64().unwrap() + 1);
     h.fake.script_held(
         "session.compact",
-        json!({"operation_id":"tui-1", "status":"noop"}),
+        after_snapshot(json!({"operation_id":"tui-1", "status":"noop"}), compacted),
     );
     let compact = "compact-operation".to_owned();
     let intent = phone_intent(&mut h, 1, json!({"kind":"compact"}));
@@ -3407,17 +3527,18 @@ async fn w4_agent_backed_settings_and_compaction_share_the_pending_limit_and_wai
         done,
     }));
     assert!(
-        h.app.session.as_ref().unwrap().compaction.is_none(),
+        h.app.resident.current().unwrap().compaction.is_none(),
         "dispatch cannot write compaction control"
     );
     finished.await.unwrap();
     called(&h, "session.compact", 1).await;
+    h.snapshot_event(compacting).await;
     h.settle().await;
     assert!(messages(&mut output).is_empty());
     assert_eq!(
         h.app
-            .session
-            .as_ref()
+            .resident
+            .current()
             .unwrap()
             .compaction
             .as_ref()
@@ -3498,7 +3619,7 @@ async fn w4_an_open_reply_for_another_known_session_never_adopts_or_refocuses_it
     assert_eq!(ack["id"], id);
     assert_eq!(ack["ok"], false);
     assert!(h.app.live("other").is_none());
-    assert_eq!(h.app.session.as_ref().unwrap().info.session_id, "s1");
+    assert_eq!(h.app.resident.current().unwrap().info.session_id, "s1");
     assert_eq!(h.app.remote.phones[0].view.session_id(), Some("s1"));
     assert_eq!(h.calls("session.open")[0]["session_id"], "wanted");
 }
@@ -3507,7 +3628,9 @@ async fn w4_an_open_reply_for_another_known_session_never_adopts_or_refocuses_it
 async fn w4_accepted_inputs_coalesce_control_reads_without_waiting_for_them_to_ack() {
     let (mut h, mut output) = w4_phone().await;
     h.mirror(vec![], true);
-    h.fake.script_held("session.state", json!({}));
+    let control = h.control(json!({"queue":queue(vec![], true)}));
+    h.fake
+        .script_held("session.state@s1", state_response(control.clone()));
     let mut queued = Vec::new();
     for index in 0..4 {
         let id = format!("input-{index}");
@@ -3528,7 +3651,11 @@ async fn w4_accepted_inputs_coalesce_control_reads_without_waiting_for_them_to_a
         1,
         "a slow read cannot accumulate one task per input"
     );
-    h.fake.release("session.state");
+    h.fake.release("session.state@s1");
+    let mut latest = control;
+    latest["revision"] = json!(latest["revision"].as_u64().unwrap() + 1);
+    latest["queue"] = queue(queued, true);
+    h.fake.script("session.state@s1", state_response(latest));
     h.settle().await;
     assert!(
         h.calls("session.state").len() <= 2,
@@ -3552,7 +3679,7 @@ async fn w4_transport_errors_are_unknown_but_explicit_rejections_stay_rejected()
         assert_eq!(ack["id"], id);
         assert_eq!(ack["ok"], false);
         assert_eq!(ack["acceptance"], acceptance.unwrap_or("unknown"));
-        assert!(h.app.session.as_ref().unwrap().returned.is_empty());
+        assert!(h.app.resident.current().unwrap().returned.is_empty());
     }
     assert_eq!(
         h.calls("input.push").len(),
@@ -3567,16 +3694,15 @@ async fn w4_late_acceptance_names_the_original_load_without_touching_the_reopene
     h.fake.script_held("input.push", pushed(vec![]));
     let id = request(&mut h, json!({"kind":"submit", "text":"same"})).await;
     called(&h, "input.push", 1).await;
-    h.app.session.as_mut().unwrap().load = Some("reopened".into());
-    h.app.session.as_mut().unwrap().epoch += 1;
+    let old = h.app.resident.current().unwrap();
+    let replacement = crate::app::Session::new(old.info.clone(), old.epoch + 1, "reopened".into());
+    h.app.resident.remove("s1");
+    h.app.show_session(Some(replacement));
     h.fake.release("input.push");
     let ack = ack_next(&mut h, &mut output).await;
     assert_eq!(ack["id"], id);
     assert_eq!(ack["load"], "load_1");
-    assert_eq!(
-        h.app.session.as_ref().unwrap().load.as_deref(),
-        Some("reopened")
-    );
+    assert_eq!(h.app.resident.current().unwrap().load, "reopened");
     assert!(
         h.calls("session.state").is_empty(),
         "an old epoch cannot refresh the new instance"
@@ -3644,13 +3770,13 @@ async fn w4_cancel_answer_and_recall_ack_only_after_the_exact_agent_operation() 
     let answer = request(&mut h, json!({"kind":"answer", "loop_id":"l1", "interaction_id":"interaction", "choice":"allow_session"})).await;
     called(&h, "interaction.answer", 1).await;
     assert!(messages(&mut output).is_empty());
-    assert!(h.app.session.as_ref().unwrap().allowed_tools.is_empty());
+    assert!(h.app.resident.current().unwrap().allowed_tools.is_empty());
     h.fake.release("interaction.answer");
     assert_eq!(ack_next(&mut h, &mut output).await["id"], answer);
     assert!(
         h.app
-            .session
-            .as_ref()
+            .resident
+            .current()
             .unwrap()
             .allowed_tools
             .contains("bash")
@@ -3688,12 +3814,13 @@ async fn w4_missing_load_and_stale_compaction_identity_are_refused_before_rpc() 
     request(&mut h, json!({"kind":"submit", "text":"same", "load":null})).await;
     assert_eq!(ack_next(&mut h, &mut output).await["error"], "missing_load");
     assert!(h.calls("input.push").is_empty());
-    h.app.session.as_mut().unwrap().compaction = Some(serde_json::from_value(json!({
+    h.app.resident.current_mut().unwrap().compaction = Some(serde_json::from_value(json!({
         "operation_id":"new", "phase":"summarizing", "covered_item_count":0, "retained_item_count":0
     })).unwrap());
     request(&mut h, json!({"kind":"cancel", "operation_id":"old"})).await;
     assert_eq!(ack_next(&mut h, &mut output).await["error"], "stale");
     assert!(h.calls("session.compact.cancel").is_empty());
+    h.fake.script("session.compact.cancel", json!({}));
     request(&mut h, json!({"kind":"cancel", "operation_id":"new"})).await;
     assert_eq!(ack_next(&mut h, &mut output).await["ok"], true);
     assert_eq!(h.calls("session.compact.cancel")[0]["operation_id"], "new");
@@ -3795,8 +3922,8 @@ async fn w4_overflow_reconnect_replaces_the_whole_projection_and_view_epochs_nev
     }
     assert!(h.app.remote.phones.is_empty());
     h.app
-        .session
-        .as_mut()
+        .resident
+        .current_mut()
         .unwrap()
         .transcript
         .push(crate::transcript::Block::User {
@@ -3830,7 +3957,13 @@ async fn w4_a_stale_draft_create_sends_to_its_created_session_without_refocusing
         json!({"session":info, "load":"created_load",
         "snapshot":snapshot("created", "created_load", 1)}),
     );
-    h.fake.script("input.push", pushed(vec![]));
+    let mut receipt = pushed(vec![]);
+    receipt["session_id"] = json!("created");
+    receipt["load"] = json!("created_load");
+    h.fake.script(
+        "input.push",
+        after_snapshot(receipt, snapshot("created", "created_load", 2)),
+    );
     let create = request(&mut h, json!({"kind":"submit", "text":"original"})).await;
     called(&h, "session.create", 1).await;
     request(&mut h, json!({"kind":"open_session", "session_id":"s1"})).await;
@@ -3843,7 +3976,7 @@ async fn w4_a_stale_draft_create_sends_to_its_created_session_without_refocusing
     assert_eq!(ack["session_id"], "created");
     assert_eq!(ack["load"], "created_load");
     assert_eq!(h.app.remote.phones[0].view.session_id(), Some("s1"));
-    assert_eq!(h.app.session.as_ref().unwrap().info.session_id, "s1");
+    assert_eq!(h.app.resident.current().unwrap().info.session_id, "s1");
     assert_eq!(h.calls("input.push")[0]["session_id"], "created");
     assert_eq!(h.calls("input.push")[0]["load"], "created_load");
     assert_eq!(h.calls("input.push")[0]["text"], "original");

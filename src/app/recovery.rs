@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use crate::protocol::{CompletedTurn, CompletionDirectory, SessionSnapshot, TurnRef};
 
-use super::tasks::TurnRead;
+use super::read::TurnRead;
 use super::{App, NoticeLevel, Session, SessionOp};
 use crate::protocol::RpcError;
 
@@ -83,31 +83,15 @@ pub struct Recovery {
 }
 
 /// What a snapshot's revision means for the client.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Revision {
-    /// Newer than what was applied; apply it.
-    Fresh,
-    /// Already applied, or delayed behind a newer observation.
-    Stale,
-    /// A different resident instance of the same session.
-    OtherLoad,
-    /// This session has no installed instance yet.
-    UnknownLoad,
-}
-
 /// The bounded recovery state of one resident instance.
 #[derive(Default)]
 pub struct RecoveryState {
-    /// A copy of the installed load, for the tests that read it alone.
-    load: Option<String>,
     /// The last applied snapshot revision of the installed load.
     pub revision: u64,
     /// The highest completion sequence the directory has reported.
     pub observed_through: u64,
     /// Every sequence at or below this is recovered or explicitly unavailable.
     pub settled_through: u64,
-    /// A recovery generation; a read from an older one is stale.
-    pub generation: u64,
     /// Unsettled completions by sequence.
     pub entries: BTreeMap<u64, Recovery>,
     /// The directory's window moved past completions this client never read.
@@ -116,49 +100,17 @@ pub struct RecoveryState {
     pub behind: bool,
     pub gap_through: u64,
     pub history_status: Option<RecoveryStatus>,
-    pub history_coverage: Option<super::tasks::HistoryCoverage>,
+    pub history_coverage: Option<super::read::HistoryCoverage>,
     history_attempts: u32,
 }
 
 impl RecoveryState {
-    /// Resets every watermark and identity for a newly installed instance.
-    pub fn begin(&mut self, load: &str, generation: u64) {
-        let same = self.load.as_deref() == Some(load);
-        self.generation = generation;
-        self.load = Some(load.to_owned());
-        if same {
-            return;
+    pub fn accept_revision(&mut self, revision: u64) -> bool {
+        if revision <= self.revision {
+            return false;
         }
-        self.revision = 0;
-        self.observed_through = 0;
-        self.settled_through = 0;
-        self.entries.clear();
-        self.truncated_gap = false;
-        self.behind = false;
-        self.gap_through = 0;
-        self.history_status = None;
-        self.history_coverage = None;
-        self.history_attempts = 0;
-    }
-
-    /// Whether a read from `generation` still belongs to this instance.
-    pub fn accepts(&self, generation: u64) -> bool {
-        generation == self.generation
-    }
-
-    /// Decides what a snapshot revision means for the installed instance.
-    pub fn accept_revision(&mut self, load: &str, revision: u64) -> Revision {
-        match self.load.as_deref() {
-            Some(current) if current == load => match revision <= self.revision {
-                true => Revision::Stale,
-                false => {
-                    self.revision = revision;
-                    Revision::Fresh
-                }
-            },
-            Some(_) => Revision::OtherLoad,
-            None => Revision::UnknownLoad,
-        }
+        self.revision = revision;
+        true
     }
 
     /// Takes a snapshot's completion directory, keeping only unsettled work.
@@ -253,7 +205,7 @@ impl RecoveryState {
         self.settle_prefix();
     }
 
-    fn trim(&mut self, limit: usize) {
+    pub(super) fn trim(&mut self, limit: usize) {
         while self.entries.len() > limit {
             let Some(seq) = self
                 .entries
@@ -269,7 +221,7 @@ impl RecoveryState {
         }
     }
 
-    pub fn cover_history(&mut self, covered: super::tasks::HistoryCoverage, authoritative: bool) {
+    pub fn cover_history(&mut self, covered: super::read::HistoryCoverage, authoritative: bool) {
         match &mut self.history_coverage {
             Some(known)
                 if known.captured_end == covered.captured_end
@@ -295,7 +247,7 @@ impl RecoveryState {
         if !self
             .history_coverage
             .as_ref()
-            .is_some_and(super::tasks::HistoryCoverage::complete)
+            .is_some_and(super::read::HistoryCoverage::complete)
         {
             return false;
         }
@@ -399,20 +351,10 @@ fn backoff(attempt: u32) -> Duration {
 pub struct RecoveryOutcome {
     pub seq: u64,
     pub turn: TurnRef,
-    pub generation: u64,
     pub result: Result<TurnRead, RpcError>,
 }
 
 impl Session {
-    /// How many reads of this session's completions are in flight.
-    pub fn recovery_fetching(&self) -> usize {
-        self.recovery_tasks
-            .0
-            .iter()
-            .filter(|(seq, _)| seq.is_some())
-            .count()
-    }
-
     /// How many completions are still to be recovered or explicitly settled.
     pub fn recovery_pending(&self) -> usize {
         self.recovery
@@ -475,201 +417,24 @@ impl PreInstall {
 impl App {
     fn spawn_recovery(
         &mut self,
+        epoch: u64,
         seq: Option<u64>,
         work: impl Future<Output = SessionOp> + Send + 'static,
     ) {
-        let epoch = self.session.as_ref().unwrap().epoch;
         let tx = self.tx.clone();
         let task = tokio::spawn(async move {
             #[cfg(feature = "e2e-observe")]
             let work = crate::rpc::metrics::recovery_scope(work);
             let _ = tx.send(super::Msg::Session(epoch, Box::new(work.await)));
         });
-        self.session_mut()
+        self.session_mut(epoch)
             .recovery_tasks
             .0
             .push((seq, task.abort_handle()));
     }
-    /// Applies one authoritative control snapshot; it is the only entry that
-    /// writes execution, queue, pause, interaction, compaction and blocking.
-    pub fn apply_snapshot(&mut self, snapshot: SessionSnapshot) {
-        let id = snapshot.session_id.clone();
-        let Some(target) = self.snapshot_target(&id) else {
-            return;
-        };
-        if let Some(index) = target {
-            self.with_background(index, |app| app.apply_snapshot(snapshot));
-            return;
-        }
-        let observed_before = self.session.as_ref().unwrap().recovery.observed_through;
-        let applied = self.apply_to_foreground(&snapshot);
-        if applied {
-            let background = self.background_op;
-            let mut ring = false;
-            for turn in snapshot
-                .completions
-                .entries
-                .iter()
-                .filter(|turn| turn.seq > observed_before)
-            {
-                let session = self.session_mut();
-                if let Some(live) = session
-                    .live
-                    .iter_mut()
-                    .chain(&mut session.ended_live)
-                    .find(|live| live.turn.loop_id == turn.loop_id)
-                    && live.completion_background.is_none()
-                {
-                    live.completion_background = Some(background);
-                    ring |= live.started.elapsed() >= crate::title::LONG_TURN;
-                }
-            }
-            self.ring |= ring;
-            let other: usize = self
-                .background
-                .iter()
-                .map(|session| session.recovery.entries.len())
-                .sum();
-            self.session_mut()
-                .recovery
-                .trim(1024usize.saturating_sub(other));
-            if snapshot.completions.through_seq > observed_before {
-                self.stamp_activity();
-            }
-            if let Some(title) = self
-                .session
-                .as_ref()
-                .filter(|session| !session.auto_title_asked)
-                .and_then(Session::auto_title)
-            {
-                self.session_mut().auto_title_asked = true;
-                self.rename(&title);
-            }
-            #[cfg(feature = "e2e-observe")]
-            self.observe_control(&snapshot);
-            self.start_adopted_turn();
-            // A newly observed approval is announced from the snapshot itself,
-            // whether or not its event reached the client first.
-            let pending = self
-                .live(&id)
-                .and_then(|session| session.interaction.as_ref())
-                .map(|interaction| interaction.interaction_id.clone());
-            if pending.is_some() && pending != self.approval_seen {
-                self.approval_seen = pending;
-                self.on_approval_requested();
-            }
-            self.recover_completions();
-        }
-    }
-
-    /// Holds a snapshot whose session is not open yet.
-    pub(super) fn hold_snapshot(&mut self, snapshot: SessionSnapshot, bytes: usize) {
-        self.pre_install.hold(snapshot, bytes);
-    }
-
-    /// Where a snapshot belongs: `Some(index)` background, `None` foreground,
-    /// and `Option::None` when this client has no live instance of it.
-    fn snapshot_target(&self, id: &str) -> Option<Option<usize>> {
-        if self
-            .session
-            .as_ref()
-            .is_some_and(|session| session.info.session_id == id)
-        {
-            return Some(None);
-        }
-        self.live_index(id).map(Some)
-    }
-
-    fn apply_to_foreground(&mut self, snapshot: &SessionSnapshot) -> bool {
-        let session = self.session.as_mut().expect("a matched live session");
-        let revision = session
-            .recovery
-            .accept_revision(&snapshot.load, snapshot.revision);
-        match revision {
-            Revision::Fresh => {}
-            // A snapshot of another instance of this session never switches it,
-            // and neither does a delayed or duplicate observation.
-            Revision::Stale | Revision::OtherLoad | Revision::UnknownLoad => return false,
-        }
-        session.apply_control(snapshot);
-        session.recovery.discover(&snapshot.completions);
-        session.replay_early();
-        true
-    }
-
-    /// Asks for the current control snapshot; receipts get their queue and
-    /// execution from here, never from their own answer.
-    pub(super) fn refresh_control(&mut self) {
-        let Some(session) = self.session.as_mut() else {
-            return;
-        };
-        if session.control_in_flight {
-            session.control_due = true;
-            return;
-        }
-        session.control_due = false;
-        session.control_in_flight = true;
-
-        self.call(
-            crate::protocol::METHOD_SESSION_STATE,
-            serde_json::json!({}),
-            super::SessionOp::State,
-        );
-    }
-
-    /// Fetches the snapshot behind control hints, at most one read at a time.
-    pub(super) fn pull_control(&mut self) {
-        if self
-            .session
-            .as_ref()
-            .is_some_and(|session| session.control_due)
-        {
-            self.refresh_control();
-        }
-    }
-
-    /// Starts waiting on an execution a control snapshot adopted, so its
-    /// outcome arrives even though no receipt named it.
-    pub(super) fn start_adopted_turn(&mut self) {
-        let Some(session) = self.session.as_mut() else {
-            return;
-        };
-        let Some(turn) = session.adopted.take() else {
-            return;
-        };
-        let load = session
-            .load
-            .clone()
-            .expect("adopted execution has an installed load");
-        self.spawn(super::tasks::wait_turn(self.client.clone(), turn, load));
-    }
-
-    /// Installs the instance identity once an open or create completed.
-    pub(super) fn install_load(&mut self, load: String) {
-        let generation = self.next_recovery_generation();
-        let session = self.session_mut();
-        session.recovery_tasks = RecoveryTasks::default();
-        session.load = Some(load.clone());
-        session.recovery.begin(&load, generation);
-        self.recover_completions();
-    }
-
-    fn next_recovery_generation(&mut self) -> u64 {
-        self.recovery_generation = self
-            .recovery_generation
-            .checked_add(1)
-            .expect("recovery generation exhausted");
-        self.recovery_generation
-    }
-
     /// Admits recovery reads in resident-session rotation under the shared slot limit.
     pub(super) fn recover_completions(&mut self) {
-        let mut epochs: Vec<u64> = self
-            .session
-            .iter()
-            .chain(&self.background)
-            .map(|session| session.epoch)
-            .collect();
+        let mut epochs: Vec<u64> = self.resident.iter().map(|session| session.epoch).collect();
         epochs.sort_unstable();
         let next = self
             .recovery_after
@@ -679,9 +444,8 @@ impl App {
         }
         let mut slots = CONCURRENT
             - self
-                .session
+                .resident
                 .iter()
-                .chain(&self.background)
                 .map(|session| session.recovery_tasks.len())
                 .sum::<usize>();
         for _ in 0..CONCURRENT {
@@ -690,22 +454,7 @@ impl App {
                 if slots == 0 {
                     return;
                 }
-                let mut started = false;
-                if self
-                    .session
-                    .as_ref()
-                    .is_some_and(|session| session.epoch == *epoch)
-                {
-                    started = self.recover_resident(CONCURRENT - slots);
-                } else if let Some(index) = self
-                    .background
-                    .iter()
-                    .position(|session| session.epoch == *epoch)
-                {
-                    self.with_background(index, |app| {
-                        started = app.recover_resident(CONCURRENT - slots)
-                    });
-                }
+                let started = self.recover_resident(*epoch, CONCURRENT - slots);
                 if started {
                     slots -= 1;
                     self.recovery_after = Some(*epoch);
@@ -717,22 +466,21 @@ impl App {
         }
     }
 
-    fn recover_resident(&mut self, in_flight: usize) -> bool {
-        let Some(session) = self.session.as_ref() else {
+    fn recover_resident(&mut self, epoch: u64, in_flight: usize) -> bool {
+        let Some(session) = self.resident.get(epoch) else {
             return false;
         };
-        let Some(load) = session.load.clone() else {
-            return false;
-        };
+        let load = session.load.clone();
         let other: usize = self
-            .background
+            .resident
             .iter()
+            .filter(|session| session.epoch != epoch)
             .map(|session| session.recovery.entries.len())
             .sum();
-        let session = self.session_mut();
+        let session = self.session_mut(epoch);
         session.recovery.discover(&session.catalog);
         session.recovery.trim(1024usize.saturating_sub(other));
-        let session = self.session.as_ref().unwrap();
+        let session = self.resident.get(epoch).unwrap();
         if !session.recovery_tasks.history()
             && match session.recovery.history_status {
                 Some(RecoveryStatus::Pending) => true,
@@ -740,41 +488,37 @@ impl App {
                 _ => false,
             }
         {
-            let generation = session.recovery.generation;
             let through = session.recovery.gap_through;
             let covered = session.recovery.history_coverage.clone();
             let id = session.info.session_id.clone();
-            self.session_mut().recovery.history_status = Some(RecoveryStatus::Fetching);
+            self.session_mut(epoch).recovery.history_status = Some(RecoveryStatus::Fetching);
             let client = self.client.clone();
-            self.spawn_recovery(None, async move {
+            self.spawn_recovery(epoch, None, async move {
                 SessionOp::HistoryRecovered(
-                    generation,
                     through,
-                    super::tasks::read_history(client, id, super::tasks::Window::CatchUp(covered))
+                    super::read::read_history(client, id, super::read::Window::CatchUp(covered))
                         .await,
                 )
             });
             return true;
         }
-        let session = self.session.as_ref().unwrap();
+        let session = self.resident.get(epoch).unwrap();
         let now = tokio::time::Instant::now();
         let ready = session.recovery.ready(now, in_flight);
         let session_id = session.info.session_id.clone();
-        let generation = session.recovery.generation;
         if let Some(turn) = ready.into_iter().next() {
-            self.session_mut()
+            self.session_mut(epoch)
                 .recovery
                 .record(turn.seq, RecoveryStatus::Fetching);
             let turn_ref = TurnRef::new(session_id.clone(), turn.loop_id.clone());
             let seq = turn.seq;
             let client = self.client.clone();
             let load = load.clone();
-            self.spawn_recovery(Some(seq), async move {
-                let result = super::tasks::read_turn(client, turn_ref.clone(), Some(load)).await;
+            self.spawn_recovery(epoch, Some(seq), async move {
+                let result = super::read::read_turn(client, turn_ref.clone(), load).await;
                 SessionOp::Recovered(RecoveryOutcome {
                     seq,
                     turn: turn_ref,
-                    generation,
                     result,
                 })
             });
@@ -785,12 +529,9 @@ impl App {
 
     /// Settles one recovered completion; the watermark moves only when the
     /// body is complete or explicitly unavailable.
-    pub(super) fn on_recovered(&mut self, outcome: RecoveryOutcome) {
+    pub(super) fn on_recovered(&mut self, epoch: u64, outcome: RecoveryOutcome) {
         {
-            let session = self.session_mut();
-            if !session.recovery.accepts(outcome.generation) {
-                return;
-            }
+            let session = self.session_mut(epoch);
             session.recovery_tasks.finish(Some(outcome.seq));
             if !session.recovery.entries.contains_key(&outcome.seq) {
                 self.recover_completions();
@@ -799,7 +540,7 @@ impl App {
         }
         let mut moved = None;
         let unreadable = {
-            let session = self.session_mut();
+            let session = self.session_mut(epoch);
             match outcome.result {
                 Ok(TurnRead::Complete(content)) => {
                     let directory = session
@@ -813,7 +554,7 @@ impl App {
                     moved = directory.as_ref().and_then(|turn| {
                         session.reconcile_completion(
                             turn,
-                            &content.outcome,
+                            &content.details,
                             &content.items,
                             content.interrupted.as_ref(),
                             content.persistence,
@@ -845,7 +586,7 @@ impl App {
                     }
                     #[cfg(feature = "e2e-observe")]
                     if moved.is_some() {
-                        self.observe_install(&content, directory.as_ref());
+                        self.observe_install(epoch, &content, directory.as_ref());
                     }
                     None
                 }
@@ -915,10 +656,10 @@ impl App {
             }
         };
         if let Some((start, grown, end)) = moved {
-            self.moved_region(start, end, grown);
+            self.moved_region(epoch, start, end, grown);
         }
         #[cfg(feature = "e2e-observe")]
-        self.observe_recovery(&outcome.turn.loop_id);
+        self.observe_recovery(epoch, &outcome.turn.loop_id);
         if let Some(message) = unreadable {
             self.notice(NoticeLevel::Error, message);
         }
@@ -964,7 +705,6 @@ mod tests {
     #[test]
     fn discovery_keeps_only_unsettled_completions_and_reports_truncation() {
         let mut state = RecoveryState::default();
-        state.begin("load_1", 1);
         state.discover(&directory(2, 1, &[1, 2], false));
         assert_eq!(state.entries.len(), 2);
         state.record(1, RecoveryStatus::Complete);
@@ -986,7 +726,7 @@ mod tests {
             "discovery alone proves no history coverage"
         );
         state.cover_history(
-            super::super::tasks::HistoryCoverage {
+            super::super::read::HistoryCoverage {
                 captured_end: 10,
                 history_revision: "history".into(),
                 total: 4,
@@ -1011,20 +751,16 @@ mod tests {
     #[test]
     fn a_newer_revision_wins_and_duplicates_are_ignored() {
         let mut state = RecoveryState::default();
-        assert_eq!(state.accept_revision("a", 2), Revision::UnknownLoad);
-        state.begin("a", 1);
-        assert_eq!(state.accept_revision("a", 2), Revision::Fresh);
-        assert_eq!(state.accept_revision("a", 2), Revision::Stale);
-        assert_eq!(state.accept_revision("a", 1), Revision::Stale);
-        assert_eq!(state.accept_revision("b", 9), Revision::OtherLoad);
+        assert!(state.accept_revision(2));
+        assert!(!state.accept_revision(2));
+        assert!(!state.accept_revision(1));
     }
 
     #[test]
     fn only_contiguous_coverage_of_the_newer_history_can_settle_a_catalog_gap() {
         let mut state = RecoveryState::default();
-        state.begin("load", 1);
         state.discover(&directory(5, 4, &[4, 5], true));
-        let newer = super::super::tasks::HistoryCoverage {
+        let newer = super::super::read::HistoryCoverage {
             captured_end: 100,
             history_revision: "H1".into(),
             total: 100,
@@ -1037,7 +773,7 @@ mod tests {
             "the verified suffix does not include the missing prefix"
         );
         state.cover_history(
-            super::super::tasks::HistoryCoverage {
+            super::super::read::HistoryCoverage {
                 captured_end: 80,
                 history_revision: "H0".into(),
                 total: 80,
@@ -1052,7 +788,7 @@ mod tests {
         );
         assert_eq!(state.history_coverage.as_ref(), Some(&newer));
         state.cover_history(
-            super::super::tasks::HistoryCoverage {
+            super::super::read::HistoryCoverage {
                 from: 0,
                 end: 80,
                 ..newer
@@ -1066,7 +802,6 @@ mod tests {
     #[test]
     fn recovery_bounds_retries_and_the_concurrent_reads() {
         let mut state = RecoveryState::default();
-        state.begin("load", 1);
         state.discover(&directory(6, 1, &[1, 2, 3, 4], false));
         let now = tokio::time::Instant::now();
         assert_eq!(state.ready(now, 0).len(), CONCURRENT);
@@ -1100,7 +835,6 @@ mod tests {
     #[test]
     fn the_identity_cap_marks_the_load_as_behind() {
         let mut state = RecoveryState::default();
-        state.begin("load", 1);
         let seqs: Vec<u64> = (1..=(IDENTITIES_PER_LOAD as u64 + 4)).collect();
         state.discover(&directory(*seqs.last().unwrap(), 1, &seqs, false));
         assert_eq!(state.entries.len(), IDENTITIES_PER_LOAD);
@@ -1112,7 +846,6 @@ mod tests {
     #[test]
     fn a_retry_deadline_is_armed_only_while_an_entry_waits() {
         let mut state = RecoveryState::default();
-        state.begin("load", 1);
         state.discover(&directory(1, 1, &[1], false));
         assert!(
             state.next_deadline().is_none(),
@@ -1125,23 +858,8 @@ mod tests {
     }
 
     #[test]
-    fn a_different_load_resets_the_watermarks() {
-        let mut state = RecoveryState::default();
-        state.begin("first", 1);
-        state.discover(&directory(3, 1, &[1, 2, 3], false));
-        state.record(1, RecoveryStatus::Complete);
-        assert_eq!(state.settled_through, 1);
-        state.begin("second", 2);
-        assert_eq!(state.settled_through, 0);
-        assert!(state.entries.is_empty());
-        assert_eq!(state.generation, 2);
-        assert!(!state.accepts(1));
-    }
-
-    #[test]
     fn an_unavailable_directory_entry_is_displayed_before_it_can_settle() {
         let mut state = RecoveryState::default();
-        state.begin("load", 1);
         let mut gone = directory(1, 1, &[1], false);
         gone.entries[0].availability = ResultAvailability::Unavailable;
         gone.entries[0].unavailable_reason = Some(UnavailableReason::Expired);
@@ -1164,7 +882,6 @@ mod tests {
         }))
         .unwrap();
         let mut state = RecoveryState::default();
-        state.begin("l", 1);
         state.discover(&snapshot.completions);
         assert_eq!(state.observed_through, 0);
         assert!(state.entries.is_empty());

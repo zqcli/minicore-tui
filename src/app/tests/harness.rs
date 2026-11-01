@@ -10,6 +10,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 
 use crate::app::{Action, App, Msg, SessionOp};
 use crate::testing::FakeAgent;
+pub use crate::testing::Reply;
 use crate::transcript::Block;
 
 pub use crate::testing::{chunk, chunk_envelope, display_read, session_info, snapshot, turn};
@@ -70,9 +71,10 @@ impl Harness {
         );
         fake.script(
             "session.state",
-            json!({"session_id": "s1", "status": "idle"}),
+            state_response(snapshot("s1", crate::testing::LOAD, 1)),
         );
         fake.script("session.context", json!({"session_id": "s1"}));
+        fake.script("workspace.status", json!({}));
         fake.script("input.list", queue(vec![], false));
         fake.script(
             "input.remove",
@@ -86,18 +88,27 @@ impl Harness {
             "input.resume",
             json!({"started": null, "queue": queue(vec![], false)}),
         );
-        fake.script("session.read", display_read(0, 0));
+        fake.script("session.read", history(display_read(0, 0)));
         fake.script(
             "changes.list",
             json!({"records": [], "total": 0, "complete": true, "warnings": []}),
         );
+        for method in [
+            "session.close",
+            "session.delete",
+            "session.configure",
+            "interaction.answer",
+            "turn.cancel",
+        ] {
+            fake.script(method, json!({}));
+        }
         Self { app, fake, rx }
     }
 
     /// Booted, with `s1` open and its tail read from `read`.
     pub async fn opened(read: Value) -> Self {
         let mut harness = Self::new();
-        harness.fake.script("session.read", read);
+        harness.fake.script("session.read", history(read));
         harness.open().await;
         harness
     }
@@ -111,19 +122,14 @@ impl Harness {
     pub async fn open(&mut self) {
         self.boot().await;
         self.action(Action::OpenSession("s1".into()));
-        self.until(|app| app.session.is_some()).await;
+        self.until(|app| app.resident.current().is_some()).await;
         self.settle().await;
-    }
-
-    /// Applies messages until none arrives for a while, leaving the phone
-    /// channels untouched so a test can read every frame in order.
-    pub async fn run_until_quiet(&mut self) {
-        crate::testing::real_bounded(self.drain()).await;
     }
 
     async fn drain(&mut self) {
         for _ in 0..MAX_MESSAGES {
             let Ok(Some(message)) = tokio::time::timeout(QUIET, self.rx.recv()).await else {
+                self.fake.assert_scripted();
                 return;
             };
             self.app.on_msg(message);
@@ -158,6 +164,7 @@ impl Harness {
     pub async fn until(&mut self, check: impl Fn(&App) -> bool) {
         for _ in 0..2000 {
             if check(&self.app) {
+                self.fake.assert_scripted();
                 return;
             }
             if let Ok(Some(message)) =
@@ -211,55 +218,31 @@ impl Harness {
     /// Sends an Agent event for `s1`; `meta` is filled in unless given.
     pub async fn emit(&mut self, kind: &str, mut data: Value) {
         if data.get("meta").is_none() {
-            data["meta"] = json!({"session_id": "s1", "dropped_before": 0});
+            data["meta"] =
+                json!({"session_id": "s1", "load": crate::testing::LOAD, "dropped_before": 0});
+        }
+        if data["meta"]["load"].is_null() {
+            data["meta"]["load"] = json!(crate::testing::LOAD);
         }
         self.fake.emit(json!({"type": kind, "data": data})).await;
     }
 
-    /// A `session.state` answer arriving for the open session. The v2 answer
-    /// carries the same control snapshot it derives its own fields from, so a
-    /// test that patches `compaction` gets both.
-    pub fn state(&mut self, mut state: Value) {
-        if state.get("snapshot").is_none() {
-            let mut snapshot = snapshot("s1", "load_1", 1);
-            if let Some(compaction) = state.get("compaction") {
-                snapshot["compaction"] = compaction.clone();
-            }
-            state["snapshot"] = snapshot;
-        }
-        // A hand-written snapshot must be a newer observation than the one on
-        // screen, or the client rightly ignores it as delayed.
-        let next = self.app.session.as_ref().map_or(1, |s| {
-            s.recovery
-                .revision
-                .max(self.fake.control_revision(&s.info.session_id))
-                + 1
-        });
-        if state["snapshot"]["revision"].as_u64().unwrap_or(0) < next {
-            state["snapshot"]["revision"] = json!(next);
-        }
-        if state["snapshot"]["load"].is_null() {
-            state["snapshot"]["load"] = json!(crate::testing::LOAD);
-        }
-        self.op(SessionOp::State(Ok(serde_json::from_value(state).unwrap())));
+    /// Applies exactly the supplied snapshot through the query response path.
+    pub fn state(&mut self, snapshot: Value) {
+        self.op(SessionOp::State(Ok(serde_json::from_value(
+            state_response(snapshot),
+        )
+        .unwrap())));
     }
 
-    /// A `session.state` answer whose snapshot is a running turn on `loop_id`.
     pub fn running_state(&mut self, loop_id: &str, input: Value) {
-        let revision = self
-            .app
-            .session
-            .as_ref()
-            .map_or(1, |s| s.recovery.revision + 1);
-        let snapshot =
-            crate::testing::snapshot_running("s1", crate::testing::LOAD, revision, loop_id, input);
-        self.op(SessionOp::State(Ok(serde_json::from_value(json!({
-            "session_id": "s1",
-            "status": "running",
-            "active_loop": {"loop_id": loop_id},
-            "snapshot": snapshot,
-        }))
-        .unwrap())));
+        self.state(crate::testing::snapshot_running(
+            "s1",
+            crate::testing::LOAD,
+            self.next_revision(),
+            loop_id,
+            input,
+        ));
     }
 
     /// A `session.context` answer arriving for the open session.
@@ -271,7 +254,11 @@ impl Harness {
 
     /// A result arriving for the open session.
     pub fn op(&mut self, op: SessionOp) {
-        let epoch = self.app.session.as_ref().map_or(0, |session| session.epoch);
+        let epoch = self
+            .app
+            .resident
+            .current()
+            .map_or(0, |session| session.epoch);
         self.app.on_msg(Msg::Session(epoch, Box::new(op)));
     }
 
@@ -323,7 +310,7 @@ impl Harness {
 
     /// The texts in the mirrored queue, in the order the Agent reported them.
     pub fn queue(&self) -> Vec<String> {
-        let session = self.app.session.as_ref().expect("a session");
+        let session = self.app.resident.current().expect("a session");
         session
             .queue
             .items
@@ -332,15 +319,10 @@ impl Harness {
             .collect()
     }
 
-    /// Sets the queue the Agent holds, as `session.state` would report it.
-    ///
-    /// The reducer only takes the queue from a control observation, so this
-    /// seeds the scripted Agent's own control state and then the session's.
+    /// Seeds the displayed queue; later Agent observations are scripted separately.
     pub fn mirror(&mut self, items: Vec<Value>, paused: bool) {
-        let queued = queue(items, paused);
-        self.fake.set_queue(queued.clone());
-        self.app.session.as_mut().expect("a session").queue =
-            serde_json::from_value(queued).unwrap();
+        self.app.resident.current_mut().expect("a session").queue =
+            serde_json::from_value(queue(items, paused)).unwrap();
     }
 
     /// A `session_snapshot` event, which is how the Agent reports control.
@@ -354,19 +336,19 @@ impl Harness {
         .await;
     }
 
+    pub fn next_revision(&self) -> u64 {
+        self.app
+            .resident
+            .current()
+            .map_or(2, |session| session.recovery.revision + 1)
+    }
+
     /// A control snapshot whose fields the caller patches, revised past the
     /// last one this session applied.
     pub fn control(&self, patch: Value) -> Value {
-        let session = self.app.session.as_ref().expect("a session");
-        let mut snapshot = crate::testing::snapshot(
-            "s1",
-            session.load.as_deref().unwrap_or(crate::testing::LOAD),
-            session
-                .recovery
-                .revision
-                .max(self.fake.control_revision(&session.info.session_id))
-                + 1,
-        );
+        let session = self.app.resident.current().expect("a session");
+        let mut snapshot =
+            crate::testing::snapshot("s1", &session.load, session.recovery.revision + 1);
         for (key, value) in patch.as_object().expect("a patch object") {
             snapshot[key] = value.clone();
         }
@@ -556,7 +538,7 @@ pub fn queue(items: Vec<Value>, paused: bool) -> Value {
 
 /// An `input.push` answer for an entry that waits in `queued`.
 pub fn pushed(queued: Vec<Value>) -> Value {
-    json!({"id": "i1", "started": null, "queue": queue(queued, false)})
+    json!({"session_id":"s1","load":crate::testing::LOAD,"accepted":true,"id": "i1", "started": null, "queue": queue(queued, false)})
 }
 
 /// A turn the Agent started from the queue with `text` as its input.
@@ -583,11 +565,95 @@ pub fn started_at(loop_id: &str, accepted_at: &str) -> Value {
 
 /// An `input.push` answer that started `turn` with the pushed text and left `queued` waiting.
 pub fn started_in(turn: Value, queued: Vec<Value>) -> Value {
-    let started = json!({"turn": turn, "input": entry("i1", "steer", "$text")});
-    json!({"id": "i1", "started": started, "queue": queue(queued, false)})
+    let started = json!({"turn": turn, "input": entry("i1", "steer", "")});
+    json!({"session_id":started["turn"]["session_id"],"load":crate::testing::LOAD,"accepted":true,
+           "id": "i1", "started": started, "queue": queue(queued, false)})
 }
 
 /// A refusal in the shape `FakeAgent::script_sequence` accepts.
 pub fn refusal(code: i64, kind: &str) -> Value {
     json!({"error": {"code": code, "message": kind, "data": {"kind": kind,"acceptance":(kind == "input_queue_full").then_some("rejected")}}})
+}
+
+/// An explicitly paged fixture; plain FakeAgent scripts remain literal.
+pub fn history(page: Value) -> Reply {
+    Reply::from(page).history()
+}
+
+pub fn state_response(snapshot: Value) -> Value {
+    json!({"session_id":snapshot["session_id"], "snapshot":snapshot})
+}
+
+pub fn opened_session(session: Value) -> Value {
+    json!({"load":crate::testing::LOAD,
+           "snapshot":snapshot(session["session_id"].as_str().unwrap(),crate::testing::LOAD,1),
+           "session":session})
+}
+
+/// Publishes exactly this snapshot before the receipt and serves it to later queries.
+pub fn after_snapshot(receipt: Value, snapshot: Value) -> Reply {
+    let event = json!({"type":"session_snapshot","data":{
+        "meta":{"session_id":snapshot["session_id"],"load":snapshot["load"],"dropped_before":0},
+        "snapshot":snapshot
+    }});
+    Reply::result(receipt)
+        .setting(
+            format!("session.state@{}", snapshot["session_id"].as_str().unwrap()),
+            state_response(snapshot),
+        )
+        .events(vec![event])
+}
+
+pub fn running_snapshot(revision: u64, loop_id: &str, text: &str) -> Value {
+    crate::testing::snapshot_running(
+        "s1",
+        crate::testing::LOAD,
+        revision,
+        loop_id,
+        entry("i1", "steer", text),
+    )
+}
+
+pub fn completion(seq: u64, loop_id: &str, outcome: &str) -> Value {
+    json!({"seq":seq,"loop_id":loop_id,"completion_kind":"reported","outcome_kind":outcome,
+           "persistence":"persisted","availability":"stored"})
+}
+
+pub fn finished_snapshot(revision: u64, entries: Vec<Value>) -> Value {
+    let mut state = snapshot("s1", crate::testing::LOAD, revision);
+    state["completions"] = json!({"through_seq":entries.last().unwrap()["seq"],
+        "retained_from_seq":entries[0]["seq"],"entries":entries,"truncated":false});
+    state
+}
+
+/// An explicit running snapshot published with an accepted push.
+pub fn starting_reply(loop_id: &str, revision: u64) -> Reply {
+    let mut receipt = started(loop_id);
+    receipt["started"]["input"]["text"] = json!("$text");
+    after_snapshot(receipt, running_snapshot(revision, loop_id, "$text")).with_request_text()
+}
+
+/// A running turn and the explicitly ordered queue observed beside it.
+pub fn running_queue(revision: u64, loop_id: &str, prompt: &str, items: Vec<Value>) -> Value {
+    let mut state = running_snapshot(revision, loop_id, prompt);
+    state["queue"] = queue(items, false);
+    state
+}
+
+pub fn completed_result(loop_id: &str, items: Vec<Value>) -> Value {
+    let mut result = turn_result(loop_id, items);
+    result["outcome"] = completed();
+    result
+}
+
+/// One completed turn with a fully specified canonical body.
+pub fn completed_reply(loop_id: &str, revision: u64, items: Vec<Value>) -> Reply {
+    after_snapshot(
+        waited(loop_id, completed()),
+        finished_snapshot(revision, vec![completion(1, loop_id, "completed")]),
+    )
+    .setting(
+        format!("turn.result@s1/{loop_id}"),
+        completed_result(loop_id, items),
+    )
 }

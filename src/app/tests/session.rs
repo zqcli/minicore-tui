@@ -23,13 +23,15 @@ async fn a_new_session_carries_only_the_launch_flags_given() {
     for (launch, expected) in cases {
         let mut h = Harness::new();
         h.fake
-            .script("session.create", json!({"session": session_info("s1")}));
-        h.fake.script("input.push", started("l1"));
+            .script("session.create", opened_session(session_info("s1")));
+        h.fake
+            .script("input.push", starting_reply("l1", h.next_revision()));
+        h.fake.script_held("turn.wait", waited("l1", completed()));
         h.app.launch = launch;
         h.boot().await;
         let workspace = h.app.workspace.clone();
         h.submit("hello");
-        h.until(|app| app.session.is_some()).await;
+        h.until(|app| app.resident.current().is_some()).await;
         let create = h.calls("session.create").remove(0);
         assert_eq!(create["workspace"], json!(workspace));
         for field in ["profile", "model", "reasoning"] {
@@ -55,7 +57,7 @@ async fn launch_flags_apply_to_an_opened_session_once() {
     assert_eq!(update.len(), 1);
     assert_eq!(update[0]["model"], "deep");
     assert_eq!(update[0]["reasoning"], "max");
-    assert_eq!(h.app.session.as_ref().unwrap().info.model, "deep");
+    assert_eq!(h.app.resident.current().unwrap().info.model, "deep");
 }
 
 #[tokio::test(start_paused = true)]
@@ -75,8 +77,8 @@ async fn a_reply_for_a_session_that_is_no_longer_open_is_dropped() {
     h.fake.script_sequence(
         "session.open",
         vec![
-            json!({"session": session_info("s1")}),
-            json!({"session": session_info("s2")}),
+            opened_session(session_info("s1")),
+            opened_session(session_info("s2")),
         ],
     );
     h.fake.script_sequence_later(
@@ -88,19 +90,22 @@ async fn a_reply_for_a_session_that_is_no_longer_open_is_dropped() {
                 page(1, 0, vec![user(0, "l9", "second session")]),
                 Duration::ZERO,
             ),
-        ],
+        ]
+        .into_iter()
+        .map(|(page, delay)| (history(page), delay))
+        .collect::<Vec<_>>(),
     );
     h.fake.script(
         "session.read",
-        page(1, 0, vec![user(0, "l0", "first session")]),
+        history(page(1, 0, vec![user(0, "l0", "first session")])),
     );
     h.boot().await;
     h.action(Action::OpenSession("s1".into()));
-    h.until(|app| app.session.is_some()).await;
+    h.until(|app| app.resident.current().is_some()).await;
     h.action(Action::OpenSession("s2".into()));
     h.until(|app| {
-        app.session
-            .as_ref()
+        app.resident
+            .current()
             .is_some_and(|session| session.info.session_id == "s2")
     })
     .await;
@@ -111,8 +116,16 @@ async fn a_reply_for_a_session_that_is_no_longer_open_is_dropped() {
 #[tokio::test(start_paused = true)]
 async fn copy_never_takes_the_answer_of_the_previous_session() {
     let mut h = Harness::opened(display_read(0, 0)).await;
-    h.fake.script("input.push", started("l1"));
-    h.fake.script_held("turn.wait", waited("l1", completed()));
+    h.fake
+        .script("input.push", starting_reply("l1", h.next_revision()));
+    h.fake.script_held(
+        "turn.wait",
+        completed_reply(
+            "l1",
+            3,
+            vec![user(0, "l1", "question"), assistant(1, "l1", "an answer")],
+        ),
+    );
     h.submit("question");
     h.until(|app| app.is_busy()).await;
     h.emit(
@@ -124,14 +137,27 @@ async fn copy_never_takes_the_answer_of_the_previous_session() {
     h.until(|app| !app.is_busy()).await;
 
     h.fake
-        .script("session.create", json!({"session": session_info("s2")}));
-    h.fake.script("input.push", started("l2"));
+        .script("session.create", opened_session(session_info("s2")));
+    h.fake.script(
+        "input.push@s2",
+        after_snapshot(
+            started_in(json!({"session_id":"s2","loop_id":"l2"}), vec![]),
+            crate::testing::snapshot_running(
+                "s2",
+                crate::testing::LOAD,
+                2,
+                "l2",
+                entry("i1", "steer", "$text"),
+            ),
+        )
+        .with_request_text(),
+    );
     h.fake.script_held("turn.wait", waited("l2", completed()));
     h.action(Action::NewSession);
     h.submit("a new question");
     h.until(|app| {
-        app.session
-            .as_ref()
+        app.resident
+            .current()
             .is_some_and(|session| session.info.session_id == "s2")
     })
     .await;
@@ -150,11 +176,11 @@ async fn the_sessions_picker_names_and_filters_by_title_or_first_prompt() {
     );
     h.fake.script(
         "session.read",
-        page(
+        history(page(
             1,
             0,
             vec![user(0, "l0", "fix the greeting\nand run the tests")],
-        ),
+        )),
     );
     h.open().await;
 
@@ -245,8 +271,9 @@ async fn the_sessions_picker_lists_this_workspace_first_then_newest() {
 #[tokio::test(start_paused = true)]
 async fn an_event_from_a_previous_load_never_reaches_this_instance() {
     let mut h = Harness::opened(display_read(0, 0)).await;
-    let installed = h.app.session.as_ref().unwrap().load.clone().unwrap();
-    h.fake.script("input.push", started("l1"));
+    let installed = h.app.resident.current().unwrap().load.clone();
+    h.fake
+        .script("input.push", starting_reply("l1", h.next_revision()));
     h.fake.script_held("turn.wait", waited("l1", completed()));
     h.submit("write a file");
     h.until(|app| app.is_busy()).await;
@@ -275,26 +302,23 @@ async fn an_event_from_a_previous_load_never_reaches_this_instance() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn installing_a_load_always_refreshes_control_even_without_an_open_snapshot() {
+async fn installing_a_load_refreshes_control_after_the_initial_snapshot() {
     let mut h = Harness::new();
-    // An open answer whose snapshot the client may have to drop: the refresh
-    // is what keeps the control state from staying empty.
-    h.fake.script(
-        "session.open",
-        json!({"session": session_info("s1"), "load": crate::testing::LOAD}),
-    );
+    h.fake
+        .script("session.open", opened_session(session_info("s1")));
     h.open().await;
     assert!(
         !h.calls("session.state").is_empty(),
         "installing a load must ask for the current control snapshot"
     );
-    assert!(h.app.session.as_ref().unwrap().load.is_some());
+    assert_eq!(h.app.resident.current().unwrap().load, crate::testing::LOAD);
 }
 
 #[tokio::test(start_paused = true)]
 async fn an_approval_published_only_by_a_snapshot_reaches_the_sheet() {
     let mut h = Harness::opened(display_read(0, 0)).await;
-    h.fake.script("input.push", started("l1"));
+    h.fake
+        .script("input.push", starting_reply("l1", h.next_revision()));
     h.fake.script_held("turn.wait", waited("l1", completed()));
     h.submit("write a file");
     h.until(|app| app.is_busy()).await;
@@ -318,10 +342,8 @@ async fn an_approval_published_only_by_a_snapshot_reaches_the_sheet() {
 #[tokio::test(start_paused = true)]
 async fn a_snapshot_that_arrives_before_its_open_is_applied_by_that_open() {
     let mut h = Harness::new();
-    h.fake.script_held(
-        "session.open",
-        json!({"session":session_info("s1"),"load":crate::testing::LOAD}),
-    );
+    h.fake
+        .script_held("session.open", opened_session(session_info("s1")));
     h.boot().await;
     h.action(Action::OpenSession("s1".into()));
     h.fake.wait_for_calls("session.open", 1).await;
@@ -355,7 +377,7 @@ async fn a_snapshot_that_arrives_before_its_open_is_applied_by_that_open() {
     // The Agent's own answer to the refresh states the same live control, at a
     // higher revision, exactly as the real one would.
     h.fake.script(
-        "session.state",
+        "session.state@s1",
         json!({"session_id": "s1", "status": "idle", "snapshot": {
             "session_id": "s1", "load": crate::testing::LOAD, "revision": 5,
             "execution": {"type": "none"},
@@ -371,7 +393,7 @@ async fn a_snapshot_that_arrives_before_its_open_is_applied_by_that_open() {
         }}),
     );
     h.fake.release("session.open");
-    h.until(|app| app.session.is_some()).await;
+    h.until(|app| app.resident.current().is_some()).await;
     h.settle().await;
     assert_eq!(h.queue(), ["held"], "the queue the Agent reports is shown");
     assert!(
@@ -383,10 +405,8 @@ async fn a_snapshot_that_arrives_before_its_open_is_applied_by_that_open() {
 #[tokio::test(start_paused = true)]
 async fn an_open_applies_the_snapshot_it_held_before_the_refresh_answers() {
     let mut h = Harness::new();
-    h.fake.script_held(
-        "session.open",
-        json!({"session":session_info("s1"),"load":crate::testing::LOAD}),
-    );
+    h.fake
+        .script_held("session.open", opened_session(session_info("s1")));
     h.boot().await;
     h.action(Action::OpenSession("s1".into()));
     h.fake.wait_for_calls("session.open", 1).await;
@@ -409,18 +429,18 @@ async fn an_open_applies_the_snapshot_it_held_before_the_refresh_answers() {
     assert!(!h.app.pre_install.is_empty());
     // The refresh is held, so what is on screen is what the open installed.
     h.fake.script_held(
-        "session.state",
+        "session.state@s1",
         json!({"session_id": "s1", "status": "idle"}),
     );
     h.fake.release("session.open");
-    h.until(|app| app.session.is_some()).await;
+    h.until(|app| app.resident.current().is_some()).await;
     h.settle().await;
     assert_eq!(
         h.queue(),
         ["held"],
         "the held snapshot supplies control until a newer one arrives"
     );
-    h.fake.release("session.state");
+    h.fake.release("session.state@s1");
 }
 
 #[tokio::test(start_paused = true)]
@@ -436,20 +456,15 @@ async fn a_superseded_same_session_open_cannot_replace_the_newer_load() {
     h.action(Action::OpenSession("s1".into()));
     h.settle().await;
     assert_eq!(h.calls("session.open").len(), 2);
-    assert_eq!(
-        h.app.session.as_ref().unwrap().load.as_deref(),
-        Some("load_second")
-    );
+    assert_eq!(h.app.resident.current().unwrap().load, "load_second");
     assert!(!h.app.loading_session);
 }
 
 #[tokio::test(start_paused = true)]
 async fn an_unrelated_snapshot_is_not_held_for_another_pending_open() {
     let mut h = Harness::new();
-    h.fake.script_held(
-        "session.open",
-        json!({"session":session_info("s2"),"load":crate::testing::LOAD}),
-    );
+    h.fake
+        .script_held("session.open", opened_session(session_info("s2")));
     h.boot().await;
     h.action(Action::OpenSession("s2".into()));
     h.fake.wait_for_calls("session.open", 1).await;
@@ -457,11 +472,11 @@ async fn an_unrelated_snapshot_is_not_held_for_another_pending_open() {
         .await;
     h.settle().await;
     assert!(h.app.pre_install.is_empty());
-    assert!(h.app.session.is_none());
+    assert!(h.app.resident.current().is_none());
     h.fake.release("session.open");
     h.until(|app| {
-        app.session
-            .as_ref()
+        app.resident
+            .current()
             .is_some_and(|session| session.info.session_id == "s2")
     })
     .await;
@@ -471,18 +486,18 @@ async fn an_unrelated_snapshot_is_not_held_for_another_pending_open() {
 async fn unknown_bodies_share_a_global_budget_without_creating_visible_turns() {
     let mut h = Harness::opened(display_read(0, 0)).await;
     for i in 2..=9 {
-        let mut session = crate::app::Session::new(
+        let session = crate::app::Session::new(
             serde_json::from_value(session_info(&format!("s{i}"))).unwrap(),
             i,
+            crate::testing::LOAD.into(),
         );
-        session.load = Some(crate::testing::LOAD.into());
-        h.app.background.push(session);
+        h.app.resident.insert(session);
     }
     for i in 1..=9 {
         h.emit_no_meta("output_delta",json!({"meta":{"session_id":format!("s{i}"),"load":crate::testing::LOAD,"dropped_before":0},"turn":{"session_id":format!("s{i}"),"loop_id":format!("unknown{i}")},"request_index":0,"channel":"text","delta":"x".repeat(1024*1024)})).await;
         h.settle().await;
     }
-    let sessions: Vec<_> = h.app.session.iter().chain(&h.app.background).collect();
+    let sessions: Vec<_> = h.app.resident.iter().collect();
     assert!(
         sessions
             .iter()
@@ -505,7 +520,10 @@ async fn a_delayed_older_state_sample_cannot_regress_a_newer_snapshot_without_le
         entry("iA", "steer", "old input"),
     );
     older["queue"] = queue(vec![entry("old-queued", "follow_up", "old queue")], false);
-    h.fake.script_held("session.state",json!({"_fixture_exact_snapshot":true,"session_id":"s1","status":"running","snapshot":older}));
+    h.fake.script_held(
+        "session.state@s1",
+        json!({"session_id":"s1","status":"running","snapshot":older}),
+    );
     h.app.refresh_control();
     let calls = h.calls("session.state").len();
     h.fake.wait_for_calls("session.state", calls + 1).await;
@@ -521,18 +539,18 @@ async fn a_delayed_older_state_sample_cannot_regress_a_newer_snapshot_without_le
     newer["block_reason"] = json!("persistence");
     newer["pending_interaction"] = json!({"loop_id":"B","request_index":0,"interaction_id":"new-question","tool_call_id":"question-call","tool_name":"question","kind":{"type":"tool_input","data":{"prompt":"Which branch?","answer_kind":"text"}}});
     h.snapshot_event(newer).await;
-    h.until(|app| app.session.as_ref().unwrap().recovery.revision == 101)
+    h.until(|app| app.resident.current().unwrap().recovery.revision == 101)
         .await;
     h.app
-        .session
-        .as_mut()
+        .resident
+        .current_mut()
         .unwrap()
         .interaction_editor
         .set_text("keep this answer");
-    h.fake.release("session.state");
-    h.until(|app| !app.session.as_ref().unwrap().control_in_flight)
+    h.fake.release("session.state@s1");
+    h.until(|app| !app.resident.current().unwrap().control_in_flight)
         .await;
-    let session = h.app.session.as_ref().unwrap();
+    let session = h.app.resident.current().unwrap();
     assert_eq!(session.recovery.revision, 101);
     assert_eq!(session.observed_loop(), Some("B"));
     assert_eq!(h.queue(), ["new queue"]);
@@ -560,9 +578,8 @@ async fn a_delayed_older_state_sample_cannot_regress_a_newer_snapshot_without_le
 }
 
 #[tokio::test(start_paused = true)]
-async fn held_history_and_result_replies_after_same_session_reopen_cannot_mutate_the_new_instance()
-{
-    use crate::app::{SessionOp, tasks};
+async fn queued_old_load_results_cannot_mutate_a_reopened_instance_and_pending_work_is_cancelled() {
+    use crate::app::{SessionOp, read};
     let mut h = Harness::opened(display_read(0, 0)).await;
     h.fake.script_sequence(
         "session.read",
@@ -573,18 +590,21 @@ async fn held_history_and_result_replies_after_same_session_reopen_cannot_mutate
                 user(0, "old-loop", "old prompt"),
                 assistant(1, "old-loop", "old history answer"),
             ],
-        )],
+        )]
+        .into_iter()
+        .map(history)
+        .collect::<Vec<_>>(),
     );
     h.fake.script_held(
         "session.read",
-        page(
+        history(page(
             2,
             0,
             vec![
                 user(0, "old-loop", "old prompt"),
                 assistant(1, "old-loop", "old history answer"),
             ],
-        ),
+        )),
     );
     let reads = h.calls("session.read").len();
     let mut result = turn_result(
@@ -596,34 +616,44 @@ async fn held_history_and_result_replies_after_same_session_reopen_cannot_mutate
     );
     result["outcome"] = completed();
     h.fake.script_held("turn.result", result);
-    let old = h.app.session.as_ref().unwrap();
+    let old = h.app.resident.current().unwrap();
     let epoch = old.epoch;
-    let generation = old.recovery.generation;
-    let old_load = old.load.clone().unwrap();
+
+    let old_load = old.load.clone();
     let client = h.fake.client.clone();
-    let (history_done, history_returned) = tokio::sync::oneshot::channel();
     h.app.spawn(async move {
-        let read = tasks::read_history(client, "s1".into(), tasks::Window::Tail).await;
-        assert!(matches!(&read,Ok(tasks::HistoryRead::Complete(page)) if page.items.len()==2));
-        let _ = history_done.send(());
+        let read = read::read_history(client, "s1".into(), read::Window::Tail).await;
+        assert!(matches!(&read,Ok(read::HistoryRead::Complete(page)) if page.items.len()==2));
         SessionOp::Tail(read)
     });
     let client = h.fake.client.clone();
-    let (result_done, result_returned) = tokio::sync::oneshot::channel();
     h.app.spawn(async move {
         let turn = crate::protocol::TurnRef::new("s1", "old-loop");
-        let result = tasks::read_turn(client, turn.clone(), Some(old_load)).await;
-        assert!(matches!(&result,Ok(tasks::TurnRead::Complete(body)) if body.items.len()==2));
-        let _ = result_done.send(());
+        let result = read::read_turn(client, turn.clone(), old_load).await;
+        assert!(matches!(&result,Ok(read::TurnRead::Complete(body)) if body.items.len()==2));
         SessionOp::Recovered(crate::app::recovery::RecoveryOutcome {
             seq: 1,
             turn,
-            generation,
+
             result,
         })
     });
     h.fake.wait_for_calls("session.read", reads + 2).await;
     h.fake.wait_for_calls("turn.result", 1).await;
+    h.fake.release("session.read");
+    h.fake.release("turn.result");
+    let stale = [h.next_message().await, h.next_message().await];
+    for message in &stale {
+        assert!(
+            matches!(message,crate::app::Msg::Session(owner,op) if *owner==epoch && matches!(&**op,SessionOp::Tail(_) | SessionOp::Recovered(_)))
+        );
+    }
+    let (pending, cancelled) = tokio::sync::oneshot::channel::<()>();
+    h.app.spawn(async move {
+        let op = std::future::pending::<SessionOp>().await;
+        drop(pending);
+        op
+    });
     h.fake.script("session.close", json!({"closed":true}));
     let _: serde_json::Value = h
         .fake
@@ -634,7 +664,11 @@ async fn held_history_and_result_replies_after_same_session_reopen_cannot_mutate
         )
         .await
         .unwrap();
-    drop(h.app.session.take());
+    h.app.resident.remove("s1");
+    assert!(
+        crate::testing::real_bounded(cancelled).await.is_err(),
+        "resident removal cancels its unfinished work"
+    );
     let mut reopened = crate::testing::snapshot_running(
         "s1",
         "load_reopened",
@@ -659,73 +693,56 @@ async fn held_history_and_result_replies_after_same_session_reopen_cannot_mutate
     );
     let mut refreshed = reopened.clone();
     refreshed["revision"] = json!(2);
-    h.fake.script("session.state",json!({"_fixture_exact_snapshot":true,"session_id":"s1","status":"running","snapshot":refreshed}));
+    h.fake.script(
+        "session.state@s1",
+        json!({"session_id":"s1","status":"running","snapshot":refreshed}),
+    );
     h.fake.script_held(
         "turn.wait",
         json!({"turn":turn("new-loop"),"outcome":completed()}),
     );
     let old_history_calls = h.calls("session.read").len();
-    h.fake
-        .script_sequence("session.read", vec![display_read(0, 0)]);
+    h.fake.script_sequence(
+        "session.read",
+        vec![display_read(0, 0)]
+            .into_iter()
+            .map(history)
+            .collect::<Vec<_>>(),
+    );
     h.action(Action::OpenSession("s1".into()));
     h.until(|app| {
-        app.session.as_ref().is_some_and(|session| {
-            session.load.as_deref() == Some("load_reopened") && session.recovery.revision == 2
+        app.resident.current().is_some_and(|session| {
+            session.load == "load_reopened" && session.recovery.revision == 2
         })
     })
     .await;
     h.emit_no_meta("output_delta",json!({"meta":{"session_id":"s1","load":"load_reopened","dropped_before":0},"turn":turn("new-loop"),"request_index":0,"channel":"text","delta":"new answer"})).await;
-    h.until(|app| app.session.as_ref().unwrap().transcript.last_answer() == Some("new answer"))
+    h.until(|app| app.resident.current().unwrap().transcript.last_answer() == Some("new answer"))
         .await;
-    assert!(h.app.session.as_ref().unwrap().epoch > epoch);
-    assert_ne!(
-        h.app.session.as_ref().unwrap().recovery.generation,
-        generation
-    );
+    assert!(h.app.resident.current().unwrap().epoch > epoch);
     h.app.composer.set_text("new draft");
     let before = format!("{:?}", h.blocks());
-    h.fake.release("session.read");
-    crate::testing::real_bounded(history_returned)
-        .await
-        .unwrap();
-    loop {
-        let message = h.next_message().await;
-        let old_history = matches!(&message,crate::app::Msg::Session(owner,op) if *owner==epoch && matches!(&**op,SessionOp::Tail(_)));
+    for message in stale {
         h.app.on_msg(message);
-        if old_history {
-            assert_eq!(
-                format!("{:?}", h.blocks()),
-                before,
-                "the actual old history reply must not mutate the new view even transiently"
-            );
-            break;
-        }
-    }
-    h.fake.release("turn.result");
-    crate::testing::real_bounded(result_returned).await.unwrap();
-    loop {
-        let message = h.next_message().await;
-        let old_result = matches!(&message,crate::app::Msg::Session(owner,op) if *owner==epoch && matches!(&**op,SessionOp::Recovered(_)));
-        h.app.on_msg(message);
-        if old_result {
-            assert_eq!(
-                format!("{:?}", h.blocks()),
-                before,
-                "the actual old result reply must not mutate the new view even transiently"
-            );
-            assert_eq!(h.app.session.as_ref().unwrap().recovery.settled_through, 0);
-            break;
-        }
+        assert_eq!(
+            format!("{:?}", h.blocks()),
+            before,
+            "an already queued old result must not mutate the new view even transiently"
+        );
+        assert_eq!(
+            h.app.resident.current().unwrap().recovery.settled_through,
+            0
+        );
     }
     h.settle().await;
     assert!(
         h.calls("session.read").len() > old_history_calls,
-        "both the new view and held old history really returned"
+        "the reopened view issues a separate history read"
     );
     assert_eq!(format!("{:?}", h.blocks()), before);
     assert_eq!(h.app.composer.text(), "new draft");
-    let session = h.app.session.as_ref().unwrap();
-    assert_eq!(session.load.as_deref(), Some("load_reopened"));
+    let session = h.app.resident.current().unwrap();
+    assert_eq!(session.load, "load_reopened");
     assert_eq!(session.recovery.revision, 2);
     assert_eq!(
         (
@@ -763,6 +780,7 @@ mod snapshot_control {
         Session::new(
             serde_json::from_value(crate::testing::session_info("s")).unwrap(),
             1,
+            crate::testing::LOAD.into(),
         )
     }
 

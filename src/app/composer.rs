@@ -5,11 +5,10 @@
 use std::cell::Cell;
 use std::collections::VecDeque;
 use std::ops::Range;
-use std::path::PathBuf;
 
 use unicode_segmentation::UnicodeSegmentation;
 
-use crate::prompt_history::{self, Record};
+use crate::prompt_history::Record;
 use crate::wrap;
 
 /// Pastes of more lines or characters than these become a chip.
@@ -248,8 +247,6 @@ pub struct Composer {
     /// The buffer before the current typing gesture, committed when it ends.
     gesture: Option<Snapshot>,
     history: VecDeque<Entry>,
-    /// Where `history` is saved after each submit.
-    history_file: Option<PathBuf>,
     /// Position in `history` while recalling; `None` means the live draft.
     recall: Option<usize>,
     draft: Entry,
@@ -266,17 +263,15 @@ impl Composer {
         Self::default()
     }
 
-    /// Loads the saved prompt history from `file` and saves it there on every submit.
-    pub fn with_history_file(file: PathBuf) -> Self {
-        let history = prompt_history::load(&file)
-            .into_iter()
-            .map(Entry::from_record)
-            .collect();
+    pub fn with_history(records: Vec<Record>) -> Self {
         Self {
-            history,
-            history_file: Some(file),
+            history: records.into_iter().map(Entry::from_record).collect(),
             ..Self::default()
         }
+    }
+
+    pub fn history_records(&self) -> Vec<Record> {
+        self.history.iter().map(Entry::record).collect()
     }
 
     pub fn version(&self) -> u64 {
@@ -410,6 +405,7 @@ impl Composer {
     }
 
     /// Records a submitted prompt and starts a fresh draft.
+    #[cfg(test)]
     pub fn submit(&mut self) -> String {
         let entry = self.take_submission();
         let text = entry.text.clone();
@@ -436,7 +432,7 @@ impl Composer {
         entry
     }
 
-    pub fn remember(&mut self, mut entry: Entry) {
+    pub fn remember(&mut self, mut entry: Entry) -> bool {
         entry.discard_rollback();
         let repeat = self
             .history
@@ -447,7 +443,9 @@ impl Composer {
             if self.history.len() > HISTORY_STEPS {
                 self.history.pop_front();
             }
-            self.save_history();
+            true
+        } else {
+            false
         }
     }
 
@@ -467,15 +465,6 @@ impl Composer {
             self.redo = redo;
         }
         entry.text
-    }
-
-    fn save_history(&self) {
-        let Some(file) = &self.history_file else {
-            return;
-        };
-        let records: Vec<Record> = self.history.iter().map(Entry::record).collect();
-        // Losing the saved history must not get in the way of sending.
-        let _ = prompt_history::save(file, &records);
     }
 
     // ---- undo ---------------------------------------------------------
@@ -1102,18 +1091,16 @@ mod tests {
     }
 
     #[test]
-    fn the_history_file_restores_prompts_and_chips_in_a_new_composer() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("state").join("history.jsonl");
+    fn history_records_restore_prompts_and_chips_in_a_new_composer() {
         let payload = big_paste(15);
-        let mut c = Composer::with_history_file(file.clone());
+        let mut c = Composer::new();
         submit_all(&mut c, &["first", "second\nline"]);
         c.insert("before ");
         c.insert(&payload);
         c.insert(" after");
         c.submit();
 
-        let mut restarted = Composer::with_history_file(file);
+        let mut restarted = Composer::with_history(c.history_records());
         assert!(restarted.history_prev());
         assert_eq!(restarted.display(), "before [paste #1 +15 lines] after");
         assert_eq!(restarted.text(), format!("before {payload} after"));
@@ -1125,15 +1112,13 @@ mod tests {
     }
 
     #[test]
-    fn the_saved_history_keeps_only_the_newest_prompts() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("history.jsonl");
-        let mut c = Composer::with_history_file(file.clone());
+    fn history_records_keep_only_the_newest_prompts() {
+        let mut c = Composer::new();
         for index in 0..HISTORY_STEPS + 5 {
             c.insert(&format!("prompt {index}"));
             c.submit();
         }
-        let saved = prompt_history::load(&file);
+        let saved = c.history_records();
         assert_eq!(saved.len(), HISTORY_STEPS);
         assert_eq!(saved[0].text, "prompt 5");
         assert_eq!(
@@ -1151,7 +1136,7 @@ mod tests {
             "{\"text\":\"héllo\",\"pastes\":[{\"start\":0,\"end\":2}]}\n",
         )
         .unwrap();
-        let mut c = Composer::with_history_file(file);
+        let mut c = Composer::with_history(crate::prompt_history::load(&file));
         assert!(c.history_prev());
         assert_eq!(c.text(), "héllo");
         assert!(c.pastes().is_empty());

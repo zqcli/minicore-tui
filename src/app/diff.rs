@@ -364,7 +364,7 @@ impl App {
     }
 
     fn read_diff(&self, query: DiffQuery, refs: Vec<String>) {
-        let Some(session) = self.session.as_ref() else {
+        let Some(session) = self.resident.current() else {
             return;
         };
         let client = self.client.clone();
@@ -400,7 +400,7 @@ impl App {
                         .iter()
                         .map(|page| {
                             let key = page.tool_ref.as_ref()?;
-                            let call = self.session.as_ref()?.transcript.find_tool(key)?;
+                            let call = self.resident.current()?.transcript.find_tool(key)?;
                             Some(call.name.clone())
                         })
                         .collect();

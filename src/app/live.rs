@@ -8,35 +8,24 @@ use super::{App, LiveStatus, NoticeLevel, Overlay, Scroll, Session};
 use crate::transcript::Block;
 
 impl App {
-    /// Where the background session `id` is.
-    pub(super) fn live_index(&self, id: &str) -> Option<usize> {
-        self.background
-            .iter()
-            .position(|session| session.info.session_id == id)
-    }
-
-    /// The live session `id`, on screen or in the background.
+    /// The loaded session, independently of which view is selected.
     pub fn live(&self, id: &str) -> Option<&Session> {
-        self.session
-            .iter()
-            .chain(&self.background)
-            .find(|session| session.info.session_id == id)
+        self.resident.find(id)
     }
 
     /// Background sessions working (running or compacting), and those waiting
     /// for an approval.
     pub fn background_counts(&self) -> (usize, usize) {
         self.other_counts(
-            self.session
-                .as_ref()
+            self.resident
+                .current()
                 .map(|session| session.info.session_id.as_str()),
         )
     }
 
     pub fn other_counts(&self, current: Option<&str>) -> (usize, usize) {
-        self.session
+        self.resident
             .iter()
-            .chain(&self.background)
             .filter(|session| Some(session.info.session_id.as_str()) != current)
             .fold((0, 0), |(working, approval), session| {
                 match session.live_status() {
@@ -47,67 +36,43 @@ impl App {
             })
     }
 
-    /// The foreground session's label, for notices about it.
-    pub(super) fn session_label(&self) -> String {
-        let session = self.session.as_ref().expect("a live session");
+    pub(super) fn session_label(&self, epoch: u64) -> String {
+        let session = self.resident.get(epoch).expect("a resident session");
         session_label(&session.info, Some(session))
     }
 
-    /// Runs reducer code for the background session at `index` by swapping it
-    /// into the foreground with its own view state, so the code needs no
-    /// second path and the foreground's view stays as it is.
-    pub(super) fn with_background(&mut self, index: usize, op: impl FnOnce(&mut Self)) {
-        let scroll = self.scroll;
-        let displaced = self.session.is_some();
-        if let Some(foreground) = self.session.as_mut() {
-            foreground.scroll = scroll;
-            std::mem::swap(foreground, &mut self.background[index]);
-        } else {
-            self.session = Some(self.background.remove(index));
+    pub(super) fn switch_to(&mut self, epoch: u64) {
+        if self.resident.is_current(epoch) {
+            return;
         }
-        self.scroll = self.session.as_ref().unwrap().scroll;
-        let previous = std::mem::replace(&mut self.background_op, true);
-        let id = self.session.as_ref().unwrap().info.session_id.clone();
-        self.with_notice_for(&id, op);
-        self.background_op = previous;
-        self.session
-            .as_mut()
-            .expect("reducer code keeps its session")
-            .scroll = self.scroll;
-        if displaced {
-            std::mem::swap(self.session.as_mut().unwrap(), &mut self.background[index]);
-        } else {
-            self.background.insert(index, self.session.take().unwrap());
-        }
-        self.scroll = scroll;
+        self.select_session(Some(epoch));
+        self.refresh_branch_for(epoch);
+        self.refresh_context_for(epoch);
     }
 
-    /// Brings the background session at `index` to the screen at once: no
-    /// history is read, only the footer's figures are refreshed.
-    pub(super) fn switch_to(&mut self, index: usize) {
-        let session = self.background.remove(index);
-        self.show_session(Some(session));
-        self.refresh_branch();
-        self.refresh_context();
+    pub(super) fn show_session(&mut self, session: Option<Session>) {
+        let epoch = session.as_ref().map(|session| session.epoch);
+        if let Some(session) = session {
+            self.resident.insert(session);
+        }
+        self.select_session(epoch);
     }
 
-    /// Puts `session` on screen, or the draft for `None`, with the composer
-    /// text and view it was left with; the foreground it replaces stays live,
-    /// first in the background.
-    pub(super) fn show_session(&mut self, mut session: Option<Session>) {
+    /// Navigation restores a view without changing any operation's target.
+    pub(super) fn select_session(&mut self, epoch: Option<u64>) {
         if self.opening_target.take().is_some() {
             self.loading_session = false;
         }
         let typed = self.composer.text().to_owned();
-        match self.session.take() {
-            Some(mut left) => {
+        match self.resident.current_mut() {
+            Some(left) => {
                 left.draft = (!typed.is_empty()).then_some(typed);
                 left.scroll = self.scroll;
-                self.background.insert(0, left);
             }
             None => self.draft_text = typed,
         }
-        let text = match &mut session {
+        self.resident.select(epoch);
+        let text = match self.resident.current_mut() {
             Some(session) => {
                 session.unseen = false;
                 self.scroll = session.scroll;
@@ -117,8 +82,13 @@ impl App {
                 } else {
                     std::mem::take(&mut session.returned)
                 };
-                let parts: Vec<String> = session.draft.take().into_iter().chain(returned).collect();
-                parts.join("\n\n")
+                session
+                    .draft
+                    .take()
+                    .into_iter()
+                    .chain(returned)
+                    .collect::<Vec<_>>()
+                    .join("\n\n")
             }
             None => {
                 self.scroll = Scroll::Follow;
@@ -126,18 +96,33 @@ impl App {
             }
         };
         self.composer.set_text(&text);
-        self.session = session;
         self.layout.clear();
         self.overlay = Overlay::None;
         self.selection = None;
     }
 
+    pub(super) fn scroll_for(&self, epoch: u64) -> Scroll {
+        if self.resident.is_current(epoch) {
+            self.scroll
+        } else {
+            self.resident.get(epoch).expect("a resident session").scroll
+        }
+    }
+
+    pub(super) fn set_scroll_for(&mut self, epoch: u64, scroll: Scroll) {
+        if self.resident.is_current(epoch) {
+            self.scroll = scroll;
+        } else {
+            self.session_mut(epoch).scroll = scroll;
+        }
+    }
+
     /// Announces a background turn end and marks it unseen unless a phone views it.
-    pub(super) fn background_turn_ended(&mut self, ended_loop: &str) {
-        let label = self.session_label();
-        let id = self.session.as_ref().unwrap().info.session_id.clone();
+    pub(super) fn background_turn_ended(&mut self, epoch: u64, ended_loop: &str) {
+        let label = self.session_label(epoch);
+        let id = self.resident.get(epoch).unwrap().info.session_id.clone();
         let viewed = self.remote.viewing(&id);
-        let session = self.session_mut();
+        let session = self.session_mut(epoch);
         session.unseen = !viewed;
         let Some(Block::TurnEnd {
             outcome, duration, ..
@@ -165,10 +150,10 @@ impl App {
     }
 
     /// A background approval rings and names the session to switch to.
-    pub(super) fn background_approval(&mut self) {
+    pub(super) fn background_approval(&mut self, epoch: u64) {
         self.ring = true;
-        let id = self.session.as_ref().unwrap().info.session_id.clone();
-        let text = format!("\"{}\" needs approval", self.session_label());
+        let id = self.resident.get(epoch).unwrap().info.session_id.clone();
+        let text = format!("\"{}\" needs approval", self.session_label(epoch));
         self.attention_notice(&id, text, " · ctrl+r");
     }
 
@@ -186,13 +171,13 @@ impl App {
     /// in the background, or holds queued messages the Agent would refuse to drop.
     pub(super) fn delete_refusal(&self, id: &str) -> Option<String> {
         if self
-            .session
-            .as_ref()
+            .resident
+            .current()
             .is_some_and(|session| session.info.session_id == id)
         {
             return Some("Open another session before deleting this one".to_owned());
         }
-        let session = &self.background[self.live_index(id)?];
+        let session = self.resident.find(id)?;
         let label = || session_label(&session.info, Some(session));
         if session.live_status() != LiveStatus::Idle {
             Some(format!("Stop \"{}\" first: open it and press Esc", label()))

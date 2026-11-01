@@ -270,7 +270,9 @@ async fn run() -> i32 {
     app.editor = launch.ui.editor;
     app.composed = launch.composed;
     app.default_profile = launch.default_profile;
-    app.composer = minicore_tui::app::composer::Composer::with_history_file(home.history_file());
+    app.composer = minicore_tui::app::composer::Composer::with_history(
+        minicore_tui::prompt_history::load(&home.history_file()),
+    );
     app.home = Some(home);
     app.remote.config = Some(launch.remote);
     if let Some(bound) = remote {
@@ -422,6 +424,7 @@ async fn run() -> i32 {
     #[cfg(feature = "e2e-observe")]
     app.observe_checkpoint(true);
     app.sync_remote();
+    app.local_files.finish().await;
     app.remote.shutdown().await;
     let _ = client.shutdown().await;
     let _ = guard.restore();

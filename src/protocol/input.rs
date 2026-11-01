@@ -39,30 +39,17 @@ pub struct StartedTurn {
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct InputPushResult {
-    /// The instance the receipt belongs to; a pre-v2 Agent omits both.
-    #[serde(default)]
-    pub session_id: Option<String>,
-    #[serde(default)]
-    pub load: Option<String>,
-    /// What the Agent accepted. A success receipt without the flag is an
-    /// acceptance: a rejected push never answers successfully.
-    #[serde(default = "accepted")]
+    pub session_id: String,
+    pub load: String,
     pub accepted: bool,
     /// The turn this push started, whose input is an older entry when queue order requires.
     pub started: Option<StartedTurn>,
     /// The entry this push accepted; the Agent always states it.
-    #[serde(default)]
-    pub id: Option<String>,
-    #[serde(default)]
+    pub id: String,
     pub accepted_at: Option<String>,
     /// The input whose start failed after acceptance; `accepted` stays true.
-    #[serde(default)]
     pub start_error: Option<InputStartError>,
     pub queue: Queue,
-}
-
-fn accepted() -> bool {
-    true
 }
 
 /// A claimed input that could not start its turn, after it was accepted.
@@ -88,7 +75,6 @@ pub struct InputRecallResult {
 #[derive(Clone, Debug, Deserialize)]
 pub struct InputResumeResult {
     pub started: Option<StartedTurn>,
-    #[serde(default)]
     pub start_error: Option<InputStartError>,
     pub queue: Queue,
 }
@@ -146,11 +132,27 @@ mod tests {
             ], "paused": true}
         }))
         .unwrap();
-        assert_eq!(push.id.as_deref(), Some("inp_new"));
+        assert_eq!(push.id, "inp_new");
         let error = push.start_error.unwrap();
         assert_eq!(error.input_id, "inp_older");
         assert!(push.queue.paused);
         assert!(push.started.is_none());
+    }
+
+    #[test]
+    fn a_push_receipt_requires_identity_and_explicit_acceptance() {
+        let receipt = json!({
+            "session_id": "ses_1", "load": "load_1", "accepted": true, "id": "inp_1",
+            "queue": {"items": [], "paused": false}
+        });
+        for key in ["session_id", "load", "accepted", "id"] {
+            let mut incomplete = receipt.clone();
+            incomplete.as_object_mut().unwrap().remove(key);
+            assert!(
+                serde_json::from_value::<InputPushResult>(incomplete).is_err(),
+                "{key}"
+            );
+        }
     }
 
     #[test]

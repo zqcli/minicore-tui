@@ -7,7 +7,7 @@ use std::time::Instant;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use super::tasks::TurnContent;
+use super::read::TurnContent;
 use super::{App, Session};
 use crate::protocol::{CompletedTurn, SessionExecution};
 use crate::transcript::Block;
@@ -244,6 +244,7 @@ impl App {
 
     pub(super) fn observe_install(
         &mut self,
+        epoch: u64,
         content: &TurnContent,
         completion: Option<&CompletedTurn>,
     ) {
@@ -251,8 +252,8 @@ impl App {
             return;
         }
         let installed = Installed::new(content, completion);
-        let row = installed.row(self.session.as_ref().unwrap());
-        let session = self.session.as_mut().unwrap();
+        let row = installed.row(self.resident.get(epoch).unwrap());
+        let session = self.resident.get_mut(epoch).unwrap();
         session
             .observed_installs
             .retain(|known| known.loop_id != installed.loop_id);
@@ -277,14 +278,13 @@ impl App {
             totals[format!("client_{key}")] = value.clone();
         }
         totals["client_early_body_bytes"] = json!(
-            self.session
+            self.resident
                 .iter()
-                .chain(&self.background)
                 .map(|session| session.early_bytes)
                 .sum::<usize>()
         );
         totals["client_early_body_peak_bytes"] = json!(self.early_body_peak_bytes);
-        for session in self.session.iter().chain(&self.background) {
+        for session in self.resident.iter() {
             let turns: Vec<Value> = session
                 .transcript
                 .blocks()
@@ -328,11 +328,11 @@ impl App {
         }
     }
 
-    pub(super) fn observe_recovery(&mut self, loop_id: &str) {
+    pub(super) fn observe_recovery(&mut self, epoch: u64, loop_id: &str) {
         if self.observer.is_none() {
             return;
         }
-        let session = self.session.as_ref().unwrap();
+        let session = self.resident.get(epoch).unwrap();
         let Some(note) = session
             .body_recovery
             .iter()
@@ -476,8 +476,8 @@ mod tests {
         let mut session = Session::new(
             serde_json::from_value(crate::testing::session_info("s1")).unwrap(),
             1,
+            "load_1".into(),
         );
-        session.load = Some("load_1".into());
         session.transcript.push(Block::Assistant {
             key: RequestKey {
                 loop_id: "A".into(),
@@ -528,8 +528,8 @@ mod tests {
         let mut session = Session::new(
             serde_json::from_value(crate::testing::session_info("s1")).unwrap(),
             1,
+            "load_1".into(),
         );
-        session.load = Some("load_1".into());
         let assistant = |request_index, text: &str, reasoning: &str| Block::Assistant {
             key: RequestKey {
                 loop_id: "A".into(),
@@ -624,8 +624,8 @@ mod tests {
         let mut session = Session::new(
             serde_json::from_value(crate::testing::session_info("s1")).unwrap(),
             1,
+            "load_1".into(),
         );
-        session.load = Some("load_1".into());
         for (seq, id) in [(1, "A"), (2, "B")] {
             let at = session.transcript.push(Block::User {
                 text: format!("prompt {id}"),
@@ -697,7 +697,9 @@ mod tests {
             at: None,
         });
         session.transcript.identify_user(at, "B", Some("steer-B"));
-        app.session = Some(session);
+        let epoch = session.epoch;
+        app.resident.insert(session);
+        app.resident.select(Some(epoch));
         let file = tempfile::NamedTempFile::new().unwrap();
         app.start_observer(file.reopen().unwrap());
         app.observe_checkpoint(false);

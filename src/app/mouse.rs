@@ -23,7 +23,7 @@ impl App {
         let editor = (!self.has_interaction()
             || uncertain_edit
             || self.remote.active()
-            || self.session.as_ref().is_some_and(|session| {
+            || self.resident.current().is_some_and(|session| {
                 session
                     .interaction
                     .as_ref()
@@ -294,7 +294,7 @@ impl App {
             .unwrap_or_default()
             .trim()
             .to_owned();
-        let Some(session) = self.session.as_mut() else {
+        let Some(session) = self.resident.current_mut() else {
             return;
         };
         match session.transcript.blocks().get(index) {

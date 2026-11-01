@@ -68,11 +68,12 @@ async fn history_catchup_at_its_page_limit() -> Harness {
     old["captured_end"] = json!(80);
     let mut h = Harness::opened(old).await;
     h.fake
-        .script_held("session.state", json!({"session_id":"s1"}));
-    h.fake.script("session.read", bounded_new_history());
+        .script_held("session.state@s1", json!({"session_id":"s1"}));
+    h.fake
+        .script("session.read", history(bounded_new_history()));
     h.control_event(json!({"completions":{"through_seq":1,"retained_from_seq":2,"entries":[],"truncated":true}})).await;
     h.until(|app| {
-        app.session.as_ref().unwrap().recovery.history_status
+        app.resident.current().unwrap().recovery.history_status
             == Some(crate::app::recovery::RecoveryStatus::Exhausted)
     })
     .await;
@@ -86,26 +87,29 @@ async fn a_bounded_history_catchup_keeps_its_verified_window_and_continues_the_m
         h.texts().iter().any(|text| text == "new-prefix-159"),
         "the verified newer window must not be discarded at the round limit"
     );
-    assert_eq!(h.app.session.as_ref().unwrap().recovery.settled_through, 0);
+    assert_eq!(
+        h.app.resident.current().unwrap().recovery.settled_through,
+        0
+    );
     h.app.notices.clear();
     assert!(
         h.screen(120, 30).contains("/recover"),
         "the continuation is persistent, not a transient notice"
     );
     for _ in 0..8 {
-        if h.app.session.as_ref().unwrap().recovery.settled_through == 1 {
+        if h.app.resident.current().unwrap().recovery.settled_through == 1 {
             break;
         }
         h.action(Action::RetryRecovery);
         h.until(|app| {
-            app.session.as_ref().unwrap().recovery.settled_through == 1
-                || app.session.as_ref().unwrap().recovery.history_status
+            app.resident.current().unwrap().recovery.settled_through == 1
+                || app.resident.current().unwrap().recovery.history_status
                     == Some(crate::app::recovery::RecoveryStatus::Exhausted)
         })
         .await;
     }
     assert_eq!(
-        h.app.session.as_ref().unwrap().recovery.settled_through,
+        h.app.resident.current().unwrap().recovery.settled_through,
         1,
         "every bounded continuation must make real coverage progress"
     );
@@ -129,17 +133,18 @@ async fn a_catchup_continuation_replaces_retained_saved_regions_without_repeatin
     };
     let mut h = Harness::opened(history(1)).await;
     h.fake
-        .script_held("session.state", json!({"session_id":"s1"}));
+        .script_held("session.state@s1", json!({"session_id":"s1"}));
     let mut appended = history(80);
     appended["_fixture_one_item"] = json!(true);
     appended["history_revision"] = json!("appended-history");
     appended["captured_end"] = json!(160_000);
-    h.fake.script("session.read", appended);
+    h.fake
+        .script("session.read", super::harness::history(appended));
     h.control_event(json!({"completions":{"through_seq":1,"retained_from_seq":2,
         "entries":[],"truncated":true}}))
         .await;
     h.until(|app| {
-        app.session.as_ref().unwrap().recovery.history_status
+        app.resident.current().unwrap().recovery.history_status
             == Some(crate::app::recovery::RecoveryStatus::Exhausted)
     })
     .await;
@@ -148,18 +153,21 @@ async fn a_catchup_continuation_replaces_retained_saved_regions_without_repeatin
         1
     );
     for _ in 0..8 {
-        if h.app.session.as_ref().unwrap().recovery.settled_through == 1 {
+        if h.app.resident.current().unwrap().recovery.settled_through == 1 {
             break;
         }
         h.action(Action::RetryRecovery);
         h.until(|app| {
-            app.session.as_ref().unwrap().recovery.settled_through == 1
-                || app.session.as_ref().unwrap().recovery.history_status
+            app.resident.current().unwrap().recovery.settled_through == 1
+                || app.resident.current().unwrap().recovery.history_status
                     == Some(crate::app::recovery::RecoveryStatus::Exhausted)
         })
         .await;
     }
-    assert_eq!(h.app.session.as_ref().unwrap().recovery.settled_through, 1);
+    assert_eq!(
+        h.app.resident.current().unwrap().recovery.settled_through,
+        1
+    );
     let expected: Vec<String> = (0..80)
         .flat_map(|index| [format!("prompt {index}"), format!("answer {index}")])
         .collect();
@@ -176,10 +184,10 @@ async fn a_catchup_continuation_replaces_retained_saved_regions_without_repeatin
 #[tokio::test(start_paused = true)]
 async fn overlapping_partial_turn_windows_keep_source_order_tools_and_live_content() {
     use crate::app::SessionOp;
-    use crate::app::tasks::{self, Window};
+    use crate::app::read::{self, Window};
     let mut h = Harness::opened(display_read(0, 0)).await;
     h.fake
-        .script_held("session.state", json!({"session_id":"s1"}));
+        .script_held("session.state@s1", json!({"session_id":"s1"}));
     h.fake.script_held("turn.wait", waited("C", completed()));
     h.running_state("C", entry("input-C", "steer", "prompt C"));
     h.emit(
@@ -212,8 +220,8 @@ async fn overlapping_partial_turn_windows_keep_source_order_tools_and_live_conte
     }
     let mut saved = page(80, 0, items);
     saved["records"] = json!([{"loop_id":"A","outcome":completed()}]);
-    h.fake.script("session.read", saved);
-    let old = tasks::read_history(h.fake.client.clone(), "s1".into(), Window::Before(40))
+    h.fake.script("session.read", history(saved));
+    let old = read::read_history(h.fake.client.clone(), "s1".into(), Window::Before(40))
         .await
         .unwrap();
     h.op(SessionOp::Tail(Ok(old)));
@@ -224,7 +232,7 @@ async fn overlapping_partial_turn_windows_keep_source_order_tools_and_live_conte
         offset: 2,
     };
     h.app.composer.set_text("draft C");
-    let new = tasks::read_history(h.fake.client.clone(), "s1".into(), Window::Before(50))
+    let new = read::read_history(h.fake.client.clone(), "s1".into(), Window::Before(50))
         .await
         .unwrap();
     h.op(SessionOp::Tail(Ok(new)));
@@ -254,8 +262,8 @@ async fn overlapping_partial_turn_windows_keep_source_order_tools_and_live_conte
     );
     let tool = h
         .app
-        .session
-        .as_ref()
+        .resident
+        .current()
         .unwrap()
         .transcript
         .tool_calls()
@@ -270,19 +278,19 @@ async fn overlapping_partial_turn_windows_keep_source_order_tools_and_live_conte
             .count(),
         1
     );
-    assert_eq!(h.app.session.as_ref().unwrap().observed_loop(), Some("C"));
-    assert_eq!(h.app.session.as_ref().unwrap().loaded_from, 20);
+    assert_eq!(h.app.resident.current().unwrap().observed_loop(), Some("C"));
+    assert_eq!(h.app.resident.current().unwrap().loaded_from, 20);
 
     // A later disjoint window keeps the older island, then ordinary pages join them.
-    let later = tasks::read_history(h.fake.client.clone(), "s1".into(), Window::Before(80))
+    let later = read::read_history(h.fake.client.clone(), "s1".into(), Window::Before(80))
         .await
         .unwrap();
     h.op(SessionOp::Tail(Ok(later)));
-    assert_eq!(h.app.session.as_ref().unwrap().loaded_from, 60);
+    assert_eq!(h.app.resident.current().unwrap().loaded_from, 60);
     for from in [40, 20, 0] {
         h.action(Action::LoadOlder);
         h.settle().await;
-        assert_eq!(h.app.session.as_ref().unwrap().loaded_from, from);
+        assert_eq!(h.app.resident.current().unwrap().loaded_from, from);
     }
     let mut all = vec!["prompt A".to_owned()];
     all.extend((1..80).filter(|index| *index != 40).map(|index| {
@@ -304,10 +312,10 @@ async fn overlapping_partial_turn_windows_keep_source_order_tools_and_live_conte
 #[tokio::test(start_paused = true)]
 async fn a_tool_result_only_window_updates_retained_cards_without_copying_their_turn_again() {
     use crate::app::SessionOp;
-    use crate::app::tasks::{self, Window};
+    use crate::app::read::{self, Window};
     let mut h = Harness::opened(display_read(0, 0)).await;
     h.fake
-        .script_held("session.state", json!({"session_id":"s1"}));
+        .script_held("session.state@s1", json!({"session_id":"s1"}));
     let mut items = vec![user(0, "A", "prompt A")];
     for request in 0..10 {
         let call = format!("earlier-{request}");
@@ -348,17 +356,17 @@ async fn a_tool_result_only_window_updates_retained_cards_without_copying_their_
     ));
     let mut saved = page(51, 0, items);
     saved["records"] = json!([{"loop_id":"A","outcome":completed()}]);
-    h.fake.script("session.read", saved);
+    h.fake.script("session.read", history(saved));
     for before in [40, 50] {
-        let read = tasks::read_history(h.fake.client.clone(), "s1".into(), Window::Before(before))
+        let read = read::read_history(h.fake.client.clone(), "s1".into(), Window::Before(before))
             .await
             .unwrap();
         h.op(SessionOp::Tail(Ok(read)));
     }
     let cards: Vec<_> = h
         .app
-        .session
-        .as_ref()
+        .resident
+        .current()
         .unwrap()
         .transcript
         .tool_calls()
@@ -386,7 +394,7 @@ async fn a_tool_result_only_window_updates_retained_cards_without_copying_their_
 #[tokio::test(start_paused = true)]
 async fn a_summary_anchor_stays_on_its_projection_when_canonical_history_fills_its_source_slot() {
     use crate::app::SessionOp;
-    use crate::app::tasks::{self, Window};
+    use crate::app::read::{self, Window};
     let mut display = page(
         42,
         39,
@@ -399,7 +407,7 @@ async fn a_summary_anchor_stays_on_its_projection_when_canonical_history_fills_i
     display["records"] = json!([{"loop_id":"B","outcome":completed()}]);
     let mut h = Harness::opened(display).await;
     h.fake
-        .script_held("session.state", json!({"session_id":"s1"}));
+        .script_held("session.state@s1", json!({"session_id":"s1"}));
     let mut items = vec![user(0, "A", "prompt A")];
     items.extend((1..40).map(|index| chunk(index,json!({"type":"assistant","data":{
         "loop_id":"A","request_index":index-1,"content":[{"type":"text","data":format!("answer {index}")}]}}))));
@@ -407,7 +415,7 @@ async fn a_summary_anchor_stays_on_its_projection_when_canonical_history_fills_i
     let mut canonical = page(42, 39, items);
     canonical["records"] =
         json!([{"loop_id":"A","outcome":completed()},{"loop_id":"B","outcome":completed()}]);
-    h.fake.script("session.read", canonical);
+    h.fake.script("session.read", history(canonical));
     let summary = h
         .blocks()
         .iter()
@@ -419,7 +427,7 @@ async fn a_summary_anchor_stays_on_its_projection_when_canonical_history_fills_i
     };
     h.action(Action::LoadOlder);
     h.settle().await;
-    let read = tasks::read_history(h.fake.client.clone(), "s1".into(), Window::CatchUp(None))
+    let read = read::read_history(h.fake.client.clone(), "s1".into(), Window::CatchUp(None))
         .await
         .unwrap();
     h.op(SessionOp::Tail(Ok(read)));
@@ -451,7 +459,7 @@ async fn canonical_older_cards_are_hydrated_after_a_limited_history_recovery() {
     ))
     .await;
     h.fake
-        .script_held("session.state", json!({"session_id":"s1"}));
+        .script_held("session.state@s1", json!({"session_id":"s1"}));
     let items = (0..160)
         .map(|index| {
             if index == 119 {
@@ -473,17 +481,17 @@ async fn canonical_older_cards_are_hydrated_after_a_limited_history_recovery() {
         .collect();
     let mut saved = page(160, 150, items);
     saved["_fixture_one_item"] = json!(true);
-    h.fake.script("session.read", saved);
+    h.fake.script("session.read", history(saved));
     h.control_event(json!({"completions":{"through_seq":1,"retained_from_seq":2,
         "entries":[],"truncated":true}}))
         .await;
     h.until(|app| {
-        app.session.as_ref().unwrap().recovery.history_status
+        app.resident.current().unwrap().recovery.history_status
             == Some(crate::app::recovery::RecoveryStatus::Exhausted)
     })
     .await;
-    assert_eq!(h.app.session.as_ref().unwrap().loaded_from, 129);
-    assert_eq!(h.app.session.as_ref().unwrap().first_item, 150);
+    assert_eq!(h.app.resident.current().unwrap().loaded_from, 129);
+    assert_eq!(h.app.resident.current().unwrap().first_item, 150);
     h.fake.script("tool.read", tool_read("failed", 2));
     h.action(Action::LoadOlder);
     h.settle().await;
@@ -500,19 +508,19 @@ async fn older_pagination_to_zero_cannot_settle_an_unread_newer_history_suffix()
     let mut old = page(80, 0, vec![user(0, "old-history", "older visible content")]);
     old["history_revision"] = json!("old-history-revision");
     old["captured_end"] = json!(80);
-    h.fake.script_sequence("session.read", vec![]);
-    h.fake.script("session.read", old);
-    let read = crate::app::tasks::read_history(
+    h.fake.script_sequence("session.read", Vec::<Value>::new());
+    h.fake.script("session.read", history(old));
+    let read = crate::app::read::read_history(
         h.fake.client.clone(),
         "s1".into(),
-        crate::app::tasks::Window::Before(20),
+        crate::app::read::Window::Before(20),
     )
     .await
     .unwrap();
-    assert!(matches!(&read,crate::app::tasks::HistoryRead::Complete(page) if page.from == 0));
+    assert!(matches!(&read,crate::app::read::HistoryRead::Complete(page) if page.from == 0));
     h.op(crate::app::SessionOp::Page(Ok(read)));
     assert_eq!(
-        h.app.session.as_ref().unwrap().recovery.settled_through,
+        h.app.resident.current().unwrap().recovery.settled_through,
         0,
         "old H0 coverage cannot stand in for the unread H1 suffix"
     );
@@ -532,17 +540,17 @@ async fn saved_fallback_for_a_truncated_catalog_keeps_unknown_unsaved_turns_visi
         ],
     );
     saved["records"] = json!([{"loop_id":"saved-B","outcome":completed()}]);
-    h.fake.script("session.read", saved);
+    h.fake.script("session.read", history(saved));
     h.fake
-        .script_held("session.state", json!({"session_id":"s1"}));
+        .script_held("session.state@s1", json!({"session_id":"s1"}));
     h.control_event(json!({"completions":{"through_seq":2,"retained_from_seq":3,"truncated":true,"entries":[]}})).await;
     h.until(|app| {
-        app.session.as_ref().unwrap().recovery.history_status
+        app.resident.current().unwrap().recovery.history_status
             == Some(crate::app::recovery::RecoveryStatus::Partial)
     })
     .await;
     assert_eq!(h.texts(), ["saved prompt B", "saved answer B"]);
-    let session = h.app.session.as_ref().unwrap();
+    let session = h.app.resident.current().unwrap();
     assert_eq!(
         (
             session.recovery.observed_through,
@@ -570,7 +578,7 @@ async fn saved_fallback_for_a_truncated_catalog_keeps_unknown_unsaved_turns_visi
 
 #[tokio::test(start_paused = true)]
 async fn chunked_large_item_catchup_retains_the_new_suffix_and_resumes_its_exact_coverage() {
-    use crate::app::tasks::{HistoryRead, Window};
+    use crate::app::read::{HistoryRead, Window};
     let h = Harness::opened(answered(80, 0)).await;
     let text = "x".repeat(1_000_000);
     let mut history = page(
@@ -582,19 +590,20 @@ async fn chunked_large_item_catchup_retains_the_new_suffix_and_resumes_its_exact
     );
     history["history_revision"] = json!("byte-limited-new-history");
     history["captured_end"] = json!(30_000_000);
-    h.fake.script("session.read", history);
+    h.fake
+        .script("session.read", super::harness::history(history));
     let before = h.calls("session.read").len();
     let first =
-        crate::app::tasks::read_history(h.fake.client.clone(), "s1".into(), Window::CatchUp(None))
+        crate::app::read::read_history(h.fake.client.clone(), "s1".into(), Window::CatchUp(None))
             .await
             .unwrap();
-    let HistoryRead::Limited(first, crate::app::tasks::ReadPartial::HistoryLimit) = first else {
+    let HistoryRead::Limited(first, crate::app::read::ReadPartial::HistoryLimit) = first else {
         panic!("a round must stop at its read budget");
     };
     assert_eq!(first.end, 30);
     assert!(first.from > 0 && !first.items.is_empty());
     assert!(
-        h.calls("session.read").len() - before <= crate::app::tasks::HISTORY_CATCHUP_MAX_PAGES,
+        h.calls("session.read").len() - before <= crate::app::read::HISTORY_CATCHUP_MAX_PAGES,
         "probes and chunk continuations count toward the page limit"
     );
     let mut covered = first.coverage();
@@ -604,7 +613,7 @@ async fn chunked_large_item_catchup_retains_the_new_suffix_and_resumes_its_exact
         if covered.complete() {
             break;
         }
-        let next = crate::app::tasks::read_history(
+        let next = crate::app::read::read_history(
             h.fake.client.clone(),
             "s1".into(),
             Window::CatchUp(Some(covered.clone())),
@@ -636,8 +645,10 @@ async fn the_tail_window_and_each_older_page_move_the_marker() {
     );
     assert_eq!(h.marker(), Some(20));
 
-    h.fake
-        .script("session.read", page(80, 0, vec![user(0, "l0", "first")]));
+    h.fake.script(
+        "session.read",
+        history(page(80, 0, vec![user(0, "l0", "first")])),
+    );
     h.action(Action::LoadOlder);
     h.settle().await;
     assert_eq!(cursors(&h), [20, 40, 60, 0]);
@@ -652,7 +663,7 @@ async fn the_marker_states_the_next_read_position_and_goes_at_the_start() {
 
     h.fake.script(
         "session.read",
-        page(90, 0, vec![user(10, "l0", "a middle question")]),
+        history(page(90, 0, vec![user(10, "l0", "a middle question")])),
     );
     h.action(Action::LoadOlder);
     h.settle().await;
@@ -661,7 +672,7 @@ async fn the_marker_states_the_next_read_position_and_goes_at_the_start() {
 
     h.fake.script(
         "session.read",
-        page(90, 0, vec![user(0, "l0", "the earliest question")]),
+        history(page(90, 0, vec![user(0, "l0", "the earliest question")])),
     );
     h.action(Action::LoadOlder);
     h.settle().await;
@@ -693,14 +704,14 @@ async fn history_below_the_display_floor_is_read_in_the_canonical_view() {
 
     h.fake.script(
         "session.read",
-        page(
+        history(page(
             30,
             10,
             vec![
                 user(9, "l0", "collapsed question"),
                 assistant(10, "l0", "covered answer"),
             ],
-        ),
+        )),
     );
     h.action(Action::LoadOlder);
     h.settle().await;
@@ -721,14 +732,15 @@ async fn a_floor_raised_past_the_loaded_window_still_reads_every_item() {
 
     // The page reports a floor above the reader: nothing arrives and the read
     // position stays where the loaded rows end.
-    h.fake.script("session.read", page(100, 60, vec![]));
+    h.fake
+        .script("session.read", history(page(100, 60, vec![])));
     h.action(Action::LoadOlder);
     h.settle().await;
     assert_eq!(h.marker(), Some(40));
 
     h.fake.script(
         "session.read",
-        page(100, 60, vec![user(20, "l0", "deep item")]),
+        history(page(100, 60, vec![user(20, "l0", "deep item")])),
     );
     h.action(Action::LoadOlder);
     h.settle().await;
@@ -747,8 +759,10 @@ async fn every_canonical_page_replaces_the_marker_at_the_top() {
     };
     let mut loaded = Vec::new();
     for (from, text) in [(21, "page two"), (1, "page one"), (0, "page zero")] {
-        h.fake
-            .script("session.read", page(42, 40, vec![user(from, "l0", text)]));
+        h.fake.script(
+            "session.read",
+            history(page(42, 40, vec![user(from, "l0", text)])),
+        );
         h.action(Action::LoadOlder);
         h.settle().await;
         loaded.insert(0, text);
@@ -773,7 +787,10 @@ async fn a_stale_pin_on_the_tail_restarts_with_a_fresh_probe() {
             refusal(STALE, "invalid_state"),
             display_read(6, 0),
             page(6, 0, vec![user(0, "l0", "recovered")]),
-        ],
+        ]
+        .into_iter()
+        .map(history)
+        .collect::<Vec<_>>(),
     );
     h.open().await;
     assert_eq!(h.texts(), ["recovered"]);
@@ -793,7 +810,10 @@ async fn a_stale_pin_on_an_older_page_retries_once() {
         let page = page(total, 0, vec![user(index, "l0", text)]);
         h.fake.script_sequence(
             "session.read",
-            vec![refusal(STALE, "invalid_state"), page.clone(), page],
+            vec![refusal(STALE, "invalid_state"), page.clone(), page]
+                .into_iter()
+                .map(history)
+                .collect::<Vec<_>>(),
         );
         h.action(Action::LoadOlder);
         h.settle().await;
@@ -844,15 +864,15 @@ async fn a_late_history_page_error_keeps_the_existing_transcript_and_anchor() {
     };
     let before = format!("{:?}", h.blocks());
     let mut first = page(80, 0, vec![user(0, "l0", "unverified prefix")]);
-    first.as_object_mut().unwrap().remove("_fixture_history");
     first["next_cursor"] = json!({"item": 1, "offset": 0});
     let mut bad_item = assistant(1, "l0", "bad");
     bad_item["encoding"] = json!("wrong");
     let mut last = page(80, 0, vec![bad_item]);
-    last.as_object_mut().unwrap().remove("_fixture_history");
     last["next_cursor"] = Value::Null;
-    h.fake
-        .script_sequence("session.read", vec![display_read(80, 0), first, last]);
+    h.fake.script_sequence(
+        "session.read",
+        vec![history(display_read(80, 0)), first.into(), last.into()],
+    );
     h.action(Action::LoadOlder);
     h.settle().await;
     assert_eq!(format!("{:?}", h.blocks()), before);
@@ -880,7 +900,7 @@ enum Timing {
 
 #[tokio::test(start_paused = true)]
 async fn a_saved_history_tail_preserves_unsaved_a_live_c_new_output_draft_and_anchor() {
-    use crate::app::tasks::{self, HistoryRead, Window};
+    use crate::app::read::{self, HistoryRead, Window};
     use crate::protocol::read::{TurnPersistence, decode_item};
     use crate::protocol::{CompletedTurn, CompletionDirectory, LoopOutcome};
     let mut h = Harness::opened(display_read(0, 0)).await;
@@ -888,7 +908,7 @@ async fn a_saved_history_tail_preserves_unsaved_a_live_c_new_output_draft_and_an
     h.running_state("C", entry("iC", "steer", "prompt C"));
     let entries:Vec<CompletedTurn> = ["A","B"].into_iter().enumerate().map(|(i,id)|serde_json::from_value(json!({"seq":i+1,"loop_id":id,"completion_kind":"reported","outcome_kind":"completed","persistence":if id == "A" {"failed"} else {"persisted"},"availability":if id == "A" {"live"} else {"stored"}})).unwrap()).collect();
     let a = [json!({"item":{"type":"user","data":{"loop_id":"A","kind":"prompt","input":{"text":"prompt A"}}}}),json!({"item":{"type":"assistant","data":{"loop_id":"A","request_index":0,"content":[{"type":"text","data":"answer A"}]}}})].into_iter().map(|item|decode_item(&item.to_string()).unwrap()).collect::<Vec<_>>();
-    let session = h.app.session.as_mut().unwrap();
+    let session = h.app.resident.current_mut().unwrap();
     session.catalog = CompletionDirectory {
         through_seq: 2,
         retained_from_seq: 1,
@@ -898,7 +918,12 @@ async fn a_saved_history_tail_preserves_unsaved_a_live_c_new_output_draft_and_an
     session
         .reconcile_completion(
             &entries[0],
-            &LoopOutcome::Completed,
+            &crate::app::read::TurnDetails {
+                outcome: LoopOutcome::Completed,
+                usage: None,
+                requests: None,
+                tool_rounds: None,
+            },
             &a,
             None,
             TurnPersistence::Failed,
@@ -911,8 +936,8 @@ async fn a_saved_history_tail_preserves_unsaved_a_live_c_new_output_draft_and_an
         vec![user(0, "B", "prompt B"), assistant(1, "B", "answer B")],
     );
     saved["records"] = json!([{"loop_id":"B","outcome":completed()}]);
-    h.fake.script("session.read", saved);
-    let history = tasks::read_history(h.fake.client.clone(), "s1".into(), Window::Tail)
+    h.fake.script("session.read", history(saved));
+    let history = read::read_history(h.fake.client.clone(), "s1".into(), Window::Tail)
         .await
         .unwrap();
     assert!(matches!(&history, HistoryRead::Complete(_)));
@@ -928,7 +953,15 @@ async fn a_saved_history_tail_preserves_unsaved_a_live_c_new_output_draft_and_an
     })
     .await;
     h.app.composer.set_text("keep this draft");
-    let c = h.app.session.as_ref().unwrap().live.as_ref().unwrap().start;
+    let c = h
+        .app
+        .resident
+        .current()
+        .unwrap()
+        .live
+        .as_ref()
+        .unwrap()
+        .start;
     h.app.scroll = Scroll::Anchor {
         block: c + 1,
         offset: 1,
@@ -947,7 +980,14 @@ async fn a_saved_history_tail_preserves_unsaved_a_live_c_new_output_draft_and_an
     );
     assert_eq!(h.app.composer.text(), "keep this draft");
     assert_eq!(
-        h.app.session.as_ref().unwrap().live.as_ref().unwrap().start,
+        h.app
+            .resident
+            .current()
+            .unwrap()
+            .live
+            .as_ref()
+            .unwrap()
+            .start,
         6
     );
     assert_eq!(
@@ -989,16 +1029,27 @@ async fn history_paged_in_during_a_turn_survives_its_reconcile() {
         };
         let result = turn_result("l1", vec![user(100, "l1", "streaming question")]);
         match timing {
-            Timing::BeforeTheSendAnswers => h.fake.script_held("input.push", started("l1")),
-            _ => h.fake.script("input.push", started("l1")),
+            Timing::BeforeTheSendAnswers => h
+                .fake
+                .script_held("input.push", starting_reply("l1", h.next_revision())),
+            _ => h
+                .fake
+                .script("input.push", starting_reply("l1", h.next_revision())),
         }
+        let wait = after_snapshot(
+            waited("l1", cancelled()),
+            finished_snapshot(
+                h.next_revision() + 1,
+                vec![completion(1, "l1", "cancelled")],
+            ),
+        );
         match timing {
             Timing::BeforeTheDurableItems => {
-                h.fake.script("turn.wait", waited("l1", cancelled()));
+                h.fake.script("turn.wait", wait);
                 h.fake.script_held("turn.result", result);
             }
             _ => {
-                h.fake.script_held("turn.wait", waited("l1", cancelled()));
+                h.fake.script_held("turn.wait", wait);
                 h.fake.script("turn.result", result);
             }
         }
@@ -1020,7 +1071,8 @@ async fn history_paged_in_during_a_turn_survives_its_reconcile() {
             offset: 1,
         };
         let total = if canonical { 32 } else { 100 };
-        h.fake.script("session.read", page(total, 0, older));
+        h.fake
+            .script("session.read", history(page(total, 0, older)));
         h.action(Action::LoadOlder);
         h.settle().await;
         if !canonical {
@@ -1033,9 +1085,13 @@ async fn history_paged_in_during_a_turn_survives_its_reconcile() {
                 "{timing:?}: the anchored block keeps its place"
             );
         }
-        h.fake.release("input.push");
-        h.fake.release("turn.wait");
-        h.fake.release("turn.result");
+        if matches!(timing, Timing::BeforeTheSendAnswers) {
+            h.fake.release("input.push");
+        }
+        h.fake.release(match timing {
+            Timing::BeforeTheDurableItems => "turn.result",
+            _ => "turn.wait",
+        });
         h.settle().await;
         assert_eq!(h.texts(), expected, "{timing:?}: {:?}", h.blocks());
     }
@@ -1045,8 +1101,18 @@ async fn history_paged_in_during_a_turn_survives_its_reconcile() {
 async fn a_canonical_page_without_visible_content_removes_the_marker_and_the_turn_still_reconciles()
 {
     let mut h = Harness::opened(answered(62, 60)).await;
-    h.fake.script("input.push", started("l1"));
-    h.fake.script_held("turn.wait", waited("l1", cancelled()));
+    h.fake
+        .script("input.push", starting_reply("l1", h.next_revision()));
+    h.fake.script_held(
+        "turn.wait",
+        after_snapshot(
+            waited("l1", cancelled()),
+            finished_snapshot(
+                h.next_revision() + 1,
+                vec![completion(1, "l1", "cancelled")],
+            ),
+        ),
+    );
     h.fake.script(
         "turn.result",
         turn_result("l1", vec![user(60, "l1", "streaming question")]),
@@ -1054,7 +1120,7 @@ async fn a_canonical_page_without_visible_content_removes_the_marker_and_the_tur
     h.submit("streaming question");
     h.until(|app| app.is_busy()).await;
 
-    h.fake.script("session.read", page(62, 60, vec![]));
+    h.fake.script("session.read", history(page(62, 60, vec![])));
     h.action(Action::LoadOlder);
     h.settle().await;
     assert_eq!(h.marker(), None);
@@ -1066,7 +1132,7 @@ async fn a_canonical_page_without_visible_content_removes_the_marker_and_the_tur
 }
 
 /// Every `session.read` the fake answers, including the tail's continuation pages.
-fn reads(windows: Vec<(usize, usize, Vec<Value>)>) -> Vec<Value> {
+fn reads(windows: Vec<(usize, usize, Vec<Value>)>) -> Vec<crate::testing::Reply> {
     windows
         .into_iter()
         .enumerate()
@@ -1082,6 +1148,7 @@ fn reads(windows: Vec<(usize, usize, Vec<Value>)>) -> Vec<Value> {
             std::iter::once(display_read(total, floor))
                 .chain(std::iter::repeat_n(page(total, floor, items), pages))
         })
+        .map(history)
         .collect()
 }
 
@@ -1148,7 +1215,10 @@ async fn a_failed_read_behind_the_summary_ends_the_backfill() {
             display_read(218, 217),
             page(218, 217, vec![summary(217)]),
             refusal(crate::protocol::INTERNAL_ERROR, "internal"),
-        ],
+        ]
+        .into_iter()
+        .map(history)
+        .collect::<Vec<_>>(),
     );
     h.open().await;
     assert_eq!(h.calls("session.read").len(), 3);
@@ -1172,8 +1242,8 @@ fn tool_read(state: &str, exit_code: i64) -> Value {
 
 fn cards(h: &Harness) -> Vec<&crate::transcript::ToolCall> {
     h.app
-        .session
-        .as_ref()
+        .resident
+        .current()
         .expect("a session")
         .transcript
         .tool_calls()
@@ -1266,11 +1336,11 @@ async fn find_matches_follow_their_blocks_when_a_page_is_put_in_front() {
 
     h.fake.script(
         "session.read",
-        page(
+        history(page(
             80,
             0,
             vec![user(18, "l0", "first"), assistant(19, "l0", "second")],
-        ),
+        )),
     );
     h.app.scroll_by(-1);
     h.action(Action::LoadOlder);
@@ -1332,7 +1402,7 @@ async fn a_reopened_session_gets_its_turn_end_lines_and_totals_from_the_read() {
         turn_end_lines(&mut h),
         ["completed · 2 requests · 1 tool", "interrupted"]
     );
-    let usage = &h.app.session.as_ref().unwrap().usage;
+    let usage = &h.app.resident.current().unwrap().usage;
     assert_eq!((usage.input, usage.output, usage.cached), (150, 15, 40));
 }
 
@@ -1399,8 +1469,10 @@ async fn a_record_repeated_on_an_older_page_adds_its_interrupted_reply_once() {
     assert_eq!(replies(&h, "l1").len(), 1);
 
     let older = vec![user(18, "l1", "go"), assistant_tool(19, "l1", "c1", "bash")];
-    h.fake
-        .script("session.read", with_records(page(80, 0, older), records));
+    h.fake.script(
+        "session.read",
+        history(with_records(page(80, 0, older), records)),
+    );
     h.action(Action::LoadOlder);
     h.settle().await;
     let halves = h.texts().iter().filter(|t| *t == "half an answer").count();
@@ -1431,19 +1503,19 @@ async fn totals_are_left_out_when_the_window_does_not_reach_the_summary() {
     read["projection"]["first_item"] = json!(0);
     let h = Harness::opened(read).await;
     assert_eq!(h.marker(), Some(20));
-    assert_eq!(h.app.session.as_ref().unwrap().usage.input, 0);
+    assert_eq!(h.app.resident.current().unwrap().usage.input, 0);
 
     let mut summarised = with_records(page(5, 3, vec![summary(3), user(4, "l1", "q")]), json!([]));
     summarised["projection"]["covered_usage"] =
         json!({"usage": {"input_tokens": 900, "output_tokens": 90}, "partial": false});
     let h = Harness::opened(summarised).await;
-    assert_eq!(h.app.session.as_ref().unwrap().usage.input, 900);
+    assert_eq!(h.app.resident.current().unwrap().usage.input, 900);
 
     let mut partial = page(5, 3, vec![summary(3), user(4, "l1", "q")]);
     partial["projection"]["covered_usage"] =
         json!({"usage": {"input_tokens": 900}, "partial": true});
     let h = Harness::opened(partial).await;
-    assert_eq!(h.app.session.as_ref().unwrap().usage.input, 0);
+    assert_eq!(h.app.resident.current().unwrap().usage.input, 0);
 }
 
 #[tokio::test(start_paused = true)]

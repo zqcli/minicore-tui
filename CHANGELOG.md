@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Background work and delayed replies target their original resident session
+  without changing the selected view or another session's draft and scroll.
+- Local and phone mutations share typed execution and receipt validation. A
+  session-wide tool approval takes effect only after the Agent accepts it.
+- Renaming and deleting idle background sessions use the correct instance and
+  storage request fields.
+- Malformed control snapshots and stdin failures close the RPC connection visibly,
+  even under event pressure; cancelled calls release their pending waiters.
+- Completed result reads preserve the Agent's request and usage totals, including
+  turns whose wait response was missed, without counting a successor's usage twice.
+- Accepted prompt history and theme writes run serially off the event loop and
+  flush on orderly exit. Reload composition also runs outside the reducer.
+
 - Overlapping history recovery and pagination keep each source row once,
   including result-only pages and the compaction summary's shared item position.
   Rebuilt history retains scroll anchors, live output and canonical tool details.

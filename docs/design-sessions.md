@@ -4,7 +4,7 @@ Switching sessions no longer drops the one you leave. Every session opened in
 this TUI process stays live in memory: its turn keeps running in the Agent, its
 events keep being applied, its waits and reconciliations keep working, and the
 Agent keeps running its queued messages. The session on screen is the *foreground*; the others are *background*.
-Switching swaps them instantly, without `session.open` or a history reload, so
+Switching selects them instantly, without `session.open` or a history reload, so
 nothing streamed meanwhile is lost. Keys (Enter, Esc, approvals) act on the
 foreground only.
 
@@ -29,75 +29,49 @@ disagree after it lands, the code wins and this file is fixed.
 
 ## Model
 
-```rust
-pub struct App {
-    pub session: Option<Session>,   // foreground, as today
-    pub background: Vec<Session>,   // live, not on screen; most recently left first
-    ...
-}
-```
+`App::resident` owns every loaded `Session` and a separate selected epoch.
+Each `Session` receives one Agent `load` and local epoch at construction; neither
+changes during that resident's lifetime. Navigation only changes selection and
+recency. There is no temporary foreground slot for background operations.
 
-- Every `Session` keeps its `epoch` for its whole life. `adopt` (open/create of
-  a session not live) assigns `App::epoch + 1` as today; switching to a live
-  session reuses its epoch, so tasks in flight for it stay valid.
-- A session is live in at most one place (foreground or `background`), never twice.
-- `Session` gains:
-  - `draft: Option<String>`: the composer text saved when it left the foreground.
-  - `returned: Vec<String>`: refused texts not delivered to a phone, kept while
-    the session is in the background or remote control has no recipient;
-    restored into the composer, joined by blank lines, when it returns to the
-    local foreground.
-  - `unseen: bool`: a turn ended (or failed) while it was in the background;
-    cleared when it comes to the foreground or any phone opens it; a turn end
-    in a session viewed by a phone does not mark it unseen.
-- Each `Session` keeps the transcript-view state it needs when it returns:
-  `scroll: Scroll` (the foreground's `App::scroll` is saved into it on leave and
-  restored on return). The layout cache is cleared on every switch, as today.
+Sessions retain their drafts, returned texts, unseen marker and saved scroll.
+The selected session uses `App::scroll` and the terminal composer; navigation
+parks those values before restoring the next view. Layout invalidation, picker
+closing, phone views and attention notices keep the same behavior.
 
 ## Routing
 
-- **Agent events**: `on_agent_event` finds the session with `meta.session_id`
-  in the foreground or `background` and applies the event to it. Events for a
-  session that is not live still only update the catalog (`SessionOpened`).
-- **Task results** (`Msg::Session(epoch, op)`): delivered to the live session
-  with that epoch, foreground or background; dropped if none (deleted).
-- **Running reducer code for a background session**: `App::with_background(index, f)`
-  swaps that session into `App::session`, sets `App::background_op = true`,
-  runs `f` (the existing `on_op`, event handling, `start_turn`, `end_turn`,
-  `on_approval_requested`, …), then swaps back and clears the
-  flag. `App::scroll` is swapped with the session's own `scroll` around it, so
-  a page prepended in the background keeps that session's anchor and the
-  foreground's is never touched; the layout cache is not used by reducer code.
-  No turn-lifecycle code is duplicated.
-- While `background_op` is set:
-  - no layout, overlay, selection or composer change: `restore_draft` routes
-    remote text or pushes to `Session::returned`; find matches are not moved; results
-    that only answer foreground pickers and views (`/session` item count, `@`
-    files, diff lists and pages) are dropped;
-  - local `notice` prefixes the text with `"<label>": ` (the session label);
-    remote session notices are plain for its viewers and prefixed for others;
-  - device views are not changed: remote projection finds each viewed live
-    session in the foreground or background independently.
-- Auto-allow ("allow this tool for the session") answers background approvals
-  as it does foreground ones.
+- Agent events resolve `session_id` and verify the resident load; unknown session
+  events update the catalog or enter the bounded pending-open snapshot buffer.
+- `Msg::Session(epoch, op)` resolves the original resident, independently of the
+  selected view. Removing a resident cancels its owned reads and waits; already
+  queued results are discarded by epoch.
+- Reducer functions take an explicit epoch. History insertion updates either
+  the selected scroll or the background session's saved scroll. Background
+  results cannot change a different view's composer, selection or picker.
+- Session notices retain their labels and original device routing. Auto-allow
+  uses the same typed interaction operation in foreground and background, and
+  a session-wide allow is recorded only after a successful Agent reply.
+- Local uncertain inputs and phone acknowledgements retain separate operation
+  owners; a navigation change cannot cancel or redirect their acceptance facts.
 
 ## Switching
 
 - `Action::OpenSession(id)` (picker, `/resume`, `--session`, phone
-  `open_session`): if `id` is the foreground, nothing; if it is in `background`,
+  `open_session`): if `id` is the foreground, nothing; if it is resident,
   **switch**; otherwise open as today (`loading_session`, `session.open`, adopt).
-  A newly adopted session pushes the previous foreground to `background`; an
-  open answer for a session that is already live (a second open of it) is
-  ignored. Every change of the session on screen closes pickers and views, whose
+  A newly adopted session becomes selected; the previous resident stays loaded.
+  A second open of the same load reuses its resident; another load is rejected
+  instead of silently replacing the installed instance. Every change of the session on screen closes pickers and views, whose
   state belongs to the session left.
 - **Switch** = save composer text into the leaving session's `draft` and
-  `App::scroll` into its `scroll`; move it to the front of `background`; take
-  the target out of `background` into `App::session`; restore its `scroll`;
+  `App::scroll` into its `scroll`; select the target epoch and update recency;
+  restore its `scroll`;
   composer = its `draft` plus its `returned` texts; clear `unseen`,
   `draft`, `returned`; `layout.clear()`; set `App::workspace` to its workspace;
   refresh presentation/branch/context as `adopt` does for an opened session
   (cheap reads, no history reload); close pickers.
-- `/new` moves the foreground to `background` (it keeps running) and shows a
+- `/new` clears selection (the resident keeps running) and shows a
   draft; remote `new_session` focuses the requesting device first and changes
   only its draft view and settings. The local draft's composer text is kept in
   `App::draft_text` while a session is in the foreground and restored on `/new`.
@@ -134,7 +108,7 @@ pub struct App {
 
 ## Deletion
 
-- Deleting a live background session that is idle drops it from `background`
+- Deleting a live background session that is idle removes it from `resident`
   after the Agent confirms. A running, approval-waiting or compacting one is
   refused with `Stop "<label>" first: open it and press Esc` (local picker and
   phone `delete_session`).
@@ -148,7 +122,8 @@ pub struct App {
 - `State` gains `"background": {"running": n, "approval": n}` (counts over live
   sessions other than the receiving device's session, including the TUI
   foreground when it differs). Each phone owns its session or draft view;
-  focusing it before intents reuses the foreground reducer. The full per-device
+  focusing it before intents preserves terminal-follow behavior, while each
+  business operation addresses its explicitly captured resident. The full per-device
   focus, pending-create and message-routing contract is in `design-remote.md`.
 - The live fields are applied on every sync next to the `current` marks, outside
   the cached catalog (a lookup per listed session, no rebuild or sort), so a

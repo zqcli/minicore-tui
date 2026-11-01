@@ -14,14 +14,14 @@ async fn answering_an_interaction_keeps_it_until_the_authoritative_snapshot_reso
     h.fake
         .script_held("interaction.answer", json!({"accepted":true}));
     h.fake
-        .script_held("session.state", json!({"session_id":"s1"}));
+        .script_held("session.state@s1", json!({"session_id":"s1"}));
     h.control_event(json!({"pending_interaction":{"loop_id":"l1","request_index":0,"interaction_id":"first","tool_call_id":"call","tool_name":"bash","kind":{"type":"approval","data":{"prompt":"Allow?"}}}})).await;
     h.until(|app| app.has_interaction()).await;
     h.action(crate::app::Action::Answer(crate::app::Answer::Allow));
     assert_eq!(
         h.app
-            .session
-            .as_ref()
+            .resident
+            .current()
             .unwrap()
             .interaction
             .as_ref()
@@ -31,8 +31,8 @@ async fn answering_an_interaction_keeps_it_until_the_authoritative_snapshot_reso
     );
     h.control_event(json!({"pending_interaction":{"loop_id":"l1","request_index":0,"interaction_id":"newer","tool_call_id":"call2","tool_name":"bash","kind":{"type":"approval","data":{"prompt":"New approval?"}}}})).await;
     h.until(|app| {
-        app.session
-            .as_ref()
+        app.resident
+            .current()
             .unwrap()
             .interaction
             .as_ref()
@@ -45,8 +45,8 @@ async fn answering_an_interaction_keeps_it_until_the_authoritative_snapshot_reso
     h.settle().await;
     assert_eq!(
         h.app
-            .session
-            .as_ref()
+            .resident
+            .current()
             .unwrap()
             .interaction
             .as_ref()
@@ -66,7 +66,7 @@ async fn persistence_blocking_stays_visible_without_hiding_an_actionable_text_in
     h.fake
         .script_held("interaction.answer", json!({"accepted":true}));
     h.control_event(json!({"block_reason":"persistence"})).await;
-    h.until(|app| app.session.as_ref().unwrap().block_reason.is_some())
+    h.until(|app| app.resident.current().unwrap().block_reason.is_some())
         .await;
     h.app.notices.clear();
     assert!(h.screen(120, 30).contains("Persistence blocked"));
@@ -100,8 +100,8 @@ async fn persistence_blocking_stays_visible_without_hiding_an_actionable_text_in
     h.control_event(json!({"pending_interaction":long_question,"block_reason":"persistence"}))
         .await;
     h.until(|app| {
-        app.session
-            .as_ref()
+        app.resident
+            .current()
             .unwrap()
             .interaction
             .as_ref()
@@ -151,7 +151,10 @@ async fn local_unknown_input_retains_its_owner_and_requires_a_duplicate_warning_
     assert_eq!(original.entry.text(), "original unknown");
     assert_eq!(original.target.session_id, "s1");
     assert_eq!(original.target.load, crate::testing::LOAD);
-    assert_eq!(original.target.epoch, h.app.session.as_ref().unwrap().epoch);
+    assert_eq!(
+        original.target.epoch,
+        h.app.resident.current().unwrap().epoch
+    );
     assert_eq!(original.mode, crate::protocol::InputMode::FollowUp);
     assert!(
         !h.app.composer.history_prev(),
@@ -294,17 +297,20 @@ async fn local_unknown_inputs_survive_view_and_load_changes_without_retargeting_
     let target = h.app.local_inputs[0].target.clone();
     h.action(Action::NewSession);
     h.settle().await;
-    assert!(h.app.session.is_none());
+    assert!(h.app.resident.current().is_none());
     assert_eq!(h.app.local_inputs[0].target, target);
     assert_eq!(h.app.local_inputs[0].status, Status::Unconfirmed);
-    h.app.background.clear();
+    h.app.resident = Default::default();
     h.fake.script("session.open",json!({"session":session_info("s1"),"load":"new-load","snapshot":snapshot("s1","new-load",1)}));
-    h.fake.script("session.state",json!({"_fixture_exact_snapshot":true,"session_id":"s1","status":"idle","snapshot":snapshot("s1","new-load",2)}));
+    h.fake.script(
+        "session.state@s1",
+        json!({"session_id":"s1","status":"idle","snapshot":snapshot("s1","new-load",2)}),
+    );
     h.action(Action::OpenSession("s1".into()));
     h.until(|app| {
-        app.session
-            .as_ref()
-            .is_some_and(|session| session.load.as_deref() == Some("new-load"))
+        app.resident
+            .current()
+            .is_some_and(|session| session.load == "new-load")
     })
     .await;
     h.app.open_panel(Panel::Unconfirmed);
@@ -338,12 +344,13 @@ async fn unknown_input_confirmation_keeps_the_same_operation_when_an_earlier_rec
     h.submit("same");
     let first = h.app.local_inputs[0].id;
     h.fake
-        .script("session.open@s2", json!({"session":session_info("s2")}));
-    h.fake.script("session.read@s2", display_read(0, 0));
+        .script("session.open@s2", opened_session(session_info("s2")));
+    h.fake
+        .script("session.read@s2", history(display_read(0, 0)));
     h.action(Action::OpenSession("s2".into()));
     h.until(|app| {
-        app.session
-            .as_ref()
+        app.resident
+            .current()
             .is_some_and(|session| session.info.session_id == "s2")
     })
     .await;
@@ -497,7 +504,7 @@ async fn a_first_input_that_becomes_unconfirmed_keeps_its_paste_and_the_draft_ty
     let mut h = Harness::new();
     h.boot().await;
     h.fake
-        .script_held("session.create", json!({"session":session_info("s1")}));
+        .script_held("session.create", opened_session(session_info("s1")));
     h.fake.script_error_with(
         "input.push",
         -32603,
@@ -553,8 +560,8 @@ async fn text_input_uses_its_own_editor_and_explicit_answer_kind_without_consumi
     h.until(|app| app.has_interaction()).await;
     assert!(matches!(
         h.app
-            .session
-            .as_ref()
+            .resident
+            .current()
             .unwrap()
             .interaction
             .as_ref()
@@ -571,8 +578,8 @@ async fn text_input_uses_its_own_editor_and_explicit_answer_kind_without_consumi
     assert!(h.calls("interaction.answer").is_empty());
     let expected = h
         .app
-        .session
-        .as_ref()
+        .resident
+        .current()
         .unwrap()
         .interaction_editor
         .text()
@@ -616,7 +623,7 @@ async fn text_editor_is_preserved_by_same_id_revisions_but_old_answers_cannot_re
         .await;
     h.settle().await;
     assert_eq!(
-        h.app.session.as_ref().unwrap().interaction_editor.text(),
+        h.app.resident.current().unwrap().interaction_editor.text(),
         "first answer"
     );
     arm_prompt().await;
@@ -625,8 +632,8 @@ async fn text_editor_is_preserved_by_same_id_revisions_but_old_answers_cannot_re
     h.control_event(json!({"pending_interaction":text_interaction("second")}))
         .await;
     h.until(|app| {
-        app.session
-            .as_ref()
+        app.resident
+            .current()
             .unwrap()
             .interaction
             .as_ref()
@@ -637,8 +644,8 @@ async fn text_editor_is_preserved_by_same_id_revisions_but_old_answers_cannot_re
     .await;
     assert!(
         h.app
-            .session
-            .as_ref()
+            .resident
+            .current()
             .unwrap()
             .interaction_editor
             .is_empty()
@@ -651,7 +658,7 @@ async fn text_editor_is_preserved_by_same_id_revisions_but_old_answers_cannot_re
     )
     .await;
     h.settle().await;
-    let session = h.app.session.as_ref().unwrap();
+    let session = h.app.resident.current().unwrap();
     assert_eq!(
         session.interaction.as_ref().unwrap().interaction_id,
         "second"
@@ -692,7 +699,7 @@ async fn empty_or_oversized_text_answers_are_rejected_without_truncating_or_send
 
 /// `count` prompts, each followed by a three-line answer.
 fn conversation(h: &mut Harness, count: usize) {
-    let transcript = &mut h.app.session.as_mut().unwrap().transcript;
+    let transcript = &mut h.app.resident.current_mut().unwrap().transcript;
     for index in 0..count {
         transcript.push(Block::User {
             text: format!("prompt {index}"),
@@ -728,11 +735,24 @@ fn first_row(h: &mut Harness) -> String {
 /// A running turn that has just asked to run `bash`.
 async fn asking() -> Harness {
     let mut h = Harness::opened(display_read(0, 0)).await;
-    h.fake.script("input.push", started("l1"));
+    h.fake
+        .script("input.push", starting_reply("l1", h.next_revision()));
     h.fake.script_held("turn.wait", waited("l1", completed()));
-    h.fake.script("interaction.answer", json!({"ok": true}));
     h.submit("write a file");
     h.until(|app| app.is_busy()).await;
+    let mut waiting = running_snapshot(h.next_revision(), "l1", "write a file");
+    waiting["execution"]["phase"] = json!("waiting_for_input");
+    waiting["pending_interaction"] = json!({"loop_id":"l1","request_index":0,
+        "interaction_id":"i1","tool_call_id":"c1","tool_name":"bash",
+        "kind":{"type":"approval","data":{"prompt":"Allow bash?"}}});
+    h.fake.script("session.state@s1", state_response(waiting));
+    h.fake.script(
+        "interaction.answer",
+        after_snapshot(
+            json!({"ok":true}),
+            running_snapshot(h.next_revision() + 1, "l1", "write a file"),
+        ),
+    );
     h.emit(
         "interaction_requested",
         json!({"turn": turn("l1"), "interaction": {
@@ -862,9 +882,15 @@ async fn shift_enter_adds_a_line_and_alt_enter_queues_follow_ups_behind_a_runnin
     h.fake.script_sequence(
         "input.push",
         vec![
-            started("l1"),
-            pushed(vec![one.clone()]),
-            pushed(vec![one, two]),
+            starting_reply("l1", 2),
+            after_snapshot(
+                pushed(vec![one.clone()]),
+                running_queue(3, "l1", "first line\nxy", vec![one.clone()]),
+            ),
+            after_snapshot(
+                pushed(vec![one.clone(), two.clone()]),
+                running_queue(4, "l1", "first line\nxy", vec![one, two]),
+            ),
         ],
     );
     h.fake.script_held("turn.wait", waited("l1", completed()));
@@ -902,11 +928,20 @@ async fn enter_pushes_a_steer_alt_and_ctrl_enter_a_follow_up_and_the_dock_follow
     h.fake.script_sequence(
         "input.push",
         vec![
-            started("l1"),
-            pushed(vec![alt.clone()]),
-            pushed(vec![alt.clone(), ctrl.clone()]),
+            starting_reply("l1", 2),
+            after_snapshot(
+                pushed(vec![alt.clone()]),
+                running_queue(3, "l1", "start", vec![alt.clone()]),
+            ),
+            after_snapshot(
+                pushed(vec![alt.clone(), ctrl.clone()]),
+                running_queue(4, "l1", "start", vec![alt.clone(), ctrl.clone()]),
+            ),
             // The Agent runs steers first.
-            pushed(vec![now, alt, ctrl]),
+            after_snapshot(
+                pushed(vec![now.clone(), alt.clone(), ctrl.clone()]),
+                running_queue(5, "l1", "start", vec![now, alt, ctrl]),
+            ),
         ],
     );
     h.fake.script_held("turn.wait", waited("l1", completed()));
@@ -953,7 +988,8 @@ async fn enter_pushes_a_steer_alt_and_ctrl_enter_a_follow_up_and_the_dock_follow
 #[tokio::test(start_paused = true)]
 async fn tab_does_nothing_in_the_composer() {
     let mut h = Harness::opened(display_read(0, 0)).await;
-    h.fake.script("input.push", started("l1"));
+    h.fake
+        .script("input.push", starting_reply("l1", h.next_revision()));
     h.fake.script_held("turn.wait", waited("l1", completed()));
     h.type_text("draft");
     h.press(KeyCode::Tab);
@@ -988,6 +1024,12 @@ async fn a_message_sent_during_a_compaction_waits_in_the_agents_queue_without_a_
     }}))
     .await;
     h.until(|app| app.compacting()).await;
+    let observed = h.control(json!({"queue":queue(vec![entry("i1","follow_up","later")],false),
+        "compaction":{"operation_id":"auto-boundary-l1-1","phase":"summarizing","covered_item_count":8,"retained_item_count":2}}));
+    h.fake.script(
+        "input.push",
+        after_snapshot(pushed(vec![entry("i1", "follow_up", "later")]), observed),
+    );
     h.app.composer.set_text("later");
     h.action(crate::app::Action::QueueFollowUp);
     h.settle().await;
@@ -1054,7 +1096,18 @@ async fn a_slash_line_that_names_no_command_is_a_prompt() {
     let mut h = Harness::opened(display_read(0, 0)).await;
     h.fake.script_sequence(
         "input.push",
-        vec![started("l1"), pushed(vec![entry("i2", "steer", "x")])],
+        vec![
+            starting_reply("l1", 2),
+            after_snapshot(
+                pushed(vec![entry("i2", "steer", "/var/log is huge")]),
+                running_queue(
+                    3,
+                    "l1",
+                    "/usr/bin/env is broken",
+                    vec![entry("i2", "steer", "/var/log is huge")],
+                ),
+            ),
+        ],
     );
     h.fake.script_held("turn.wait", waited("l1", completed()));
 
@@ -1431,4 +1484,47 @@ async fn pointer_motion_asks_for_a_redraw_only_over_the_scrollbar() {
     };
     assert!(!moved(&mut h, 20), "motion over text changes nothing");
     assert!(moved(&mut h, 59), "motion over the scrollbar shows it");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_local_session_tool_grant_is_recorded_only_after_a_successful_answer() {
+    for accepted in [false, true] {
+        let mut h = Harness::opened(display_read(0, 0)).await;
+        if accepted {
+            h.fake
+                .script_held("interaction.answer", json!({"accepted":true}));
+        } else {
+            h.fake.script_error_held(
+                "interaction.answer",
+                -32000,
+                "already resolved",
+                "invalid_state",
+            );
+        }
+        h.control_event(
+            json!({"pending_interaction":{"loop_id":"l1","request_index":0,
+            "interaction_id":"approval","tool_call_id":"call","tool_name":"bash",
+            "kind":{"type":"approval","data":{"prompt":"Allow?"}}}}),
+        )
+        .await;
+        h.until(|app| app.has_interaction()).await;
+        h.action(crate::app::Action::Answer(crate::app::Answer::AllowTool));
+        h.fake.wait_for_calls("interaction.answer", 1).await;
+        assert!(
+            h.app.resident.current().unwrap().allowed_tools.is_empty(),
+            "sending is not acceptance"
+        );
+        h.fake.release("interaction.answer");
+        h.settle().await;
+        assert_eq!(
+            h.app
+                .resident
+                .current()
+                .unwrap()
+                .allowed_tools
+                .contains("bash"),
+            accepted
+        );
+        assert_eq!(h.calls("interaction.answer").len(), 1);
+    }
 }

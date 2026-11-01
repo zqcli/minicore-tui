@@ -17,12 +17,12 @@ use crate::transcript::{Block, EXPANDED_ROWS, RequestKey, ToolCall, ToolState, T
 use crate::transcript::{append_history_item, push_interrupted};
 
 use super::Scroll;
-use super::tasks::History;
+use super::read::{History, TurnDetails};
 
 /// How soon the footer's figures may be asked for again while a turn runs.
 const PRESENTATION_EVERY: Duration = Duration::from_secs(2);
-/// Closed turns remembered for late-delta suppression.
-const CLOSED_TURNS: usize = 256;
+/// Recent completions and canonical installs retained independently.
+const COMPLETIONS: usize = 256;
 /// Turn regions remembered for a completion that may still arrive.
 const RECONCILE_REGIONS: usize = 256;
 pub const EARLY_BYTES: usize = 2 * 1024 * 1024;
@@ -36,7 +36,7 @@ pub struct Session {
     pub epoch: u64,
     pub transcript: Transcript,
     pub live: Option<LiveTurn>,
-    pub(super) ended_live: VecDeque<LiveTurn>,
+    ended_live: VecDeque<LiveTurn>,
     pub(super) auto_title_asked: bool,
     /// The Agent's queue as last reported; the Agent owns it.
     pub queue: Queue,
@@ -53,20 +53,20 @@ pub struct Session {
     pub context: Option<SessionContext>,
     pub control_in_flight: bool,
     pub control_due: bool,
-    /// The resident instance the Agent reports; `None` until an open installs it.
-    pub load: Option<String>,
+    /// The resident instance this session was opened with.
+    pub load: String,
     /// Completion discovery watermarks and pending bodies for that instance.
     pub recovery: crate::app::recovery::RecoveryState,
     pub recovery_tasks: crate::app::recovery::RecoveryTasks,
+    pub(super) tasks: super::tasks::Tasks,
     pub body_recovery: VecDeque<BodyRecovery>,
     /// The Agent's execution as the last snapshot observed it, which differs
     /// from `live` while a waited turn has not answered yet.
     pub execution: Option<crate::protocol::SessionExecution>,
     pub catalog: crate::protocol::CompletionDirectory,
-    /// Turns whose canonical body is installed; their late deltas are dropped.
-    closed: VecDeque<String>,
+    /// Completion order and whether each body is already canonical.
+    completions: VecDeque<CompletionMark>,
     pub(super) delivered: VecDeque<DeliveredIdentity>,
-    completion_order: VecDeque<(u64, String)>,
     /// A turn a control snapshot adopted, which needs its own wait registered.
     pub adopted: Option<TurnRef>,
     /// A recovered turn whose ordering anchor is not loaded, so its position
@@ -83,6 +83,7 @@ pub struct Session {
     /// replayed from history carries none of its own.
     pub summary_coverage: Option<(usize, usize)>,
     pub interaction: Option<PendingInteraction>,
+    pub approval_seen: Option<String>,
     pub interaction_editor: super::composer::Composer,
     /// When the pending prompt starts taking answer keys; a stray key before then moves it back.
     pub armed_at: tokio::time::Instant,
@@ -135,6 +136,12 @@ pub(super) struct DeliveredIdentity {
     pub request_index: u32,
 }
 
+struct CompletionMark {
+    loop_id: String,
+    seq: u64,
+    canonical: bool,
+}
+
 pub struct LiveTurn {
     pub(super) completion_background: Option<bool>,
     pub turn: TurnRef,
@@ -144,8 +151,6 @@ pub struct LiveTurn {
     pub phase: Phase,
     /// Index in the transcript where this turn's blocks start.
     pub start: usize,
-    /// The Agent dropped events while this turn ran.
-    pub gap: bool,
     /// The tool running now and its detail, for the status line.
     pub running_tool: Option<(String, String)>,
     /// Esc asked for cancellation and `turn.wait` has not answered yet.
@@ -181,7 +186,6 @@ impl LiveTurn {
             requests: 1,
             phase: Phase::Thinking,
             start,
-            gap: false,
             running_tool: None,
             interrupting: false,
             accounted_usage: Usage::default(),
@@ -271,7 +275,7 @@ impl PendingInteraction {
 }
 
 impl Session {
-    pub fn new(info: SessionInfo, epoch: u64) -> Self {
+    pub fn new(info: SessionInfo, epoch: u64, load: String) -> Self {
         Self {
             #[cfg(feature = "e2e-observe")]
             observed_installs: Vec::new(),
@@ -294,15 +298,15 @@ impl Session {
             context: None,
             control_in_flight: false,
             control_due: false,
-            load: None,
+            load,
             recovery: crate::app::recovery::RecoveryState::default(),
             recovery_tasks: crate::app::recovery::RecoveryTasks::default(),
+            tasks: super::tasks::Tasks::default(),
             body_recovery: VecDeque::new(),
             execution: None,
             catalog: crate::protocol::CompletionDirectory::default(),
-            closed: VecDeque::new(),
+            completions: VecDeque::new(),
             delivered: VecDeque::new(),
-            completion_order: VecDeque::new(),
             adopted: None,
             ordering_gap: false,
             block_reason: None,
@@ -311,6 +315,7 @@ impl Session {
             compaction: None,
             summary_coverage: None,
             interaction: None,
+            approval_seen: None,
             interaction_editor: super::composer::Composer::new(),
             armed_at: tokio::time::Instant::now(),
             allowed_tools: BTreeSet::new(),
@@ -324,6 +329,29 @@ impl Session {
             returned: Vec::new(),
             unseen: false,
             scroll: Scroll::Follow,
+        }
+    }
+
+    fn tracked_turn(&self, loop_id: &str) -> Option<&LiveTurn> {
+        self.live
+            .iter()
+            .chain(&self.ended_live)
+            .find(|live| live.turn.loop_id == loop_id)
+    }
+
+    pub(super) fn tracked_turn_mut(&mut self, loop_id: &str) -> Option<&mut LiveTurn> {
+        self.live
+            .iter_mut()
+            .chain(&mut self.ended_live)
+            .find(|live| live.turn.loop_id == loop_id)
+    }
+
+    pub(super) fn retire_live(&mut self) {
+        if let Some(live) = self.live.take() {
+            self.ended_live.push_back(live);
+            if self.ended_live.len() > RECONCILE_REGIONS {
+                self.ended_live.pop_front();
+            }
         }
     }
 
@@ -436,12 +464,7 @@ impl Session {
             }
             None => format!("{message} · save unknown"),
         };
-        self.completion_order.retain(|(_, id)| id != &turn.loop_id);
-        self.completion_order
-            .push_back((turn.seq, turn.loop_id.clone()));
-        if self.completion_order.len() > CLOSED_TURNS {
-            self.completion_order.pop_front();
-        }
+        self.remember_completion(turn, false);
         let message = if self.ordering_gap {
             format!("{message} · history anchor unavailable; region position is unresolved")
         } else {
@@ -543,8 +566,7 @@ impl Session {
             .is_some_and(|live| live.turn.loop_id == turn.loop_id)
     }
 
-    /// Applies one event for this session. Events are hints that may arrive in
-    /// any order; a turn starts only from an RPC answer, never from an event.
+    /// Applies body hints to the session's known turn regions.
     pub fn apply_event(&mut self, event: AgentEvent) {
         match event {
             AgentEvent::SessionOpened { session, .. } => self.info = *session,
@@ -792,25 +814,7 @@ impl Session {
         }
     }
 
-    /// Trims the output of the finished cards from block `from` on.
-    pub fn settle_cards(&mut self, from: usize) {
-        let long: Vec<usize> = (from..self.transcript.len())
-            .filter(|index| {
-                matches!(&self.transcript.blocks()[*index], Block::Tool(call)
-                    if call.output_content().len() > EXPANDED_ROWS)
-            })
-            .collect();
-        for index in long {
-            if let Some(Block::Tool(call)) = self.transcript.block_mut(index) {
-                call.settle();
-            }
-        }
-    }
-
-    /// Ends the live turn when `wait` is about it, appending the turn-end line.
-    /// Returns whether the durable items must replace what was streamed.
-    /// Remembers where a turn's streamed region begins, so a completion that
-    /// arrives for it later replaces that region instead of duplicating it.
+    /// Remembers a streamed region until its completion can replace it.
     pub fn record_region(&mut self, loop_id: &str, start: usize) {
         self.reconcile_from.retain(|(id, _)| id != loop_id);
         self.reconcile_from.push((loop_id.to_owned(), start));
@@ -819,32 +823,21 @@ impl Session {
         }
     }
 
-    pub fn end_turn(&mut self, wait: &TurnWaitResult) -> Option<bool> {
+    pub fn end_turn(&mut self, wait: &TurnWaitResult) -> bool {
         let loop_id = &wait.turn.loop_id;
         if self.transcript.blocks().iter().any(|block| matches!(block, Block::TurnEnd { loop_id: id, duration: Some(_), .. } if id == loop_id)) {
-            return None;
+            return false;
         }
-        let live = self
-            .live
-            .as_ref()
-            .filter(|live| &live.turn.loop_id == loop_id)
-            .or_else(|| {
-                self.ended_live
-                    .iter()
-                    .find(|live| &live.turn.loop_id == loop_id)
-            });
-        let start = live.map(|live| live.start).or_else(|| {
+        let live = self.tracked_turn(loop_id);
+        let Some(start) = live.map(|live| live.start).or_else(|| {
             self.reconcile_from
                 .iter()
                 .find(|(id, _)| id == loop_id)
                 .map(|(_, start)| *start)
-        })?;
+        }) else {
+            return false;
+        };
         let elapsed = live.map(|live| live.started.elapsed());
-        let requests = wait
-            .requests
-            .unwrap_or_else(|| live.map_or(0, |live| live.requests));
-        let gap = live.is_some_and(|live| live.gap);
-        let accounted_usage = live.map(|live| live.accounted_usage.clone());
         let end = self.region_end(loop_id);
         let finishing: Vec<usize> = (start..end)
             .filter(|index| {
@@ -860,60 +853,83 @@ impl Session {
                 _ => {}
             }
         }
-        let usage = wait
-            .usage
-            .clone()
-            .or_else(|| accounted_usage.clone())
-            .unwrap_or_default();
-        if wait.usage.is_some()
-            && let Some(previous) = accounted_usage
+        self.install_terminal(
+            loop_id,
+            &TurnDetails::from(wait),
+            elapsed.or(Some(Duration::ZERO)),
+            start..end,
+        );
+        true
+    }
+
+    /// Waits and canonical reads share one metadata installation. Duration is
+    /// supplied only by the wait; reading a body must not extend a turn's timer.
+    fn install_terminal(
+        &mut self,
+        loop_id: &str,
+        details: &TurnDetails,
+        elapsed: Option<Duration>,
+        range: std::ops::Range<usize>,
+    ) {
+        let live = self.tracked_turn(loop_id);
+        let requests = details
+            .requests
+            .unwrap_or_else(|| live.map_or(0, |live| live.requests));
+        let usage = details.usage.clone().unwrap_or_else(|| {
+            live.map(|live| live.accounted_usage.clone())
+                .unwrap_or_default()
+        });
+        if let Some(previous) = live.map(|live| live.accounted_usage.clone())
+            && details.usage.is_some()
         {
             self.usage.replace_contribution(&previous, &usage);
-            if let Some(live) = self
-                .live
-                .iter_mut()
-                .chain(&mut self.ended_live)
-                .find(|live| live.turn.loop_id == *loop_id)
-            {
+            if let Some(live) = self.tracked_turn_mut(loop_id) {
                 live.accounted_usage = usage.clone();
                 live.usage_final = true;
             }
         }
-        let tools = self.transcript.blocks()[start..end]
+        let tools = self.transcript.blocks()[range]
             .iter()
             .filter(|block| matches!(block, Block::Tool(_)))
             .count() as u64;
-        // A completion that arrived before this wait already closed the turn
-        // with its own line; the wait only fills in what it alone knows.
-        match self.transcript.blocks().iter().rposition(
-            |block| matches!(block, Block::TurnEnd { loop_id, .. } if loop_id == &wait.turn.loop_id),
-        ) {
-            Some(at) => {
-                if let Some(Block::TurnEnd { duration, requests, tools: t, usage: u, .. }) =
-                    self.transcript.block_mut(at)
+        let terminal = self.transcript.blocks().iter().rposition(
+            |block| matches!(block, Block::TurnEnd { loop_id: id, .. } if id == loop_id),
+        );
+        if let Some(at) = terminal {
+            if let Some(Block::TurnEnd {
+                outcome,
+                duration,
+                requests: count,
+                tools: calls,
+                usage: tokens,
+                ..
+            }) = self.transcript.block_mut(at)
+            {
+                outcome.clone_from(&details.outcome);
+                *duration = duration.or(elapsed);
+                *count = (*count).max(requests);
+                *calls = (*calls).max(tools);
+                if details.usage.is_some()
+                    || (tokens.input_tokens.is_none() && tokens.output_tokens.is_none())
                 {
-                    *duration = elapsed.or(Some(Duration::ZERO));
-                    *requests = (*requests).max(wait.requests.unwrap_or(0));
-                    *t = (*t).max(tools);
-                    if u.input_tokens.is_none() && u.output_tokens.is_none() {
-                        u.clone_from(&usage);
-                    }
+                    *tokens = usage;
                 }
             }
-            None => {
-                self.push_in_turn(loop_id, Block::TurnEnd {
-                    loop_id: wait.turn.loop_id.clone(),
-                    outcome: wait.outcome.clone(),
-                    duration: elapsed.or(Some(Duration::ZERO)),
+        } else {
+            self.push_in_turn(
+                loop_id,
+                Block::TurnEnd {
+                    loop_id: loop_id.to_owned(),
+                    outcome: details.outcome.clone(),
+                    duration: elapsed,
                     requests,
                     tools,
                     usage,
                     changes: None,
                     saving: None,
-                });
-            }
+                },
+            );
         }
-        Some(gap || !wait.outcome.is_completed())
     }
 
     /// Installs a completion's verified body: the region the turn streamed into
@@ -923,7 +939,7 @@ impl Session {
     pub fn reconcile_completion(
         &mut self,
         turn: &crate::protocol::CompletedTurn,
-        outcome: &crate::protocol::LoopOutcome,
+        details: &TurnDetails,
         items: &[RawHistoryItem],
         interrupted: Option<&InterruptedRequest>,
         persistence: TurnPersistence,
@@ -942,11 +958,7 @@ impl Session {
             .reconcile_from
             .iter()
             .any(|(id, _)| id == &turn.loop_id)
-            && (self
-                .live
-                .iter()
-                .chain(&self.ended_live)
-                .any(|live| live.turn.loop_id == turn.loop_id))
+            && self.tracked_turn(&turn.loop_id).is_some()
         {
             return None;
         }
@@ -975,7 +987,9 @@ impl Session {
         }
         let placed = match streamed {
             true => self.reconcile_turn(&turn.loop_id, items, interrupted),
-            false => Some(self.place_completion(turn, outcome, items, interrupted, early_end)),
+            false => {
+                Some(self.place_completion(turn, &details.outcome, items, interrupted, early_end))
+            }
         };
         // A completion that installed nothing leaves the turn repairable and
         // states no saving fact: the region it would have replaced is gone, so
@@ -999,18 +1013,15 @@ impl Session {
                         .identify_user(index, &turn.loop_id, turn.input_id.as_deref());
                 }
             }
-            for live in &mut self.ended_live {
-                if live.turn.loop_id == turn.loop_id {
-                    live.start = start;
-                }
+            if let Some(live) = self.tracked_turn_mut(&turn.loop_id) {
+                live.start = start;
             }
+            let end = self.transcript.blocks().iter().position(
+                |block| matches!(block, Block::TurnEnd { loop_id, .. } if *loop_id == turn.loop_id),
+            ).expect("an installed completion has its terminal");
+            self.install_terminal(&turn.loop_id, details, None, start..end);
             self.saving_note(&turn.loop_id, persistence, persistence_uncertain);
-            self.close_turn(&turn.loop_id);
-            self.completion_order
-                .push_back((turn.seq, turn.loop_id.clone()));
-            if self.completion_order.len() > CLOSED_TURNS {
-                self.completion_order.pop_front();
-            }
+            self.remember_completion(turn, true);
         }
         placed
     }
@@ -1088,16 +1099,10 @@ impl Session {
                 })
                 .unwrap_or(self.transcript.len()),
         };
-        for (_, prior) in self
-            .completion_order
-            .iter()
-            .filter(|(seq, _)| *seq < turn.seq)
-        {
-            if let Some(at) =
-                self.transcript.blocks().iter().position(
-                    |block| matches!(block,Block::TurnEnd { loop_id,.. } if loop_id == prior),
-                )
-            {
+        for prior in self.completions.iter().filter(|entry| entry.seq < turn.seq) {
+            if let Some(at) = self.transcript.blocks().iter().position(
+                |block| matches!(block,Block::TurnEnd { loop_id,.. } if loop_id == &prior.loop_id),
+            ) {
                 start = start.max(at + 1);
             }
         }
@@ -1148,19 +1153,38 @@ impl Session {
         });
     }
 
-    /// Closes every body entry of a turn whose canonical content is installed,
-    /// so a late delta cannot duplicate it.
-    fn close_turn(&mut self, loop_id: &str) {
-        self.closed.retain(|id| id != loop_id);
-        self.closed.push_back(loop_id.to_owned());
-        if self.closed.len() > CLOSED_TURNS {
-            self.closed.pop_front();
+    fn remember_completion(&mut self, turn: &crate::protocol::CompletedTurn, canonical: bool) {
+        let canonical = canonical || self.is_closed(&turn.loop_id);
+        self.completions
+            .retain(|entry| entry.loop_id != turn.loop_id);
+        self.completions.push_back(CompletionMark {
+            loop_id: turn.loop_id.clone(),
+            seq: turn.seq,
+            canonical,
+        });
+        // Failed/partial reads must not evict the canonical markers that
+        // suppress late deltas. The union stays within two identity budgets.
+        let recent = self.completions.len().saturating_sub(COMPLETIONS);
+        let mut canonical = 0;
+        for entry in self.completions.iter_mut().rev() {
+            if entry.canonical {
+                canonical += 1;
+                entry.canonical = canonical <= COMPLETIONS;
+            }
         }
+        let mut index = 0;
+        self.completions.retain(|entry| {
+            let keep = index >= recent || entry.canonical;
+            index += 1;
+            keep
+        });
     }
 
     /// Whether a turn's body is already authoritative.
     pub fn is_closed(&self, loop_id: &str) -> bool {
-        self.closed.iter().any(|id| id == loop_id)
+        self.completions
+            .iter()
+            .any(|entry| entry.loop_id == loop_id && entry.canonical)
     }
 
     /// The loop the last control snapshot saw executing; it differs from
@@ -1186,8 +1210,6 @@ impl Session {
             .iter()
             .position(|(id, _)| id == loop_id)?;
         let start = self.reconcile_from[at].1;
-        // The region ends at this turn's line, so a successor already started
-        // after it keeps its place; the line itself is replaced because the
         // The region ends before this turn's own line, which stays: it is where
         // the wait recorded the outcome, duration, counts and usage, and where
         // `saving_note` states what the result reported. A successor that
@@ -1213,6 +1235,18 @@ impl Session {
         Some((start, grown, end))
     }
 
+    fn boundaries_mut(&mut self) -> impl Iterator<Item = (&str, &mut usize)> {
+        self.live
+            .iter_mut()
+            .chain(&mut self.ended_live)
+            .map(|live| (live.turn.loop_id.as_str(), &mut live.start))
+            .chain(
+                self.reconcile_from
+                    .iter_mut()
+                    .map(|(id, at)| (id.as_str(), at)),
+            )
+    }
+
     /// Moves every boundary for a region `start..end` replaced by `grown` more
     /// blocks: before it stays, inside it lands on `start`, after it moves.
     fn rebase_range(&mut self, start: usize, end: usize, grown: isize) {
@@ -1227,13 +1261,7 @@ impl Session {
                 before => before,
             };
         };
-        if let Some(live) = self.live.as_mut() {
-            shift(&mut live.start);
-        }
-        for live in &mut self.ended_live {
-            shift(&mut live.start);
-        }
-        for (_, at) in &mut self.reconcile_from {
+        for (_, at) in self.boundaries_mut() {
             shift(at);
         }
     }
@@ -1251,7 +1279,7 @@ impl Session {
                 AgentEvent::InputDelivered {
                     meta: crate::protocol::event::EventMeta {
                         session_id: turn.session_id.clone(),
-                        load: self.load.clone(),
+                        load: Some(self.load.clone()),
                         dropped_before: 0,
                     },
                     turn,
@@ -1401,20 +1429,9 @@ impl Session {
     }
 
     fn insert_in_turn(&mut self, loop_id: &str, at: usize, block: Block) {
-        for (id, start) in &mut self.reconcile_from {
+        for (id, start) in self.boundaries_mut() {
             if id != loop_id && *start >= at {
                 *start += 1;
-            }
-        }
-        if let Some(live) = &mut self.live
-            && live.turn.loop_id != loop_id
-            && live.start >= at
-        {
-            live.start += 1;
-        }
-        for live in &mut self.ended_live {
-            if live.turn.loop_id != loop_id && live.start >= at {
-                live.start += 1;
             }
         }
         self.transcript.insert(at, block);
@@ -1674,15 +1691,8 @@ impl Session {
                 .find(|(id, _)| id == loop_id)
                 .expect("every retained region was placed")
                 .1;
-            if let Some(live) = &mut self.live
-                && live.turn.loop_id == *loop_id
-            {
+            if let Some(live) = self.tracked_turn_mut(loop_id) {
                 live.start = new_start;
-            }
-            for live in &mut self.ended_live {
-                if live.turn.loop_id == *loop_id {
-                    live.start = new_start;
-                }
             }
             mapping.push((*start..end, new_start, full_turns.contains(loop_id)));
         }
@@ -1760,13 +1770,7 @@ impl Session {
                 *index = index.saturating_add_signed(delta);
             }
         };
-        if let Some(live) = self.live.as_mut() {
-            shift(&mut live.start);
-        }
-        for live in &mut self.ended_live {
-            shift(&mut live.start);
-        }
-        for (_, start) in &mut self.reconcile_from {
+        for (_, start) in self.boundaries_mut() {
             shift(start);
         }
     }
@@ -1936,6 +1940,7 @@ mod tests {
         Session::new(
             serde_json::from_value(crate::testing::session_info("s")).unwrap(),
             1,
+            crate::testing::LOAD.into(),
         )
     }
 
@@ -2020,8 +2025,8 @@ mod tests {
             "turn": {"session_id": "s", "loop_id": "l"}, "outcome": {"type": "completed"}
         }))
         .unwrap();
-        assert_eq!(session.end_turn(&wait), Some(false));
-        assert_eq!(session.end_turn(&wait), None, "the turn ends once");
+        assert!(session.end_turn(&wait));
+        assert!(!session.end_turn(&wait), "the turn ends once");
         assert_eq!(session.queue.items.len(), 1);
     }
 

@@ -174,7 +174,7 @@ pub enum PhoneView {
 
 impl PhoneView {
     pub fn foreground(app: &App) -> Self {
-        match &app.session {
+        match app.resident.current() {
             Some(session) => Self::Session(session.info.session_id.clone()),
             None => Self::Draft(DraftSettings {
                 workspace: app.workspace.clone(),
@@ -243,7 +243,6 @@ pub enum PendingKind {
     },
     Open,
     Command {
-        allow_tool: Option<String>,
         text: Option<String>,
     },
 }
@@ -333,7 +332,18 @@ pub struct Remote {
     /// Text those modifications hold.
     pending_text_bytes: usize,
     stop: Option<oneshot::Sender<()>>,
-    server_task: Option<tokio::task::JoinHandle<()>>,
+    server_tasks: Vec<tokio::task::JoinHandle<()>>,
+}
+
+impl Drop for Remote {
+    fn drop(&mut self) {
+        if let Some(task) = &self.starting {
+            task.abort();
+        }
+        for task in &self.server_tasks {
+            task.abort();
+        }
+    }
 }
 
 impl Remote {
@@ -465,7 +475,8 @@ impl Remote {
         let phone_gate = phone_gate::Gate::from_env().expect("acceptance phone gate setup failed");
         let (stop, stopped) = oneshot::channel();
         self.tls = bound.tls.is_some();
-        self.server_task = Some(tokio::spawn(server::serve(
+        self.server_tasks.retain(|task| !task.is_finished());
+        self.server_tasks.push(tokio::spawn(server::serve(
             bound.listeners,
             bound.tls.map(tokio_rustls::TlsAcceptor::from),
             server::Host {
@@ -505,8 +516,12 @@ impl Remote {
 
     pub async fn shutdown(&mut self) {
         self.stop("tui_exit");
-        if let Some(task) = self.server_task.take() {
-            let _ = tokio::time::timeout(std::time::Duration::from_millis(500), task).await;
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(500);
+        for mut task in self.server_tasks.drain(..) {
+            if tokio::time::timeout_at(deadline, &mut task).await.is_err() {
+                task.abort();
+                let _ = task.await;
+            }
         }
     }
 
@@ -576,8 +591,7 @@ pub enum RemoteEvent {
     Finished {
         connection: u64,
         id: String,
-        method: &'static str,
-        result: Result<Value, crate::protocol::RpcError>,
+        result: Result<crate::app::operation::Outcome, crate::protocol::RpcError>,
     },
     /// The Agent's answer to a phone's `input.remove`, which decides its ack.
     Removed {

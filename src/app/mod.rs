@@ -13,15 +13,19 @@ mod draft;
 pub mod find;
 pub mod keys;
 mod live;
+mod local_files;
 mod mouse;
 mod notify;
 #[cfg(feature = "e2e-observe")]
 pub mod observe;
+pub mod operation;
 mod ops;
 pub mod overlay;
 pub mod picker;
+pub mod read;
 pub mod recovery;
 mod remote;
+pub mod resident;
 pub mod scrollbar;
 pub mod selection;
 pub mod session;
@@ -43,9 +47,9 @@ use serde_json::{Value, json};
 use crate::config::ThemeKind;
 use crate::protocol::changes::DiffPage;
 use crate::protocol::{
-    AgentEvent, ChangeList, CompactionResult, InputPushResult, InputRecallResult,
-    InputResumeResult, ModelInfo, ProfileInfo, Queue, Reasoning, RpcError, SessionContext,
-    SessionInfo, SessionPresentation, ToolReadResult, ToolRef, TurnWaitResult,
+    AgentEvent, ChangeList, InputPushResult, InputRecallResult, InputResumeResult, ModelInfo,
+    ProfileInfo, Reasoning, RpcError, SessionContext, SessionInfo, SessionPresentation,
+    ToolReadResult, ToolRef, TurnWaitResult,
 };
 use crate::rpc::Client;
 use crate::transcript::layout::Layout;
@@ -78,6 +82,7 @@ pub enum Msg {
     /// A result for the live session with epoch `.0`.
     Session(u64, Box<SessionOp>),
     LocalPushed(u64, Result<InputPushResult, RpcError>),
+    Configured(Vec<templates::Template>, Result<(), String>),
     Notice(NoticeLevel, String),
     /// The external editor returned a draft.
     DraftEdited(Option<String>),
@@ -94,8 +99,8 @@ pub struct Ready {
 
 /// What an async operation on the foreground session produced.
 pub enum SessionOp {
-    Tail(Result<tasks::HistoryRead, RpcError>),
-    Page(Result<tasks::HistoryRead, RpcError>),
+    Tail(Result<read::HistoryRead, RpcError>),
+    Page(Result<read::HistoryRead, RpcError>),
     State(Result<crate::protocol::SessionStateResult, RpcError>),
     Presentation(Result<SessionPresentation, RpcError>),
     /// A `workspace.status` answer, wanted only for the branch it caches in the presentation.
@@ -103,18 +108,14 @@ pub enum SessionOp {
     Context(Result<SessionContext, RpcError>),
     Resumed(Result<InputResumeResult, RpcError>),
     Recalled(Result<InputRecallResult, RpcError>),
-    Queue(Result<Queue, RpcError>),
     Waited(Result<TurnWaitResult, RpcError>),
-    /// An answer of which only a failure matters.
-    Done(Result<Value, RpcError>),
-    Compacted(Result<CompactionResult, RpcError>),
-    Info(Result<SessionInfo, RpcError>),
+    Operated(Result<operation::Outcome, RpcError>),
     /// The number of history items, for `/session`.
     ItemCount(Result<usize, RpcError>),
     Changes(String, Result<ChangeSummary, RpcError>),
     /// One finished turn's verified body, or why it could not be read.
     Recovered(recovery::RecoveryOutcome),
-    HistoryRecovered(u64, u64, Result<tasks::HistoryRead, RpcError>),
+    HistoryRecovered(u64, Result<read::HistoryRead, RpcError>),
     /// The facts of a card loaded without its detail; `None` when the read failed.
     ToolHydrated(ToolRef, Option<ToolReadResult>),
     Files(Result<Vec<String>, RpcError>),
@@ -188,13 +189,10 @@ pub struct App {
     pub remote: crate::remote::Remote,
     pub client: Arc<Client>,
     pub tx: Tx,
+    pub(super) tasks: tasks::Tasks,
+    pub local_files: local_files::LocalFiles,
     pub workspace: PathBuf,
-    /// The session on screen; `None` is the draft.
-    pub session: Option<Session>,
-    /// The other live sessions, most recently left first.
-    pub background: Vec<Session>,
-    /// Reducer code is running for a background session swapped into `session`.
-    pub background_op: bool,
+    pub resident: resident::Sessions,
     /// The draft's composer text while a session is on screen.
     pub draft_text: String,
     /// A long turn ended or asked for approval, or a background session asked.
@@ -252,14 +250,10 @@ pub struct App {
     pub first_message: Option<String>,
     /// Numbers the live sessions, so a late result never reaches another one.
     pub epoch: u64,
-    /// Numbers recovery tasks; a read from an older generation is dropped.
-    pub recovery_generation: u64,
     pub(super) recovery_after: Option<u64>,
     /// A control read is outstanding.
     /// Snapshots held for sessions this client has not opened yet.
     pub pre_install: recovery::PreInstall,
-    /// The interaction the client already announced, so one approval rings once.
-    pub approval_seen: Option<String>,
     pub templates: Vec<templates::Template>,
     /// The TUI directory; `None` in tests, which touch no files.
     pub home: Option<crate::config::Home>,
@@ -296,10 +290,10 @@ impl App {
             remote: crate::remote::Remote::default(),
             client,
             tx,
+            tasks: tasks::Tasks::default(),
+            local_files: local_files::LocalFiles::default(),
             workspace,
-            session: None,
-            background: Vec::new(),
-            background_op: false,
+            resident: resident::Sessions::default(),
             draft_text: String::new(),
             ring: false,
             sessions: Vec::new(),
@@ -340,10 +334,8 @@ impl App {
             opening_target: None,
             first_message: None,
             epoch: 0,
-            recovery_generation: 0,
             recovery_after: None,
             pre_install: recovery::PreInstall::default(),
-            approval_seen: None,
             templates: Vec::new(),
             home: None,
             composed: false,
@@ -362,9 +354,8 @@ impl App {
                 #[cfg(feature = "e2e-observe")]
                 {
                     self.early_body_peak_bytes = self.early_body_peak_bytes.max(
-                        self.session
+                        self.resident
                             .iter()
-                            .chain(&self.background)
                             .map(|session| session.early_bytes)
                             .sum(),
                     );
@@ -421,8 +412,7 @@ impl App {
                 if app.ok(result).is_some() {
                     app.forget_phone_session(&id);
                     app.sessions.retain(|session| session.session_id != id);
-                    app.background
-                        .retain(|session| session.info.session_id != id);
+                    app.resident.remove(&id);
                     app.catalog_generation += 1;
                     if let Overlay::Sessions { rows, .. } = &mut app.overlay {
                         rows.retain(|session| session.session_id != id);
@@ -433,17 +423,24 @@ impl App {
             }),
             Msg::Renamed(id, result) => self.with_notice_for(&id, |app| app.on_renamed(result)),
             Msg::Session(epoch, op) => {
-                if let Some(session) = self.session.as_ref()
-                    && session.epoch == epoch
-                {
+                if let Some(session) = self.resident.get(epoch) {
                     let id = session.info.session_id.clone();
-                    self.with_notice_for(&id, |app| app.on_op(*op));
-                } else if let Some(index) = self
-                    .background
-                    .iter()
-                    .position(|session| session.epoch == epoch)
-                {
-                    self.with_background(index, |app| app.on_op(*op));
+                    self.with_notice_for(&id, |app| app.on_op(epoch, *op));
+                }
+            }
+            Msg::Configured(templates, result) => {
+                self.templates = templates;
+                match result {
+                    Ok(()) => {
+                        let client = self.client.clone();
+                        self.spawn_msg(async move {
+                            match client.call::<_, Value>(crate::protocol::METHOD_RELOAD, &Value::Null).await {
+                                Ok(_) => Msg::Notice(NoticeLevel::Info, "Agent reloaded; the new system prompt applies from the next turn".into()),
+                                Err(error) => Msg::Notice(NoticeLevel::Error, error.message),
+                            }
+                        });
+                    }
+                    Err(error) => self.notice(NoticeLevel::Error, error),
                 }
             }
             Msg::Notice(level, text) => self.notice(level, text),
@@ -482,16 +479,14 @@ impl App {
         let flash = self.flash.iter().map(|(_, at)| *at + FLASH_TTL);
         let scrollbar = self.scrolled_at.map(|at| at + FLASH_TTL);
         let room = self
-            .session
+            .resident
             .iter()
-            .chain(&self.background)
             .map(|session| session.recovery_tasks.len())
             .sum::<usize>()
             < recovery::CONCURRENT;
         let recovery = self
-            .session
+            .resident
             .iter()
-            .chain(&self.background)
             .filter_map(|session| room.then(|| session.recovery.next_deadline()).flatten());
         notices.chain(flash).chain(scrollbar).chain(recovery).min()
     }
@@ -518,9 +513,15 @@ impl App {
             _ => None,
         };
         self.remote.notice(level, &text, label.as_deref());
-        let text = match self.background_op {
-            true => format!("\"{}\": {text}", self.session_label()),
-            false => text,
+        let background = match &self.remote.notice_target {
+            crate::remote::NoticeTarget::Session(id) => self
+                .live(id)
+                .is_some_and(|session| !self.resident.is_current(session.epoch)),
+            _ => false,
+        };
+        let text = match label.filter(|_| background) {
+            Some(label) => format!("\"{label}\": {text}"),
+            None => text,
         };
         self.push_notice(level, text);
     }
@@ -549,8 +550,15 @@ impl App {
     pub fn error(&mut self, error: RpcError) {
         // A stale or missing load says this client's instance identity is out
         // of date; re-reading control is the answer, never a blind retry.
-        if crate::app::tasks::is_stale_load(&error) && self.session.is_some() {
-            self.refresh_control();
+        if crate::app::tasks::is_stale_load(&error) {
+            let target = match &self.remote.notice_target {
+                crate::remote::NoticeTarget::Session(id) => self.resident.find(id),
+                _ => self.resident.current(),
+            }
+            .map(|session| session.epoch);
+            if let Some(epoch) = target {
+                self.refresh_control_for(epoch);
+            }
         }
         self.notice(NoticeLevel::Error, error.message);
     }
@@ -560,15 +568,14 @@ impl App {
         result.map_err(|error| self.error(error)).ok()
     }
 
-    /// The foreground session, for results `on_msg` has matched to it by epoch.
-    pub(super) fn session_mut(&mut self) -> &mut Session {
-        self.session
-            .as_mut()
-            .expect("the result's session is in the foreground")
+    pub(super) fn session_mut(&mut self, epoch: u64) -> &mut Session {
+        self.resident
+            .get_mut(epoch)
+            .expect("a matched resident session")
     }
 
     pub fn is_busy(&self) -> bool {
-        self.session.as_ref().is_some_and(Session::is_busy)
+        self.resident.current().is_some_and(Session::is_busy)
     }
 
     pub(crate) fn active_editor(&self) -> &composer::Composer {
@@ -583,7 +590,7 @@ impl App {
         }
         if !self.remote.active()
             && self.overlay.is_none()
-            && let Some(session) = &self.session
+            && let Some(session) = self.resident.current()
             && session
                 .interaction
                 .as_ref()
@@ -606,7 +613,7 @@ impl App {
         }
         if !self.remote.active()
             && self.overlay.is_none()
-            && let Some(session) = &mut self.session
+            && let Some(session) = self.resident.current_mut()
             && session
                 .interaction
                 .as_ref()
@@ -618,32 +625,32 @@ impl App {
     }
 
     pub fn has_interaction(&self) -> bool {
-        self.session
-            .as_ref()
+        self.resident
+            .current()
             .is_some_and(|session| session.interaction.is_some())
     }
 
     pub fn compacting(&self) -> bool {
-        self.session.as_ref().is_some_and(Session::compacting)
+        self.resident.current().is_some_and(Session::compacting)
     }
 
     /// Status-line text while something is in flight.
     pub fn status_label(&self) -> Option<&'static str> {
-        self.session.as_ref().and_then(Session::status_label)
+        self.resident.current().and_then(Session::status_label)
     }
 
     /// Elapsed time of the running turn, for the status line.
     pub fn busy_elapsed(&self) -> Option<Duration> {
-        self.session
-            .as_ref()
+        self.resident
+            .current()
             .and_then(|session| session.live.as_ref())
             .map(|live| live.started.elapsed())
     }
 
     /// The transcript blocks, or an empty slice when no session is open.
     pub fn transcript_blocks(&self) -> &[Block] {
-        self.session
-            .as_ref()
+        self.resident
+            .current()
             .map_or(&[], |session| session.transcript.blocks())
     }
 
@@ -719,7 +726,7 @@ impl App {
     pub fn copy_view(&mut self) {
         let text = match &self.overlay {
             Overlay::Diff(diff) => diff::text(diff),
-            _ => views::context::text(self.session.as_ref(), self.styles),
+            _ => views::context::text(self.resident.current(), self.styles),
         };
         if text.trim().is_empty() {
             self.notice(NoticeLevel::Info, "Nothing to copy here");

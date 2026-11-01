@@ -179,8 +179,8 @@ fn sessions_sheet(app: &App, rows: &[SessionInfo], state: &SessionsState, styles
         renaming,
     } = *state;
     let foreground = app
-        .session
-        .as_ref()
+        .resident
+        .current()
         .map(|session| session.info.session_id.as_str());
     let now = now_millis() / 1000;
     let shown = app.filtered_sessions(rows, filter);
@@ -326,7 +326,7 @@ fn interaction_sheet(app: &App, styles: Styles) -> Option<Sheet> {
     if app.remote.active() {
         return None;
     }
-    let session = app.session.as_ref()?;
+    let session = app.resident.current()?;
     let interaction = session.interaction.as_ref()?;
     if matches!(interaction.kind, InteractionKind::Text) {
         return None;
@@ -536,14 +536,14 @@ fn session_row(info: &SessionInfo, label: String, context: &RowContext, now_seco
 }
 
 fn context_sheet(app: &App, styles: Styles) -> Sheet {
-    let lines = crate::ui::views::context::lines(app.session.as_ref(), styles);
+    let lines = crate::ui::views::context::lines(app.resident.current(), styles);
     Sheet::new("Context", "r refresh · c copy · esc close").body(lines)
 }
 
 /// `/session`: the facts about the foreground session; Enter or `c` copies its id.
 fn session_info_sheet(app: &App, items: Option<usize>, styles: Styles) -> Sheet {
     let sheet = Sheet::new("Session", "enter copy id · c copy id · esc close");
-    let Some(session) = app.session.as_ref() else {
+    let Some(session) = app.resident.current() else {
         return sheet.body(vec![Line::styled("  No session is open", styles.dim())]);
     };
     let info = &session.info;

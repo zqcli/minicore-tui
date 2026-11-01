@@ -45,19 +45,14 @@ impl ApplicationGate {
         }
         let session = match message {
             Msg::Agent { event, .. } => event.meta().and_then(|meta| app.live(&meta.session_id)),
-            Msg::Session(epoch, _) => app
-                .session
-                .iter()
-                .chain(&app.background)
-                .find(|session| session.epoch == *epoch),
+            Msg::Session(epoch, _) => app.resident.iter().find(|session| session.epoch == *epoch),
             Msg::LocalPushed(id, _) => app
                 .local_inputs
                 .iter()
                 .find(|input| input.id == *id)
                 .and_then(|input| {
                     app.live(&input.target.session_id).filter(|session| {
-                        input.target.epoch == session.epoch
-                            && session.load.as_deref() == Some(input.target.load.as_str())
+                        input.target.epoch == session.epoch && session.load == input.target.load
                     })
                 }),
             _ => None,
@@ -65,9 +60,7 @@ impl ApplicationGate {
         let Some(session) = session else {
             return Ok(());
         };
-        let Some(load) = session.load.clone() else {
-            return Ok(());
-        };
+        let load = session.load.clone();
         let id = session.info.session_id.clone();
         match std::fs::remove_file(self.directory.join("arm")) {
             Ok(()) => {}

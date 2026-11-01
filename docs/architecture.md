@@ -1,6 +1,6 @@
 # Architecture
 
-How `minicore-tui` 0.4 is built, and the rules later changes must keep. The
+How `minicore-tui` is built, and the rules later changes must keep. The
 original plan is [design-v0.4.md](design-v0.4.md); where the two differ, this
 document and the code win.
 
@@ -40,11 +40,17 @@ src/
   prompt_history.rs  the prompt history file (JSON lines, atomic rewrite)
   app/          the reducer; all mutable application state
     mod.rs        App, Msg, SessionOp, Scroll, notices, scrolling
+    resident.rs   loaded session collection and selected epoch
     session.rs    Session: transcript, live turn, queue, usage, history window
+    operation.rs  typed mutations shared by terminal and phone adapters
+    control.rs    authoritative snapshot application and coalesced control reads
+    recovery.rs   bounded completion discovery and recovery scheduling
+    read.rs       verified history/result paging, assembly and budgets
+    local_files.rs serial coalesced history/theme writes and reload composition
     actions.rs    Action (keys and commands land here) and the IO each starts
     ops.rs        applies SessionOp results and Agent events
     remote.rs     remote commands, local authorization, intents, projection sync
-    tasks.rs      async operations: bootstrap, waits, history reads, changes, export
+    tasks.rs      task ownership, bootstrap, waits, changes and export
     keys/         on_key and the per-surface key handlers: mod (approval prompt),
                   composer, completion (the / and @ lists), overlay (pickers, views)
     mouse.rs      on_mouse: wheel, scrollbar, press/drag/word selection, clicks
@@ -119,6 +125,19 @@ touched:
 reloaded), `/theme` edits `[ui] theme` with `toml_edit` so comments survive. The
 Agent config is never parsed back: `AgentFile` only serializes.
 
+### Protocol and transport ownership
+
+The handshake requires RPC v2. Open/create responses include a required load and
+snapshot, while rename responses contain session information only. Input receipts
+must name the requested session/load and an accepted input ID. A malformed receipt
+leaves acceptance unknown and cannot trigger an automatic resend.
+
+Responses consume their decoded JSON value; pending calls unregister on cancellation.
+Reader, writer and child exit share one terminal failure reason. The stdout reader
+alone publishes events and the final connection-close notification, awaiting queue
+space instead of dropping closure. Unknown future body events remain extensible;
+an unreadable known control snapshot is a protocol failure, never silently ignored.
+
 ## Main loop and message flow
 
 `main` resolves the TUI directory, runs `config::prepare` (scaffold, validate,
@@ -138,7 +157,7 @@ most every 16 ms, so a burst of deltas costs one draw; pointer motion off the
 scrollbar draws nothing. `MINICORE_TUI_PERF_STATS` prints the draws per cause
 and their times on exit. After bootstrap the loop opens a session once, for
 `--session`, else the newest for the workspace with `--continue`. Without one the
-app stays in the draft (`app/draft.rs`): `app.session` is `None`, the screen is
+app stays in the draft (`app/draft.rs`): `app.resident.current()` is `None`, the screen is
 the welcome header over an empty transcript, and nothing is created.
 
 ### Single writer
@@ -161,36 +180,40 @@ enum Msg {
 }
 ```
 
-`SessionOp` holds the results of everything done for a live session
-(`Tail`, `Page`, `Waited`, `Sent`, `Context`, `Presentation`, `Changes`,
-`ToolHydrated`, `DiffFile`, …). `App::spawn` and `App::call` stamp each task with
-the foreground session's `epoch`; `on_msg` finds that epoch in the foreground or
-background and drops a result only when its session is gone. `adopt` assigns
-`App::epoch + 1` to a newly opened or created session; a live switch reuses its
-epoch. Remote listeners have a separate generation so late handshakes cannot
-survive an off/on cycle.
+`SessionOp` carries results for a resident epoch. `spawn_for` and `call_for`
+attach that epoch when work begins; `on_msg` looks up the same resident and drops
+results after it has gone. Each resident owns its ordinary tasks, cancelling
+unfinished reads and waits when removed. Recovery reads also retain their shared
+slot and byte budgets. Input acceptance and phone acknowledgements have separate
+operation owners, so changing the selected view never cancels an accepted input.
 
-Every session opened in the process stays live (`docs/design-sessions.md`):
-`App::session` is the foreground and `App::background` holds the others, most
-recently left first. Each keeps its epoch for life, so `Msg::Session` reaches it
-by epoch wherever it is, and Agent events reach it by `session_id`; a result for
-a deleted session is dropped. Background work runs the ordinary reducer code
-through `App::with_background`, which swaps the session into the foreground slot
-with its own `scroll`, sets `background_op` and swaps it back. While that flag is
-set the view is left alone: `restore_draft` routes remote text or keeps it in `Session::returned`,
-find matches and foreground-only answers (item counts, `@` files, diff reads)
-are skipped, and `notice` names the session locally. A background turn end marks the
-session `unseen` unless a phone views it, and an approval asks for the bell (`App::ring`). Switching
-(`show_session`) parks the foreground with its composer text and scroll, brings
-the target back with its draft and returned texts, clears the layout cache and
-pickers and reads only the footer's figures; the draft keeps its text in
-`App::draft_text`. Live states reach the picker, the footer, the status screen
-and the phone's session list when drawn or projected, with no timer of their own.
+`App::resident` contains every loaded session and a separate selected epoch.
+Each session is constructed with its immutable Agent `load`; the same identity
+is used by commands, snapshots and result reads. Navigation changes selection
+and restores the existing composer, scroll and layout behavior. Background
+reducers directly receive the target epoch and update that resident's saved
+scroll; they never swap the selected session. Results for pickers and diff views
+are applied only when their target remains selected. Notices still identify
+background sessions, and completion/approval notifications keep their existing
+bell and unseen rules.
+
+Local and phone mutations use `operation::Operation`, whose executor decodes and
+checks the Agent reply once. `Outcome` is applied by the reducer; adapters retain
+their own draft ownership, feedback and acknowledgement identities. The terminal
+continues to follow phone navigation, but operation targets do not depend on that
+policy. A phone open/create installs its resident before deciding whether its
+unchanged view still owns focus; no temporary selection needs to be undone.
+
+History, theme and reload composition use one coalescing local-file worker.
+Only the latest pending history/theme value is retained, blocking filesystem
+work runs off the event loop, and writes to the same file cannot finish out of
+order. Normal exit flushes this worker. Composer owns editing and in-memory
+history only; input acceptance schedules persistence.
 
 ### The draft
 
 A session is created by the first message, never at startup, so the session
-list holds no empty sessions. While `app.session` is `None`:
+list holds no empty sessions. While `app.resident.current()` is `None`:
 
 - `App::launch` holds the settings the next session takes: the command-line
   flags, then what `/model`, `/reasoning`, `Ctrl+L`, `Ctrl+P`, `Shift+Tab` and
@@ -198,8 +221,8 @@ list holds no empty sessions. While `app.session` is `None`:
   The footer resolves them with the profile's defaults (`profile.list`; the
   Agent's default profile comes from `config.toml` and is unknown for a raw
   `--agent-config`) through `App::model_id` and `App::reasoning`.
-- The first `Enter` takes the editor's text (and records it in the prompt
-  history), parks it in `App::first_message` and sends `session.create`.
+- The first `Enter` takes the editor's text (recorded in prompt history only
+  after confirmed input acceptance), parks it in `App::first_message` and sends `session.create`.
   `Msg::Created` adopts the session and sends that text through the ordinary
   `send`, so the user block, timestamps and auto title behave as for any first
   message. A new session has no history, so no tail is read; it would clear the
@@ -271,7 +294,7 @@ which frees the slot and answers the connection if it is still admitted. Each se
 keeps it in `Session::returned` until local control returns. A scoped
 `Remote::notice_target` routes synchronous notices to the requester and async
 session notices to its viewers plain and to other devices with the session
-label. Foreground results/events and `with_background` set that scope;
+label. Results and events set that scope from their explicit session target;
 open/rename/delete results retain their session id too. Labels are resolved only
 when a notice is emitted, not on every event. A notice raised by the TUI's own
 keys stays in the TUI (`NoticeTarget::Local`, the default); only a refused

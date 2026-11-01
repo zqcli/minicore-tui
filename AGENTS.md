@@ -35,7 +35,10 @@ backend repository only after confirming that is where the behavior belongs.
 | `src/config/` | The TUI directory: `config.toml`, `models.toml`, prompts, scaffolding, the composed Agent config |
 | `src/rpc.rs`, `src/protocol/` | Agent child and JSON-RPC client; serde DTOs and constants only |
 | `src/app/` | The reducer: all mutable state, keys (`keys/`), mouse, selection, composer, overlays, async tasks |
-| `src/app/control.rs`, `recovery.rs` | Snapshot-only control writes, bounded completion discovery, retries and body installation |
+| `src/app/resident.rs`, `live.rs` | Resident session collection and terminal navigation; operations carry explicit epochs |
+| `src/app/operation.rs` | Typed mutations and receipt validation shared by terminal and phone adapters |
+| `src/app/control.rs`, `recovery.rs`, `read.rs` | Snapshot-only control writes, bounded completion discovery, verified paginated reads and body installation |
+| `src/app/local_files.rs` | Serialized, coalesced local writes and reload composition off the reducer |
 | `src/remote/` | Remote mode: listener, web client, password sign-in, the phone protocol, the projection and host directories |
 | `src/transcript/` | Blocks with revisions, tool calls, history mapping, the per-block layout cache |
 | `src/ui/` | Drawing from `&App`: transcript, blocks, rails, markdown, dock, sheets, views, theme |
@@ -114,6 +117,8 @@ prints draw counts and timings on exit of a live run.
 
 Keep these unless the user asks to change them:
 
+- A loaded `Session` has one immutable Agent load and local epoch. Background
+  reducers take that epoch; navigation alone changes `resident.current()`.
 - Control state — execution, queue, pause, interaction, compaction, blocking —
   is written only by `App::apply_snapshot` from `session.state`, `session.open`,
   `session.create` and the `session_snapshot` event. Command receipts refresh it;
@@ -156,6 +161,9 @@ Keep these unless the user asks to change them:
 - Reducer behavior goes in `src/app/tests/<area>.rs` through `Harness`/
   `FakeAgent`; pure logic gets an inline `mod tests` next to it; rendering goes
   in `ui/snapshots.rs`. Do not add a parallel test file for one module.
+- `FakeAgent::script(Value)` and `emit` deliver literal frames. Scenario helpers
+  may explicitly publish a supplied snapshot and its query reply, but must never
+  infer execution, queues or completions from command receipts.
 - Tests are deterministic: use `#[tokio::test(start_paused = true)]`, scripted
   Agent responses and explicit gates, not sleeps. `testing::real_bounded` is an
   outer real-time failure watchdog only; correctness never depends on its timing.

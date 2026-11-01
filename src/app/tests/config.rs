@@ -24,6 +24,7 @@ async fn the_theme_command_keeps_the_config_file_and_its_comments() {
     h.app.home = Some(home.clone());
     h.type_text("/theme light");
     h.press(crossterm::event::KeyCode::Enter);
+    h.app.local_files.finish().await;
     let text = std::fs::read_to_string(home.config_file()).unwrap();
     assert!(text.starts_with("# keep me\n"), "{text}");
     assert!(text.contains("[ui]\ntheme = \"light\""), "{text}");
@@ -39,6 +40,7 @@ async fn reload_composes_the_agent_config_and_a_rejected_edit_never_reaches_the_
 
     h.type_text("/reload");
     h.press(crossterm::event::KeyCode::Enter);
+    h.app.local_files.finish().await;
     h.settle().await;
     let generated = std::fs::read_to_string(home.agent_config_file()).unwrap();
     assert!(generated.contains("[models.main]"), "{generated}");
@@ -47,6 +49,7 @@ async fn reload_composes_the_agent_config_and_a_rejected_edit_never_reaches_the_
     std::fs::write(home.system_prompt_file(), "").unwrap();
     h.type_text("/reload");
     h.press(crossterm::event::KeyCode::Enter);
+    h.app.local_files.finish().await;
     h.settle().await;
     assert_eq!(h.calls("agent.reload").len(), 1);
     assert!(
@@ -66,6 +69,7 @@ async fn a_raw_agent_config_is_not_composed_on_reload() {
     h.app.home = Some(home.clone());
     h.type_text("/reload");
     h.press(crossterm::event::KeyCode::Enter);
+    h.app.local_files.finish().await;
     h.settle().await;
     assert!(!home.agent_config_file().exists());
     assert_eq!(h.calls("agent.reload").len(), 1);

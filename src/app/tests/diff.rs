@@ -82,7 +82,7 @@ async fn the_diff_view_lists_one_row_per_path_and_counts_every_record() {
         },
         "edit",
     );
-    let session = h.app.session.as_mut().unwrap();
+    let session = h.app.resident.current_mut().unwrap();
     session.transcript.push(Block::Tool(Box::new(edit)));
 
     open_diff(&mut h);
@@ -218,8 +218,8 @@ async fn clicking_a_turn_end_line_lists_the_working_tree() {
     use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
     let mut h = Harness::opened(display_read(0, 0)).await;
     h.app
-        .session
-        .as_mut()
+        .resident
+        .current_mut()
         .unwrap()
         .transcript
         .push(Block::TurnEnd {

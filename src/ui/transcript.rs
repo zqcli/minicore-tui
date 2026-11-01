@@ -132,7 +132,7 @@ pub fn inner(area: Rect) -> Rect {
 pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, styles: Styles) {
     let area = inner(area);
     let welcome = || header(styles, area.width, &app.workspace);
-    let Some(session) = app.session.as_ref() else {
+    let Some(session) = app.resident.current() else {
         // A draft shows the header; only waiting gets a line under it.
         let status = if !app.ready {
             Some("Connecting to minicore-agent…")

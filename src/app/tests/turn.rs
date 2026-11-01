@@ -17,37 +17,69 @@ async fn queued_follow_ups_run_one_per_turn_as_the_agent_starts_them() {
     h.fake.script_sequence(
         "input.push",
         vec![
-            started("l1"),
-            pushed(vec![first.clone()]),
-            pushed(vec![first, second.clone()]),
+            starting_reply("l1", 2),
+            after_snapshot(
+                pushed(vec![first.clone()]),
+                running_queue(3, "l1", "start", vec![first.clone()]),
+            ),
+            after_snapshot(
+                pushed(vec![first.clone(), second.clone()]),
+                running_queue(4, "l1", "start", vec![first.clone(), second.clone()]),
+            ),
         ],
     );
-    h.fake.script_sequence_later(
-        "turn.wait",
+    for (id, prompt) in [("l1", "start"), ("l2", "first"), ("l3", "second")] {
+        let result = completed_result(id, vec![user(0, id, prompt)]);
+        h.fake.script(&format!("turn.result@s1/{id}"), result);
+    }
+    let mut after_first = finished_snapshot(5, vec![completion(1, "l1", "completed")]);
+    after_first["execution"] = running_snapshot(5, "l2", "first")["execution"].clone();
+    after_first["queue"] = queue(vec![second.clone()], false);
+    h.fake.script_held(
+        "turn.wait@s1/l1",
+        after_snapshot(
+            waited_then(
+                "l1",
+                completed(),
+                Some(next_turn("l2", "first")),
+                queue(vec![second], false),
+            ),
+            after_first,
+        ),
+    );
+    let mut after_second = finished_snapshot(
+        6,
         vec![
-            (
-                waited_then(
-                    "l1",
-                    completed(),
-                    Some(next_turn("l2", "first")),
-                    queue(vec![second], false),
-                ),
-                Duration::from_secs(1),
-            ),
-            (
-                waited_then(
-                    "l2",
-                    completed(),
-                    Some(next_turn("l3", "second")),
-                    queue(vec![], false),
-                ),
-                Duration::ZERO,
-            ),
-            (
-                waited_then("l3", completed(), None, queue(vec![], false)),
-                Duration::ZERO,
-            ),
+            completion(1, "l1", "completed"),
+            completion(2, "l2", "completed"),
         ],
+    );
+    after_second["execution"] = running_snapshot(6, "l3", "second")["execution"].clone();
+    h.fake.script(
+        "turn.wait@s1/l2",
+        after_snapshot(
+            waited_then(
+                "l2",
+                completed(),
+                Some(next_turn("l3", "second")),
+                queue(vec![], false),
+            ),
+            after_second,
+        ),
+    );
+    h.fake.script(
+        "turn.wait@s1/l3",
+        after_snapshot(
+            waited("l3", completed()),
+            finished_snapshot(
+                7,
+                vec![
+                    completion(1, "l1", "completed"),
+                    completion(2, "l2", "completed"),
+                    completion(3, "l3", "completed"),
+                ],
+            ),
+        ),
     );
     h.submit("start");
     h.until(|app| app.is_busy()).await;
@@ -55,10 +87,10 @@ async fn queued_follow_ups_run_one_per_turn_as_the_agent_starts_them() {
         h.app.composer.set_text(text);
         h.key(KeyCode::Enter, KeyModifiers::ALT);
     }
-    h.until(|app| app.session.as_ref().unwrap().queue.items.len() == 2)
+    h.until(|app| app.resident.current().unwrap().queue.items.len() == 2)
         .await;
     assert!(h.screen(60, 12).contains("↳ follow-up 1  first"));
-
+    h.fake.release("turn.wait@s1/l1");
     h.settle().await;
     assert_eq!(
         h.sends(),
@@ -99,9 +131,15 @@ async fn steers_a_running_turn_took_become_steering_blocks_in_the_agents_order()
         h.fake.script_sequence(
             "input.push",
             vec![
-                started("l1"),
-                pushed(vec![first.clone()]),
-                pushed(vec![first, second]),
+                starting_reply("l1", 2),
+                after_snapshot(
+                    pushed(vec![first.clone()]),
+                    running_queue(3, "l1", "start", vec![first.clone()]),
+                ),
+                after_snapshot(
+                    pushed(vec![first.clone(), second.clone()]),
+                    running_queue(4, "l1", "start", vec![first.clone(), second.clone()]),
+                ),
             ],
         );
         h.fake.script_held("turn.wait", waited("l1", completed()));
@@ -122,6 +160,7 @@ async fn steers_a_running_turn_took_become_steering_blocks_in_the_agents_order()
             json!({"turn": turn("old"), "items": [{"id": "x", "text": "stray", "request_index":1}]}),
         )
         .await;
+        let mut remaining = vec![first, second];
         for batch in batches {
             let items: Vec<Value> = batch
                 .iter()
@@ -131,6 +170,14 @@ async fn steers_a_running_turn_took_become_steering_blocks_in_the_agents_order()
                 "input_delivered",
                 json!({"turn": turn("l1"), "items": items}),
             )
+            .await;
+            remaining.retain(|queued| !batch.iter().any(|text| queued["id"] == id(text)));
+            h.snapshot_event(running_queue(
+                h.next_revision(),
+                "l1",
+                "start",
+                remaining.clone(),
+            ))
             .await;
             h.settle().await;
         }
@@ -158,17 +205,39 @@ async fn steers_a_running_turn_took_become_steering_blocks_in_the_agents_order()
 async fn inputs_taken_by_a_successor_before_its_wait_starts_still_become_steering_blocks() {
     let mut h = Harness::opened(display_read(0, 0)).await;
     let next = entry("i2", "steer", "next up");
-    h.fake
-        .script_sequence("input.push", vec![started("A"), pushed(vec![next])]);
+    h.fake.script_sequence(
+        "input.push",
+        vec![
+            starting_reply("A", 2),
+            after_snapshot(
+                pushed(vec![next.clone()]),
+                running_queue(3, "A", "start", vec![next]),
+            ),
+        ],
+    );
+    let mut successor = finished_snapshot(4, vec![completion(1, "A", "completed")]);
+    successor["execution"] = crate::testing::snapshot_running(
+        "s1",
+        crate::testing::LOAD,
+        4,
+        "B",
+        entry("i2", "steer", "next up"),
+    )["execution"]
+        .clone();
     h.fake.script_held(
         "turn.wait",
-        waited_then(
-            "A",
-            completed(),
-            Some(next_turn("B", "next up")),
-            queue(vec![], false),
+        after_snapshot(
+            waited_then(
+                "A",
+                completed(),
+                Some(next_turn("B", "next up")),
+                queue(vec![], false),
+            ),
+            successor,
         ),
     );
+    let result = completed_result("A", vec![user(0, "A", "start")]);
+    h.fake.script("turn.result@s1/A", result);
     h.submit("start");
     h.until(|app| app.is_busy()).await;
     h.submit("next up");
@@ -193,8 +262,17 @@ async fn a_push_into_a_paused_queue_shows_the_older_entry_the_agent_started_with
     h.mirror(vec![entry("i1", "follow_up", "older")], true);
     h.fake.script(
         "input.push",
-        json!({"id": "i2", "started": next_turn("l2", "older"),
+        after_snapshot(
+            json!({"session_id":"s1","load":crate::testing::LOAD,"accepted":true,
+               "id": "i2", "started": next_turn("l2", "older"),
                "queue": queue(vec![entry("i2", "follow_up", "newer")], false)}),
+            running_queue(
+                h.next_revision(),
+                "l2",
+                "older",
+                vec![entry("i2", "follow_up", "newer")],
+            ),
+        ),
     );
     h.fake.script_held("turn.wait", waited("l2", completed()));
     h.app.composer.set_text("newer");
@@ -202,7 +280,7 @@ async fn a_push_into_a_paused_queue_shows_the_older_entry_the_agent_started_with
     h.until(|app| app.is_busy()).await;
     assert_eq!(h.texts(), ["older"], "queue order wins over arrival");
     assert_eq!(h.queue(), ["newer"]);
-    assert!(!h.app.session.as_ref().unwrap().queue.paused);
+    assert!(!h.app.resident.current().unwrap().queue.paused);
 }
 
 #[tokio::test(start_paused = true)]
@@ -210,11 +288,10 @@ async fn a_wait_answer_without_a_queue_asks_for_the_control_once_and_nothing_els
     let mut h = Harness::new();
     // The state names the loop that just ended, as a stale Agent could.
     h.fake.script(
-        "session.state",
+        "session.state@s1",
         json!({"session_id": "s1", "status": "running",
                "active_loop": {"loop_id": "l9"},
-               "snapshot": crate::testing::snapshot_running(
-                   "s1", crate::testing::LOAD, 1, "l9", entry("i1", "steer", "running"))}),
+               "snapshot": running_snapshot(2, "l9", "running")}),
     );
     h.fake.script_held(
         "turn.wait",
@@ -223,6 +300,12 @@ async fn a_wait_answer_without_a_queue_asks_for_the_control_once_and_nothing_els
     h.open().await;
     assert!(h.is_busy());
     let states = h.calls("session.state").len();
+    h.fake.script(
+        "session.state@s1",
+        state_response(finished_snapshot(3, vec![completion(1, "l9", "completed")])),
+    );
+    let result = completed_result("l9", vec![user(0, "l9", "running")]);
+    h.fake.script("turn.result@s1/l9", result);
     h.fake.release("turn.wait");
     h.settle().await;
     assert!(!h.is_busy());
@@ -247,41 +330,47 @@ async fn an_input_queue_event_replaces_the_mirrored_queue_and_its_paused_flag() 
     ];
     h.control_event(json!({"queue": queue(items, true)})).await;
     h.settle().await;
-    let session = h.app.session.as_ref().unwrap();
+    let session = h.app.resident.current().unwrap();
     assert!(session.queue.paused);
     assert_eq!(h.queue(), ["now", "later"]);
     h.control_event(json!({"queue": queue(vec![], false)}))
         .await;
     h.settle().await;
     assert!(h.queue().is_empty());
-    assert!(!h.app.session.as_ref().unwrap().queue.paused);
+    assert!(!h.app.resident.current().unwrap().queue.paused);
 }
 
 #[tokio::test(start_paused = true)]
 async fn opening_a_session_takes_the_queued_entries_the_agent_reports() {
     let mut h = Harness::new();
-    let mut state = crate::testing::snapshot("s1", crate::testing::LOAD, 1);
+    let mut state = crate::testing::snapshot("s1", crate::testing::LOAD, 2);
     state["queue"] = queue(vec![entry("i1", "follow_up", "waiting")], true);
     h.fake.script(
-        "session.state",
+        "session.state@s1",
         json!({"session_id": "s1", "status": "idle", "snapshot": state}),
     );
     h.open().await;
     assert_eq!(h.queue(), ["waiting"]);
-    assert!(h.app.session.as_ref().unwrap().queue.paused);
+    assert!(h.app.resident.current().unwrap().queue.paused);
 }
 
 #[tokio::test(start_paused = true)]
 async fn a_paused_queue_shows_how_to_go_on_and_enter_without_a_draft_resumes_it() {
     let mut h = Harness::opened(display_read(0, 0)).await;
-    h.fake.script("input.push", started("l1"));
+    h.fake
+        .script("input.push", starting_reply("l1", h.next_revision()));
+    let mut paused = finished_snapshot(3, vec![completion(1, "l1", "cancelled")]);
+    paused["queue"] = queue(vec![entry("i2", "follow_up", "after the stop")], true);
     h.fake.script_sequence(
         "turn.wait",
-        vec![waited_then(
-            "l1",
-            cancelled(),
-            None,
-            queue(vec![entry("i2", "follow_up", "after the stop")], true),
+        vec![after_snapshot(
+            waited_then(
+                "l1",
+                cancelled(),
+                None,
+                queue(vec![entry("i2", "follow_up", "after the stop")], true),
+            ),
+            paused,
         )],
     );
     h.fake.script(
@@ -291,7 +380,7 @@ async fn a_paused_queue_shows_how_to_go_on_and_enter_without_a_draft_resumes_it(
     h.submit("start");
     h.settle().await;
     assert!(!h.is_busy());
-    assert!(h.app.session.as_ref().unwrap().queue.paused);
+    assert!(h.app.resident.current().unwrap().queue.paused);
     let screen = h.screen(80, 16);
     assert!(screen.contains("↳ follow-up 1  after the stop"), "{screen}");
     assert!(
@@ -308,7 +397,10 @@ async fn a_paused_queue_shows_how_to_go_on_and_enter_without_a_draft_resumes_it(
 
     h.fake.script(
         "input.resume",
-        json!({"started": next_turn("l2", "after the stop"), "queue": queue(vec![], false)}),
+        after_snapshot(
+            json!({"started": next_turn("l2", "after the stop"), "queue": queue(vec![], false)}),
+            running_snapshot(h.next_revision(), "l2", "after the stop"),
+        ),
     );
     h.fake.script_held("turn.wait", waited("l2", completed()));
     h.press(KeyCode::Enter);
@@ -320,7 +412,7 @@ async fn a_paused_queue_shows_how_to_go_on_and_enter_without_a_draft_resumes_it(
     assert_eq!(h.sends(), ["start"], "resuming pushes no text");
     assert_eq!(h.texts(), ["start", "after the stop"]);
     assert!(h.queue().is_empty());
-    assert!(!h.app.session.as_ref().unwrap().queue.paused);
+    assert!(!h.app.resident.current().unwrap().queue.paused);
 }
 
 #[tokio::test(start_paused = true)]
@@ -337,7 +429,8 @@ async fn enter_on_an_empty_draft_asks_the_agent_for_nothing_unless_the_queue_is_
 #[tokio::test(start_paused = true)]
 async fn alt_up_takes_every_queued_message_back_in_the_agents_order_into_an_empty_draft() {
     let mut h = Harness::opened(display_read(0, 0)).await;
-    h.fake.script("input.push", started("l1"));
+    h.fake
+        .script("input.push", starting_reply("l1", h.next_revision()));
     h.fake.script_held("turn.wait", waited("l1", completed()));
     h.submit("start");
     h.until(|app| app.is_busy()).await;
@@ -354,7 +447,8 @@ async fn alt_up_takes_every_queued_message_back_in_the_agents_order_into_an_empt
     );
     h.fake.script(
         "input.recall",
-        json!({"texts": ["waiting steer", "follow1", "follow2"], "queue": queue(vec![], false)}),
+        after_snapshot(json!({"texts": ["waiting steer", "follow1", "follow2"], "queue": queue(vec![], false)}),
+            running_snapshot(h.next_revision(),"l1","start")),
     );
     h.app.composer.set_text("draft");
     h.key(KeyCode::Up, KeyModifiers::ALT);
@@ -398,9 +492,12 @@ async fn a_push_the_agent_refuses_returns_its_text_and_leaves_the_queue_as_it_wa
     h.fake.script_sequence(
         "input.push",
         vec![
-            started("l1"),
-            pushed(vec![waiting]),
-            refusal(-32030, "input_queue_full"),
+            starting_reply("l1", 2),
+            after_snapshot(
+                pushed(vec![waiting.clone()]),
+                running_queue(3, "l1", "start", vec![waiting]),
+            ),
+            refusal(-32030, "input_queue_full").into(),
         ],
     );
     h.fake.script_held("turn.wait", waited("l1", completed()));
@@ -430,7 +527,7 @@ fn turn_ends(h: &Harness) -> Vec<String> {
 async fn a_late_wait_finishes_only_its_turn_while_the_successor_runs_a_tool() {
     let mut h = Harness::opened(display_read(0, 0)).await;
     h.fake
-        .script_held("session.state", json!({"session_id":"s1"}));
+        .script_held("session.state@s1", json!({"session_id":"s1"}));
     h.fake.script_held("turn.wait", waited("A", completed()));
     h.running_state("A", entry("input-A", "steer", "prompt A"));
     h.running_state("B", entry("input-B", "follow_up", "prompt B"));
@@ -453,8 +550,8 @@ async fn a_late_wait_finishes_only_its_turn_while_the_successor_runs_a_tool() {
     )
     .await;
     h.until(|app| {
-        app.session
-            .as_ref()
+        app.resident
+            .current()
             .unwrap()
             .transcript
             .tool_calls()
@@ -463,8 +560,8 @@ async fn a_late_wait_finishes_only_its_turn_while_the_successor_runs_a_tool() {
     .await;
     let before = h
         .app
-        .session
-        .as_ref()
+        .resident
+        .current()
         .unwrap()
         .transcript
         .tool_calls()
@@ -479,7 +576,7 @@ async fn a_late_wait_finishes_only_its_turn_while_the_successor_runs_a_tool() {
     ))
     .unwrap())));
 
-    let session = h.app.session.as_ref().unwrap();
+    let session = h.app.resident.current().unwrap();
     let call = session.transcript.tool_calls().next().unwrap();
     assert_eq!(
         call.output, before,
@@ -495,7 +592,7 @@ async fn a_late_wait_finishes_only_its_turn_while_the_successor_runs_a_tool() {
 async fn late_body_updates_its_region_without_changing_the_successors_working_line() {
     let mut h = Harness::opened(display_read(0, 0)).await;
     h.fake
-        .script_held("session.state", json!({"session_id":"s1"}));
+        .script_held("session.state@s1", json!({"session_id":"s1"}));
     h.fake.script_held("turn.wait", waited("A", completed()));
     h.running_state("A", entry("input-A", "steer", "prompt A"));
     h.running_state("B", entry("input-B", "follow_up", "prompt B"));
@@ -520,7 +617,14 @@ async fn late_body_updates_its_region_without_changing_the_successors_working_li
     })
     .await;
     assert_eq!(
-        h.app.session.as_ref().unwrap().live.as_ref().unwrap().phase,
+        h.app
+            .resident
+            .current()
+            .unwrap()
+            .live
+            .as_ref()
+            .unwrap()
+            .phase,
         crate::app::Phase::Thinking
     );
     h.emit(
@@ -532,8 +636,8 @@ async fn late_body_updates_its_region_without_changing_the_successors_working_li
     h.emit("tool_presentation", json!({"turn":turn("A"),"request_index":0,
         "tool_call_id":"tool-A","tool_name":"write","display":{"detail":"A file","truncated":false}})).await;
     h.until(|app| {
-        app.session
-            .as_ref()
+        app.resident
+            .current()
             .unwrap()
             .transcript
             .tool_calls()
@@ -542,8 +646,8 @@ async fn late_body_updates_its_region_without_changing_the_successors_working_li
     .await;
     assert_eq!(
         h.app
-            .session
-            .as_ref()
+            .resident
+            .current()
             .unwrap()
             .live
             .as_ref()
@@ -556,12 +660,36 @@ async fn late_body_updates_its_region_without_changing_the_successors_working_li
 #[tokio::test(start_paused = true)]
 async fn a_turn_streams_tool_facts_and_ends_on_its_wait() {
     let mut h = Harness::opened(display_read(0, 0)).await;
-    h.fake.script("input.push", started("l1"));
+    h.fake
+        .script("input.push", starting_reply("l1", h.next_revision()));
+    let mut result = completed_result(
+        "l1",
+        vec![
+            user(0, "l1", "fix the greeting"),
+            chunk(
+                1,
+                json!({"type":"assistant","data":{"loop_id":"l1","request_index":0,"content":[
+            {"type":"text","data":"Fixed."},
+            {"type":"tool_call","data":{"tool_call_id":"c1","name":"bash"}}]}}),
+            ),
+            chunk(
+                2,
+                json!({"type":"tool_result","data":{"loop_id":"l1","request_index":0,"call_id":"c1","outcome":"success","output":{"content":""}}}),
+            ),
+        ],
+    );
+    result["usage"] = json!({"input_tokens":100,"output_tokens":20});
+    result["requests"] = json!(2);
+    result["tool_rounds"] = json!(1);
+    h.fake.script("turn.result@s1/l1", result);
     h.fake.script_held(
         "turn.wait",
-        json!({"turn": turn("l1"), "outcome": completed(),
+        after_snapshot(
+            json!({"turn": turn("l1"), "outcome": completed(),
                "usage": {"input_tokens": 100, "output_tokens": 20},
                "requests": 2, "tool_rounds": 1}),
+            finished_snapshot(3, vec![completion(1, "l1", "completed")]),
+        ),
     );
     h.submit("fix the greeting");
     h.until(|app| app.is_busy()).await;
@@ -630,7 +758,7 @@ async fn a_turn_streams_tool_facts_and_ends_on_its_wait() {
         _ => None,
     });
     assert_eq!(end, Some((true, 2, 1)));
-    assert_eq!(h.app.session.as_ref().unwrap().usage.output, 20);
+    assert_eq!(h.app.resident.current().unwrap().usage.output, 20);
     let waits = h.calls("turn.wait");
     assert_eq!(waits.len(), 1, "turn_started registers no second wait");
     assert_eq!(waits[0]["loop_id"], "l1");
@@ -660,7 +788,7 @@ async fn a_provided_input_event_finishes_its_tool_without_ending_the_running_tur
         .unwrap();
     assert_eq!(call.state, ToolState::Succeeded);
     assert!(call.state.is_terminal());
-    assert_eq!(h.app.session.as_ref().unwrap().observed_loop(), Some("A"));
+    assert_eq!(h.app.resident.current().unwrap().observed_loop(), Some("A"));
     assert!(
         h.is_busy(),
         "a supplied tool input does not complete its model turn"
@@ -670,15 +798,20 @@ async fn a_provided_input_event_finishes_its_tool_without_ending_the_running_tur
 #[tokio::test(start_paused = true)]
 async fn a_failed_turn_shows_the_providers_status_the_hint_and_its_message() {
     let mut h = Harness::opened(display_read(0, 0)).await;
-    h.fake.script("input.push", started("l1"));
+    h.fake
+        .script("input.push", starting_reply("l1", h.next_revision()));
+    let outcome = json!({"type": "failed", "kind": "model", "model_error": {
+        "kind": "rate_limited", "delivery": "not_started", "retry_after_millis": 12000,
+        "provider": {"status": 429, "code": "rate_limit_exceeded", "type": "requests",
+                     "message": "Rate limit reached for gpt-6 in organization org-1"}}});
+    let mut result = turn_result("l1", vec![user(0, "l1", "go")]);
+    result["outcome"] = outcome.clone();
+    h.fake.script("turn.result@s1/l1", result);
     h.fake.script_held(
         "turn.wait",
-        waited(
-            "l1",
-            json!({"type": "failed", "kind": "model", "model_error": {
-                "kind": "rate_limited", "delivery": "not_started", "retry_after_millis": 12000,
-                "provider": {"status": 429, "code": "rate_limit_exceeded", "type": "requests",
-                             "message": "Rate limit reached for gpt-6 in organization org-1"}}}),
+        after_snapshot(
+            waited("l1", outcome),
+            finished_snapshot(3, vec![completion(1, "l1", "failed")]),
         ),
     );
     h.submit("go");
@@ -699,7 +832,8 @@ async fn a_failed_turn_shows_the_providers_status_the_hint_and_its_message() {
 #[tokio::test(start_paused = true)]
 async fn a_tick_keeps_tool_cards_cached_until_a_tool_event_changes_them() {
     let mut h = Harness::opened(display_read(0, 0)).await;
-    h.fake.script("input.push", started("l1"));
+    h.fake
+        .script("input.push", starting_reply("l1", h.next_revision()));
     h.fake.script_held("turn.wait", waited("l1", completed()));
     h.submit("go");
     h.until(|app| app.is_busy()).await;
@@ -727,12 +861,12 @@ async fn a_tick_keeps_tool_cards_cached_until_a_tool_event_changes_them() {
     h.settle().await;
     let revisions = |h: &Harness| {
         h.app
-            .session
-            .as_ref()
+            .resident
+            .current()
             .unwrap()
             .transcript
             .revisions()
-            .to_vec()
+            .collect::<Vec<_>>()
     };
     let before = revisions(&h);
     h.app.tick();
@@ -770,7 +904,8 @@ async fn a_tick_keeps_tool_cards_cached_until_a_tool_event_changes_them() {
 #[tokio::test(start_paused = true)]
 async fn a_wait_answer_for_another_loop_leaves_the_turn_running() {
     let mut h = Harness::opened(display_read(0, 0)).await;
-    h.fake.script("input.push", started("l1"));
+    h.fake
+        .script("input.push", starting_reply("l1", h.next_revision()));
     h.fake.script("turn.wait", waited("l0", completed()));
     h.submit("go");
     h.settle().await;
@@ -789,9 +924,19 @@ async fn dropped_events_make_the_durable_items_replace_only_that_turn() {
         ],
     ))
     .await;
-    h.fake
-        .script("input.push", started_at("l1", "2026-10-20T21:38:00Z"));
-    h.fake.script_held("turn.wait", waited("l1", completed()));
+    let mut starting = running_snapshot(h.next_revision(), "l1", "$text");
+    starting["execution"]["input"]["accepted_at"] = json!("2026-10-20T21:38:00Z");
+    h.fake.script(
+        "input.push",
+        after_snapshot(started_at("l1", "2026-10-20T21:38:00Z"), starting).with_request_text(),
+    );
+    h.fake.script_held(
+        "turn.wait",
+        after_snapshot(
+            waited("l1", completed()),
+            finished_snapshot(3, vec![completion(1, "l1", "completed")]),
+        ),
+    );
     h.fake.script(
         "turn.result",
         turn_result(
@@ -832,8 +977,12 @@ async fn dropped_events_make_the_durable_items_replace_only_that_turn() {
 #[tokio::test(start_paused = true)]
 async fn a_prompt_shows_the_time_the_agent_accepted_it() {
     let mut h = Harness::opened(display_read(0, 0)).await;
-    h.fake
-        .script("input.push", started_at("l1", "2026-10-20T21:38:00Z"));
+    let mut starting = running_snapshot(h.next_revision(), "l1", "$text");
+    starting["execution"]["input"]["accepted_at"] = json!("2026-10-20T21:38:00Z");
+    h.fake.script(
+        "input.push",
+        after_snapshot(started_at("l1", "2026-10-20T21:38:00Z"), starting).with_request_text(),
+    );
     h.fake.script_held("turn.wait", waited("l1", completed()));
     h.submit("with a time");
     h.until(|app| app.is_busy()).await;
@@ -848,7 +997,8 @@ async fn a_prompt_shows_the_time_the_agent_accepted_it() {
 #[tokio::test(start_paused = true)]
 async fn a_prompt_without_an_acceptance_time_takes_the_clock_when_its_turn_starts() {
     let mut h = Harness::opened(display_read(0, 0)).await;
-    h.fake.script("input.push", started("l1"));
+    h.fake
+        .script("input.push", starting_reply("l1", h.next_revision()));
     h.fake.script_held("turn.wait", waited("l1", completed()));
     let before = now_millis();
     h.submit("no ack time");
@@ -863,8 +1013,16 @@ async fn a_pushed_steer_waits_in_the_dock_until_the_turn_takes_it_and_shows_its_
     h.fake.script_sequence(
         "input.push",
         vec![
-            started("l1"),
-            pushed(vec![entry("i2", "steer", "also the tests")]),
+            starting_reply("l1", 2),
+            after_snapshot(
+                pushed(vec![entry("i2", "steer", "also the tests")]),
+                running_queue(
+                    3,
+                    "l1",
+                    "start",
+                    vec![entry("i2", "steer", "also the tests")],
+                ),
+            ),
         ],
     );
     h.fake.script_held("turn.wait", waited("l1", completed()));
@@ -881,6 +1039,8 @@ async fn a_pushed_steer_waits_in_the_dock_until_the_turn_takes_it_and_shows_its_
             {"id": "i2", "text": "also the tests", "accepted_at": "2026-10-20T21:39:30Z", "request_index":1}]}),
     )
     .await;
+    h.snapshot_event(running_snapshot(h.next_revision(), "l1", "start"))
+        .await;
     h.settle().await;
     assert!(h.queue().is_empty());
     assert_eq!(
@@ -906,7 +1066,8 @@ async fn running_card() -> Harness {
         })
         .collect();
     let mut h = Harness::opened(page(30, 0, history)).await;
-    h.fake.script("input.push", started("l1"));
+    h.fake
+        .script("input.push", starting_reply("l1", h.next_revision()));
     h.fake.script_held("turn.wait", waited("l1", completed()));
     h.submit("go");
     h.until(|app| app.is_busy()).await;
@@ -943,15 +1104,33 @@ async fn rows_added_to_the_dock_never_cover_the_running_card() {
             }
             match shown {
                 "↗ steer  more" => {
-                    h.fake
-                        .script("input.push", pushed(vec![entry("i2", "steer", "more")]));
+                    h.fake.script(
+                        "input.push",
+                        after_snapshot(
+                            pushed(vec![entry("i2", "steer", "more")]),
+                            running_queue(
+                                h.next_revision(),
+                                "l1",
+                                "go",
+                                vec![entry("i2", "steer", "more")],
+                            ),
+                        ),
+                    );
                     h.submit("more");
                     h.settle().await;
                 }
                 "↳ follow-up 1  later" => {
                     h.fake.script(
                         "input.push",
-                        pushed(vec![entry("i2", "follow_up", "later")]),
+                        after_snapshot(
+                            pushed(vec![entry("i2", "follow_up", "later")]),
+                            running_queue(
+                                h.next_revision(),
+                                "l1",
+                                "go",
+                                vec![entry("i2", "follow_up", "later")],
+                            ),
+                        ),
                     );
                     h.app.composer.set_text("later");
                     h.key(KeyCode::Enter, KeyModifiers::ALT);
@@ -959,6 +1138,11 @@ async fn rows_added_to_the_dock_never_cover_the_running_card() {
                 }
                 "boom" => h.app.notice(NoticeLevel::Error, "boom"),
                 _ => {
+                    let mut waiting = running_snapshot(h.next_revision(), "l1", "go");
+                    waiting["pending_interaction"] = json!({"loop_id":"l1","request_index":0,
+                        "interaction_id":"i1","tool_call_id":"c1","tool_name":"bash",
+                        "kind":{"type":"approval","data":{"prompt":"Allow bash?"}}});
+                    h.fake.script("session.state@s1", state_response(waiting));
                     h.emit(
                         "interaction_requested",
                         json!({"turn": turn("l1"), "interaction": {
@@ -1012,7 +1196,10 @@ async fn a_refused_send_returns_its_text_without_losing_a_newer_draft() {
 #[tokio::test(start_paused = true)]
 async fn a_running_loop_is_adopted_from_state_and_ends_through_its_wait() {
     let mut h = Harness::opened(display_read(0, 0)).await;
-    h.fake.script("turn.wait", waited("l9", completed()));
+    h.fake.script(
+        "turn.wait",
+        completed_reply("l9", 3, vec![user(0, "l9", "running")]),
+    );
     h.running_state("l9", entry("i1", "steer", "running"));
     h.settle().await;
     assert_eq!(h.calls("turn.wait")[0]["loop_id"], "l9");
@@ -1024,13 +1211,15 @@ async fn a_running_loop_is_adopted_from_state_and_ends_through_its_wait() {
 async fn opening_a_session_mid_turn_adopts_the_running_loop() {
     let mut h = Harness::new();
     h.fake.script(
-        "session.state",
+        "session.state@s1",
         json!({"session_id": "s1", "status": "running",
                "active_loop": {"loop_id": "l9"},
-               "snapshot": crate::testing::snapshot_running(
-                   "s1", crate::testing::LOAD, 2, "l9", entry("i1", "steer", "running"))}),
+               "snapshot": running_snapshot(2, "l9", "running")}),
     );
-    h.fake.script_held("turn.wait", waited("l9", completed()));
+    h.fake.script_held(
+        "turn.wait",
+        completed_reply("l9", 3, vec![user(0, "l9", "running")]),
+    );
     h.open().await;
     assert!(h.is_busy());
     assert_eq!(h.calls("turn.wait").len(), 1);
@@ -1044,13 +1233,14 @@ async fn opening_a_session_mid_turn_adopts_the_running_loop() {
 #[tokio::test(start_paused = true)]
 async fn a_capacity_refusal_on_turn_wait_is_retried() {
     let mut h = Harness::opened(display_read(0, 0)).await;
-    h.fake.script("input.push", started("l1"));
+    h.fake
+        .script("input.push", starting_reply("l1", h.next_revision()));
     h.fake.script_error_then(
         "turn.wait",
         -32019,
         "no deferred slot",
         "resource_exhausted",
-        waited("l1", completed()),
+        completed_reply("l1", 3, vec![user(0, "l1", "retry the wait")]),
     );
     h.submit("retry the wait");
     h.settle().await;
@@ -1102,8 +1292,12 @@ async fn the_turn_end_line_counts_changed_files_and_lines() {
     ];
     for (records, diff, expected) in cases {
         let mut h = Harness::opened(display_read(0, 0)).await;
-        h.fake.script("input.push", started("l1"));
-        h.fake.script("turn.wait", waited("l1", completed()));
+        h.fake
+            .script("input.push", starting_reply("l1", h.next_revision()));
+        h.fake.script(
+            "turn.wait",
+            completed_reply("l1", 3, vec![user(0, "l1", "change it")]),
+        );
         h.fake.script(
             "changes.list",
             json!({"records": records, "total": records.len(), "complete": true, "warnings": []}),
@@ -1120,18 +1314,22 @@ async fn the_turn_end_line_counts_changed_files_and_lines() {
 #[tokio::test(start_paused = true)]
 async fn late_changes_invalidate_only_the_turn_end_block() {
     let mut h = Harness::opened(display_read(0, 0)).await;
-    h.fake.script("input.push", started("l1"));
-    h.fake.script("turn.wait", waited("l1", completed()));
+    h.fake
+        .script("input.push", starting_reply("l1", h.next_revision()));
+    h.fake.script(
+        "turn.wait",
+        completed_reply("l1", 3, vec![user(0, "l1", "go")]),
+    );
     h.submit("go");
     h.settle().await;
     let revisions = |h: &Harness| {
         h.app
-            .session
-            .as_ref()
+            .resident
+            .current()
             .unwrap()
             .transcript
             .revisions()
-            .to_vec()
+            .collect::<Vec<_>>()
     };
     let before = revisions(&h);
 
@@ -1149,16 +1347,18 @@ async fn late_changes_invalidate_only_the_turn_end_block() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_lost_wait_ends_the_turn_from_its_stored_result() {
+async fn a_lost_wait_recovers_the_stored_result_after_completion_is_observed() {
     let mut h = Harness::opened(display_read(0, 0)).await;
-    h.fake.script("input.push", started("l1"));
+    h.fake
+        .script("input.push", starting_reply("l1", h.next_revision()));
     h.fake
         .script_error("turn.wait", -32007, "turn not found", "turn_not_found");
     h.fake.script(
         "turn.result",
-        json!({"turn": turn("l1"), "availability": "stored", "persistence": "persisted",
+        after_snapshot(json!({"turn": turn("l1"), "availability": "stored", "persistence": "persisted",
                "load": crate::testing::LOAD, "result_id": RESULT_ID,
                "total": 0, "items": [], "next_cursor": null, "outcome": completed(), "requests": 3}),
+            finished_snapshot(3,vec![completion(1,"l1","completed")])) ,
     );
     h.submit("go");
     h.settle().await;
@@ -1169,7 +1369,8 @@ async fn a_lost_wait_ends_the_turn_from_its_stored_result() {
 #[tokio::test(start_paused = true)]
 async fn a_wait_read_failure_cannot_override_a_running_snapshot() {
     let mut h = Harness::opened(display_read(0, 0)).await;
-    h.fake.script("input.push", started("l1"));
+    h.fake
+        .script("input.push", starting_reply("l1", h.next_revision()));
     h.fake
         .script_error("turn.wait", -32007, "turn not found", "turn_not_found");
     h.fake
@@ -1190,11 +1391,21 @@ async fn a_wait_read_failure_cannot_override_a_running_snapshot() {
 
 #[tokio::test(start_paused = true)]
 async fn an_oversized_turn_read_keeps_the_live_region_and_reports_the_missing_item() {
-    use crate::app::tasks::{ReadPartial, TurnRead};
+    use crate::app::read::{ReadPartial, TurnRead};
 
     let mut h = Harness::opened(display_read(0, 0)).await;
-    h.fake.script("input.push", started("l1"));
-    h.fake.script_held("turn.wait", waited("l1", cancelled()));
+    h.fake
+        .script("input.push", starting_reply("l1", h.next_revision()));
+    h.fake.script_held(
+        "turn.wait",
+        after_snapshot(
+            waited("l1", cancelled()),
+            finished_snapshot(
+                h.next_revision() + 1,
+                vec![completion(1, "l1", "cancelled")],
+            ),
+        ),
+    );
     h.fake
         .script_held("turn.result", turn_result("l1", vec![user(0, "l1", "go")]));
     h.submit("go");
@@ -1214,7 +1425,7 @@ async fn an_oversized_turn_read_keeps_the_live_region_and_reports_the_missing_it
     .await;
     h.fake.release("turn.wait");
     h.until(|app| {
-        app.session.as_ref().is_some_and(|session| {
+        app.resident.current().is_some_and(|session| {
             session
                 .recovery
                 .entries
@@ -1233,13 +1444,13 @@ async fn an_oversized_turn_read_keeps_the_live_region_and_reports_the_missing_it
         )
     };
     let before = body(&h);
-    let session = h.app.session.as_ref().unwrap();
+    let session = h.app.resident.current().unwrap();
     let seq = *session.recovery.entries.first_key_value().unwrap().0;
-    let generation = session.recovery.generation;
+
     h.op(SessionOp::Recovered(
         crate::app::recovery::RecoveryOutcome {
             seq,
-            generation,
+
             turn: crate::protocol::TurnRef::new("s1", "l1"),
             result: Ok(TurnRead::Partial(Box::new(ReadPartial::Oversized {
                 index: 1,
@@ -1257,12 +1468,12 @@ async fn an_oversized_turn_read_keeps_the_live_region_and_reports_the_missing_it
         ["l1"],
         "a partial result has one persistent terminal, not an empty canonical answer"
     );
-    assert!(!h.app.session.as_ref().unwrap().is_closed("l1"));
+    assert!(!h.app.resident.current().unwrap().is_closed("l1"));
     assert_eq!(
-        h.app.session.as_ref().unwrap().body_recovery[0].status,
+        h.app.resident.current().unwrap().body_recovery[0].status,
         crate::app::recovery::RecoveryStatus::Partial
     );
-    assert_eq!(h.app.session.as_ref().unwrap().reconcile_from.len(), 1);
+    assert_eq!(h.app.resident.current().unwrap().reconcile_from.len(), 1);
     assert!(
         h.notices()
             .iter()
@@ -1273,26 +1484,52 @@ async fn an_oversized_turn_read_keeps_the_live_region_and_reports_the_missing_it
 #[tokio::test(start_paused = true)]
 async fn a_successor_started_before_the_finished_turn_reconciles_stays_after_it() {
     let mut h = Harness::opened(display_read(0, 0)).await;
-    let next = entry("i2", "follow_up", "next");
     h.fake
-        .script_sequence("input.push", vec![started("l1"), pushed(vec![next])]);
-    h.fake.script_sequence_later(
-        "turn.wait",
+        .script_error("tool.read", -32021, "tool not found", "tool_not_found");
+    let next = entry("i2", "follow_up", "next");
+    h.fake.script_sequence(
+        "input.push",
         vec![
-            (
-                waited_then(
-                    "l1",
-                    completed(),
-                    Some(next_turn("l2", "next")),
-                    queue(vec![], false),
-                ),
-                Duration::from_secs(1),
+            starting_reply("l1", 2),
+            after_snapshot(
+                pushed(vec![next.clone()]),
+                running_queue(3, "l1", "start", vec![next]),
             ),
-            (waited("l2", completed()), Duration::from_secs(60)),
         ],
     );
+    let mut successor = finished_snapshot(4, vec![completion(1, "l1", "completed")]);
+    successor["execution"] = running_snapshot(4, "l2", "next")["execution"].clone();
     h.fake.script_held(
-        "turn.result",
+        "turn.wait@s1/l1",
+        after_snapshot(
+            waited_then(
+                "l1",
+                completed(),
+                Some(next_turn("l2", "next")),
+                queue(vec![], false),
+            ),
+            successor,
+        ),
+    );
+    h.fake.script_held(
+        "turn.wait@s1/l2",
+        after_snapshot(
+            waited("l2", completed()),
+            finished_snapshot(
+                5,
+                vec![
+                    completion(1, "l1", "completed"),
+                    completion(2, "l2", "completed"),
+                ],
+            ),
+        ),
+    );
+    h.fake.script(
+        "turn.result@s1/l2",
+        completed_result("l2", vec![user(0, "l2", "next")]),
+    );
+    h.fake.script_held(
+        "turn.result@s1/l1",
         turn_result(
             "l1",
             vec![
@@ -1313,12 +1550,15 @@ async fn a_successor_started_before_the_finished_turn_reconciles_stays_after_it(
     .await;
     h.app.composer.set_text("next");
     h.key(KeyCode::Enter, KeyModifiers::ALT);
-    // The turn ends and the successor starts while the stored items are still on their way.
+    h.until(|app| app.resident.current().unwrap().queue.items.len() == 1)
+        .await;
+    h.fake.release("turn.wait@s1/l1");
+    // The successor is observed while the stored items are still held.
     h.until(|app| app.transcript_blocks().len() >= 3).await;
     h.run_for(Duration::from_secs(3)).await;
     assert_eq!(h.sends(), ["start", "next"]);
 
-    h.fake.release("turn.result");
+    h.fake.release("turn.result@s1/l1");
     h.run_for(Duration::from_secs(2)).await;
     assert_eq!(h.texts(), ["start", "partial answer", "next"]);
     let shape: Vec<&str> = h
@@ -1333,10 +1573,11 @@ async fn a_successor_started_before_the_finished_turn_reconciles_stays_after_it(
         })
         .collect();
     assert_eq!(shape, ["user", "tool", "assistant", "end", "user"]);
-    let live = h.app.session.as_ref().unwrap().live.as_ref().unwrap();
+    let live = h.app.resident.current().unwrap().live.as_ref().unwrap();
     assert_eq!(live.start, 4, "the running turn still starts at its prompt");
 
-    h.run_for(Duration::from_secs(120)).await;
+    h.fake.release("turn.wait@s1/l2");
+    h.settle().await;
     assert_eq!(turn_ends(&h), ["l1", "l2"]);
     assert!(matches!(h.blocks().last(), Some(Block::TurnEnd { .. })));
 }
@@ -1344,8 +1585,20 @@ async fn a_successor_started_before_the_finished_turn_reconciles_stays_after_it(
 #[tokio::test(start_paused = true)]
 async fn an_interrupted_turn_keeps_its_card_details_and_unfinished_thinking() {
     let mut h = Harness::opened(display_read(0, 0)).await;
-    h.fake.script("input.push", started("l1"));
-    h.fake.script_held("turn.wait", waited("l1", cancelled()));
+    h.fake
+        .script_error("tool.read", -32021, "tool not found", "tool_not_found");
+    h.fake
+        .script("input.push", starting_reply("l1", h.next_revision()));
+    h.fake.script_held(
+        "turn.wait",
+        after_snapshot(
+            waited("l1", cancelled()),
+            finished_snapshot(
+                h.next_revision() + 1,
+                vec![completion(1, "l1", "cancelled")],
+            ),
+        ),
+    );
     h.fake.script(
         "turn.result",
         turn_result(
@@ -1388,8 +1641,8 @@ async fn an_interrupted_turn_keeps_its_card_details_and_unfinished_thinking() {
 
     let cards: Vec<(String, Option<String>)> = h
         .app
-        .session
-        .as_ref()
+        .resident
+        .current()
         .unwrap()
         .transcript
         .tool_calls()
@@ -1413,8 +1666,20 @@ async fn an_interrupted_turn_keeps_its_card_details_and_unfinished_thinking() {
 #[tokio::test(start_paused = true)]
 async fn the_interrupted_reply_of_a_cancelled_turn_replaces_its_streamed_block_in_place() {
     let mut h = Harness::opened(display_read(0, 0)).await;
-    h.fake.script("input.push", started("l1"));
-    h.fake.script_held("turn.wait", waited("l1", cancelled()));
+    h.fake
+        .script_error("tool.read", -32021, "tool not found", "tool_not_found");
+    h.fake
+        .script("input.push", starting_reply("l1", h.next_revision()));
+    h.fake.script_held(
+        "turn.wait",
+        after_snapshot(
+            waited("l1", cancelled()),
+            finished_snapshot(
+                h.next_revision() + 1,
+                vec![completion(1, "l1", "cancelled")],
+            ),
+        ),
+    );
     let mut result = turn_result(
         "l1",
         vec![user(0, "l1", "go"), assistant_tool(1, "l1", "c1", "bash")],
@@ -1457,40 +1722,67 @@ async fn the_turn_start_and_end_leave_an_anchored_view_where_it_is() {
     let mut h = Harness::opened(display_read(0, 0)).await;
     h.fake.script_sequence(
         "input.push",
-        vec![started("l1"), pushed(vec![entry("i2", "follow_up", "two")])],
-    );
-    h.fake.script_sequence_later(
-        "turn.wait",
         vec![
-            (
-                waited_then(
-                    "l1",
-                    completed(),
-                    Some(next_turn("l2", "two")),
-                    queue(vec![], false),
-                ),
-                Duration::from_secs(1),
+            starting_reply("l1", 2),
+            after_snapshot(
+                pushed(vec![entry("i2", "follow_up", "two")]),
+                running_queue(3, "l1", "one", vec![entry("i2", "follow_up", "two")]),
             ),
-            (waited("l2", completed()), Duration::from_secs(1)),
         ],
     );
+    let mut successor = finished_snapshot(4, vec![completion(1, "l1", "completed")]);
+    successor["execution"] = running_snapshot(4, "l2", "two")["execution"].clone();
+    h.fake.script_held(
+        "turn.wait@s1/l1",
+        after_snapshot(
+            waited_then(
+                "l1",
+                completed(),
+                Some(next_turn("l2", "two")),
+                queue(vec![], false),
+            ),
+            successor,
+        ),
+    );
+    h.fake.script_held(
+        "turn.wait@s1/l2",
+        after_snapshot(
+            waited("l2", completed()),
+            finished_snapshot(
+                5,
+                vec![
+                    completion(1, "l1", "completed"),
+                    completion(2, "l2", "completed"),
+                ],
+            ),
+        ),
+    );
+    for (id, text) in [("l1", "one"), ("l2", "two")] {
+        h.fake.script(
+            &format!("turn.result@s1/{id}"),
+            completed_result(id, vec![user(0, id, text)]),
+        );
+    }
     h.submit("one");
     assert_eq!(h.app.scroll, Scroll::Follow, "sending follows");
     h.until(|app| app.is_busy()).await;
     h.app.composer.set_text("two");
     h.key(KeyCode::Enter, KeyModifiers::ALT);
     h.app.scroll = anchor;
-    // The turn ends and the Agent starts the queued follow-up by itself.
+    h.until(|app| app.resident.current().unwrap().queue.items.len() == 1)
+        .await;
+    h.fake.release("turn.wait@s1/l1");
+    // The Agent starts the queued follow-up by itself.
     h.until(|app| app.transcript_blocks().len() >= 3).await;
-    h.run_for(Duration::from_secs(3)).await;
+    h.fake.release("turn.wait@s1/l2");
     assert_eq!(h.sends(), ["one", "two"]);
     h.settle().await;
     assert_eq!(h.app.scroll, anchor);
     assert!(!h.is_busy());
 
-    h.fake.script("turn.wait", waited("l9", completed()));
-    h.state(json!({"session_id": "s1", "status": "running",
-                   "active_loop": {"loop_id": "l9"}}));
+    h.fake
+        .script_held("turn.wait@s1/l9", waited("l9", completed()));
+    h.running_state("l9", entry("i9", "steer", "adopted"));
     assert_eq!(
         h.app.scroll, anchor,
         "adopting a running turn does not follow"
@@ -1500,15 +1792,23 @@ async fn the_turn_start_and_end_leave_an_anchored_view_where_it_is() {
 #[tokio::test(start_paused = true)]
 async fn the_footer_totals_move_with_each_request_and_the_wait_settles_them() {
     let mut h = Harness::opened(display_read(0, 0)).await;
-    h.fake.script("input.push", started("l1"));
+    h.fake
+        .script("input.push", starting_reply("l1", h.next_revision()));
     h.fake.script_held(
         "turn.wait",
-        json!({"turn": turn("l1"), "outcome": completed(),
+        after_snapshot(
+            json!({"turn": turn("l1"), "outcome": completed(),
                "usage": {"input_tokens": 300, "output_tokens": 30}, "requests": 3}),
+            finished_snapshot(3, vec![completion(1, "l1", "completed")]),
+        ),
     );
+    let mut result = completed_result("l1", vec![user(0, "l1", "go")]);
+    result["usage"] = json!({"input_tokens":300,"output_tokens":30});
+    result["requests"] = json!(3);
+    h.fake.script("turn.result@s1/l1", result);
     h.submit("go");
     h.until(|app| app.is_busy()).await;
-    let usage = |h: &Harness| h.app.session.as_ref().unwrap().usage.clone();
+    let usage = |h: &Harness| h.app.resident.current().unwrap().usage.clone();
 
     for _ in 0..2 {
         h.emit(
@@ -1517,14 +1817,14 @@ async fn the_footer_totals_move_with_each_request_and_the_wait_settles_them() {
         )
         .await;
     }
-    h.until(|app| app.session.as_ref().unwrap().usage.input == 200)
+    h.until(|app| app.resident.current().unwrap().usage.input == 200)
         .await;
     assert_eq!(usage(&h).output, 20);
 
     // The third request's event was dropped; the wait has the whole turn.
     h.fake.release("turn.wait");
     h.until(|app| !app.is_busy()).await;
-    h.until(|app| app.session.as_ref().unwrap().usage.input == 300)
+    h.until(|app| app.resident.current().unwrap().usage.input == 300)
         .await;
     assert_eq!((usage(&h).input, usage(&h).output), (300, 30));
 }
@@ -1585,12 +1885,15 @@ async fn a_start_failure_keeps_the_entry_queued_and_reports_its_reason() {
     let mut h = Harness::opened(display_read(0, 0)).await;
     h.fake.script(
         "input.push",
-        json!({"session_id": "s1", "load": crate::testing::LOAD, "accepted": true,
+        after_snapshot(
+            json!({"session_id": "s1", "load": crate::testing::LOAD, "accepted": true,
                "id": "inp_1", "started": null,
                "start_error": {"input_id": "inp_0", "kind": "provider_unavailable",
                                "message": "no provider is configured"},
                "queue": {"items": [{"id": "inp_1", "mode": "steer", "text": "later"}],
                          "paused": false}}),
+            h.control(json!({"queue":queue(vec![entry("inp_1","steer","later")],false)})),
+        ),
     );
     h.submit("later");
     h.settle().await;
@@ -1604,8 +1907,18 @@ async fn a_start_failure_keeps_the_entry_queued_and_reports_its_reason() {
 #[tokio::test(start_paused = true)]
 async fn a_completion_whose_region_was_evicted_does_not_close_the_turn() {
     let mut h = Harness::opened(display_read(0, 0)).await;
-    h.fake.script("input.push", started("l1"));
-    h.fake.script_held("turn.wait", waited("l1", cancelled()));
+    h.fake
+        .script("input.push", starting_reply("l1", h.next_revision()));
+    h.fake.script_held(
+        "turn.wait",
+        after_snapshot(
+            waited("l1", cancelled()),
+            finished_snapshot(
+                h.next_revision() + 1,
+                vec![completion(1, "l1", "cancelled")],
+            ),
+        ),
+    );
     h.fake
         .script_held("turn.result", turn_result("l1", vec![user(0, "l1", "go")]));
     h.submit("go");
@@ -1625,16 +1938,16 @@ async fn a_completion_whose_region_was_evicted_does_not_close_the_turn() {
     // The bounded region list drops old turns, so by the time this completion
     // arrives its streamed region is no longer recorded.
     h.until(|app| {
-        app.session
-            .as_ref()
+        app.resident
+            .current()
             .is_some_and(|session| !session.reconcile_from.is_empty())
     })
     .await;
-    h.app.session.as_mut().unwrap().reconcile_from.clear();
+    h.app.resident.current_mut().unwrap().reconcile_from.clear();
     h.fake.release("turn.result");
     h.settle().await;
 
-    let session = h.app.session.as_ref().unwrap();
+    let session = h.app.resident.current().unwrap();
     assert!(
         !session.is_closed("l1"),
         "a completion that installed nothing must leave the turn repairable"
@@ -1654,7 +1967,7 @@ async fn a_completion_whose_region_was_evicted_does_not_close_the_turn() {
 async fn receipts_wait_delivery_and_context_cannot_overwrite_snapshot_control() {
     let mut h = Harness::opened(display_read(0, 0)).await;
     h.fake
-        .script_held("session.state", json!({"session_id":"s1"}));
+        .script_held("session.state@s1", json!({"session_id":"s1"}));
     h.fake.script_held("turn.wait", waited("A", completed()));
     let mut authoritative = h.control(json!({
         "execution":{"type":"running","loop_id":"A","input":entry("iA","steer","prompt A"),"request_index":0,"phase":"running_model"},
@@ -1669,7 +1982,7 @@ async fn receipts_wait_delivery_and_context_cannot_overwrite_snapshot_control() 
     h.app.on_msg(crate::app::Msg::LocalPushed(
         operation,
         Ok(serde_json::from_value(json!({
-            "id":"new","accepted":true,"load":crate::testing::LOAD,
+            "session_id":"s1","id":"new","accepted":true,"load":crate::testing::LOAD,
             "started":next_turn("B","not authoritative"),"queue":queue(vec![],false)
         }))
         .unwrap()),
@@ -1681,12 +1994,12 @@ async fn receipts_wait_delivery_and_context_cannot_overwrite_snapshot_control() 
         queue(vec![], false),
     ))
     .unwrap())));
-    h.op(SessionOp::Compacted(Ok(serde_json::from_value(
+    h.op(SessionOp::Operated(Ok(crate::app::operation::Outcome::Compacted(serde_json::from_value(
         json!({"operation_id":"old","status":"noop","next":next_turn("B","not authoritative")}),
     )
-    .unwrap())));
+    .unwrap()))));
     h.context(json!({"session_id":"s1"}));
-    let session = h.app.session.as_mut().unwrap();
+    let session = h.app.resident.current_mut().unwrap();
     session.apply_body_event(serde_json::from_value(json!({"type":"input_delivered","data":{
         "meta":{"session_id":"s1","load":crate::testing::LOAD,"dropped_before":0},"turn":turn("A"),"items":[{"id":"kept","text":"kept","request_index":1}]
     }})).unwrap(),256);
@@ -1738,19 +2051,24 @@ async fn catalog_eviction_does_not_release_a_recovery_slot_before_its_read_finis
     h.fake.script_held("turn.result", turn_result("l1", vec![]));
     let directory = |start: u64| json!({"through_seq":start+255,"retained_from_seq":start,"truncated":start>1,"entries":(start..start+256).map(|seq|json!({"seq":seq,"loop_id":format!("l{seq}"),"completion_kind":"reported","outcome_kind":"completed","persistence":"persisted","availability":"stored"})).collect::<Vec<_>>()});
     h.control_event(json!({"completions":directory(1)})).await;
-    h.until(|app| app.session.as_ref().unwrap().recovery_tasks.len() == 2)
+    h.until(|app| app.resident.current().unwrap().recovery_tasks.len() == 2)
         .await;
     h.fake.wait_for_calls("turn.result", 2).await;
     h.control_event(json!({"completions":directory(257)})).await;
     h.settle().await;
-    let session = h.app.session.as_ref().unwrap();
+    let session = h.app.resident.current().unwrap();
     assert_eq!(session.recovery_tasks.len(), 2);
     assert_eq!(h.calls("turn.result").len(), 2);
     assert_eq!(session.recovery.observed_through, 512);
     assert_eq!(session.recovery.settled_through, 0);
     assert_eq!(session.recovery.entries.len(), 256);
     assert!(session.recovery.truncated_gap);
-    h.app.session.as_mut().unwrap().recovery.retry_later(257);
+    h.app
+        .resident
+        .current_mut()
+        .unwrap()
+        .recovery
+        .retry_later(257);
     tokio::time::advance(Duration::from_secs(1)).await;
     h.app.notices.clear();
     h.app.flash = None;
@@ -1789,7 +2107,7 @@ async fn pending_recovery_exhausts_without_settling_or_losing_body_and_unrelated
         h.settle().await;
     }
     assert_eq!(h.calls("turn.result").len(), 4);
-    let session = h.app.session.as_ref().unwrap();
+    let session = h.app.resident.current().unwrap();
     assert_eq!(
         session.recovery.entries[&1].status,
         RecoveryStatus::Exhausted
@@ -1812,7 +2130,7 @@ async fn pending_recovery_exhausts_without_settling_or_losing_body_and_unrelated
     h.fake.script("turn.result",json!({"turn":turn("l1"),"load":crate::testing::LOAD,"availability":"unavailable","unavailable_reason":"expired","persistence":"failed","total":0,"items":[],"next_cursor":null}));
     h.action(Action::RetryRecovery);
     h.settle().await;
-    let session = h.app.session.as_ref().unwrap();
+    let session = h.app.resident.current().unwrap();
     assert_eq!(session.recovery.settled_through, 1);
     assert_eq!(session.body_recovery[0].status, RecoveryStatus::Unavailable);
     assert!(session.body_recovery[0].message.contains("not saved"));
@@ -1832,10 +2150,10 @@ async fn a_stale_load_body_cannot_evict_the_installed_loads_early_cache() {
     )
     .await;
     h.settle().await;
-    let before = h.app.session.as_ref().unwrap().early_bytes;
+    let before = h.app.resident.current().unwrap().early_bytes;
     h.emit_no_meta("output_delta",json!({"meta":{"session_id":"s1","load":"closed-load","dropped_before":0},"turn":turn("stale"),"request_index":0,"channel":"text","delta":"x".repeat(9*1024*1024)})).await;
     h.settle().await;
-    let session = h.app.session.as_ref().unwrap();
+    let session = h.app.resident.current().unwrap();
     assert_eq!(session.early_bytes, before);
     assert!(!session.early_gap);
     assert!(session.transcript.is_empty());
@@ -1863,18 +2181,24 @@ async fn an_unseen_completion_inserted_before_live_content_rebases_the_actual_vi
         offset: 1,
     };
     h.app.composer.set_text("keep the draft");
-    let mut result = turn_result(
+    let result = completed_result(
         "A",
         vec![user(0, "A", "prompt A"), assistant(1, "A", "answer A")],
     );
-    result["outcome"] = completed();
     h.fake.script("turn.result", result);
     h.control_event(json!({"execution":{"type":"running","loop_id":"C","input":input,"request_index":0,"phase":"running_model"},"completions":{"through_seq":1,"retained_from_seq":1,"truncated":false,"entries":[{"seq":1,"loop_id":"A","completion_kind":"reported","outcome_kind":"completed","persistence":"persisted","availability":"stored"}]}})).await;
-    h.until(|app| app.session.as_ref().unwrap().is_closed("A"))
+    h.until(|app| app.resident.current().unwrap().is_closed("A"))
         .await;
     assert_eq!(h.texts(), ["prompt A", "answer A", "prompt C", "live C"]);
     assert_eq!(
-        h.app.session.as_ref().unwrap().live.as_ref().unwrap().start,
+        h.app
+            .resident
+            .current()
+            .unwrap()
+            .live
+            .as_ref()
+            .unwrap()
+            .start,
         3
     );
     assert_eq!(
@@ -1904,11 +2228,10 @@ async fn a_saved_anchor_after_a_recovered_unsaved_turn_controls_unseen_completio
         json!([{"loop_id":"S","outcome":completed()},{"loop_id":"B","outcome":completed()}]);
     let mut h = Harness::opened(history).await;
     let result = |id: &str, text: &str| {
-        let mut page = turn_result(
+        let mut page = completed_result(
             id,
             vec![user(0, id, &format!("prompt {id}")), assistant(1, id, text)],
         );
-        page["outcome"] = completed();
         page["persistence"] = json!(if id == "B" { "persisted" } else { "failed" });
         page
     };
@@ -1920,15 +2243,15 @@ async fn a_saved_anchor_after_a_recovered_unsaved_turn_controls_unseen_completio
         {"seq":2,"loop_id":"B","completion_kind":"reported","outcome_kind":"completed","persistence":"persisted","availability":"stored","after_saved_loop_id":"S"},
         {"seq":3,"loop_id":"C","completion_kind":"reported","outcome_kind":"completed","persistence":"failed","availability":"live","after_saved_loop_id":"B"}
     ]}})).await;
-    h.until(|app| app.session.as_ref().unwrap().recovery_tasks.len() == 2)
+    h.until(|app| app.resident.current().unwrap().recovery_tasks.len() == 2)
         .await;
     h.fake.wait_for_calls("turn.result", 2).await;
     h.fake
         .script_sequence("turn.result", vec![result("C", "answer C")]);
-    h.until(|app| app.session.as_ref().unwrap().is_closed("C"))
+    h.until(|app| app.resident.current().unwrap().is_closed("C"))
         .await;
     assert!(
-        !h.app.session.as_ref().unwrap().is_closed("B"),
+        !h.app.resident.current().unwrap().is_closed("B"),
         "B's reader is still held"
     );
     assert_eq!(
@@ -1937,7 +2260,7 @@ async fn a_saved_anchor_after_a_recovered_unsaved_turn_controls_unseen_completio
         "the saved B anchor is stronger than the earlier reconciled A"
     );
     h.fake.release("turn.result");
-    h.until(|app| app.session.as_ref().unwrap().is_closed("B"))
+    h.until(|app| app.resident.current().unwrap().is_closed("B"))
         .await;
     assert_eq!(turn_ends(&h), ["S", "A", "B", "C"]);
 }
@@ -1948,19 +2271,19 @@ async fn delayed_predecessor_waits_preserve_successor_usage_in_both_reply_orders
         let mut h = Harness::opened(display_read(0, 0)).await;
         h.fake.script_held("turn.wait", waited("A", completed()));
         h.fake
-            .script_held("session.state", json!({"session_id":"s1"}));
-        h.app.session.as_mut().unwrap().usage = crate::protocol::UsageTotals {
+            .script_held("session.state@s1", json!({"session_id":"s1"}));
+        h.app.resident.current_mut().unwrap().usage = crate::protocol::UsageTotals {
             input: 1000,
             output: 100,
             cached: 50,
         };
         h.running_state("A", entry("iA", "steer", "A"));
         h.emit("request_usage",json!({"turn":turn("A"),"usage":{"input_tokens":100,"output_tokens":10,"cache_read_tokens":5}})).await;
-        h.until(|app| app.session.as_ref().unwrap().usage.input == 1100)
+        h.until(|app| app.resident.current().unwrap().usage.input == 1100)
             .await;
         h.running_state("B", entry("iB", "steer", "B"));
         h.emit("request_usage",json!({"turn":turn("B"),"usage":{"input_tokens":200,"output_tokens":20,"cache_read_tokens":7}})).await;
-        h.until(|app| app.session.as_ref().unwrap().usage.input == 1300)
+        h.until(|app| app.resident.current().unwrap().usage.input == 1300)
             .await;
         let mut a = 100;
         let mut b = 200;
@@ -1977,22 +2300,22 @@ async fn delayed_predecessor_waits_preserve_successor_usage_in_both_reply_orders
                 (b, bc)
             };
             h.op(SessionOp::Waited(Ok(serde_json::from_value(json!({"turn":turn(id),"outcome":completed(),"usage":{"input_tokens":input,"output_tokens":input/10,"cache_read_tokens":cached}})).unwrap())));
-            let usage = &h.app.session.as_ref().unwrap().usage;
+            let usage = &h.app.resident.current().unwrap().usage;
             assert_eq!(
                 (usage.input, usage.output, usage.cached),
                 (1000 + a + b, 100 + (a + b) / 10, 50 + ac + bc),
                 "reply order {order:?}, after {id}"
             );
             assert_eq!(
-                h.app.session.as_ref().unwrap().observed_loop(),
+                h.app.resident.current().unwrap().observed_loop(),
                 Some("B"),
                 "wait metadata cannot change control"
             );
         }
-        let before = h.app.session.as_ref().unwrap().usage.clone();
+        let before = h.app.resident.current().unwrap().usage.clone();
         h.op(SessionOp::Waited(Ok(serde_json::from_value(json!({"turn":turn("A"),"outcome":completed(),"usage":{"input_tokens":150,"output_tokens":15,"cache_read_tokens":8}})).unwrap())));
         assert_eq!(
-            h.app.session.as_ref().unwrap().usage,
+            h.app.resident.current().unwrap().usage,
             before,
             "a duplicate terminal receipt is not counted twice"
         );
@@ -2034,7 +2357,7 @@ async fn unseen_unavailable_completions_keep_terminal_identity_reason_and_saving
         h.app.start_observer(trace.reopen().unwrap());
         h.fake.script("turn.result",json!({"turn":turn(id),"load":crate::testing::LOAD,"availability":"unavailable","unavailable_reason":reason,"persistence":persistence,"items":[],"total":0,"next_cursor":null}));
         h.control_event(json!({"completions":{"through_seq":1,"retained_from_seq":1,"truncated":false,"entries":[{"seq":1,"loop_id":id,"completion_kind":kind,"outcome_kind":outcome,"persistence":persistence,"availability":"unavailable","unavailable_reason":reason}]}})).await;
-        h.until(|app| app.session.as_ref().unwrap().recovery.settled_through == 1)
+        h.until(|app| app.resident.current().unwrap().recovery.settled_through == 1)
             .await;
         h.app.notices.clear();
         let screen = h.screen(120, 30).to_lowercase();
@@ -2066,7 +2389,7 @@ async fn unseen_unavailable_completions_keep_terminal_identity_reason_and_saving
                 .any(|block| matches!(block,Block::TurnEnd { loop_id,.. } if loop_id == id))
         );
         assert!(
-            !h.app.session.as_ref().unwrap().is_closed(id),
+            !h.app.resident.current().unwrap().is_closed(id),
             "a terminal placeholder is not a canonical empty result"
         );
         #[cfg(feature = "e2e-observe")]
@@ -2097,17 +2420,17 @@ async fn an_unseen_partial_completion_has_a_persistent_noncanonical_terminal() {
     #[cfg(feature = "e2e-observe")]
     h.app.start_observer(trace.reopen().unwrap());
     let directory:crate::protocol::CompletionDirectory = serde_json::from_value(json!({"through_seq":1,"retained_from_seq":1,"truncated":false,"entries":[{"seq":1,"loop_id":"partial-loop","completion_kind":"reported","outcome_kind":"completed","persistence":"failed","availability":"live"}]})).unwrap();
-    let session = h.app.session.as_mut().unwrap();
+    let session = h.app.resident.current_mut().unwrap();
     session.catalog = directory.clone();
     session.recovery.discover(&directory);
-    let generation = session.recovery.generation;
+
     h.op(SessionOp::Recovered(
         crate::app::recovery::RecoveryOutcome {
             seq: 1,
             turn: crate::protocol::TurnRef::new("s1", "partial-loop"),
-            generation,
-            result: Ok(crate::app::tasks::TurnRead::Partial(Box::new(
-                crate::app::tasks::ReadPartial::Oversized {
+
+            result: Ok(crate::app::read::TurnRead::Partial(Box::new(
+                crate::app::read::ReadPartial::Oversized {
                     index: 0,
                     total_bytes: 8_388_609,
                 },
@@ -2122,7 +2445,7 @@ async fn an_unseen_partial_completion_has_a_persistent_noncanonical_terminal() {
             "{text} is missing from persistent UI: {screen}"
         );
     }
-    assert!(!h.app.session.as_ref().unwrap().is_closed("partial-loop"));
+    assert!(!h.app.resident.current().unwrap().is_closed("partial-loop"));
     #[cfg(feature = "e2e-observe")]
     {
         let rows: Vec<Value> = std::fs::read_to_string(trace.path())
@@ -2151,7 +2474,7 @@ async fn unavailable_regions_keep_sequence_order_and_late_received_body_before_t
         {"seq":1,"loop_id":"A","completion_kind":"reported","outcome_kind":"completed","persistence":"failed","availability":"unavailable"},
         {"seq":2,"loop_id":"B","completion_kind":"reported","outcome_kind":"failed","persistence":"failed","availability":"unavailable"}
     ]}})).await;
-    h.until(|app| app.session.as_ref().unwrap().recovery.settled_through == 2)
+    h.until(|app| app.resident.current().unwrap().recovery.settled_through == 2)
         .await;
     h.emit(
         "output_delta",
@@ -2171,7 +2494,7 @@ async fn unavailable_regions_keep_sequence_order_and_late_received_body_before_t
         .collect();
     assert_eq!(order, ["A", "A", "B"]);
     assert_eq!(turn_ends(&h), ["A", "B"]);
-    assert!(!h.app.session.as_ref().unwrap().is_closed("A"));
+    assert!(!h.app.resident.current().unwrap().is_closed("A"));
 }
 
 #[tokio::test(start_paused = true)]
@@ -2186,17 +2509,17 @@ async fn a_partial_history_region_keeps_late_body_before_its_existing_terminal()
     let directory = serde_json::from_value(json!({"through_seq":1,"retained_from_seq":1,"truncated":false,"entries":[
         {"seq":1,"loop_id":"A","completion_kind":"reported","outcome_kind":"completed","persistence":"persisted","availability":"stored"}
     ]})).unwrap();
-    let session = h.app.session.as_mut().unwrap();
+    let session = h.app.resident.current_mut().unwrap();
     session.catalog = directory;
     session.recovery.discover(&session.catalog);
-    let generation = session.recovery.generation;
+
     h.op(SessionOp::Recovered(
         crate::app::recovery::RecoveryOutcome {
             seq: 1,
-            generation,
+
             turn: crate::protocol::TurnRef::new("s1", "A"),
-            result: Ok(crate::app::tasks::TurnRead::Partial(Box::new(
-                crate::app::tasks::ReadPartial::WorkspaceLimit,
+            result: Ok(crate::app::read::TurnRead::Partial(Box::new(
+                crate::app::read::ReadPartial::WorkspaceLimit,
             ))),
         },
     ));
@@ -2210,7 +2533,7 @@ async fn a_partial_history_region_keeps_late_body_before_its_existing_terminal()
         matches!(h.blocks().last(),Some(Block::TurnEnd {loop_id,saving:Some(crate::transcript::Saving::Saved),..}) if loop_id == "A")
     );
     assert_eq!(h.texts(), ["prompt A", "tail A", "late retained A"]);
-    assert!(!h.app.session.as_ref().unwrap().is_closed("A"));
+    assert!(!h.app.resident.current().unwrap().is_closed("A"));
 }
 
 #[tokio::test(start_paused = true)]
@@ -2219,7 +2542,7 @@ async fn a_normal_completed_turn_keeps_its_late_tail_until_canonical_repair_then
     let mut h = Harness::opened(display_read(0, 0)).await;
     h.fake.script_held("turn.wait", waited("A", completed()));
     h.fake
-        .script_held("session.state", json!({"session_id":"s1"}));
+        .script_held("session.state@s1", json!({"session_id":"s1"}));
     h.running_state("A", entry("iA", "steer", "prompt A"));
     h.emit(
         "output_delta",
@@ -2232,7 +2555,6 @@ async fn a_normal_completed_turn_keeps_its_late_tail_until_canonical_repair_then
             .any(|block| matches!(block,Block::Assistant{text,..} if text=="prefix"))
     })
     .await;
-    assert!(!h.app.session.as_ref().unwrap().live.as_ref().unwrap().gap);
     h.op(SessionOp::Waited(Ok(serde_json::from_value(waited(
         "A",
         completed(),
@@ -2249,23 +2571,21 @@ async fn a_normal_completed_turn_keeps_its_late_tail_until_canonical_repair_then
             .any(|block| matches!(block,Block::Assistant{text,..} if text=="prefix tail"))
     })
     .await;
-    let mut canonical = turn_result(
+    let canonical = completed_result(
         "A",
         vec![
             user(0, "A", "prompt A"),
             assistant(1, "A", "prefix tail repaired"),
         ],
     );
-    canonical["outcome"] = completed();
     h.fake.script_held("turn.result", canonical);
     h.control_event(json!({"completions":{"through_seq":1,"retained_from_seq":1,"truncated":false,"entries":[{"seq":1,"loop_id":"A","input_id":"iA","completion_kind":"reported","outcome_kind":"completed","persistence":"persisted","availability":"stored"}]}})).await;
-    h.until(|app| app.session.as_ref().unwrap().recovery_fetching() == 1)
-        .await;
+    h.settle().await;
     h.fake.wait_for_calls("turn.result", 1).await;
-    assert!(!h.app.session.as_ref().unwrap().is_closed("A"));
+    assert!(!h.app.resident.current().unwrap().is_closed("A"));
     assert_eq!(h.texts(), ["prompt A", "prefix tail"]);
     h.fake.release("turn.result");
-    h.until(|app| app.session.as_ref().unwrap().is_closed("A"))
+    h.until(|app| app.resident.current().unwrap().is_closed("A"))
         .await;
     assert_eq!(h.texts(), ["prompt A", "prefix tail repaired"]);
     let before = format!("{:?}", h.blocks());
@@ -2287,7 +2607,10 @@ async fn a_normal_completed_turn_keeps_its_late_tail_until_canonical_repair_then
         "canonical installation closes every body channel, not just the last streamed key"
     );
     assert_eq!(turn_ends(&h), ["A"]);
-    assert_eq!(h.app.session.as_ref().unwrap().recovery.settled_through, 1);
+    assert_eq!(
+        h.app.resident.current().unwrap().recovery.settled_through,
+        1
+    );
     assert_eq!(
         h.calls("turn.result").len(),
         1,
@@ -2309,7 +2632,7 @@ async fn a_tool_record_saved_after_canonical_install_updates_only_its_auxiliary_
     h.fake.script("turn.result", result);
     h.fake.script("tool.read",json!({"execution":{"tool_ref":{"session_id":"s1","loop_id":"A","request_index":0,"tool_call_id":"call-A"},"state":"succeeded","recording":"memory_only","result_truncated":false}}));
     h.control_event(json!({"completions":{"through_seq":1,"retained_from_seq":1,"truncated":false,"entries":[{"seq":1,"loop_id":"A","completion_kind":"reported","outcome_kind":"completed","persistence":"persisted","availability":"stored"}]}})).await;
-    h.until(|app| app.session.as_ref().unwrap().is_closed("A"))
+    h.until(|app| app.resident.current().unwrap().is_closed("A"))
         .await;
     let card = || crate::protocol::ToolRef {
         session_id: "s1".into(),
@@ -2319,8 +2642,8 @@ async fn a_tool_record_saved_after_canonical_install_updates_only_its_auxiliary_
     };
     assert_eq!(
         h.app
-            .session
-            .as_ref()
+            .resident
+            .current()
             .unwrap()
             .transcript
             .find_tool(&card())
@@ -2341,8 +2664,8 @@ async fn a_tool_record_saved_after_canonical_install_updates_only_its_auxiliary_
     h.settle().await;
     assert_eq!(
         h.app
-            .session
-            .as_ref()
+            .resident
+            .current()
             .unwrap()
             .transcript
             .find_tool(&card())
@@ -2355,8 +2678,8 @@ async fn a_tool_record_saved_after_canonical_install_updates_only_its_auxiliary_
     h.settle().await;
     let call = h
         .app
-        .session
-        .as_ref()
+        .resident
+        .current()
         .unwrap()
         .transcript
         .find_tool(&card())
@@ -2384,7 +2707,7 @@ async fn a_tool_record_saved_after_canonical_install_updates_only_its_auxiliary_
         "the actual late commit event, not query backfill, updates the card"
     );
     assert_eq!(h.calls("turn.result").len(), result_reads);
-    assert!(h.app.session.as_ref().unwrap().is_closed("A"));
+    assert!(h.app.resident.current().unwrap().is_closed("A"));
 }
 
 #[tokio::test(start_paused = true)]
@@ -2411,21 +2734,21 @@ async fn late_identical_steers_keep_their_request_boundaries_before_an_incomplet
         })
         .await;
         let directory:crate::protocol::CompletionDirectory=serde_json::from_value(json!({"through_seq":1,"retained_from_seq":1,"truncated":false,"entries":[{"seq":1,"loop_id":"A","completion_kind":"reported","outcome_kind":"completed","persistence":"failed","availability":"unavailable","unavailable_reason":"expired"}]})).unwrap();
-        let session = h.app.session.as_mut().unwrap();
+        let session = h.app.resident.current_mut().unwrap();
         session.catalog = directory.clone();
         session.recovery.discover(&directory);
-        let generation = session.recovery.generation;
+
         h.op(SessionOp::Recovered(
             crate::app::recovery::RecoveryOutcome {
                 seq: 1,
                 turn: crate::protocol::TurnRef::new("s1", "A"),
-                generation,
+
                 result: Ok(if partial {
-                    crate::app::tasks::TurnRead::Partial(Box::new(
-                        crate::app::tasks::ReadPartial::WorkspaceLimit,
+                    crate::app::read::TurnRead::Partial(Box::new(
+                        crate::app::read::ReadPartial::WorkspaceLimit,
                     ))
                 } else {
-                    crate::app::tasks::TurnRead::Unavailable(crate::app::tasks::UnavailableRead {
+                    crate::app::read::TurnRead::Unavailable(crate::app::read::UnavailableRead {
                         reason: crate::protocol::UnavailableReason::Expired,
                         persistence: Some(crate::protocol::TurnPersistence::Failed),
                         persistence_uncertain: false,
@@ -2485,7 +2808,14 @@ async fn late_identical_steers_keep_their_request_boundaries_before_an_incomplet
             "partial={partial}: the candidate boundary, not text or arrival position, owns each steer"
         );
         assert_eq!(
-            h.app.session.as_ref().unwrap().live.as_ref().unwrap().start,
+            h.app
+                .resident
+                .current()
+                .unwrap()
+                .live
+                .as_ref()
+                .unwrap()
+                .start,
             9
         );
         assert_eq!(
@@ -2544,7 +2874,7 @@ async fn delivered_input_for_a_canonical_closed_turn_cannot_resurrect_a_steer_be
         ),
     );
     h.control_event(json!({"completions":{"through_seq":1,"retained_from_seq":1,"truncated":false,"entries":[{"seq":1,"loop_id":"A","completion_kind":"reported","outcome_kind":"completed","persistence":"persisted","availability":"stored"}]}})).await;
-    h.until(|app| app.session.as_ref().unwrap().is_closed("A"))
+    h.until(|app| app.resident.current().unwrap().is_closed("A"))
         .await;
     h.fake.script_held("turn.wait", waited("B", completed()));
     h.running_state("B", entry("input-B", "steer", "prompt B"));
@@ -2556,7 +2886,7 @@ async fn delivered_input_for_a_canonical_closed_turn_cannot_resurrect_a_steer_be
     .await;
     h.settle().await;
     assert_eq!(format!("{:?}", h.blocks()), before);
-    assert!(h.app.session.as_ref().unwrap().is_closed("A"));
+    assert!(h.app.resident.current().unwrap().is_closed("A"));
 }
 
 #[tokio::test(start_paused = true)]
@@ -2622,7 +2952,7 @@ async fn canonical_replacement_keeps_identified_equal_steers_and_reports_the_act
     )
     .await;
     h.settle().await;
-    let mut result = turn_result(
+    let result = completed_result(
         "A",
         vec![
             user(0, "A", "prompt A"),
@@ -2648,10 +2978,9 @@ async fn canonical_replacement_keeps_identified_equal_steers_and_reports_the_act
             ),
         ],
     );
-    result["outcome"] = completed();
     h.fake.script("turn.result", result);
     h.control_event(json!({"completions":{"through_seq":1,"retained_from_seq":1,"truncated":false,"entries":[{"seq":1,"loop_id":"A","input_id":"input-A","completion_kind":"reported","outcome_kind":"completed","persistence":"persisted","availability":"stored"}]}})).await;
-    h.until(|app| app.session.as_ref().unwrap().is_closed("A"))
+    h.until(|app| app.resident.current().unwrap().is_closed("A"))
         .await;
     h.app.observe_checkpoint(false);
     let rows: Vec<Value> = std::fs::read_to_string(trace.path())
@@ -2711,11 +3040,10 @@ async fn a_late_wait_fallback_reads_the_original_load_instead_of_unbound_history
         "wait result is outside the retained window",
         "turn_not_found",
     );
-    let mut result = turn_result(
+    let result = completed_result(
         "A",
         vec![user(0, "A", "prompt A"), assistant(1, "A", "answer A")],
     );
-    result["outcome"] = completed();
     h.fake.script("turn.result", result);
     h.running_state("A", entry("input-A", "steer", "prompt A"));
     h.until(|app| {
@@ -2747,6 +3075,7 @@ mod body_recovery {
         Session::new(
             serde_json::from_value(crate::testing::session_info("s")).unwrap(),
             1,
+            crate::testing::LOAD.into(),
         )
     }
 
@@ -2830,7 +3159,7 @@ mod body_recovery {
                 "seq":i+1,"loop_id":id,"completion_kind":"reported","outcome_kind":"completed",
                 "persistence":if id == "A" {"failed"} else {"persisted"},"availability":if id == "A" {"live"} else {"stored"}
             })).unwrap()).collect();
-            session.recovery.begin("load_1", 1);
+            session.recovery = crate::app::recovery::RecoveryState::default();
             session
                 .recovery
                 .discover(&crate::protocol::CompletionDirectory {
@@ -2846,7 +3175,12 @@ mod body_recovery {
                     session
                         .reconcile_completion(
                             description,
-                            &LoopOutcome::Completed,
+                            &crate::app::read::TurnDetails {
+                                outcome: LoopOutcome::Completed,
+                                usage: None,
+                                requests: None,
+                                tool_rounds: None,
+                            },
                             &b,
                             None,
                             TurnPersistence::Persisted,
@@ -2861,7 +3195,12 @@ mod body_recovery {
                     session
                         .reconcile_completion(
                             description,
-                            &LoopOutcome::Completed,
+                            &crate::app::read::TurnDetails {
+                                outcome: LoopOutcome::Completed,
+                                usage: None,
+                                requests: None,
+                                tool_rounds: None,
+                            },
                             &a,
                             None,
                             TurnPersistence::Failed,
@@ -2911,5 +3250,82 @@ mod body_recovery {
                 matches!(&session.transcript.blocks()[session.live.as_ref().unwrap().start], Block::User { text, .. } if text == "prompt C")
             );
         }
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn wait_and_result_facts_replace_only_their_turns_usage_in_either_order() {
+    use crate::app::read::TurnDetails;
+    use crate::protocol::read::TurnPersistence;
+
+    for result_first in [false, true] {
+        let mut h = Harness::opened(display_read(0, 0)).await;
+        h.fake.script_held("turn.wait", waited("A", completed()));
+        h.fake
+            .script_held("session.state@s1", json!({"session_id":"s1"}));
+        h.running_state("A", entry("iA", "steer", "prompt A"));
+        h.emit(
+            "request_usage",
+            json!({"turn":turn("A"),"usage":{"input_tokens":100,"output_tokens":10}}),
+        )
+        .await;
+        h.until(|app| app.resident.current().unwrap().usage.input == 100)
+            .await;
+        h.running_state("B", entry("iB", "steer", "prompt B"));
+        h.emit(
+            "request_usage",
+            json!({"turn":turn("B"),"usage":{"input_tokens":200,"output_tokens":20}}),
+        )
+        .await;
+        h.until(|app| app.resident.current().unwrap().usage.input == 300)
+            .await;
+
+        let wait = serde_json::from_value::<crate::protocol::TurnWaitResult>(json!({
+            "turn":turn("A"), "outcome":completed(), "requests":3, "tool_rounds":2,
+            "usage":{"input_tokens":150,"output_tokens":15}
+        }))
+        .unwrap();
+        let descriptor = serde_json::from_value(json!({
+            "seq":1, "loop_id":"A", "input_id":"iA", "completion_kind":"reported",
+            "outcome_kind":"completed", "persistence":"persisted", "availability":"stored"
+        }))
+        .unwrap();
+        for read_result in [result_first, !result_first] {
+            if read_result {
+                h.app
+                    .resident
+                    .current_mut()
+                    .unwrap()
+                    .reconcile_completion(
+                        &descriptor,
+                        &TurnDetails::from(&wait),
+                        &[],
+                        None,
+                        TurnPersistence::Persisted,
+                        false,
+                    )
+                    .expect("the predecessor has a recoverable region");
+            } else {
+                h.op(SessionOp::Waited(Ok(wait.clone())));
+            }
+            let session = h.app.resident.current().unwrap();
+            assert_eq!((session.usage.input, session.usage.output), (350, 35));
+            assert_eq!(session.live.as_ref().unwrap().turn.loop_id, "B");
+            assert_eq!(session.observed_loop(), Some("B"));
+        }
+        h.op(SessionOp::Waited(Ok(wait)));
+        let terminal = h
+            .blocks()
+            .iter()
+            .find(|block| matches!(block, Block::TurnEnd { loop_id, .. } if loop_id == "A"))
+            .unwrap();
+        assert!(
+            matches!(terminal, Block::TurnEnd {
+            duration: Some(_), requests: 3, tools: 0, usage,
+            saving: Some(crate::transcript::Saving::Saved), ..
+        } if usage.input_tokens == Some(150) && usage.output_tokens == Some(15)),
+            "wait and result describe one terminal, and tool rounds are not tool calls: {terminal:?}"
+        );
+        assert_eq!(h.app.resident.current().unwrap().usage.input, 350);
     }
 }

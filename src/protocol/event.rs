@@ -1,20 +1,16 @@
-//! Agent event notifications. Events are hints: every fact here is also
-//! available from an authoritative read, so delivery order never decides
-//! correctness.
+//! Agent notifications: reliable control snapshots and recoverable body hints.
 
 use serde::{Deserialize, Deserializer};
 
 use super::{
-    DeliveredInput, PendingInteraction, Queue, SessionInfo, SessionSnapshot, SessionState,
-    ToolDisplay, ToolExecution, ToolInvocation, ToolRef, TurnRef, Usage,
+    DeliveredInput, SessionInfo, SessionSnapshot, ToolDisplay, ToolExecution, ToolInvocation,
+    ToolRef, TurnRef, Usage,
 };
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct EventMeta {
     pub session_id: String,
-    /// The loaded instance the observation belongs to; `None` only for bodies
-    /// that predate v2.
-    #[serde(default)]
+    /// The loaded instance the Agent names for this observation.
     pub load: Option<String>,
     pub dropped_before: u64,
 }
@@ -32,7 +28,6 @@ pub enum AgentEvent {
     },
     SessionState {
         meta: EventMeta,
-        state: Box<SessionState>,
     },
     TurnStarted {
         meta: EventMeta,
@@ -59,7 +54,6 @@ pub enum AgentEvent {
     },
     InputQueue {
         meta: EventMeta,
-        queue: Queue,
     },
     InputDelivered {
         meta: EventMeta,
@@ -111,12 +105,10 @@ pub enum AgentEvent {
     InteractionRequested {
         meta: EventMeta,
         turn: TurnRef,
-        interaction: Box<PendingInteraction>,
     },
     InteractionResolved {
         meta: EventMeta,
         turn: TurnRef,
-        interaction_id: String,
     },
     TurnFinished {
         meta: EventMeta,
@@ -127,7 +119,7 @@ pub enum AgentEvent {
         meta: EventMeta,
         snapshot: Box<SessionSnapshot>,
     },
-    /// An event type this client does not model, or a payload it cannot read.
+    /// An unknown event type or an unreadable body hint.
     #[serde(other)]
     Unknown,
 }
@@ -327,7 +319,6 @@ pub enum CommandStatus {
 
 #[cfg(test)]
 mod tests {
-    use super::super::InputMode;
     use super::*;
     use serde_json::{Value, json};
 
@@ -406,20 +397,11 @@ mod tests {
     }
 
     #[test]
-    fn input_events_carry_the_queue_and_the_delivered_texts() {
+    fn delivered_input_keeps_its_identity_and_text() {
         let events: Vec<AgentEvent> = AGENT_EVENTS
             .lines()
             .map(|line| decode(serde_json::from_str(line).unwrap()))
             .collect();
-        let Some(AgentEvent::InputQueue { queue, .. }) = events
-            .iter()
-            .find(|event| matches!(event, AgentEvent::InputQueue { .. }))
-        else {
-            panic!("no input_queue");
-        };
-        let modes: Vec<_> = queue.items.iter().map(|item| item.mode).collect();
-        assert_eq!(modes, [InputMode::Steer, InputMode::FollowUp]);
-        assert!(!queue.paused);
         let Some(AgentEvent::InputDelivered { turn, items, .. }) = events
             .iter()
             .find(|event| matches!(event, AgentEvent::InputDelivered { .. }))
@@ -428,7 +410,7 @@ mod tests {
         };
         assert_eq!(turn.loop_id, "lup_00000000000000000000000000000002");
         assert_eq!(items[0].text, "also the tests");
-        assert_eq!(items[0].id, queue.items[0].id);
+        assert_eq!(items[0].id, "inp_00000000000000000000000000000004");
     }
 
     #[test]

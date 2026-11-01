@@ -1,4 +1,4 @@
-//! Wire DTOs for minicore-agent 0.9.1 (Protocol v2). Unknown fields are
+//! Wire DTOs for minicore-agent Protocol v2. Unknown fields are
 //! ignored, and enums the Agent documents as non-exhaustive decode future values
 //! to `Unknown` instead of failing the frame.
 
@@ -161,31 +161,13 @@ pub enum IncomingFrame {
 #[derive(Debug, Clone)]
 pub struct RpcResponse {
     pub id: RequestId,
-    pub result: Option<Value>,
-    pub error: Option<RpcError>,
+    payload: Result<Value, RpcError>,
 }
 
 impl RpcResponse {
-    pub fn decode<T: DeserializeOwned>(&self) -> Result<T, RpcError> {
-        match (&self.result, &self.error) {
-            (Some(value), None) => {
-                serde_json::from_value(value.clone()).map_err(|error| RpcError {
-                    code: INVALID_PARAMS,
-                    kind: "malformed_result".into(),
-                    message: error.to_string(),
-                    retryable: false,
-                    acceptance: None,
-                })
-            }
-            (None, Some(error)) => Err(error.clone()),
-            _ => Err(RpcError {
-                code: INVALID_REQUEST,
-                kind: "malformed_result".into(),
-                message: "response has neither result nor error".into(),
-                retryable: false,
-                acceptance: None,
-            }),
-        }
+    pub fn decode<T: DeserializeOwned>(self) -> Result<T, RpcError> {
+        serde_json::from_value(self.payload?)
+            .map_err(|error| RpcError::new(INVALID_PARAMS, "malformed_result", error.to_string()))
     }
 }
 
@@ -258,16 +240,6 @@ impl fmt::Display for FrameError {
 
 impl std::error::Error for FrameError {}
 
-#[derive(Deserialize)]
-struct Envelope {
-    jsonrpc: Option<Value>,
-    id: Option<Value>,
-    method: Option<Value>,
-    params: Option<Value>,
-    result: Option<Value>,
-    error: Option<Value>,
-}
-
 pub fn parse_frame(line: &[u8]) -> Result<IncomingFrame, FrameError> {
     let text = std::str::from_utf8(line).map_err(|_| FrameError {
         detail: "frame is not valid UTF-8".into(),
@@ -275,26 +247,45 @@ pub fn parse_frame(line: &[u8]) -> Result<IncomingFrame, FrameError> {
     let value: Value = serde_json::from_str(text).map_err(|error| FrameError {
         detail: format!("frame is not valid JSON: {error}"),
     })?;
-    let envelope: Envelope = serde_json::from_value(value).map_err(|error| FrameError {
-        detail: format!("frame envelope is malformed: {error}"),
-    })?;
-    if envelope.jsonrpc.as_ref().and_then(Value::as_str) != Some(JSONRPC_VERSION) {
+    let Value::Object(mut envelope) = value else {
+        return Err(FrameError {
+            detail: "frame envelope is not an object".into(),
+        });
+    };
+    if envelope.get("jsonrpc").and_then(Value::as_str) != Some(JSONRPC_VERSION) {
         return Err(FrameError {
             detail: "frame has no jsonrpc 2.0 marker".into(),
         });
     }
+    let method = envelope.remove("method");
     match (
-        envelope.id,
-        envelope.method.as_ref().and_then(Value::as_str),
+        envelope.remove("id"),
+        method.as_ref().and_then(Value::as_str),
     ) {
-        (Some(id), _) => parse_response(id, envelope.result, envelope.error),
+        (Some(id), _) => parse_response(id, envelope.remove("result"), envelope.remove("error")),
         (None, Some("agent.event")) => {
-            let params = envelope.params.ok_or_else(|| FrameError {
+            let params = envelope.remove("params").ok_or_else(|| FrameError {
                 detail: "agent.event without params".into(),
             })?;
-            // Events are hints the turn reconciles anyway, so an unreadable one
-            // must not stop the stream.
-            let event = serde_json::from_value(params).unwrap_or(AgentEvent::Unknown);
+            let control = params.get("type").and_then(Value::as_str) == Some("session_snapshot");
+            let event = match serde_json::from_value(params) {
+                Ok(event) => event,
+                Err(error) if control => {
+                    return Err(FrameError {
+                        detail: format!("session_snapshot is malformed: {error}"),
+                    });
+                }
+                // Body hints can be recovered from the canonical turn result.
+                Err(_) => AgentEvent::Unknown,
+            };
+            if let AgentEvent::SessionSnapshot { meta, snapshot } = &event
+                && (meta.session_id != snapshot.session_id
+                    || meta.load.as_deref() != Some(snapshot.load.as_str()))
+            {
+                return Err(FrameError {
+                    detail: "session_snapshot metadata does not match its session and load".into(),
+                });
+            }
             Ok(IncomingFrame::Event(event))
         }
         (None, Some(method)) => Ok(IncomingFrame::UnknownNotification(method.to_owned())),
@@ -312,24 +303,16 @@ fn parse_response(
     let id = id.as_u64().map(RequestId).ok_or_else(|| FrameError {
         detail: "response id is not an unsigned integer".into(),
     })?;
-    let response = match (result, error) {
-        (Some(result), None) => RpcResponse {
-            id,
-            result: Some(result),
-            error: None,
-        },
-        (None, Some(error)) => RpcResponse {
-            id,
-            result: None,
-            error: Some(parse_wire_error(error)?),
-        },
+    let payload = match (result, error) {
+        (Some(result), None) => Ok(result),
+        (None, Some(error)) => Err(parse_wire_error(error)?),
         _ => {
             return Err(FrameError {
                 detail: "response needs exactly one of result or error".into(),
             });
         }
     };
-    Ok(IncomingFrame::Response(response))
+    Ok(IncomingFrame::Response(RpcResponse { id, payload }))
 }
 
 fn parse_wire_error(value: Value) -> Result<RpcError, FrameError> {
@@ -505,42 +488,18 @@ pub struct SessionInfo {
 #[derive(Clone, Debug, Deserialize)]
 pub struct SessionResult {
     pub session: SessionInfo,
-    /// The resident instance the snapshot belongs to.
-    #[serde(default)]
-    pub load: Option<String>,
-    #[serde(default)]
-    pub snapshot: Option<SessionSnapshot>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct OpenedSession {
+    pub session: SessionInfo,
+    pub load: String,
+    pub snapshot: SessionSnapshot,
 }
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct SessionStateResult {
-    #[serde(flatten)]
-    pub state: SessionState,
     pub snapshot: SessionSnapshot,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum SessionStatus {
-    Idle,
-    Running,
-    WaitingForInput,
-    Finishing,
-    Blocked,
-    #[serde(other)]
-    Unknown,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct SessionState {
-    pub session_id: String,
-    pub status: SessionStatus,
-    pub active_loop: Option<LoopState>,
-    pub compaction: Option<CompactionProgress>,
-}
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct LoopState {
-    pub loop_id: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -891,15 +850,6 @@ mod tests {
     }
 
     #[test]
-    fn unknown_session_status_degrades_instead_of_failing() {
-        let state: SessionState = serde_json::from_value(json!({
-            "session_id": "s", "status": "teleporting"
-        }))
-        .unwrap();
-        assert_eq!(state.status, SessionStatus::Unknown);
-    }
-
-    #[test]
     fn unknown_outcome_and_cancel_reason_are_accepted() {
         let wait: TurnWaitResult = serde_json::from_value(json!({
             "turn": {"session_id": "s", "loop_id": "l"},
@@ -1026,11 +976,76 @@ mod tests {
         let IncomingFrame::Response(response) = parse_frame(frame).unwrap() else {
             panic!("expected a response");
         };
-        let error = response.error.unwrap();
         assert_eq!(response.id, RequestId(7));
+        let error = response.decode::<Value>().unwrap_err();
         assert_eq!(error.code, SESSION_BUSY);
         assert_eq!(error.kind, "session_busy");
         assert!(error.retryable && error.is_busy());
+    }
+
+    #[test]
+    fn malformed_control_is_visible_while_future_body_hints_remain_ignorable() {
+        let frame = |params| {
+            serde_json::to_vec(&json!({
+                "jsonrpc": "2.0", "method": "agent.event", "params": params
+            }))
+            .unwrap()
+        };
+        let error = parse_frame(&frame(json!({
+            "type": "session_snapshot", "data": {"snapshot": {"revision": "bad"}}
+        })))
+        .unwrap_err();
+        assert!(error.detail.contains("session_snapshot"));
+        let snapshot = json!({
+            "session_id":"s1", "load":"load_1", "revision":1,
+            "execution":{"type":"none"}, "queue":{"items":[], "paused":false},
+            "completions":{"through_seq":0, "retained_from_seq":1,
+                "entries":[], "truncated":false}
+        });
+        for meta in [
+            json!({"session_id":"s1", "dropped_before":0}),
+            json!({"session_id":"s1", "load":"other", "dropped_before":0}),
+            json!({"session_id":"s2", "load":"load_1", "dropped_before":0}),
+        ] {
+            let error = parse_frame(&frame(json!({
+                "type":"session_snapshot", "data":{"meta":meta, "snapshot":snapshot}
+            })))
+            .unwrap_err();
+            assert!(error.detail.contains("metadata"));
+        }
+        assert!(matches!(
+            parse_frame(&frame(json!({"type":"session_snapshot", "data":{
+                "meta":{"session_id":"s1", "load":"load_1", "dropped_before":0},
+                "snapshot":snapshot
+            }})))
+            .unwrap(),
+            IncomingFrame::Event(AgentEvent::SessionSnapshot { .. })
+        ));
+        for params in [
+            json!({"type": "future_event", "data": {"new_field": true}}),
+            json!({"type": "output_delta", "data": {"channel": {"future": true}}}),
+        ] {
+            assert!(matches!(
+                parse_frame(&frame(params)).unwrap(),
+                IncomingFrame::Event(AgentEvent::Unknown)
+            ));
+        }
+    }
+
+    #[test]
+    fn null_is_a_result_but_a_response_cannot_have_both_payloads() {
+        let IncomingFrame::Response(response) =
+            parse_frame(br#"{"jsonrpc":"2.0","id":1,"result":null}"#).unwrap()
+        else {
+            panic!("expected a response");
+        };
+        assert_eq!(response.decode::<Value>().unwrap(), Value::Null);
+        for frame in [
+            br#"{"jsonrpc":"2.0","id":1}"#.as_slice(),
+            br#"{"jsonrpc":"2.0","id":1,"result":null,"error":null}"#.as_slice(),
+        ] {
+            assert!(parse_frame(frame).is_err());
+        }
     }
 
     #[test]

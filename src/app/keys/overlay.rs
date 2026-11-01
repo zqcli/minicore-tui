@@ -150,8 +150,8 @@ impl App {
         };
         let show_reasoning = self.show_reasoning;
         let blocks = self
-            .session
-            .as_ref()
+            .resident
+            .current()
             .map_or(&[][..], |session| session.transcript.blocks());
         match &mut self.overlay {
             Overlay::Sessions {

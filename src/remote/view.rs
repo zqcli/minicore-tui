@@ -244,7 +244,9 @@ impl View {
         shared: &Shared,
     ) -> Vec<Value> {
         let epoch = session.map(|session| session.epoch);
-        let revisions = session.map_or(&[][..], |session| session.transcript.revisions());
+        let revisions = session
+            .into_iter()
+            .flat_map(|session| session.transcript.revisions());
         let blocks = session.map_or(&[][..], |session| session.transcript.blocks());
         let annotations: Vec<_> = session
             .into_iter()
@@ -270,11 +272,11 @@ impl View {
             messages.push(json!({"t":"snapshot", "view_epoch":self.view_epoch, "state":shared.state, "blocks":(0..blocks.len()).map(project).collect::<Vec<_>>()}));
             self.streaming = blocks.iter().map(Streaming::of).collect();
         } else {
-            self.streaming.resize_with(revisions.len(), || None);
+            self.streaming.resize_with(blocks.len(), || None);
             let mut upserts = Vec::new();
-            for (i, revision) in revisions.iter().enumerate() {
+            for (i, revision) in revisions.clone().enumerate() {
                 let same_annotation = self.annotations.get(i) == Some(&annotations[i]);
-                if self.revisions.get(i) == Some(revision) && same_annotation {
+                if self.revisions.get(i) == Some(&revision) && same_annotation {
                     continue;
                 }
                 let current = &blocks[i];
@@ -292,8 +294,8 @@ impl View {
                 }
                 self.streaming[i] = Streaming::of(current);
             }
-            if !upserts.is_empty() || revisions.len() != self.revisions.len() {
-                messages.push(json!({"t":"blocks", "len":revisions.len(), "upserts":upserts}));
+            if !upserts.is_empty() || blocks.len() != self.revisions.len() {
+                messages.push(json!({"t":"blocks", "len":blocks.len(), "upserts":upserts}));
             }
             if shared.serialized != self.state {
                 messages.push(json!({"t":"state", "state":shared.state}));
@@ -301,7 +303,7 @@ impl View {
         }
         self.epoch = Some(epoch);
         self.revisions.clear();
-        self.revisions.extend_from_slice(revisions);
+        self.revisions.extend(revisions);
         self.annotations = annotations;
         self.state.clone_from(&shared.serialized);
         messages
@@ -518,7 +520,7 @@ mod tests {
     fn sync(view: &mut View, app: &mut App) -> Vec<Value> {
         Catalog::refresh(app);
         let shared = Shared::new(app, PhoneView::foreground(app), false);
-        view.sync(1, app.session.as_ref(), &shared)
+        view.sync(1, app.resident.current(), &shared)
     }
 
     fn turn_end(outcome: Value) -> Value {
@@ -541,7 +543,7 @@ mod tests {
             loop_id: "partial".into(),
             request_index: 0,
         };
-        let session = app.session.as_mut().unwrap();
+        let session = app.resident.current_mut().unwrap();
         session.transcript.push(Block::Assistant {
             key: key.clone(),
             text: "verified text".into(),
@@ -561,8 +563,8 @@ mod tests {
         });
         let mut view = View::default();
         sync(&mut view, &mut app);
-        let session = app.session.as_mut().unwrap();
-        let revisions = session.transcript.revisions().to_vec();
+        let session = app.resident.current_mut().unwrap();
+        let revisions = session.transcript.revisions().collect::<Vec<_>>();
         session
             .body_recovery
             .push_back(crate::app::session::BodyRecovery {
@@ -573,7 +575,10 @@ mod tests {
         session
             .transcript
             .mark_preserved([crate::transcript::PreservedKey::AssistantReasoning(key)]);
-        assert_eq!(session.transcript.revisions(), revisions);
+        assert_eq!(
+            session.transcript.revisions().collect::<Vec<_>>(),
+            revisions
+        );
         let update = sync(&mut view, &mut app);
         assert_eq!(update[0]["t"], "blocks");
         assert_eq!(
@@ -587,7 +592,7 @@ mod tests {
             json!({"status":"partial", "reason":"Item 1 is too large"})
         );
         assert!(sync(&mut view, &mut app).is_empty());
-        app.session.as_mut().unwrap().body_recovery.clear();
+        app.resident.current_mut().unwrap().body_recovery.clear();
         let cleared = sync(&mut view, &mut app);
         assert!(cleared[0]["upserts"][0]["block"].get("recovery").is_none());
         let full = sync(&mut View::default(), &mut app);
@@ -631,17 +636,19 @@ mod tests {
             allow_insecure: false,
             tls: None,
         });
-        app.session = Some(crate::app::Session::new(
+        app.resident.insert(crate::app::Session::new(
             serde_json::from_value(crate::testing::session_info("s1")).unwrap(),
             1,
+            crate::testing::LOAD.into(),
         ));
+        app.resident.select(Some(1));
         (fake, app)
     }
 
     #[tokio::test(start_paused = true)]
     async fn draft_settings_resolve_profile_defaults_and_explicit_overrides_without_clock_churn() {
         let (_fake, mut app) = connected_app();
-        app.session = None;
+        app.resident.select(None);
         app.profiles = serde_json::from_value(json!([
             {"id":"coding", "model":"main", "reasoning":"medium"},
             {"id":"ask", "model":"quick", "reasoning":"low"}
@@ -702,18 +709,18 @@ mod tests {
         let presentation = |branch: &str| {
             serde_json::from_value(json!({"session_id":"s1", "git_branch":branch})).unwrap()
         };
-        app.session.as_mut().unwrap().presentation = Some(presentation("feat/ui2"));
+        app.resident.current_mut().unwrap().presentation = Some(presentation("feat/ui2"));
         let changed = sync(&mut view, &mut app);
         assert_eq!(changed[0]["state"]["session"]["branch"], "feat/ui2");
         assert!(sync(&mut view, &mut app).is_empty());
-        app.session.as_mut().unwrap().presentation = Some(presentation(" "));
+        app.resident.current_mut().unwrap().presentation = Some(presentation(" "));
         assert!(sync(&mut view, &mut app)[0]["state"]["session"]["branch"].is_null());
     }
 
     #[tokio::test(start_paused = true)]
     async fn queue_projection_keeps_the_agents_order_and_carries_no_sent_marker() {
         let (_fake, mut app) = connected_app();
-        let queue = &mut app.session.as_mut().unwrap().queue;
+        let queue = &mut app.resident.current_mut().unwrap().queue;
         for (id, text, mode) in [
             ("a", "now", InputMode::Steer),
             ("b", "also now", InputMode::Steer),
@@ -747,7 +754,7 @@ mod tests {
             json!([])
         );
         assert!(sync(&mut view, &mut app).is_empty());
-        let allowed = &mut app.session.as_mut().unwrap().allowed_tools;
+        let allowed = &mut app.resident.current_mut().unwrap().allowed_tools;
         allowed.extend(["edit".to_owned(), "bash".to_owned()]);
         assert_eq!(
             sync(&mut view, &mut app)[0]["state"]["session"]["allowed"],
@@ -762,7 +769,7 @@ mod tests {
             loop_id: "loop".into(),
             request_index: 0,
         };
-        let session = app.session.as_mut().unwrap();
+        let session = app.resident.current_mut().unwrap();
         session.live = Some(crate::app::LiveTurn::new(
             crate::protocol::TurnRef::new("s1", "loop"),
             0,
@@ -780,8 +787,8 @@ mod tests {
         tokio::time::advance(std::time::Duration::from_secs(60)).await;
         assert!(sync(&mut view, &mut app).is_empty());
         assert_eq!(
-            app.session
-                .as_ref()
+            app.resident
+                .current()
                 .unwrap()
                 .live
                 .as_ref()
@@ -789,8 +796,12 @@ mod tests {
                 .started_ms,
             started
         );
-        if let Block::Assistant { text, .. } =
-            app.session.as_mut().unwrap().transcript.assistant_mut(&key)
+        if let Block::Assistant { text, .. } = app
+            .resident
+            .current_mut()
+            .unwrap()
+            .transcript
+            .assistant_mut(&key)
         {
             text.push_str(" world");
         }
@@ -798,8 +809,12 @@ mod tests {
             sync(&mut view, &mut app),
             [json!({"t":"blocks", "len":1, "upserts":[{"i":0, "append":{"text":" world"}}]})]
         );
-        if let Block::Assistant { reasoning, .. } =
-            app.session.as_mut().unwrap().transcript.assistant_mut(&key)
+        if let Block::Assistant { reasoning, .. } = app
+            .resident
+            .current_mut()
+            .unwrap()
+            .transcript
+            .assistant_mut(&key)
         {
             reasoning.push('え');
         }
@@ -808,7 +823,7 @@ mod tests {
             json!({"reasoning":"え"})
         );
         if let Some(Block::Assistant { streaming, .. }) =
-            app.session.as_mut().unwrap().transcript.block_mut(0)
+            app.resident.current_mut().unwrap().transcript.block_mut(0)
         {
             *streaming = false;
         }
@@ -832,12 +847,12 @@ mod tests {
         );
         call.state = ToolState::Running;
         call.push_output("one\ntw");
-        let session = app.session.as_mut().unwrap();
+        let session = app.resident.current_mut().unwrap();
         session.transcript.push(Block::Tool(Box::new(call)));
         let mut view = View::default();
         assert_eq!(sync(&mut view, &mut app)[0]["t"], "snapshot");
         fn tool(app: &mut App) -> &mut ToolCall {
-            match app.session.as_mut().unwrap().transcript.block_mut(0) {
+            match app.resident.current_mut().unwrap().transcript.block_mut(0) {
                 Some(Block::Tool(call)) => call,
                 _ => unreachable!("the tool block"),
             }
@@ -883,11 +898,15 @@ mod tests {
             kind: UserKind::Prompt,
             at: None,
         };
-        app.session.as_mut().unwrap().transcript.push(user("new"));
+        app.resident
+            .current_mut()
+            .unwrap()
+            .transcript
+            .push(user("new"));
         let mut view = View::default();
         sync(&mut view, &mut app);
-        app.session
-            .as_mut()
+        app.resident
+            .current_mut()
             .unwrap()
             .transcript
             .insert(0, user("old"));
@@ -895,7 +914,7 @@ mod tests {
         assert_eq!(messages[0]["upserts"].as_array().unwrap().len(), 2);
         assert_eq!(messages[0]["upserts"][0]["block"]["text"], "old");
         assert_eq!(messages[0]["upserts"][1]["block"]["text"], "new");
-        app.session.as_mut().unwrap().transcript.remove(1);
+        app.resident.current_mut().unwrap().transcript.remove(1);
         assert_eq!(
             sync(&mut view, &mut app),
             [json!({"t":"blocks", "len":1, "upserts":[]})]
@@ -923,11 +942,15 @@ mod tests {
                     app.sessions.push(serde_json::from_value(info).unwrap());
                 }
                 for i in 0..5000 {
-                    app.session.as_mut().unwrap().transcript.push(Block::User {
-                        text: format!("message {i}"),
-                        kind: UserKind::Prompt,
-                        at: None,
-                    });
+                    app.resident
+                        .current_mut()
+                        .unwrap()
+                        .transcript
+                        .push(Block::User {
+                            text: format!("message {i}"),
+                            kind: UserKind::Prompt,
+                            at: None,
+                        });
                 }
                 let mut view = View::default();
                 assert_eq!(
@@ -981,7 +1004,12 @@ mod tests {
         info["workspace"] = json!(app.workspace);
         let info: crate::protocol::SessionInfo = serde_json::from_value(info).unwrap();
         app.sessions.push(info.clone());
-        app.session = Some(crate::app::Session::new(info, 1));
+        app.resident.insert(crate::app::Session::new(
+            info,
+            1,
+            crate::testing::LOAD.into(),
+        ));
+        app.resident.select(Some(1));
         let state = state(&app, &catalog(&app), &PhoneView::foreground(&app), false);
         for workspace in [
             &state["draft"]["workspace"],
@@ -1006,11 +1034,13 @@ mod tests {
         let mut view = View::default();
         assert_eq!(sync(&mut view, &mut app)[0]["t"], "snapshot");
         assert!(sync(&mut view, &mut app).is_empty());
-        app.session = Some(crate::app::Session::new(
+        app.resident.insert(crate::app::Session::new(
             serde_json::from_value(crate::testing::session_info("s1")).unwrap(),
             1,
+            crate::testing::LOAD.into(),
         ));
-        let transcript = &mut app.session.as_mut().unwrap().transcript;
+        app.resident.select(Some(1));
+        let transcript = &mut app.resident.current_mut().unwrap().transcript;
         for text in ["one", "two"] {
             transcript.push(Block::User {
                 text: text.into(),
@@ -1020,7 +1050,7 @@ mod tests {
         }
         assert_eq!(sync(&mut view, &mut app)[0]["t"], "snapshot");
         if let Some(Block::User { text, .. }) =
-            app.session.as_mut().unwrap().transcript.block_mut(1)
+            app.resident.current_mut().unwrap().transcript.block_mut(1)
         {
             *text = "changed".into();
         }
@@ -1031,9 +1061,10 @@ mod tests {
             json!({"t":"blocks", "len":2, "upserts":[{"i":1, "block":{"type":"user", "kind":"prompt", "text":"changed", "at":null}}]})
         );
         assert!(sync(&mut view, &mut app).is_empty());
-        app.session.as_mut().unwrap().epoch = 2;
+        app.resident.current_mut().unwrap().epoch = 2;
+        app.resident.select(Some(2));
         assert_eq!(sync(&mut view, &mut app)[0]["t"], "snapshot");
-        app.session = None;
+        app.resident.select(None);
         assert_eq!(sync(&mut view, &mut app)[0]["t"], "snapshot");
     }
 }

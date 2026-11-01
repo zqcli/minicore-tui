@@ -26,12 +26,12 @@ impl App {
             )
             .into_owned();
         let auto_title = self
-            .session
-            .as_ref()
+            .resident
+            .current()
             .and_then(|session| session.auto_title());
         let title = self
-            .session
-            .as_ref()
+            .resident
+            .current()
             .and_then(|session| session.info.title.as_deref())
             .filter(|title| !title.trim().is_empty())
             .or(auto_title.as_deref());
@@ -40,8 +40,8 @@ impl App {
             title,
             approval: self.has_interaction()
                 || self
-                    .background
-                    .iter()
+                    .resident
+                    .others()
                     .any(|session| session.interaction.is_some()),
             busy: self.busy_elapsed().is_some(),
             ring: std::mem::take(&mut self.ring),
@@ -57,8 +57,8 @@ impl App {
             out.push_str(POP_TITLE);
         }
         if let Some(session) = self
-            .session
-            .as_ref()
+            .resident
+            .current()
             .filter(|session| !session.transcript.blocks().is_empty())
         {
             out.push_str(&format!(

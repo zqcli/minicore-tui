@@ -220,7 +220,7 @@ impl App {
             self.open_unconfirmed();
             return;
         }
-        if self.session.is_none() {
+        if self.resident.current().is_none() {
             // `workspace.files` needs a loaded session.
             let hint = match panel {
                 Panel::Files => Some("@ file completion needs a session: send a message first"),
@@ -374,7 +374,7 @@ impl App {
 
     /// Copies the foreground session's id.
     pub(super) fn copy_session_id(&mut self) {
-        if let Some(session) = &self.session {
+        if let Some(session) = self.resident.current() {
             let id = session.info.session_id.clone();
             self.copy(id);
         }
@@ -432,10 +432,11 @@ impl App {
 
     pub(super) fn rename_session(&self, session_id: String, title: String) {
         let client = self.client.clone();
+        let load = self.live(&session_id).map(|session| session.load.clone());
         self.spawn_msg(async move {
             Msg::Renamed(
                 session_id.clone(),
-                tasks::renamed_session(client, session_id, title).await,
+                tasks::renamed_session(client, session_id, title, load).await,
             )
         });
     }
@@ -453,9 +454,8 @@ impl App {
             *row = info.clone();
         }
         if let Some(session) = self
-            .session
+            .resident
             .iter_mut()
-            .chain(&mut self.background)
             .find(|session| session.info.session_id == info.session_id)
         {
             session.info = info.clone();
@@ -490,10 +490,12 @@ impl App {
     /// recently left), then the current workspace's, then newest first.
     fn session_rows(&self) -> Vec<SessionInfo> {
         let workspace = self.workspace.to_string_lossy();
-        let live = |info: &SessionInfo| match &self.session {
+        let live = |info: &SessionInfo| match self.resident.current() {
             Some(session) if session.info.session_id == info.session_id => 0,
             _ => self
-                .live_index(&info.session_id)
+                .resident
+                .others()
+                .position(|session| session.info.session_id == info.session_id)
                 .map_or(usize::MAX, |at| at + 1),
         };
         let rank = |info: &SessionInfo| (info.workspace == workspace, info.updated_at.clone());

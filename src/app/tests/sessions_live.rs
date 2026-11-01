@@ -30,24 +30,41 @@ async fn running_first() -> Harness {
 
 /// `running_first` where the first session's turn ends with `outcome`.
 async fn running_first_ending(outcome: Value) -> Harness {
-    running_first_with(json!({"turn": turn_in("s1", "l1"), "outcome": outcome})).await
+    running_first_with(
+        json!({"turn": turn_in("s1", "l1"), "outcome": outcome}),
+        crate::testing::snapshot("s1", crate::testing::LOAD, 100),
+    )
+    .await
 }
 
 /// `running_first` where the first session's turn ends with the `turn.wait` answer `wait`.
-async fn running_first_with(wait: Value) -> Harness {
+async fn running_first_with(wait: Value, finished: Value) -> Harness {
     let mut h = Harness::opened(display_read(0, 0)).await;
     let mut first = session_info("s1");
     first["title"] = json!("First");
     h.fake
         .script("session.rename@s1", json!({"session": first}));
     h.fake
-        .script("input.push@s1", started_in(turn_in("s1", "l1"), vec![]));
-    h.fake.script_held("turn.wait@s1", wait);
+        .script("input.push@s1", starting_reply("l1", h.next_revision()));
+    h.fake
+        .script_held("turn.wait@s1", after_snapshot(wait, finished));
     let mut second = session_info("s2");
     second["title"] = json!("Second");
-    h.fake.script("session.open@s2", json!({"session": second}));
-    h.fake
-        .script("input.push@s2", started_in(turn_in("s2", "l2"), vec![]));
+    h.fake.script("session.open@s2", opened_session(second));
+    h.fake.script(
+        "input.push@s2",
+        after_snapshot(
+            started_in(turn_in("s2", "l2"), vec![]),
+            crate::testing::snapshot_running(
+                "s2",
+                crate::testing::LOAD,
+                2,
+                "l2",
+                entry("i1", "steer", "$text"),
+            ),
+        )
+        .with_request_text(),
+    );
     h.fake.script_held("turn.wait@s2", waited_in("s2", "l2"));
     h.submit("work in one");
     h.until(|app| app.is_busy()).await;
@@ -57,10 +74,21 @@ async fn running_first_with(wait: Value) -> Harness {
 
 /// Shows `id`, live or not, and lets its reads settle.
 async fn show(h: &mut Harness, id: &str) {
+    if h.app.live(id).is_none() {
+        let mut read = display_read(0, 0);
+        read["session"] = session_info(id);
+        h.fake.script(&format!("session.read@{id}"), history(read));
+        h.fake.script(
+            &format!("session.state@{id}"),
+            state_response(crate::testing::snapshot(id, crate::testing::LOAD, 1)),
+        );
+        h.fake
+            .script(&format!("session.context@{id}"), json!({"session_id":id}));
+    }
     h.action(Action::OpenSession(id.into()));
     h.until(|app| {
-        app.session
-            .as_ref()
+        app.resident
+            .current()
             .is_some_and(|s| s.info.session_id == id)
     })
     .await;
@@ -89,10 +117,10 @@ async fn two_global_recovery_slots_rotate_busy_residents_when_snapshot_availabil
     for id in ["s2", "s3"] {
         h.fake.script(
             &format!("session.open@{id}"),
-            json!({"session":session_info(id)}),
+            opened_session(session_info(id)),
         );
         h.fake
-            .script(&format!("session.read@{id}"), display_read(0, 0));
+            .script(&format!("session.read@{id}"), history(display_read(0, 0)));
         show(&mut h, id).await;
     }
     for id in ["s1", "s2", "s3"] {
@@ -184,12 +212,7 @@ async fn two_global_recovery_slots_rotate_busy_residents_when_snapshot_availabil
                 .all(|id| app.live(id).unwrap().recovery.revision == revision)
         })
         .await;
-        let sessions = h
-            .app
-            .session
-            .iter()
-            .chain(&h.app.background)
-            .collect::<Vec<_>>();
+        let sessions = h.app.resident.iter().collect::<Vec<_>>();
         assert!(sessions.iter().all(|session| session.is_busy()));
         assert!(
             sessions
@@ -213,9 +236,8 @@ async fn two_global_recovery_slots_rotate_busy_residents_when_snapshot_availabil
             ));
         }
         h.until(|app| {
-            app.session
+            app.resident
                 .iter()
-                .chain(&app.background)
                 .map(|session| session.recovery.settled_through)
                 .sum::<u64>()
                 > settled
@@ -290,16 +312,29 @@ async fn two_sessions_run_at_once_and_switching_back_needs_no_reload() {
             offset: 0
         }
     );
-    assert_eq!(h.app.background[0].info.session_id, "s2");
+    assert_eq!(
+        h.app.resident.others().next().unwrap().info.session_id,
+        "s2"
+    );
 }
 
 #[tokio::test(start_paused = true)]
 async fn a_background_turn_ends_there_and_waits_for_the_successor_the_agent_started() {
-    let mut h = running_first_with(json!({
-        "turn": turn_in("s1", "l1"), "outcome": completed(),
-        "next": started_turn(turn_in("s1", "l3"), "next for one"),
-        "queue": queue(vec![], false),
-    }))
+    let successor = crate::testing::snapshot_running(
+        "s1",
+        crate::testing::LOAD,
+        100,
+        "l3",
+        entry("n1", "follow_up", "next for one"),
+    );
+    let mut h = running_first_with(
+        json!({
+            "turn": turn_in("s1", "l1"), "outcome": completed(),
+            "next": started_turn(turn_in("s1", "l3"), "next for one"),
+            "queue": queue(vec![], false),
+        }),
+        successor,
+    )
     .await;
     h.mirror(vec![entry("f1", "follow_up", "next for one")], false);
     show(&mut h, "s2").await;
@@ -344,9 +379,9 @@ async fn a_background_turn_ends_there_and_waits_for_the_successor_the_agent_star
         ["work in one"],
         "the Agent started it, not the TUI"
     );
-    assert_eq!(h.app.session.as_ref().unwrap().info.session_id, "s2");
+    assert_eq!(h.app.resident.current().unwrap().info.session_id, "s2");
     show(&mut h, "s1").await;
-    assert!(!h.app.session.as_ref().unwrap().unseen);
+    assert!(!h.app.resident.current().unwrap().unseen);
 }
 
 #[tokio::test(start_paused = true)]
@@ -373,12 +408,48 @@ fn approval_for(session: &str, id: &str) -> Value {
         "kind": {"type": "approval", "data": {"prompt": "Allow bash?"}}}})
 }
 
+async fn ask_approval(h: &mut Harness, asked: Value) {
+    let id = asked["turn"]["session_id"].as_str().unwrap();
+    let loop_id = asked["turn"]["loop_id"].as_str().unwrap();
+    let revision = h.app.live(id).unwrap().recovery.revision + 1;
+    let mut running = crate::testing::snapshot_running(
+        id,
+        crate::testing::LOAD,
+        revision,
+        loop_id,
+        entry(
+            "i1",
+            "steer",
+            if id == "s1" {
+                "work in one"
+            } else {
+                "work in two"
+            },
+        ),
+    );
+    let mut resumed = running.clone();
+    resumed["revision"] = json!(revision + 1);
+    h.fake.script(
+        &format!("interaction.answer@{id}"),
+        after_snapshot(json!({}), resumed),
+    );
+    let mut pending = asked["interaction"].clone();
+    pending["loop_id"] = json!(loop_id);
+    pending["request_index"] = json!(0);
+    running["pending_interaction"] = pending;
+    h.fake.script(
+        &format!("session.state@{id}"),
+        state_response(running.clone()),
+    );
+    h.snapshot_event(running).await;
+    h.emit("interaction_requested", asked).await;
+}
+
 #[tokio::test(start_paused = true)]
 async fn a_background_approval_notifies_and_is_answered_only_once_shown() {
     let mut h = running_first().await;
     show(&mut h, "s2").await;
-    h.emit("interaction_requested", approval_for("s1", "i1"))
-        .await;
+    ask_approval(&mut h, approval_for("s1", "i1")).await;
     h.settle().await;
     assert!(
         h.notices()
@@ -407,9 +478,14 @@ async fn a_background_approval_notifies_and_is_answered_only_once_shown() {
 
     show(&mut h, "s2").await;
     assert_eq!(h.app.composer.text(), "y", "each session keeps its draft");
-    h.app.background[0].allowed_tools.insert("bash".into());
-    h.emit("interaction_requested", approval_for("s1", "i2"))
-        .await;
+    h.app
+        .resident
+        .iter_mut()
+        .find(|session| session.info.session_id == "s1")
+        .unwrap()
+        .allowed_tools
+        .insert("bash".into());
+    ask_approval(&mut h, approval_for("s1", "i2")).await;
     h.settle().await;
     let answers = h.calls("interaction.answer");
     assert_eq!(
@@ -423,7 +499,7 @@ async fn a_background_approval_notifies_and_is_answered_only_once_shown() {
         "{:?}",
         h.notices()
     );
-    assert_eq!(h.app.session.as_ref().unwrap().info.session_id, "s2");
+    assert_eq!(h.app.resident.current().unwrap().info.session_id, "s2");
 }
 
 #[tokio::test(start_paused = true)]
@@ -446,7 +522,12 @@ async fn bells_when_the_foreground_turn_ends_after(run: Duration) -> usize {
     tokio::time::advance(run).await;
     h.bells();
     h.fake.release("turn.wait@s1");
-    h.until(|app| !app.is_busy()).await;
+    h.until(|app| {
+        !app.is_busy() && app.transcript_blocks().iter().any(|block| {
+        matches!(block, Block::TurnEnd { loop_id, duration: Some(_), .. } if loop_id == "l1")
+    })
+    })
+    .await;
     h.bells()
 }
 
@@ -468,8 +549,7 @@ async fn a_long_turn_asking_for_approval_rings_while_a_background_approval_waits
     show(&mut h, "s2").await;
     h.submit("work in two");
     h.until(|app| app.is_busy()).await;
-    h.emit("interaction_requested", approval_for("s1", "i1"))
-        .await;
+    ask_approval(&mut h, approval_for("s1", "i1")).await;
     h.settle().await;
     assert_eq!(h.bells(), 1, "the background approval rings");
 
@@ -477,7 +557,7 @@ async fn a_long_turn_asking_for_approval_rings_while_a_background_approval_waits
     let mut asked = approval_for("s2", "i2");
     asked["turn"] = turn_in("s2", "l2");
     asked["meta"] = json!({"session_id": "s2", "dropped_before": 0});
-    h.emit("interaction_requested", asked).await;
+    ask_approval(&mut h, asked).await;
     h.settle().await;
     assert_eq!(h.bells(), 1, "the foreground approval rings too");
 }
@@ -485,8 +565,7 @@ async fn a_long_turn_asking_for_approval_rings_while_a_background_approval_waits
 #[tokio::test(start_paused = true)]
 async fn a_young_turn_asking_for_approval_does_not_ring() {
     let mut h = running_first().await;
-    h.emit("interaction_requested", approval_for("s1", "i1"))
-        .await;
+    ask_approval(&mut h, approval_for("s1", "i1")).await;
     h.settle().await;
     assert!(h.app.has_interaction());
     assert_eq!(h.bells(), 0);
@@ -533,16 +612,19 @@ async fn the_draft_keeps_its_text_while_a_session_is_shown() {
     show(&mut h, "s1").await;
     assert_eq!(h.app.composer.text(), "");
     h.action(Action::NewSession);
-    assert!(h.app.session.is_none());
+    assert!(h.app.resident.current().is_none());
     assert_eq!(h.app.composer.text(), "draft words");
-    assert_eq!(h.app.background[0].info.session_id, "s1");
+    assert_eq!(
+        h.app.resident.others().next().unwrap().info.session_id,
+        "s1"
+    );
 }
 
 #[tokio::test(start_paused = true)]
 async fn an_older_page_for_a_background_session_leaves_the_screen_alone() {
     let mut h = Harness::opened(page(80, 0, vec![assistant(79, "l9", "latest")])).await;
     h.fake
-        .script("session.open@s2", json!({"session": session_info("s2")}));
+        .script("session.open@s2", opened_session(session_info("s2")));
     show(&mut h, "s2").await;
     let anchored = Scroll::Anchor {
         block: 1,
@@ -554,9 +636,12 @@ async fn an_older_page_for_a_background_session_leaves_the_screen_alone() {
         matches: Vec::new(),
         current: 0,
     };
-    h.fake
-        .script("session.read@s1", page(80, 0, vec![user(0, "l0", "first")]));
-    h.app.with_background(0, |app| app.load_older());
+    h.fake.script(
+        "session.read@s1",
+        history(page(80, 0, vec![user(0, "l0", "first")])),
+    );
+    let epoch = h.app.resident.others().next().unwrap().epoch;
+    h.app.load_older_for(epoch);
     h.settle().await;
     assert_eq!(texts_of(first(&h)), ["first", "latest"]);
     assert_eq!(h.app.scroll, anchored);
@@ -591,13 +676,10 @@ async fn a_working_background_session_cannot_be_deleted() {
 
 #[tokio::test(start_paused = true)]
 async fn an_idle_background_session_with_queued_messages_cannot_be_deleted() {
-    let mut h = running_first_with(waited_then(
-        "l1",
-        cancelled(),
-        None,
-        queue(vec![entry("i2", "follow_up", "after the stop")], true),
-    ))
-    .await;
+    let queued = queue(vec![entry("i2", "follow_up", "after the stop")], true);
+    let mut finished = crate::testing::snapshot("s1", crate::testing::LOAD, 100);
+    finished["queue"] = queued.clone();
+    let mut h = running_first_with(waited_then("l1", cancelled(), None, queued), finished).await;
     h.fake.script("turn.result", turn_result("l1", vec![]));
     show(&mut h, "s2").await;
     h.fake.release("turn.wait@s1");
@@ -615,14 +697,18 @@ async fn an_idle_background_session_with_queued_messages_cannot_be_deleted() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn an_input_queue_event_updates_the_mirror_of_a_background_session_only() {
+async fn a_queue_snapshot_updates_the_mirror_of_a_background_session_only() {
     let mut h = running_first().await;
     show(&mut h, "s2").await;
-    h.emit(
-        "input_queue",
-        json!({"queue": queue(vec![entry("i1", "follow_up", "later")], false)}),
-    )
-    .await;
+    let mut snapshot = crate::testing::snapshot_running(
+        "s1",
+        crate::testing::LOAD,
+        first(&h).recovery.revision + 1,
+        "l1",
+        entry("i1", "steer", "work in one"),
+    );
+    snapshot["queue"] = queue(vec![entry("i1", "follow_up", "later")], false);
+    h.snapshot_event(snapshot).await;
     h.settle().await;
     assert_eq!(first(&h).queue.items[0].text, "later");
     assert!(
@@ -643,13 +729,19 @@ async fn an_idle_background_session_is_deleted_and_a_late_result_for_it_goes_now
     delete_from_picker(&mut h, "s1");
     h.ctrl(KeyCode::Char('d'));
     h.settle().await;
-    assert_eq!(h.calls("session.delete")[0]["session_id"], "s1");
+    assert_eq!(
+        h.calls("session.close"),
+        [json!({
+            "session_id":"s1", "load":crate::testing::LOAD,
+        })]
+    );
+    assert_eq!(h.calls("session.delete"), [json!({"session_id":"s1"})]);
     assert!(h.app.live("s1").is_none());
-    assert!(h.app.background.is_empty());
+    assert!(h.app.resident.others().next().is_none());
 
     h.app
-        .session
-        .as_mut()
+        .resident
+        .current_mut()
         .unwrap()
         .transcript
         .push(Block::User {
@@ -657,10 +749,10 @@ async fn an_idle_background_session_is_deleted_and_a_late_result_for_it_goes_now
             kind: UserKind::Prompt,
             at: None,
         });
-    let late = crate::app::tasks::read_history(
+    let late = crate::app::read::read_history(
         h.fake.client.clone(),
         "s1".into(),
-        crate::app::tasks::Window::Tail,
+        crate::app::read::Window::Tail,
     )
     .await
     .unwrap();
@@ -694,8 +786,9 @@ async fn the_picker_lists_live_sessions_first() {
 async fn an_untitled_background_session_is_found_and_named_by_its_first_prompt() {
     let mut h = Harness::opened(page(1, 0, vec![user(0, "l0", "refactor the parser")])).await;
     h.fake
-        .script("session.open@s2", json!({"session": session_info("s2")}));
-    h.fake.script("session.read@s2", display_read(0, 0));
+        .script("session.open@s2", opened_session(session_info("s2")));
+    h.fake
+        .script("session.read@s2", history(display_read(0, 0)));
     show(&mut h, "s2").await;
     h.ctrl(KeyCode::Char('r'));
     h.type_text("parser");
@@ -800,7 +893,12 @@ async fn a_foreground_turn_end_is_the_sessions_latest_activity_in_the_phone_and_
     h.app.sessions.push(idle_session("s3"));
     let before = h.app.sessions[0].updated_at.clone();
     h.fake.release("turn.wait@s1");
-    h.until(|app| !app.is_busy()).await;
+    h.until(|app| {
+        !app.is_busy() && app.transcript_blocks().iter().any(|block| {
+        matches!(block, Block::TurnEnd { loop_id, duration: Some(_), .. } if loop_id == "l1")
+    })
+    })
+    .await;
     assert!(h.app.sessions[0].updated_at > before);
     assert_first_in_the_phone_and_picker_lists(&mut h).await;
 }
@@ -834,8 +932,7 @@ async fn the_phone_sees_live_sessions_and_switches_to_one_at_once() {
         "time alone sends nothing"
     );
 
-    h.emit("interaction_requested", approval_for("s1", "i1"))
-        .await;
+    ask_approval(&mut h, approval_for("s1", "i1")).await;
     h.settle().await;
     let state = synced_state(&mut h, &mut output).expect("a new state");
     assert_eq!(listed(&state, "s1")["status"], "approval");
@@ -848,7 +945,7 @@ async fn the_phone_sees_live_sessions_and_switches_to_one_at_once() {
             assert_eq!(message["ok"], true);
         }
     }
-    assert_eq!(h.app.session.as_ref().unwrap().info.session_id, "s1");
+    assert_eq!(h.app.resident.current().unwrap().info.session_id, "s1");
     assert_eq!(h.calls("session.open").len(), opens);
 }
 
@@ -858,7 +955,7 @@ async fn only_the_foreground_is_laid_out_and_an_unchanged_phone_frame_sends_noth
     for n in 0..20 {
         let id = format!("b{n}");
         let info: crate::protocol::SessionInfo = serde_json::from_value(session_info(&id)).unwrap();
-        let mut session = Session::new(info.clone(), 100 + n);
+        let mut session = Session::new(info.clone(), 100 + n, crate::testing::LOAD.into());
         for i in 0..500 {
             session.transcript.push(Block::User {
                 text: format!("message {i}"),
@@ -866,7 +963,7 @@ async fn only_the_foreground_is_laid_out_and_an_unchanged_phone_frame_sends_noth
                 at: None,
             });
         }
-        h.app.background.push(session);
+        h.app.resident.insert(session);
         h.app.sessions.push(info);
     }
     h.app.catalog_generation += 1;

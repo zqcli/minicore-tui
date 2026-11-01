@@ -14,8 +14,9 @@ const NO_SESSION: &str = "No session yet: send a message first";
 /// Scripts what the first message of a draft needs: a session and a running turn.
 fn script_first_message(h: &Harness) {
     h.fake
-        .script("session.create", json!({"session": session_info("s1")}));
-    h.fake.script("input.push", started("l1"));
+        .script("session.create", opened_session(session_info("s1")));
+    h.fake
+        .script("input.push", starting_reply("l1", h.next_revision()));
     h.fake.script_held("turn.wait", waited("l1", completed()));
 }
 
@@ -42,7 +43,7 @@ async fn the_first_submit_creates_the_session_with_the_draft_settings_then_sends
         h.calls("session.create").is_empty(),
         "booting creates nothing"
     );
-    assert!(h.app.session.is_none());
+    assert!(h.app.resident.current().is_none());
 
     let workspace = h.app.workspace.clone();
     h.submit("fix the greeting");
@@ -93,7 +94,7 @@ async fn the_draft_shows_the_welcome_header_and_creates_no_session() {
     for status in ["Connecting", "Creating", "Opening", "No session"] {
         assert!(!screen.contains(status), "no status line:\n{screen}");
     }
-    assert!(h.app.session.is_none());
+    assert!(h.app.resident.current().is_none());
     assert!(h.calls("session.create").is_empty());
 }
 
@@ -137,7 +138,7 @@ async fn a_failed_create_puts_the_text_back_and_enter_tries_again() {
 
     assert_eq!(h.app.composer.text(), "hello");
     assert_eq!(h.notices(), ["profile not found"]);
-    assert!(h.app.session.is_none());
+    assert!(h.app.resident.current().is_none());
     assert!(h.sends().is_empty());
 
     h.press(KeyCode::Enter);
@@ -149,10 +150,10 @@ async fn a_failed_create_puts_the_text_back_and_enter_tries_again() {
 async fn enter_while_the_session_is_being_created_keeps_the_text_in_the_editor() {
     let mut h = draft().await;
     h.fake
-        .script_held("session.create", json!({"session": session_info("s1")}));
+        .script_held("session.create", opened_session(session_info("s1")));
     h.submit("first");
     h.run_for(Duration::from_millis(50)).await;
-    assert!(h.app.session.is_none());
+    assert!(h.app.resident.current().is_none());
     let screen = h.screen(60, 20);
     assert!(screen.contains(HEADER), "{screen}");
     assert!(screen.contains("Creating the session…"), "{screen}");
@@ -187,20 +188,38 @@ async fn new_returns_to_the_draft_without_creating_and_records_the_profile() {
     );
     h.fake.script(
         "session.read",
-        page(1, 0, vec![user(0, "l0", "an old question")]),
+        history(page(1, 0, vec![user(0, "l0", "an old question")])),
     );
     h.open().await;
     assert_eq!(h.texts(), ["an old question"]);
-    let old = h.app.session.as_ref().unwrap().epoch;
+    let old = h.app.resident.current().unwrap().epoch;
     script_first_message(&h);
     // The session left for the draft stays live, so the new one has its own id.
     h.fake
-        .script("session.create", json!({"session": session_info("s2")}));
+        .script("session.create", opened_session(session_info("s2")));
+    h.fake.script(
+        "input.push@s2",
+        after_snapshot(
+            started_in(json!({"session_id":"s2","loop_id":"l1"}), vec![]),
+            crate::testing::snapshot_running(
+                "s2",
+                crate::testing::LOAD,
+                2,
+                "l1",
+                entry("i1", "steer", "$text"),
+            ),
+        )
+        .with_request_text(),
+    );
+    h.fake.script_held(
+        "turn.wait@s2",
+        json!({"turn":{"session_id":"s2","loop_id":"l1"},"outcome":completed()}),
+    );
 
     h.type_text("/new ask");
     h.press(KeyCode::Enter);
     h.settle().await;
-    assert!(h.app.session.is_none());
+    assert!(h.app.resident.current().is_none());
     assert!(h.calls("session.create").is_empty());
     assert_eq!(h.app.launch.profile.as_deref(), Some("ask"));
     let screen = h.screen(60, 12);
@@ -220,7 +239,7 @@ async fn new_returns_to_the_draft_without_creating_and_records_the_profile() {
     assert_eq!(create.len(), 1);
     assert_eq!(create[0]["profile"], "ask");
     assert_ne!(
-        h.app.session.as_ref().unwrap().epoch,
+        h.app.resident.current().unwrap().epoch,
         old,
         "results for the old session cannot reach the new one"
     );
@@ -349,8 +368,8 @@ async fn the_sessions_picker_opens_an_existing_session_from_the_draft() {
     let mut h = draft().await;
     h.ctrl(KeyCode::Char('r'));
     h.press(KeyCode::Enter);
-    h.until(|app| app.session.is_some()).await;
-    assert_eq!(h.app.session.as_ref().unwrap().info.session_id, "s1");
+    h.until(|app| app.resident.current().is_some()).await;
+    assert_eq!(h.app.resident.current().unwrap().info.session_id, "s1");
     assert!(h.calls("session.create").is_empty());
 }
 

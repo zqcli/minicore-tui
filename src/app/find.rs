@@ -201,7 +201,7 @@ impl App {
     /// Opens the thinking or tool output a match sits in when it is folded.
     fn reveal(&mut self, found: FindMatch) {
         let all = self.tools_expanded;
-        let Some(session) = self.session.as_mut() else {
+        let Some(session) = self.resident.current_mut() else {
             return;
         };
         match (found.field, session.transcript.block_mut(found.block)) {

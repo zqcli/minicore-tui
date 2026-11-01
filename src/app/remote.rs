@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use serde_json::json;
 
+use super::operation::{Operation, Outcome};
 use super::{Action, App, LaunchSettings, Msg, NoticeLevel, Overlay, commands, tasks};
 use crate::protocol::{self, InputMode, Reasoning};
 use crate::remote::{
@@ -62,8 +63,8 @@ impl App {
 
     pub fn enter_remote(&mut self, bound: Bound) {
         if self
-            .session
-            .as_ref()
+            .resident
+            .current()
             .is_some_and(|s| !s.queue.items.is_empty())
         {
             self.recall_queue();
@@ -92,7 +93,7 @@ impl App {
                     self.launch = draft.launch;
                 }
                 self.remote.stop("remote_off");
-                if let Some(session) = &mut self.session {
+                if let Some(session) = self.resident.current_mut() {
                     let returned = std::mem::take(&mut session.returned);
                     for text in returned {
                         self.restore_draft(&text);
@@ -268,10 +269,9 @@ impl App {
             RemoteEvent::Finished {
                 connection,
                 id,
-                method,
                 result,
             } => {
-                self.phone_finished(connection, id, method, result);
+                self.phone_finished(connection, id, result);
             }
             RemoteEvent::Disconnected(id) => {
                 self.remote.disconnected(id);
@@ -415,7 +415,7 @@ impl App {
             self.focus_phone(connection);
         }
         let result = self.remote_intent(connection, id, intent, &view_epoch, session_id);
-        if focus && self.session.is_none() {
+        if focus && self.resident.current().is_none() {
             let draft = DraftSettings {
                 workspace: self.workspace.clone(),
                 launch: std::mem::take(&mut self.launch),
@@ -487,7 +487,7 @@ impl App {
         let session = self
             .live(bound)
             .expect("the phone views a resident session");
-        if session.load.as_deref() != Some(load) {
+        if session.load != load {
             return Some("stale_load");
         }
         if let Intent::Answer {
@@ -551,12 +551,12 @@ impl App {
         self.launch = LaunchSettings::default();
         match view {
             PhoneView::Session(id) => {
-                if let Some(index) = self.live_index(&id) {
-                    self.switch_to(index);
+                if let Some(epoch) = self.live(&id).map(|session| session.epoch) {
+                    self.switch_to(epoch);
                 }
             }
             PhoneView::Draft(draft) => {
-                if self.session.is_some() {
+                if self.resident.current().is_some() {
                     self.show_session(None);
                 }
                 self.workspace = draft.workspace;
@@ -575,9 +575,8 @@ impl App {
             return;
         };
         if let Some(id) = view.session_id() {
-            self.session
+            self.resident
                 .iter_mut()
-                .chain(&mut self.background)
                 .find(|session| session.info.session_id == id)
                 .expect("a phone views a live session")
                 .unseen = false;
@@ -587,8 +586,8 @@ impl App {
 
     pub(super) fn forget_phone_session(&mut self, id: &str) {
         let foreground = self
-            .session
-            .as_ref()
+            .resident
+            .current()
             .is_some_and(|session| session.info.session_id == id);
         if foreground {
             self.show_session(None);
@@ -617,6 +616,10 @@ impl App {
         view_epoch: &str,
         session_id: Option<String>,
     ) -> Option<Result<Option<serde_json::Value>, wire::Refusal>> {
+        let epoch = session_id
+            .as_deref()
+            .and_then(|id| self.live(id))
+            .map(|session| session.epoch);
         match intent {
             Intent::Submit { text, .. } => {
                 self.remote_text(connection, id, text, false, view_epoch, session_id)
@@ -632,36 +635,36 @@ impl App {
                 // Only the turn the phone was shown may be cancelled. Without a
                 // turn on screen the phone cancels the compaction it showed; with
                 // neither, there is nothing to stop.
-                let live = self
-                    .session
-                    .as_ref()
+                let live = epoch
+                    .and_then(|epoch| self.resident.get(epoch))
                     .and_then(|s| s.live.as_ref())
                     .map(|live| live.turn.loop_id.clone());
-                let (method, fields) = match (loop_id, live) {
+                let operation = match (loop_id, live) {
                     (Some(named), Some(current)) if named == current && operation_id.is_none() => {
-                        (protocol::METHOD_TURN_CANCEL, json!({"loop_id": named}))
+                        Operation::CancelTurn(named)
                     }
                     (Some(_), Some(_)) => return Some(Err(wire::Refusal::new("stale"))),
                     (Some(_), None) => return Some(Err(wire::Refusal::new("stale"))),
                     (None, Some(_)) => return Some(Err(wire::Refusal::new("stale"))),
                     (None, None) => {
-                        let current = self.session.as_ref().and_then(|s| s.compaction.as_ref());
+                        let current = epoch
+                            .and_then(|epoch| self.resident.get(epoch))
+                            .and_then(|s| s.compaction.as_ref());
                         match (operation_id, current) {
-                            (Some(named), Some(current)) if named == current.operation_id => (
-                                protocol::METHOD_SESSION_COMPACT_CANCEL,
-                                json!({"operation_id": named}),
-                            ),
+                            (Some(named), Some(current)) if named == current.operation_id => {
+                                Operation::CancelCompaction(named)
+                            }
                             (None, None) => return Some(Ok(None)),
                             _ => return Some(Err(wire::Refusal::new("stale"))),
                         }
                     }
                 };
-                self.hold_phone_command(connection, id, view_epoch, session_id, None, None);
-                self.call_phone_command(connection, id.to_owned(), method, fields, None);
+                self.hold_phone_command(connection, id, view_epoch, session_id, None);
+                self.call_phone_command(connection, id.to_owned(), operation, None);
                 None
             }
             Intent::Compact { .. } => {
-                let Some(session) = self.session.as_ref() else {
+                let Some(session) = epoch.and_then(|epoch| self.resident.get(epoch)) else {
                     return Some(Err(wire::Refusal::new("No session")));
                 };
                 if session.is_busy() || session.compacting() {
@@ -671,21 +674,17 @@ impl App {
                     .op_seq
                     .checked_add(1)
                     .expect("operation identity exhausted");
-                let fields = json!({"operation_id":format!("tui-{}", self.op_seq)});
-                self.hold_phone_command(connection, id, view_epoch, session_id, None, None);
-                self.call_phone_command(
-                    connection,
-                    id.to_owned(),
-                    protocol::METHOD_SESSION_COMPACT,
-                    fields,
-                    None,
-                );
+                let operation = Operation::Compact(format!("tui-{}", self.op_seq));
+                self.hold_phone_command(connection, id, view_epoch, session_id, None);
+                self.call_phone_command(connection, id.to_owned(), operation, None);
                 None
             }
             Intent::Unqueue { input_id, edit, .. } => {
-                let queued = self.session.as_ref().and_then(|session| {
-                    session.queue.items.iter().find(|item| item.id == input_id)
-                });
+                let queued = epoch
+                    .and_then(|epoch| self.resident.get(epoch))
+                    .and_then(|session| {
+                        session.queue.items.iter().find(|item| item.id == input_id)
+                    });
                 if queued.is_none() {
                     return Some(Err(wire::Refusal::rejected("input_not_queued")));
                 }
@@ -695,8 +694,12 @@ impl App {
                         id: id.to_owned(),
                         view_epoch: view_epoch.to_owned(),
                         session_id,
-                        load: self.session.as_ref().and_then(|s| s.load.clone()),
-                        epoch: self.session.as_ref().map(|s| s.epoch),
+                        load: epoch
+                            .and_then(|epoch| self.resident.get(epoch))
+                            .map(|s| s.load.clone()),
+                        epoch: epoch
+                            .and_then(|epoch| self.resident.get(epoch))
+                            .map(|s| s.epoch),
                         focus_generation: self.remote.focus_generation,
                         kind: crate::remote::PendingKind::Unqueue {
                             input_id: input_id.clone(),
@@ -708,68 +711,51 @@ impl App {
                 None
             }
             Intent::Answer {
-                loop_id,
-                interaction_id,
-                choice,
-                message,
-                ..
+                choice, message, ..
             } => {
-                let interaction = self
-                    .session
-                    .as_ref()
+                let interaction = epoch
+                    .and_then(|epoch| self.resident.get(epoch))
                     .and_then(|s| s.interaction.as_ref())
                     .expect("the answer target was validated before admission");
-                let (answer, allow_tool) = match (choice, &interaction.kind) {
+                let answer = match (choice, &interaction.kind) {
                     (Choice::Text { text }, super::InteractionKind::Text) => {
-                        (json!({"type":"text", "text":text}), None)
+                        super::Answer::Text(text)
                     }
                     (Choice::Name(name), super::InteractionKind::Approval) => match name.as_str() {
-                        "allow" => (json!({"type":"approval", "decision":"allow_once"}), None),
-                        "allow_session" => (
-                            json!({"type":"approval", "decision":"allow_once"}),
-                            Some(interaction.tool_name.clone()),
-                        ),
-                        "deny" => (json!({"type":"approval", "decision":"deny"}), None),
+                        "allow" => super::Answer::Allow,
+                        "allow_session" => super::Answer::AllowTool,
+                        "deny" => super::Answer::Deny,
                         _ => return Some(Err(wire::Refusal::new("bad_request"))),
                     },
                     (Choice::Index(index), super::InteractionKind::Choice(options))
                         if index < options.len() =>
                     {
-                        (json!({"type":"choice", "index":index}), None)
+                        super::Answer::Choice(index)
                     }
                     _ => return Some(Err(wire::Refusal::new("bad_request"))),
                 };
                 if message.as_ref().is_some_and(|message| {
-                    answer["decision"] != "deny" || message.trim().is_empty()
+                    answer != super::Answer::Deny || message.trim().is_empty()
                 }) {
                     return Some(Err(wire::Refusal::new("bad_request")));
                 }
-                self.hold_phone_command(
-                    connection,
-                    id,
-                    view_epoch,
-                    session_id,
-                    allow_tool,
-                    answer
-                        .get("text")
-                        .and_then(serde_json::Value::as_str)
-                        .map(str::to_owned)
-                        .or_else(|| message.clone()),
-                );
-                self.call_phone_command(
-                    connection,
-                    id.to_owned(),
-                    protocol::METHOD_INTERACTION_ANSWER,
-                    json!({"loop_id":loop_id, "interaction_id":interaction_id, "answer":answer}),
-                    message,
-                );
+                let retained = match &answer {
+                    super::Answer::Text(text) => Some(text.clone()),
+                    _ => message.clone(),
+                };
+                let operation = match super::operation::answer(interaction, answer) {
+                    Ok(Some(operation)) => operation,
+                    _ => return Some(Err(wire::Refusal::new("bad_request"))),
+                };
+                self.hold_phone_command(connection, id, view_epoch, session_id, retained);
+                self.call_phone_command(connection, id.to_owned(), operation, message);
                 None
             }
             Intent::LoadOlder { .. } => {
-                if self.session.is_none() {
+                if epoch.and_then(|epoch| self.resident.get(epoch)).is_none() {
                     return Some(Err(wire::Refusal::new("No session")));
                 }
-                self.load_older();
+                self.load_older_for(epoch.unwrap());
                 Some(Ok(None))
             }
             Intent::OpenSession { session_id, .. } => {
@@ -784,14 +770,8 @@ impl App {
                 if title.trim().chars().count() > 200 || title.chars().any(char::is_control) {
                     return Some(Err(wire::Refusal::new("bad_request")));
                 }
-                self.hold_phone_command(connection, id, view_epoch, Some(session_id), None, None);
-                self.call_phone_command(
-                    connection,
-                    id.to_owned(),
-                    protocol::METHOD_SESSION_RENAME,
-                    json!({"title":title.trim()}),
-                    None,
-                );
+                self.hold_phone_command(connection, id, view_epoch, Some(session_id), None);
+                self.call_phone_command(connection, id.to_owned(), Operation::Rename(title), None);
                 None
             }
             Intent::DeleteSession { session_id, .. } => {
@@ -807,20 +787,24 @@ impl App {
                 if !self.models.iter().any(|m| m.id == model) {
                     return Some(Err(wire::Refusal::new("Unknown model")));
                 }
-                if self.session.is_none() {
+                if epoch.and_then(|epoch| self.resident.get(epoch)).is_none() {
                     self.set_model(model);
                     Some(Ok(None))
                 } else {
                     let mut fields = json!({"model":model});
-                    if let Some(level) = self.reasoning_for(&model) {
+                    if let Some(level) = self.reasoning_for_level(
+                        &model,
+                        self.resident
+                            .get(epoch.unwrap())
+                            .map(|session| session.info.reasoning),
+                    ) {
                         fields["reasoning"] = json!(level);
                     }
-                    self.hold_phone_command(connection, id, view_epoch, session_id, None, None);
+                    self.hold_phone_command(connection, id, view_epoch, session_id, None);
                     self.call_phone_command(
                         connection,
                         id.to_owned(),
-                        protocol::METHOD_SESSION_UPDATE,
-                        fields,
+                        Operation::Update(fields),
                         None,
                     );
                     None
@@ -830,16 +814,15 @@ impl App {
                 let Some(level) = Reasoning::parse(&level) else {
                     return Some(Err(wire::Refusal::new("Unknown reasoning level")));
                 };
-                if self.session.is_none() {
+                if epoch.and_then(|epoch| self.resident.get(epoch)).is_none() {
                     self.set_reasoning(level);
                     Some(Ok(None))
                 } else {
-                    self.hold_phone_command(connection, id, view_epoch, session_id, None, None);
+                    self.hold_phone_command(connection, id, view_epoch, session_id, None);
                     self.call_phone_command(
                         connection,
                         id.to_owned(),
-                        protocol::METHOD_SESSION_UPDATE,
-                        json!({"reasoning":level}),
+                        Operation::Update(json!({"reasoning":level})),
                         None,
                     );
                     None
@@ -863,7 +846,7 @@ impl App {
             self.focus_phone(connection);
             return Some(Ok(None));
         } else {
-            if self.session.is_none() {
+            if self.resident.current().is_none() {
                 self.remote.draft = Some(DraftSettings {
                     workspace: self.workspace.clone(),
                     launch: self.draft_launch().clone(),
@@ -935,21 +918,8 @@ impl App {
         if let Some(refusal) = self.delete_refusal(&session_id) {
             return Err(wire::Refusal::new(refusal));
         }
-        self.hold_phone_command(
-            connection,
-            operation,
-            view_epoch,
-            Some(session_id),
-            None,
-            None,
-        );
-        self.call_phone_command(
-            connection,
-            operation.to_owned(),
-            protocol::METHOD_SESSION_DELETE,
-            json!({}),
-            None,
-        );
+        self.hold_phone_command(connection, operation, view_epoch, Some(session_id), None);
+        self.call_phone_command(connection, operation.to_owned(), Operation::Delete, None);
         Ok(())
     }
 
@@ -1014,11 +984,15 @@ impl App {
                 "A session is opening or being created",
             )));
         }
+        let target = session_id
+            .as_deref()
+            .and_then(|id| self.live(id))
+            .map(|session| (session.epoch, session.load.clone()));
         let mode = match follow {
             true => InputMode::FollowUp,
             false => InputMode::Steer,
         };
-        if self.session.is_none() {
+        if target.is_none() {
             // A draft creates its session first. The push of its first text is
             // made by this operation, so it answers that operation either way.
             self.hold_pending(
@@ -1046,8 +1020,8 @@ impl App {
                 id: id.to_owned(),
                 view_epoch: view_epoch.to_owned(),
                 session_id,
-                load: self.session.as_ref().and_then(|s| s.load.clone()),
-                epoch: self.session.as_ref().map(|s| s.epoch),
+                load: target.as_ref().map(|(_, load)| load.clone()),
+                epoch: target.map(|(epoch, _)| epoch),
                 focus_generation: self.remote.focus_generation,
                 kind: crate::remote::PendingKind::Input { text: text.clone() },
             },
@@ -1123,47 +1097,37 @@ impl App {
             );
             return;
         }
-        let current = PhoneView::foreground(self);
-        let launch = std::mem::take(&mut self.launch);
-        let draft = self.remote.draft.clone();
         let unchanged = self.remote.phones.iter().any(|phone| {
             phone.connection.id == connection && phone.projection.view_epoch() == pending.view_epoch
         });
         let keep_focus = unchanged && self.remote.focus_generation == pending.focus_generation;
         let typed = (keep_focus
-            && self.session.is_none()
+            && self.resident.current().is_none()
             && matches!(pending.kind, crate::remote::PendingKind::DraftInput { .. }))
         .then(|| self.composer.text().to_owned());
         pending.session_id = Some(created.info.session_id.clone());
         pending.load = Some(created.load.clone());
-        self.adopt(Ok(created), None);
+        let epoch = match self.install_session(created, keep_focus, true) {
+            Ok(epoch) => epoch,
+            Err(error) => {
+                self.phone_answer(connection, &id, Err(wire::Refusal::new(error.message)));
+                return;
+            }
+        };
+        if keep_focus {
+            self.launch = super::LaunchSettings::default();
+            self.remote.draft = None;
+        }
         if let Some(typed) = typed {
             self.draft_text.clear();
             self.composer.set_text(&typed);
         }
-        pending.epoch = self
-            .live(pending.session_id.as_deref().unwrap())
-            .map(|s| s.epoch);
+        pending.epoch = Some(epoch);
         if unchanged {
             self.set_phone_view(
                 connection,
                 PhoneView::Session(pending.session_id.clone().unwrap()),
             );
-        }
-        if !keep_focus {
-            match current {
-                PhoneView::Session(id) => {
-                    if let Some(index) = self.live_index(&id) {
-                        self.switch_to(index);
-                    }
-                }
-                PhoneView::Draft(settings) => {
-                    self.show_session(None);
-                    self.workspace = settings.workspace;
-                }
-            }
-            self.launch = launch;
-            self.remote.draft = draft;
         }
         let crate::remote::PendingKind::DraftInput { text, mode } = &pending.kind else {
             self.phone_answer(connection, &id, Ok(None));
@@ -1220,25 +1184,15 @@ impl App {
         let Some(pending) = self.remote.release_pending(connection, &id) else {
             return;
         };
+        let result = result.and_then(|receipt| {
+            tasks::accepted_input(
+                receipt,
+                pending.session_id.as_deref().expect("input target"),
+                pending.load.as_deref().expect("input load"),
+            )
+        });
         let reply = match &result {
-            Ok(pushed)
-                if pushed.accepted
-                    && pushed.id.is_some()
-                    && pushed
-                        .session_id
-                        .as_ref()
-                        .is_none_or(|id| Some(id) == pending.session_id.as_ref())
-                    && pushed
-                        .load
-                        .as_ref()
-                        .is_none_or(|load| Some(load) == pending.load.as_ref()) =>
-            {
-                Ok(Some(self.pushed_fields(&pending, pushed)))
-            }
-            Ok(_) => Err(wire::Refusal {
-                error: "Invalid input acceptance receipt".into(),
-                acceptance: Some(crate::protocol::Acceptance::Unknown),
-            }),
+            Ok(pushed) => Ok(Some(self.pushed_fields(&pending, pushed))),
             Err(error) => Err(self.pushed_refusal(error)),
         };
         self.remote.send(Some(connection), wire::ack(&id, reply));
@@ -1253,9 +1207,7 @@ impl App {
     ) -> serde_json::Value {
         let mut fields =
             json!({"accepted": true, "session_id":pending.session_id, "load":pending.load});
-        if let Some(input_id) = pushed.id.as_ref() {
-            fields["input_id"] = json!(input_id);
-        }
+        fields["input_id"] = json!(pushed.id);
         if let Some(accepted_at) = pushed.accepted_at.as_ref() {
             fields["accepted_at"] = json!(accepted_at);
         }
@@ -1337,28 +1289,13 @@ impl App {
     }
 
     fn refresh_phone_target(&mut self, pending: &crate::remote::PendingIntent) {
-        let (Some(id), Some(load), Some(epoch)) =
-            (&pending.session_id, &pending.load, pending.epoch)
-        else {
-            return;
-        };
-        if !self
-            .live(id)
-            .is_some_and(|s| s.epoch == epoch && s.load.as_ref() == Some(load))
+        if let Some(epoch) = pending.epoch
+            && self.resident.get(epoch).is_some_and(|session| {
+                Some(&session.info.session_id) == pending.session_id.as_ref()
+                    && Some(&session.load) == pending.load.as_ref()
+            })
         {
-            return;
-        }
-        if self
-            .session
-            .as_ref()
-            .is_some_and(|session| session.epoch == epoch)
-        {
-            self.refresh_control();
-        } else {
-            let index = self
-                .live_index(id)
-                .expect("the verified target is resident");
-            self.with_background(index, Self::refresh_control);
+            self.refresh_control_for(epoch);
         }
     }
 
@@ -1368,11 +1305,10 @@ impl App {
         id: &str,
         view_epoch: &str,
         session_id: Option<String>,
-        allow_tool: Option<String>,
         text: Option<String>,
     ) {
         let session = session_id.as_deref().and_then(|id| self.live(id));
-        let load = session.and_then(|s| s.load.clone());
+        let load = session.map(|s| s.load.clone());
         let epoch = session.map(|s| s.epoch);
         self.remote.hold_pending(
             connection,
@@ -1383,7 +1319,7 @@ impl App {
                 load,
                 epoch,
                 focus_generation: self.remote.focus_generation,
-                kind: crate::remote::PendingKind::Command { allow_tool, text },
+                kind: crate::remote::PendingKind::Command { text },
             },
         );
     }
@@ -1392,57 +1328,27 @@ impl App {
         &self,
         connection: u64,
         id: String,
-        method: &'static str,
-        mut fields: serde_json::Value,
+        operation: Operation,
         message: Option<String>,
     ) {
         let pending = self
             .remote
             .pending(connection, &id)
             .expect("a held phone command");
-        fields["session_id"] = json!(pending.session_id);
-        if let Some(load) = &pending.load {
-            fields["load"] = json!(load);
-        }
-        let push = message.map(|text| {
-            json!({"session_id":pending.session_id, "load":pending.load,
-            "mode":"steer", "text":text.trim_end()})
-        });
+        let session_id = pending.session_id.clone().expect("a session command");
+        let load = pending.load.clone();
         let client = self.client.clone();
         self.spawn_msg(async move {
             let result = async {
-                if method == protocol::METHOD_SESSION_DELETE && fields.get("load").is_some() {
-                    client
-                        .call::<_, serde_json::Value>(protocol::METHOD_SESSION_CLOSE, &fields)
-                        .await?;
+                let outcome = operation.execute(&client, &session_id, load.as_deref()).await?;
+                if let Some(text) = message {
+                    let fields = json!({"session_id":session_id,"load":load,"mode":"steer","text":text.trim_end()});
+                    let receipt = client.call(protocol::METHOD_INPUT_PUSH, &fields).await?;
+                    tasks::accepted_input(receipt, &session_id, load.as_deref().expect("an answer targets a loaded session"))?;
                 }
-                let answer: serde_json::Value = client.call(method, &fields).await?;
-                if method == protocol::METHOD_SESSION_COMPACT
-                    && answer["operation_id"] != fields["operation_id"]
-                {
-                    return Err(crate::protocol::RpcError::new(
-                        protocol::INVALID_PARAMS,
-                        "malformed_result",
-                        "Compaction operation identity changed",
-                    ));
-                }
-                if let Some(push) = push {
-                    client
-                        .call::<_, crate::protocol::InputPushResult>(
-                            protocol::METHOD_INPUT_PUSH,
-                            &push,
-                        )
-                        .await?;
-                }
-                Ok(answer)
-            }
-            .await;
-            Msg::Remote(RemoteEvent::Finished {
-                connection,
-                id,
-                method,
-                result,
-            })
+                Ok(outcome)
+            }.await;
+            Msg::Remote(RemoteEvent::Finished { connection, id, result })
         });
     }
 
@@ -1450,73 +1356,20 @@ impl App {
         &mut self,
         connection: u64,
         id: String,
-        method: &'static str,
-        result: Result<serde_json::Value, crate::protocol::RpcError>,
+        result: Result<Outcome, crate::protocol::RpcError>,
     ) {
         let Some(pending) = self.remote.release_pending(connection, &id) else {
             return;
         };
-        if result.is_ok()
-            && let crate::remote::PendingKind::Command {
-                allow_tool: Some(tool),
-                ..
-            } = &pending.kind
-            && let Some(session) = self
-                .session
-                .iter_mut()
-                .chain(&mut self.background)
-                .find(|s| {
-                    Some(s.epoch) == pending.epoch
-                        && s.load == pending.load
-                        && Some(&s.info.session_id) == pending.session_id.as_ref()
-                })
-        {
-            session.allowed_tools.insert(tool.clone());
-        }
         let reply = result
-            .and_then(|value| {
-                let malformed = |error: serde_json::Error| {
-                    crate::protocol::RpcError::new(
-                        protocol::INVALID_PARAMS,
-                        "malformed_result",
-                        error.to_string(),
-                    )
-                };
-                match method {
-                    protocol::METHOD_SESSION_DELETE => {
-                        self.on_msg(Msg::Deleted(pending.session_id.clone().unwrap(), Ok(())));
-                    }
-                    protocol::METHOD_SESSION_UPDATE | protocol::METHOD_SESSION_RENAME => {
-                        let info = serde_json::from_value::<crate::protocol::SessionResult>(value)
-                            .map_err(malformed)?;
-                        if Some(&info.session.session_id) != pending.session_id.as_ref() {
-                            return Err(crate::protocol::RpcError::new(
-                                protocol::INVALID_PARAMS,
-                                "malformed_result",
-                                "Session operation identity changed",
-                            ));
-                        }
-                        if let Some(epoch) = pending.epoch {
-                            self.on_msg(Msg::Session(
-                                epoch,
-                                Box::new(super::SessionOp::Info(Ok(info.session))),
-                            ));
-                        } else {
-                            self.merge_catalog_info(info.session);
-                        }
-                    }
-                    protocol::METHOD_SESSION_COMPACT => {
-                        let compacted = serde_json::from_value(value).map_err(malformed)?;
-                        if let Some(epoch) = pending.epoch {
-                            self.on_msg(Msg::Session(
-                                epoch,
-                                Box::new(super::SessionOp::Compacted(Ok(compacted))),
-                            ));
-                        }
-                    }
-                    _ => {}
-                }
-                Ok(None)
+            .map(|outcome| {
+                self.with_notice_for(
+                    pending.session_id.as_deref().expect("a session command"),
+                    |app| {
+                        app.apply_operation(pending.epoch, outcome);
+                    },
+                );
+                None
             })
             .map_err(|error| wire::Refusal::new(error.message));
         self.remote.send(Some(connection), wire::ack(&id, reply));
@@ -1549,16 +1402,16 @@ impl App {
     /// Shows session `id`: at once when it is live, else opened in the Agent.
     pub fn open_session(&mut self, id: String) {
         if self
-            .session
-            .as_ref()
+            .resident
+            .current()
             .is_some_and(|session| session.info.session_id == id)
         {
             return;
         }
-        if let Some(index) = self.live_index(&id) {
+        if let Some(epoch) = self.live(&id).map(|session| session.epoch) {
             // The session being created takes the screen when it arrives.
             if self.first_message.is_none() {
-                self.switch_to(index);
+                self.switch_to(epoch);
             }
             return;
         }

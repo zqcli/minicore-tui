@@ -93,6 +93,7 @@ impl App {
 
     pub(super) fn push_local_input(
         &mut self,
+        epoch: u64,
         mut entry: Entry,
         mode: InputMode,
         retry_of: Option<u64>,
@@ -111,15 +112,12 @@ impl App {
             return;
         }
         let session = self
-            .session
-            .as_ref()
+            .resident
+            .get(epoch)
             .expect("local input has a resident session");
         let target = Target {
             session_id: session.info.session_id.clone(),
-            load: session
-                .load
-                .clone()
-                .expect("local input has an installed load"),
+            load: session.load.clone(),
             epoch: session.epoch,
         };
         self.op_seq = self
@@ -154,45 +152,32 @@ impl App {
         }
         let target = self.local_inputs[index].target.clone();
         let result = result.and_then(|receipt| {
-            if receipt.accepted
-                && receipt
-                    .session_id
-                    .as_ref()
-                    .is_none_or(|session| *session == target.session_id)
-                && receipt
-                    .load
-                    .as_ref()
-                    .is_none_or(|load| *load == target.load)
-            {
-                Ok(receipt)
-            } else {
-                Err(RpcError::new(
-                    -32603,
-                    "unconfirmed_receipt",
-                    "The acceptance receipt did not confirm this operation's target",
-                ))
-            }
+            super::tasks::accepted_input(receipt, &target.session_id, &target.load)
         });
         match result {
             Ok(receipt) => {
                 let input = self.local_inputs.remove(index).unwrap();
-                self.composer.remember(input.entry);
+                if self.composer.remember(input.entry)
+                    && let Some(home) = &self.home
+                {
+                    self.local_files.history(
+                        &self.tx,
+                        home.history_file(),
+                        self.composer.history_records(),
+                    );
+                }
                 if let Some(error) = receipt.start_error {
                     self.notice(
                         NoticeLevel::Error,
                         format!("Input tui-{id} was accepted; {}", error.message),
                     );
                 }
-                if self.session.as_ref().is_some_and(|session| {
-                    session.epoch == target.epoch
-                        && session.load.as_deref() == Some(target.load.as_str())
-                }) {
-                    self.refresh_control();
-                } else if let Some(index) = self.background.iter().position(|session| {
-                    session.epoch == target.epoch
-                        && session.load.as_deref() == Some(target.load.as_str())
-                }) {
-                    self.with_background(index, App::refresh_control);
+                if self
+                    .resident
+                    .get(target.epoch)
+                    .is_some_and(|session| session.load == target.load)
+                {
+                    self.refresh_control_for(target.epoch);
                 }
             }
             Err(error) if error.acceptance == Some(Acceptance::Rejected) => {
@@ -202,9 +187,8 @@ impl App {
                     && self.composer.is_empty()
                     && self.composer.version() == input.draft_version
                     && !self.remote.active()
-                    && self.session.as_ref().is_some_and(|session| {
-                        session.epoch == target.epoch
-                            && session.load.as_deref() == Some(target.load.as_str())
+                    && self.resident.current().is_some_and(|session| {
+                        session.epoch == target.epoch && session.load == target.load
                     });
                 if restore {
                     let input = self.local_inputs.remove(index).unwrap();
@@ -273,10 +257,9 @@ impl App {
         let mode = input.mode;
         let retry_of = input.id;
         if self.fatal.is_some()
-            || !self.live(&target.session_id).is_some_and(|session| {
-                session.load.as_deref() == Some(target.load.as_str())
-                    && session.epoch == target.epoch
-            })
+            || !self
+                .live(&target.session_id)
+                .is_some_and(|session| session.load == target.load && session.epoch == target.epoch)
         {
             self.notice(
                 NoticeLevel::Error,
@@ -317,21 +300,7 @@ impl App {
             );
             return;
         }
-        if self
-            .session
-            .as_ref()
-            .is_some_and(|session| session.epoch == target.epoch)
-        {
-            self.push_local_input(entry, mode, Some(retry_of));
-        } else if let Some(index) = self
-            .background
-            .iter()
-            .position(|session| session.epoch == target.epoch)
-        {
-            self.with_background(index, |app| {
-                app.push_local_input(entry, mode, Some(retry_of))
-            });
-        }
+        self.push_local_input(target.epoch, entry, mode, Some(retry_of));
         self.set_review_mode(ReviewMode::List);
         self.unconfirmed_editor = Composer::new();
     }

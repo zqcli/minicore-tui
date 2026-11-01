@@ -54,7 +54,7 @@ impl App {
 
     /// The model the next message runs on: the session's, else the one a new session would get.
     pub fn model_id(&self) -> Option<&str> {
-        match &self.session {
+        match self.resident.current() {
             Some(session) => Some(&session.info.model),
             None => self
                 .draft_launch()
@@ -64,7 +64,7 @@ impl App {
 
     /// The reasoning level of the next message, resolved like [`App::model_id`].
     pub fn reasoning(&self) -> Option<Reasoning> {
-        match &self.session {
+        match self.resident.current() {
             Some(session) => Some(session.info.reasoning),
             None => self
                 .draft_launch()
@@ -75,7 +75,7 @@ impl App {
     /// Switches the session's model, or the draft's; a reasoning level the
     /// model lacks moves to the nearest one it has in the same request.
     pub(super) fn set_model(&mut self, id: String) {
-        if self.session.is_some() {
+        if self.resident.current().is_some() {
             let mut fields = json!({ "model": id });
             if let Some(level) = self.reasoning_for(&id) {
                 fields["reasoning"] = json!(level);
@@ -92,7 +92,15 @@ impl App {
     /// The level to switch to when `model` does not support the current one,
     /// with a notice saying so.
     pub(super) fn reasoning_for(&mut self, model: &str) -> Option<Reasoning> {
-        let current = self.reasoning()?;
+        self.reasoning_for_level(model, self.reasoning())
+    }
+
+    pub(super) fn reasoning_for_level(
+        &mut self,
+        model: &str,
+        current: Option<Reasoning>,
+    ) -> Option<Reasoning> {
+        let current = current?;
         let supported = &self
             .models
             .iter()
@@ -113,7 +121,7 @@ impl App {
 
     /// Sets the session's reasoning level, or the draft's.
     pub(super) fn set_reasoning(&mut self, level: Reasoning) {
-        if self.session.is_some() {
+        if self.resident.current().is_some() {
             self.update_session(json!({ "reasoning": level }));
         } else {
             self.launch.reasoning = Some(level);

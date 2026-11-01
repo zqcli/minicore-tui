@@ -4,9 +4,8 @@
 use serde_json::{Value, json};
 
 use super::draft::NO_SESSION;
-use super::{
-    App, InteractionKind, Msg, NoticeLevel, Scroll, SessionOp, commands, tasks, templates,
-};
+use super::operation::Operation;
+use super::{App, InteractionKind, Msg, NoticeLevel, Scroll, SessionOp, commands, read, tasks};
 use crate::config::ThemeKind;
 use crate::protocol::{self, InputMode, Reasoning};
 use crate::title::LONG_TURN;
@@ -81,7 +80,7 @@ impl App {
             self.remote_flash();
             return;
         }
-        if self.session.is_none() && action.needs_session() {
+        if self.resident.current().is_none() && action.needs_session() {
             self.notice(NoticeLevel::Info, NO_SESSION);
             return;
         }
@@ -98,7 +97,8 @@ impl App {
             }
             Action::DeleteSession(id) => {
                 let client = self.client.clone();
-                self.spawn_msg(tasks::delete_session(client, id));
+                let load = self.live(&id).map(|session| session.load.clone());
+                self.spawn_msg(tasks::delete_session(client, id, load));
             }
             Action::Rename(title) => self.rename(&title),
             Action::SetModel(id) => self.set_model(id),
@@ -111,7 +111,7 @@ impl App {
             Action::Compact => self.compact(),
             Action::CopyLastAnswer => self.copy_last_answer(),
             Action::Export(path) => {
-                if let Some(session) = self.session.as_ref() {
+                if let Some(session) = self.resident.current() {
                     let client = self.client.clone();
                     let session_id = session.info.session_id.clone();
                     self.spawn_msg(tasks::export(client, session_id, path));
@@ -122,7 +122,7 @@ impl App {
             Action::LoadOlder => self.load_older(),
             Action::RecallQueued => self.recall_queued(),
             Action::RetryRecovery => {
-                if let Some(session) = self.session.as_mut() {
+                if let Some(session) = self.resident.current_mut() {
                     session.recovery.retry_failed();
                     self.refresh_control();
                     self.recover_completions();
@@ -134,28 +134,8 @@ impl App {
                 ThemeKind::Light => ThemeKind::Dark,
             }),
             Action::ReloadAgent => {
-                self.templates = templates::load(self.home.as_ref());
-                if let Some(home) = self.home.as_ref().filter(|_| self.composed)
-                    && let Err(error) =
-                        crate::config::load(home).and_then(|loaded| loaded.write(home))
-                {
-                    self.notice(NoticeLevel::Error, error.to_string());
-                    return;
-                }
-                let client = self.client.clone();
-                self.spawn_msg(async move {
-                    match client
-                        .call::<_, Value>(protocol::METHOD_RELOAD, &Value::Null)
-                        .await
-                    {
-                        Ok(_) => Msg::Notice(
-                            NoticeLevel::Info,
-                            "Agent reloaded; the new system prompt applies from the next turn"
-                                .into(),
-                        ),
-                        Err(error) => Msg::Notice(NoticeLevel::Error, error.message),
-                    }
-                });
+                self.local_files
+                    .reload(&self.tx, self.home.clone(), self.composed)
             }
             Action::Quit => self.request_quit(),
             Action::Remote(command) => self.remote_command(&command),
@@ -169,7 +149,7 @@ impl App {
             }
             return;
         }
-        if self.session.is_none() && (!self.ready || self.loading_session) {
+        if self.resident.current().is_none() && (!self.ready || self.loading_session) {
             return;
         }
         if !self.composer.text().trim_end().is_empty() {
@@ -184,7 +164,7 @@ impl App {
             }
             let entry = self.composer.take_submission();
             self.submit_entry(entry, follow, None);
-        } else if !follow && self.session.as_ref().is_some_and(|s| s.queue.paused) {
+        } else if !follow && self.resident.current().is_some_and(|s| s.queue.paused) {
             self.call(protocol::METHOD_INPUT_RESUME, json!({}), SessionOp::Resumed);
         }
     }
@@ -199,7 +179,7 @@ impl App {
         follow: bool,
         retry_of: Option<u64>,
     ) {
-        if self.session.is_none() {
+        if self.resident.current().is_none() {
             if !self.local_input_room(entry.retained_bytes() + entry.text().len()) {
                 entry.discard_rollback();
             }
@@ -222,23 +202,28 @@ impl App {
                 true => InputMode::FollowUp,
                 false => InputMode::Steer,
             };
-            self.push_local_input(entry, mode, retry_of);
+            self.push_local_input(
+                self.resident.current().unwrap().epoch,
+                entry,
+                mode,
+                retry_of,
+            );
         }
     }
 
     /// Esc on a running turn asks the Agent to cancel it; `turn.wait` ends it.
     pub(super) fn interrupt(&mut self) {
         let Some(live) = self
-            .session
-            .as_mut()
+            .resident
+            .current_mut()
             .and_then(|session| session.live.as_mut())
             .filter(|live| !live.interrupting)
         else {
             return;
         };
         live.interrupting = true;
-        let fields = json!({ "loop_id": live.turn.loop_id });
-        self.call(protocol::METHOD_TURN_CANCEL, fields, SessionOp::Done);
+        let operation = Operation::CancelTurn(live.turn.loop_id.clone());
+        self.operate(self.resident.current().unwrap().epoch, operation);
     }
 
     /// Esc: interrupt a running turn, else cancel a compaction, else clear the draft.
@@ -246,15 +231,13 @@ impl App {
         if self.is_busy() {
             self.interrupt();
         } else if let Some(progress) = self
-            .session
-            .as_ref()
+            .resident
+            .current()
             .and_then(|session| session.compaction.as_ref())
         {
-            let fields = json!({ "operation_id": progress.operation_id });
-            self.call(
-                protocol::METHOD_SESSION_COMPACT_CANCEL,
-                fields,
-                SessionOp::Done,
+            self.operate(
+                self.resident.current().unwrap().epoch,
+                Operation::CancelCompaction(progress.operation_id.clone()),
             );
         } else {
             self.composer.clear();
@@ -264,7 +247,11 @@ impl App {
     /// Asks for the context report now and then while a turn runs, because a
     /// turn-start compaction has no event.
     pub fn watch_context(&mut self) {
-        let Some(session) = self.session.as_mut().filter(|session| session.is_busy()) else {
+        let Some(session) = self
+            .resident
+            .current_mut()
+            .filter(|session| session.is_busy())
+        else {
             return;
         };
         if session
@@ -310,27 +297,21 @@ impl App {
     }
 
     pub(super) fn rename(&self, title: &str) {
-        let title = title.trim();
-        if !title.is_empty() {
-            self.call(
-                protocol::METHOD_SESSION_RENAME,
-                json!({ "title": title }),
-                |result: Result<crate::protocol::SessionResult, _>| {
-                    SessionOp::Info(result.map(|result| result.session))
-                },
-            );
+        if let Some(session) = self.resident.current() {
+            self.rename_for(session.epoch, title);
         }
     }
 
-    /// `session.update` with the model or reasoning level in `fields`.
+    pub(super) fn rename_for(&self, epoch: u64, title: &str) {
+        if !title.trim().is_empty() {
+            self.operate(epoch, Operation::Rename(title.to_owned()));
+        }
+    }
+
     pub(super) fn update_session(&self, fields: Value) {
-        self.call(
-            protocol::METHOD_SESSION_UPDATE,
-            fields,
-            |result: Result<crate::protocol::SessionResult, _>| {
-                SessionOp::Info(result.map(|result| result.session))
-            },
-        );
+        if let Some(session) = self.resident.current() {
+            self.operate(session.epoch, Operation::Update(fields));
+        }
     }
 
     /// Ctrl+P: the next model in the catalog, wrapping at the end.
@@ -352,7 +333,7 @@ impl App {
     }
 
     pub(super) fn compact(&mut self) {
-        let Some(session) = self.session.as_mut() else {
+        let Some(session) = self.resident.current_mut() else {
             return;
         };
         if session.is_busy() {
@@ -364,17 +345,16 @@ impl App {
             .checked_add(1)
             .expect("operation identity exhausted");
         let operation_id = format!("tui-{}", self.op_seq);
-        self.call(
-            protocol::METHOD_SESSION_COMPACT,
-            json!({ "operation_id": operation_id }),
-            SessionOp::Compacted,
+        self.operate(
+            self.resident.current().unwrap().epoch,
+            Operation::Compact(operation_id),
         );
     }
 
     fn copy_last_answer(&mut self) {
         let text = self
-            .session
-            .as_ref()
+            .resident
+            .current()
             .and_then(|session| session.transcript.last_answer())
             .map(str::to_owned);
         match text {
@@ -386,10 +366,8 @@ impl App {
     /// Switches the palette and persists the choice, so `/theme` survives a
     /// restart. A failed write is a notice, not a reason to keep the old theme.
     fn apply_theme(&mut self, kind: ThemeKind) {
-        if let Some(home) = &self.home
-            && let Err(error) = crate::config::save_theme(&home.config_file(), kind)
-        {
-            self.notice(NoticeLevel::Error, error);
+        if let Some(home) = &self.home {
+            self.local_files.theme(&self.tx, home.config_file(), kind);
         }
         self.theme = kind;
         self.styles = Styles::of(Palette::for_kind(kind));
@@ -411,73 +389,34 @@ impl App {
     }
 
     pub(super) fn answer(&mut self, answer: Answer) {
+        if let Some(epoch) = self.resident.current().map(|session| session.epoch) {
+            self.answer_for(epoch, answer);
+        }
+    }
+
+    pub(super) fn answer_for(&mut self, epoch: u64, answer: Answer) {
         let Some(interaction) = self
-            .session
-            .as_ref()
+            .resident
+            .get(epoch)
             .and_then(|session| session.interaction.as_ref())
-            .cloned()
         else {
             return;
         };
-        let decision = |decision: &str| json!({"type": "approval", "decision": decision});
-        let wire = match (answer, &interaction.kind) {
-            (Answer::Text(text), InteractionKind::Text) => {
-                if text.is_empty()
-                    || text.len() > super::session::TEXT_ANSWER_MAX_BYTES
-                    || text.chars().any(char::is_control)
-                {
-                    self.notice(
-                        NoticeLevel::Error,
-                        "An answer must contain 1–8192 UTF-8 bytes without control characters",
-                    );
-                    return;
-                }
-                json!({"type":"text","text":text})
+        match super::operation::answer(interaction, answer) {
+            Ok(Some(operation)) => {
+                self.operate(epoch, operation);
+                self.refresh_control_for(epoch);
             }
-            (Answer::Text(_), _) => {
-                self.notice(NoticeLevel::Error, "This interaction does not accept text");
-                return;
-            }
-            (Answer::Deny, InteractionKind::Text) => {
-                self.call(
-                    protocol::METHOD_TURN_CANCEL,
-                    json!({"loop_id":interaction.turn.loop_id}),
-                    SessionOp::Done,
-                );
-                self.refresh_control();
-                return;
-            }
-            (Answer::Allow | Answer::AllowTool | Answer::Choice(_), InteractionKind::Text) => {
-                return;
-            }
-            (Answer::Choice(index), InteractionKind::Choice(_)) => {
-                json!({"type": "choice", "index": index})
-            }
-            (Answer::AllowTool | Answer::Choice(2), InteractionKind::Approval) => {
-                if let Some(session) = self.session.as_mut() {
-                    session.allowed_tools.insert(interaction.tool_name.clone());
-                }
-                decision("allow_once")
-            }
-            (Answer::Allow | Answer::AllowTool | Answer::Choice(0), _) => decision("allow_once"),
-            (Answer::Deny | Answer::Choice(_), _) => decision("deny"),
-        };
-        let fields = json!({
-            "loop_id": interaction.turn.loop_id,
-            "interaction_id": interaction.interaction_id,
-            "answer": wire,
-        });
-        // The answer settles the request; the snapshot that follows is what
-        // takes the sheet down.
-        self.call(protocol::METHOD_INTERACTION_ANSWER, fields, SessionOp::Done);
-        self.refresh_control();
+            Ok(None) => {}
+            Err(message) => self.notice(NoticeLevel::Error, message),
+        }
     }
 
     /// A new approval: answered silently for a tool allowed for the session,
     /// else its card is read for the input it would run, which an `edit`
     /// card only has once it has run.
-    pub(super) fn on_approval_requested(&mut self) {
-        let Some(session) = self.session.as_ref() else {
+    pub(super) fn on_approval_requested(&mut self, epoch: u64) {
+        let Some(session) = self.resident.get(epoch) else {
             return;
         };
         let Some(interaction) = session.interaction.as_ref() else {
@@ -485,7 +424,7 @@ impl App {
         };
         let approval = matches!(interaction.kind, InteractionKind::Approval);
         if approval && session.allowed_tools.contains(&interaction.tool_name) {
-            self.answer(Answer::Allow);
+            self.answer_for(epoch, Answer::Allow);
             return;
         }
         let card = session
@@ -499,15 +438,20 @@ impl App {
                 SessionOp::ToolHydrated(hydrated, read.ok())
             });
         }
-        if self.background_op {
-            self.background_approval();
+        if !self.resident.is_current(epoch) {
+            self.background_approval(epoch);
         } else {
-            self.ring |= self.busy_elapsed() >= Some(LONG_TURN);
+            self.ring |= self
+                .resident
+                .get(epoch)
+                .and_then(|session| session.live.as_ref())
+                .map(|live| live.started.elapsed())
+                >= Some(LONG_TURN);
         }
     }
 
-    pub(super) fn load_older(&mut self) {
-        let Some(session) = self.session.as_mut() else {
+    pub(super) fn load_older_for(&mut self, epoch: u64) {
+        let Some(session) = self.resident.get_mut(epoch) else {
             return;
         };
         if session.loading_older || session.loaded_from == 0 {
@@ -518,22 +462,27 @@ impl App {
         // history, behind the compaction summary.
         let before = session.hidden_items();
         let window = if session.loaded_from <= session.first_item {
-            tasks::Window::CanonicalBefore(before)
+            read::Window::CanonicalBefore(before)
         } else {
-            tasks::Window::Before(before)
+            read::Window::Before(before)
         };
-        self.read_history(window);
+        self.read_history_for(epoch, window);
+    }
+    pub fn load_older(&mut self) {
+        if let Some(epoch) = self.resident.current().map(|session| session.epoch) {
+            self.load_older_for(epoch);
+        }
     }
 
     /// Reads a history window for the foreground session.
-    pub(super) fn read_history(&self, window: tasks::Window) {
-        let Some(session) = self.session.as_ref() else {
+    pub(super) fn read_history_for(&self, epoch: u64, window: read::Window) {
+        let Some(session) = self.resident.get(epoch) else {
             return;
         };
         let (client, session_id) = (self.client.clone(), session.info.session_id.clone());
-        self.spawn(async move {
-            let tail = matches!(&window, tasks::Window::Tail);
-            let history = tasks::read_history(client, session_id, window).await;
+        self.spawn_for(epoch, async move {
+            let tail = matches!(&window, read::Window::Tail);
+            let history = read::read_history(client, session_id, window).await;
             if tail {
                 SessionOp::Tail(history)
             } else {
@@ -543,25 +492,27 @@ impl App {
     }
 
     /// Asks for a fresh context report.
-    pub fn refresh_context(&self) {
-        self.call(
+    pub fn refresh_context_for(&self, epoch: u64) {
+        self.call_for(
+            epoch,
             protocol::METHOD_SESSION_CONTEXT,
             json!({}),
             SessionOp::Context,
         );
     }
-
-    /// Asks whether the session is mid-turn or compacting.
-    pub(super) fn read_state(&self) {
-        self.call(protocol::METHOD_SESSION_STATE, json!({}), SessionOp::State);
+    pub fn refresh_context(&self) {
+        if let Some(epoch) = self.resident.current().map(|session| session.epoch) {
+            self.refresh_context_for(epoch);
+        }
     }
 
     /// Asks for the footer's figures: model label, branch, context usage.
-    pub(super) fn refresh_presentation(&mut self) {
-        let session = self.session_mut();
+    pub(super) fn refresh_presentation_for(&mut self, epoch: u64) {
+        let session = self.session_mut(epoch);
         session.presentation_asked = Some(tokio::time::Instant::now());
         session.presentation_in_flight = true;
-        self.call(
+        self.call_for(
+            epoch,
             protocol::METHOD_SESSION_PRESENTATION,
             json!({}),
             SessionOp::Presentation,
@@ -570,8 +521,9 @@ impl App {
 
     /// The Agent reports a branch only after a `workspace.status`, so one runs
     /// before the presentation is read again.
-    pub(super) fn refresh_branch(&mut self) {
-        self.call(
+    pub(super) fn refresh_branch_for(&mut self, epoch: u64) {
+        self.call_for(
+            epoch,
             protocol::METHOD_WORKSPACE_STATUS,
             json!({}),
             SessionOp::WorkspaceStatus,
@@ -586,8 +538,8 @@ impl App {
                 "Clear the draft before recalling a queued message",
             );
         } else if self
-            .session
-            .as_ref()
+            .resident
+            .current()
             .is_some_and(|s| !s.queue.items.is_empty())
         {
             self.recall_queue();
@@ -608,28 +560,12 @@ impl App {
     /// The only routing identity is the operation: text never follows whichever
     /// device most recently sent something to the session.
     pub(super) fn restore_draft(&mut self, text: &str) {
-        if let Some(session) = &mut self.session
-            && !self.background_op
-            && !self.remote.active()
-        {
-            session.draft = Some(text.to_owned());
-            self.restore_to_composer(text);
-            return;
-        }
-        if let Some(session) = &mut self.session
-            && !self.background_op
-            && self.remote.active()
-        {
-            session.returned.push(text.to_owned());
-            return;
-        }
-        if self.background_op {
-            // The session it was typed in owns it, so it is there when the user
-            // returns rather than in whichever session is on screen now.
-            if let Some(session) = &mut self.session {
+        if let Some(session) = self.resident.current_mut() {
+            if self.remote.active() {
                 session.returned.push(text.to_owned());
                 return;
             }
+            session.draft = Some(text.to_owned());
         }
         self.restore_to_composer(text);
     }

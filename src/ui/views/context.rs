@@ -400,6 +400,7 @@ mod tests {
         let mut session = Session::new(
             serde_json::from_value(crate::testing::session_info("s")).unwrap(),
             1,
+            "load_1".into(),
         );
         session.presentation = Some(
             serde_json::from_value(json!({

@@ -21,18 +21,18 @@ impl Transcript {
         from: usize,
     ) -> Self {
         let mut transcript = Self::default();
-        append_history_from(&mut transcript, items, records, session_id, Some(from));
+        append_history_from(&mut transcript, items, records, session_id, from);
         transcript
     }
 
     /// Keeps previously displayed source rows outside the incoming verified window.
     pub fn with_previous_history(self, previous: &Self, covered: std::ops::Range<usize>) -> Self {
         let mut rows: Vec<_> = previous
-            .origins
+            .metadata
             .iter()
             .enumerate()
-            .filter_map(|(at, origin)| {
-                origin
+            .filter_map(|(at, meta)| {
+                meta.origin
                     .history
                     .filter(|source| {
                         !covered.contains(&source.item) || source.part >= INTERRUPTED_PART
@@ -40,10 +40,10 @@ impl Transcript {
                     .map(|source| (source, false, at))
             })
             .chain(
-                self.origins
+                self.metadata
                     .iter()
                     .enumerate()
-                    .filter_map(|(at, origin)| origin.history.map(|source| (source, true, at))),
+                    .filter_map(|(at, meta)| meta.origin.history.map(|source| (source, true, at))),
             )
             .collect();
         let mut last_items = std::collections::HashMap::new();
@@ -88,7 +88,7 @@ impl Transcript {
             let source = if fresh { &self } else { previous };
             let inserted = result.len();
             result.splice_copy(inserted..inserted, source, at..at + 1);
-            result.origins[inserted].history = Some(history);
+            result.metadata[inserted].origin.history = Some(history);
         }
         result
     }
@@ -229,21 +229,12 @@ pub fn merge_live(
 /// Appends history items, closing each turn that has a record with its
 /// turn-end line; the duration and changes are not stored, and the tool count
 /// is left out for a turn whose start is not among `items`.
-pub fn append_history(
-    transcript: &mut Transcript,
-    items: &[RawHistoryItem],
-    records: &[TurnRecord],
-    session_id: &str,
-) {
-    append_history_from(transcript, items, records, session_id, None);
-}
-
 fn append_history_from(
     transcript: &mut Transcript,
     items: &[RawHistoryItem],
     records: &[TurnRecord],
     session_id: &str,
-    from: Option<usize>,
+    from: usize,
 ) {
     let close =
         |transcript: &mut Transcript, loop_id: Option<&str>, whole: bool, item: Option<usize>| {
@@ -260,10 +251,11 @@ fn append_history_from(
             };
             if let Some(partial) = &record.interrupted {
                 push_interrupted(transcript, &record.loop_id, partial);
-                transcript.origins.last_mut().unwrap().history = item.map(|item| HistorySource {
-                    item,
-                    part: INTERRUPTED_PART,
-                });
+                transcript.metadata.last_mut().unwrap().origin.history =
+                    item.map(|item| HistorySource {
+                        item,
+                        part: INTERRUPTED_PART,
+                    });
             }
             let terminal = transcript.push(Block::TurnEnd {
                 loop_id: record.loop_id.clone(),
@@ -276,7 +268,7 @@ fn append_history_from(
                 // A stored record exists, so the turn is in committed history.
                 saving: Some(crate::transcript::Saving::Saved),
             });
-            transcript.origins[terminal].history = item.map(|item| HistorySource {
+            transcript.metadata[terminal].origin.history = item.map(|item| HistorySource {
                 item,
                 part: TERMINAL_PART,
             });
@@ -305,18 +297,17 @@ fn append_history_from(
         }
         let first = transcript.len();
         append_history_item(transcript, item, session_id);
-        last = from.map(|from| from + offset);
-        if let Some(index) = last {
-            for (part, origin) in transcript.origins[first..].iter_mut().enumerate() {
-                origin.history = Some(HistorySource {
-                    item: index,
-                    part: if matches!(item.item, RuntimeItem::Summary(_)) {
-                        SUMMARY_PART
-                    } else {
-                        part
-                    },
-                });
-            }
+        let index = from + offset;
+        last = Some(index);
+        for (part, meta) in transcript.metadata[first..].iter_mut().enumerate() {
+            meta.origin.history = Some(HistorySource {
+                item: index,
+                part: if matches!(item.item, RuntimeItem::Summary(_)) {
+                    SUMMARY_PART
+                } else {
+                    part
+                },
+            });
         }
         // A request that only called tools would add a second separator row.
         if transcript
@@ -547,7 +538,7 @@ mod tests {
             kind: UserKind::Prompt,
             at: Some(42),
         }];
-        let (merged, _, _) = merge_live(durable.into_blocks(), &live);
+        let (merged, _, _) = merge_live(durable.blocks, &live);
         assert!(matches!(
             merged.as_slice(),
             [Block::User { at: Some(42), .. }]
@@ -737,7 +728,7 @@ mod tests {
             streaming: false,
             expanded: None,
         }];
-        let (merged, _, _) = merge_live(durable.into_blocks(), &live);
+        let (merged, _, _) = merge_live(durable.blocks, &live);
         let shape: Vec<String> = merged
             .iter()
             .map(|block| match block {
@@ -759,8 +750,7 @@ mod tests {
             request_item(1, json!([call("c1")])),
             request_item(2, json!([{"type": "text", "data": " \n"}, call("c2")])),
         ];
-        let mut transcript = Transcript::default();
-        append_history(&mut transcript, &items, &[], "s");
+        let transcript = Transcript::from_history(&items, &[], "s", 0);
         let kinds: Vec<&str> = transcript
             .blocks()
             .iter()

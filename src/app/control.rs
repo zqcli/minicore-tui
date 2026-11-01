@@ -61,12 +61,7 @@ impl Session {
                 Some(_) | None => {}
             }
         }
-        if let Some(live) = self.live.take() {
-            self.ended_live.push_back(live);
-            if self.ended_live.len() > 256 {
-                self.ended_live.pop_front();
-            }
-        }
+        self.retire_live();
         let loop_id = observed?;
         let start = self.transcript.len();
         if let Some(input) = execution.input() {
@@ -137,14 +132,6 @@ impl Session {
                 self.cache_early(event, bytes);
                 return;
             }
-            if event.meta().is_some_and(|meta| meta.dropped_before > 0)
-                && let Some(live) = self
-                    .live
-                    .as_mut()
-                    .filter(|live| live.turn.loop_id == loop_id)
-            {
-                live.gap = true;
-            }
         }
         self.apply_event(event);
     }
@@ -157,5 +144,142 @@ fn phase_of(phase: ExecutionPhase) -> Phase {
         ExecutionPhase::RunningTools => Phase::Thinking,
         ExecutionPhase::WaitingForInput => Phase::Waiting,
         ExecutionPhase::Finishing | ExecutionPhase::Finished => Phase::Waiting,
+    }
+}
+
+impl super::App {
+    /// Applies one authoritative control snapshot; it is the only entry that
+    /// writes execution, queue, pause, interaction, compaction and blocking.
+    pub fn apply_snapshot(&mut self, snapshot: SessionSnapshot) {
+        let id = snapshot.session_id.clone();
+        let Some(epoch) = self.live(&id).map(|session| session.epoch) else {
+            return;
+        };
+        let observed_before = self.resident.get(epoch).unwrap().recovery.observed_through;
+        let applied = self.apply_to_session(epoch, &snapshot);
+        if applied {
+            let background = !self.resident.is_current(epoch);
+            let mut ring = false;
+            for turn in snapshot
+                .completions
+                .entries
+                .iter()
+                .filter(|turn| turn.seq > observed_before)
+            {
+                let session = self.session_mut(epoch);
+                if let Some(live) = session.tracked_turn_mut(&turn.loop_id)
+                    && live.completion_background.is_none()
+                {
+                    live.completion_background = Some(background);
+                    ring |= live.started.elapsed() >= crate::title::LONG_TURN;
+                }
+            }
+            self.ring |= ring;
+            let other: usize = self
+                .resident
+                .iter()
+                .filter(|session| session.epoch != epoch)
+                .map(|session| session.recovery.entries.len())
+                .sum();
+            self.session_mut(epoch)
+                .recovery
+                .trim(1024usize.saturating_sub(other));
+            if snapshot.completions.through_seq > observed_before {
+                self.stamp_activity(epoch);
+            }
+            if let Some(title) = self
+                .resident
+                .get(epoch)
+                .filter(|session| !session.auto_title_asked)
+                .and_then(Session::auto_title)
+            {
+                self.session_mut(epoch).auto_title_asked = true;
+                self.rename_for(epoch, &title);
+            }
+            #[cfg(feature = "e2e-observe")]
+            self.observe_control(&snapshot);
+            self.start_adopted_turn_for(epoch);
+            // A newly observed approval is announced from the snapshot itself,
+            // whether or not its event reached the client first.
+            let pending = self
+                .live(&id)
+                .and_then(|session| session.interaction.as_ref())
+                .map(|interaction| interaction.interaction_id.clone());
+            if pending.is_some() && pending != self.resident.get(epoch).unwrap().approval_seen {
+                self.session_mut(epoch).approval_seen = pending;
+                self.on_approval_requested(epoch);
+            }
+            self.recover_completions();
+        }
+    }
+
+    /// Holds a snapshot whose session is not open yet.
+    pub(super) fn hold_snapshot(&mut self, snapshot: SessionSnapshot, bytes: usize) {
+        self.pre_install.hold(snapshot, bytes);
+    }
+
+    fn apply_to_session(&mut self, epoch: u64, snapshot: &SessionSnapshot) -> bool {
+        let session = self.session_mut(epoch);
+        if session.load != snapshot.load || !session.recovery.accept_revision(snapshot.revision) {
+            return false;
+        }
+        session.apply_control(snapshot);
+        session.recovery.discover(&snapshot.completions);
+        session.replay_early();
+        true
+    }
+
+    /// Asks for the current control snapshot; receipts get their queue and
+    /// execution from here, never from their own answer.
+    pub(super) fn refresh_control_for(&mut self, epoch: u64) {
+        let Some(session) = self.resident.get_mut(epoch) else {
+            return;
+        };
+        if session.control_in_flight {
+            session.control_due = true;
+            return;
+        }
+        session.control_due = false;
+        session.control_in_flight = true;
+
+        self.call_for(
+            epoch,
+            crate::protocol::METHOD_SESSION_STATE,
+            serde_json::json!({}),
+            super::SessionOp::State,
+        );
+    }
+
+    pub(super) fn refresh_control(&mut self) {
+        if let Some(epoch) = self.resident.current().map(|session| session.epoch) {
+            self.refresh_control_for(epoch);
+        }
+    }
+
+    /// Fetches the snapshot behind control hints, at most one read at a time.
+    pub(super) fn pull_control_for(&mut self, epoch: u64) {
+        if self
+            .resident
+            .get(epoch)
+            .is_some_and(|session| session.control_due)
+        {
+            self.refresh_control_for(epoch);
+        }
+    }
+
+    /// Starts waiting on an execution a control snapshot adopted, so its
+    /// outcome arrives even though no receipt named it.
+    pub(super) fn start_adopted_turn_for(&mut self, epoch: u64) {
+        let Some(session) = self.resident.get_mut(epoch) else {
+            return;
+        };
+        let Some(turn) = session.adopted.take() else {
+            return;
+        };
+        let load = session.load.clone();
+        self.spawn_for(
+            epoch,
+            super::tasks::wait_turn(self.client.clone(), turn, load),
+        );
     }
 }
