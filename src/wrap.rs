@@ -124,9 +124,21 @@ pub fn wrap(text: &str, cell_limit: usize) -> Vec<String> {
 /// whitespace at each break and merging spans that share a style.
 pub fn wrap_spans(spans: &[Span<'static>], cell_limit: usize) -> Vec<Line<'static>> {
     let text: String = spans.iter().map(|span| span.content.as_ref()).collect();
+    let mut remaining = spans;
+    let mut offset = 0;
     breaks(&text, cell_limit)
         .into_iter()
-        .map(|range| line_from(&text, range, spans))
+        .map(|range| {
+            while let Some(span) = remaining.first() {
+                let end = offset + span.content.len();
+                if end > range.start {
+                    break;
+                }
+                offset = end;
+                remaining = &remaining[1..];
+            }
+            line_from(&text, range, remaining, offset)
+        })
         .collect()
 }
 
@@ -141,10 +153,17 @@ pub fn wrapped(text: &str, cell_limit: usize, style: Style) -> Vec<Line<'static>
         .collect()
 }
 
-fn line_from(text: &str, range: Range<usize>, spans: &[Span<'static>]) -> Line<'static> {
+fn line_from(
+    text: &str,
+    range: Range<usize>,
+    spans: &[Span<'static>],
+    mut offset: usize,
+) -> Line<'static> {
     let mut pieces: Vec<(Style, String)> = Vec::new();
-    let mut offset = 0;
     for span in spans {
+        if offset >= range.end {
+            break;
+        }
         let end = offset + span.content.len();
         let from = range.start.max(offset);
         let to = range.end.min(end);
@@ -374,6 +393,30 @@ mod tests {
         assert_eq!(lines[1].to_string(), "world");
         assert_eq!(lines[2].to_string(), "again");
         assert_eq!(lines[2].spans.last().unwrap().style.fg, Some(Color::Blue));
+    }
+
+    #[test]
+    fn styled_wraps_keep_unicode_and_skip_whitespace_between_rows() {
+        let red = Style::new().fg(Color::Red);
+        let blue = Style::new().fg(Color::Blue);
+        let spans = vec![
+            Span::styled("", blue),
+            Span::styled("中", red),
+            Span::styled("文  ", blue),
+            Span::styled("", red),
+            Span::styled("e", red),
+            Span::styled("\u{301}", red),
+            Span::styled(" xyz", blue),
+            Span::styled("   ", red),
+        ];
+        assert_eq!(
+            wrap_spans(&spans, 4),
+            vec![
+                Line::from(vec![Span::styled("中", red), Span::styled("文", blue)]),
+                Line::from(Span::styled("e\u{301}", red)),
+                Line::from(Span::styled("xyz", blue)),
+            ]
+        );
     }
 
     #[test]
