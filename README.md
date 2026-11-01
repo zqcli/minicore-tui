@@ -16,8 +16,10 @@ file is the whole program. Version 0.4 is a rewrite of the v0.3 frontend; see
   inserts a newline. `Alt+Enter` needs the terminal to pass Alt (on macOS, Option
   as Meta or Esc+); see [docs/keybindings.md](docs/keybindings.md).
 
-Built-in backend: Agent 0.9.0, which links Runtime 0.9.0; `Cargo.toml` pins the
-Agent by its release tag and `Cargo.lock` fixes both. An
+Built-in backend: Agent 0.9.1 (development), which links Runtime 0.9.0;
+`Cargo.toml` pins the matching RPC v2 Agent by an immutable Git revision and
+`Cargo.lock` fixes both. The `0.9.2` optimization branch keeps the development
+package versions; it does not create or move release tags. An
 external Agent can still be named with `--agent`. At startup the TUI requires
 Protocol v2 and these Agent capabilities, and refuses an Agent that lacks one: `session.read`, `session.read.display`, `session.context`,
 `turn.result`, `tool.read`, `tool.read.display`,

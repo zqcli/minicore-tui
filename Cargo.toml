@@ -8,7 +8,7 @@ keywords = ["tui", "ratatui", "coding-agent", "jsonrpc"]
 categories = ["command-line-utilities"]
 
 [features]
-e2e-observe = []
+e2e-observe = ["minicore-agent/e2e-observe"]
 
 [dependencies]
 base64 = "0.22"
@@ -21,7 +21,7 @@ sha2 = "0.10"
 socket2 = "0.6"
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
 # The Agent is built in and runs as this executable's `agent` subcommand.
-minicore-agent = { git = "https://github.com/zqcli/minicore-agent", tag = "v0.9.0", version = "0.9.0" }
+minicore-agent = { git = "https://github.com/zqcli/minicore-agent", rev = "5ceab57ccd0fdec62eefd20e61d0c4ae1462734e", version = "0.9.1" }
 jiff = { version = "0.2", default-features = false, features = ["std", "tz-system", "tzdb-zoneinfo", "tzdb-concatenated", "tzdb-bundle-platform"] }
 pulldown-cmark = { version = "0.13", default-features = false }
 ratatui = { version = "0.30", default-features = false, features = ["crossterm"] }
