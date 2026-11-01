@@ -54,11 +54,9 @@ impl ApplicationGate {
                 .local_inputs
                 .iter()
                 .find(|input| input.id == *id)
-                .and_then(|input| app.live(&input.target.session_id))
-                .filter(|session| {
-                    app.local_inputs.iter().any(|input| {
-                        input.id == *id
-                            && input.target.epoch == session.epoch
+                .and_then(|input| {
+                    app.live(&input.target.session_id).filter(|session| {
+                        input.target.epoch == session.epoch
                             && session.load.as_deref() == Some(input.target.load.as_str())
                     })
                 }),

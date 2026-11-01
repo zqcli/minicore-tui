@@ -1,9 +1,26 @@
-"""Bounded cleanup for PTY sessions (which have their own process group)."""
+"""Bounded helper execution and cleanup of PTY process groups."""
 
 import os
 import signal
 import subprocess
+import sys
 import time
+
+
+def run_bounded(main, seconds, label):
+    def expired(_signum, _frame):
+        raise TimeoutError("helper exceeded its outer deadline")
+
+    signal.signal(signal.SIGALRM, expired)
+    signal.signal(signal.SIGTERM, expired)
+    signal.alarm(seconds)
+    try:
+        main()
+    except Exception as error:
+        print(f"{label}: {type(error).__name__}: {error}", file=sys.stderr)
+        sys.exit(1)
+    finally:
+        signal.alarm(0)
 
 
 def register_group(process):

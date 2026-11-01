@@ -9,7 +9,6 @@ separate owner-provided legal gates. No stdio byte reordering is permitted.
 
 import argparse
 import codecs
-import contextlib
 import errno
 import fcntl
 import hashlib
@@ -17,7 +16,6 @@ import json
 import os
 import pty
 import select
-import signal
 import struct
 import subprocess
 import sys
@@ -31,8 +29,8 @@ from pathlib import Path
 
 from canonical_observer import ObservationError, Trace, text_part, tool_part
 from agent_observer import AgentTrace
-from agent_observer_facts import bind_completion_facts
-from process_support import cleanup_group, register_group
+from agent_observer_checks import bind_completion_facts
+from process_support import assert_group_exited, cleanup_group, register_group, run_bounded
 
 KEY = "dummy-local-sentinel"
 WIDTH, HEIGHT = 140, 48
@@ -90,7 +88,6 @@ class Provider(ThreadingHTTPServer):
         self.thread = threading.Thread(target=self.serve, daemon=True)
         self.gate = threading.Event()
         self.gate.set()
-        self.released = threading.Event()
 
     def serve(self):
         self.serving.set()
@@ -181,8 +178,9 @@ class Handler(BaseHTTPRequestHandler):
                            if item.get("type") == "function_call_output" and item.get("call_id") == expected_call]
                 if len(outputs) != 1:
                     raise AssertionError("tool continuation lost its actual call identity")
-                expected = "tool denied" if plan.tool_name == "write" else "fixture read content"
-                if expected not in outputs[0].get("output", ""):
+                output = outputs[0].get("output", "")
+                valid = output == "tool denied" if plan.tool_name == "write" else "fixture read content" in output
+                if not valid:
                     raise AssertionError("real tool result did not reach provider continuation")
             self.server.notify()
             if not self.server.gate.wait(STAGE_TIMEOUT):
@@ -695,23 +693,7 @@ class Chain:
             raise AssertionError("TUI did not exit after terminal restore") from error
         if status != 0:
             raise AssertionError(f"TUI exit status {status}")
-        # The TUI reaps its Agent child as part of close; that is not instantly
-        # observable through /proc, so allow a bounded wait rather than racing it.
-        deadline = time.monotonic() + 10
-        while True:
-            try:
-                os.kill(self.agent_pid, 0)
-            except ProcessLookupError:
-                break
-            if time.monotonic() > deadline:
-                raise AssertionError("Agent child remained after TUI exit")
-            time.sleep(0.02)
-        try:
-            os.killpg(self.process.pid, 0)
-        except ProcessLookupError:
-            pass
-        else:
-            raise AssertionError("TUI process group remained after exit")
+        assert_group_exited(self.process.pid, self.agent_pid, timeout=10)
         if not self.screen_only:
             if self.terminal_inputs:
                 started = [row for row in self.agent_trace.records() if row['event'] == 'loop_installed']
@@ -993,8 +975,6 @@ def integrity(binary, root, screen_only=False):
     )
 
 
-def alarm_handler(_signum, _frame):
-    raise TimeoutError("natural-load helper exceeded its deadline")
 
 
 def main():
@@ -1047,13 +1027,4 @@ def main():
 
 
 if __name__ == "__main__":
-    signal.signal(signal.SIGALRM, alarm_handler)
-    signal.signal(signal.SIGTERM, alarm_handler)
-    signal.alarm(3600)
-    try:
-        main()
-    except Exception as error:
-        print(f"natural-load: {type(error).__name__}: {error}", file=sys.stderr)
-        sys.exit(1)
-    finally:
-        signal.alarm(0)
+    run_bounded(main, 3600, "natural-load")

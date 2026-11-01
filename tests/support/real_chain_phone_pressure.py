@@ -3,13 +3,12 @@
 
 import argparse
 import json
-import signal
-import sys
 import tempfile
 import threading
 from pathlib import Path
 
 from canonical_observer import ObservationError, text_part
+from process_support import run_bounded
 from real_chain_load import Chain, Plan, completed, delta, sse
 from real_chain_scenarios import phone, phone_submit, new_loop, verify_install, assert_phone_turn
 
@@ -109,22 +108,13 @@ def pressure(binary):
                     replacement.close()
 
 
-def alarm(_signum, _frame):
-    raise TimeoutError('real-phone pressure outer bound')
-
-
-if __name__ == '__main__':
+def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('binary')
     parser.add_argument('case', choices=('phone-overflow',))
     args = parser.parse_args()
-    signal.signal(signal.SIGTERM, alarm)
-    signal.signal(signal.SIGALRM, alarm)
-    signal.alarm(90)
-    try:
-        print(json.dumps(pressure(args.binary), sort_keys=True))
-    except Exception as error:
-        print('real-phone pressure: ' + type(error).__name__ + ': ' + str(error), file=sys.stderr)
-        sys.exit(1)
-    finally:
-        signal.alarm(0)
+    print(json.dumps(pressure(args.binary), sort_keys=True))
+
+
+if __name__ == "__main__":
+    run_bounded(main, 90, "real-phone pressure")

@@ -72,6 +72,34 @@ class HarnessTests(unittest.TestCase):
             self.assertFalse(Path(temporary).exists())
             self.assertFalse(chain.provider.thread.is_alive())
 
+    @unittest.skipUnless(hasattr(signal, "SIGALRM"), "Unix helper signals")
+    def test_helper_termination_runs_cleanup_and_exits_unsuccessfully(self):
+        code = '''import signal
+from process_support import run_bounded
+def main():
+    try:
+        print("ready", flush=True)
+        signal.pause()
+    finally:
+        print("cleanup", flush=True)
+run_bounded(main, 30, "fixture")
+'''
+        process = subprocess.Popen(
+            [sys.executable, "-c", code], cwd=Path(__file__).parent,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        try:
+            self.assertEqual(process.stdout.readline().strip(), "ready")
+            process.terminate()
+            output, error = process.communicate(timeout=5)
+            self.assertEqual(output, "cleanup\n")
+            self.assertEqual(process.returncode, 1)
+            self.assertIn("fixture: TimeoutError:", error)
+        finally:
+            if process.poll() is None:
+                process.kill()
+            process.wait(timeout=5)
+
     @unittest.skipUnless(hasattr(os, "killpg"), "Unix process groups")
     def test_timeout_cleanup_kills_stubborn_group_and_records_pid(self):
         with tempfile.TemporaryDirectory() as root:

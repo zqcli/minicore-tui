@@ -111,18 +111,12 @@ async fn shutdown_joins_the_child_after_its_ack_before_aborting_pipe_tasks() {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn acceptance_consumers_reject_causal_identity_and_steering_order_false_greens() {
+async fn acceptance_helpers_check_observations_and_fixture_cleanup() {
     let support = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/support");
     let mut command = Command::new("python3");
     command
         .current_dir(&support)
-        .args([
-            "-m",
-            "unittest",
-            "test_agent_observer",
-            "test_canonical_observer",
-            "-v",
-        ])
+        .args(["-m", "unittest", "discover", "-p", "test_*.py"])
         .env("PYTHONDONTWRITEBYTECODE", "1")
         .kill_on_drop(true);
     let output = tokio::time::timeout(std::time::Duration::from_secs(30), command.output())
@@ -508,11 +502,9 @@ async fn tui_real_chain_natural_load() {
         Ok("approvals") => &["approvals", "--count", "100"][..],
         other => panic!("select an implemented natural class, got {other:?}"),
     };
-    let mut args = Vec::new();
-    args.extend_from_slice(class);
     run_helper(
         "real_chain_load.py",
-        &args,
+        class,
         std::time::Duration::from_secs(3600),
     )
     .await;

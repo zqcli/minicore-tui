@@ -4,11 +4,10 @@
 import argparse
 import json
 import os
-import signal
-import sys
 from pathlib import Path
 
 from canonical_observer import ObservationError, text_part, tool_part
+from process_support import run_bounded
 from real_chain_load import Chain, completed, delta, sse
 from real_chain_scenarios import ScenarioPlan, latest_control, new_loop, phone, phone_submit, verify_install
 
@@ -357,18 +356,5 @@ def main():
     print(json.dumps(functions[args.case](), sort_keys=True))
 
 
-def alarm(_signum, _frame):
-    raise TimeoutError('real-main fault test outer bound')
-
-
-if __name__ == '__main__':
-    signal.signal(signal.SIGTERM, alarm)
-    signal.signal(signal.SIGALRM, alarm)
-    signal.alarm(150)
-    try:
-        main()
-    except Exception as error:
-        print('real-main fault: ' + type(error).__name__ + ': ' + str(error), file=sys.stderr)
-        sys.exit(1)
-    finally:
-        signal.alarm(0)
+if __name__ == "__main__":
+    run_bounded(main, 150, "real-main fault")

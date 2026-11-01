@@ -10,9 +10,7 @@ import fcntl
 import json
 import os
 import re
-import signal
 import struct
-import sys
 import threading
 import tempfile
 import time
@@ -20,6 +18,7 @@ from pathlib import Path
 
 from canonical_observer import ObservationError, parts, text_part, tool_part
 from phone_client import Phone
+from process_support import run_bounded
 from real_chain_load import Chain, Plan, STAGE_TIMEOUT, completed, delta, percentile, process_cpu_ticks, sse
 
 # Runtime's legal per-channel cap is 256 KiB. With JSON escaping/envelope,
@@ -36,7 +35,6 @@ class ScenarioPlan(Plan):
         self.partial = set()
         self.events = {}
         self.allow_cancel_close = case == "cancel"
-        self.labels = {}
         self.lock = threading.Lock()
 
     def hold(self, index):
@@ -636,18 +634,5 @@ def main():
     print(json.dumps(result, sort_keys=True))
 
 
-def alarm_handler(_signum, _frame):
-    raise TimeoutError("real-chain scenario outer deadline")
-
-
 if __name__ == "__main__":
-    signal.signal(signal.SIGALRM, alarm_handler)
-    signal.signal(signal.SIGTERM, alarm_handler)
-    signal.alarm(360)
-    try:
-        main()
-    except Exception as error:
-        print(f"real-chain scenario: {type(error).__name__}: {error}", file=sys.stderr)
-        sys.exit(1)
-    finally:
-        signal.alarm(0)
+    run_bounded(main, 360, "real-chain scenario")

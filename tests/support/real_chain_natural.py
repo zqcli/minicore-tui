@@ -10,12 +10,11 @@ apply gates, small limits or fault plans establish natural execution order.
 import argparse
 import json
 import os
-import signal
-import sys
 import time
 from pathlib import Path
 
 from canonical_observer import ObservationError, text_part, tool_part
+from process_support import run_bounded
 from real_chain_load import Chain, Plan, percentile
 from real_chain_scenarios import ack, new_loop
 from real_chain_scenarios import phone, phone_submit, verify_install
@@ -129,18 +128,5 @@ def main():
     print(json.dumps(successor_batches(args.binary, args.count, args.natural), sort_keys=True))
 
 
-def alarm(_signum, _frame):
-    raise TimeoutError('natural successor outer deadline')
-
-
-if __name__ == '__main__':
-    signal.signal(signal.SIGTERM, alarm)
-    signal.signal(signal.SIGALRM, alarm)
-    signal.alarm(600)
-    try:
-        main()
-    except Exception as error:
-        print('real-chain natural successor: ' + type(error).__name__ + ': ' + str(error), file=sys.stderr)
-        sys.exit(1)
-    finally:
-        signal.alarm(0)
+if __name__ == "__main__":
+    run_bounded(main, 600, "real-chain natural successor")
