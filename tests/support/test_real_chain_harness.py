@@ -1,18 +1,19 @@
 """Fixture/gate/cleanup tests; these do not claim canonical chain acceptance."""
 
-import faulthandler
+import json
 import os
 import signal
 import subprocess
 import sys
 import tempfile
 import unittest
+from http.client import HTTPConnection
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from process_support import assert_group_exited, cleanup_group, register_group
-from real_chain_load import Chain, Plan, Screen, fixture_hash, process_cpu_ticks
+from real_chain_load import KEY, Chain, Plan, Provider, Screen, fixture_hash, process_cpu_ticks
 
 
 class HarnessTests(unittest.TestCase):
@@ -64,8 +65,6 @@ class HarnessTests(unittest.TestCase):
             self.assertIsNone(process_cpu_ticks(7))
 
     def test_failed_enter_closes_provider_and_temp_directory(self):
-        faulthandler.dump_traceback_later(5, repeat=True)
-        self.addCleanup(faulthandler.cancel_dump_traceback_later)
         with tempfile.TemporaryDirectory() as root:
             chain = Chain("/does/not/exist", root, Plan(), screen_only=True)
             temporary = chain.temporary.name
@@ -74,6 +73,57 @@ class HarnessTests(unittest.TestCase):
                     self.fail("unreachable")
             self.assertFalse(Path(temporary).exists())
             self.assertFalse(chain.provider.thread.is_alive())
+
+    def test_loopback_provider_serves_without_reverse_dns(self):
+        with patch('socket.getfqdn', side_effect=AssertionError('unexpected reverse DNS')):
+            provider = Provider(Plan())
+            connection = HTTPConnection(*provider.server_address, timeout=5)
+            try:
+                provider.thread.start()
+                self.assertTrue(provider.serving.wait(timeout=5))
+                request = {'model': 'smokemodel', 'stream': True, 'input': []}
+                connection.request('POST', '/v1/responses', json.dumps(request),
+                                   {'Authorization': 'Bearer ' + KEY})
+                response = connection.getresponse()
+                self.assertEqual(response.status, 200)
+                self.assertIn(b'ANSOK0000', response.read())
+                self.assertEqual(provider.request(0), request)
+                provider.check()
+            finally:
+                connection.close()
+                provider.close()
+
+    def test_shutdown_drains_terminal_tail_until_process_exits(self):
+        code = r'''import os, tty
+tty.setraw(0)
+os.write(1, b"READY")
+assert os.read(0, 1) == b"\x04"
+os.write(1, b"\x1b[?1049l")
+remaining = memoryview(b"x" * (256 * 1024))
+while remaining:
+    remaining = remaining[os.write(1, remaining):]
+'''
+        with tempfile.TemporaryDirectory() as root:
+            chain = Chain(sys.executable, root, Plan(), screen_only=True)
+            try:
+                chain.master, chain.slave = os.openpty()
+                chain.process = subprocess.Popen(
+                    [sys.executable, str(Path(__file__).with_name('process_support.py')),
+                     sys.executable, '-c', code], start_new_session=True,
+                    stdin=chain.slave, stdout=chain.slave, stderr=chain.slave,
+                )
+                os.close(chain.slave)
+                chain.slave = None
+                chain.screen = Screen()
+                chain.sampler = SimpleNamespace(sample=lambda: None)
+                chain.trace = SimpleNamespace(ready=False, installs=[])
+                chain.agent_pid = chain.process.pid
+                chain.wait_for('fixture ready', lambda: chain.screen.contains('READY'), timeout=5)
+                chain.shutdown()
+                self.assertEqual(chain.process.returncode, 0)
+                self.assertGreaterEqual(chain.screen.raw_bytes, 256 * 1024)
+            finally:
+                chain.__exit__()
 
     def test_pty_launcher_executes_with_a_controlling_terminal_and_owned_group(self):
         master, slave = os.openpty()

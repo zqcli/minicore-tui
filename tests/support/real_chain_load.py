@@ -26,6 +26,7 @@ import time
 import unicodedata
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from socketserver import TCPServer
 
 from canonical_observer import ObservationError, Trace, text_part, tool_part
 from agent_observer import AgentTrace
@@ -76,6 +77,11 @@ def tool_response(name, arguments, call_id):
 class Provider(ThreadingHTTPServer):
     daemon_threads = False
     allow_reuse_address = False
+
+    def server_bind(self):
+        # Numeric loopback fixtures must not wait for reverse DNS.
+        TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address
 
     def __init__(self, plan):
         super().__init__(("127.0.0.1", 0), Handler)
@@ -683,10 +689,19 @@ class Chain:
             self.wait_for("remote quit confirmation armed", lambda: self.screen.contains("quit again"), timeout=5)
             os.write(self.master, b"\x03")
         self.wait_for("terminal restore", lambda: self.screen.saw_restore, timeout=TURN_TIMEOUT)
-        try:
-            status = self.process.wait(timeout=10)
-        except subprocess.TimeoutExpired as error:
-            raise AssertionError("TUI did not exit after terminal restore") from error
+        # Darwin can wait for the terminal's remaining output during exit.
+        deadline = time.monotonic() + 10
+        while self.process.poll() is None:
+            self.drain()
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise AssertionError("TUI did not exit after terminal restore")
+            try:
+                self.process.wait(timeout=min(remaining, 0.05))
+            except subprocess.TimeoutExpired:
+                pass
+        self.drain()
+        status = self.process.returncode
         if status != 0:
             raise AssertionError(f"TUI exit status {status}")
         assert_group_exited(self.process.pid, self.agent_pid, timeout=10)
@@ -736,15 +751,16 @@ class Chain:
                 (Path(evidence) / "observer.jsonl").write_bytes(self.trace.path.read_bytes())
                 if hasattr(self, "agent_trace") and self.agent_trace.path.exists():
                     (Path(evidence) / "agent-observer.jsonl").write_bytes(self.agent_trace.path.read_bytes())
-        cleanup_group(self.process)
         if self.master is not None:
             try:
                 os.close(self.master)
             except OSError:
                 pass
+            self.master = None
         if self.slave is not None:
             os.close(self.slave)
             self.slave = None
+        cleanup_group(self.process)
         self.provider.close()
         self.temporary.cleanup()
         return False

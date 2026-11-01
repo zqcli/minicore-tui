@@ -14,6 +14,8 @@
 - Start acceptance-test PTYs without a threaded pre-exec callback, reap owned
   leaders before group checks, and require actual disappearance of macOS zombie
   groups. Failed helpers retain their full diagnostics within the existing bounds.
+- Keep loopback test providers independent of reverse DNS, and drain PTY output
+  through process exit so terminal tails cannot block macOS fixture cleanup.
 - Include revision-pinned backends in packaged `BUILD.txt` manifests.
 
 ## 0.9.6 — 2026-11-01
