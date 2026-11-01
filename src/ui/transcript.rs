@@ -39,7 +39,7 @@ const HEADER_HINTS: &[(&str, &str)] = &[
 pub struct RenderState {
     streams: HashMap<RequestKey, Stream>,
     /// What the streams were rendered for; any change restarts them.
-    key: Option<(u16, Fold, Styles)>,
+    key: Option<(u16, Styles)>,
     /// Rows of the welcome header cached in front of block 0.
     pub header_rows: usize,
 }
@@ -50,7 +50,7 @@ struct Stream {
 }
 
 impl RenderState {
-    fn prepare(&mut self, key: (u16, Fold, Styles), blocks: &[Block]) {
+    fn prepare(&mut self, key: (u16, Styles), blocks: &[Block]) {
         if self.key != Some(key) {
             self.key = Some(key);
             self.streams.clear();
@@ -160,7 +160,7 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, styles: Styles) {
     let key = (width, fold, styles);
     let layout = &mut app.layout;
     let blocks = session.transcript.blocks();
-    layout.state.prepare(key, blocks);
+    layout.state.prepare((width, styles), blocks);
     // The header rides in front of block 0, so it scrolls and anchors with the
     // transcript without being a block.
     let mut render = |state: &mut RenderState, index: usize, block: &Block| {
@@ -452,10 +452,10 @@ mod tests {
         let first = live(0, "one\n\ntwo is long enough to leave a prefix\n\nthree");
         let second = live(1, "beta");
         let mut state = RenderState::default();
-        state.prepare(key, &[first.clone(), second.clone()]);
+        state.prepare((key.0, key.2), &[first.clone(), second.clone()]);
         state.render(&first, key);
         state.render(&second, key);
-        state.prepare(key, std::slice::from_ref(&second));
+        state.prepare((key.0, key.2), std::slice::from_ref(&second));
         let rendered = state.render(&second, key);
         let rows: Vec<String> = rendered.iter_from(0).map(Line::to_string).collect();
         let want: Vec<String> = blocks::render(&second, key.2, 60, fold)
@@ -463,6 +463,52 @@ mod tests {
             .map(Line::to_string)
             .collect();
         assert_eq!(rows, want);
+    }
+
+    #[test]
+    fn folding_keeps_streamed_markdown_and_matches_a_full_render() {
+        use std::sync::Arc;
+
+        use crate::ui::theme::Palette;
+
+        let request = RequestKey {
+            loop_id: "l".into(),
+            request_index: 0,
+        };
+        let block = Block::Assistant {
+            key: request.clone(),
+            reasoning: "# Plan\n\nFirst step\nSecond step\nThird step\nFourth step".into(),
+            text: "Stable **paragraph**.\n\nA changing tail.".into(),
+            streaming: true,
+            expanded: None,
+        };
+        let styles = Styles::of(Palette::dark());
+        let width = 60;
+        let mut state = RenderState::default();
+        state.prepare((width, styles), std::slice::from_ref(&block));
+        state.render(&block, (width, Fold::default(), styles));
+        let stream = state.streams.get_mut(&request).unwrap();
+        let reply = stream.text.rows(&styles)[0].clone();
+        let reasoning = stream.reasoning.rows(&styles)[0].clone();
+        for (expanded, show_reasoning) in
+            [(true, true), (false, true), (false, false), (true, false)]
+        {
+            let fold = Fold {
+                expanded,
+                show_reasoning,
+            };
+            state.prepare((width, styles), std::slice::from_ref(&block));
+            let rendered = state.render(&block, (width, fold, styles));
+            let expected = blocks::render(&block, styles, width, fold);
+            assert_eq!(
+                rendered.iter_from(0).collect::<Vec<_>>(),
+                expected.iter().collect::<Vec<_>>(),
+                "fold {fold:?}"
+            );
+            let stream = state.streams.get_mut(&request).unwrap();
+            assert!(Arc::ptr_eq(&reply, &stream.text.rows(&styles)[0]));
+            assert!(Arc::ptr_eq(&reasoning, &stream.reasoning.rows(&styles)[0]));
+        }
     }
 
     #[test]

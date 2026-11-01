@@ -716,8 +716,9 @@ the tail, shown under its marker with `Ctrl+O`.
 
 ## Rendering
 
-A frame touches only what is visible, and cost follows the changed block, not
-the history length.
+A frame draws visible rows and reuses unchanged block layouts. Preparing the
+layout still compares the revision prefix; a cleared cache renders all loaded
+blocks once.
 
 - **Block cache.** `Transcript` keeps a revision per block, taken from one
   process-wide counter and bumped on every mutation, so no two blocks of any
@@ -745,7 +746,8 @@ the history length.
   code fence, once the next line shows that a list, quote or table has ended),
   and keeps the lines before it as shared chunks (`Rows`, `Arc<[Line]>`), so a
   delta hands the cache the committed chunks without copying them and renders
-  only the tail. Tests assert that the incremental result equals a full render
+  only the tail. Width or style changes reset the Markdown cache; folding reuses
+  its parsed rows. Tests assert that the incremental result equals a full render
   at every byte. Folded thinking shows its newest three rows under an `earlier`
   hint, while it streams and after.
 - **Cards.** Tool output is a bounded tail (400 lines, 64 KiB) while a turn runs;
