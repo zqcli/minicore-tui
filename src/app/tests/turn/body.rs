@@ -14,7 +14,7 @@ fn diff_with(added: usize, removed: usize) -> Value {
                       "new_count": added, "lines": lines}]})
 }
 
-/// A long history and a turn whose `bash` card is still running, drawn once.
+/// A long history and a turn whose `bash` card is still running.
 async fn running_card() -> Harness {
     let history = (0..15)
         .flat_map(|n| {
@@ -65,7 +65,11 @@ async fn a_literal_truncated_line_in_live_output_is_visible_and_searchable() {
     let found = crate::app::find::find_matches(h.blocks(), "[truncated]", false);
     assert_eq!(found.len(), 1);
     assert_eq!(found[0].field, crate::app::find::Field::Output);
+    let collapsed = h.screen(80, 24);
+    assert!(collapsed.contains("▎ $ sleep 40"), "{collapsed}");
     h.ctrl(KeyCode::Char('o'));
+    // Expansion pins the viewport; follow the tail to read the newly opened output.
+    h.press(KeyCode::End);
     let screen = h.screen(80, 24);
     assert!(screen.contains("[truncated]"), "{screen}");
 
