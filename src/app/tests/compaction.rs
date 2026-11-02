@@ -126,6 +126,7 @@ async fn a_request_refreshes_the_footer_context_at_most_once_per_window() {
         .await;
     tokio::time::advance(Duration::from_secs(3)).await;
     let opened = asked(&h);
+    let status_reads = h.calls("workspace.status").len();
 
     h.fake.script("session.presentation", presentation(40.0));
     h.emit("request_usage", usage()).await;
@@ -174,6 +175,7 @@ async fn a_request_refreshes_the_footer_context_at_most_once_per_window() {
     })
     .await;
     assert_eq!(asked(&h), opened + 2);
+    assert_eq!(h.calls("workspace.status").len(), status_reads);
 }
 
 #[tokio::test(start_paused = true)]

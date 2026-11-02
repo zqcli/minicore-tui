@@ -8,6 +8,119 @@ use crate::app::{Action, LaunchSettings};
 use crate::protocol::Reasoning;
 
 #[tokio::test(start_paused = true)]
+async fn incompatible_backends_stop_before_catalogs_or_session_operations() {
+    for (version, missing) in [
+        (2, None),
+        (3, None),
+        (4, Some("workspace.status")),
+        (4, Some("tool.output")),
+    ] {
+        let mut h = Harness::new();
+        let capabilities: Vec<_> = crate::protocol::REQUIRED_CAPABILITIES
+            .iter()
+            .copied()
+            .filter(|name| Some(*name) != missing)
+            .collect();
+        h.fake.script(
+            "agent.ping",
+            json!({
+                "version":"test", "protocol_version":version, "capabilities":capabilities
+            }),
+        );
+        crate::app::tasks::bootstrap(h.fake.client.clone(), h.app.tx.clone()).await;
+        h.until(|app| app.fatal.is_some()).await;
+        assert!(!h.app.ready);
+        for method in [
+            "model.list",
+            "session.list",
+            "session.open",
+            "session.create",
+            "input.push",
+        ] {
+            assert!(
+                h.calls(method).is_empty(),
+                "incompatible backend received {method}"
+            );
+        }
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn workspace_branch_and_presentation_refresh_independently() {
+    let mut h = Harness::new();
+    h.fake.script_held(
+        "workspace.status",
+        json!({
+            "branch":"feat/work", "complete":true, "repo_available":true
+        }),
+    );
+    h.open().await;
+    assert_eq!(crate::app::session::context_percent(h.session()), Some(0.6));
+    assert_eq!(h.session().branch(), None);
+    let presentations = h.calls("session.presentation").len();
+    let epoch = h.session().epoch;
+    h.fake.release("workspace.status");
+    h.until(|app| app.resident.current().unwrap().branch() == Some("feat/work"))
+        .await;
+    h.settle().await;
+    assert_eq!(h.calls("session.presentation").len(), presentations);
+
+    for (complete, available, branch) in [
+        (false, true, "partial"),
+        (true, false, "absent"),
+        (true, true, "next"),
+    ] {
+        h.fake.script(
+            "workspace.status",
+            json!({
+                "branch":branch, "complete":complete, "repo_available":available
+            }),
+        );
+        h.app.refresh_session_details_for(epoch);
+        h.settle().await;
+        assert_eq!(
+            h.session().branch(),
+            (complete && available).then_some(branch)
+        );
+    }
+    h.fake.script_error(
+        "workspace.status",
+        crate::protocol::INTERNAL_ERROR,
+        "status failed",
+        "internal",
+    );
+    h.app.refresh_session_details_for(epoch);
+    h.settle().await;
+    assert_eq!(h.session().branch(), None);
+    assert_eq!(crate::app::session::context_percent(h.session()), Some(0.6));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_delayed_branch_updates_its_resident_without_changing_the_foreground() {
+    let mut h = Harness::new();
+    h.fake.script_held(
+        "workspace.status@s1",
+        json!({
+            "branch":"first", "complete":true, "repo_available":true
+        }),
+    );
+    h.open().await;
+    h.fake
+        .script("session.open@s2", opened_session(session_info("s2")));
+    let mut read = display_read(0, 0);
+    read["session"] = session_info("s2");
+    h.fake.script("session.read@s2", history(read));
+    h.action(Action::OpenSession("s2".into()));
+    h.settle().await;
+    assert_eq!(h.session().info.session_id, "s2");
+    assert_eq!(h.session().branch(), Some("main"));
+    h.fake.release("workspace.status@s1");
+    h.settle().await;
+    assert_eq!(h.app.live("s1").unwrap().branch(), Some("first"));
+    assert_eq!(h.session().branch(), Some("main"));
+}
+
+#[tokio::test(start_paused = true)]
 async fn a_new_session_carries_only_the_launch_flags_given() {
     let cases = [
         (LaunchSettings::default(), json!({})),

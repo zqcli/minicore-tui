@@ -137,7 +137,6 @@ pub struct TurnDetails {
     pub outcome: crate::protocol::LoopOutcome,
     pub usage: Option<Usage>,
     pub requests: Option<u32>,
-    pub tool_rounds: Option<u64>,
 }
 
 impl From<&TurnWaitResult> for TurnDetails {
@@ -146,7 +145,6 @@ impl From<&TurnWaitResult> for TurnDetails {
             outcome: wait.outcome.clone(),
             usage: wait.usage.clone(),
             requests: wait.requests,
-            tool_rounds: wait.tool_rounds,
         }
     }
 }
@@ -278,7 +276,6 @@ pub(super) async fn stored_outcome(
         outcome,
         usage: page.usage,
         requests: page.requests,
-        tool_rounds: page.tool_rounds,
     }))
 }
 
@@ -867,7 +864,7 @@ pub async fn read_turn(
     let mut workspace = ReadWorkspace::acquire(&client).await;
     let mut assembly = Assembly::new(0);
     let mut expected: Option<TurnContentMeta> = None;
-    let (mut usage, mut requests, mut tool_rounds) = (None, None, None);
+    let (mut usage, mut requests) = (None, None);
     loop {
         let position = assembly.position;
         let mut params = json!({
@@ -966,7 +963,6 @@ pub async fn read_turn(
         // Keep known facts without extending the body's identity contract.
         usage = usage.or(page.usage);
         requests = requests.or(page.requests);
-        tool_rounds = tool_rounds.or(page.tool_rounds);
         for chunk in page.items {
             if let Some(partial) = assembly.push(chunk, page.total, &mut workspace)? {
                 return Ok(TurnRead::Partial(Box::new(partial)));
@@ -1056,7 +1052,6 @@ pub async fn read_turn(
                     outcome: meta.outcome,
                     usage,
                     requests,
-                    tool_rounds,
                 },
                 persistence: meta.persistence,
                 persistence_uncertain: meta.persistence_uncertain,
@@ -1188,7 +1183,6 @@ mod tests {
         for page in [&mut first, &mut last] {
             page["usage"] = json!({"input_tokens":90, "output_tokens":12});
             page["requests"] = json!(3);
-            page["tool_rounds"] = json!(2);
         }
         let (result, calls) = read_pages(vec![first, last]).await;
         let TurnRead::Complete(content) = result.expect("complete pages must be readable") else {
@@ -1200,7 +1194,6 @@ mod tests {
             Some(12)
         );
         assert_eq!(content.details.requests, Some(3));
-        assert_eq!(content.details.tool_rounds, Some(2));
         assert!(content.interrupted.is_none());
         drop(content);
         assert_eq!(calls.len(), 2);
@@ -1251,7 +1244,6 @@ mod tests {
             };
             statistics["usage"] = json!({"input_tokens":90,"output_tokens":12});
             statistics["requests"] = json!(3);
-            statistics["tool_rounds"] = json!(2);
             let (result, calls) = read_pages(vec![first, last]).await;
             let Ok(TurnRead::Complete(content)) = result else {
                 panic!("live-to-stored lost its immutable body: {result:?}");
@@ -1263,7 +1255,6 @@ mod tests {
                 Some(12)
             );
             assert_eq!(content.details.requests, Some(3));
-            assert_eq!(content.details.tool_rounds, Some(2));
             assert_eq!(calls[1]["result_id"], RESULT_ID);
         }
     }

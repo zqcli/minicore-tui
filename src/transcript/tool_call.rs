@@ -173,14 +173,9 @@ impl ToolCall {
         }
     }
 
-    /// Stores the head of a result within the card bounds, keeping the Agent's
-    /// cut marker as the last line since its line total counts it.
+    /// Stores the head of a result within the card bounds.
     fn push_head(&mut self, content: &str) {
         let body = content.strip_suffix('\n').unwrap_or(content);
-        let (body, cut) = match body.strip_suffix(TRUNCATED_MARKER) {
-            Some(rest) if rest.is_empty() || rest.ends_with('\n') => (rest, true),
-            _ => (body, false),
-        };
         let mut bytes = 0;
         for line in body.lines().take(OUTPUT_TAIL_LINES) {
             if bytes > OUTPUT_TAIL_BYTES {
@@ -190,10 +185,6 @@ impl ToolCall {
             self.truncated |= append_capped(&mut kept, line);
             bytes += kept.len() + 1;
             self.output.push(kept);
-        }
-        if cut {
-            self.truncated = true;
-            self.output.push(TRUNCATED_MARKER.to_owned());
         }
     }
 
@@ -209,17 +200,7 @@ impl ToolCall {
             self.output.drain(..drop);
             self.output_dropped += drop;
         } else {
-            // The Agent's total counts the cut marker, which the head loses.
-            let markers = self
-                .output
-                .iter()
-                .filter(|line| *line == TRUNCATED_MARKER)
-                .count();
-            self.output_lines = Some(
-                self.output_lines
-                    .map_or(0, |total| total.saturating_sub(markers))
-                    .max(content),
-            );
+            self.output_lines = Some(self.output_lines.unwrap_or(0).max(content));
             self.output.truncate(EXPANDED_ROWS);
         }
         self.output.shrink_to_fit();
@@ -358,14 +339,9 @@ impl ToolCall {
             .map_or(0, |total| total.saturating_sub(sent))
     }
 
-    /// The output lines worth showing, without an empty open line or the `[truncated]` marker.
+    /// The output lines to show, without an empty open line.
     pub fn output_content(&self) -> Vec<&str> {
-        let mut lines: Vec<&str> = self
-            .output
-            .iter()
-            .map(String::as_str)
-            .filter(|line| *line != TRUNCATED_MARKER)
-            .collect();
+        let mut lines: Vec<&str> = self.output.iter().map(String::as_str).collect();
         if lines.last() == Some(&"") {
             lines.pop();
         }
@@ -473,8 +449,6 @@ pub const EXPANDED_ROWS: usize = 200;
 pub const OUTPUT_TAIL_LINES: usize = 400;
 /// Byte cap for a card's stored output tail.
 pub const OUTPUT_TAIL_BYTES: usize = 64 * 1024;
-/// The line older Agents' `read` and `bash` results end with when cut; stored history keeps it.
-pub const TRUNCATED_MARKER: &str = "[truncated]";
 
 /// Appends to one stored line within the byte cap; returns whether anything was cut.
 fn append_capped(line: &mut String, text: &str) -> bool {
@@ -642,16 +616,12 @@ mod tests {
     fn settling_a_read_card_keeps_the_head_and_the_total() {
         let mut call = ToolCall::new(key("c"), "read");
         let content: String = (0..399).map(|line| format!("line {line}\n")).collect();
-        call.apply_result(&format!("{content}{TRUNCATED_MARKER}\n"));
+        call.apply_result(&format!("{content}[truncated]\n"));
         call.output_lines = Some(400);
         call.settle();
         assert_eq!(call.output.len(), EXPANDED_ROWS);
         assert_eq!(call.output[0], "line 0");
-        assert_eq!(
-            call.output_lines,
-            Some(399),
-            "the marker is no longer a line"
-        );
+        assert_eq!(call.output_lines, Some(400));
     }
 
     #[test]
@@ -687,15 +657,23 @@ mod tests {
     }
 
     #[test]
-    fn a_long_read_result_keeps_its_head_and_the_cut_marker() {
-        let mut call = ToolCall::new(key("c"), "read");
-        let lines: Vec<String> = (1..=1000).map(|n| format!("{n}: row")).collect();
-        call.apply_result(&format!("{}\n[truncated]", lines.join("\n")));
-        assert_eq!(call.output[0], "1: row");
-        assert_eq!(call.output.last().unwrap(), TRUNCATED_MARKER);
-        assert!(call.output.len() <= OUTPUT_TAIL_LINES + 1);
-        assert!(call.truncated);
-        assert_eq!(call.output_content().len(), OUTPUT_TAIL_LINES);
+    fn result_text_does_not_decide_whether_output_was_truncated() {
+        for name in ["read", "bash"] {
+            let mut call = ToolCall::new(key("c"), name);
+            let text = "before\n[truncated]\nafter\n[truncated]\n";
+            if name == "bash" {
+                call.apply_result(&format!("exit_code: 0\nstdout:\n{text}stderr:\n"));
+            } else {
+                call.apply_result(text);
+            }
+            assert_eq!(
+                call.output_content(),
+                ["before", "[truncated]", "after", "[truncated]"]
+            );
+            assert!(!call.truncated);
+            call.settle();
+            assert_eq!(call.output_content().len(), 4);
+        }
     }
 
     #[test]
@@ -709,11 +687,8 @@ mod tests {
 
     #[test]
     fn a_command_record_without_an_exit_code_keeps_the_known_one() {
-        use crate::protocol::event::{CommandResult, CommandStatus};
-        let record = |exit_code| CommandResult {
-            status: CommandStatus::Exited,
-            exit_code,
-        };
+        use crate::protocol::event::CommandResult;
+        let record = |exit_code| CommandResult { exit_code };
         let mut call = ToolCall::new(key("c"), "bash");
         call.apply_command(&record(Some(2)));
         call.apply_command(&record(None));

@@ -353,9 +353,9 @@ fn busy_session() -> Bench {
         output: 45_678,
         cached: 987_654,
     };
+    session.branch = Some("v05/perf".into());
     session.presentation = Some(SessionPresentation {
         session_id: "ses_perf".into(),
-        git_branch: Some("v05/perf".into()),
         context: Some(ContextUsage {
             tokens: Some(61_000),
             window: Some(200_000),

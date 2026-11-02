@@ -65,7 +65,7 @@ impl App {
             return;
         }
         self.select_session(Some(epoch));
-        self.refresh_branch_for(epoch);
+        self.refresh_session_details_for(epoch);
         self.refresh_context_for(epoch);
     }
 

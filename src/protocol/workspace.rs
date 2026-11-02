@@ -1,6 +1,13 @@
-//! Workspace file listings and Git entry identities.
+//! Workspace file listings and Git observations.
 
 use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct WorkspaceStatus {
+    pub repo_available: bool,
+    pub branch: Option<String>,
+    pub complete: bool,
+}
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct WorkspaceStatusEntry {

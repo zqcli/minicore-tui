@@ -1,4 +1,4 @@
-//! Wire DTOs for minicore-agent Protocol v3. Unknown fields are
+//! Wire DTOs for minicore-agent Protocol v4. Unknown fields are
 //! ignored, and enums the Agent documents as non-exhaustive decode future values
 //! to `Unknown` instead of failing the frame.
 
@@ -42,7 +42,7 @@ pub use tool::{
 pub use workspace::{FileEntry, FileKind, FilesPage};
 
 pub const JSONRPC_VERSION: &str = "2.0";
-pub const PROTOCOL_VERSION: u32 = 3;
+pub const PROTOCOL_VERSION: u32 = 4;
 
 pub const METHOD_PING: &str = "agent.ping";
 pub const METHOD_RELOAD: &str = "agent.reload";
@@ -75,8 +75,6 @@ pub const METHOD_WORKSPACE_STATUS: &str = "workspace.status";
 pub const METHOD_CHANGES_LIST: &str = "changes.list";
 pub const METHOD_CHANGES_DIFF: &str = "changes.diff";
 pub const METHOD_INTERACTION_ANSWER: &str = "interaction.answer";
-/// The notification that carries the authoritative control snapshot.
-pub const EVENT_SESSION_SNAPSHOT: &str = "session_snapshot";
 
 pub const INVALID_PARAMS: i64 = -32_602;
 pub const INTERNAL_ERROR: i64 = -32_603;
@@ -97,7 +95,9 @@ pub const REQUIRED_CAPABILITIES: &[&str] = &[
     "turn.result",
     "tool.read",
     "tool.read.display",
+    "tool.output",
     "workspace.files",
+    "workspace.status",
     "changes.list",
     "changes.diff",
 ];
@@ -173,7 +173,6 @@ pub struct RpcError {
     pub code: i64,
     pub kind: String,
     pub message: String,
-    pub retryable: bool,
     /// For input methods: whether the Agent refused before accepting anything.
     pub acceptance: Option<Acceptance>,
 }
@@ -191,7 +190,6 @@ impl RpcError {
             code,
             kind: kind.into(),
             message: message.into(),
-            retryable: false,
             acceptance: None,
         }
     }
@@ -326,27 +324,23 @@ fn parse_wire_error(value: Value) -> Result<RpcError, FrameError> {
         .get("message")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    let (kind, retryable, acceptance) = match object.get("data") {
+    let (kind, acceptance) = match object.get("data") {
         Some(data) => (
             data.get("kind")
                 .and_then(Value::as_str)
                 .unwrap_or("unknown"),
-            data.get("retryable")
-                .and_then(Value::as_bool)
-                .unwrap_or(false),
             match data.get("acceptance").and_then(Value::as_str) {
                 Some("rejected") => Some(Acceptance::Rejected),
                 Some("unknown") => Some(Acceptance::Unknown),
                 _ => None,
             },
         ),
-        None => ("unknown", false, None),
+        None => ("unknown", None),
     };
     Ok(RpcError {
         code,
         kind: kind.to_owned(),
         message: message.to_owned(),
-        retryable,
         acceptance,
     })
 }
@@ -541,7 +535,6 @@ impl CompactionPhase {
 #[derive(Clone, Debug, Deserialize)]
 pub struct SessionPresentation {
     pub session_id: String,
-    pub git_branch: Option<String>,
     pub context: Option<ContextUsage>,
 }
 
@@ -557,7 +550,6 @@ pub struct ContextUsage {
 #[serde(rename_all = "snake_case")]
 pub enum ContextKind {
     Reported,
-    Estimated,
     #[serde(other)]
     Unknown,
 }
@@ -815,7 +807,6 @@ pub struct TurnWaitResult {
     pub outcome: LoopOutcome,
     pub usage: Option<Usage>,
     pub requests: Option<u32>,
-    pub tool_rounds: Option<u64>,
 }
 
 #[cfg(test)]
@@ -859,7 +850,6 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(future.outcome, LoopOutcome::Unknown);
-        assert_eq!(future.tool_rounds, None);
     }
 
     fn failed(model_error: Value) -> LoopOutcome {
@@ -942,30 +932,41 @@ mod tests {
     }
 
     #[test]
-    fn handshake_requires_protocol_three_and_used_capabilities() {
-        let ping = |capabilities: &[&str]| PingResult {
-            version: "0.9.3".into(),
-            protocol_version: 3,
-            capabilities: capabilities.iter().map(|c| (*c).to_owned()).collect(),
+    fn handshake_requires_protocol_four_and_every_used_capability() {
+        let mut ping = PingResult {
+            version: "0.9.4".into(),
+            protocol_version: 4,
+            capabilities: REQUIRED_CAPABILITIES
+                .iter()
+                .map(|c| (*c).to_owned())
+                .collect(),
         };
-        assert_eq!(validate_backend(&ping(REQUIRED_CAPABILITIES)), Ok(()));
-        assert!(matches!(
-            validate_backend(&ping(&[REQUIRED_CAPABILITIES[0]])),
-            Err(BackendError::MissingCapabilities { .. })
-        ));
-        let mut wrong = ping(REQUIRED_CAPABILITIES);
-        wrong.protocol_version = 2;
-        assert!(matches!(
-            validate_backend(&wrong),
-            Err(BackendError::ProtocolVersion {
-                found: 2,
-                required: 3
-            })
-        ));
+        assert_eq!(validate_backend(&ping), Ok(()));
+        for capability in REQUIRED_CAPABILITIES {
+            let mut missing = ping.clone();
+            missing.capabilities.retain(|name| name != capability);
+            assert!(
+                matches!(
+                    validate_backend(&missing),
+                    Err(BackendError::MissingCapabilities { .. })
+                ),
+                "missing {capability}"
+            );
+        }
+        for version in [2, 3] {
+            ping.protocol_version = version;
+            assert_eq!(
+                validate_backend(&ping),
+                Err(BackendError::ProtocolVersion {
+                    found: version,
+                    required: 4
+                })
+            );
+        }
     }
 
     #[test]
-    fn response_error_carries_kind_and_retryability() {
+    fn response_error_carries_kind_and_classifies_busy() {
         let frame = br#"{"jsonrpc":"2.0","id":7,"error":{"code":-32003,"message":"busy","data":{"kind":"session_busy","retryable":true}}}"#;
         let IncomingFrame::Response(response) = parse_frame(frame).unwrap() else {
             panic!("expected a response");
@@ -974,7 +975,7 @@ mod tests {
         let error = response.decode::<Value>().unwrap_err();
         assert_eq!(error.code, SESSION_BUSY);
         assert_eq!(error.kind, "session_busy");
-        assert!(error.retryable && error.is_busy());
+        assert!(error.is_busy());
     }
 
     #[test]

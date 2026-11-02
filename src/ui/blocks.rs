@@ -15,7 +15,7 @@ use super::theme::Styles;
 use crate::protocol::read::UserKind;
 use crate::transcript::layout::Fold;
 use crate::transcript::{Block, ToolCall};
-use crate::transcript::{EXPANDED_ROWS, TRUNCATED_MARKER, ToolState};
+use crate::transcript::{EXPANDED_ROWS, ToolState};
 use crate::wrap;
 
 /// Columns before block text: the rail and one pad cell.
@@ -609,16 +609,7 @@ fn card_body(call: &ToolCall) -> Body<'_> {
     }
     let output = call.output_content();
     let shown = EXPANDED_ROWS.min(output.len());
-    // The Agent's count includes the cut marker the card leaves out.
-    let markers = call
-        .output
-        .iter()
-        .filter(|line| *line == TRUNCATED_MARKER)
-        .count();
-    let total = call
-        .output_lines
-        .map_or(0, |total| total.saturating_sub(markers))
-        .max(output.len());
+    let total = call.output_lines.unwrap_or(0).max(output.len());
     Body {
         hidden: total - shown,
         lines: output[..shown].to_vec(),
@@ -1305,10 +1296,11 @@ mod tests {
         read.duration = None;
         read.exit_code = None;
         read.output_dropped = 0;
-        read.output_lines = Some(2001);
+        read.output_lines = Some(2000);
         read.output = Vec::new();
-        // The 2,000 line result as previewed: cut inside line 5, then marked.
-        read.apply_result("1: alpha\n2: beta\n3: gamma\n4: delta\n1\n[truncated]");
+        // Structured metadata identifies a preview cut inside line 5.
+        read.truncated = true;
+        read.apply_result("1: alpha\n2: beta\n3: gamma\n4: delta\n1");
         assert_eq!(
             card(read.clone(), fold())[2],
             "▎ ... (2000 more lines, click or ctrl+o to expand)"

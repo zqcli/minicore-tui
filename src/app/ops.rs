@@ -35,8 +35,13 @@ impl App {
                     self.session_mut(epoch).presentation = Some(presentation);
                 }
             }
-            // A failed status still leaves the footer's other figures to read.
-            SessionOp::WorkspaceStatus(_) => self.refresh_presentation_for(epoch),
+            SessionOp::WorkspaceStatus(result) => {
+                // An incomplete or failed observation cannot establish the current branch.
+                self.session_mut(epoch).branch = result
+                    .ok()
+                    .filter(|status| status.complete && status.repo_available)
+                    .and_then(|status| status.branch);
+            }
             SessionOp::Context(result) => {
                 if let Some(context) = self.ok(result)
                     && let Some(reason) = self.session_mut(epoch).apply_context(context)
@@ -191,7 +196,7 @@ impl App {
             self.read_history_for(epoch, Window::Tail);
         }
         self.refresh_control_for(epoch);
-        self.refresh_branch_for(epoch);
+        self.refresh_session_details_for(epoch);
         self.refresh_context_for(epoch);
         Ok(epoch)
     }
@@ -524,7 +529,7 @@ impl App {
         // A turn-start compaction has no response of its own: `session.context`
         // is where it is reported, and the footer's figure moved too. The turn
         // may also have switched branches.
-        self.refresh_branch_for(epoch);
+        self.refresh_session_details_for(epoch);
         self.refresh_context_for(epoch);
     }
 

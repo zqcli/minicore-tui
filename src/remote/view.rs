@@ -725,14 +725,11 @@ mod tests {
                    {"name":"review", "description":"Review staged changes", "hint":"[focus]"}])
         );
         assert!(state["session"]["branch"].is_null());
-        let presentation = |branch: &str| {
-            serde_json::from_value(json!({"session_id":"s1", "git_branch":branch})).unwrap()
-        };
-        app.resident.current_mut().unwrap().presentation = Some(presentation("feat/ui2"));
+        app.resident.current_mut().unwrap().branch = Some("feat/ui2".into());
         let changed = sync(&mut view, &mut app);
         assert_eq!(changed[0]["state"]["session"]["branch"], "feat/ui2");
         assert!(sync(&mut view, &mut app).is_empty());
-        app.resident.current_mut().unwrap().presentation = Some(presentation(" "));
+        app.resident.current_mut().unwrap().branch = Some(" ".into());
         assert!(sync(&mut view, &mut app)[0]["state"]["session"]["branch"].is_null());
     }
 

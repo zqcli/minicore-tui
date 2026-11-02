@@ -46,6 +46,52 @@ async fn running_card() -> Harness {
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_literal_truncated_line_in_live_output_is_visible_and_searchable() {
+    let mut h = running_card().await;
+    let output = "before\n[truncated]\nafter\n";
+    h.emit(
+        "tool_process",
+        json!({"data":{
+            "tool_ref":{"session_id":"s1","loop_id":"l1","request_index":0,"tool_call_id":"c1"},
+            "chunk":{"stream":"stdout","encoding":"utf8","data":output,
+                     "base_offset":0,"next_offset":output.len(),"expired":false}
+        }}),
+    )
+    .await;
+    h.settle().await;
+    let call = h.session().transcript.tool_calls().next().unwrap();
+    assert_eq!(call.output_content(), ["before", "[truncated]", "after"]);
+    assert!(!call.truncated);
+    let found = crate::app::find::find_matches(h.blocks(), "[truncated]", false);
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].field, crate::app::find::Field::Output);
+    h.ctrl(KeyCode::Char('o'));
+    let screen = h.screen(80, 24);
+    assert!(screen.contains("[truncated]"), "{screen}");
+
+    use crate::app::tests::phone::{connect_phone, enable_remote, messages};
+    enable_remote(&mut h);
+    let (mut phone, _closing) = connect_phone(&mut h, 1, "phone").await;
+    h.app.sync_remote();
+    let frames = messages(&mut phone);
+    let snapshot = frames
+        .iter()
+        .find(|frame| frame["t"] == "snapshot")
+        .unwrap();
+    let tool = snapshot["blocks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|block| block["type"] == "tool")
+        .unwrap();
+    assert_eq!(
+        tool["output"],
+        json!(["before", "[truncated]", "after", ""])
+    );
+    assert_eq!(tool["truncated"], false);
+}
+
+#[tokio::test(start_paused = true)]
 async fn steers_a_running_turn_took_become_steering_blocks_in_the_agents_order() {
     let id = |text: &str| if text == "first" { "i2" } else { "i3" };
     for batches in [

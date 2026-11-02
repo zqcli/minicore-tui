@@ -60,10 +60,6 @@ pub enum ArgsError {
     Theme(String),
     #[error("--session and --continue cannot be combined")]
     Conflict,
-    #[error(
-        "--config was replaced: --home names the TUI directory, --agent-config a raw Agent file"
-    )]
-    ConfigRenamed,
     #[error("unexpected argument {0}")]
     Unexpected(String),
 }
@@ -88,7 +84,6 @@ impl Args {
                 "--agent-config" => {
                     args.agent_config = Some(PathBuf::from(value("--agent-config")?));
                 }
-                "--config" => return Err(ArgsError::ConfigRenamed),
                 "--workspace" => args.workspace = Some(PathBuf::from(value("--workspace")?)),
                 "--session" => args.session = Some(value("--session")?),
                 "--continue" => args.continue_recent = true,
@@ -190,14 +185,6 @@ mod tests {
             Args::parse(["--reasoning", "turbo"]).unwrap_err(),
             ArgsError::Reasoning(_)
         ));
-    }
-
-    #[test]
-    fn the_old_config_flag_says_what_replaced_it() {
-        assert_eq!(
-            Args::parse(["--config", "/a.toml"]).unwrap_err(),
-            ArgsError::ConfigRenamed
-        );
     }
 
     #[test]

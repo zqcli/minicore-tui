@@ -482,7 +482,6 @@ pub struct TurnResultPage {
     pub persistence: Option<TurnPersistence>,
     pub usage: Option<super::Usage>,
     pub requests: Option<u32>,
-    pub tool_rounds: Option<u64>,
     pub interrupted: Option<InterruptedRequest>,
 }
 

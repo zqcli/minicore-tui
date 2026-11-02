@@ -42,7 +42,7 @@ impl Harness {
         let (fake, app) = FakeAgent::start(tx);
         fake.script(
             "agent.ping",
-            json!({"version": "0.9.3", "protocol_version": 3, "capabilities": [
+            json!({"version": "0.9.4", "protocol_version": 4, "capabilities": [
                 "session.read", "session.read.display", "session.context", "turn.result",
                 "tool.read", "tool.read.display", "tool.output", "workspace.files",
                 "workspace.search", "workspace.status", "changes.list", "changes.diff"
@@ -73,7 +73,7 @@ impl Harness {
         );
         fake.script(
             "session.presentation",
-            json!({"session_id": "s1", "model_label": "mock", "git_branch": "main",
+            json!({"session_id": "s1", "model_label": "mock",
                    "context": {"tokens": 1200, "window": 200000, "percent": 0.6, "kind": "reported"}}),
         );
         fake.script(
@@ -81,8 +81,10 @@ impl Harness {
             state_response(snapshot("s1", crate::testing::LOAD, 1)),
         );
         fake.script("session.context", json!({"session_id": "s1"}));
-        fake.script("workspace.status", json!({}));
-        fake.script("input.list", queue(vec![], false));
+        fake.script(
+            "workspace.status",
+            json!({"branch":"main", "complete":true, "repo_available":true}),
+        );
         fake.script("input.remove", json!({"text": ""}));
         fake.script("input.recall", json!({"texts": []}));
         fake.script("input.resume", json!({"start_error": null}));

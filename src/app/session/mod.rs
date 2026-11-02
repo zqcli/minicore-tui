@@ -45,6 +45,7 @@ pub struct Session {
     pub early_gap: bool,
     pub usage: UsageTotals,
     pub presentation: Option<SessionPresentation>,
+    pub branch: Option<String>,
     /// When `presentation` was last asked for, and whether that answer is still due.
     pub presentation_asked: Option<tokio::time::Instant>,
     pub presentation_in_flight: bool,
@@ -290,6 +291,7 @@ impl Session {
             early_gap: false,
             usage: UsageTotals::default(),
             presentation: None,
+            branch: None,
             presentation_asked: None,
             presentation_in_flight: false,
             context: None,
@@ -363,10 +365,11 @@ impl Session {
         self.compaction.is_some()
     }
 
-    /// The Git branch the footer shows, from the last presentation.
+    /// The branch shared by the terminal and phone, from the last workspace observation.
     pub fn branch(&self) -> Option<&str> {
-        let branch = self.presentation.as_ref()?.git_branch.as_deref();
-        branch.filter(|branch| !branch.trim().is_empty())
+        self.branch
+            .as_deref()
+            .filter(|branch| !branch.trim().is_empty())
     }
 
     pub fn status_label(&self) -> Option<&'static str> {

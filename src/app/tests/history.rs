@@ -901,7 +901,6 @@ async fn a_saved_history_tail_preserves_unsaved_a_live_c_new_output_draft_and_an
                 outcome: LoopOutcome::Completed,
                 usage: None,
                 requests: None,
-                tool_rounds: None,
             },
             &a,
             None,

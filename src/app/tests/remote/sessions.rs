@@ -1192,9 +1192,7 @@ async fn changes_and_diff_queries_list_the_workspace_like_the_diff_view_and_refu
                "next_cursor":null, "complete":true, "binary":false, "availability":"available",
                "stale":false, "truncated":false}),
     );
-    live_mut(&mut h, "s1").presentation = Some(
-        serde_json::from_value(json!({"session_id":"s1", "git_branch":"feat/parser"})).unwrap(),
-    );
+    live_mut(&mut h, "s1").branch = Some("feat/parser".into());
     messages(&mut a);
     query_from(&mut h, 1, "changes", json!({"kind":"changes"}));
     h.settle().await;

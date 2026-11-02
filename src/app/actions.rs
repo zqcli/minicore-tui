@@ -499,7 +499,7 @@ impl App {
         }
     }
 
-    /// Asks for the footer's figures: model label, branch, context usage.
+    /// Asks for the footer's context usage.
     pub(super) fn refresh_presentation_for(&mut self, epoch: u64) {
         let session = self.session_mut(epoch);
         session.presentation_asked = Some(tokio::time::Instant::now());
@@ -512,9 +512,9 @@ impl App {
         );
     }
 
-    /// The Agent reports a branch only after a `workspace.status`, so one runs
-    /// before the presentation is read again.
-    pub(super) fn refresh_branch_for(&mut self, epoch: u64) {
+    /// Refreshes branch and context independently; periodic usage reads never run Git.
+    pub(super) fn refresh_session_details_for(&mut self, epoch: u64) {
+        self.refresh_presentation_for(epoch);
         self.call_for(
             epoch,
             protocol::METHOD_WORKSPACE_STATUS,

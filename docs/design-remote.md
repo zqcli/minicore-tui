@@ -685,8 +685,8 @@ uses the routing above; local background notices keep their label prefix.
   session (`allow_session`); their approvals are answered without a notice.
   It is `[]` when there are none.
 - `session.branch` is the Git branch the footer shows for that session
-  (`Session::branch`: the last `session.presentation` after a
-  `workspace.status`, blank names dropped), or `null`. A draft has no session
+  (`Session::branch`: the last complete `workspace.status` observation with
+  a repository available, blank names dropped), or `null`. A draft has no session
   and the TUI knows no branch for it.
 - `commands` are the prompt templates (`prompt/commands/*.md`): name, the
   description line and the `argument-hint`, sorted by name, shared by every

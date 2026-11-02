@@ -3,7 +3,7 @@
 `minicore-tui` is a fullscreen terminal frontend for [`minicore-agent`]: a
 scrolling transcript, a status line, a composer and a footer. The Agent is built
 into the same executable: the TUI starts itself as `minicore-tui agent` in a
-child process and talks to it with stdio NDJSON JSON-RPC (Protocol v3), so one
+child process and talks to it with stdio NDJSON JSON-RPC (Protocol v4), so one
 file is the whole program. Version 0.4 is a rewrite of the v0.3 frontend; see
 [CHANGELOG.md](CHANGELOG.md).
 
@@ -16,14 +16,15 @@ file is the whole program. Version 0.4 is a rewrite of the v0.3 frontend; see
   inserts a newline. `Alt+Enter` needs the terminal to pass Alt (on macOS, Option
   as Meta or Esc+); see [docs/keybindings.md](docs/keybindings.md).
 
-Built-in backend: Agent 0.9.3 (development), which links Runtime 0.9.0;
-`Cargo.toml` pins the matching RPC v3 Agent by an immutable Git revision and
-`Cargo.lock` fixes both. The `0.9.7` branch adopts that protocol while preserving
+Built-in backend: Agent 0.9.4 (development), which links Runtime 0.9.0;
+`Cargo.toml` pins the matching RPC v4 Agent by an immutable Git revision and
+`Cargo.lock` fixes both. The `0.9.8` branch adopts that protocol while preserving
 the terminal and phone interfaces. An
 external Agent can still be named with `--agent`. At startup the TUI requires
-Protocol v3 and these Agent capabilities, and refuses an Agent that lacks one: `session.read`, `session.read.display`, `session.context`,
-`turn.result`, `tool.read`, `tool.read.display`,
-`workspace.files`, `changes.list`, `changes.diff`.
+Protocol v4 and these Agent capabilities, and refuses an Agent that lacks one: `session.read`, `session.read.display`, `session.context`,
+`turn.result`, `tool.read`, `tool.read.display`, `tool.output`,
+`workspace.files`, `workspace.status`, `changes.list`, `changes.diff`.
+The phone WebSocket protocol remains v3.
 
 ## Build and run
 
@@ -122,7 +123,7 @@ history is `history.jsonl` in the TUI directory.
 
 ```text
 
- minicore-tui v0.9.7                                  (welcome header)
+ minicore-tui v0.9.8                                  (welcome header)
 
  esc interrupt · ctrl+c clear · / commands · @ files · ctrl+o expand · ctrl+r sessions
 

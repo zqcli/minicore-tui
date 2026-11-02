@@ -335,7 +335,7 @@ phones disconnecting alone leave remote mode Waiting.
 | `--remote` | start remote control; bind before taking the terminal (bind failure exits with status 1) |
 | `--workspace DIR`, `--session ID`, `--continue` | which workspace and session; with neither of the last two the TUI creates no session until the first message |
 
-`--config` was removed; the parser says so instead of reporting an unknown option.
+`--config` is not a TUI option; use `--agent-config` for a raw Agent file.
 
 ## Prompt templates
 

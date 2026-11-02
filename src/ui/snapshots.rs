@@ -325,9 +325,10 @@ fn the_footer_reports_model_and_reasoning_without_duplicate_status() {
 fn the_footer_names_the_branch_and_right_aligns_the_totals() {
     let mut app = app();
     let session = app.resident.current_mut().expect("session");
+    session.branch = Some("main".into());
     session.presentation = Some(
         serde_json::from_value(serde_json::json!({
-            "session_id": "ses_0123456789abcdef", "git_branch": "main",
+            "session_id": "ses_0123456789abcdef",
             "context": {"tokens": 16400, "window": 40000, "percent": 41.0, "kind": "reported"}
         }))
         .unwrap(),

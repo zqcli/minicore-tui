@@ -10,7 +10,7 @@ file gets fixed.
 `minicore-tui` is a fullscreen terminal frontend (Rust, ratatui + crossterm) for
 [minicore-agent](https://github.com/zqcli/minicore-agent). The Agent is built
 into the same executable: the TUI starts itself as `minicore-tui agent` in one
-child process and talks to it over stdio NDJSON JSON-RPC (Protocol v3). The RPC
+child process and talks to it over stdio NDJSON JSON-RPC (Protocol v4). The RPC
 contract is the only interface; the only Agent Rust API used is
 `minicore_agent::cli::run` for that subcommand. The TUI never reads the Agent
 store or the workspace, runs no tool, calls no provider and holds no credential.
@@ -129,7 +129,10 @@ Keep these unless the user asks to change them:
   bounded until a snapshot confirms their region; canonical installation closes
   body appends while allowing auxiliary tool facts. History pins are never cached. Compaction inserts a marker and never
   removes transcript content. The footer shows only the context figure the Agent
-  reported, never an estimate. Steering placement uses the delivered input ID and
+  reported, never an estimate. The branch comes directly from a complete
+  `workspace.status` observation and is shared by terminal and phone projections;
+  `session.presentation` does not cache workspace data. Steering placement uses
+  the delivered input ID and
   authoritative candidate request index, before its turn's terminal and successor;
   identical text never identifies an input or its boundary.
 - The snapshot's completion directory is the discovery source: every entry above
@@ -194,7 +197,7 @@ to it. Do not rewrite released changelog sections.
 ## Backends, CI And Releases
 
 - Formal releases pin `minicore-agent` by its release tag (`tag = "vX.Y.Z"`).
-  The current 0.9.7 development branch pins Agent 0.9.3 by immutable Git revision;
+  The current 0.9.8 development branch pins Agent 0.9.4 by immutable Git revision;
   `Cargo.lock` also fixes its Runtime dependency. To adopt an Agent version,
   update its ref and version, run `cargo update`, and update the README backend
   line. Tags are never moved.

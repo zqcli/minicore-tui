@@ -267,22 +267,7 @@ pub enum ProcessStream {
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct CommandResult {
-    pub status: CommandStatus,
     pub exit_code: Option<i64>,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum CommandStatus {
-    Running,
-    Cancelling,
-    Exited,
-    Cancelled,
-    TimedOut,
-    SpawnFailed,
-    Failed,
-    #[serde(other)]
-    Unknown,
 }
 
 #[cfg(test)]

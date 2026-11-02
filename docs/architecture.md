@@ -10,7 +10,7 @@ document and the code win.
 `minicore-runtime`). The Agent crate is linked only to serve as this
 executable's `agent` subcommand: `main` hands those arguments to
 `minicore_agent::cli::run` before anything else. The TUI talks to that child over
-stdio NDJSON JSON-RPC (Protocol v3) and calls no other Agent API. It never reads the Agent store or
+stdio NDJSON JSON-RPC (Protocol v4) and calls no other Agent API. It never reads the Agent store or
 workspace file contents, runs a tool, calls a provider or keeps provider credentials;
 its two settings files name environment variables, never keys. Remote mode
 validates host directory paths and stores only hashes of phone tokens.
@@ -131,7 +131,7 @@ Agent config is never parsed back: `AgentFile` only serializes.
 
 ### Protocol and transport ownership
 
-The handshake requires RPC v3. Open/create responses include a required load and
+The handshake requires RPC v4. Open/create responses include a required load and
 snapshot, while rename responses contain session information only. Input receipts
 must name the requested session/load and an accepted input ID. A malformed receipt
 leaves acceptance unknown and cannot trigger an automatic resend.
@@ -408,9 +408,11 @@ apart), completion recovery (250 ms, 1 s, 4 s) and `changes.diff` (twice).
 Exhausted completion reads remain unsettled; an unrelated snapshot revision
 cannot restart their retry budget.
 
-The handshake requires `protocol_version == 3` and the ten capabilities in
-`REQUIRED_CAPABILITIES` (`protocol/mod.rs`; `workspace.search` and
-`workspace.status` are not used). `session.presentation` has no capability
+The handshake requires `protocol_version == 4` and the eleven capabilities in
+`REQUIRED_CAPABILITIES` (`protocol/mod.rs`), including `workspace.status` and
+`tool.output`; `workspace.search` is not used. Older protocols and missing
+capabilities are rejected before catalogs or session operations. The phone
+WebSocket protocol remains v3. `session.presentation` has no capability
 string and is called unconditionally. Shutdown serializes callers and sends
 `agent.shutdown` once; its ACK is not child-exit proof. The actual child owner is
 joined before pipe tasks are aborted, with a fresh 3 s exit grace after the
@@ -643,7 +645,7 @@ Turn and history reads check the response identity, chunk encoding and byte
 continuity, item JSON, cursor progress and the requested item range before any
 content is installed. A pending turn is not an empty result. A missing turn,
 invalid page, oversized item or exhausted read workspace leaves the existing
-transcript in place and reports the problem. RPC v3 result pages repeat the
+transcript in place and reports the problem. RPC v4 result pages repeat the
 requested load and immutable result_id. Later requests carry that result_id;
 changing identity is an error, expiry is explicit unavailable, and live-to-stored
 availability can change without changing the immutable body. Partial and
@@ -689,7 +691,10 @@ Source identities also keep scroll anchors on their row through a rebuild.
   leaves the card as is.
   A card whose turn ended, and every card read from history, keeps only the
   200 output rows an expanded card shows (the tail for `bash`, the head for
-  other tools; `ToolCall::settle`).
+  other tools; `ToolCall::settle`). Tool truncation comes from structured
+  execution and summary fields or the local buffer bounds, never result text.
+  A literal `[truncated]` line stays visible and searchable, including old
+  history whose text does not identify whether it was an Agent marker.
 - `/export` reads the whole canonical history the same way and writes Markdown.
 
 ## Compaction
@@ -823,9 +828,12 @@ reported it for the last request, and `ctx ?` otherwise; the TUI never
 substitutes an estimate. `presentation` is read on open, after each turn and
 compaction, and on request-usage events at most every 2 s while a turn runs. The
 Context sheet also shows the budget's history estimate, labelled as one. The git
-branch comes from the same answer, which only caches it after a complete
-`workspace.status`, so one runs on open and after each turn; until then the
-branch is omitted.
+branch comes directly from `workspace.status`, read independently of
+`session.presentation` on open, foreground activation and after each turn.
+Only a complete observation with `repo_available: true` supplies the branch;
+a failed, incomplete or non-repository result clears it. Both answers target
+the captured resident epoch, and `Session::branch` serves the terminal and
+phone projection. Periodic usage refreshes never run Git.
 
 Local sends use `app/unconfirmed.rs`: an operation ID owns the exact target
 session/load/epoch/mode and original submission. A global `Msg::LocalPushed`

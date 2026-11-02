@@ -14,7 +14,7 @@ pub use block::{Block, ChangeSummary, RequestKey, Saving};
 pub use history::{PreservedKey, merge_live};
 
 pub use history::{append_history_item, push_interrupted, to_markdown};
-pub use tool_call::{EXPANDED_ROWS, TRUNCATED_MARKER, ToolCall, ToolState};
+pub use tool_call::{EXPANDED_ROWS, ToolCall, ToolState};
 
 /// Revisions come from one counter, so no two blocks of any session share one and
 /// the layout cache can follow a block that moved.

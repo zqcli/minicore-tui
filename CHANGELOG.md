@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+## 0.9.8 — 2026-11-02
+
+- Adopt Agent 0.9.4 and require Agent RPC v4, including the `workspace.status`
+  and `tool.output` capabilities, before session operations. The phone WebSocket
+  protocol stays v3.
+- Read the workspace branch directly and refresh context independently, keeping
+  periodic context updates free of Git queries. Terminal and phone share the
+  same per-session branch observation.
+- Preserve literal `[truncated]` lines in tool output and transcript search.
+  Truncation uses structured metadata; old history without a distinct marker
+  identity keeps that line as text.
+- Remove unused wire fields, the obsolete `--config` migration diagnostic and
+  an unused standalone control probe. Terminal and phone layouts, input behavior,
+  control snapshots and result recovery are unchanged.
+
 ## 0.9.7 — 2026-11-02
 
 - Adopt Agent 0.9.3 and require Agent RPC v3 before starting session operations.

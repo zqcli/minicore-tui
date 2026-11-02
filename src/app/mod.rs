@@ -107,8 +107,7 @@ pub enum SessionOp {
     Page(Result<read::HistoryRead, RpcError>),
     State(Result<crate::protocol::SessionStateResult, RpcError>),
     Presentation(Result<SessionPresentation, RpcError>),
-    /// A `workspace.status` answer, wanted only for the branch it caches in the presentation.
-    WorkspaceStatus(Result<Value, RpcError>),
+    WorkspaceStatus(Result<crate::protocol::workspace::WorkspaceStatus, RpcError>),
     Context(Result<SessionContext, RpcError>),
     Resumed(Result<InputResumeResult, RpcError>),
     Recalled(Result<InputRecallResult, RpcError>),
