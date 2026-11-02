@@ -464,14 +464,6 @@ impl Session {
         }
     }
 
-    /// The loop the last control snapshot saw executing; it differs from
-    /// `live` while a waited turn has not answered yet.
-    pub fn observed_loop(&self) -> Option<&str> {
-        self.execution
-            .as_ref()
-            .and_then(|execution| execution.loop_id())
-    }
-
     fn boundaries_mut(&mut self) -> impl Iterator<Item = (&str, &mut usize)> {
         self.live
             .iter_mut()

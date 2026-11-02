@@ -112,7 +112,92 @@ fn texts_of(session: &Session) -> Vec<String> {
 }
 
 #[tokio::test(start_paused = true)]
-async fn two_global_recovery_slots_rotate_busy_residents_when_snapshot_availability_changes() {
+async fn stalled_recoveries_leave_history_and_export_capacity_and_release_it_on_drop() {
+    for history_first in [false, true] {
+        let mut h = Harness::opened(page(
+            80,
+            0,
+            vec![
+                user(0, "old", "old prompt"),
+                assistant(79, "latest", "latest answer"),
+            ],
+        ))
+        .await;
+        assert_eq!(h.session().loaded_from, 20);
+        for (id, epoch, catchup) in [("s2", 2, history_first), ("s3", 3, !history_first)] {
+            h.app.resident.insert(Session::new(
+                serde_json::from_value(session_info(id)).unwrap(),
+                epoch,
+                crate::testing::LOAD.into(),
+            ));
+            let mut snapshot = crate::testing::snapshot(id, crate::testing::LOAD, 100);
+            if catchup {
+                h.fake
+                    .script_held(&format!("session.read@{id}"), history(display_read(0, 0)));
+                snapshot["completions"] = json!({
+                    "through_seq":1,"retained_from_seq":2,"entries":[],"truncated":true
+                });
+            } else {
+                let mut result = turn_result("finished", vec![]);
+                result["turn"] = turn_in(id, "finished");
+                h.fake.script_held(&format!("turn.result@{id}"), result);
+                snapshot["completions"] = json!({
+                    "through_seq":1,"retained_from_seq":1,"truncated":false,
+                    "entries":[completion(1,"finished","completed")]
+                });
+            }
+            h.snapshot_event(snapshot).await;
+            h.until(|app| app.live(id).unwrap().recovery.revision == 100)
+                .await;
+        }
+        h.settle().await;
+
+        let directory = tempfile::tempdir().unwrap();
+        let export = directory.path().join("foreground.md");
+        h.action(Action::LoadOlder);
+        h.action(Action::Export(Some(export.to_string_lossy().into_owned())));
+        h.until(|app| app.resident.current().unwrap().loaded_from == 0)
+            .await;
+        h.until(|app| {
+            app.notices
+                .iter()
+                .any(|notice| notice.text.starts_with("Exported to "))
+        })
+        .await;
+        assert!(h.texts().iter().any(|text| text == "old prompt"));
+        assert!(
+            std::fs::read_to_string(export)
+                .unwrap()
+                .contains("old prompt")
+        );
+        assert_eq!(h.app.live("s2").unwrap().recovery_tasks.len(), 1);
+        assert_eq!(h.app.live("s3").unwrap().recovery_tasks.len(), 0);
+
+        let next_method = if history_first {
+            "turn.result"
+        } else {
+            "session.read"
+        };
+        let before = h.calls(next_method).len();
+        h.app.resident.remove("s2");
+        h.app.tick();
+        h.fake.wait_for_calls(next_method, before + 1).await;
+        let spare = crate::testing::real_bounded(h.fake.client.read_workspaces().acquire_owned())
+            .await
+            .unwrap();
+        drop(spare);
+        h.app.resident.remove("s3");
+        let all =
+            crate::testing::real_bounded(h.fake.client.read_workspaces().acquire_many_owned(2))
+                .await
+                .unwrap();
+        drop(all);
+        h.fake.assert_scripted();
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn recovery_rotates_busy_residents_when_snapshot_availability_changes() {
     let mut h = Harness::opened(display_read(0, 0)).await;
     for id in ["s2", "s3"] {
         h.fake.script(
@@ -174,35 +259,32 @@ async fn two_global_recovery_slots_rotate_busy_residents_when_snapshot_availabil
         h.until(|app| app.live(id).unwrap().recovery.revision == 100)
             .await;
     }
-    h.fake.wait_for_calls("turn.result", 2).await;
+    h.fake.wait_for_calls("turn.result", 1).await;
     assert_eq!(
         h.calls("turn.result")
             .iter()
             .map(|call| call["session_id"].as_str().unwrap().to_owned())
             .collect::<Vec<_>>(),
-        ["s1", "s1"]
+        ["s1"]
     );
     h.snapshot_event(snapshot_for("s2", 101, true)).await;
     h.until(|app| app.live("s2").unwrap().recovery.revision == 101)
         .await;
-    for seq in 1..=2 {
-        h.fake.release(&format!("turn.result@s1/s1-finished-{seq}"));
-    }
-    h.until(|app| app.live("s1").unwrap().recovery.settled_through >= 2)
+    h.fake.release("turn.result@s1/s1-finished-1");
+    h.until(|app| app.live("s1").unwrap().recovery.settled_through == 1)
         .await;
-    h.fake.wait_for_calls("turn.result", 4).await;
-    let admitted = h
-        .calls("turn.result")
-        .iter()
-        .skip(2)
-        .map(|call| call["session_id"].as_str().unwrap().to_owned())
-        .collect::<Vec<_>>();
+    h.fake.wait_for_calls("turn.result", 2).await;
+    assert_eq!(h.calls("turn.result")[1]["session_id"], "s2");
+    h.fake.release("turn.result@s2/s2-finished-1");
+    h.until(|app| app.live("s2").unwrap().recovery.settled_through == 1)
+        .await;
+    h.fake.wait_for_calls("turn.result", 3).await;
     assert_eq!(
-        admitted,
-        ["s2", "s3"],
-        "a busy resident's backlog cannot take both freed slots ahead of another resident"
+        h.calls("turn.result")[2]["session_id"],
+        "s3",
+        "a busy resident's backlog cannot take the next slot ahead of another resident"
     );
-    for revision in 102..=110 {
+    for revision in 102..=113 {
         for id in ["s1", "s2", "s3"] {
             h.snapshot_event(snapshot_for(id, revision, true)).await;
         }
@@ -219,7 +301,7 @@ async fn two_global_recovery_slots_rotate_busy_residents_when_snapshot_availabil
                 .iter()
                 .map(|session| session.recovery_tasks.len())
                 .sum::<usize>()
-                <= 2
+                <= 1
         );
         let settled = sessions
             .iter()

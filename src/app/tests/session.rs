@@ -660,7 +660,13 @@ async fn a_delayed_older_state_sample_cannot_regress_a_newer_snapshot_without_le
         .await;
     let session = h.session();
     assert_eq!(session.recovery.revision, 101);
-    assert_eq!(session.observed_loop(), Some("B"));
+    assert_eq!(
+        session
+            .execution
+            .as_ref()
+            .and_then(|execution| execution.loop_id()),
+        Some("B")
+    );
     assert_eq!(h.queue(), ["new queue"]);
     assert!(session.queue.paused);
     assert_eq!(
@@ -927,7 +933,13 @@ mod snapshot_control {
             json!({"type":"running","loop_id":"l2","input":item("i2","second"),"request_index":0,"phase":"running_tools"}),
             json!({"items":[],"paused":false}),
         ));
-        assert_eq!(session.observed_loop(), Some("l2"));
+        assert_eq!(
+            session
+                .execution
+                .as_ref()
+                .and_then(|execution| execution.loop_id()),
+            Some("l2")
+        );
         assert_eq!(session.live.as_ref().unwrap().start, 1);
         assert!(
             matches!(&session.transcript.blocks()[1], Block::User {text,..} if text == "second")

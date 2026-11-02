@@ -1,6 +1,6 @@
 [package]
 name = "minicore-tui"
-version = "0.9.8"
+version = "0.9.9"
 edition = "2024"
 description = "A pi-style coding agent TUI with minicore-agent built in, spoken to over stdio JSON-RPC"
 license = "MIT OR Apache-2.0"
@@ -21,7 +21,7 @@ sha2 = "0.10"
 socket2 = "0.6"
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
 # The Agent is built in and runs as this executable's `agent` subcommand.
-minicore-agent = { git = "https://github.com/zqcli/minicore-agent", rev = "21cc12ae946cc0713bd70a93c220316db3e8eefd", version = "0.9.4" }
+minicore-agent = { git = "https://github.com/zqcli/minicore-agent", rev = "f36a87366d8e2fe0a1c8216463887902e471c739", version = "0.9.5" }
 jiff = { version = "0.2", default-features = false, features = ["std", "tz-system", "tzdb-zoneinfo", "tzdb-concatenated", "tzdb-bundle-platform"] }
 pulldown-cmark = { version = "0.13", default-features = false }
 ratatui = { version = "0.30", default-features = false, features = ["crossterm"] }

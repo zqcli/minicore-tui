@@ -231,7 +231,7 @@ list holds no empty sessions. While `app.resident.current()` is `None`:
 
 - `App::launch` holds the settings the next session takes: the command-line
   flags, then what `/model`, `/reasoning`, `Ctrl+L`, `Ctrl+P`, `Shift+Tab` and
-  `/new <profile>` set, which the footer shows instead of `session.update`.
+  `/new <profile>` set, which the footer shows instead of `session.configure`.
   The footer resolves them with the profile's defaults (`profile.list`; the
   Agent's default profile comes from `config.toml` and is unknown for a raw
   `--agent-config`) through `App::model_id` and `App::reasoning`.
@@ -464,10 +464,11 @@ for one `session.state` afterwards.
 `RecoveryState` (in `app/recovery.rs`) keeps `observed_through` from the directory
 and `settled_through` for what has been read or explicitly declared
 unreadable. Every unsettled entry is read through `turn.result` with the
-load, at most two at a time. Only a complete, identity-checked body or an explicit
-unavailability settles an entry. A partial read is explicitly marked partial,
-not installed as canonical; pending and failed reads remain unsettled. A failure
-retries three times (250 ms, 1 s, 4 s), then retains an exhausted error instead of
+load, at most one at a time. Canonical installation or an explicit partial or
+unavailable terminal region settles an entry. A partial read is not installed as
+canonical; pending and failed reads remain unsettled. A retained complete body
+that cannot be placed also remains unsettled. Failures retry three times (250 ms, 1 s, 4 s),
+then keep an exhausted annotation and a visible `/recover` hint instead of
 claiming the source is unavailable. Partial, unavailable and exhausted bodies
 keep a bounded per-turn annotation as well as a dock indicator. An unseen partial
 or unavailable completion also gets an identifiable terminal region, its known
@@ -494,12 +495,28 @@ History metadata overlap is not full-body
 coverage: a replacement needs the prompt boundary and a verified end boundary;
 uncovered regions, later live output and session drafts stay intact.
 
+Recovery identities are admitted before insertion, at most 256 per load and
+1024 across residents. At the global limit, the rotating scheduler may defer one
+pending identity not yet attempted in its current retry round from another
+resident to admit waiting work. Fetching, retrying, exhausted and settled
+identities keep their state and attempt counts. If all retained identities are
+protected this way, admission waits;
+`/recover` in stalled sessions retries failures and can free capacity when they
+settle. Successfully deleting a resident also frees its capacity and reschedules
+recovery. Capacity backlog clears when retained directory entries are admitted
+again, without requiring a new snapshot. Dropped early body events and expired
+catalog prefixes have separate gap warnings that backlog progress cannot clear.
+
 Recovery task ownership outlives catalog eviction: an in-flight read still owns
 its global slot until its outcome is applied, or its Session drops and aborts
-the task. One epoch cursor rotates admission among resident sessions; each gets
-one start per pass under the shared two-slot limit, including history catch-up.
-Continuous foreground work or availability changes cannot refill both slots
-ahead of other residents. An overdue retry cannot arm an idle wake while both slots are occupied.
+the task. Its descriptor stays within the identity budget even after catalog
+eviction or a history-watermark advance, so the fetched body is still handled.
+A retired read that fails, stays pending or cannot be placed leaves an explicit
+warning that it left the catalog; it is not advertised as retryable or read again.
+One epoch cursor rotates admission among resident sessions; each gets
+one start under the single shared recovery slot, including history catch-up.
+Continuous foreground work or availability changes cannot refill that slot
+ahead of other residents. An overdue retry cannot arm an idle wake while the slot is occupied.
 Missing final tool facts use up to 64 serial metadata reads within that same
 recovery slot/workspace, never raw output downloads; a tool with no final fact
 is not labeled succeeded. The remaining facts can still arrive as tool metadata.
@@ -653,8 +670,9 @@ unavailable bodies retain a bounded per-turn UI annotation, not a canonical
 success; exhausted errors remain unsettled and `/recover` starts a fresh round.
 
 At most two history, turn or export reads assemble at once per client. Each
-workspace has a 64 MiB budget, including conservative reservations for decoded
-data, metadata and page copies; a completed result holds its slot until the
+workspace has a 64 MiB budget; recovery can occupy only one of the two slots,
+leaving the other available for foreground history and export. The budget includes
+conservative reservations for decoded data, metadata and page copies; a completed result holds its slot until the
 reducer finishes installing it. An item above the 8 MiB automatic decode limit
 produces a partial-read notice rather than an incomplete replacement. This bound
 does not include the existing transcript or the RPC client's general buffers.

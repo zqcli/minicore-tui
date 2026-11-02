@@ -521,7 +521,13 @@ async fn receipts_wait_delivery_and_context_cannot_overwrite_snapshot_control() 
     session.apply_body_event(serde_json::from_value(json!({"type":"input_delivered","data":{
         "meta":{"session_id":"s1","load":crate::testing::LOAD,"dropped_before":0},"turn":turn("A"),"items":[{"id":"kept","text":"kept","request_index":1}]
     }})).unwrap(),256);
-    assert_eq!(session.observed_loop(), Some("A"));
+    assert_eq!(
+        session
+            .execution
+            .as_ref()
+            .and_then(|execution| execution.loop_id()),
+        Some("A")
+    );
     assert_eq!(session.live.as_ref().unwrap().turn.loop_id, "A");
     assert_eq!(session.queue.items[0].id, "kept");
     assert!(session.queue.paused);

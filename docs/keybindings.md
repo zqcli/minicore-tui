@@ -235,7 +235,7 @@ the name.
 | `/theme [dark\|light]` | Switch the palette and save it; without an argument, toggle. |
 | `/reload` | Compose the Agent config again from `config.toml`, `models.toml` and the prompt, reload the Agent and the templates. |
 | `/unconfirmed` | Review retained local input operations. `e`/Enter edits separately without deciding acceptance; `r` or Enter from the editor opens a possible-duplicate warning, only `y` resends. Enter/Esc cancels the warning. `c` copies; `d` then `y` forgets without cancelling Agent work. A resend uses a new ID and the original session/load/mode; unavailable old targets are not silently retargeted. |
-| `/recover` | Retry failed conversation reads or continue the missing range after a bounded history catch-up. Verified newer content stays visible; no input is resent and execution is not restarted. Older history also remains available through normal paging. |
+| `/recover` | Retry failed conversation reads in the viewed session or continue its missing range after a bounded history catch-up. Verified newer content stays visible; no input is resent and execution is not restarted. Older history also remains available through normal paging. |
 | `/remote [on\|off\|status\|password [text]]` | Phone control: start listening and show the status screen, stop and unfreeze local input, or set a new password (generated, or `<text>` of at least 8 characters), which signs phones out. `/remote` with remote control off says how to start it. See [Remote mode](#remote-mode). |
 | `/help` | Open the help view. |
 | `/quit` | Quit. |

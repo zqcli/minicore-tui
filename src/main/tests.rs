@@ -236,7 +236,7 @@ async fn receipts_cannot_restore_consumed_inputs_or_completed_execution_in_eithe
             let session = h.app.resident.current().unwrap();
             assert!(session.queue.items.is_empty());
             assert!(session.live.is_none());
-            assert_eq!(session.observed_loop(), None);
+            assert_eq!(session.execution.as_ref().and_then(|execution| execution.loop_id()), None);
             assert_eq!(session.recovery.observed_through, 1);
         }
     }).await.expect("FIFO dispatch did not finish");

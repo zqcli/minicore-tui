@@ -85,7 +85,7 @@ mod body_recovery {
             session.apply_body_event(delta(&format!("unknown-{index}"), "x"), 128);
         }
         assert!(session.early_gap);
-        assert!(session.recovery.behind);
+        assert!(!session.recovery.behind);
         assert_eq!(session.early_bytes, (EARLY_TURNS + 1) * 128);
         assert!(session.transcript.is_empty());
         session.apply_body_event(delta(&held, "retained"), EARLY_BYTES);
@@ -140,14 +140,15 @@ mod body_recovery {
                 "persistence":if id == "A" {"failed"} else {"persisted"},"availability":if id == "A" {"live"} else {"stored"}
             })).unwrap()).collect();
             session.recovery = crate::app::recovery::RecoveryState::default();
-            session
-                .recovery
-                .discover(&crate::protocol::CompletionDirectory {
+            session.recovery.discover(
+                &crate::protocol::CompletionDirectory {
                     through_seq: 2,
                     retained_from_seq: 1,
                     entries: descriptions.clone(),
                     truncated: false,
-                });
+                },
+                crate::app::recovery::IDENTITIES_PER_LOAD,
+            );
             for id in order {
                 let description = &descriptions[usize::from(id == "B")];
                 if id == "B" {
@@ -726,6 +727,171 @@ async fn a_completion_whose_region_was_evicted_does_not_close_the_turn() {
         "and must not state a saving fact it did not establish: {:?}",
         h.blocks()
     );
+    for delay in [
+        Duration::from_millis(250),
+        Duration::from_secs(1),
+        Duration::from_secs(4),
+    ] {
+        tokio::time::advance(delay).await;
+        h.app.tick();
+        h.settle().await;
+    }
+    assert_eq!(h.calls("turn.result").len(), 4);
+    assert_eq!(
+        h.session().recovery.entries[&1].status,
+        crate::app::recovery::RecoveryStatus::Exhausted
+    );
+    assert_eq!(h.session().recovery.settled_through, 0);
+    let note = h
+        .session()
+        .body_recovery
+        .front()
+        .expect("an unplaceable completed body must retain its exhausted recovery note");
+    assert_eq!(note.status, crate::app::recovery::RecoveryStatus::Exhausted);
+    assert!(note.message.contains("could not be placed"));
+    h.app.notices.clear();
+    assert!(h.screen(120, 30).contains("/recover"));
+    h.action(Action::RetryRecovery);
+    h.settle().await;
+    assert_eq!(h.calls("turn.result").len(), 5);
+    assert!(matches!(
+        h.session().recovery.entries[&1].status,
+        crate::app::recovery::RecoveryStatus::Retryable { .. }
+    ));
+}
+
+fn fill_resident_recovery_capacity(h: &mut Harness) {
+    use crate::app::recovery::IDENTITIES_PER_LOAD;
+    for epoch in 2..=5 {
+        h.app.resident.insert(crate::app::Session::new(
+            serde_json::from_value(session_info(&format!("s{epoch}"))).unwrap(),
+            epoch,
+            crate::testing::LOAD.into(),
+        ));
+    }
+    for epoch in 1..=5 {
+        let session = h.app.resident.get_mut(epoch).unwrap();
+        session.catalog = serde_json::from_value(json!({
+            "through_seq":256,"retained_from_seq":1,"truncated":false,
+            "entries":(1..=256).map(|seq|json!({"seq":seq,"loop_id":format!("l{seq}"),
+                "completion_kind":"reported","outcome_kind":"completed",
+                "persistence":"persisted","availability":"stored"})).collect::<Vec<_>>()
+        }))
+        .unwrap();
+        session.recovery.discover(
+            &session.catalog,
+            if epoch == 5 { 0 } else { IDENTITIES_PER_LOAD },
+        );
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_fifth_resident_reclaims_only_unstarted_work_when_its_recovery_slot_arrives() {
+    use crate::app::recovery::IDENTITIES_TOTAL;
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    fill_resident_recovery_capacity(&mut h);
+    h.fake
+        .script_held("turn.result", json!({"availability":"pending"}));
+    h.app.recovery_after = Some(4);
+    h.app.recover_completions();
+    h.fake.wait_for_calls("turn.result", 1).await;
+    assert_eq!(h.calls("turn.result")[0]["session_id"], "s5");
+    assert_eq!(
+        h.app
+            .resident
+            .iter()
+            .map(|session| session.recovery.entries.len())
+            .sum::<usize>(),
+        IDENTITIES_TOTAL
+    );
+    assert_eq!(
+        h.app.resident.get(5).unwrap().recovery.entries[&1].status,
+        crate::app::recovery::RecoveryStatus::Fetching
+    );
+    assert!(h.app.resident.get(1).unwrap().recovery.behind);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_resident_with_an_exhausted_entry_can_admit_its_next_retained_completion() {
+    use crate::app::recovery::{IDENTITIES_TOTAL, RecoveryStatus};
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    fill_resident_recovery_capacity(&mut h);
+    let donor = &mut h.app.resident.get_mut(1).unwrap().recovery;
+    donor.entries.remove(&256);
+    donor.behind = true;
+    let target = h.app.resident.get_mut(5).unwrap();
+    target.recovery.discover(&target.catalog, 1);
+    target.recovery.record(1, RecoveryStatus::Exhausted);
+    h.fake
+        .script_held("turn.result", json!({"availability":"pending"}));
+    h.app.recovery_after = Some(4);
+    h.app.recover_completions();
+    h.fake.wait_for_calls("turn.result", 1).await;
+    assert_eq!(h.calls("turn.result")[0]["session_id"], "s5");
+    assert_eq!(h.calls("turn.result")[0]["loop_id"], "l2");
+    let recovery = &h.app.resident.get(5).unwrap().recovery;
+    assert_eq!(recovery.entries[&1].status, RecoveryStatus::Exhausted);
+    assert_eq!(recovery.entries[&2].status, RecoveryStatus::Fetching);
+    assert_eq!(
+        h.app
+            .resident
+            .iter()
+            .map(|session| session.recovery.entries.len())
+            .sum::<usize>(),
+        IDENTITIES_TOTAL
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn nonreclaimable_capacity_stays_visible_and_resumes_after_resident_deletion() {
+    use crate::app::recovery::{IDENTITIES_PER_LOAD, RecoveryStatus};
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    fill_resident_recovery_capacity(&mut h);
+    for epoch in 1..=4 {
+        let recovery = &mut h.app.resident.get_mut(epoch).unwrap().recovery;
+        recovery.record(1, RecoveryStatus::Exhausted);
+        for seq in 2..=IDENTITIES_PER_LOAD as u64 {
+            recovery.record(seq, RecoveryStatus::Partial);
+        }
+    }
+    h.app.resident.select(Some(5));
+    h.app.recovery_after = Some(4);
+    for _ in 0..3 {
+        h.app.recover_completions();
+        h.settle().await;
+        assert!(h.calls("turn.result").is_empty());
+        for epoch in 1..=4 {
+            let recovery = &h.app.resident.get(epoch).unwrap().recovery;
+            assert_eq!(recovery.entries.len(), IDENTITIES_PER_LOAD);
+            assert_eq!(recovery.entries[&1].status, RecoveryStatus::Exhausted);
+            assert!(
+                recovery
+                    .entries
+                    .values()
+                    .skip(1)
+                    .all(|entry| entry.status == RecoveryStatus::Partial)
+            );
+        }
+    }
+    assert!(h.session().recovery.behind);
+    h.app.notices.clear();
+    assert!(h.screen(120, 30).contains("Recovery capacity is full"));
+    h.app.flash = None;
+    h.app.scrolled_at = None;
+    assert!(
+        h.app.next_expiry().is_none(),
+        "idle capacity debt arms no wake-up"
+    );
+    h.fake
+        .script_held("turn.result", json!({"availability":"pending"}));
+    h.app.on_msg(crate::app::Msg::Deleted("s1".into(), Ok(())));
+    h.fake.wait_for_calls("turn.result", 1).await;
+    assert_eq!(h.calls("turn.result")[0]["session_id"], "s5");
+    assert!(!h.session().recovery.behind);
+    assert_eq!(
+        h.session().recovery.entries[&1].status,
+        RecoveryStatus::Fetching
+    );
 }
 
 #[tokio::test(start_paused = true)]
@@ -734,14 +900,14 @@ async fn catalog_eviction_does_not_release_a_recovery_slot_before_its_read_finis
     h.fake.script_held("turn.result", turn_result("l1", vec![]));
     let directory = |start: u64| json!({"through_seq":start+255,"retained_from_seq":start,"truncated":start>1,"entries":(start..start+256).map(|seq|json!({"seq":seq,"loop_id":format!("l{seq}"),"completion_kind":"reported","outcome_kind":"completed","persistence":"persisted","availability":"stored"})).collect::<Vec<_>>()});
     h.control_event(json!({"completions":directory(1)})).await;
-    h.until(|app| app.resident.current().unwrap().recovery_tasks.len() == 2)
+    h.until(|app| app.resident.current().unwrap().recovery_tasks.len() == 1)
         .await;
-    h.fake.wait_for_calls("turn.result", 2).await;
+    h.fake.wait_for_calls("turn.result", 1).await;
     h.control_event(json!({"completions":directory(257)})).await;
     h.settle().await;
     let session = h.session();
-    assert_eq!(session.recovery_tasks.len(), 2);
-    assert_eq!(h.calls("turn.result").len(), 2);
+    assert_eq!(session.recovery_tasks.len(), 1);
+    assert_eq!(h.calls("turn.result").len(), 1);
     assert_eq!(session.recovery.observed_through, 512);
     assert_eq!(session.recovery.settled_through, 0);
     assert_eq!(session.recovery.entries.len(), 256);
@@ -753,7 +919,7 @@ async fn catalog_eviction_does_not_release_a_recovery_slot_before_its_read_finis
     h.app.scrolled_at = None;
     assert!(
         h.app.next_expiry().is_none(),
-        "an overdue retry cannot busy-poll while both reads still own their slots"
+        "an overdue retry cannot busy-poll while the read still owns its slot"
     );
 }
 
@@ -903,28 +1069,33 @@ async fn a_saved_anchor_after_a_recovered_unsaved_turn_controls_unseen_completio
         page["persistence"] = json!(if id == "B" { "persisted" } else { "failed" });
         page
     };
+    h.fake.script("turn.result@s1/A", result("A", "answer A"));
+    h.fake.script_sequence(
+        "turn.result@s1/B",
+        vec![json!({
+            "turn":turn("B"),"load":crate::testing::LOAD,"availability":"pending",
+            "total":0,"items":[],"next_cursor":null
+        })],
+    );
     h.fake
-        .script_sequence("turn.result", vec![result("A", "answer A")]);
-    h.fake.script_held("turn.result", result("B", "answer B"));
+        .script_held("turn.result@s1/B", result("B", "answer B"));
+    h.fake.script("turn.result@s1/C", result("C", "answer C"));
     h.control_event(json!({"completions":{"through_seq":3,"retained_from_seq":1,"truncated":false,"entries":[
         {"seq":1,"loop_id":"A","completion_kind":"reported","outcome_kind":"completed","persistence":"failed","availability":"live","after_saved_loop_id":"S"},
         {"seq":2,"loop_id":"B","completion_kind":"reported","outcome_kind":"completed","persistence":"persisted","availability":"stored","after_saved_loop_id":"S"},
         {"seq":3,"loop_id":"C","completion_kind":"reported","outcome_kind":"completed","persistence":"failed","availability":"live","after_saved_loop_id":"B"}
     ]}})).await;
-    h.until(|app| app.resident.current().unwrap().recovery_tasks.len() == 2)
-        .await;
-    h.fake.wait_for_calls("turn.result", 2).await;
-    h.fake
-        .script_sequence("turn.result", vec![result("C", "answer C")]);
     h.until(|app| app.resident.current().unwrap().is_closed("C"))
         .await;
-    assert!(!h.session().is_closed("B"), "B's reader is still held");
+    assert!(!h.session().is_closed("B"), "B still awaits its retry");
     assert_eq!(
         turn_ends(&h),
         ["S", "A", "B", "C"],
         "the saved B anchor is stronger than the earlier reconciled A"
     );
-    h.fake.release("turn.result");
+    h.fake.release("turn.result@s1/B");
+    tokio::time::advance(Duration::from_secs(1)).await;
+    h.app.tick();
     h.until(|app| app.resident.current().unwrap().is_closed("B"))
         .await;
     assert_eq!(turn_ends(&h), ["S", "A", "B", "C"]);
@@ -1030,7 +1201,9 @@ async fn an_unseen_partial_completion_has_a_persistent_noncanonical_terminal() {
     let directory:crate::protocol::CompletionDirectory = serde_json::from_value(json!({"through_seq":1,"retained_from_seq":1,"truncated":false,"entries":[{"seq":1,"loop_id":"partial-loop","completion_kind":"reported","outcome_kind":"completed","persistence":"failed","availability":"live"}]})).unwrap();
     let session = h.session_mut();
     session.catalog = directory.clone();
-    session.recovery.discover(&directory);
+    session
+        .recovery
+        .discover(&directory, crate::app::recovery::IDENTITIES_PER_LOAD);
 
     h.op(SessionOp::Recovered(
         crate::app::recovery::RecoveryOutcome {
@@ -1119,7 +1292,9 @@ async fn a_partial_history_region_keeps_late_body_before_its_existing_terminal()
     ]})).unwrap();
     let session = h.session_mut();
     session.catalog = directory;
-    session.recovery.discover(&session.catalog);
+    session
+        .recovery
+        .discover(&session.catalog, crate::app::recovery::IDENTITIES_PER_LOAD);
 
     h.op(SessionOp::Recovered(
         crate::app::recovery::RecoveryOutcome {
@@ -1428,4 +1603,254 @@ async fn a_late_wait_fallback_reads_the_original_load_instead_of_unbound_history
         crate::testing::LOAD,
         "the resident wait fallback must retain its original load identity"
     );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_canonical_finishing_predecessor_stays_live_until_the_successor_snapshot() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.fake
+        .script_held("turn.wait@s1/A", waited("A", completed()));
+    h.fake
+        .script_held("turn.wait@s1/B", waited("B", completed()));
+    h.fake.script(
+        "turn.result",
+        turn_result(
+            "A",
+            vec![user(0, "A", "prompt A"), assistant(1, "A", "answer A")],
+        ),
+    );
+    let input_a = entry("input-A", "steer", "prompt A");
+    h.running_state("A", input_a.clone());
+    let finishing = json!({"execution":{"type":"finishing","loop_id":"A",
+        "input":input_a,"request_index":1}, "queue":{"items":[],"paused":false},
+        "completions":{"through_seq":1,"retained_from_seq":1,"truncated":false,
+            "entries":[completion(1, "A", "completed")]}});
+    h.control_event(finishing.clone()).await;
+    h.until(|app| app.resident.current().unwrap().is_closed("A"))
+        .await;
+    assert_eq!(h.session().live.as_ref().unwrap().turn.loop_id, "A");
+    assert_eq!(h.texts(), ["prompt A", "answer A"]);
+    h.control_event(finishing).await;
+    h.settle().await;
+    assert_eq!(h.texts(), ["prompt A", "answer A"]);
+    assert_eq!(turn_ends(&h), ["A"]);
+    assert_eq!(h.calls("turn.result").len(), 1);
+    h.control_event(json!({"execution":{"type":"running","loop_id":"B",
+        "input":entry("input-B","steer","prompt B"),"request_index":0,"phase":"starting"}}))
+        .await;
+    h.settle().await;
+    assert_eq!(h.session().live.as_ref().unwrap().turn.loop_id, "B");
+    assert_eq!(h.texts(), ["prompt A", "answer A", "prompt B"]);
+    h.fake.release("turn.wait@s1/A");
+    h.settle().await;
+    assert_eq!(h.session().live.as_ref().unwrap().turn.loop_id, "B");
+    assert_eq!(h.texts(), ["prompt A", "answer A", "prompt B"]);
+    assert_eq!(turn_ends(&h), ["A"]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_unknown_early_body_gap_remains_visible_after_retained_recovery_catches_up() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.emit(
+        "output_delta",
+        json!({"turn":turn("unknown"),"request_index":0,
+        "channel":"text","delta":"x".repeat(crate::app::session::EARLY_BYTES + 1)}),
+    )
+    .await;
+    h.settle().await;
+    assert!(h.session().early_gap);
+    let session = h.session_mut();
+    session.catalog = serde_json::from_value(json!({"through_seq":1,"retained_from_seq":1,
+        "truncated":false,"entries":[completion(1,"l1","completed")]}))
+    .unwrap();
+    session.recovery.discover(&session.catalog, 0);
+    assert!(session.recovery.behind);
+    h.fake.script(
+        "turn.result",
+        turn_result("l1", vec![user(0, "l1", "recovered")]),
+    );
+    h.app.recover_completions();
+    h.until(|app| app.resident.current().unwrap().recovery.settled_through == 1)
+        .await;
+    assert!(!h.session().recovery.behind);
+    assert!(h.session().early_gap);
+    h.app.notices.clear();
+    assert!(h.screen(120, 30).contains("Turn order is incomplete"));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_completed_unsaved_read_survives_catalog_eviction_and_releases_its_identity() {
+    use crate::app::read::HistoryCoverage;
+    use crate::app::recovery::RecoveryStatus;
+    for (history_settles_first, missing_anchor) in [(false, false), (true, false), (false, true)] {
+        let mut h = Harness::opened(display_read(0, 0)).await;
+        for id in ["A", "B"] {
+            let mut body = turn_result(
+                id,
+                vec![
+                    user(0, id, &format!("prompt {id}")),
+                    assistant(1, id, &format!("unsaved {id}")),
+                ],
+            );
+            body["availability"] = json!("live");
+            body["persistence"] = json!("failed");
+            h.fake.script_held(&format!("turn.result@s1/{id}"), body);
+        }
+        let mut a = completion(1, "A", "completed");
+        a["persistence"] = json!("failed");
+        a["availability"] = json!("live");
+        if missing_anchor {
+            a["after_saved_loop_id"] = json!("missing-history-anchor");
+        }
+        h.control_event(json!({"completions":{"through_seq":1,"retained_from_seq":1,
+            "truncated":false,"entries":[a]}}))
+            .await;
+        h.until(|app| {
+            app.resident
+                .current()
+                .unwrap()
+                .recovery
+                .entries
+                .get(&1)
+                .is_some_and(|entry| entry.status == RecoveryStatus::Fetching)
+        })
+        .await;
+        h.fake.wait_for_calls("turn.result", 1).await;
+        h.fake
+            .script_held("session.read", history(display_read(0, 0)));
+        let mut b = completion(2, "B", "completed");
+        b["persistence"] = json!("failed");
+        b["availability"] = json!("live");
+        h.control_event(json!({"completions":{"through_seq":2,"retained_from_seq":2,
+            "truncated":true,"entries":[b]}}))
+            .await;
+        h.settle().await;
+        assert_eq!(
+            h.session().recovery.entries[&1].status,
+            RecoveryStatus::Fetching
+        );
+        if history_settles_first {
+            let recovery = &mut h.session_mut().recovery;
+            recovery.cover_history(
+                HistoryCoverage {
+                    captured_end: 0,
+                    history_revision: "verified-empty-history".into(),
+                    total: 0,
+                    from: 0,
+                    end: 0,
+                },
+                true,
+            );
+            assert!(recovery.settle_history_gap());
+            assert_eq!(recovery.settled_through, 1);
+        }
+        h.fake.release("turn.result@s1/A");
+        h.until(|app| {
+            let session = app.resident.current().unwrap();
+            session.is_closed("A") || session.body_recovery.iter().any(|note| note.loop_id == "A")
+        })
+        .await;
+        assert!(!h.session().recovery.entries.contains_key(&1));
+        if missing_anchor {
+            assert!(!h.session().is_closed("A"));
+            let note = h
+                .session()
+                .body_recovery
+                .iter()
+                .find(|note| note.loop_id == "A")
+                .unwrap();
+            assert_eq!(note.status, RecoveryStatus::Exhausted);
+            assert!(note.message.contains("left the catalog"));
+            assert!(
+                h.notices()
+                    .iter()
+                    .any(|message| message.contains("left the catalog"))
+            );
+        } else {
+            assert_eq!(h.texts(), ["prompt A", "unsaved A"]);
+            assert_eq!(turn_ends(&h), ["A"]);
+            assert!(h.blocks().iter().any(|block|matches!(block,
+                Block::TurnEnd {loop_id, saving:Some(crate::transcript::Saving::Unsaved), ..} if loop_id == "A")));
+        }
+        h.fake.release("session.read");
+        h.until(|app| {
+            app.resident
+                .current()
+                .unwrap()
+                .recovery
+                .entries
+                .get(&2)
+                .is_some_and(|entry| entry.status == RecoveryStatus::Fetching)
+        })
+        .await;
+        h.fake.wait_for_calls("turn.result", 2).await;
+        h.fake.release("turn.result@s1/B");
+        h.until(|app| app.resident.current().unwrap().is_closed("B"))
+            .await;
+        h.settle().await;
+        assert_eq!(
+            h.calls("turn.result")
+                .iter()
+                .filter(|call| call["loop_id"] == "A")
+                .count(),
+            1
+        );
+        assert!(h.session().recovery.entries.is_empty());
+        assert!(h.session().recovery_tasks.is_empty());
+        assert_eq!(h.session().recovery.settled_through, 2);
+        if !missing_anchor {
+            assert_eq!(
+                h.texts(),
+                ["prompt A", "unsaved A", "prompt B", "unsaved B"]
+            );
+            assert_eq!(turn_ends(&h), ["A", "B"]);
+        }
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_retired_inflight_result_reports_failure_without_promising_another_result_read() {
+    use crate::app::recovery::RecoveryStatus;
+    for fails in [false, true] {
+        let mut h = Harness::opened(display_read(0, 0)).await;
+        let pending = json!({"turn":turn("A"),"load":crate::testing::LOAD,
+            "availability":"pending","total":0,"items":[],"next_cursor":null});
+        h.fake.script("turn.result", pending.clone());
+        h.control_event(json!({"completions":{"through_seq":1,"retained_from_seq":1,
+            "truncated":false,"entries":[completion(1,"A","completed")]}}))
+            .await;
+        h.settle().await;
+        for delay in [Duration::from_millis(250), Duration::from_secs(1)] {
+            tokio::time::advance(delay).await;
+            h.app.tick();
+            h.settle().await;
+        }
+        assert_eq!(h.calls("turn.result").len(), 3);
+        if fails {
+            h.fake
+                .script_error_held("turn.result", -32603, "read failed", "internal_error");
+        } else {
+            h.fake.script_held("turn.result", pending);
+        }
+        tokio::time::advance(Duration::from_secs(4)).await;
+        h.app.tick();
+        h.fake.wait_for_calls("turn.result", 4).await;
+        h.fake
+            .script_held("session.read", history(display_read(0, 0)));
+        h.control_event(json!({"completions":{"through_seq":1,"retained_from_seq":2,
+            "truncated":true,"entries":[]}}))
+            .await;
+        h.settle().await;
+        h.fake.release("turn.result");
+        h.until(|app| !app.resident.current().unwrap().body_recovery.is_empty())
+            .await;
+        let note = &h.session().body_recovery[0];
+        assert_eq!(note.status, RecoveryStatus::Exhausted);
+        assert!(note.message.contains("left the catalog"));
+        assert!(!note.message.contains("/recover"));
+        assert!(!h.session().recovery.entries.contains_key(&1));
+        h.action(Action::RetryRecovery);
+        h.settle().await;
+        assert_eq!(h.calls("turn.result").len(), 4);
+    }
 }

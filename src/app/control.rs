@@ -148,15 +148,6 @@ impl super::App {
                 }
             }
             self.ring |= ring;
-            let other: usize = self
-                .resident
-                .iter()
-                .filter(|session| session.epoch != epoch)
-                .map(|session| session.recovery.entries.len())
-                .sum();
-            self.session_mut(epoch)
-                .recovery
-                .trim(1024usize.saturating_sub(other));
             if snapshot.completions.through_seq > observed_before {
                 self.stamp_activity(epoch);
             }
@@ -191,12 +182,13 @@ impl super::App {
     }
 
     fn apply_to_session(&mut self, epoch: u64, snapshot: &SessionSnapshot) -> bool {
+        let limit = self.recovery_capacity_for(epoch);
         let session = self.session_mut(epoch);
         if session.load != snapshot.load || !session.recovery.accept_revision(snapshot.revision) {
             return false;
         }
         session.apply_control(snapshot);
-        session.recovery.discover(&snapshot.completions);
+        session.recovery.discover(&snapshot.completions, limit);
         session.replay_early();
         true
     }

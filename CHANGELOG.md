@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+## 0.9.9 — 2026-11-02
+
+- Bundle Agent 0.9.5, preserving one execution owner while a turn finishes and
+  a queued successor starts. The Agent RPC and phone protocols are unchanged.
+- Keep foreground history loading and export responsive while completion or
+  history recovery is stalled, without increasing the shared read-memory budget.
+- Share recovery identity capacity across waiting sessions without losing retry
+  counts or already-settled results. Capacity warnings clear after
+  retained work is admitted again; warnings for missing content remain visible.
+  Deleting a resident session also wakes waiting recovery work.
+- Keep in-flight result reads when their catalog entries expire or a history
+  watermark advances, so verified completed output is still handled.
+- Explain completed bodies that cannot be placed: retained entries show a
+  persistent retry hint after bounded retries; expired entries report the loss
+  without promising that `/recover` can read them again.
+- Remove unused pre-install bookkeeping and a test-only session accessor;
+  installing a load still refreshes its control snapshot unconditionally.
+
 ## 0.9.8 — 2026-11-02
 
 - Adopt Agent 0.9.4 and require Agent RPC v4, including the `workspace.status`

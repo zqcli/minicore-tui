@@ -4,8 +4,7 @@
 scrolling transcript, a status line, a composer and a footer. The Agent is built
 into the same executable: the TUI starts itself as `minicore-tui agent` in a
 child process and talks to it with stdio NDJSON JSON-RPC (Protocol v4), so one
-file is the whole program. Version 0.4 is a rewrite of the v0.3 frontend; see
-[CHANGELOG.md](CHANGELOG.md).
+file is the whole program. See [CHANGELOG.md](CHANGELOG.md) for release history.
 
 ## Requirements
 
@@ -16,12 +15,11 @@ file is the whole program. Version 0.4 is a rewrite of the v0.3 frontend; see
   inserts a newline. `Alt+Enter` needs the terminal to pass Alt (on macOS, Option
   as Meta or Esc+); see [docs/keybindings.md](docs/keybindings.md).
 
-Built-in backend: Agent 0.9.4 (development), which links Runtime 0.9.0;
+Built-in backend: Agent 0.9.5 (development), which links Runtime 0.9.0;
 `Cargo.toml` pins the matching RPC v4 Agent by an immutable Git revision and
-`Cargo.lock` fixes both. The `0.9.8` branch adopts that protocol while preserving
-the terminal and phone interfaces. An
-external Agent can still be named with `--agent`. At startup the TUI requires
-Protocol v4 and these Agent capabilities, and refuses an Agent that lacks one: `session.read`, `session.read.display`, `session.context`,
+`Cargo.lock` fixes both. An external Agent can still be named with `--agent`.
+At startup the TUI requires Protocol v4 and these Agent capabilities, and refuses
+an Agent that lacks one: `session.read`, `session.read.display`, `session.context`,
 `turn.result`, `tool.read`, `tool.read.display`, `tool.output`,
 `workspace.files`, `workspace.status`, `changes.list`, `changes.diff`.
 The phone WebSocket protocol remains v3.
@@ -69,7 +67,7 @@ macOS a downloaded binary may need `xattr -d com.apple.quarantine bin/*` first.
 | `--session <ID>` | Open this session. |
 | `--continue` | Open the most recent session of the workspace; with none, start on an empty conversation. Cannot be combined with `--session`. |
 | `--profile <ID>` | Profile of a new session (created by the first message). |
-| `--model <ID>` | Model for the session; applied to an opened session with `session.update`. |
+| `--model <ID>` | Model for the session; applied to an opened session with `session.configure`. |
 | `--reasoning <LEVEL>` | `auto`, `disabled`, `low`, `medium`, `high`, `xhigh`, `max` or `ultra`; applied like `--model`. |
 | `--theme <dark\|light>` | Palette for this run. |
 | `--remote` | Start [remote mode](#remote-mode) at startup. |
@@ -123,7 +121,7 @@ history is `history.jsonl` in the TUI directory.
 
 ```text
 
- minicore-tui v0.9.8                                  (welcome header)
+ minicore-tui v0.9.9                                  (welcome header)
 
  esc interrupt · ctrl+c clear · / commands · @ files · ctrl+o expand · ctrl+r sessions
 
@@ -145,9 +143,12 @@ tool counts. Queued messages show in the order the Agent runs them as
 `↗ steer` / `↳ follow-up N` rows above it, with a hint for the keys that act on
 them (a paused queue says how to go on).
 The latest notice is a railed line in the band: info fades after 5 seconds,
-errors stay until the next key press. Completion reads share two slots fairly
-across resident sessions; recovering saved history does not hide an unknown gap
-of missing unsaved turns. `Persistence blocked` stays visible until
+errors stay until the next key press. Completion and saved-history recovery take
+turns across resident sessions, leaving one read workspace for foreground history
+and export. Capacity warnings clear when retained work is admitted again; gaps
+from dropped body events or missing unsaved turns stay visible. `/recover` in a
+stalled session retries its failed reads, which can free capacity for other
+sessions when they succeed. `Persistence blocked` stays visible until
 the Agent clears the block, without hiding a question that still needs an answer.
 
 The footer shows the workspace and git branch, the model and reasoning level,

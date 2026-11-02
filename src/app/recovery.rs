@@ -14,10 +14,12 @@ use super::read::{HistoryRead, TurnRead};
 use super::{App, NoticeLevel, Session, SessionOp};
 use crate::protocol::RpcError;
 
-/// Turns recovering at once.
-pub const CONCURRENT: usize = 2;
+// Leave one of the two read workspaces available for foreground history and export.
+pub const CONCURRENT: usize = 1;
 /// Unsettled identities kept per load.
-const IDENTITIES_PER_LOAD: usize = 256;
+pub const IDENTITIES_PER_LOAD: usize = 256;
+/// Recovery identities shared by resident loads.
+pub const IDENTITIES_TOTAL: usize = 1024;
 /// Automatic attempts for one completion before it stays failed.
 pub const MAX_RETRIES: u32 = 3;
 
@@ -94,7 +96,7 @@ pub struct RecoveryState {
     pub entries: BTreeMap<u64, Recovery>,
     /// The directory's window moved past completions this client never read.
     pub truncated_gap: bool,
-    /// The identity cap dropped work that still has to catch up.
+    /// Retained directory entries are waiting for recovery identity capacity.
     pub behind: bool,
     pub gap_through: u64,
     pub history_status: Option<RecoveryStatus>,
@@ -112,7 +114,7 @@ impl RecoveryState {
     }
 
     /// Takes a snapshot's completion directory, keeping only unsettled work.
-    pub fn discover(&mut self, directory: &CompletionDirectory) {
+    pub fn discover(&mut self, directory: &CompletionDirectory, limit: usize) {
         self.observed_through = self.observed_through.max(directory.through_seq);
         if directory.truncated && directory.retained_from_seq > self.settled_through + 1 {
             self.truncated_gap = true;
@@ -123,10 +125,33 @@ impl RecoveryState {
                 self.history_attempts = 0;
             }
         }
+        // A read may still hold the only copy of an unsaved turn after its
+        // descriptor leaves the catalog, so keep its identity until it finishes.
+        let oldest_retained = directory.retained_from_seq;
+        let dropped: Vec<u64> = self
+            .entries
+            .iter()
+            .filter_map(|(seq, entry)| {
+                (*seq < oldest_retained && entry.status != RecoveryStatus::Fetching).then_some(*seq)
+            })
+            .collect();
+        let mut lost = false;
+        for seq in dropped {
+            if let Some(entry) = self.entries.remove(&seq)
+                && !entry.status.is_settled()
+            {
+                lost = true;
+            }
+        }
+        if lost {
+            self.truncated_gap = true;
+        }
+        self.behind = false;
         for entry in &directory.entries {
             if entry.seq <= self.settled_through {
                 continue;
             }
+            let can_admit = self.entries.len() < limit.min(IDENTITIES_PER_LOAD);
             match self.entries.get_mut(&entry.seq) {
                 Some(known) => {
                     if known.turn.availability != entry.availability {
@@ -140,7 +165,7 @@ impl RecoveryState {
                     }
                     known.turn = entry.clone();
                 }
-                None => {
+                None if can_admit => {
                     self.entries.insert(
                         entry.seq,
                         Recovery {
@@ -150,36 +175,7 @@ impl RecoveryState {
                         },
                     );
                 }
-            }
-        }
-        // The directory is a contiguous suffix: an entry it stopped listing was
-        // evicted from the Agent's window and can only be shown as a gap.
-        let oldest_retained = directory.retained_from_seq;
-        let dropped: Vec<u64> = self
-            .entries
-            .keys()
-            .copied()
-            .filter(|seq| *seq < oldest_retained)
-            .collect();
-        let mut lost = false;
-        for seq in dropped {
-            if let Some(entry) = self.entries.remove(&seq)
-                && !entry.status.is_settled()
-            {
-                lost = true;
-            }
-        }
-        if lost {
-            self.truncated_gap = true;
-        }
-        while self.entries.len() > IDENTITIES_PER_LOAD {
-            let Some(oldest) = self.entries.keys().next_back().copied() else {
-                break;
-            };
-            if let Some(entry) = self.entries.remove(&oldest)
-                && !entry.status.is_settled()
-            {
-                self.behind = true;
+                None => self.behind = true,
             }
         }
         self.settle_prefix();
@@ -203,20 +199,15 @@ impl RecoveryState {
         self.settle_prefix();
     }
 
-    pub(super) fn trim(&mut self, limit: usize) {
-        while self.entries.len() > limit {
-            let Some(seq) = self
-                .entries
-                .iter()
-                .rev()
-                .find(|(_, entry)| entry.status != RecoveryStatus::Fetching)
-                .map(|(seq, _)| *seq)
-            else {
-                break;
-            };
+    fn defer_unstarted(&mut self) -> bool {
+        let seq = self.entries.iter().rev().find_map(|(seq, entry)| {
+            (entry.status == RecoveryStatus::Pending && entry.attempts == 0).then_some(*seq)
+        });
+        if let Some(seq) = seq {
             self.entries.remove(&seq);
             self.behind = true;
         }
+        seq.is_some()
     }
 
     pub fn cover_history(&mut self, covered: super::read::HistoryCoverage, authoritative: bool) {
@@ -299,6 +290,15 @@ impl RecoveryState {
         Some(status)
     }
 
+    fn retry_retained(&mut self, seq: u64, retained_from: u64) -> Option<RecoveryStatus> {
+        if seq < retained_from {
+            self.record(seq, RecoveryStatus::Exhausted);
+            Some(RecoveryStatus::Exhausted)
+        } else {
+            self.retry_later(seq)
+        }
+    }
+
     /// Opens one new round of retries for every failed entry, for a user
     /// retry or a restored connection.
     pub fn retry_failed(&mut self) {
@@ -368,8 +368,6 @@ pub const PRE_INSTALL_BUDGET_BYTES: usize = 2 * crate::rpc::CONTROL_FRAME_MAX_BY
 #[derive(Default)]
 pub struct PreInstall {
     held: Vec<(SessionSnapshot, usize)>,
-    /// The budget forced a drop, so the install must refresh its control.
-    pub overflowed: bool,
 }
 
 impl PreInstall {
@@ -389,7 +387,6 @@ impl PreInstall {
         while self.held.len() > PRE_INSTALL_SNAPSHOTS || total > PRE_INSTALL_BUDGET_BYTES {
             let (_, dropped) = self.held.remove(0);
             total -= dropped;
-            self.overflowed = true;
         }
     }
 
@@ -408,6 +405,16 @@ impl PreInstall {
 }
 
 impl App {
+    pub(super) fn recovery_capacity_for(&self, epoch: u64) -> usize {
+        let other: usize = self
+            .resident
+            .iter()
+            .filter(|session| session.epoch != epoch)
+            .map(|session| session.recovery.entries.len())
+            .sum();
+        IDENTITIES_TOTAL.saturating_sub(other)
+    }
+
     fn spawn_recovery(
         &mut self,
         epoch: u64,
@@ -464,15 +471,28 @@ impl App {
             return false;
         };
         let load = session.load.clone();
-        let other: usize = self
-            .resident
-            .iter()
-            .filter(|session| session.epoch != epoch)
-            .map(|session| session.recovery.entries.len())
-            .sum();
+        let mut limit = self.recovery_capacity_for(epoch);
+        if session.recovery.behind
+            && limit < IDENTITIES_PER_LOAD
+            && session.recovery.entries.len() == limit
+            && session
+                .recovery
+                .ready(tokio::time::Instant::now())
+                .is_none()
+        {
+            for other in self
+                .resident
+                .iter_mut()
+                .filter(|other| other.epoch != epoch)
+            {
+                if other.recovery.defer_unstarted() {
+                    limit += 1;
+                    break;
+                }
+            }
+        }
         let session = self.session_mut(epoch);
-        session.recovery.discover(&session.catalog);
-        session.recovery.trim(1024usize.saturating_sub(other));
+        session.recovery.discover(&session.catalog, limit);
         let session = self.resident.get(epoch).unwrap();
         if !session.recovery_tasks.history()
             && match session.recovery.history_status {
@@ -589,6 +609,8 @@ impl App {
         let mut moved = None;
         let unreadable = {
             let session = self.session_mut(epoch);
+            let retained_from = session.catalog.retained_from_seq;
+            let retired = outcome.seq < retained_from;
             match outcome.result {
                 Ok(TurnRead::Complete(content)) => {
                     let directory = session.recovery.entries[&outcome.seq].turn.clone();
@@ -601,16 +623,30 @@ impl App {
                         content.persistence,
                         content.persistence_uncertain,
                     );
-                    // A body that installed nothing (its streamed region was
-                    // evicted) is not settled: the descriptor stays retryable
-                    // so the turn can still be repaired.
-                    match moved.is_some() || session.is_closed(loop_id) {
-                        true => session
-                            .recovery
-                            .record(outcome.seq, RecoveryStatus::Complete),
-                        false => {
-                            session.recovery.retry_later(outcome.seq);
+                    // Retained identities can retry failed placement; a retired
+                    // identity needs a visible failure instead of a futile retry.
+                    let failure = match moved.is_some() || session.is_closed(loop_id) {
+                        true => {
+                            session
+                                .recovery
+                                .record(outcome.seq, RecoveryStatus::Complete);
+                            None
                         }
+                        false => (session.recovery.retry_retained(outcome.seq, retained_from)
+                            == Some(RecoveryStatus::Exhausted)).then(|| {
+                            if retired {
+                                "The recovered body could not be placed after its completion left the catalog; existing content was kept".to_owned()
+                            } else {
+                                "The completed body could not be placed; /recover to retry".to_owned()
+                            }
+                        }),
+                    };
+                    if let Some(message) = &failure {
+                        session.note_body_recovery(
+                            loop_id,
+                            RecoveryStatus::Exhausted,
+                            message.clone(),
+                        );
                     }
                     if moved.is_none()
                         && session.ordering_gap
@@ -632,7 +668,7 @@ impl App {
                     if moved.is_some() {
                         self.observe_install(epoch, &content, Some(&directory));
                     }
-                    None
+                    failure
                 }
                 Ok(TurnRead::Partial(partial)) => {
                     let message = partial.message();
@@ -663,23 +699,36 @@ impl App {
                 }
                 // A pending answer is not a completed turn: retry within bounds.
                 Ok(TurnRead::Pending) => {
-                    if session.recovery.retry_later(outcome.seq) == Some(RecoveryStatus::Exhausted)
+                    if session.recovery.retry_retained(outcome.seq, retained_from)
+                        == Some(RecoveryStatus::Exhausted)
                     {
                         session.note_body_recovery(
                             &outcome.turn.loop_id,
                             RecoveryStatus::Exhausted,
-                            "The completed turn result is still pending; /recover to retry".into(),
+                            if retired {
+                                "The completed result was still pending after its completion left the catalog".into()
+                            } else {
+                                "The completed turn result is still pending; /recover to retry".into()
+                            },
                         );
                     }
                     None
                 }
                 Err(error) => {
-                    if session.recovery.retry_later(outcome.seq) == Some(RecoveryStatus::Exhausted)
+                    if session.recovery.retry_retained(outcome.seq, retained_from)
+                        == Some(RecoveryStatus::Exhausted)
                     {
                         session.note_body_recovery(
                             &outcome.turn.loop_id,
                             RecoveryStatus::Exhausted,
-                            format!("Recovery failed; /recover to retry: {}", error.message),
+                            if retired {
+                                format!(
+                                    "Recovery failed after its completion left the catalog: {}",
+                                    error.message
+                                )
+                            } else {
+                                format!("Recovery failed; /recover to retry: {}", error.message)
+                            },
                         );
                         Some(error.message)
                     } else {
@@ -737,13 +786,13 @@ mod tests {
     #[test]
     fn discovery_keeps_only_unsettled_completions_and_reports_truncation() {
         let mut state = RecoveryState::default();
-        state.discover(&directory(2, 1, &[1, 2], false));
+        state.discover(&directory(2, 1, &[1, 2], false), IDENTITIES_PER_LOAD);
         assert_eq!(state.entries.len(), 2);
         state.record(1, RecoveryStatus::Complete);
         assert_eq!(state.settled_through, 1, "only the settled prefix advances");
         assert_eq!(state.entries.keys().copied().collect::<Vec<_>>(), vec![2]);
         // A window that stopped listing 2 while it was unsettled lost it.
-        state.discover(&directory(5, 4, &[4, 5], true));
+        state.discover(&directory(5, 4, &[4, 5], true), IDENTITIES_PER_LOAD);
         assert_eq!(
             state.settled_through, 1,
             "discovery alone cannot settle an unread gap"
@@ -776,7 +825,7 @@ mod tests {
             "a lost entry moves the watermark past the gap it can never settle"
         );
         assert!(state.entries.is_empty());
-        state.discover(&directory(9, 8, &[8, 9], true));
+        state.discover(&directory(9, 8, &[8, 9], true), IDENTITIES_PER_LOAD);
         assert!(state.truncated_gap, "the window skipped 6 and 7");
     }
 
@@ -791,7 +840,7 @@ mod tests {
     #[test]
     fn only_contiguous_coverage_of_the_newer_history_can_settle_a_catalog_gap() {
         let mut state = RecoveryState::default();
-        state.discover(&directory(5, 4, &[4, 5], true));
+        state.discover(&directory(5, 4, &[4, 5], true), IDENTITIES_PER_LOAD);
         let newer = super::super::read::HistoryCoverage {
             captured_end: 100,
             history_revision: "H1".into(),
@@ -834,7 +883,7 @@ mod tests {
     #[test]
     fn recovery_selects_the_oldest_ready_completion_and_bounds_retries() {
         let mut state = RecoveryState::default();
-        state.discover(&directory(6, 1, &[1, 2, 3, 4], false));
+        state.discover(&directory(6, 1, &[1, 2, 3, 4], false), IDENTITIES_PER_LOAD);
         let now = tokio::time::Instant::now();
         assert_eq!(state.ready(now).unwrap().seq, 1);
         state.record(1, RecoveryStatus::Fetching);
@@ -870,17 +919,67 @@ mod tests {
     fn the_identity_cap_marks_the_load_as_behind() {
         let mut state = RecoveryState::default();
         let seqs: Vec<u64> = (1..=(IDENTITIES_PER_LOAD as u64 + 4)).collect();
-        state.discover(&directory(*seqs.last().unwrap(), 1, &seqs, false));
+        state.discover(
+            &directory(*seqs.last().unwrap(), 1, &seqs, false),
+            IDENTITIES_PER_LOAD,
+        );
         assert_eq!(state.entries.len(), IDENTITIES_PER_LOAD);
         assert!(state.behind);
         assert_eq!(state.observed_through, *seqs.last().unwrap());
         assert_eq!(state.settled_through, 0);
+        let catalog = directory(*seqs.last().unwrap(), 1, &seqs, false);
+        for seq in seqs {
+            state.record(seq, RecoveryStatus::Complete);
+            state.discover(&catalog, IDENTITIES_PER_LOAD);
+        }
+        assert!(
+            !state.behind,
+            "retained cap debt clears without a new snapshot"
+        );
+        assert_eq!(state.settled_through, catalog.through_seq);
+    }
+
+    #[test]
+    fn capacity_deferral_keeps_attempted_and_settled_identities_intact() {
+        let catalog = directory(5, 1, &[1, 2, 3, 4, 5], false);
+        let mut state = RecoveryState::default();
+        state.discover(&catalog, IDENTITIES_PER_LOAD);
+        state.record(1, RecoveryStatus::Fetching);
+        state.retry_later(2);
+        for _ in 0..=MAX_RETRIES {
+            state.retry_later(3);
+        }
+        state.record(4, RecoveryStatus::Partial);
+        let retained: Vec<_> = state
+            .entries
+            .iter()
+            .take(4)
+            .map(|(seq, entry)| (*seq, entry.status, entry.attempts))
+            .collect();
+        assert!(state.defer_unstarted());
+        assert!(!state.entries.contains_key(&5));
+        for _ in 0..3 {
+            state.discover(&catalog, 4);
+            assert!(state.behind);
+            assert!(!state.defer_unstarted());
+            assert_eq!(
+                state
+                    .entries
+                    .iter()
+                    .map(|(seq, entry)| (*seq, entry.status, entry.attempts))
+                    .collect::<Vec<_>>(),
+                retained
+            );
+        }
+        state.discover(&catalog, 5);
+        assert!(!state.behind);
+        assert_eq!(state.entries[&5].status, RecoveryStatus::Pending);
     }
 
     #[test]
     fn a_retry_deadline_is_armed_only_while_an_entry_waits() {
         let mut state = RecoveryState::default();
-        state.discover(&directory(1, 1, &[1], false));
+        state.discover(&directory(1, 1, &[1], false), IDENTITIES_PER_LOAD);
         assert!(
             state.next_deadline().is_none(),
             "a fresh entry is ready now"
@@ -897,7 +996,7 @@ mod tests {
         let mut gone = directory(1, 1, &[1], false);
         gone.entries[0].availability = ResultAvailability::Unavailable;
         gone.entries[0].unavailable_reason = Some(UnavailableReason::Expired);
-        state.discover(&gone);
+        state.discover(&gone, IDENTITIES_PER_LOAD);
         assert_eq!(state.settled_through, 0);
         assert_eq!(state.entries[&1].status, RecoveryStatus::Pending);
         state.record(1, RecoveryStatus::Unavailable);
@@ -916,7 +1015,7 @@ mod tests {
         }))
         .unwrap();
         let mut state = RecoveryState::default();
-        state.discover(&snapshot.completions);
+        state.discover(&snapshot.completions, IDENTITIES_PER_LOAD);
         assert_eq!(state.observed_through, 0);
         assert!(state.entries.is_empty());
         assert!(!state.truncated_gap);
@@ -944,12 +1043,12 @@ mod pre_install_tests {
         held.hold(snapshot("a", 1), 1024);
         held.hold(snapshot("b", 1), 1024);
         assert!(!held.is_empty());
-        assert!(!held.overflowed);
         held.hold(snapshot("c", 1), 1024);
         assert!(!held.is_empty(), "only the newest two are kept");
-        assert!(held.overflowed, "a drop forces a refresh after install");
         assert!(held.take("a").is_none(), "the oldest was dropped");
+        assert!(held.take("b").is_some());
         assert!(held.take("c").is_some());
+        assert!(held.is_empty());
     }
 
     #[test]
@@ -957,14 +1056,17 @@ mod pre_install_tests {
         let mut held = PreInstall::default();
         held.hold(snapshot("a", 1), PRE_INSTALL_BUDGET_BYTES);
         assert!(!held.is_empty());
-        assert!(!held.overflowed);
         held.hold(snapshot("b", 1), 1);
         assert!(
             !held.is_empty(),
             "the byte budget evicts, not only the count"
         );
-        assert!(held.overflowed);
+        assert!(
+            held.take("a").is_none(),
+            "the oldest exceeded the byte budget"
+        );
         assert!(held.take("b").is_some());
+        assert!(held.is_empty());
         // Two maximum control frames are the budget: two of them plus a byte is not.
         assert_eq!(
             PRE_INSTALL_BUDGET_BYTES,

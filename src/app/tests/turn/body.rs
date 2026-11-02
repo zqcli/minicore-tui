@@ -282,7 +282,13 @@ async fn a_late_wait_finishes_only_its_turn_while_the_successor_runs_a_tool() {
         "finishing A cannot trim B's running output"
     );
     assert_eq!(call.state, ToolState::Running);
-    assert_eq!(session.observed_loop(), Some("B"));
+    assert_eq!(
+        session
+            .execution
+            .as_ref()
+            .and_then(|execution| execution.loop_id()),
+        Some("B")
+    );
     assert!(h.blocks().iter().any(|block| matches!(block,
         Block::TurnEnd {loop_id, tools:0, ..} if loop_id == "A")));
 }
@@ -478,7 +484,13 @@ async fn a_provided_input_event_finishes_its_tool_without_ending_the_running_tur
         .unwrap();
     assert_eq!(call.state, ToolState::Succeeded);
     assert!(call.state.is_terminal());
-    assert_eq!(h.session().observed_loop(), Some("A"));
+    assert_eq!(
+        h.session()
+            .execution
+            .as_ref()
+            .and_then(|execution| execution.loop_id()),
+        Some("A")
+    );
     assert!(
         h.is_busy(),
         "a supplied tool input does not complete its model turn"
@@ -955,7 +967,10 @@ async fn delayed_predecessor_waits_preserve_successor_usage_in_both_reply_orders
                 "reply order {order:?}, after {id}"
             );
             assert_eq!(
-                h.session().observed_loop(),
+                h.session()
+                    .execution
+                    .as_ref()
+                    .and_then(|execution| execution.loop_id()),
                 Some("B"),
                 "wait metadata cannot change control"
             );
@@ -996,7 +1011,9 @@ async fn late_identical_steers_keep_their_request_boundaries_before_an_incomplet
         let directory:crate::protocol::CompletionDirectory=serde_json::from_value(json!({"through_seq":1,"retained_from_seq":1,"truncated":false,"entries":[{"seq":1,"loop_id":"A","completion_kind":"reported","outcome_kind":"completed","persistence":"failed","availability":"unavailable","unavailable_reason":"expired"}]})).unwrap();
         let session = h.session_mut();
         session.catalog = directory.clone();
-        session.recovery.discover(&directory);
+        session
+            .recovery
+            .discover(&directory, crate::app::recovery::IDENTITIES_PER_LOAD);
 
         h.op(SessionOp::Recovered(
             crate::app::recovery::RecoveryOutcome {
@@ -1231,7 +1248,13 @@ async fn wait_and_result_facts_replace_only_their_turns_usage_in_either_order() 
             let session = h.session();
             assert_eq!((session.usage.input, session.usage.output), (350, 35));
             assert_eq!(session.live.as_ref().unwrap().turn.loop_id, "B");
-            assert_eq!(session.observed_loop(), Some("B"));
+            assert_eq!(
+                session
+                    .execution
+                    .as_ref()
+                    .and_then(|execution| execution.loop_id()),
+                Some("B")
+            );
         }
         h.op(SessionOp::Waited(Ok(wait)));
         let terminal = h

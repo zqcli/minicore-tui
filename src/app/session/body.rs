@@ -322,7 +322,6 @@ impl Session {
     fn cache_early(&mut self, event: AgentEvent, bytes: usize) {
         if bytes > EARLY_BYTES {
             self.early_gap = true;
-            self.recovery.behind = true;
             return;
         }
         while self.early_bytes + bytes > EARLY_BYTES
@@ -353,7 +352,6 @@ impl Session {
         if let Some((_, bytes)) = self.early.pop_front() {
             self.early_bytes -= bytes;
             self.early_gap = true;
-            self.recovery.behind = true;
         }
     }
 

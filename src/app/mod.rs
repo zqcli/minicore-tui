@@ -421,6 +421,7 @@ impl App {
                         // A zero step keeps the selection on a row that is still there.
                         app.overlay_move(0);
                     }
+                    app.recover_completions();
                 }
             }),
             Msg::Renamed(id, result) => self.with_notice_for(&id, |app| app.on_renamed(result)),

@@ -140,7 +140,17 @@ Keep these unless the user asks to change them:
   or an explicit partial/unavailable terminal region settles it. History catch-up
   settles a gap only after verified coverage of the entire newer pinned history,
   never merely because older pagination reached zero. A turn's canonical body is installed
-  once; late deltas for it are dropped.
+  once; late deltas for it are dropped. In-flight descriptors survive catalog
+  eviction and history-watermark changes until their results are handled.
+- Recovery uses one rotating worker across resident sessions, leaving one of
+  the two 64 MiB read workspaces for foreground history and export. Descriptor
+  admission is bounded to 256 per load and 1024 globally; only pending work not
+  yet attempted in its current retry round may be deferred for another resident. Attempt counts and settled
+  identities survive admission pressure. Capacity backlog can clear on
+  readmission; dropped early bodies and truncated catalog gaps remain distinct.
+  A retained fetched body that cannot be installed stays unsettled and exhausts
+  visibly; a failed retired read keeps a warning without promising another retry.
+  Successfully deleting a resident releases its capacity and reschedules recovery.
 - An anchored view does not move when content grows; when the dock grows it
   gives up rows at its top so the row being read stays visible. Folding a block
   (click, `Ctrl+O`, `Ctrl+T`) pins the top of the view (`App::pin_view`), so
@@ -197,7 +207,7 @@ to it. Do not rewrite released changelog sections.
 ## Backends, CI And Releases
 
 - Formal releases pin `minicore-agent` by its release tag (`tag = "vX.Y.Z"`).
-  The current 0.9.8 development branch pins Agent 0.9.4 by immutable Git revision;
+  The current development line pins Agent 0.9.5 by immutable Git revision;
   `Cargo.lock` also fixes its Runtime dependency. To adopt an Agent version,
   update its ref and version, run `cargo update`, and update the README backend
   line. Tags are never moved.

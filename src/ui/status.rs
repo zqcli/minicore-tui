@@ -313,7 +313,9 @@ fn gap_line(app: &App, styles: Styles, width: u16) -> Option<Line<'static>> {
         "More history remains to recover; /recover to continue"
     } else if session.recovery.truncated_gap {
         "Some unsaved turns may be missing outside the completion catalog"
-    } else if session.ordering_gap || session.recovery.behind {
+    } else if session.recovery.behind {
+        "Recovery capacity is full; /recover in stalled sessions retries failed reads"
+    } else if session.ordering_gap || session.early_gap {
         "Turn order is incomplete; reload the session to read it in order"
     } else if !session.body_recovery.is_empty() {
         "Some turn bodies are incomplete or unavailable; /recover retries failed reads"

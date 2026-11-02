@@ -264,7 +264,13 @@ async fn overlapping_partial_turn_windows_keep_source_order_tools_and_live_conte
             .count(),
         1
     );
-    assert_eq!(h.session().observed_loop(), Some("C"));
+    assert_eq!(
+        h.session()
+            .execution
+            .as_ref()
+            .and_then(|execution| execution.loop_id()),
+        Some("C")
+    );
     assert_eq!(h.session().loaded_from, 20);
 
     // A later disjoint window keeps the older island, then ordinary pages join them.
