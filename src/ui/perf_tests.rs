@@ -80,7 +80,8 @@ fn tool(index: usize) -> Block {
         "bash",
     );
     call.detail = format!("$ cargo test --lib module_{index}");
-    call.expanded_input = Some(format!("cargo test --lib module_{index}"));
+    call.arguments =
+        Some(serde_json::json!({"command":format!("cargo test --lib module_{index}")}));
     call.state = ToolState::Succeeded;
     call.exit_code = Some(0);
     call.duration = Some(Duration::from_millis(1200));

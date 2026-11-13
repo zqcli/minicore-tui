@@ -3,8 +3,7 @@
 use std::time::{Duration, Instant};
 
 use minicore_host_core::{
-    DelegationAssociation, ToolCallData, ToolCallState, ToolCallStateData, ToolInvocationData,
-    ToolResultData,
+    DelegationAssociation, ToolCallState, ToolCallStateData, ToolInvocationData, ToolResultData,
 };
 use minicore_host_local_tools::{CommandResult, OutputData};
 use minicore_host_protocol::{ToolCallId, ToolCallRef, TurnId};
@@ -50,8 +49,6 @@ pub struct ToolCall {
     pub name: String,
     pub arguments: Option<Value>,
     pub detail: String,
-    pub expanded_input: Option<String>,
-    pub input_lines: Option<usize>,
     pub state: ToolState,
     pub delegations: Vec<DelegationAssociation>,
     pub progress: Option<String>,
@@ -67,6 +64,7 @@ pub struct ToolCall {
     pub expanded: Option<bool>,
     output_from_result: bool,
     arguments_display: Option<(String, bool)>,
+    edit_input: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -109,8 +107,6 @@ impl ToolCall {
             name: name.into(),
             arguments: None,
             detail: String::new(),
-            expanded_input: None,
-            input_lines: None,
             state: ToolState::Pending,
             delegations: Vec::new(),
             progress: None,
@@ -125,6 +121,7 @@ impl ToolCall {
             expanded: None,
             output_from_result: false,
             arguments_display: None,
+            edit_input: None,
         }
     }
 
@@ -149,22 +146,29 @@ impl ToolCall {
             .next()
             .unwrap_or("")
             .to_owned();
-        let body = match self.name.as_str() {
-            "bash" => string("command").map(str::to_owned),
-            "write" => string("content").map(str::to_owned),
-            "apply_patch" => string("patch").map(str::to_owned),
-            "edit" => string("old_text")
+        self.edit_input = if self.name == "edit" {
+            string("old_text")
                 .zip(string("new_text"))
                 .map(|(old, new)| {
                     old.lines()
                         .map(|line| format!("-{line}\n"))
                         .chain(new.lines().map(|line| format!("+{line}\n")))
                         .collect()
-                }),
-            _ => None,
+                })
+        } else {
+            None
         };
-        self.input_lines = body.as_deref().map(|body| body.lines().count());
-        self.expanded_input = body;
+    }
+
+    pub fn expanded_input(&self) -> Option<&str> {
+        let key = match self.name.as_str() {
+            "bash" => "command",
+            "write" => "content",
+            "apply_patch" => "patch",
+            "edit" => return self.edit_input.as_deref(),
+            _ => return None,
+        };
+        self.arguments.as_ref()?.get(key)?.as_str()
     }
 
     /// A bounded, already formatted view of the complete native arguments.
@@ -199,14 +203,6 @@ impl ToolCall {
                 ToolCallState::Running => self.set_state(ToolState::Running),
                 ToolCallState::Finished => {}
             }
-        }
-    }
-
-    pub fn apply_read(&mut self, read: &ToolCallData) {
-        self.apply_state(&read.state);
-        self.set_arguments(&read.arguments);
-        if let Some(result) = &read.result {
-            self.apply_result(result);
         }
     }
 
@@ -255,9 +251,12 @@ impl ToolCall {
                                 && value["kind"] == "file"
                         })
                         .and_then(|value| value["text"].as_str());
-                    let formatted = parsed.as_ref().map(|value| {
-                        serde_json::to_string_pretty(value).expect("JSON values serialize")
-                    });
+                    let formatted = parsed
+                        .as_ref()
+                        .filter(|_| read_text.is_none())
+                        .map(|value| {
+                            serde_json::to_string_pretty(value).expect("JSON values serialize")
+                        });
                     let body = read_text.or(formatted.as_deref()).unwrap_or(content);
                     self.output_lines = Some(body.lines().count());
                     if self.name == "bash" {
@@ -270,33 +269,6 @@ impl ToolCall {
             self.output_from_result = true;
         }
         self.settle();
-    }
-
-    pub fn keep_live_facts(&mut self, live: &Self) {
-        self.expanded = live.expanded;
-        self.started_at = self.started_at.or(live.started_at);
-        self.duration = self.duration.or(live.duration);
-        self.exit_code = self.exit_code.or(live.exit_code);
-        if self.result_error.is_none() {
-            self.result_error.clone_from(&live.result_error);
-        }
-        if self.arguments.is_none()
-            && let Some(arguments) = &live.arguments
-        {
-            self.set_arguments(arguments);
-        }
-        if self.delegations.is_empty() {
-            self.delegations.clone_from(&live.delegations);
-        }
-        if !live.output.is_empty() && !live.output_from_result {
-            self.output.clone_from(&live.output);
-            self.output_dropped = live.output_dropped;
-            self.truncated |= live.truncated;
-            self.output_from_result = false;
-        }
-        if !self.state.is_terminal() {
-            self.state = live.state;
-        }
     }
 
     pub fn is_running(&self) -> bool {
@@ -315,8 +287,7 @@ impl ToolCall {
     pub fn header_detail(&self) -> String {
         if self.name == "bash"
             && let Some(command) = self
-                .expanded_input
-                .as_deref()
+                .expanded_input()
                 .and_then(|input| input.lines().find(|line| !line.trim().is_empty()))
         {
             return format!("$ {}", command.trim());
@@ -329,7 +300,7 @@ impl ToolCall {
 
     fn patch_paths(&self) -> Vec<&str> {
         let mut paths = Vec::new();
-        for line in self.expanded_input.as_deref().unwrap_or("").lines() {
+        for line in self.expanded_input().unwrap_or("").lines() {
             let path = [
                 "*** Update File: ",
                 "*** Add File: ",
@@ -352,7 +323,7 @@ impl ToolCall {
     }
 
     pub fn line_changes(&self) -> Option<(usize, usize)> {
-        let input = self.expanded_input.as_deref()?;
+        let input = self.expanded_input()?;
         match self.name.as_str() {
             "write" => Some((input.lines().count(), 0)),
             "edit" | "apply_patch" => {
@@ -371,10 +342,6 @@ impl ToolCall {
             }
             _ => None,
         }
-    }
-
-    pub fn hidden_input_lines(&self) -> usize {
-        0
     }
 
     pub fn output_content(&self) -> Vec<&str> {
@@ -504,15 +471,24 @@ fn append_capped_to(line: &mut String, text: &str, limit: usize) -> bool {
     if line.len() >= limit && line.ends_with('…') {
         return !text.is_empty();
     }
-    line.push_str(text);
-    if line.len() <= limit {
+    if text.len() <= limit.saturating_sub(line.len()) {
+        line.push_str(text);
         return false;
     }
+    line.reserve_exact(limit.saturating_sub(line.len()));
     let mut end = limit - '…'.len_utf8();
-    while !line.is_char_boundary(end) {
-        end -= 1;
+    if line.len() > end {
+        while !line.is_char_boundary(end) {
+            end -= 1;
+        }
+        line.truncate(end);
+    } else {
+        end -= line.len();
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        line.push_str(&text[..end]);
     }
-    line.truncate(end);
     line.push('…');
     true
 }
@@ -532,17 +508,22 @@ mod tests {
     }
 
     #[test]
-    fn complete_arguments_are_not_shortened_to_the_header() {
-        let mut call = card();
-        let command = "printf '你好'\n".repeat(300);
-        let arguments = serde_json::json!({"command":command,"timeout_seconds":5});
-        call.set_arguments(&arguments);
-        assert_eq!(call.arguments.as_ref(), Some(&arguments));
-        assert_eq!(
-            call.expanded_input.as_deref(),
-            arguments["command"].as_str()
-        );
-        assert_eq!(call.hidden_input_lines(), 0);
+    fn complete_input_borrows_the_native_arguments() {
+        for (name, key) in [
+            ("bash", "command"),
+            ("write", "content"),
+            ("apply_patch", "patch"),
+        ] {
+            let mut call = card();
+            call.name = name.into();
+            let input = "printf '你好'\n".repeat(300);
+            let arguments = serde_json::json!({key:input,"timeout_seconds":5});
+            call.set_arguments(&arguments);
+            let stored = call.arguments.as_ref().unwrap()[key].as_str().unwrap();
+            assert_eq!(call.arguments.as_ref(), Some(&arguments));
+            assert_eq!(call.expanded_input(), Some(input.as_str()));
+            assert_eq!(call.expanded_input().unwrap().as_ptr(), stored.as_ptr());
+        }
     }
 
     #[test]
@@ -562,20 +543,37 @@ mod tests {
         assert_eq!(call.argument_display().unwrap().0.as_ptr(), address);
         assert_eq!(call.argument_display().unwrap().0, cached);
         assert_eq!(call.arguments.as_ref(), Some(&arguments));
-        assert_eq!(
-            call.expanded_input.as_deref(),
-            arguments["command"].as_str()
-        );
+        assert_eq!(call.expanded_input(), arguments["command"].as_str());
     }
 
     #[test]
-    fn huge_unicode_output_is_bounded_without_splitting_characters() {
-        let mut call = card();
-        call.push_output(&"中".repeat(100_000));
-        assert!(call.output[0].len() <= OUTPUT_TAIL_BYTES);
-        assert!(call.output[0].ends_with('…'));
-        call.push_output("\ntail");
-        assert_eq!(call.output_content().last(), Some(&"tail"));
+    fn huge_output_keeps_bounded_capacity_without_splitting_characters() {
+        for size in [1024 * 1024, 8 * 1024 * 1024] {
+            for character in ["x", "中🙂"] {
+                let mut call = card();
+                call.push_output(&character.repeat(size / character.len()));
+                call.settle();
+                assert!(call.output[0].len() <= OUTPUT_TAIL_BYTES);
+                assert!(call.output[0].capacity() <= OUTPUT_TAIL_BYTES);
+                assert!(call.output[0].ends_with('…'));
+                call.push_output("\ntail");
+                assert_eq!(call.output_content().last(), Some(&"tail"));
+            }
+        }
+    }
+
+    #[test]
+    fn a_capped_append_keeps_the_utf8_prefix_across_chunks() {
+        for chunks in [["ab", "中🙂xyz"], ["ab中🙂", "xyz"]] {
+            let mut line = String::new();
+            assert!(!append_capped_to(&mut line, chunks[0], 10));
+            assert!(append_capped_to(&mut line, chunks[1], 10));
+            assert_eq!(line, "ab中…");
+        }
+        let mut line = String::new();
+        assert!(!append_capped_to(&mut line, "0123456789", 10));
+        assert!(append_capped_to(&mut line, "x", 10));
+        assert_eq!(line, "0123456…");
     }
 
     #[test]
@@ -666,7 +664,7 @@ mod tests {
             "lines":500,"text":text,"next_offset":null,"eof":true
         })));
         assert_eq!(call.arguments.as_ref(), Some(&arguments));
-        assert!(call.expanded_input.is_none());
+        assert!(call.expanded_input().is_none());
         assert_eq!(call.output.first().map(String::as_str), Some("line 0"));
         assert_eq!(call.output.last().map(String::as_str), Some("line 199"));
         assert_eq!(call.output_lines, Some(500));
@@ -683,7 +681,7 @@ mod tests {
         assert_eq!(call.state, ToolState::Succeeded);
         assert_eq!(call.result_error.as_deref(), Some("permission denied"));
         assert!(call.output.join("\n").contains("permission denied"));
-        assert_eq!(call.expanded_input.as_deref(), Some("proposed"));
+        assert_eq!(call.expanded_input(), Some("proposed"));
     }
 
     #[test]
@@ -695,7 +693,7 @@ mod tests {
         });
         call.set_arguments(&arguments);
         assert_eq!(call.arguments.as_ref(), Some(&arguments));
-        assert_eq!(call.expanded_input.as_deref(), Some("-one\n-two\n+three\n"));
+        assert_eq!(call.expanded_input(), Some("-one\n-two\n+three\n"));
         assert_eq!(call.line_changes(), Some((1, 2)));
     }
 

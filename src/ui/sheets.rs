@@ -512,7 +512,7 @@ fn interaction_sheet(app: &App, styles: Styles) -> Option<Sheet> {
     let subject = Subject {
         tool: call.map_or(interaction.tool_name(), |call| call.name.as_str()),
         detail: call.map_or("", |call| call.detail.as_str()),
-        input: call.and_then(|call| call.expanded_input.as_deref()),
+        input: call.and_then(|call| call.expanded_input()),
     };
     let mut sheet = approval_sheet(
         prompt,

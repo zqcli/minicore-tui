@@ -1199,7 +1199,7 @@ fn an_approval_shows_the_tool_its_target_and_its_input() {
         "write",
     );
     previous.detail = "previous-turn.txt".into();
-    previous.expanded_input = Some("Wrong turn input".into());
+    previous.arguments = Some(serde_json::json!({"content":"Wrong turn input"}));
     session.transcript.push(Block::Tool(Box::new(previous)));
     let mut call = ToolCall::new(
         ToolCallRef {
@@ -1209,7 +1209,7 @@ fn an_approval_shows_the_tool_its_target_and_its_input() {
         "write",
     );
     call.detail = "notes/approval.txt".into();
-    call.expanded_input = Some("Approval fixture executed.\nsecond line".into());
+    call.arguments = Some(serde_json::json!({"content":"Approval fixture executed.\nsecond line"}));
     session.transcript.push(Block::Tool(Box::new(call)));
     session.interaction = Some(approval());
     let rendered = render(&mut app, 80, 24);

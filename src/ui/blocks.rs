@@ -332,7 +332,7 @@ fn tool(call: &ToolCall, styles: Styles, width: usize, expanded: bool) -> Vec<Li
     };
     let row = |spans: Vec<Span<'static>>| surface_row(rail, surface, spans, width);
     let inner = text_width(width);
-    let body = card_body(call);
+    let body = card_body(call, expanded);
     // A bash call can take seconds to print anything; say it is alive.
     let waiting = call.is_running() && body.lines.is_empty() && body.hidden == 0;
     let running_row = || chrome(row(padded(vec![Span::styled("running…", styles.meta())])));
@@ -541,9 +541,9 @@ fn display_name(call: &ToolCall) -> &str {
 
 /// The collapsed title: the tool, and for a patch how many lines it has.
 fn card_title(call: &ToolCall) -> String {
-    match (call.name.as_str(), call.expanded_input.as_deref()) {
+    match (call.name.as_str(), call.expanded_input()) {
         ("apply_patch", Some(input)) => {
-            let lines = input.lines().count() + call.hidden_input_lines();
+            let lines = input.lines().count();
             format!("apply-patch ({})", plural(lines as u64, "line"))
         }
         _ => display_name(call).to_owned(),
@@ -569,7 +569,7 @@ fn error_line(call: &ToolCall) -> Option<&str> {
 fn expanded_title(call: &ToolCall) -> String {
     let detail = call.header_detail();
     if call.name == "bash"
-        && let Some(command) = call.expanded_input.as_deref()
+        && let Some(command) = call.expanded_input()
     {
         return format!("$ {}", command.trim());
     }
@@ -664,47 +664,42 @@ struct Body<'a> {
 
 /// `bash` shows its output tail; `edit`, `apply_patch` and `write` the head of
 /// their input; `read`, failed and other tools the head of their result.
-fn card_body(call: &ToolCall) -> Body<'_> {
+fn card_body(call: &ToolCall, expanded: bool) -> Body<'_> {
+    let limit = if expanded { EXPANDED_ROWS } else { 0 };
     let failed = call.state == ToolState::Failed || call.result_error.is_some();
-    if call.name == "bash" {
-        let output = call.output_content();
-        let shown = EXPANDED_ROWS.min(output.len());
-        let hidden = if output.is_empty() {
-            call.output_lines.unwrap_or(0)
-        } else {
-            call.output_dropped + output.len() - shown
-        };
-        return Body {
-            hidden,
-            lines: output[output.len() - shown..].to_vec(),
-            tail: true,
-            patch: false,
-        };
-    }
+    let tail = call.name == "bash";
     // A failed change explains itself in its result, not in its input.
-    if let Some(input) = call.expanded_input.as_deref()
+    if !tail
+        && let Some(input) = call.expanded_input()
         && (!failed || call.output.is_empty())
     {
         let write = call.name == "write";
-        let source: Vec<&str> = input
-            .lines()
-            .filter(|line| write || !is_noise(line))
-            .collect();
-        let shown = EXPANDED_ROWS.min(source.len());
+        let mut source = input.lines().filter(|line| write || !is_noise(line));
+        let lines = source.by_ref().take(limit).collect();
         return Body {
-            hidden: source.len() - shown + call.hidden_input_lines(),
-            lines: source[..shown].to_vec(),
+            hidden: source.count(),
+            lines,
             tail: false,
             patch: !write,
         };
     }
-    let output = call.output_content();
-    let shown = EXPANDED_ROWS.min(output.len());
-    let total = call.output_lines.unwrap_or(0).max(output.len());
+    let count = call.output.len() - usize::from(call.output.last().is_some_and(String::is_empty));
+    let output = &call.output[..count];
+    let shown = limit.min(count);
+    let total = if tail && !output.is_empty() {
+        call.output_dropped + count
+    } else {
+        call.output_lines.unwrap_or(0).max(count)
+    };
+    let lines = if tail {
+        &output[count - shown..]
+    } else {
+        &output[..shown]
+    };
     Body {
         hidden: total - shown,
-        lines: output[..shown].to_vec(),
-        tail: false,
+        lines: lines.iter().map(String::as_str).collect(),
+        tail,
         patch: false,
     }
 }
@@ -1260,7 +1255,7 @@ mod tests {
     fn an_expanded_bash_card_shows_the_command_output_and_time() {
         let mut long = call();
         long.exit_code = Some(2);
-        long.expanded_input = Some("cd app\npython3 -m unittest".into());
+        long.arguments = Some(serde_json::json!({"command":"cd app\npython3 -m unittest"}));
         assert_eq!(
             card(long, expanded()),
             [
@@ -1365,6 +1360,20 @@ mod tests {
             body.iter().any(|row| row.contains("\"patch\":")),
             "{body:?}"
         );
+    }
+
+    #[test]
+    fn large_patch_bodies_count_hidden_lines_without_collecting_them() {
+        let mut patch = patch_card();
+        patch.set_arguments(&serde_json::json!({"patch":format!(
+            "*** Begin Patch\n{}*** End Patch\n", "+line\n@@\n".repeat(10_000)
+        )}));
+        let collapsed = card_body(&patch, false);
+        assert_eq!(collapsed.lines.capacity(), 0);
+        assert_eq!(collapsed.hidden, 10_000);
+        let expanded = card_body(&patch, true);
+        assert_eq!(expanded.lines, vec!["+line"; EXPANDED_ROWS]);
+        assert_eq!(expanded.hidden, 10_000 - EXPANDED_ROWS);
     }
 
     #[test]
