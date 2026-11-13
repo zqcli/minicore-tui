@@ -1,6 +1,6 @@
 # Configuration
 
-Version 0.10 uses the native Host 0.11 configuration types. Terminal preferences,
+Version 0.11 uses the native Host 0.11 configuration types. Terminal preferences,
 Host resources, Agent defaults and saved Session settings have distinct owners.
 The TUI does not compose an Agent TOML file or import an old Agent store.
 
@@ -26,7 +26,9 @@ exit with status 2 before the terminal switches to fullscreen.
 | New Session | Selected Agent's saved Session defaults plus explicit overrides | Session creation |
 | Existing Session | Its saved native Session configuration | Reopening; explicit model, reasoning or approval update |
 
-Saved Host configuration wins over the candidate file at startup. Editing a
+Saved Host configuration wins over the candidate file at startup. An existing
+Host does not parse the default candidate until `/reload`; an explicit
+`--host-config` is still parsed at startup to report argument errors. Editing a
 file does not watch, reload or rewrite existing objects. Opening a Session does
 not reapply new-Agent defaults. Startup `--model` and `--reasoning` apply to the
 startup Session once; later navigation keeps the selected Session's settings.
@@ -42,6 +44,8 @@ editor = ["code", "--wait"]         # optional; otherwise $VISUAL, then $EDITOR
 
 `/theme` and F4 update only the theme key while preserving comments. The editor
 is an executable and argument vector; Ctrl+G appends the temporary draft path.
+An empty edited file clears the draft. A failed editor or unreadable result
+keeps the original draft and reports the temporary path for recovery.
 `NO_COLOR` disables colors. Prompt recall is stored in `history.jsonl`; input
 enters it only after verified acceptance.
 
@@ -176,9 +180,10 @@ successful `/reload`.
 
 ## Upgrading from 0.9.x
 
-Use a new home and let 0.10 generate its native starter files. Copy the provider
-endpoint/model declarations, credential-variable names and desired instructions
-into the new files explicitly. Reuse prompt template Markdown if desired.
+Use a new home and let the current version generate its native starter files.
+Copy the provider endpoint/model declarations, credential-variable names and
+desired instructions into the new files explicitly. Reuse prompt template
+Markdown if desired.
 The old `models.toml`, profiles, composed `session/agent.toml` and Agent Session
 store are not automatically translated, opened or modified.
 

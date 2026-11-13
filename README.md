@@ -1,7 +1,7 @@
 # minicore-tui
 
 `minicore-tui` is a fullscreen terminal frontend for
-[minicore-host](https://github.com/zqcli/minicore-host). Version 0.10.0 embeds
+[minicore-host](https://github.com/zqcli/minicore-host). Version 0.11.0 embeds
 Host 0.11.0 in the same executable and uses its typed Rust client through
 `HostClient::in_process`. Host owns Agents, Sessions, execution, tools,
 credentials, history and persistence; the TUI owns terminal interaction and
@@ -156,5 +156,6 @@ macOS x86_64 and Windows x86_64 packages. Each contains `bin/minicore-tui`
 (`.exe` on Windows), guides and `BUILD.txt` identifying the TUI and pinned Host
 revisions. Use `--home` or `MINICORE_HOME` to put data outside the package.
 
-See [architecture](docs/architecture.md), [migration design](docs/design-host.md)
-and [CHANGELOG.md](CHANGELOG.md).
+See [architecture](docs/architecture.md), [migration design](docs/design-host.md),
+[0.11.0 performance and size](docs/performance-0.11.0.md) and
+[CHANGELOG.md](CHANGELOG.md).

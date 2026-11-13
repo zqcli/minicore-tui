@@ -2,7 +2,7 @@
 
 ## Scope
 
-TUI 0.10.0 embeds MiniCore Host 0.11.0 at commit
+TUI 0.11.0 embeds MiniCore Host 0.11.0 at commit
 `32f074c57868533af81b0c6491440bae24b872c8`. The frontend uses
 `HostClient::in_process` and native Host DTOs. Host owns execution, storage,
 configuration, tools and credentials. There is no Agent subprocess, replacement
@@ -68,6 +68,13 @@ client does not require these removed servers.
   There is no timer that silently upgrades graceful shutdown to force.
 
 ## Verification and delivery
+
+The 0.11 frontend keeps these ownership contracts while removing unused
+conversion paths and duplicate input bodies. Catalog reads have one coalescing
+owner; workspace status is queried independently of scheduling controls.
+History installation indexes native identities within each batch and leaves
+unchanged blocks and ordering alone. Tool display limits apply before copying
+output; complete native arguments and exported history remain available.
 
 Use real embedded Host tests with explicitly named loopback model fixtures for
 execution, streaming, tools, approvals, history and shutdown. Preserve terminal

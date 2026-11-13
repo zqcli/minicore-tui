@@ -83,6 +83,8 @@ frame counts/timings on exit.
   memory while retaining an arbitrary loaded transcript.
 - Limits belong to the actual resource being bounded. Do not carry old JSON-RPC
   frame ceilings into the in-process API or truncate legal native content.
+- Apply presentation limits before allocating discarded output. Measure native
+  event/history installation as well as draw-only renderer fixtures.
 - Windows-only behavior stays behind `cfg(windows)` at its call site; compile
   and test pure logic everywhere. Use `Path`/`join`, executable suffix constants
   and native path formatting. Do not add platform-specific latency elsewhere.
@@ -99,6 +101,8 @@ frame counts/timings on exit.
 - Native snapshots own execution, queues, pause, residency, interaction,
   compaction, persistence and blocking. Mutation receipts cause reads, not
   synthetic success. `Persisted` alone means saved.
+- Catalog reads use one coalescing owner. Automatic workspace status reads are
+  separate from unrelated controls and skip Sessions with no workspace.
 - A send is never automatically repeated. Pending/unknown acceptance retains the
   original target and text. F8 resend needs explicit duplicate confirmation and
   a fresh Message ID. Only verified acceptance enters prompt recall.

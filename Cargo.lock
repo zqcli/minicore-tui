@@ -1240,7 +1240,7 @@ dependencies = [
 
 [[package]]
 name = "minicore-tui"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "base64 0.22.1",
  "clipboard-win",
@@ -1261,7 +1261,6 @@ dependencies = [
  "ratatui",
  "serde",
  "serde_json",
- "sha2",
  "tempfile",
  "thiserror",
  "tokio",

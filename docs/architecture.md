@@ -19,7 +19,7 @@ Agent, transport adapter, Webpage service or remote view layer.
 | `app/session/`, `app/control.rs` | Native snapshot projection, independent revisions, interactions, canonical history and output ranges |
 | `app/actions.rs`, `app/ops.rs` | Captured user intents and results installed into the original target |
 | `app/unconfirmed.rs` | Bounded local ownership of sends with pending or unknown acceptance |
-| `app/composer/`, `app/keys/`, `app/mouse.rs` | Editing, paste, key dispatch, selection and scrolling |
+| `app/composer.rs`, `app/keys/`, `app/mouse.rs` | Editing, paste, key dispatch, selection and scrolling |
 | `app/local_files.rs` | Serialized/coalesced preference and accepted-input history writes |
 | `history.rs`, `transcript/` | Native pagination/export, positioned records, tool cards, revisions and layout caching |
 | `ui/` | Terminal rendering, sheets and views; no execution owner |
@@ -78,6 +78,14 @@ resident views also receive completion, message, interaction and output events.
 Fresh catalogs are overlaid with already observed state to avoid downgrading the
 view with an older read result.
 
+Post-bootstrap catalog reads share one coalescing gate. Mutations and Agent
+progress request a refresh; requests arriving during a read coalesce into its
+successor. Automatic workspace status reads have a separate per-Session gate
+and run on opening or switching, workspace changes and Turn completion.
+Unrelated scheduling and model controls do not start an idle status read. A
+pending result from a different configuration revision is retried after fresh
+Session Info. Sessions with no workspace skip automatic status reads.
+
 Agent deletion confirms a captured exact child-Session set. Native scope
 validation rejects a changed child set; the frontend does not expand a cascade
 in response to that rejection. Close and delete admission are distinct from
@@ -119,6 +127,11 @@ content. They reconcile live output, late results and history rereads without
 combining identical text or reused Message IDs. A compaction record is displayed
 with its real source/coverage; it does not erase earlier transcript content.
 Interrupted partial responses and native terminal records remain distinct.
+
+Each installation batch indexes existing native positions and block identities.
+Only matching records are reconciled, and unchanged replays do not reorder
+blocks or invalidate layout revisions. The indexes end with the batch, so direct
+streamed block updates do not need to maintain a second persistent identity map.
 
 Export reads a separate full forward window and writes pages incrementally.
 It is independent of loaded screen history and preserves Host's fixed export

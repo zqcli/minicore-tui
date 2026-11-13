@@ -1,4 +1,4 @@
-> Historical design for the pre-0.10 Agent frontend. For the current native Host architecture, see [design-host.md](design-host.md) and [architecture.md](architecture.md).
+> Historical design for the pre-0.10 Agent frontend. For the current native Host architecture, see [design-host.md](../design-host.md) and [architecture.md](../architecture.md).
 
 # Concurrent sessions design
 
@@ -126,7 +126,7 @@ closing, phone views and attention notices keep the same behavior.
   foreground when it differs). Each phone owns its session or draft view;
   focusing it before intents preserves terminal-follow behavior, while each
   business operation addresses its explicitly captured resident. The full per-device
-  focus, pending-create and message-routing contract is in `design-remote.md`.
+  focus, pending-create and message-routing contract was in the retired remote design.
 - The live fields are applied on every sync next to the `current` marks, outside
   the cached catalog (a lookup per listed session, no rebuild or sort), so a
   background status or `unseen` change changes the serialized `State` and a

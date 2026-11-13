@@ -78,7 +78,7 @@ confirmation in `F8` does not remove an accepted input from the Host queue.
 | `↑`, `↓` | Move within a multiline draft, then browse prompt history at its first or last line. |
 | `Alt+↑` | Recall still-queued inputs into an empty draft. |
 | `Ctrl+X` | Cut an editor selection; otherwise copy the last assistant answer. |
-| `Ctrl+G` | Open the external editor configured by `[ui] editor`, then `$VISUAL`, then `$EDITOR`. |
+| `Ctrl+G` | Open the external editor configured by `[ui] editor`, then `$VISUAL`, then `$EDITOR`. Failures preserve the original draft. |
 | `/` at draft start | Open the command palette. |
 | `@` at word start | Open the Host workspace file picker; an `@` within a word stays text. |
 | `Home`, `End`, `Ctrl+A`, `Ctrl+E` | Move to the line start or end. `Home` with an empty draft and `End` also navigate the transcript as described below. |
@@ -178,7 +178,7 @@ tool.
 | Single-choice question | Arrows select an option; Enter sends its native index. Esc cancels the requesting Turn. `y` and `n` are not answer shortcuts. |
 | Text question | Type in a separate answer editor; Shift+Enter or Ctrl+J inserts a newline. Enter sends the answer, and Esc cancels the requesting Turn. |
 
-Answer keys are armed after half a second; unrelated typing during the initial
+Answer keys are armed after 250 ms; unrelated typing during the initial
 window postpones approval/choice arming. Esc remains available immediately.
 The text answer editor preserves whitespace and the conversation draft. Host
 validation errors remain visible and leave the answer editable. Once an

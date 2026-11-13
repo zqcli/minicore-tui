@@ -54,7 +54,7 @@ const KEYS: &[KeyRow] = &[
     },
     KeyRow {
         keys: "ctrl+g",
-        action: "edit the draft in `editor`, $VISUAL or $EDITOR",
+        action: "edit in `editor`, $VISUAL or $EDITOR; errors keep the draft",
     },
     KeyRow {
         keys: "ctrl+←/→, alt+←/→",

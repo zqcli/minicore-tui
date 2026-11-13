@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+## 0.11.0 — 2026-11-14
+
+- Index native history positions and identities per installation batch; preserve
+  unchanged block revisions and avoid sorting unchanged or already ordered history.
+- Bound tool output allocation before copying, borrow tool input from native
+  arguments, and avoid duplicate argument installation and result formatting.
+- Use one coalescing catalog reader for actions and observed progress. Separate
+  workspace status reads from unrelated controls and skip unconfigured workspaces.
+- Count background Sessions without cross-product scans or copied address strings.
+  Keep a new Session's first input only in its original creation owner.
+- Preserve drafts and recovery files when external-editor output cannot be read.
+  Defer the default Host configuration candidate on reopen until explicit reload.
+- Remove unused conversion APIs, write-only state and an unused direct dependency.
+  Preserve embedded Host 0.11.0, terminal behavior and native recovery contracts.
+
 ## 0.10.0 — 2026-11-13
 
 - Embed Host 0.11.0 at immutable revision 32f074c57868533af81b0c6491440bae24b872c8
