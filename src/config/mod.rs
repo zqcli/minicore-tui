@@ -130,10 +130,10 @@ pub fn prepare(home: &Home, request: &Request<'_>) -> Result<Prepared, String> {
             home, &created,
         )));
     }
-    let initial_config = if host_config_file.exists() || request.host_config.is_some() {
-        load_host_config(&host_config_file).map_err(|error| error.to_string())?
-    } else if saved_host {
+    let initial_config = if saved_host && request.host_config.is_none() {
         HostConfig::default()
+    } else if host_config_file.exists() || request.host_config.is_some() {
+        load_host_config(&host_config_file).map_err(|error| error.to_string())?
     } else {
         return Err(format!(
             "{}: not found; supply a native HostConfig with --host-config (the old Agent store is not migrated)",

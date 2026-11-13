@@ -233,15 +233,7 @@ async fn reopen(root: &Path) {
     let saved: Value =
         serde_json::from_slice(&std::fs::read(root.join("observed.json")).unwrap()).unwrap();
     let original = config::load_host_config(&home.host_config_file()).unwrap();
-    let replacement = HostConfig {
-        name: String::new(),
-        ..HostConfig::default()
-    };
-    std::fs::write(
-        home.host_config_file(),
-        serde_json::to_vec(&replacement).unwrap(),
-    )
-    .unwrap();
+    std::fs::write(home.host_config_file(), "{ invalid default candidate").unwrap();
     let mut hosted = Hosted::open(&launch(&home)).await.unwrap();
     let client = hosted.client();
     assert_eq!(

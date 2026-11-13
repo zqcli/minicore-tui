@@ -61,11 +61,6 @@ impl Home {
         self.0.join("history.jsonl")
     }
 
-    /// A path from a settings file: relative ones start at the TUI directory.
-    pub fn join(&self, path: &Path) -> PathBuf {
-        self.0.join(path)
-    }
-
     /// Existing Agent settings require an explicit migration, never scaffolding over them.
     pub fn is_fresh(&self) -> bool {
         !self.config_file().exists()
@@ -113,7 +108,5 @@ mod tests {
         );
         assert_eq!(home.commands_dir(), Path::new("/h/prompt/commands"));
         assert_eq!(home.data_root(), Path::new("/h/host"));
-        assert_eq!(home.join(Path::new("p/x.md")), Path::new("/h/p/x.md"));
-        assert_eq!(home.join(Path::new("/abs.md")), Path::new("/abs.md"));
     }
 }
