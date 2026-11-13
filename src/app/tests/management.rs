@@ -131,11 +131,12 @@ async fn stopping_agent_stays_stopping_until_its_owned_preparation_settles() {
     app.on_msg(Msg::Ready(
         tasks::catalogs(&client, Some(target.agent_id.clone())).await,
     ));
+    let message_id = MessageId::new().unwrap();
     client
         .session(target.clone())
         .send(
             MessageInput {
-                message_id: MessageId::new().unwrap(),
+                message_id: message_id.clone(),
                 mode: MessageMode::FollowUp,
                 text: "wait for the selected resources".into(),
                 in_reply_to: None,
@@ -175,6 +176,19 @@ async fn stopping_agent_stays_stopping_until_its_owned_preparation_settles() {
     assert!(!native.sessions[0].owned_work.preparing);
     assert_eq!(native.sessions[0].next_turn, 1);
 
+    // The preserved input cannot drain while this Agent is stopped.
+    client
+        .session(target)
+        .remove_input(
+            InputRemoveRequest {
+                operation_id: OperationId::new().unwrap(),
+                message_id,
+                expected_controller_revision: None,
+            },
+            tasks::options(),
+        )
+        .await
+        .unwrap();
     finish_host(app, messages, host, client).await;
 }
 
@@ -194,10 +208,20 @@ async fn default_session_change_keeps_the_original_agent_after_navigation() {
         .config;
     let other = memory_agent(&h.native.client, "Other Agent", config).await;
     let other_owner = agent_ref(&h.native.client, other.agent_id.clone());
-    h.app.on_msg(Msg::Catalogs(
-        tasks::catalogs(&h.native.client, Some(original.agent_id.clone())).await,
-    ));
     h.open(&desired).await;
+    // Opening can consume older queued catalog reads. Establish the Agent
+    // picker's actual selectable target after that navigation has completed.
+    h.app.refresh_catalogs();
+    h.until(|app| {
+        app.agents.iter().any(|agent| {
+            agent.id == other.agent_id
+                && agent.default_session_id.as_ref() == Some(&other.session_id)
+        }) && app
+            .resident
+            .current()
+            .is_some_and(|session| session.address() == desired)
+    })
+    .await;
 
     h.app.on_action(Action::SetDefaultSession);
     h.app.on_action(Action::SelectAgent(other.agent_id.clone()));
