@@ -80,31 +80,9 @@ impl RequestKey {
             Self::History { .. } => None,
         }
     }
-
-    pub fn response_index(&self) -> Option<u64> {
-        match self {
-            Self::Response { response_index, .. } => Some(*response_index),
-            Self::History { .. } => None,
-        }
-    }
 }
 
 impl Block {
-    pub fn is_streaming(&self) -> bool {
-        matches!(
-            self,
-            Self::Assistant {
-                streaming: true,
-                ..
-            }
-        )
-    }
-
-    pub fn is_blank_assistant(&self) -> bool {
-        matches!(self, Self::Assistant { reasoning, text, partial: false, .. }
-            if reasoning.trim().is_empty() && text.trim().is_empty())
-    }
-
     pub fn turn_id(&self) -> Option<&TurnId> {
         match self {
             Self::Assistant { key, .. } => key.turn_id(),

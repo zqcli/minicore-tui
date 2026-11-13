@@ -1,14 +1,16 @@
 //! Native accepted records as blocks and streaming Markdown.
 
+use std::collections::HashMap;
 use std::io::{self, Write};
 
-use minicore_host_core::{HistoryItemData, HistoryRecordData, TurnResultSnapshot};
-use minicore_host_protocol::{MessageMode, PersistenceState, ToolCallId, ToolCallRef};
+use minicore_host_core::{HistoryItemData, HistoryRecordData};
+use minicore_host_protocol::{MessageMode, ToolCallId, ToolCallRef, TurnId};
 use minicore_host_runtime::model::{AssistantPart, Usage};
 
 use super::{Block, HistorySource, RequestKey, ToolCall, ToolKey, Transcript, UserKind};
 
 impl Transcript {
+    #[cfg(test)]
     pub fn from_history(records: &[HistoryRecordData]) -> Self {
         let mut transcript = Self::default();
         transcript.install_history_records(records);
@@ -17,105 +19,89 @@ impl Transcript {
 
     /// Installs accepted records by position without rebuilding streamed bodies.
     pub fn install_history_records(&mut self, records: &[HistoryRecordData]) {
+        if records.is_empty() {
+            return;
+        }
+        let mut index = HistoryIndex::new(self);
+        let mut added = false;
         for record in records {
-            append_record(self, record);
-        }
-        self.sort_history();
-    }
-
-    pub fn from_turn_result(result: &TurnResultSnapshot) -> Self {
-        let turn = &result.source.turn_id;
-        let mut records: Vec<_> = result
-            .data
-            .history
-            .iter()
-            .map(|item| HistoryRecordData {
-                position: item.position,
-                recorded_at: item.recorded_at,
-                turn_id: Some(turn.clone()),
-                response_index: item.response_index,
-                item: item.item.clone(),
-            })
-            .chain(
-                result
-                    .data
-                    .partials
-                    .iter()
-                    .map(|partial| HistoryRecordData {
-                        position: partial.position,
-                        recorded_at: partial.recorded_at,
-                        turn_id: Some(turn.clone()),
-                        response_index: Some(partial.response_index),
-                        item: HistoryItemData::Partial {
-                            partial: partial.partial.clone(),
-                        },
-                    }),
-            )
-            .collect();
-        if let Some(saved) = &result.data.saved_terminal {
-            records.push(HistoryRecordData {
-                position: saved.position,
-                recorded_at: saved.recorded_at,
-                turn_id: Some(turn.clone()),
-                response_index: None,
-                item: HistoryItemData::TurnFinished {
-                    terminal: saved.terminal.clone(),
-                },
-            });
-        }
-        records.sort_by_key(|record| record.position);
-        let mut transcript = Self::from_history(&records);
-        if result.data.saved_terminal.is_some()
-            && let Some(Block::TurnEnd { saving, .. }) = transcript
-                .blocks
-                .iter_mut()
-                .find(|block| matches!(block, Block::TurnEnd { turn_id, .. } if turn_id == turn))
-        {
-            *saving = Some(PersistenceState::Persisted);
-        }
-        if let Some(info) = &result.data.info
-            && let Some(outcome) = info.outcome
-        {
-            let block = Block::TurnEnd {
-                turn_id: turn.clone(),
-                outcome,
-                reason: info.fault.as_ref().map(|fault| fault.message().to_owned()),
-                duration: None,
-                requests: info.requests,
-                tool_rounds: info.tool_rounds,
-                usage: Usage::default(),
-                changes: None,
-                saving: Some(info.persistence),
-            };
-            let at = match transcript.blocks.iter().position(
-                |block| matches!(block, Block::TurnEnd { turn_id, .. } if turn_id == turn),
-            ) {
-                Some(at) => {
-                    transcript.blocks[at] = block;
-                    at
+            if let Some(blocks) = index.positions.get(&record.position) {
+                for &at in blocks {
+                    let mut changed = false;
+                    for source in &mut self.metadata[at].history {
+                        if source.position == record.position
+                            && source.response_index.is_none()
+                            && record.response_index.is_some()
+                        {
+                            source.response_index = record.response_index;
+                            changed = true;
+                        }
+                    }
+                    if changed {
+                        if let Block::Tool(call) = &mut self.blocks[at] {
+                            call.response_index = record.response_index;
+                        }
+                        self.bump(at);
+                    }
                 }
-                None => transcript.push(block),
-            };
-            if let (Some(position), Some(recorded_at)) = (info.history_position, info.recorded_at) {
-                transcript.add_history_source(
-                    at,
-                    HistorySource {
-                        position,
-                        recorded_at,
-                        turn_id: Some(turn.clone()),
-                        response_index: None,
-                        part: 0,
-                    },
-                );
+            } else {
+                append_record(self, &mut index, record);
+                added = true;
             }
         }
-        transcript.sort_history();
-        transcript
+        if added {
+            self.sort_history();
+        }
     }
 }
 
-pub fn append_history_record(transcript: &mut Transcript, record: &HistoryRecordData) {
-    transcript.install_history_records(std::slice::from_ref(record));
+// Block indices are stable until the batch's final reorder.
+#[derive(Default)]
+struct HistoryIndex {
+    positions: HashMap<u64, Vec<usize>>,
+    responses: HashMap<RequestKey, usize>,
+    tools: HashMap<ToolKey, usize>,
+    seed_tools: HashMap<ToolCallId, usize>,
+    turns: HashMap<TurnId, usize>,
+}
+
+impl HistoryIndex {
+    fn new(transcript: &Transcript) -> Self {
+        let mut index = Self::default();
+        for (at, (block, meta)) in transcript
+            .blocks
+            .iter()
+            .zip(&transcript.metadata)
+            .enumerate()
+        {
+            for source in &meta.history {
+                index.positions.entry(source.position).or_default().push(at);
+            }
+            match block {
+                Block::Assistant { key, .. } => {
+                    index.responses.insert(key.clone(), at);
+                }
+                Block::Tool(call) => index.tool(call.key.clone(), at),
+                Block::TurnEnd { turn_id, .. } => {
+                    index.turns.entry(turn_id.clone()).or_insert(at);
+                }
+                _ => {}
+            }
+        }
+        index
+    }
+
+    fn tool(&mut self, key: ToolKey, at: usize) {
+        if key.turn_id().is_none() {
+            self.seed_tools.insert(key.tool_call_id().clone(), at);
+        }
+        self.tools.insert(key, at);
+    }
+
+    fn source(&mut self, transcript: &mut Transcript, at: usize, source: HistorySource) {
+        self.positions.entry(source.position).or_default().push(at);
+        transcript.add_history_source(at, source);
+    }
 }
 
 fn source(record: &HistoryRecordData, part: usize) -> HistorySource {
@@ -152,28 +138,11 @@ fn tool_key(record: &HistoryRecordData, tool_call_id: ToolCallId) -> ToolKey {
     }
 }
 
-fn append_record(transcript: &mut Transcript, record: &HistoryRecordData) {
-    if transcript.contains_history_position(record.position) {
-        for at in 0..transcript.metadata.len() {
-            let mut changed = false;
-            for source in &mut transcript.metadata[at].history {
-                if source.position == record.position
-                    && source.response_index.is_none()
-                    && record.response_index.is_some()
-                {
-                    source.response_index = record.response_index;
-                    changed = true;
-                }
-            }
-            if changed {
-                if let Block::Tool(call) = &mut transcript.blocks[at] {
-                    call.response_index = record.response_index;
-                }
-                transcript.bump(at);
-            }
-        }
-        return;
-    }
+fn append_record(
+    transcript: &mut Transcript,
+    index: &mut HistoryIndex,
+    record: &HistoryRecordData,
+) {
     match &record.item {
         HistoryItemData::User {
             received_at,
@@ -192,13 +161,13 @@ fn append_record(transcript: &mut Transcript, record: &HistoryRecordData) {
                 at: Some(received_at.unwrap_or(record.recorded_at)),
             });
             transcript.identify_user(at, record.turn_id.clone(), message_id.clone());
-            transcript.add_history_source(at, source(record, 0));
+            index.source(transcript, at, source(record, 0));
         }
         HistoryItemData::Assistant { response } => {
-            append_response(transcript, record, &response.content, false);
+            append_response(transcript, index, record, &response.content, false);
         }
         HistoryItemData::Partial { partial } => {
-            append_response(transcript, record, &partial.content, true);
+            append_response(transcript, index, record, &partial.content, true);
         }
         HistoryItemData::ToolResult {
             tool_call_id,
@@ -206,27 +175,27 @@ fn append_record(transcript: &mut Transcript, record: &HistoryRecordData) {
             result,
         } => {
             let key = tool_key(record, tool_call_id.clone());
-            let known = transcript.blocks.iter().rposition(|block| match block {
-                Block::Tool(call) => {
-                    call.key == key
-                        || (record.turn_id.is_none()
-                            && call.key.turn_id().is_none()
-                            && call.key.tool_call_id() == tool_call_id)
-                }
-                _ => false,
-            });
+            let known = if record.turn_id.is_none() {
+                index.seed_tools.get(tool_call_id)
+            } else {
+                index.tools.get(&key)
+            }
+            .copied();
             let at = known.unwrap_or_else(|| {
-                transcript.push(Block::Tool(Box::new(ToolCall::with_key(key, name))))
+                let at =
+                    transcript.push(Block::Tool(Box::new(ToolCall::with_key(key.clone(), name))));
+                index.tool(key, at);
+                at
             });
             if let Block::Tool(call) = &mut transcript.blocks[at] {
-                call.response_index = record.response_index;
+                call.response_index = record.response_index.or(call.response_index);
                 call.apply_result(result);
             }
-            transcript.add_history_source(at, source(record, 0));
+            index.source(transcript, at, source(record, 0));
         }
         HistoryItemData::Summary { text } => {
             let at = transcript.push(Block::Summary { text: text.clone() });
-            transcript.add_history_source(at, source(record, 0));
+            index.source(transcript, at, source(record, 0));
         }
         HistoryItemData::Compaction {
             text,
@@ -238,7 +207,7 @@ fn append_record(transcript: &mut Transcript, record: &HistoryRecordData) {
                 covered_items: *covered_items,
                 summary: text.clone(),
             });
-            transcript.add_history_source(at, source(record, 0));
+            index.source(transcript, at, source(record, 0));
         }
         HistoryItemData::TurnFinished { terminal } => {
             let Some(turn_id) = &record.turn_id else {
@@ -255,9 +224,7 @@ fn append_record(transcript: &mut Transcript, record: &HistoryRecordData) {
                 changes: None,
                 saving: None,
             };
-            let at = match transcript.blocks.iter().position(
-                |block| matches!(block, Block::TurnEnd { turn_id: known, .. } if known == turn_id),
-            ) {
+            let at = match index.turns.get(turn_id).copied() {
                 Some(at) => {
                     let mut block = block;
                     if let (
@@ -282,15 +249,20 @@ fn append_record(transcript: &mut Transcript, record: &HistoryRecordData) {
                     transcript.blocks[at] = block;
                     at
                 }
-                None => transcript.push(block),
+                None => {
+                    let at = transcript.push(block);
+                    index.turns.insert(turn_id.clone(), at);
+                    at
+                }
             };
-            transcript.add_history_source(at, source(record, 0));
+            index.source(transcript, at, source(record, 0));
         }
     }
 }
 
 fn append_response(
     transcript: &mut Transcript,
+    index: &mut HistoryIndex,
     record: &HistoryRecordData,
     content: &[AssistantPart],
     partial: bool,
@@ -309,36 +281,37 @@ fn append_response(
             AssistantPart::ToolCall(_) => {}
         }
     }
-    let at =
-        match transcript.blocks.iter().rposition(
-            |block| matches!(block, Block::Assistant { key: known, .. } if known == &key),
-        ) {
-            Some(at) => {
-                if let Block::Assistant {
-                    reasoning: known_reasoning,
-                    text: known_text,
-                    streaming,
-                    partial: known_partial,
-                    ..
-                } = &mut transcript.blocks[at]
-                {
-                    *known_reasoning = reasoning;
-                    *known_text = text;
-                    *streaming = false;
-                    *known_partial = partial;
-                }
-                at
+    let at = match index.responses.get(&key).copied() {
+        Some(at) => {
+            if let Block::Assistant {
+                reasoning: known_reasoning,
+                text: known_text,
+                streaming,
+                partial: known_partial,
+                ..
+            } = &mut transcript.blocks[at]
+            {
+                *known_reasoning = reasoning;
+                *known_text = text;
+                *streaming = false;
+                *known_partial = partial;
             }
-            None => transcript.push(Block::Assistant {
-                key,
+            at
+        }
+        None => {
+            let at = transcript.push(Block::Assistant {
+                key: key.clone(),
                 reasoning,
                 text,
                 streaming: false,
                 partial,
                 expanded: None,
-            }),
-        };
-    transcript.add_history_source(at, source(record, 0));
+            });
+            index.responses.insert(key, at);
+            at
+        }
+    };
+    index.source(transcript, at, source(record, 0));
     if partial {
         return;
     }
@@ -347,21 +320,19 @@ fn append_response(
             continue;
         };
         let key = tool_key(record, ToolCallId(call.tool_call_id().as_str().to_owned()));
-        let known = transcript
-            .blocks
-            .iter()
-            .rposition(|block| matches!(block, Block::Tool(known) if known.key == key));
-        let at = known.unwrap_or_else(|| {
-            transcript.push(Block::Tool(Box::new(ToolCall::with_key(
-                key,
+        let at = index.tools.get(&key).copied().unwrap_or_else(|| {
+            let at = transcript.push(Block::Tool(Box::new(ToolCall::with_key(
+                key.clone(),
                 call.name().as_str(),
-            ))))
+            ))));
+            index.tool(key, at);
+            at
         });
         if let Block::Tool(card) = &mut transcript.blocks[at] {
-            card.response_index = record.response_index;
+            card.response_index = record.response_index.or(card.response_index);
             card.set_arguments(call.arguments());
         }
-        transcript.add_history_source(at, source(record, part_index + 1));
+        index.source(transcript, at, source(record, part_index + 1));
     }
 }
 
@@ -524,6 +495,14 @@ mod tests {
         )
     }
 
+    fn result(position: u64) -> HistoryRecordData {
+        record(
+            position,
+            json!({"kind":"tool_result","tool_call_id":"call","name":"bash",
+                "result":{"outcome":"success","output":{"content":"done"}}}),
+        )
+    }
+
     #[test]
     fn repeated_message_ids_and_equal_text_keep_distinct_native_positions() {
         let user =
@@ -680,5 +659,164 @@ mod tests {
             transcript.tool_calls().next().unwrap().response_index,
             Some(7)
         );
+    }
+
+    #[test]
+    fn overlapping_pages_preserve_anchors_revisions_and_canonical_bodies() {
+        let tail = [
+            record(4, json!({"kind":"user","text":"same"})),
+            record(5, json!({"kind":"summary","text":"keep me"})),
+        ];
+        let mut transcript = Transcript::from_history(&tail);
+        let anchors: Vec<_> = (0..2)
+            .map(|at| transcript.history_source(at).unwrap().clone())
+            .collect();
+        let revisions: Vec<_> = transcript.revisions().collect();
+        let response = assistant(2);
+        let key = request_key(&response);
+        if let Block::Assistant { text, expanded, .. } = transcript.assistant_mut(&key) {
+            *text = "streamed draft".into();
+            *expanded = Some(true);
+        }
+        assert!(!transcript.has_canonical_response(&key));
+        let page = [
+            result(3),
+            response,
+            record(1, json!({"kind":"user","text":"same"})),
+            tail[0].clone(),
+        ];
+        transcript.install_history_records(&page);
+        assert_eq!(transcript.len(), 5);
+        assert!(transcript.has_canonical_response(&key));
+        assert!(matches!(&transcript.blocks()[1], Block::Assistant {
+            text, streaming: false, expanded: Some(true), ..
+        } if text == "working"));
+        assert_eq!(
+            transcript.tool_calls().next().unwrap().output_content(),
+            ["done"]
+        );
+        for (anchor, revision) in anchors.iter().zip(revisions) {
+            let at = transcript.find_history_source(anchor).unwrap();
+            assert_eq!(transcript.revisions().nth(at), Some(revision));
+        }
+        let revisions: Vec<_> = transcript.revisions().collect();
+        transcript.install_history_records(&page);
+        assert_eq!(transcript.revisions().collect::<Vec<_>>(), revisions);
+        assert_eq!(transcript.len(), 5);
+    }
+
+    #[test]
+    fn tool_response_identity_fill_preserves_every_source_and_canonical_body() {
+        let mut records = [assistant(1), result(2)];
+        records[0].response_index = Some(7);
+        records[1].response_index = None;
+        let mut transcript = Transcript::from_history(&records);
+        let anchor = transcript.history_source(1).unwrap().clone();
+        let response_revision = transcript.revisions().next();
+        records[1].response_index = Some(7);
+        transcript.install_history_records(&records);
+        assert_eq!(transcript.len(), 2);
+        assert_eq!(transcript.find_history_source(&anchor), Some(1));
+        assert!(transcript.has_canonical_response(&request_key(&records[0])));
+        assert_eq!(transcript.revisions().next(), response_revision);
+        assert!(
+            transcript
+                .metadata
+                .iter()
+                .flat_map(|meta| &meta.history)
+                .all(|source| source.response_index == Some(7))
+        );
+        assert_eq!(
+            transcript.tool_calls().next().unwrap().response_index,
+            Some(7)
+        );
+        let revisions: Vec<_> = transcript.revisions().collect();
+        transcript.install_history_records(&records);
+        assert_eq!(transcript.revisions().collect::<Vec<_>>(), revisions);
+    }
+
+    #[test]
+    fn a_tool_finish_without_response_identity_keeps_its_invocation_identity() {
+        let mut finished = result(2);
+        finished.response_index = None;
+        let transcript = Transcript::from_history(&[assistant(1), finished]);
+        assert_eq!(
+            transcript.tool_calls().next().unwrap().response_index,
+            Some(0)
+        );
+        assert_eq!(transcript.history_sources(1).len(), 2);
+    }
+
+    #[test]
+    fn a_streamed_response_and_seed_with_equal_text_keep_distinct_identities() {
+        let mut seed = assistant(1);
+        seed.turn_id = None;
+        seed.response_index = None;
+        let response = assistant(2);
+        let key = request_key(&response);
+        let mut transcript = Transcript::from_history(&[seed]);
+        if let Block::Assistant { text, .. } = transcript.assistant_mut(&key) {
+            *text = "working".into();
+        }
+        assert!(!transcript.has_canonical_response(&key));
+        assert!(transcript.has_canonical_response(&RequestKey::History { position: 1 }));
+        transcript.install_history_records(std::slice::from_ref(&response));
+        assert!(transcript.has_canonical_response(&key));
+        assert!(transcript.has_canonical_response(&RequestKey::History { position: 1 }));
+        assert_eq!(
+            transcript
+                .blocks
+                .iter()
+                .filter(|block| matches!(block, Block::Assistant { .. }))
+                .count(),
+            2
+        );
+        let revisions: Vec<_> = transcript.revisions().collect();
+        transcript.install_history_records(&[response]);
+        assert_eq!(transcript.revisions().collect::<Vec<_>>(), revisions);
+    }
+
+    #[test]
+    #[ignore = "native history installation timing"]
+    fn native_history_performance() {
+        use std::time::Instant;
+
+        for count in [1_000, 5_000, 10_000, 20_000] {
+            let records: Vec<_> = (0..count)
+                .map(|position| {
+                    let mut record = match position % 3 {
+                        0 => record(position, json!({"kind":"user","text":"repeat"})),
+                        1 => assistant(position),
+                        _ => result(position),
+                    };
+                    record.turn_id = Some(format!("{:020}", position / 3 + 1).parse().unwrap());
+                    record
+                })
+                .collect();
+            let mut transcript = Transcript::default();
+            let start = Instant::now();
+            transcript.install_history_records(&records);
+            let build = start.elapsed();
+            let revisions: Vec<_> = transcript.revisions().collect();
+            let start = Instant::now();
+            transcript.install_history_records(&records);
+            let replay = start.elapsed();
+            let start = Instant::now();
+            transcript.install_history_records(&records[records.len() - 60..]);
+            let tail = start.elapsed();
+            assert_eq!(transcript.revisions().collect::<Vec<_>>(), revisions);
+            let active = RequestKey::response(format!("{:020}", count + 1).parse().unwrap(), 0);
+            transcript.assistant_mut(&active);
+            let start = Instant::now();
+            for _ in 0..100_000 {
+                assert!(!std::hint::black_box(
+                    transcript.has_canonical_response(std::hint::black_box(&active))
+                ));
+            }
+            let active_checks = start.elapsed();
+            eprintln!(
+                "native history {count}: build {build:?}, replay {replay:?}, tail 60 {tail:?}, 100k active checks {active_checks:?}"
+            );
+        }
     }
 }

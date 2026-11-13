@@ -5,13 +5,12 @@ mod history;
 pub mod layout;
 mod tool_call;
 
-use std::ops::Range;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use minicore_host_protocol::{MessageId, Timestamp, ToolCallRef, TurnId};
 
 pub use block::{Block, ChangeSummary, RequestKey, UserKind};
-pub use history::{append_history_record, to_markdown, write_markdown};
+pub use history::{to_markdown, write_markdown};
 pub use tool_call::{EXPANDED_ROWS, ToolCall, ToolKey, ToolState};
 
 fn next_revision() -> u64 {
@@ -84,42 +83,10 @@ impl Transcript {
         self.blocks.len() - 1
     }
 
+    #[cfg(test)]
     pub fn insert(&mut self, index: usize, block: Block) {
         self.blocks.insert(index, block);
         self.metadata.insert(index, BlockMeta::default());
-    }
-
-    pub fn clear(&mut self) {
-        self.blocks.clear();
-        self.metadata.clear();
-    }
-
-    pub fn remove(&mut self, index: usize) {
-        self.blocks.remove(index);
-        self.metadata.remove(index);
-    }
-
-    pub fn splice(&mut self, range: Range<usize>, blocks: Vec<Block>) {
-        let metadata = (0..blocks.len()).map(|_| BlockMeta::default());
-        self.metadata.splice(range.clone(), metadata);
-        self.blocks.splice(range, blocks);
-    }
-
-    pub fn remove_front(&mut self, count: usize) {
-        self.blocks.drain(..count);
-        self.metadata.drain(..count);
-    }
-
-    pub fn splice_copy(&mut self, range: Range<usize>, source: &Self, copied: Range<usize>) {
-        self.blocks
-            .splice(range.clone(), source.blocks[copied.clone()].iter().cloned());
-        self.metadata
-            .splice(range, source.metadata[copied].iter().cloned());
-    }
-
-    pub fn splice_transcript(&mut self, range: Range<usize>, source: Self) {
-        self.blocks.splice(range.clone(), source.blocks);
-        self.metadata.splice(range, source.metadata);
     }
 
     pub fn block_mut(&mut self, index: usize) -> Option<&mut Block> {
@@ -143,14 +110,6 @@ impl Transcript {
             meta.history
                 .iter()
                 .any(|known| known.position == source.position && known.part == source.part)
-        })
-    }
-
-    pub fn contains_history_position(&self, position: u64) -> bool {
-        self.metadata.iter().any(|meta| {
-            meta.history
-                .iter()
-                .any(|source| source.position == position)
         })
     }
 
@@ -213,6 +172,23 @@ impl Transcript {
         &mut self.blocks[at]
     }
 
+    pub fn has_canonical_response(&self, key: &RequestKey) -> bool {
+        self.blocks
+            .iter()
+            .zip(&self.metadata)
+            .rev()
+            .find(|(block, _)| matches!(block, Block::Assistant { key: known, .. } if known == key))
+            .is_some_and(|(block, meta)| {
+                matches!(
+                    block,
+                    Block::Assistant {
+                        streaming: false,
+                        ..
+                    }
+                ) && !meta.history.is_empty()
+            })
+    }
+
     pub fn last_answer(&self) -> Option<&str> {
         self.blocks.iter().rev().find_map(|block| match block {
             Block::Assistant { text, .. } if !text.is_empty() => Some(text.as_str()),
@@ -230,17 +206,18 @@ impl Transcript {
     }
 
     fn sort_history(&mut self) {
-        let mut order: Vec<_> = (0..self.blocks.len()).collect();
-        order.sort_by_key(|&at| {
+        let key = |at: usize| {
             self.metadata[at]
                 .history
                 .first()
                 .map(|source| (source.position, source.part))
                 .unwrap_or((u64::MAX, at))
-        });
-        if order.iter().enumerate().all(|(at, &old)| at == old) {
+        };
+        if (0..self.blocks.len()).map(key).is_sorted() {
             return;
         }
+        let mut order: Vec<_> = (0..self.blocks.len()).collect();
+        order.sort_by_key(|&at| key(at));
         let mut blocks: Vec<_> = std::mem::take(&mut self.blocks)
             .into_iter()
             .map(Some)
