@@ -62,7 +62,10 @@ pub enum SessionOp {
     Info(Result<SessionInfo, String>),
     Inputs(Result<InputList, String>),
     Context(Result<SessionContextSnapshot, String>),
-    Workspace(Result<WorkspaceSnapshot<minicore_host_workspace::StatusResult>, String>),
+    Workspace {
+        revision: ConfigRevision,
+        result: Result<WorkspaceSnapshot<minicore_host_workspace::StatusResult>, String>,
+    },
     History(Result<HistoryWindow, String>),
     Older {
         window: HistoryWindow,
@@ -488,20 +491,39 @@ impl App {
         });
     }
     pub(super) fn refresh_session_details_for(&mut self, epoch: u64) {
+        self.refresh_session_info_for(epoch);
+        self.refresh_context_for(epoch);
+    }
+    pub(super) fn refresh_session_info_for(&mut self, epoch: u64) {
         let client = self.session_mut(epoch).client.clone();
         self.spawn_for(epoch, async move {
             SessionOp::Info(client.info(options()).await.map_err(|e| e.to_string()))
         });
-        let client = self.session_mut(epoch).client.clone();
+    }
+    pub(super) fn refresh_workspace_for(&mut self, epoch: u64) {
+        let session = self.session_mut(epoch);
+        if session.info.config.workspace.is_none() {
+            session.branch = None;
+            session.workspace_due = false;
+            return;
+        }
+        if session.workspace_loading {
+            session.workspace_due = true;
+            return;
+        }
+        session.workspace_due = false;
+        session.workspace_loading = true;
+        let client = session.client.clone();
+        let revision = session.info.config_revision;
         self.spawn_for(epoch, async move {
-            SessionOp::Workspace(
-                client
+            SessionOp::Workspace {
+                revision,
+                result: client
                     .workspace_status(options())
                     .await
                     .map_err(|e| e.to_string()),
-            )
+            }
         });
-        self.refresh_context_for(epoch);
     }
     pub(super) fn refresh_history(&mut self, epoch: u64) {
         let session = self.session_mut(epoch);
@@ -675,30 +697,15 @@ pub enum AgentWait {
 
 /// Agent progress has no Session observation event. Follow an accepted operation
 /// until its native owner settles; dropping App aborts this task with the others.
-pub async fn observe_agent(
-    client: &HostClient,
-    tx: &Tx,
-    target: AgentRef,
-    selected: Option<AgentId>,
-    wait: AgentWait,
-) -> Msg {
-    if tx
-        .send(Msg::Catalogs(catalogs(client, selected.clone()).await))
-        .await
-        .is_err()
-    {
-        return Msg::Catalogs(Err("Terminal closed during Agent observation".into()));
+pub async fn observe_agent(client: &HostClient, tx: &Tx, target: AgentRef, wait: AgentWait) -> Msg {
+    if tx.send(Msg::RefreshCatalogs(Ok(()))).await.is_err() {
+        return Msg::RefreshCatalogs(Err("Terminal closed during Agent observation".into()));
     }
-    let result = wait_agent(client, &target, wait).await;
-    if let Err(error) = result {
-        let _ = tx
-            .send(Msg::Notice(
-                NoticeLevel::Error,
-                format!("Agent {}: {error}", target.agent_id),
-            ))
-            .await;
-    }
-    Msg::Catalogs(catalogs(client, selected).await)
+    Msg::RefreshCatalogs(
+        wait_agent(client, &target, wait)
+            .await
+            .map_err(|error| format!("Agent {}: {error}", target.agent_id)),
+    )
 }
 
 async fn wait_agent(client: &HostClient, target: &AgentRef, wait: AgentWait) -> Result<(), String> {

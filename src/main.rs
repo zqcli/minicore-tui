@@ -384,7 +384,7 @@ async fn run() -> i32 {
                 Err(error) => {
                     app.notice(minicore_tui::app::NoticeLevel::Error, error);
                     // A failed editor must not cost the user what they typed.
-                    Some(draft)
+                    draft
                 }
             };
             app.on_msg(Msg::DraftEdited(edited));

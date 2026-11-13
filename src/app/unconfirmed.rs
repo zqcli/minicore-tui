@@ -82,7 +82,6 @@ impl App {
                 .filter_map(|creation| creation.entry.as_ref())
                 .map(Entry::retained_bytes)
                 .sum::<usize>()
-            + self.first_message.as_ref().map_or(0, String::capacity)
     }
 
     pub(super) fn local_input_room(&self, bytes: usize) -> bool {

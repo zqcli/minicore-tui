@@ -204,7 +204,6 @@ impl App {
                     *renaming = None;
                 }
             }
-            self.catalog_generation += 1;
             return;
         }
         let apply = |row: &mut SessionSummary| {
@@ -242,7 +241,6 @@ impl App {
                 apply(row);
             }
         }
-        self.catalog_generation += 1;
     }
 
     /// Run after one complete message reduction, so a final baseline can finish
@@ -544,6 +542,7 @@ impl App {
             self.refresh_history(epoch);
             self.refresh_inputs(epoch);
             self.refresh_session_details_for(epoch);
+            self.refresh_workspace_for(epoch);
         }
     }
 
@@ -601,11 +600,10 @@ impl App {
             .expect("tool card inserted")
             .set_arguments(&snapshot.data.arguments);
         self.apply_tool_state(epoch, snapshot.source, snapshot.data.state.clone());
-        if let Some(call) = self.session_mut(epoch).transcript.find_tool_mut(&key) {
-            call.set_arguments(&snapshot.data.arguments);
-            if let Some(result) = &snapshot.data.result {
-                call.apply_result(result);
-            }
+        if let Some(result) = &snapshot.data.result
+            && let Some(call) = self.session_mut(epoch).transcript.find_tool_mut(&key)
+        {
+            call.apply_result(result);
         }
         self.advance_outputs(epoch);
     }
@@ -878,7 +876,7 @@ impl App {
                             source.turn.turn_id.clone(),
                             source.response_index,
                         );
-                        if !canonical_response(&session.transcript, &key)
+                        if !session.transcript.has_canonical_response(&key)
                             && let Block::Assistant {
                                 reasoning, text, ..
                             } = session.transcript.assistant_mut(&key)
@@ -909,7 +907,7 @@ impl App {
         }
         let mut closed = Vec::new();
         session.outputs.retain(|output| {
-            let canonical_model = matches!(output.buffer.source(), OutputSource::Model { source } if canonical_response(&session.transcript, &RequestKey::response(source.turn.turn_id.clone(), source.response_index)));
+            let canonical_model = matches!(output.buffer.source(), OutputSource::Model { source } if session.transcript.has_canonical_response(&RequestKey::response(source.turn.turn_id.clone(), source.response_index)));
             let complete = (output.fixed_final || output.buffer.is_complete() || canonical_model)
                 && !output.reading && output.buffer.next_read(OUTPUT_PAGE_BYTES).is_none();
             if complete && output.rendered == output.buffer.text().len() {
@@ -975,13 +973,6 @@ fn event_session(event: &ObservationEvent) -> Option<&SessionIdentity> {
         _ => None,
     })
 }
-fn canonical_response(transcript: &crate::transcript::Transcript, key: &RequestKey) -> bool {
-    transcript.blocks().iter().enumerate().any(|(at, block)| {
-        matches!(block, Block::Assistant { key: known, streaming: false, .. } if known == key)
-            && transcript.history_source(at).is_some()
-    })
-}
-
 enum Anchor {
     History(HistorySource),
     Response(RequestKey),
@@ -1020,10 +1011,14 @@ fn find_anchor(transcript: &crate::transcript::Transcript, anchor: &Anchor) -> O
 fn source_is_canonical(session: &super::Session, source: &OutputSource) -> bool {
     session.completed.contains(&output_turn(source).turn_id)
         || match source {
-            OutputSource::Model { source } => canonical_response(
-                &session.transcript,
-                &RequestKey::response(source.turn.turn_id.clone(), source.response_index),
-            ),
+            OutputSource::Model { source } => {
+                session
+                    .transcript
+                    .has_canonical_response(&RequestKey::response(
+                        source.turn.turn_id.clone(),
+                        source.response_index,
+                    ))
+            }
             OutputSource::Toolcall { source } => session
                 .transcript
                 .find_tool(&tool_ref(source))

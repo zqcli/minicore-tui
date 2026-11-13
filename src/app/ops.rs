@@ -42,6 +42,7 @@ impl App {
         }
         self.pump_subscription(epoch, opened.subscription);
         self.refresh_session_details_for(epoch);
+        self.refresh_workspace_for(epoch);
         epoch
     }
     pub(super) fn on_op(&mut self, epoch: u64, op: SessionOp) {
@@ -101,7 +102,18 @@ impl App {
                         && info.agent_id == session.info.agent_id
                         && info.config_revision >= session.info.config_revision
                     {
+                        let workspace_changed =
+                            session.info.config.workspace != info.config.workspace;
                         session.info = info;
+                        if workspace_changed {
+                            session.branch = None;
+                        }
+                        if workspace_changed
+                            || (session.workspace_due && !session.workspace_loading)
+                        {
+                            session.workspace_due = false;
+                            self.refresh_workspace_for(epoch);
+                        }
                     }
                 }
                 Err(error) => self.error(error),
@@ -151,19 +163,34 @@ impl App {
                     self.refresh_context_for(epoch);
                 }
             }
-            SessionOp::Workspace(result) => match result {
-                Ok(workspace) => {
-                    let session = self.session_mut(epoch);
-                    if session.identity_matches(&workspace.source)
-                        && workspace
-                            .config_revision
-                            .is_none_or(|revision| revision >= session.info.config_revision)
-                    {
-                        session.branch = workspace.data.branch;
+            SessionOp::Workspace { revision, result } => {
+                self.session_mut(epoch).workspace_loading = false;
+                let mut refresh_info = false;
+                match result {
+                    Ok(workspace) => {
+                        let session = self.session_mut(epoch);
+                        if session.identity_matches(&workspace.source)
+                            && session.info.config.workspace.is_some()
+                        {
+                            if workspace.config_revision == Some(session.info.config_revision) {
+                                session.branch = workspace.data.branch;
+                            } else {
+                                session.workspace_due = true;
+                                refresh_info = true;
+                            }
+                        }
                     }
+                    Err(error) if revision == self.session_mut(epoch).info.config_revision => {
+                        self.error(error);
+                    }
+                    Err(_) => {}
                 }
-                Err(error) => self.error(error),
-            },
+                if refresh_info {
+                    self.refresh_session_info_for(epoch);
+                } else if std::mem::take(&mut self.session_mut(epoch).workspace_due) {
+                    self.refresh_workspace_for(epoch);
+                }
+            }
             SessionOp::History(result) => {
                 self.session_mut(epoch).history_refreshing = false;
                 match result {

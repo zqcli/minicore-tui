@@ -7,7 +7,7 @@ use minicore_host_transport::HostClient;
 use tokio::sync::{Notify, Semaphore, mpsc};
 
 use super::harness::Harness;
-use crate::app::{Action, App, Msg, tasks};
+use crate::app::{Action, App, Msg, SessionOp, tasks};
 use crate::testing::real_bounded;
 
 fn agent_ref(client: &HostClient, agent_id: AgentId) -> AgentRef {
@@ -256,6 +256,263 @@ async fn default_session_change_keeps_the_original_agent_after_navigation() {
         Some(other.session_id)
     );
     assert_eq!(h.app.current_agent_id(), Some(&other.agent_id));
+    h.finish().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn catalog_mutations_share_one_reader_and_final_metadata_cannot_roll_back() {
+    let mut h = Harness::opened().await;
+    let target = h.another_session().await;
+    h.open(&target).await;
+    h.until(|app| !app.catalog_loading).await;
+    h.app.refresh_catalogs();
+    let old = real_bounded(async {
+        loop {
+            let message = h.messages.recv().await.unwrap();
+            if matches!(message, Msg::Catalogs(_)) {
+                break message;
+            }
+            h.app.on_msg(message);
+        }
+    })
+    .await;
+    assert!(h.app.catalog_loading);
+    h.app.on_action(Action::RenameSession {
+        target: target.clone(),
+        title: "Final Session title".into(),
+    });
+    h.app.on_action(Action::SetDefaultSession);
+    real_bounded(async {
+        let mut requests = 0;
+        while requests < 3 {
+            let message = h.messages.recv().await.unwrap();
+            match &message {
+                Msg::RefreshCatalogs(Ok(())) => requests += 1,
+                Msg::RefreshCatalogs(Err(error)) => panic!("mutation failed: {error}"),
+                Msg::Catalogs(_) => panic!("mutation bypassed the active catalog reader"),
+                _ => {}
+            }
+            h.app.on_msg(message);
+        }
+    })
+    .await;
+    let native = h
+        .native
+        .client
+        .agent(
+            agent_ref(&h.native.client, target.agent_id.clone()),
+            tasks::options(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        native.info.default_session_id.as_ref(),
+        Some(&target.session_id)
+    );
+    assert_eq!(
+        native
+            .sessions
+            .iter()
+            .find(|row| row.id == target.session_id)
+            .unwrap()
+            .title
+            .as_deref(),
+        Some("Final Session title")
+    );
+    assert!(h.app.catalog_due);
+    h.app.on_msg(old);
+    assert!(h.app.catalog_loading);
+    assert!(!h.app.catalog_due);
+
+    real_bounded(async {
+        let mut reads = 0;
+        while h.app.catalog_loading {
+            let message = h.messages.recv().await.unwrap();
+            if let Msg::Catalogs(result) = &message {
+                reads += 1;
+                let catalog = result.as_ref().unwrap();
+                assert_eq!(
+                    catalog
+                        .agents
+                        .iter()
+                        .find(|row| row.id == target.agent_id)
+                        .unwrap()
+                        .default_session_id
+                        .as_ref(),
+                    Some(&target.session_id)
+                );
+                assert_eq!(
+                    catalog
+                        .sessions
+                        .iter()
+                        .find(|row| row.id == target.session_id && row.agent_id == target.agent_id)
+                        .unwrap()
+                        .title
+                        .as_deref(),
+                    Some("Final Session title")
+                );
+            }
+            h.app.on_msg(message);
+        }
+        assert_eq!(
+            reads, 1,
+            "requests during one read need only one trailing read"
+        );
+    })
+    .await;
+    assert_eq!(
+        h.app
+            .sessions
+            .iter()
+            .find(|row| row.id == target.session_id && row.agent_id == target.agent_id)
+            .unwrap()
+            .title
+            .as_deref(),
+        Some("Final Session title")
+    );
+    h.finish().await;
+}
+
+async fn take_workspace(h: &mut Harness) -> Msg {
+    real_bounded(async {
+        loop {
+            let message = h.messages.recv().await.unwrap();
+            if matches!(&message, Msg::Session(_, op) if matches!(op.as_ref(), SessionOp::Workspace { .. })) {
+                return message;
+            }
+            h.app.on_msg(message);
+        }
+    })
+    .await
+}
+
+#[tokio::test]
+async fn workspace_reads_coalesce_and_follow_only_the_current_workspace_config() {
+    let mut h = Harness::opened().await;
+    let epoch = h.app.resident.current().unwrap().epoch;
+    assert!(
+        h.app
+            .resident
+            .current()
+            .unwrap()
+            .info
+            .config
+            .workspace
+            .is_none()
+    );
+    h.app.refresh_workspace_for(epoch);
+    assert!(!h.app.resident.current().unwrap().workspace_loading);
+
+    let first = tempfile::tempdir().unwrap();
+    let second = tempfile::tempdir().unwrap();
+    for (directory, branch) in [(&first, "first"), (&second, "second")] {
+        let output = std::process::Command::new("git")
+            .args(["init", "--quiet", "--initial-branch", branch])
+            .arg(directory.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    h.app.update_session(SessionConfigPatch {
+        workspace: NullablePatch::Set(WorkspaceRef {
+            path: first.path().to_str().unwrap().into(),
+        }),
+        ..SessionConfigPatch::default()
+    });
+    let old = take_workspace(&mut h).await;
+    assert!(h.app.resident.current().unwrap().workspace_loading);
+    h.app.update_session(SessionConfigPatch {
+        model: Some("fixture/during-read".parse().unwrap()),
+        ..SessionConfigPatch::default()
+    });
+    h.until(|app| {
+        app.resident.current().unwrap().info.config.model.as_str() == "fixture/during-read"
+    })
+    .await;
+    assert!(!h.app.resident.current().unwrap().workspace_due);
+    h.app.on_msg(old);
+    assert!(h.app.resident.current().unwrap().branch.is_none());
+    assert!(h.app.resident.current().unwrap().workspace_due);
+    assert!(!h.app.resident.current().unwrap().workspace_loading);
+    let refreshed = take_workspace(&mut h).await;
+    h.app.on_msg(refreshed);
+    assert_eq!(
+        h.app.resident.current().unwrap().branch.as_deref(),
+        Some("first")
+    );
+
+    h.app.refresh_workspace_for(epoch);
+    let old = take_workspace(&mut h).await;
+    for _ in 0..4 {
+        h.app.refresh_workspace_for(epoch);
+    }
+    assert!(h.app.resident.current().unwrap().workspace_due);
+
+    h.app.update_session(SessionConfigPatch {
+        workspace: NullablePatch::Set(WorkspaceRef {
+            path: second.path().to_str().unwrap().into(),
+        }),
+        ..SessionConfigPatch::default()
+    });
+    h.until(|app| {
+        app.resident
+            .current()
+            .unwrap()
+            .info
+            .config
+            .workspace
+            .as_ref()
+            .unwrap()
+            .path
+            == second.path().to_str().unwrap()
+    })
+    .await;
+    h.app.on_msg(old);
+    assert!(h.app.resident.current().unwrap().branch.is_none());
+    assert!(!h.app.resident.current().unwrap().workspace_loading);
+    assert!(h.app.resident.current().unwrap().workspace_due);
+    let current = take_workspace(&mut h).await;
+    h.app.on_msg(current);
+    assert_eq!(
+        h.app.resident.current().unwrap().branch.as_deref(),
+        Some("second")
+    );
+    assert!(!h.app.resident.current().unwrap().workspace_loading);
+
+    h.app.update_session(SessionConfigPatch {
+        model: Some("fixture/changed".parse().unwrap()),
+        ..SessionConfigPatch::default()
+    });
+    h.until(|app| app.resident.current().unwrap().info.config.model.as_str() == "fixture/changed")
+        .await;
+    assert_eq!(
+        h.app.resident.current().unwrap().branch.as_deref(),
+        Some("second")
+    );
+    assert!(!h.app.resident.current().unwrap().workspace_loading);
+
+    h.app.update_session(SessionConfigPatch {
+        workspace: NullablePatch::Clear,
+        ..SessionConfigPatch::default()
+    });
+    h.until(|app| {
+        app.resident
+            .current()
+            .unwrap()
+            .info
+            .config
+            .workspace
+            .is_none()
+    })
+    .await;
+    h.app.refresh_workspace_for(epoch);
+    assert!(h.app.resident.current().unwrap().branch.is_none());
+    assert!(!h.app.resident.current().unwrap().workspace_loading);
+    assert!(!h.app.resident.current().unwrap().workspace_due);
     h.finish().await;
 }
 

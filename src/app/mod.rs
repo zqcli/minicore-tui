@@ -51,6 +51,7 @@ pub use tasks::{MESSAGE_CAPACITY, SessionOp, Tx, bootstrap};
 pub enum Msg {
     Ready(Result<Ready, String>),
     Catalogs(Result<Ready, String>),
+    RefreshCatalogs(Result<(), String>),
     HostState(Box<StateEvent>),
     Opened(u64, SessionRef, Result<Box<tasks::Opened>, String>),
     Created(u64, Result<SessionRef, String>),
@@ -61,7 +62,7 @@ pub enum Msg {
     LocalPushed(u64, Result<MessageAccepted, CallError>),
     Failed(String),
     Notice(NoticeLevel, String),
-    DraftEdited(Option<String>),
+    DraftEdited(String),
     Flash(String),
 }
 
@@ -131,7 +132,6 @@ pub struct App {
     pub agents: Vec<AgentSummary>,
     pub selected_agent: Option<AgentId>,
     pub new_agent: AgentConfig,
-    pub catalog_generation: u64,
     pub(super) catalog_loading: bool,
     pub(super) catalog_due: bool,
     pub models: Vec<ModelDescription>,
@@ -166,7 +166,6 @@ pub struct App {
     pub loading_session: bool,
     pub(super) open_generation: u64,
     pub(super) opening_target: Option<(u64, SessionRef)>,
-    pub first_message: Option<String>,
     pub epoch: u64,
     pub templates: Vec<templates::Template>,
     pub home: Option<crate::config::Home>,
@@ -199,7 +198,6 @@ impl App {
             agents: Vec::new(),
             selected_agent: None,
             new_agent: AgentConfig::default(),
-            catalog_generation: 0,
             catalog_loading: false,
             catalog_due: false,
             models: Vec::new(),
@@ -234,7 +232,6 @@ impl App {
             loading_session: false,
             open_generation: 0,
             opening_target: None,
-            first_message: None,
             epoch: 0,
             templates: Vec::new(),
             home: None,
@@ -270,6 +267,12 @@ impl App {
                     self.refresh_catalogs();
                 }
             }
+            Msg::RefreshCatalogs(result) => {
+                if let Err(error) = result {
+                    self.error(error);
+                }
+                self.refresh_catalogs();
+            }
             Msg::HostState(state) => self.on_host_state(*state),
             Msg::Opened(generation, target, result) => {
                 if self.opening_target.as_ref() != Some(&(generation, target.clone())) {
@@ -303,7 +306,6 @@ impl App {
                     let select = generation == self.open_generation;
                     if select {
                         self.loading_session = false;
-                        self.first_message = None;
                     }
                     let epoch = self.install_opened(*opened, select);
                     debug_assert_eq!(self.resident.get(epoch).unwrap().address(), target);
@@ -356,9 +358,7 @@ impl App {
                 }
             }
             Msg::Notice(level, text) => self.notice(level, text),
-            Msg::DraftEdited(draft) => self
-                .composer
-                .restore_text(draft.as_deref().unwrap_or_default()),
+            Msg::DraftEdited(draft) => self.composer.restore_text(&draft),
             Msg::Flash(text) => self.flash = Some((text, tokio::time::Instant::now())),
         }
         self.retire_removed_sessions();
@@ -386,7 +386,6 @@ impl App {
         for snapshot in observed {
             self.project_catalog_state(&snapshot);
         }
-        self.catalog_generation += 1;
         if let Overlay::Sessions { rows, .. } = &mut self.overlay {
             *rows = self.sessions.clone();
         }
@@ -483,6 +482,10 @@ impl App {
     }
     pub fn is_busy(&self) -> bool {
         self.resident.current().is_some_and(Session::is_busy)
+    }
+
+    pub fn creating_session(&self) -> bool {
+        self.pending_creations.contains_key(&self.open_generation)
     }
 
     pub(crate) fn active_editor(&self) -> &composer::Composer {

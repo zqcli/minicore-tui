@@ -18,7 +18,7 @@ pub async fn edit_in_terminal(
     guard: &mut crate::terminal::Guard,
     command: &[String],
     draft: &str,
-) -> Result<Option<String>, String> {
+) -> Result<String, String> {
     guard
         .suspend()
         .map_err(|error| format!("cannot hand the terminal to the editor: {error}"))?;
@@ -33,9 +33,8 @@ pub async fn edit_in_terminal(
 }
 
 /// Writes `draft` to a temporary Markdown file, runs `command` (program plus
-/// arguments) on it and returns the new contents. `Ok(None)` means the file
-/// came back empty.
-pub async fn edit(command: &[String], draft: &str) -> Result<Option<String>, String> {
+/// arguments) on it and returns the new contents. Failed edits retain the file.
+pub async fn edit(command: &[String], draft: &str) -> Result<String, String> {
     let (program, args) = command
         .split_first()
         .ok_or("no editor is configured: set `editor` in the TUI config or $VISUAL/$EDITOR")?;
@@ -44,10 +43,12 @@ pub async fn edit(command: &[String], draft: &str) -> Result<Option<String>, Str
     }
     let path = temp_path();
     std::fs::write(&path, draft).map_err(|error| format!("{}: {error}", path.display()))?;
-    let result = run(program, args, &path).await;
-    let text = std::fs::read_to_string(&path).ok();
+    run(program, args, &path)
+        .await
+        .map_err(|error| format!("{error}; draft file: {}", path.display()))?;
+    let text = std::fs::read_to_string(&path)
+        .map_err(|error| format!("cannot read edited draft {}: {error}", path.display()))?;
     let _ = std::fs::remove_file(&path);
-    result?;
     Ok(text)
 }
 
@@ -101,8 +102,7 @@ mod tests {
         // `cat` rewrites the file with itself: the draft must survive verbatim.
         let text = edit(&["cat".to_owned()], "line one\nline two\n")
             .await
-            .unwrap()
-            .expect("a non-empty file is a draft");
+            .unwrap();
         assert_eq!(text, "line one\nline two\n");
     }
 
@@ -116,15 +116,47 @@ mod tests {
             "sh".to_owned(),
         ];
         let text = edit(&command, "draft").await.expect("editor runs");
-        assert_eq!(text.as_deref(), Some("edited"));
+        assert_eq!(text, "edited");
     }
 
     #[tokio::test]
-    async fn an_editor_that_writes_nothing_returns_no_draft() {
-        // `true` leaves the file empty of a write and never touches it; the
-        // file is still the original draft, so this is the unchanged case.
+    async fn an_editor_that_writes_nothing_keeps_the_draft() {
         let text = edit(&["true".to_owned()], "keep me").await.unwrap();
-        assert_eq!(text.as_deref(), Some("keep me"));
+        assert_eq!(text, "keep me");
+    }
+
+    #[tokio::test]
+    async fn clearing_a_draft_is_distinct_from_removing_its_file() {
+        for (script, cleared) in [(r#"> "$1""#, true), (r#"rm -- "$1""#, false)] {
+            let result = edit(
+                &["sh".into(), "-c".into(), script.into(), "sh".into()],
+                "draft",
+            )
+            .await;
+            if cleared {
+                assert_eq!(result.unwrap(), "");
+            } else {
+                assert!(result.unwrap_err().contains("cannot read edited draft"));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn unreadable_edited_content_is_retained_for_recovery() {
+        let directory = tempfile::tempdir().unwrap();
+        let recorded = directory.path().join("draft-path");
+        let command = [
+            "sh".into(),
+            "-c".into(),
+            r#"printf '\377' > "$2"; printf '%s' "$2" > "$1""#.into(),
+            "sh".into(),
+            recorded.to_str().unwrap().into(),
+        ];
+        let error = edit(&command, "original draft").await.unwrap_err();
+        let path = std::fs::read_to_string(recorded).unwrap();
+        assert!(error.contains(&path));
+        assert_eq!(std::fs::read(&path).unwrap(), [255]);
+        std::fs::remove_file(path).unwrap();
     }
 
     #[tokio::test]

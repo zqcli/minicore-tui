@@ -2,13 +2,14 @@
 
 use super::{App, LiveStatus, NoticeLevel, Overlay, Scroll, Session};
 use minicore_host_protocol::*;
+use std::collections::HashSet;
 
 impl App {
     pub fn open_session(&mut self, target: SessionRef) {
         if self
             .resident
             .current()
-            .is_some_and(|s| s.address() == target)
+            .is_some_and(|s| s.info.agent_id == target.agent_id && s.info.id == target.session_id)
         {
             self.cancel_navigation();
             return;
@@ -23,19 +24,23 @@ impl App {
         self.resident.find(target)
     }
     pub fn background_counts(&self) -> (usize, usize) {
-        let current = self.resident.current().map(Session::address);
         let mut counts = (0, 0);
+        let mut residents = HashSet::new();
+        for session in self.resident.iter() {
+            residents.insert((&session.info.agent_id, &session.info.id));
+            if !self.resident.is_current(session.epoch) {
+                match session.live_status() {
+                    LiveStatus::Idle => {}
+                    LiveStatus::Approval => counts.1 += 1,
+                    _ => counts.0 += 1,
+                }
+            }
+        }
         for row in &self.sessions {
-            let target = SessionRef {
-                agent_id: row.agent_id.clone(),
-                session_id: row.id.clone(),
-            };
-            if current.as_ref() == Some(&target) {
+            if residents.contains(&(&row.agent_id, &row.id)) {
                 continue;
             }
-            let status = if let Some(session) = self.resident.find(&target) {
-                session.live_status()
-            } else if row.pending_interactions > 0 {
+            let status = if row.pending_interactions > 0 {
                 LiveStatus::Approval
             } else if row.active_turn_id.is_some()
                 || row.owned_work.preparing
@@ -50,20 +55,6 @@ impl App {
                 LiveStatus::Idle
             };
             match status {
-                LiveStatus::Idle => {}
-                LiveStatus::Approval => counts.1 += 1,
-                _ => counts.0 += 1,
-            }
-        }
-        for session in self.resident.others() {
-            if self
-                .sessions
-                .iter()
-                .any(|row| row.agent_id == session.info.agent_id && row.id == session.info.id)
-            {
-                continue;
-            }
-            match session.live_status() {
                 LiveStatus::Idle => {}
                 LiveStatus::Approval => counts.1 += 1,
                 _ => counts.0 += 1,
@@ -85,12 +76,12 @@ impl App {
         }
         self.select_session(Some(epoch));
         self.refresh_session_details_for(epoch);
+        self.refresh_workspace_for(epoch);
     }
     fn cancel_navigation(&mut self) {
         self.open_generation += 1;
         self.opening_target = None;
         self.loading_session = false;
-        self.first_message = None;
     }
     pub(super) fn select_session(&mut self, epoch: Option<u64>) {
         self.cancel_navigation();

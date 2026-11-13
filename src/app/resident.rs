@@ -40,9 +40,9 @@ impl Sessions {
         self.items.iter_mut().find(|session| session.epoch == epoch)
     }
     pub fn find(&self, target: &SessionRef) -> Option<&Session> {
-        self.items
-            .iter()
-            .find(|session| session.address() == *target)
+        self.items.iter().find(|session| {
+            session.info.agent_id == target.agent_id && session.info.id == target.session_id
+        })
     }
     pub fn iter(&self) -> impl Iterator<Item = &Session> {
         self.items.iter()
@@ -59,7 +59,9 @@ impl Sessions {
         self.items.push(session);
     }
     pub fn remove(&mut self, target: &SessionRef) {
-        self.items.retain(|session| session.address() != *target);
+        self.items.retain(|session| {
+            session.info.agent_id != target.agent_id || session.info.id != target.session_id
+        });
         if self.selected.is_some_and(|epoch| self.get(epoch).is_none()) {
             self.selected = None;
         }

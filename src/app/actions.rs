@@ -117,7 +117,6 @@ impl App {
                     return;
                 }
                 let client = self.client.clone();
-                let selected = self.selected_agent.clone();
                 self.spawn_msg(async move {
                     let result = async {
                         client
@@ -130,11 +129,11 @@ impl App {
                                 tasks::options(),
                             )
                             .await
-                            .map_err(|e| e.to_string())?;
-                        tasks::catalogs(&client, selected).await
+                            .map(drop)
+                            .map_err(|e| e.to_string())
                     }
                     .await;
-                    Msg::Catalogs(result)
+                    Msg::RefreshCatalogs(result)
                 });
             }
             Action::SwitchModel(text) => {
@@ -209,7 +208,6 @@ impl App {
             return;
         };
         let client = self.client.clone();
-        let selected = self.selected_agent.clone();
         let tx = self.tx.clone();
         self.spawn_msg(async move {
             let result = async {
@@ -242,16 +240,9 @@ impl App {
             .await;
             match result {
                 Ok(target) => {
-                    tasks::observe_agent(
-                        &client,
-                        &tx,
-                        target,
-                        selected,
-                        tasks::AgentWait::Lifecycle,
-                    )
-                    .await
+                    tasks::observe_agent(&client, &tx, target, tasks::AgentWait::Lifecycle).await
                 }
-                Err(error) => Msg::Catalogs(Err(error)),
+                Err(error) => Msg::RefreshCatalogs(Err(error)),
             }
         });
     }
@@ -260,7 +251,6 @@ impl App {
             return;
         }
         let client = self.client.clone();
-        let selected = self.selected_agent.clone();
         let tx = self.tx.clone();
         self.spawn_msg(async move {
             let result = async {
@@ -292,10 +282,9 @@ impl App {
             .await;
             match result {
                 Ok(target) => {
-                    tasks::observe_agent(&client, &tx, target, selected, tasks::AgentWait::Deletion)
-                        .await
+                    tasks::observe_agent(&client, &tx, target, tasks::AgentWait::Deletion).await
                 }
-                Err(error) => Msg::Catalogs(Err(error)),
+                Err(error) => Msg::RefreshCatalogs(Err(error)),
             }
         });
     }
@@ -307,7 +296,6 @@ impl App {
             return;
         };
         let client = self.client.clone();
-        let selected = self.selected_agent.clone();
         let tx = self.tx.clone();
         self.spawn_msg(async move {
             let result = async {
@@ -331,10 +319,9 @@ impl App {
             .await;
             match result {
                 Ok(target) => {
-                    tasks::observe_agent(&client, &tx, target, selected, tasks::AgentWait::Metadata)
-                        .await
+                    tasks::observe_agent(&client, &tx, target, tasks::AgentWait::Metadata).await
                 }
-                Err(error) => Msg::Catalogs(Err(error)),
+                Err(error) => Msg::RefreshCatalogs(Err(error)),
             }
         });
     }
@@ -346,7 +333,7 @@ impl App {
             return;
         };
         let client = self.client.clone();
-        let selected = self.selected_agent.clone();
+        let tx = self.tx.clone();
         let home = self.home.clone();
         let fallback = self.new_agent.clone();
         self.spawn_msg(async move {
@@ -368,7 +355,7 @@ impl App {
                     .agent(target.clone(), tasks::options())
                     .await
                     .map_err(|e| e.to_string())?;
-                let receipt = client
+                client
                     .update_agent(
                         target.clone(),
                         AgentUpdateRequest {
@@ -386,25 +373,15 @@ impl App {
                     )
                     .await
                     .map_err(|e| e.to_string())?;
-                if matches!(receipt.result, MetadataUpdateResult::Saving { .. }) {
-                    loop {
-                        let current = client
-                            .agent(target.clone(), tasks::options())
-                            .await
-                            .map_err(|e| e.to_string())?;
-                        if let Some(error) = current.info.metadata_fault {
-                            return Err(error.to_string());
-                        }
-                        if !current.info.metadata_saving {
-                            break;
-                        }
-                        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-                    }
-                }
-                tasks::catalogs(&client, selected).await
+                Ok(target)
             }
             .await;
-            Msg::Catalogs(result)
+            match result {
+                Ok(target) => {
+                    tasks::observe_agent(&client, &tx, target, tasks::AgentWait::Metadata).await
+                }
+                Err(error) => Msg::RefreshCatalogs(Err(error)),
+            }
         });
     }
     fn submit_composer(&mut self, follow: bool) {
@@ -516,7 +493,6 @@ impl App {
         let generation = self.open_generation;
         self.opening_target = None;
         self.loading_session = true;
-        self.first_message = entry.as_ref().map(|entry| entry.text().to_owned());
         self.pending_creations
             .insert(generation, super::PendingCreation { entry, mode });
         let client = self.client.clone();
@@ -532,7 +508,6 @@ impl App {
     pub(super) fn creation_failed(&mut self, generation: u64, error: String) {
         if generation == self.open_generation {
             self.loading_session = false;
-            self.first_message = None;
         }
         let creation = self
             .pending_creations
@@ -560,7 +535,6 @@ impl App {
     pub(super) fn request_session_open(&mut self, target: SessionRef) {
         self.open_generation += 1;
         let generation = self.open_generation;
-        self.first_message = None;
         self.opening_target = Some((generation, target.clone()));
         self.loading_session = true;
         let client = self.client.clone();
@@ -734,7 +708,6 @@ impl App {
             return;
         }
         let client = self.client.clone();
-        let selected = self.selected_agent.clone();
         self.spawn_msg(async move {
             let result = async {
                 let session = client.session(target);
@@ -750,11 +723,10 @@ impl App {
                         config: SessionConfigPatch::default(),
                     },
                 )
-                .await?;
-                tasks::catalogs(&client, selected).await
+                .await
             }
             .await;
-            Msg::Catalogs(result)
+            Msg::RefreshCatalogs(result)
         });
     }
     pub(super) fn update_session(&mut self, config: SessionConfigPatch) {

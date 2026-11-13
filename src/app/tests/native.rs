@@ -76,9 +76,23 @@ async fn first_input_stays_with_its_created_session_after_navigation() {
     let existing = h.native.target.clone();
     h.app.select_session(None);
     submit(&mut h, "first input for a new session", false);
+    assert!(h.app.creating_session());
+    assert_eq!(
+        h.app.local_input_bytes(),
+        h.app
+            .pending_creations
+            .values()
+            .next()
+            .unwrap()
+            .entry
+            .as_ref()
+            .unwrap()
+            .retained_bytes()
+    );
     let created = take_created(&mut h).await;
     let target = created_target(&created);
     h.open(&existing).await;
+    assert!(!h.app.creating_session());
     h.app.composer.set_text("draft in existing session");
     h.app.on_msg(created);
     let call = h.next_call().await;

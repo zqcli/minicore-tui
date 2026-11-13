@@ -146,7 +146,7 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, styles: Styles) {
         // A draft shows the header; only waiting gets a line under it.
         let status = if !app.ready {
             Some("Starting MiniCore Host…")
-        } else if app.first_message.is_some() {
+        } else if app.creating_session() {
             Some("Creating the session…")
         } else if app.loading_session {
             Some("Opening the session…")
