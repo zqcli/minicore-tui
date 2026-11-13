@@ -1,22 +1,13 @@
 //! Render-path timings over a long session. Ignored by default; run with
 //! `cargo test --release -- --ignored --nocapture perf`.
 
-use std::path::PathBuf;
-use std::time::{Duration, Instant};
-
+use super::snapshots::{self, turn_id};
+use crate::app::{App, Scroll};
+use crate::transcript::{Block, RequestKey, ToolCall, ToolState, Transcript, UserKind};
+use minicore_host_protocol::{ToolCallRef, TurnOutcome, TurnPhase};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
-use tokio::sync::mpsc;
-
-use crate::app::session::{LiveTurn, Phase};
-use crate::app::{App, Msg, Scroll, Session};
-use crate::protocol::read::UserKind;
-use crate::protocol::{
-    ContextKind, ContextUsage, LoopOutcome, Reasoning, SessionInfo, SessionPresentation, ToolRef,
-    TurnRef, UsageTotals,
-};
-use crate::transcript::{Block, RequestKey, ToolCall, ToolState, Transcript};
-use crate::ui::theme::{Palette, Styles};
+use std::time::{Duration, Instant};
 
 const BLOCKS: usize = 5000;
 const WIDTH: u16 = 140;
@@ -30,31 +21,11 @@ struct Bench {
 
 impl Bench {
     fn new() -> Self {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("runtime");
-        let (tx, _rx) = mpsc::unbounded_channel::<Msg>();
-        let (incoming_tx, _incoming_rx) = mpsc::channel(4);
-        let client = runtime.block_on(async {
-            crate::rpc::Client::start(
-                tokio::io::sink(),
-                tokio::io::empty(),
-                tokio::io::empty(),
-                incoming_tx,
-            )
-        });
-        let mut app = App::new(client, tx, PathBuf::from("/work/minicore-tui"));
-        app.styles = Styles::of(Palette::dark());
-        app.ready = true;
-        let mut session = Session::new(info(), 1, crate::testing::LOAD.into());
-        session.transcript = Transcript::default();
-        app.resident.insert(session);
-        app.resident.select(Some(1));
+        let snapshots::Fixture { app, _runtime } = snapshots::app();
         Self {
             app,
             terminal: Terminal::new(TestBackend::new(WIDTH, HEIGHT)).expect("terminal"),
-            _runtime: runtime,
+            _runtime,
         }
     }
 
@@ -76,19 +47,6 @@ impl Bench {
     }
 }
 
-fn info() -> SessionInfo {
-    SessionInfo {
-        session_id: "ses_perf".into(),
-        title: None,
-        profile: "coding".into(),
-        workspace: "/work/minicore-tui".into(),
-        model: "gpt-6-luna".into(),
-        reasoning: Reasoning::Max,
-        loaded: true,
-        updated_at: String::new(),
-    }
-}
-
 fn user(index: usize) -> Block {
     Block::User {
         text: format!("Prompt {index}: please look at the parser and explain why it is slow."),
@@ -99,10 +57,7 @@ fn user(index: usize) -> Block {
 
 fn answer(index: usize) -> Block {
     Block::Assistant {
-        key: RequestKey {
-            loop_id: format!("loop_{index}"),
-            request_index: 0,
-        },
+        key: RequestKey::response(turn_id(index as u64), 0),
         reasoning: "Read the module first.\nThen compare the two paths.".into(),
         text: format!(
             "## Result {index}\n\nThe parser **re-reads** the whole input on every call, which \
@@ -110,6 +65,7 @@ fn answer(index: usize) -> Block {
              rows shared\n\n```rust\nfn main() {{\n    println!(\"{index}\");\n}}\n```"
         ),
         streaming: false,
+        partial: false,
         expanded: None,
     }
 }
@@ -117,11 +73,9 @@ fn answer(index: usize) -> Block {
 /// A bash card whose output is close to the 400-line, 64 KiB bound.
 fn tool(index: usize) -> Block {
     let mut call = ToolCall::new(
-        ToolRef {
-            session_id: "ses_perf".into(),
-            loop_id: format!("loop_{index}"),
-            request_index: 0,
-            tool_call_id: format!("call_{index}"),
+        ToolCallRef {
+            turn_id: turn_id(index as u64),
+            tool_call_id: format!("call_{index}").into(),
         },
         "bash",
     );
@@ -144,11 +98,12 @@ fn tool(index: usize) -> Block {
 
 fn turn_end(index: usize) -> Block {
     Block::TurnEnd {
-        loop_id: format!("loop_{index}"),
-        outcome: LoopOutcome::Completed,
+        turn_id: turn_id(index as u64),
+        outcome: TurnOutcome::Completed,
+        reason: None,
         duration: Some(Duration::from_secs(9)),
         requests: 2,
-        tools: 2,
+        tool_rounds: 2,
         usage: Default::default(),
         changes: None,
         saving: None,
@@ -227,10 +182,7 @@ fn perf() {
     );
 
     let text = long_answer();
-    let key = RequestKey {
-        loop_id: "loop_live".into(),
-        request_index: 0,
-    };
+    let key = RequestKey::response(turn_id(90000), 0);
     bench.transcript().push(user(BLOCKS));
     let step = text.len().div_ceil(200);
     let mut frames = Vec::new();
@@ -331,10 +283,7 @@ fn busy_session() -> Bench {
         call.output.truncate(12);
     }
     transcript.push(running);
-    let key = RequestKey {
-        loop_id: "loop_live".into(),
-        request_index: 1,
-    };
+    let key = RequestKey::response(turn_id(90000), 1);
     if let Block::Assistant {
         text, reasoning, ..
     } = transcript.assistant_mut(&key)
@@ -342,29 +291,18 @@ fn busy_session() -> Bench {
         *reasoning = "Compare the two paths.\nThe cache key is the problem.".into();
         text.push_str(&long_answer()[..3000]);
     }
-    let mut live = LiveTurn::new(TurnRef::new("ses_perf", "loop_live"), start);
-    live.phase = Phase::Writing;
-    live.requests = 2;
-    live.running_tool = Some(("bash".into(), "cargo test --lib module_60".into()));
+    let mut live = snapshots::live(start, 90000);
+    live.state.phase = Some(TurnPhase::Model);
+    live.state.requests = 2;
+    live.running_tool = Some("bash".into());
     let session = bench.app.resident.current_mut().expect("session");
+    session.state.data.active_turn_id = Some(live.turn_id.clone());
     session.live = Some(live);
-    session.usage = UsageTotals {
-        input: 1_234_567,
-        output: 45_678,
-        cached: 987_654,
-    };
-    session.branch = Some("v05/perf".into());
-    session.presentation = Some(SessionPresentation {
-        session_id: "ses_perf".into(),
-        context: Some(ContextUsage {
-            tokens: Some(61_000),
-            window: Some(200_000),
-            percent: Some(30.5),
-            kind: ContextKind::Reported,
-        }),
-    });
-    // `watch_context` would ask the (absent) Agent; it was asked a moment ago.
-    session.context_asked = Some(tokio::time::Instant::now() + Duration::from_secs(3600));
+    session.branch = Some("perf".into());
+    session.context = Some(snapshots::context(
+        session,
+        serde_json::json!({"input_tokens":1234567,"output_tokens":45678,"cache_read_tokens":987654}),
+    ));
     bench.draw();
     bench
 }
@@ -390,10 +328,7 @@ fn busy_frame() {
         .collect();
     report("tick frame", &mut ticks);
 
-    let key = RequestKey {
-        loop_id: "loop_live".into(),
-        request_index: 1,
-    };
+    let key = RequestKey::response(turn_id(90000), 1);
     let mut events: Vec<Duration> = (0..500)
         .map(|_| {
             if let Block::Assistant { text, .. } = bench.transcript().assistant_mut(&key) {

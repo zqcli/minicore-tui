@@ -2,12 +2,34 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::app::overlay::matching_models;
+use crate::app::overlay::{matching_agents, matching_models, session_target};
 use crate::app::picker;
 use crate::app::{Action, App, NoticeLevel, Overlay, find};
 
 impl App {
     pub(super) fn on_overlay_key(&mut self, key: KeyEvent) -> Option<Action> {
+        if matches!(self.overlay, Overlay::AgentDelete { .. }) {
+            match key.code {
+                KeyCode::Char('y') if key.modifiers.is_empty() => {
+                    if let Overlay::AgentDelete {
+                        agent_id, sessions, ..
+                    } = std::mem::replace(&mut self.overlay, Overlay::None)
+                    {
+                        return Some(Action::DeleteAgent {
+                            agent_id,
+                            session_ids: sessions.into_iter().map(|(id, _)| id).collect(),
+                        });
+                    }
+                }
+                KeyCode::Esc | KeyCode::Char('n') => self.overlay = Overlay::None,
+                KeyCode::Up => self.overlay_move(-1),
+                KeyCode::Down => self.overlay_move(1),
+                KeyCode::PageUp => self.overlay_move(-10),
+                KeyCode::PageDown => self.overlay_move(10),
+                _ => {}
+            }
+            return None;
+        }
         if matches!(
             self.overlay,
             Overlay::Palette { .. } | Overlay::Files { .. }
@@ -21,8 +43,7 @@ impl App {
                 ..
             }
         ) {
-            self.on_rename_key(key);
-            return None;
+            return self.on_rename_key(key);
         }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let scrolling = matches!(self.overlay, Overlay::Diff(_));
@@ -45,7 +66,7 @@ impl App {
             KeyCode::Backspace => self.overlay_filter_push(None),
             KeyCode::Char('d') if ctrl => self.delete_confirm(),
             KeyCode::Char('n') if ctrl => self.start_rename(),
-            KeyCode::Char('c') if matches!(self.overlay, Overlay::SessionInfo { .. }) => {
+            KeyCode::Char('c') if matches!(self.overlay, Overlay::SessionInfo) => {
                 self.copy_session_id();
             }
             KeyCode::Char('r') if matches!(self.overlay, Overlay::Context) => {
@@ -60,26 +81,26 @@ impl App {
     /// Ctrl+D in the sessions picker: the first press arms the delete, the
     /// second deletes the selected session.
     fn delete_confirm(&mut self) {
-        if self.remote.active() {
-            self.remote_flash();
+        if let Overlay::Agents { filter, selected } = &self.overlay {
+            let id = matching_agents(&self.agents, filter)
+                .get(*selected)
+                .map(|agent| agent.id.clone());
+            if let Some(id) = id {
+                self.confirm_agent_delete(id);
+            }
             return;
         }
         let Some(info) = self.selected_session() else {
             return;
         };
-        let id = info.session_id.clone();
+        let target = session_target(info);
         let label = self.session_title(info);
-        let again =
-            matches!(&self.overlay, Overlay::Sessions { armed: Some(armed), .. } if *armed == id);
-        if let Some(refusal) = self.delete_refusal(&id) {
-            self.notice(NoticeLevel::Error, refusal);
-            return;
-        }
+        let again = matches!(&self.overlay, Overlay::Sessions { armed: Some(armed), .. } if *armed == target);
         if let Overlay::Sessions { armed, .. } = &mut self.overlay {
-            *armed = (!again).then(|| id.clone());
+            *armed = (!again).then(|| target.clone());
         }
         if again {
-            self.on_action(Action::DeleteSession(id));
+            self.on_action(Action::DeleteSession(target));
         } else {
             self.notice(
                 NoticeLevel::Info,
@@ -106,7 +127,9 @@ impl App {
             Overlay::Palette { .. } | Overlay::Files { .. } => self.completion_len(),
             Overlay::Sessions { rows, filter, .. } => self.filtered_sessions(rows, filter).len(),
             Overlay::Models { filter, .. } => matching_models(&self.models, filter).len(),
+            Overlay::Agents { filter, .. } => matching_agents(&self.agents, filter).len(),
             Overlay::Reasoning { .. } => self.reasoning_levels().len(),
+            Overlay::AgentDelete { sessions, .. } => sessions.len(),
             Overlay::Diff(diff) => diff.files.len(),
             _ => 0,
         };
@@ -114,6 +137,8 @@ impl App {
             Overlay::Palette { selected }
             | Overlay::Sessions { selected, .. }
             | Overlay::Models { selected, .. }
+            | Overlay::Agents { selected, .. }
+            | Overlay::AgentDelete { selected, .. }
             | Overlay::Reasoning { selected }
             | Overlay::Files { selected, .. } => *selected = picker::step(*selected, delta, len),
             Overlay::Diff(diff) => {
@@ -127,7 +152,7 @@ impl App {
             Overlay::Help { scroll } => *scroll = scroll.saturating_add_signed(delta * 3),
             Overlay::Find { .. } => self.find_step(delta > 0),
             Overlay::Unconfirmed { .. } => self.move_local_input(delta),
-            Overlay::Context | Overlay::SessionInfo { .. } | Overlay::None => {}
+            Overlay::Context | Overlay::SessionInfo | Overlay::None => {}
         }
     }
 
@@ -157,7 +182,8 @@ impl App {
             Overlay::Sessions {
                 filter, selected, ..
             }
-            | Overlay::Models { filter, selected } => {
+            | Overlay::Models { filter, selected }
+            | Overlay::Agents { filter, selected } => {
                 edit(filter);
                 *selected = 0;
             }
@@ -176,12 +202,8 @@ impl App {
     }
 
     fn on_overlay_accept(&mut self) -> Option<Action> {
-        if self.remote.active() && matches!(self.overlay, Overlay::Sessions { .. }) {
-            self.remote_flash();
-            return None;
-        }
         match std::mem::replace(&mut self.overlay, Overlay::None) {
-            review @ Overlay::Unconfirmed { .. } => {
+            review @ (Overlay::Unconfirmed { .. } | Overlay::AgentDelete { .. }) => {
                 self.overlay = review;
                 None
             }
@@ -193,7 +215,7 @@ impl App {
             } => self
                 .filtered_sessions(&rows, &filter)
                 .get(selected)
-                .map(|info| Action::OpenSession(info.session_id.clone())),
+                .map(|info| Action::OpenSession(session_target(info))),
             find @ Overlay::Find { .. } => {
                 self.overlay = find;
                 self.find_step(true);
@@ -201,12 +223,15 @@ impl App {
             }
             Overlay::Models { filter, selected } => matching_models(&self.models, &filter)
                 .get(selected)
-                .map(|model| Action::SetModel(model.id.clone())),
+                .map(|model| Action::SwitchModel(model.model.to_string())),
+            Overlay::Agents { filter, selected } => matching_agents(&self.agents, &filter)
+                .get(selected)
+                .map(|agent| Action::SelectAgent(agent.id.clone())),
             Overlay::Reasoning { selected } => self
                 .reasoning_levels()
                 .get(selected)
                 .map(|level| Action::SetReasoning(*level)),
-            Overlay::SessionInfo { .. } => {
+            Overlay::SessionInfo => {
                 self.copy_session_id();
                 None
             }

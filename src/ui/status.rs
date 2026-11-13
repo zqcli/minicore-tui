@@ -11,9 +11,11 @@ use super::composer::Editor;
 use super::theme::Styles;
 use super::{composer, sheets};
 use crate::app::{App, Notice, NoticeLevel, Session};
-use crate::protocol::InputMode;
 use crate::transcript::Block;
 use crate::wrap;
+use minicore_host_core::InteractionRequestData;
+use minicore_host_protocol::{CompactionState, InputQueue, ModelRetryPhase, TurnPhase, TurnState};
+use minicore_host_runtime::tools::ToolInputAnswerKind;
 
 /// Queued messages listed before the rest are summarized.
 const QUEUE_ROWS: usize = 3;
@@ -32,31 +34,24 @@ pub struct Dock {
 /// The dock for a band `width` cells wide on a terminal `height` rows tall.
 pub fn dock(app: &App, styles: Styles, width: u16, height: u16) -> Dock {
     let mut above = Vec::new();
-    // The remote status screen shows the work and the queue instead.
-    let local = !app.remote.active();
-    if local {
-        let unresolved = app
-            .local_inputs
-            .iter()
-            .filter(|input| input.status != crate::app::unconfirmed::Status::Sending)
-            .count();
-        if unresolved > 0 {
-            above.push(padded(&format!("{unresolved} retained local inputs · F8 review · unconfirmed may already be accepted"),width,styles.failure()));
-        }
-        if let Some(session) = app.resident.current().filter(|s| !s.queue.items.is_empty()) {
-            above.push(Line::default());
-            above.extend(queued_rows(session, styles, width));
-        }
-        if let Some(line) = working_line(app, styles, width) {
-            above.push(Line::default());
-            above.push(line);
-        }
-        if let Some(line) = gap_line(app, styles, width) {
-            above.push(line);
-        }
-        if let Some(hint) = key_hint(app, styles, width) {
-            above.push(hint);
-        }
+    let unresolved = app
+        .local_inputs
+        .iter()
+        .filter(|input| input.status != crate::app::unconfirmed::Status::Sending)
+        .count();
+    if unresolved > 0 {
+        above.push(padded(&format!("{unresolved} retained local inputs · F8 review · unconfirmed may already be accepted"),width,styles.failure()));
+    }
+    if let Some(session) = app.resident.current().filter(|s| queued_count(s) > 0) {
+        above.push(Line::default());
+        above.extend(queued_rows(session, styles, width));
+    }
+    if let Some(line) = working_line(app, styles, width) {
+        above.push(Line::default());
+        above.push(line);
+    }
+    if let Some(hint) = key_hint(app, styles, width) {
+        above.push(hint);
     }
     if let Some(notice) = app.notices.back() {
         above.push(Line::default());
@@ -64,29 +59,32 @@ pub fn dock(app: &App, styles: Styles, width: u16, height: u16) -> Dock {
     }
     above.push(Line::default());
 
-    let text_input = local
-        .then_some(app.resident.current())
-        .flatten()
-        .filter(|session| {
+    let text_input = app.resident.current().filter(|session| {
             !matches!(app.overlay, crate::app::Overlay::Unconfirmed { .. })
                 && session.interaction.as_ref().is_some_and(|pending| {
-                    matches!(pending.kind, crate::app::InteractionKind::Text)
+                    matches!(pending.request(), InteractionRequestData::ToolInput { request } if request.answer_kind == ToolInputAnswerKind::Text)
                 })
         });
     if let Some(session) = text_input {
         let pending = session.interaction.as_ref().unwrap();
         above.push(padded(
-            &format!("{} · input", pending.tool_name),
+            &format!("{} · input", pending.tool_name()),
             width,
             styles.title(),
         ));
-        above.extend(super::panel::body_lines(
-            &pending.prompt,
-            usize::from(width),
-            styles.text(),
-        ));
+        if let InteractionRequestData::ToolInput { request } = pending.request() {
+            above.extend(super::panel::body_lines(
+                request.prompt.as_str(),
+                usize::from(width),
+                styles.text(),
+            ));
+        }
         above.push(padded(
-            "Text answer · enter send · esc cancel turn",
+            if pending.submitted {
+                "Answer submitted · waiting for Host confirmation"
+            } else {
+                "Text answer · enter send · esc cancel turn"
+            },
             width,
             styles.faint(),
         ));
@@ -108,8 +106,17 @@ pub fn dock(app: &App, styles: Styles, width: u16, height: u16) -> Dock {
         };
         above.push(padded(label, width, styles.failure()));
     }
-    if local && let Some(label) = app.resident.current().and_then(Session::block_label) {
-        above.push(padded(label, width, styles.failure()));
+    if let Some(session) = app.resident.current() {
+        if let Some(reason) = &session.state.data.block_reason {
+            above.push(padded(
+                &format!("{} · {}", reason.message, reason.resolution),
+                width,
+                styles.failure(),
+            ));
+        }
+        if let Some(error) = &session.observation_error {
+            above.push(padded(error, width, styles.failure()));
+        }
     }
     let (mut editor, cursor) = composer::render(
         app.active_editor(),
@@ -118,8 +125,6 @@ pub fn dock(app: &App, styles: Styles, width: u16, height: u16) -> Dock {
         composer::max_rows(height),
         if app.overlay.is_view() {
             Editor::View
-        } else if !local {
-            Editor::Remote
         } else {
             Editor::Live
         },
@@ -171,25 +176,30 @@ fn padded(text: &str, width: u16, style: Style) -> Line<'static> {
     ])
 }
 
-/// Messages in the order the Agent will run them: steers, then follow-ups.
-fn queued_rows(session: &Session, styles: Styles, width: u16) -> Vec<Line<'static>> {
-    let mut follow = 0;
-    let mut rows: Vec<Line<'static>> = session
+fn queued_count(session: &Session) -> usize {
+    session
         .queue
-        .items
+        .as_ref()
+        .map_or(0, |queue| queue.next_step.len() + queue.next_turn.len())
+}
+
+/// Unbound messages in the Host's actual next-step and next-turn queues.
+fn queued_rows(session: &Session, styles: Styles, width: u16) -> Vec<Line<'static>> {
+    let Some(queue) = &session.queue else {
+        return Vec::new();
+    };
+    let mut rows: Vec<Line<'static>> = queue
+        .next_step
         .iter()
+        .chain(&queue.next_turn)
         .take(QUEUE_ROWS)
         .map(|queued| {
-            let label = match queued.mode {
-                InputMode::Steer => "↗ steer".to_owned(),
-                InputMode::FollowUp => {
-                    follow += 1;
-                    format!("↳ follow-up {follow}")
-                }
+            let label = match queued.queue {
+                InputQueue::NextStep => "↗ next step",
+                InputQueue::NextTurn => "↳ next turn",
             };
-            let room = usize::from(width).saturating_sub(wrap::width(&label) + 4);
-            // One more than fits, so the cut still ends in its ellipsis.
-            let text: String = queued.text.chars().take(room + 1).collect();
+            let room = usize::from(width).saturating_sub(wrap::width(label) + 4);
+            let text: String = queued.input.text.chars().take(room + 1).collect();
             let text = wrap::sanitize(&text.replace('\n', " ")).into_owned();
             Line::from(vec![
                 Span::raw(" "),
@@ -199,9 +209,13 @@ fn queued_rows(session: &Session, styles: Styles, width: u16) -> Vec<Line<'stati
             ])
         })
         .collect();
-    if session.queue.items.len() > QUEUE_ROWS {
-        let more = format!("+{} more queued", session.queue.items.len() - QUEUE_ROWS);
-        rows.push(padded(&more, width, styles.faint()));
+    let count = queued_count(session);
+    if count > QUEUE_ROWS {
+        rows.push(padded(
+            &format!("+{} more queued", count - QUEUE_ROWS),
+            width,
+            styles.faint(),
+        ));
     }
     rows
 }
@@ -212,7 +226,7 @@ fn key_hint(app: &App, styles: Styles, width: u16) -> Option<Line<'static>> {
     let session = app.resident.current().filter(|_| !app.has_interaction())?;
     let drafting = !app.composer.is_empty();
     let mut keys = Vec::new();
-    if session.queue.paused {
+    if session.paused() {
         keys.push(match drafting {
             true => "paused · enter sends",
             false => "paused · enter resumes",
@@ -225,7 +239,7 @@ fn key_hint(app: &App, styles: Styles, width: u16) -> Option<Line<'static>> {
         if drafting && (session.is_busy() || session.compacting()) {
             keys.push("alt+enter follow-up");
         }
-        if !session.queue.items.is_empty() {
+        if queued_count(session) > 0 {
             keys.push("alt+↑ edit queued");
         }
     }
@@ -243,16 +257,29 @@ fn key_hint(app: &App, styles: Styles, width: u16) -> Option<Line<'static>> {
 fn working_line(app: &App, styles: Styles, width: u16) -> Option<Line<'static>> {
     let session = app.resident.current();
     let live = session.and_then(|session| session.live.as_ref());
-    let interrupting = live.is_some_and(|live| live.interrupting);
-    let compaction = session.and_then(Session::compaction_label);
+    let interrupting =
+        live.is_some_and(|live| live.interrupting || live.state.state == TurnState::Cancelling);
+    let compaction = session
+        .and_then(|session| session.state.data.compaction.as_ref())
+        .and_then(|activity| {
+            Some(match activity.state {
+                CompactionState::Preparing {} => "Preparing compaction",
+                CompactionState::Summarizing {} => "Summarizing context",
+                CompactionState::Merging {} => "Merging summary",
+                CompactionState::Committing { .. } => "Saving compaction",
+                CompactionState::Finished { .. } => return None,
+            })
+        });
     let text = if let Some(label) = &compaction {
-        label.as_str()
+        *label
     } else if app.has_interaction() {
         if app
             .resident
             .current()
             .and_then(|session| session.interaction.as_ref())
-            .is_some_and(|pending| matches!(pending.kind, crate::app::InteractionKind::Text))
+            .is_some_and(|pending| {
+                matches!(pending.request(), InteractionRequestData::ToolInput { .. })
+            })
         {
             "Waiting for input (esc to cancel turn)"
         } else {
@@ -270,20 +297,38 @@ fn working_line(app: &App, styles: Styles, width: u16) -> Option<Line<'static>> 
     if let Some(live) = live {
         let quiet = interrupting || app.has_interaction() || app.compacting();
         match live.running_tool.as_ref().filter(|_| !quiet) {
-            Some((tool, detail)) if detail.is_empty() => extras.push(format!("Running {tool}")),
-            Some((tool, detail)) => {
-                let detail = wrap::truncate(&detail.replace('\n', " "), 48);
-                extras.push(format!("Running {tool} {detail}"));
+            Some(tool) => extras.push(format!("Running {tool}")),
+            None if !quiet => {
+                if let Some(phase) = live.state.phase {
+                    extras.push(
+                        match phase {
+                            TurnPhase::Model => "Model request",
+                            TurnPhase::Tools => "Running tools",
+                            TurnPhase::WaitingForInput => "Waiting for input",
+                            TurnPhase::Finalizing => "Finalizing",
+                        }
+                        .to_owned(),
+                    );
+                }
             }
-            None if !quiet => extras.push(live.phase.label().to_owned()),
             None => {}
         }
-        if live.requests > 1 {
-            extras.push(format!("request {}", live.requests));
+        if let Some(retry) = &live.state.model_retry {
+            extras.push(format!(
+                "retry {}/{} {}",
+                retry.attempt,
+                retry.max_attempts,
+                match retry.phase {
+                    ModelRetryPhase::Waiting { .. } => "waiting",
+                    ModelRetryPhase::Requesting => "requesting",
+                }
+            ));
         }
-        let tools = session.map_or(0, |session| session.tools_since(live.start));
-        if tools > 0 {
-            extras.push(super::blocks::plural(tools, "tool"));
+        if live.state.requests > 1 {
+            extras.push(format!("request {}", live.state.requests));
+        }
+        if live.state.tool_rounds > 0 {
+            extras.push(super::blocks::plural(live.state.tool_rounds, "tool round"));
         }
     }
     let mut spans = vec![
@@ -300,35 +345,6 @@ fn working_line(app: &App, styles: Styles, width: u16) -> Option<Line<'static>> 
         ));
     }
     Some(Line::from(fit(spans, usize::from(width))))
-}
-
-/// Says what the client could not recover, so a computed gap is never silent.
-fn gap_line(app: &App, styles: Styles, width: u16) -> Option<Line<'static>> {
-    let session = app.resident.current()?;
-    let text = if session.recovery.gap_through > session.recovery.settled_through
-        || matches!(
-            session.recovery.history_status,
-            Some(crate::app::recovery::RecoveryStatus::Exhausted)
-        ) {
-        "More history remains to recover; /recover to continue"
-    } else if session.recovery.truncated_gap {
-        "Some unsaved turns may be missing outside the completion catalog"
-    } else if session.recovery.behind {
-        "Recovery capacity is full; /recover in stalled sessions retries failed reads"
-    } else if session.ordering_gap || session.early_gap {
-        "Turn order is incomplete; reload the session to read it in order"
-    } else if !session.body_recovery.is_empty() {
-        "Some turn bodies are incomplete or unavailable; /recover retries failed reads"
-    } else {
-        return None;
-    };
-    Some(Line::from(vec![
-        Span::styled("▎", styles.status_rail()),
-        Span::styled(
-            wrap::truncate(text, usize::from(width).saturating_sub(1)),
-            styles.failure(),
-        ),
-    ]))
 }
 
 /// The latest notice as a status line: a rail, then dim text, or the failure
@@ -349,19 +365,33 @@ fn notice_line(notice: &Notice, styles: Styles, width: u16) -> Line<'static> {
 }
 
 /// `▸ dir@branch · model · reasoning · 3m · queued` and,
-/// right-aligned, `↑in ↓out Rcache · ctx N%`. Short of room, the directory and
+/// right-aligned, `last ↑in ↓out Rcache`. Short of room, the directory and
 /// branch give way first, then the elapsed time and queue mark, then the model;
 /// the reasoning level stays.
 fn footer(app: &App, styles: Styles, width: u16) -> Line<'static> {
     let width = usize::from(width);
     let session = app.resident.current();
 
-    let workspace = app
-        .workspace
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| app.workspace.display().to_string());
-    let branch = session.and_then(Session::branch);
+    let workspace_path = match session {
+        Some(session) => session
+            .info
+            .config
+            .workspace
+            .as_ref()
+            .map(|workspace| std::path::Path::new(&workspace.path)),
+        None => Some(app.workspace.as_path()),
+    };
+    let workspace = workspace_path.map_or_else(
+        || "no workspace".to_owned(),
+        |path| {
+            path.file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| path.display().to_string())
+        },
+    );
+    let branch = session
+        .filter(|session| session.info.config.workspace.is_some())
+        .and_then(|session| session.branch.as_deref());
 
     let model = app.model_id().map_or_else(Vec::new, |id| {
         let model = wrap::truncate(&model_label(id), 24);
@@ -370,44 +400,29 @@ fn footer(app: &App, styles: Styles, width: u16) -> Line<'static> {
 
     let mut priority = Vec::new();
     if let Some(level) = app.reasoning() {
-        priority.push(Span::styled(level.label(), styles.amber()));
+        priority.push(Span::styled(sheets::reasoning_label(level), styles.amber()));
     }
-    if let Some(session) = session.filter(|session| !session.allowed_tools.is_empty()) {
-        let tools: Vec<&str> = session.allowed_tools.iter().map(String::as_str).collect();
-        if !priority.is_empty() {
-            priority.push(Span::styled(" · ", styles.meta()));
-        }
-        priority.push(Span::styled(
-            format!("allow {}", tools.join(",")),
-            styles.amber(),
-        ));
-    }
-
     let mut suffix = Vec::new();
     if let Some(elapsed) = session.and_then(|session| turn_elapsed(app, session)) {
         suffix.push(Span::styled(minutes(elapsed), styles.amber()));
     }
-    if session.is_some_and(|session| !session.queue.items.is_empty()) {
+    if session.is_some_and(|session| queued_count(session) > 0) {
         if !suffix.is_empty() {
             suffix.push(Span::styled(" · ", styles.meta()));
         }
         suffix.push(Span::styled("queued", styles.amber()));
     }
 
-    let remote = match (app.remote.active(), app.remote.phones.as_slice()) {
-        (false, _) => Vec::new(),
-        (true, []) => vec![Span::styled("remote", styles.warning())],
-        (true, [phone]) => {
-            let device = wrap::truncate(&wrap::sanitize(&phone.connection.device.name), 16);
-            vec![Span::styled(format!("remote · {device}"), styles.accent())]
-        }
-        (true, phones) => {
-            let count = super::blocks::plural(phones.len() as u64, "phone");
-            vec![Span::styled(format!("remote · {count}"), styles.accent())]
-        }
-    };
-
     let others = others(app, styles);
+    let agent = app
+        .current_agent_id()
+        .map(|id| {
+            vec![Span::styled(
+                format!("agent {}", sheets::agent_label(app, id)),
+                styles.meta(),
+            )]
+        })
+        .unwrap_or_default();
 
     let right = session.map_or_else(Vec::new, |session| totals(session, styles));
     let right_width = spans_width(&right);
@@ -429,10 +444,10 @@ fn footer(app: &App, styles: Styles, width: u16) -> Line<'static> {
         room.saturating_sub(rest + separator),
         styles,
     );
-    // The remote mark and the background sessions take only what the rest leaves.
-    groups[4] = remote;
+    // Background sessions take only what the rest leaves.
+    groups[4] = agent;
     groups[5] = others;
-    for index in [4, 5, 3, 1, 2] {
+    for index in [5, 3, 4, 1, 2] {
         let over = spans_width(&join(&groups, styles)).saturating_sub(room);
         if over == 0 {
             break;
@@ -454,20 +469,20 @@ fn footer(app: &App, styles: Styles, width: u16) -> Line<'static> {
     Line::from(spans)
 }
 
-/// `2 running · 1 needs approval` over the background sessions, only the
+/// `2 running · 1 needs input` over the background sessions, only the
 /// parts that are not zero; empty when none needs attention.
 pub fn others(app: &App, styles: Styles) -> Vec<Span<'static>> {
-    let (working, approval) = app.background_counts();
+    let (working, input) = app.background_counts();
     let mut spans = Vec::new();
     if working > 0 {
         spans.push(Span::styled(format!("{working} running"), styles.text()));
     }
-    if approval > 0 {
+    if input > 0 {
         if !spans.is_empty() {
             spans.push(Span::styled(" · ", styles.meta()));
         }
         spans.push(Span::styled(
-            format!("{approval} needs approval"),
+            format!("{input} needs input"),
             styles.warning(),
         ));
     }
@@ -502,37 +517,31 @@ fn identity(
     spans
 }
 
-/// `↑in ↓out Rcache · ctx N%`, each part once known; the context share turns amber from 70 %.
+/// Last complete response usage keeps absent provider fields unknown.
 fn totals(session: &Session, styles: Styles) -> Vec<Span<'static>> {
-    let usage = &session.usage;
-    let tokens = crate::ui::format_tokens;
-    let mut spans = Vec::new();
-    // Totals count from when the session was opened, so zeros on a reopened
-    // session would misstate it.
-    if usage.input + usage.output + usage.cached > 0 {
+    let Some(usage) = session
+        .context
+        .as_ref()
+        .and_then(|context| context.data.history.as_ref())
+        .and_then(|history| history.latest_response.as_ref())
+        .map(|response| &response.usage)
+    else {
+        return Vec::new();
+    };
+    let count = |value: Option<u64>| value.map_or_else(|| "?".to_owned(), super::format_tokens);
+    let mut spans = vec![Span::styled(
+        format!(
+            "last ↑{} ↓{}",
+            count(usage.input_tokens()),
+            count(usage.output_tokens())
+        ),
+        styles.user_rail(),
+    )];
+    if let Some(cached) = usage.cache_read_tokens() {
         spans.push(Span::styled(
-            format!("↑{} ↓{}", tokens(usage.input), tokens(usage.output)),
-            styles.user_rail(),
-        ));
-        spans.push(Span::styled(
-            format!(" R{}", tokens(usage.cached)),
+            format!(" R{}", super::format_tokens(cached)),
             styles.reasoning_rail(),
         ));
-    }
-    // An unknown window is only worth a mark once the session has used some.
-    let context = match crate::app::session::context_percent(session) {
-        Some(percent) if percent >= 70.0 => Some((format!("ctx {percent:.2}%"), styles.amber())),
-        Some(percent) => Some((format!("ctx {percent:.2}%"), styles.reasoning_rail())),
-        None if session.presentation.is_some() && usage.input > 0 => {
-            Some(("ctx ?".to_owned(), styles.reasoning_rail()))
-        }
-        None => None,
-    };
-    if let Some((text, style)) = context {
-        if !spans.is_empty() {
-            spans.push(Span::styled(" · ", styles.meta()));
-        }
-        spans.push(Span::styled(text, style));
     }
     spans
 }

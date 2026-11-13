@@ -127,7 +127,6 @@ impl App {
             }
         };
         match commands::execute(&name, &arg) {
-            Some(executed) if !self.permitted(&executed) => None,
             Some(Executed::Action(action)) => {
                 self.overlay = Overlay::None;
                 self.composer.clear();
@@ -141,13 +140,9 @@ impl App {
             // The completed name stays in the draft for the argument it needs.
             _ => {
                 if let Some(text) = self.expand_template(&name, &arg) {
-                    if self.remote.active() {
-                        self.remote_flash();
-                        return None;
-                    }
                     self.overlay = Overlay::None;
                     self.composer.set_text(&text);
-                    return Some(Action::Submit);
+                    return Some(Action::Submit { follow: false });
                 }
                 self.apply_completion();
                 self.notice(NoticeLevel::Error, commands::needs_argument(&name));

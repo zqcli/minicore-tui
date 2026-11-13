@@ -1,177 +1,113 @@
-//! The draft: the welcome screen before any session exists. A session is
-//! created by the first message and takes the settings picked meanwhile.
+//! Selections for a new Session and committed settings of the current Session.
 
-use serde_json::{Value, json};
-
-use super::{App, LaunchSettings, NoticeLevel};
-use crate::protocol::{ProfileInfo, Reasoning};
-
-/// The levels that rank against each other, lowest first.
-const SCALE: [Reasoning; 6] = [
-    Reasoning::Low,
-    Reasoning::Medium,
-    Reasoning::High,
-    Reasoning::XHigh,
-    Reasoning::Max,
-    Reasoning::Ultra,
-];
-
-pub(super) const NO_SESSION: &str = "No session yet: send a message first";
-
-impl LaunchSettings {
-    fn profile<'a>(
-        &self,
-        profiles: &'a [ProfileInfo],
-        default: Option<&str>,
-    ) -> Option<&'a ProfileInfo> {
-        let id = self.profile.as_deref().or(default)?;
-        profiles.iter().find(|profile| profile.id == id)
-    }
-
-    pub fn model_id<'a>(
-        &'a self,
-        profiles: &'a [ProfileInfo],
-        default: Option<&str>,
-    ) -> Option<&'a str> {
-        self.model
-            .as_deref()
-            .or_else(|| Some(self.profile(profiles, default)?.model.as_str()))
-    }
-
-    pub fn reasoning(&self, profiles: &[ProfileInfo], default: Option<&str>) -> Option<Reasoning> {
-        self.reasoning
-            .or_else(|| Some(self.profile(profiles, default)?.reasoning))
-    }
-}
+use super::App;
+use minicore_host_protocol::*;
 
 impl App {
-    pub(super) fn create_fields(&self) -> Value {
-        let mut fields = self.launch.fields(true);
-        fields["workspace"] = json!(self.workspace);
-        fields
-    }
-
-    pub fn draft_launch(&self) -> &LaunchSettings {
-        self.remote
-            .draft
-            .as_ref()
-            .map_or(&self.launch, |draft| &draft.launch)
-    }
-
-    /// The model the next message runs on: the session's, else the one a new session would get.
     pub fn model_id(&self) -> Option<&str> {
-        match self.resident.current() {
-            Some(session) => Some(&session.info.model),
-            None => self
-                .draft_launch()
-                .model_id(&self.profiles, self.default_profile.as_deref()),
-        }
+        self.resident
+            .current()
+            .map(|s| s.info.config.model.as_str())
+            .or_else(|| self.launch.model.as_ref().map(ModelRef::as_str))
     }
-
-    /// The reasoning level of the next message, resolved like [`App::model_id`].
-    pub fn reasoning(&self) -> Option<Reasoning> {
-        match self.resident.current() {
-            Some(session) => Some(session.info.reasoning),
-            None => self
-                .draft_launch()
-                .reasoning(&self.profiles, self.default_profile.as_deref()),
-        }
+    pub fn reasoning(&self) -> Option<ReasoningPreference> {
+        self.resident
+            .current()
+            .map(|s| s.info.config.reasoning)
+            .or(self.launch.reasoning)
     }
-
-    /// Switches the session's model, or the draft's; a reasoning level the
-    /// model lacks moves to the nearest one it has in the same request.
-    pub(super) fn set_model(&mut self, id: String) {
-        if self.resident.current().is_some() {
-            let fields = self.model_fields(&id, self.reasoning());
-            self.update_session(fields);
-        } else {
-            if let Some(level) = self.reasoning_for_level(&id, self.reasoning()) {
-                self.launch.reasoning = Some(level);
-            }
-            self.launch.model = Some(id);
-        }
-    }
-
-    pub(super) fn model_fields(&mut self, model: &str, current: Option<Reasoning>) -> Value {
-        let mut fields = json!({"model": model});
-        if let Some(level) = self.reasoning_for_level(model, current) {
-            fields["reasoning"] = json!(level);
-        }
-        fields
-    }
-
-    fn reasoning_for_level(
-        &mut self,
-        model: &str,
-        current: Option<Reasoning>,
-    ) -> Option<Reasoning> {
-        let current = current?;
-        let supported = &self
-            .models
+    pub fn reasoning_levels(&self) -> Vec<ReasoningPreference> {
+        self.models
             .iter()
-            .find(|info| info.id == model)?
-            .supported_reasoning;
-        if supported.is_empty() || supported.contains(&current) {
-            return None;
-        }
-        let level = nearest_reasoning(current, supported);
-        let text = format!(
-            "{model} does not support reasoning {}; using {}",
-            current.label(),
-            level.label()
-        );
-        self.notice(NoticeLevel::Info, text);
-        Some(level)
+            .find(|model| Some(model.model.as_str()) == self.model_id())
+            .map(|model| model.supported_reasoning.clone())
+            .unwrap_or_default()
     }
-
-    /// Sets the session's reasoning level, or the draft's.
-    pub(super) fn set_reasoning(&mut self, level: Reasoning) {
+    pub(super) fn set_model(&mut self, model: ModelRef) {
         if self.resident.current().is_some() {
-            self.update_session(json!({ "reasoning": level }));
+            self.update_session(SessionConfigPatch {
+                model: Some(model),
+                ..Default::default()
+            });
         } else {
-            self.launch.reasoning = Some(level);
+            self.launch.model = Some(model);
         }
     }
-
-    /// `/new`: leaves the session; the first message creates the next one.
-    pub(super) fn new_draft(&mut self, profile: Option<String>) {
-        self.show_session(None);
-        if profile.is_some() {
-            self.launch.profile = profile;
+    pub(super) fn set_reasoning(&mut self, reasoning: ReasoningPreference) {
+        if self.resident.current().is_some() {
+            self.update_session(SessionConfigPatch {
+                reasoning: Some(reasoning),
+                ..Default::default()
+            });
+        } else {
+            self.launch.reasoning = Some(reasoning);
         }
     }
-}
-
-/// The supported level closest to `current` on [`SCALE`], the higher one on a
-/// tie; the first supported level when `current` or none of them is on it.
-fn nearest_reasoning(current: Reasoning, supported: &[Reasoning]) -> Reasoning {
-    let rank = |level| SCALE.iter().position(|scaled| *scaled == level);
-    rank(current)
-        .and_then(|from| {
-            supported
-                .iter()
-                .filter_map(|&level| Some((level, rank(level)?)))
-                .min_by_key(|&(_, at)| (at.abs_diff(from), std::cmp::Reverse(at)))
+    pub(super) fn creation_overrides(&self) -> SessionOverrides {
+        SessionOverrides(SessionConfigPatch {
+            model: self.launch.model.clone(),
+            reasoning: self.launch.reasoning,
+            workspace: NullablePatch::Set(WorkspaceRef {
+                path: self.workspace.to_string_lossy().into_owned(),
+            }),
+            ..Default::default()
         })
-        .map_or(supported[0], |(level, _)| level)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use Reasoning::*;
+    use crate::testing::NativeHost;
 
-    #[test]
-    fn the_nearest_supported_level_wins_and_a_tie_goes_up() {
-        assert_eq!(nearest_reasoning(XHigh, &[High, Max]), Max);
-        assert_eq!(nearest_reasoning(Ultra, &[Low, Medium, High]), High);
-        assert_eq!(nearest_reasoning(Low, &[Medium, High]), Medium);
+    #[tokio::test(start_paused = true)]
+    async fn an_unopened_agent_never_inherits_the_new_agent_configuration_for_display() {
+        let fixture = NativeHost::new().await;
+        let (tx, _) = tokio::sync::mpsc::channel(crate::app::tasks::MESSAGE_CAPACITY);
+        let mut app = App::new(fixture.client.clone(), tx, std::path::PathBuf::from("."));
+        app.selected_agent = Some(fixture.target.agent_id.clone());
+        app.new_agent.session_defaults.model = "startup/not-selected".parse().unwrap();
+        app.new_agent.session_defaults.reasoning = ReasoningPreference::High;
+        assert_eq!(app.model_id(), None);
+        assert_eq!(app.reasoning(), None);
+        assert!(app.reasoning_levels().is_empty());
+        app.launch.model = Some("fixture/explicit".parse().unwrap());
+        app.launch.reasoning = Some(ReasoningPreference::Low);
+        assert_eq!(app.model_id(), Some("fixture/explicit"));
+        assert_eq!(app.reasoning(), Some(ReasoningPreference::Low));
+        drop(app);
+        fixture.finish().await;
     }
 
-    #[test]
-    fn a_level_off_the_scale_takes_the_first_supported_one() {
-        assert_eq!(nearest_reasoning(Auto, &[Medium, High]), Medium);
-        assert_eq!(nearest_reasoning(Disabled, &[High, Max]), High);
-        assert_eq!(nearest_reasoning(High, &[Auto, Disabled]), Auto);
+    #[tokio::test(start_paused = true)]
+    async fn committed_session_settings_and_the_native_model_catalog_control_the_picker() {
+        use minicore_host_core::ModelDescription;
+        let fixture = NativeHost::new().await;
+        let client = fixture.client.session(fixture.target.clone());
+        let info = client.info(CallOptions::default()).await.unwrap();
+        let state = client.state(CallOptions::default()).await.unwrap();
+        let model = info.config.model.clone();
+        let reasoning = info.config.reasoning;
+        let (tx, _) = tokio::sync::mpsc::channel(crate::app::tasks::MESSAGE_CAPACITY);
+        let mut app = App::new(fixture.client.clone(), tx, std::path::PathBuf::from("."));
+        app.launch.model = Some("fixture/next-session".parse().unwrap());
+        app.launch.reasoning = Some(ReasoningPreference::High);
+        app.resident
+            .insert(crate::app::Session::new(info, state, 1, client));
+        app.resident.select(Some(1));
+        assert_eq!(app.model_id(), Some(model.as_str()));
+        assert_eq!(app.reasoning(), Some(reasoning));
+        let description: ModelDescription = serde_json::from_value(serde_json::json!({
+            "model":model,"api":"responses","context_window":1000,
+            "supported_reasoning":["low","high"],"supports_tools":true
+        }))
+        .unwrap();
+        app.models = vec![description];
+        assert_eq!(
+            app.reasoning_levels(),
+            [ReasoningPreference::Low, ReasoningPreference::High]
+        );
+        drop(app);
+        fixture.finish().await;
     }
 }

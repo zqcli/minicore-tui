@@ -1,119 +1,123 @@
-//! The block types of a conversation.
+//! Presentation blocks identified by native Host facts.
 
 use std::time::Duration;
 
-use super::ToolCall;
-use crate::protocol::read::UserKind;
-use crate::protocol::{LoopOutcome, Usage};
+use minicore_host_protocol::{PersistenceState, Timestamp, TurnId, TurnOutcome};
+use minicore_host_runtime::model::Usage;
 
-/// One rendered unit of the conversation.
+use super::ToolCall;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum UserKind {
+    Prompt,
+    Steering,
+    FollowUp,
+}
+
 #[derive(Clone, Debug)]
 pub enum Block {
     User {
         text: String,
         kind: UserKind,
-        /// When the Agent accepted it, in Unix milliseconds; old history has none.
-        at: Option<u64>,
+        at: Option<Timestamp>,
     },
     Assistant {
         key: RequestKey,
         reasoning: String,
         text: String,
         streaming: bool,
-        /// The reader's thinking fold; `None` follows the global Ctrl+O.
+        partial: bool,
         expanded: Option<bool>,
     },
     Tool(Box<ToolCall>),
     TurnEnd {
-        loop_id: String,
-        outcome: LoopOutcome,
+        turn_id: TurnId,
+        outcome: TurnOutcome,
+        reason: Option<String>,
         duration: Option<Duration>,
-        requests: u32,
-        tools: u64,
+        requests: u64,
+        tool_rounds: u64,
         usage: Usage,
         changes: Option<ChangeSummary>,
-        /// Whether the Agent saved this turn, once a result said so.
-        saving: Option<Saving>,
+        saving: Option<PersistenceState>,
+    },
+    Summary {
+        text: String,
     },
     Compaction {
-        /// The Agent's operation id, so a duplicate report is recognised.
-        operation_id: String,
-        before: Option<u64>,
-        after: Option<u64>,
-        /// Items covered and kept, each when reported; shown when there are no token figures.
-        coverage: Option<(Option<usize>, Option<usize>)>,
-        summary: Option<String>,
+        source_position: u64,
+        covered_items: u64,
+        summary: String,
     },
     EarlierHistory {
-        hidden_items: usize,
+        hidden_items: u64,
     },
 }
 
-/// Identity of one assistant response inside a turn.
+/// Seed history has a native position but no fabricated execution identity.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct RequestKey {
-    pub loop_id: String,
-    pub request_index: u32,
+pub enum RequestKey {
+    Response {
+        turn_id: TurnId,
+        response_index: u64,
+    },
+    History {
+        position: u64,
+    },
+}
+
+impl RequestKey {
+    pub fn response(turn_id: TurnId, response_index: u64) -> Self {
+        Self::Response {
+            turn_id,
+            response_index,
+        }
+    }
+
+    pub fn turn_id(&self) -> Option<&TurnId> {
+        match self {
+            Self::Response { turn_id, .. } => Some(turn_id),
+            Self::History { .. } => None,
+        }
+    }
+
+    pub fn response_index(&self) -> Option<u64> {
+        match self {
+            Self::Response { response_index, .. } => Some(*response_index),
+            Self::History { .. } => None,
+        }
+    }
 }
 
 impl Block {
     pub fn is_streaming(&self) -> bool {
         matches!(
             self,
-            Block::Assistant {
+            Self::Assistant {
                 streaming: true,
                 ..
             }
         )
     }
 
-    /// An assistant block with no thinking and no text, such as a request that only called tools.
     pub fn is_blank_assistant(&self) -> bool {
-        matches!(self, Block::Assistant { reasoning, text, .. }
+        matches!(self, Self::Assistant { reasoning, text, partial: false, .. }
             if reasoning.trim().is_empty() && text.trim().is_empty())
     }
 
-    pub fn loop_id(&self) -> Option<&str> {
+    pub fn turn_id(&self) -> Option<&TurnId> {
         match self {
-            Block::Assistant { key, .. } => Some(&key.loop_id),
-            Block::Tool(call) => Some(&call.key.loop_id),
-            Block::TurnEnd { loop_id, .. } => Some(loop_id),
+            Self::Assistant { key, .. } => key.turn_id(),
+            Self::Tool(call) => call.key.turn_id(),
+            Self::TurnEnd { turn_id, .. } => Some(turn_id),
             _ => None,
         }
     }
 }
 
-/// Whether the Agent wrote a finished turn to the store.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Saving {
-    /// The stored record holds the whole turn.
-    Saved,
-    /// The turn is readable only while the Agent retains it.
-    Unsaved,
-    /// A write happened but its result is unknown; only reopening settles it.
-    Uncertain,
-}
-
-impl Saving {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Saved => "saved",
-            Self::Unsaved => "not saved",
-            Self::Uncertain => "save unconfirmed",
-        }
-    }
-
-    /// Whether a reader must be told the turn is not in committed history.
-    pub fn is_persisted(self) -> bool {
-        self == Self::Saved
-    }
-}
-
-/// What one turn changed.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ChangeSummary {
     pub files: usize,
-    /// Added and removed lines; `None` unless every file's diff was counted.
     pub lines: Option<(usize, usize)>,
 }
 

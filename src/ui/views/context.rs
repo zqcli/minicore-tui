@@ -1,450 +1,249 @@
-//! The context sheet's report lines and plain text.
+//! Read-only Host context facts, with past response usage kept separate from context size.
 
+use minicore_host_core::{SessionContextData, SessionContextSnapshot};
+use minicore_host_protocol::{CompactionOutcome, CompactionState, PersistenceState};
+use minicore_host_runtime::model::Usage;
 use ratatui::text::Line;
 
 use crate::app::Session;
-use crate::app::session::input_budget;
-use crate::protocol::{
-    CompactStatus, CompactionPhase, CompactionProgress, SessionContext, SessionPresentation,
-};
-
-use super::styled;
 use crate::ui::format_tokens;
 use crate::ui::theme::Styles;
 
-/// The summary lines of the context sheet.
+use super::styled;
+
 pub fn lines(session: Option<&Session>, styles: Styles) -> Vec<Line<'static>> {
-    summary_lines(
-        session.and_then(|session| session.context.as_ref()),
-        session.and_then(|session| session.presentation.as_ref()),
-        styles,
-    )
+    report(session.and_then(|session| session.context.as_ref()), styles)
 }
 
-/// The context report as plain text, for `c`.
 pub fn text(session: Option<&Session>, styles: Styles) -> String {
-    let lines = lines(session, styles);
-    lines
+    lines(session, styles)
         .iter()
         .map(Line::to_string)
         .collect::<Vec<_>>()
         .join("\n")
 }
 
-/// Labels estimates as estimates and never prints an unknown number as zero.
-fn summary_lines(
-    context: Option<&SessionContext>,
-    presentation: Option<&SessionPresentation>,
-    styles: Styles,
-) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
-    let usage = presentation.and_then(|view| view.context.as_ref());
-
-    let reported = usage.and_then(|usage| {
-        let tokens = usage.tokens?;
-        let window = usage.window.filter(|window| *window > 0);
-        let line = match (input_budget(context), window) {
-            (Some(budget), window) => {
-                let percent = tokens as f64 / budget as f64 * 100.0;
-                let window = window
-                    .filter(|window| *window != budget)
-                    .map_or(String::new(), |window| {
-                        format!(" · model window {}", format_tokens(window))
-                    });
-                format!(
-                    "Context: {} of {} input budget ({percent:.0}%){window} — reported by the last request",
-                    format_tokens(tokens),
-                    format_tokens(budget)
-                )
-            }
-            (None, Some(window)) => {
-                let percent = usage
-                    .percent
-                    .unwrap_or(tokens as f64 / window as f64 * 100.0);
-                format!(
-                    "Context: {} of {} tokens ({percent:.0}%) — reported by the last request",
-                    format_tokens(tokens),
-                    format_tokens(window)
-                )
-            }
-            (None, None) => return None,
-        };
-        Some(line)
-    });
-    let budget = context.and_then(|context| context.budget.as_ref());
-    let estimated = budget.and_then(|budget| {
-        // The request estimate is the last request's and goes stale once a
-        // compaction shrinks the history, so only the history estimate is shown.
-        let used = budget.estimated_history_tokens?;
-        let limit = budget.input_budget_tokens?;
-        let percent = if limit > 0 {
-            format!(" ({:.0}%)", used as f64 / limit as f64 * 100.0)
-        } else {
-            String::new()
-        };
-        Some(format!(
-            "History estimate: {} of {} input tokens{percent}",
-            format_tokens(used),
-            format_tokens(limit)
-        ))
-    });
-    match reported.or(estimated) {
-        Some(line) => lines.push(styled(&line, styles.text())),
-        None => lines.push(styled("Context usage is not reported yet.", styles.dim())),
-    }
-
-    if let Some(budget) = budget {
-        if let (Some(trigger), Some(limit)) = (budget.trigger_tokens, budget.input_budget_tokens) {
-            let percent = if limit > 0 {
-                format!(
-                    " ({:.0}% of the input budget)",
-                    trigger as f64 / limit as f64 * 100.0
-                )
-            } else {
-                String::new()
-            };
-            lines.push(styled(
-                &format!(
-                    "Auto-compacts at {} tokens{percent}{}",
-                    format_tokens(trigger),
-                    match budget.target_tokens {
-                        Some(target) => format!(", keeping about {}", format_tokens(target)),
-                        None => String::new(),
-                    }
-                ),
-                styles.dim(),
-            ));
-        } else {
-            lines.push(styled("Automatic compaction is disabled.", styles.dim()));
-        }
-    }
-
-    if let Some(context) = context {
-        if let Some(operation) = &context.current_operation {
-            lines.push(styled(
-                &format!(
-                    "Compacting now: {} · {}",
-                    operation_label(&operation.phase),
-                    phase_counts(operation)
-                ),
-                styles.warning(),
-            ));
-        }
-        if let Some(last) = &context.last_result {
-            // Coverage is the Summary line's; equal figures say nothing.
-            let detail = match (last.before_tokens, last.after_tokens) {
-                (Some(before), Some(after))
-                    if last.status == CompactStatus::Compacted
-                        && format_tokens(before) != format_tokens(after) =>
-                {
-                    format!(
-                        "{} → {} tokens",
-                        format_tokens(before),
-                        format_tokens(after)
-                    )
-                }
-                _ => compact_status(last.status).to_owned(),
-            };
-            lines.push(styled(&format!("Last compaction: {detail}"), styles.dim()));
-        }
-        if let Some(last) = context
-            .automatic
-            .as_ref()
-            .and_then(|view| view.last.as_ref())
-        {
-            let detail = match (last.before_tokens, last.after_tokens) {
-                (Some(before), Some(after)) if last.outcome == "compacted" => {
-                    format!(
-                        "{} → {} tokens",
-                        format_tokens(before),
-                        format_tokens(after)
-                    )
-                }
-                _ => last.outcome.replace('_', " "),
-            };
-            lines.push(styled(
-                &format!("Last automatic compaction: {detail}"),
-                styles.dim(),
-            ));
-        }
-        if let Some(coverage) = &context.coverage {
-            lines.push(styled(
-                &format!(
-                    "Summary covers {} turns · {} items · {} kept",
-                    coverage.covered_loop_count,
-                    coverage.covered_item_count,
-                    coverage.retained_item_count
-                ),
-                styles.dim(),
-            ));
-        }
-        if let Some(failure) = &context.last_prepare_failure {
-            lines.push(styled(
-                &format!("Last preparation failed: {failure}"),
-                styles.failure(),
-            ));
-        }
-    } else {
+fn report(context: Option<&SessionContextSnapshot>, styles: Styles) -> Vec<Line<'static>> {
+    let Some(context) = context else {
+        return vec![styled("Context facts are not loaded yet.", styles.dim())];
+    };
+    let data = &context.data;
+    let mut lines = vec![styled(
+        "Exact context token usage and percentage are not reported.",
+        styles.dim(),
+    )];
+    lines.push(styled(
+        &format!("Configured model: {}", data.model),
+        styles.text(),
+    ));
+    if let Some(active) = &data.active_turn {
         lines.push(styled(
-            "No context report is loaded for this session.",
-            styles.dim(),
+            &format!(
+                "Active model: {} · {} declared window",
+                active.model.model,
+                format_tokens(active.model.context_window)
+            ),
+            styles.text(),
         ));
     }
-    lines.push(Line::from(""));
+    match &data.history {
+        Some(history) => {
+            lines.push(styled(
+                &format!(
+                    "Native history: {} raw items · {} effective items · position {}",
+                    history.raw_items, history.effective_items, history.position
+                ),
+                styles.text(),
+            ));
+            if let Some(projection) = &history.projection {
+                lines.push(styled(
+                    &format!(
+                        "Committed summary: {} covered items · source position {}",
+                        projection.covered_items, projection.source_position
+                    ),
+                    styles.dim(),
+                ));
+            }
+            if let Some(response) = &history.latest_response {
+                lines.push(styled(
+                    &format!(
+                        "Latest response: {} · {}",
+                        response.model,
+                        usage_text(&response.usage)
+                    ),
+                    styles.text(),
+                ));
+                lines.push(styled(
+                    if response.covered_by_compaction {
+                        "This past response is covered by compaction; its usage is not the current context size."
+                    } else {
+                        "Past response usage is not the current context size."
+                    },
+                    styles.dim(),
+                ));
+            } else {
+                lines.push(styled(
+                    "No complete response usage is available.",
+                    styles.dim(),
+                ));
+            }
+        }
+        None => lines.push(styled(
+            "Native history is not loaded; its size is unknown.",
+            styles.dim(),
+        )),
+    }
     lines.push(styled(
-        "Estimates are byte-based and exclude the system prompt and tool schemas.",
+        &format!(
+            "Unbound inputs: {} next step · {} next turn",
+            data.queued_inputs.next_step, data.queued_inputs.next_turn
+        ),
         styles.dim(),
     ));
-
+    compaction_lines(data, styles, &mut lines);
+    if data.history_save.pending {
+        lines.push(styled(
+            if data.history_save.running {
+                "History save is running."
+            } else {
+                "History save is pending confirmation."
+            },
+            styles.warning(),
+        ));
+    }
+    if let Some(fault) = &data.history_save.fault {
+        lines.push(styled(
+            &format!("History save: {}", fault.message()),
+            styles.failure(),
+        ));
+    }
+    if let Some(fault) = &data.block_reason {
+        lines.push(styled(
+            &format!("Blocked: {}", fault.message()),
+            styles.failure(),
+        ));
+    }
     lines
 }
 
-fn phase_counts(operation: &CompactionProgress) -> String {
-    format!(
-        "{} items prepared · {} kept",
-        operation.covered_item_count, operation.retained_item_count
-    )
-}
-
-fn operation_label(phase: &CompactionPhase) -> &'static str {
-    match phase {
-        CompactionPhase::Preparing => "preparing",
-        CompactionPhase::Summarizing => "summarizing",
-        CompactionPhase::Merging => "merging",
-        CompactionPhase::Committing => "committing",
-        CompactionPhase::Unknown => "working",
+pub(crate) fn usage_text(usage: &Usage) -> String {
+    let count = |value: Option<u64>| value.map_or_else(|| "?".to_owned(), format_tokens);
+    let mut parts = vec![format!(
+        "↑{} ↓{}",
+        count(usage.input_tokens()),
+        count(usage.output_tokens())
+    )];
+    if let Some(value) = usage.reasoning_tokens() {
+        parts.push(format!("reasoning {}", format_tokens(value)));
     }
+    if let Some(value) = usage.cache_read_tokens() {
+        parts.push(format!("cache read {}", format_tokens(value)));
+    }
+    if let Some(value) = usage.cache_write_tokens() {
+        parts.push(format!("cache write {}", format_tokens(value)));
+    }
+    if let Some(value) = usage.provider_total_tokens() {
+        parts.push(format!("provider total {}", format_tokens(value)));
+    }
+    parts.join(" · ")
 }
 
-fn compact_status(status: CompactStatus) -> &'static str {
-    match status {
-        CompactStatus::Compacted => "compacted",
-        CompactStatus::Noop => "nothing to compact",
-        CompactStatus::Failed => "failed",
-        CompactStatus::UnknownWrite => "write outcome unknown",
-        CompactStatus::Unknown => "unknown",
+fn compaction_lines(data: &SessionContextData, styles: Styles, lines: &mut Vec<Line<'static>>) {
+    let Some(activity) = &data.compaction else {
+        return;
+    };
+    let mut change = None;
+    let label = match &activity.state {
+        CompactionState::Preparing {} => "preparing",
+        CompactionState::Summarizing {} => "summarizing",
+        CompactionState::Merging {} => "merging",
+        CompactionState::Committing {
+            change: value,
+            persistence,
+            fault,
+        } => {
+            change = Some(value);
+            if let Some(fault) = fault {
+                lines.push(styled(
+                    &format!("Compaction save: {}", fault.message()),
+                    styles.failure(),
+                ));
+            }
+            match persistence {
+                PersistenceState::Failed => "save failed",
+                _ => "committing",
+            }
+        }
+        CompactionState::Finished { result } => match result {
+            CompactionOutcome::Compacted {
+                change: value,
+                persistence,
+            } => {
+                change = Some(value);
+                match persistence {
+                    PersistenceState::Persisted => "completed · saved",
+                    PersistenceState::NotApplicable => "completed · save not applicable",
+                    PersistenceState::Pending => "completed · save pending",
+                    PersistenceState::Failed => "completed · save failed",
+                }
+            }
+            CompactionOutcome::Unchanged => "nothing to compact",
+            CompactionOutcome::Cancelled => "cancelled",
+            CompactionOutcome::Failed { fault } => {
+                lines.push(styled(
+                    &format!("Compaction failed: {}", fault.message()),
+                    styles.failure(),
+                ));
+                "failed"
+            }
+        },
+    };
+    lines.push(styled(
+        &format!(
+            "Compaction: {label}{}",
+            if activity.cancellation_requested {
+                " · cancellation requested"
+            } else {
+                ""
+            }
+        ),
+        styles.dim(),
+    ));
+    if let Some(change) = change {
+        lines.push(styled(
+            &format!(
+                "Compaction estimate: {} → {} request tokens · {} covered items",
+                format_tokens(change.before_tokens),
+                format_tokens(change.after_tokens),
+                change.covered_items
+            ),
+            styles.dim(),
+        ));
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
-
-    use crate::app::session::context_percent;
-    use crate::ui::theme::Palette;
-
-    fn lines_of(lines: Vec<Line<'static>>) -> Vec<String> {
-        lines.iter().map(Line::to_string).collect()
-    }
 
     #[test]
-    fn the_context_view_prefers_reported_numbers_and_labels_estimates() {
-        let styles = Styles::of(Palette::dark());
-        let presentation: SessionPresentation = serde_json::from_value(json!({
-            "session_id": "ses_1",
-            "context": {"tokens": 31200, "window": 40000, "percent": 78.0, "kind": "reported"}
-        }))
-        .unwrap();
-        let context: SessionContext = serde_json::from_value(json!({
-            "session_id": "ses_1",
-            "coverage": {"covered_loop_count": 6, "covered_item_count": 12, "retained_item_count": 3},
-            "budget": {"estimated_history_tokens": 370, "input_budget_tokens": 40000,
-                       "trigger_tokens": 32000, "target_tokens": 16000},
-            "last_result": {"operation_id": "tui-1", "status": "compacted",
-                            "before_tokens": 4200, "after_tokens": 900, "covered_loop_count": 6}
-        }))
-        .unwrap();
-        let lines = summary_lines(Some(&context), Some(&presentation), styles);
-        let text = lines_of(lines);
-        assert!(
-            text[0].contains("31.2k of 40k input budget (78%)"),
-            "{text:?}"
-        );
-        assert!(text[0].contains("reported"), "{text:?}");
-        assert!(
-            text.iter()
-                .any(|line| line.contains("Auto-compacts at 32k tokens (80% of the input budget)")),
-            "{text:?}"
-        );
-        assert!(
-            text.iter()
-                .any(|line| line.contains("Last compaction: 4.2k → 900 tokens")),
-            "{text:?}"
-        );
-        assert!(
-            text.iter()
-                .any(|line| line.contains("Summary covers 6 turns")),
-            "{text:?}"
-        );
-    }
-
-    #[test]
-    fn the_context_view_falls_back_to_estimates_and_says_so() {
-        let styles = Styles::of(Palette::dark());
-        let context: SessionContext = serde_json::from_value(json!({
-            "session_id": "ses_1",
-            "budget": {"estimated_history_tokens": 1000, "input_budget_tokens": 4000}
-        }))
-        .unwrap();
-        let lines = summary_lines(Some(&context), None, styles);
-        let text = lines_of(lines);
-        assert!(
-            text.iter()
-                .any(|line| line.contains("History estimate: 1k of 4k")),
-            "{text:?}"
-        );
-        assert!(
-            text.iter()
-                .any(|line| line.contains("Estimates are byte-based")),
-            "{text:?}"
-        );
-    }
-
-    #[test]
-    fn a_compaction_that_changed_nothing_shows_its_status_not_coverage() {
-        let styles = Styles::of(Palette::dark());
-        let context: SessionContext = serde_json::from_value(json!({
-            "session_id": "ses_1",
-            "coverage": {"covered_loop_count": 6, "covered_item_count": 379, "retained_item_count": 0},
-            "last_result": {"operation_id": "tui-1", "status": "compacted",
-                            "before_tokens": 14812, "after_tokens": 14790,
-                            "covered_loop_count": 0, "covered_item_count": 379,
-                            "retained_item_count": 0}
-        }))
-        .unwrap();
-        let text: Vec<String> = summary_lines(Some(&context), None, styles)
-            .iter()
-            .map(Line::to_string)
-            .collect();
-        assert!(
-            text.contains(&"Last compaction: compacted".to_owned()),
-            "{text:?}"
-        );
-        assert!(text.iter().all(|line| !line.contains('→')), "{text:?}");
-        assert!(
-            text.iter()
-                .any(|line| line == "Summary covers 6 turns · 379 items · 0 kept"),
-            "{text:?}"
-        );
-    }
-
-    #[test]
-    fn the_context_view_never_prints_zero_for_unknown_numbers() {
-        let styles = Styles::of(Palette::dark());
-        let context: SessionContext = serde_json::from_value(json!({
-            "session_id": "ses_1",
-            "budget": {"input_budget_tokens": 40000},
-            "automatic": {}
-        }))
-        .unwrap();
-        let lines = summary_lines(Some(&context), None, styles);
-        let text = lines_of(lines).join("\n");
-        assert!(!text.contains("0 tokens"), "{text}");
-        assert!(text.contains("not reported yet"), "{text}");
-    }
-
-    #[test]
-    fn a_current_operation_is_shown_as_compacting_now() {
-        let styles = Styles::of(Palette::dark());
-        let context: SessionContext = serde_json::from_value(json!({
-            "session_id": "ses_1",
-            "current_operation": {"operation_id": "tui-1", "phase": "summarizing",
-                                  "covered_item_count": 12, "retained_item_count": 0}
-        }))
-        .unwrap();
-        let lines = summary_lines(Some(&context), None, styles);
-        let text = lines_of(lines).join("\n");
-        assert!(text.contains("Compacting now: summarizing"), "{text}");
-    }
-
-    #[test]
-    fn a_failed_context_line_is_red() {
-        let palette = Palette::dark();
-        let styles = Styles::of(palette);
-        let context: SessionContext = serde_json::from_value(json!({
-            "session_id": "ses_1",
-            "last_prepare_failure": "context_uncompressible"
-        }))
-        .unwrap();
-        let lines = summary_lines(Some(&context), None, styles);
-        let failure = lines
-            .iter()
-            .find(|line| {
-                line.spans
-                    .iter()
-                    .any(|span| span.content.contains("context_uncompressible"))
-            })
-            .expect("failure line");
-        assert_eq!(failure.spans[0].style.fg, Some(palette.failure));
-    }
-
-    #[test]
-    fn an_automatic_observation_without_numbers_reads_as_its_outcome() {
-        let styles = Styles::of(Palette::dark());
-        let context: SessionContext = serde_json::from_value(json!({
-            "session_id": "ses_1",
-            "automatic": {"last": {"operation_id": "auto-boundary-l1-1", "outcome": "no_progress"}}
-        }))
-        .unwrap();
-        let lines = summary_lines(Some(&context), None, styles);
-        let text = lines_of(lines).join("\n");
-        assert!(
-            text.contains("Last automatic compaction: no progress"),
-            "{text}"
-        );
-    }
-
-    #[test]
-    fn the_footer_percent_is_of_the_input_budget_the_agent_reports() {
-        let mut session = Session::new(
-            serde_json::from_value(crate::testing::session_info("s")).unwrap(),
-            1,
-            "load_1".into(),
-        );
-        session.presentation = Some(
-            serde_json::from_value(json!({
-                "session_id": "s",
-                "context": {"tokens": 18000, "window": 64000, "percent": 28.1, "kind": "reported"}
-            }))
-            .unwrap(),
-        );
+    fn missing_provider_counts_stay_unknown_instead_of_becoming_zero() {
+        assert_eq!(usage_text(&Usage::default()), "↑? ↓?");
         assert_eq!(
-            context_percent(&session),
-            Some(28.1),
-            "no budget yet: the window"
-        );
-        session.context = Some(
-            serde_json::from_value(json!({
-                "session_id": "s",
-                "budget": {"input_budget_tokens": 40000, "trigger_tokens": 32000}
-            }))
-            .unwrap(),
-        );
-        assert_eq!(context_percent(&session), Some(45.0));
-        let text = lines_of(lines(Some(&session), Styles::of(Palette::dark())));
-        assert!(
-            text[0].starts_with("Context: 18k of 40k input budget (45%) · model window 64k"),
-            "{text:?}"
+            usage_text(&Usage::from_optional(Some(42), None, None)),
+            "↑42 ↓?"
         );
     }
 
     #[test]
-    fn a_turn_start_compaction_is_listed_as_the_last_automatic_one() {
-        let context: SessionContext = serde_json::from_value(json!({
-            "session_id": "ses_1",
-            "automatic": {"last": {"operation_id": "auto-boundary-l1-1", "before_tokens": 35300,
-                                   "after_tokens": 8000, "outcome": "compacted"}}
-        }))
-        .unwrap();
-        let text = lines_of(summary_lines(
-            Some(&context),
-            None,
-            Styles::of(Palette::dark()),
-        ));
-        assert!(
-            text.contains(&"Last automatic compaction: 35.3k → 8k tokens".to_owned()),
-            "{text:?}"
+    fn provider_counts_remain_separate_instead_of_forming_a_context_estimate() {
+        let usage = Usage::new(1_200, 50, 30)
+            .with_cache_read_tokens(Some(400))
+            .with_cache_write_tokens(Some(20))
+            .with_provider_total_tokens(Some(1_280));
+        assert_eq!(
+            usage_text(&usage),
+            "↑1.2k ↓50 · reasoning 30 · cache read 400 · cache write 20 · provider total 1.3k"
         );
     }
 }

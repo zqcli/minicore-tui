@@ -13,7 +13,7 @@ fn mouse(h: &mut Harness, kind: MouseEventKind, x: u16, y: u16) {
 
 #[tokio::test(start_paused = true)]
 async fn editor_click_drag_shift_replace_and_undo_work_through_real_layout() {
-    let mut h = Harness::opened(display_read(0, 0)).await;
+    let mut h = Harness::opened().await;
     h.app.composer.set_text("ab中文cd\nsecond line");
     h.screen(60, 24);
     let area = h.app.composer_area;
@@ -47,11 +47,12 @@ async fn editor_click_drag_shift_replace_and_undo_work_through_real_layout() {
     assert_eq!(h.app.composer.selected_text(), Some("文"));
     h.press(KeyCode::Delete);
     assert_eq!(h.app.composer.text(), "ab中cd\nsecond line");
+    h.finish().await;
 }
 
 #[tokio::test(start_paused = true)]
 async fn editor_shift_selection_crosses_lines_without_changing_prompt_history() {
-    let mut h = Harness::opened(display_read(0, 0)).await;
+    let mut h = Harness::opened().await;
     h.app.composer.set_text("a中\nsecond");
     h.key(KeyCode::Home, KeyModifiers::SHIFT);
     assert_eq!(h.app.composer.selected_text(), Some("second"));
@@ -62,11 +63,12 @@ async fn editor_shift_selection_crosses_lines_without_changing_prompt_history() 
     h.press(KeyCode::Esc);
     assert_eq!(h.app.composer.text(), "a中\nsecond");
     assert!(h.app.composer.selection().is_none());
+    h.finish().await;
 }
 
 #[tokio::test(start_paused = true)]
 async fn completion_rows_and_fullscreen_sheets_are_not_editing_hit_targets() {
-    let mut h = Harness::opened(display_read(0, 0)).await;
+    let mut h = Harness::opened().await;
     h.type_text("/di");
     h.screen(80, 24);
     assert!(matches!(h.app.overlay, Overlay::Palette { .. }));
@@ -102,11 +104,12 @@ async fn completion_rows_and_fullscreen_sheets_are_not_editing_hit_targets() {
     let before = h.app.composer.text().to_owned();
     h.app.on_paste("not in hidden draft");
     assert_eq!(h.app.composer.text(), before);
+    h.finish().await;
 }
 
 #[tokio::test(start_paused = true)]
 async fn dragging_outside_editor_scrolls_long_drafts_and_keeps_the_anchor() {
-    let mut h = Harness::opened(display_read(0, 0)).await;
+    let mut h = Harness::opened().await;
     h.app.composer.set_text(&"line\n".repeat(20));
     h.screen(60, 24);
     let area = h.app.composer_area;
@@ -131,29 +134,46 @@ async fn dragging_outside_editor_scrolls_long_drafts_and_keeps_the_anchor() {
     assert_eq!(h.app.composer.cursor(), 0);
     assert_eq!(h.app.composer.selection(), Some(0..anchor));
     assert_eq!(h.app.scroll, crate::app::Scroll::Follow);
+    h.finish().await;
 }
 
 #[tokio::test(start_paused = true)]
 async fn a_multiline_paste_is_draft_text_and_never_runs_a_command() {
     for text in ["/new\r\nhello\n", "first\nsecond\n"] {
-        let mut h = Harness::opened(display_read(0, 0)).await;
+        let mut h = Harness::opened().await;
+        let client = h.native.client.session(h.native.target.clone());
+        let before_agents = h.native.client.agents(Default::default()).await.unwrap();
+        let before = client.state(Default::default()).await.unwrap();
+        let before_history = crate::history::HistoryWindow::tail(&client, 60)
+            .await
+            .unwrap();
         h.app.on_paste(text);
-        h.settle().await;
         assert_eq!(h.app.composer.text(), text.replace("\r\n", "\n"));
-        for method in [
-            "input.push",
-            "session.create",
-            "session.delete",
-            "interaction.answer",
-        ] {
-            assert!(h.calls(method).is_empty(), "paste invoked {method}");
-        }
+        let agents = h.native.client.agents(Default::default()).await.unwrap();
+        let state = client.state(Default::default()).await.unwrap();
+        let history = crate::history::HistoryWindow::tail(&client, 60)
+            .await
+            .unwrap();
+        let queue = client.inputs(Default::default()).await.unwrap();
+        assert_eq!(agents.len(), before_agents.len());
+        assert_eq!(agents[0].sessions.len(), before_agents[0].sessions.len());
+        assert_eq!(
+            state.data.controller_revision,
+            before.data.controller_revision
+        );
+        assert_eq!(state.data.runner_revision, before.data.runner_revision);
+        assert_eq!(history.upper_bound, before_history.upper_bound);
+        assert!(queue.next_step.is_empty() && queue.next_turn.is_empty());
+        assert!(state.data.pending_interactions.is_empty());
+        assert!(h.app.local_inputs.is_empty());
+        assert!(h.native.calls.try_recv().is_err());
+        h.finish().await;
     }
 }
 
 #[tokio::test(start_paused = true)]
 async fn copying_a_selection_drops_it_so_ctrl_c_quits_again() {
-    let mut h = Harness::opened(display_read(0, 0)).await;
+    let mut h = Harness::opened().await;
     h.app.composer.set_text("keep this");
     h.key(KeyCode::Left, KeyModifiers::SHIFT);
     h.ctrl(KeyCode::Char('c'));
@@ -162,11 +182,12 @@ async fn copying_a_selection_drops_it_so_ctrl_c_quits_again() {
     h.ctrl(KeyCode::Char('c'));
     h.ctrl(KeyCode::Char('c'));
     assert!(h.app.quit);
+    h.finish().await;
 }
 
 #[tokio::test(start_paused = true)]
 async fn a_cut_the_clipboard_would_refuse_keeps_the_text() {
-    let mut h = Harness::opened(display_read(0, 0)).await;
+    let mut h = Harness::opened().await;
     let big = "x".repeat(crate::clipboard::MAX_CLIPBOARD_BYTES + 1);
     h.app.composer.set_text(&big);
     h.key(KeyCode::Home, KeyModifiers::SHIFT);
@@ -177,22 +198,24 @@ async fn a_cut_the_clipboard_would_refuse_keeps_the_text() {
         "{:?}",
         h.notices()
     );
+    h.finish().await;
 }
 
 #[tokio::test(start_paused = true)]
 async fn shift_end_with_no_draft_follows_the_tail_like_end() {
-    let mut h = Harness::opened(display_read(0, 0)).await;
+    let mut h = Harness::opened().await;
     h.app.scroll = crate::app::Scroll::Anchor {
         block: 0,
         offset: 0,
     };
     h.key(KeyCode::End, KeyModifiers::SHIFT);
     assert_eq!(h.app.scroll, crate::app::Scroll::Follow);
+    h.finish().await;
 }
 
 #[tokio::test(start_paused = true)]
 async fn a_drag_in_the_editor_copies_on_release_and_stays_selected() {
-    let mut h = Harness::opened(display_read(0, 0)).await;
+    let mut h = Harness::opened().await;
     h.app.composer.set_text("copy me");
     h.screen(60, 24);
     let area = h.app.composer_area;
@@ -201,7 +224,8 @@ async fn a_drag_in_the_editor_copies_on_release_and_stays_selected() {
     mouse(&mut h, MouseEventKind::Drag(MouseButton::Left), x + 3, y);
     assert!(h.app.flash.is_none(), "nothing is copied mid-drag");
     mouse(&mut h, MouseEventKind::Up(MouseButton::Left), x + 3, y);
-    h.settle().await;
+    h.until(|app| app.flash.is_some()).await;
     assert!(h.app.flash.is_some(), "{:?}", h.notices());
     assert_eq!(h.app.composer.selected_text(), Some("cop"));
+    h.finish().await;
 }

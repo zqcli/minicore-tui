@@ -5,15 +5,13 @@ use std::borrow::Cow;
 use std::path::Path;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use serde_json::json;
 
 use super::diff::DiffState;
-use super::draft::NO_SESSION;
-use super::session::auto_title;
-use super::{App, Msg, NoticeLevel, Session, SessionOp, commands, find, tasks};
+use super::{Action, App, NoticeLevel, Session, commands, find};
 use crate::app::picker::fuzzy_match;
-use crate::protocol::{self, FilesPage, ModelInfo, RpcError, SessionInfo};
 use crate::ui::sheets;
+use minicore_host_core::{AgentSummary, ModelDescription, SessionSummary};
+use minicore_host_protocol::{AgentId, SessionId, SessionRef};
 
 #[derive(Debug)]
 pub enum Overlay {
@@ -30,11 +28,21 @@ pub enum Overlay {
         filter: String,
         selected: usize,
         /// Display order, fixed when the picker opens.
-        rows: Vec<SessionInfo>,
+        rows: Vec<SessionSummary>,
         /// The session a first Ctrl+D asked to delete.
-        armed: Option<String>,
+        armed: Option<SessionRef>,
         /// The new title being typed for the selected session.
-        renaming: Option<String>,
+        renaming: Option<(SessionRef, String)>,
+    },
+    Agents {
+        filter: String,
+        selected: usize,
+    },
+    AgentDelete {
+        agent_id: AgentId,
+        name: String,
+        sessions: Vec<(SessionId, String)>,
+        selected: usize,
     },
     Models {
         filter: String,
@@ -49,10 +57,8 @@ pub enum Overlay {
         paths: Vec<String>,
     },
     Context,
-    /// `/session`; the item count arrives from `session.read`.
-    SessionInfo {
-        items: Option<usize>,
-    },
+    /// `/session`; facts come from its native info, state and context.
+    SessionInfo,
     Help {
         scroll: usize,
     },
@@ -81,6 +87,8 @@ impl Overlay {
 pub enum Panel {
     Unconfirmed,
     Sessions,
+    Agents,
+    AgentDelete,
     Models,
     Reasoning,
     Files,
@@ -119,67 +127,86 @@ pub fn file_name(path: &str) -> &str {
 }
 
 /// The models whose id fuzzy-matches `filter`, in catalog order.
-pub fn matching_models<'a>(models: &'a [ModelInfo], filter: &str) -> Vec<&'a ModelInfo> {
+pub fn matching_models<'a>(
+    models: &'a [ModelDescription],
+    filter: &str,
+) -> Vec<&'a ModelDescription> {
     models
         .iter()
-        .filter(|model| fuzzy_match(&model.id, filter.trim()))
+        .filter(|model| fuzzy_match(model.model.as_str(), filter.trim()))
         .collect()
 }
 
 /// A session's name in the picker: its title, else (for a live session `live`)
 /// its first prompt, else its short id.
-pub fn session_label(info: &SessionInfo, live: Option<&Session>) -> String {
+pub fn session_label(info: &SessionSummary, live: Option<&Session>) -> String {
     let title = info
         .title
         .as_deref()
         .filter(|title| !title.trim().is_empty());
     title
         .map(str::to_owned)
-        .or_else(|| auto_title(live?.first_prompt()?))
-        .unwrap_or_else(|| short_session_id(&info.session_id).to_owned())
+        .or_else(|| live?.auto_title())
+        .unwrap_or_else(|| short_session_id(info.id.as_str()).to_owned())
 }
 
 /// The folder a session's workspace ends in.
-pub fn workspace_name(info: &SessionInfo) -> Option<Cow<'_, str>> {
-    Path::new(&info.workspace)
+pub fn workspace_name(info: &SessionSummary) -> Option<Cow<'_, str>> {
+    Path::new(&info.workspace.as_ref()?.path)
         .file_name()
         .map(|name| name.to_string_lossy())
 }
 
-/// `ses_8ca3c4cf...` → `ses_8ca3c4`, enough to tell sessions apart in a row.
-pub fn short_session_id(session_id: &str) -> &str {
-    let body = session_id.strip_prefix("ses_").unwrap_or(session_id);
-    let cut = body
-        .char_indices()
-        .nth(6)
-        .map_or(body.len(), |(index, _)| index);
-    &session_id[..session_id.len() - body.len() + cut]
+/// The first six symbols of a native ID, enough to scan a picker row.
+pub fn short_session_id(id: &str) -> &str {
+    &id[..id.len().min(6)]
+}
+
+pub fn session_target(info: &SessionSummary) -> SessionRef {
+    SessionRef {
+        agent_id: info.agent_id.clone(),
+        session_id: info.id.clone(),
+    }
+}
+
+pub fn matching_agents<'a>(agents: &'a [AgentSummary], filter: &str) -> Vec<&'a AgentSummary> {
+    let query = filter.to_lowercase();
+    agents
+        .iter()
+        .filter(|agent| {
+            format!("{} {}", agent.name, agent.id)
+                .to_lowercase()
+                .contains(&query)
+        })
+        .collect()
 }
 
 impl App {
     /// The name the picker shows for `info`.
-    pub fn session_title(&self, info: &SessionInfo) -> String {
-        session_label(info, self.live(&info.session_id))
+    pub fn session_title(&self, info: &SessionSummary) -> String {
+        session_label(info, self.resident.find(&session_target(info)))
     }
 
     /// The picker rows whose name or workspace folder fuzzy-matches `filter`, in order.
     pub fn filtered_sessions<'a>(
         &self,
-        rows: &'a [SessionInfo],
+        rows: &'a [SessionSummary],
         filter: &str,
-    ) -> Vec<&'a SessionInfo> {
+    ) -> Vec<&'a SessionSummary> {
         let filter = filter.trim();
         rows.iter()
             .filter(|info| {
                 filter.is_empty()
                     || fuzzy_match(&self.session_title(info), filter)
+                    || fuzzy_match(info.id.as_str(), filter)
+                    || fuzzy_match(info.agent_id.as_str(), filter)
                     || workspace_name(info).is_some_and(|name| fuzzy_match(&name, filter))
             })
             .collect()
     }
 
     /// The row the open sessions picker has selected.
-    pub(super) fn selected_session(&self) -> Option<&SessionInfo> {
+    pub(super) fn selected_session(&self) -> Option<&SessionSummary> {
         let Overlay::Sessions {
             rows,
             filter,
@@ -192,28 +219,14 @@ impl App {
         self.filtered_sessions(rows, filter).get(*selected).copied()
     }
 
-    /// The reasoning levels the current model supports, in Agent order.
-    pub fn reasoning_levels(&self) -> Vec<protocol::Reasoning> {
-        let id = self.model_id();
-        self.models
-            .iter()
-            .find(|model| Some(model.id.as_str()) == id)
-            .map(|model| model.supported_reasoning.clone())
-            .unwrap_or_default()
-    }
-
-    pub fn local_panel_allowed(&self, panel: &Panel) -> bool {
-        !self.remote.active()
-            || matches!(
-                panel,
-                Panel::Help | Panel::SessionInfo | Panel::Context | Panel::Diff | Panel::Sessions
-            )
-    }
-
     /// Opens a picker or view, seeding it from the current state.
     pub fn open_panel(&mut self, panel: Panel) {
-        if !self.local_panel_allowed(&panel) {
-            self.remote_flash();
+        if panel == Panel::AgentDelete {
+            if let Some(id) = self.current_agent_id().cloned() {
+                self.confirm_agent_delete(id);
+            } else {
+                self.notice(NoticeLevel::Info, "Select an Agent first");
+            }
             return;
         }
         if panel == Panel::Unconfirmed {
@@ -224,7 +237,7 @@ impl App {
             // `workspace.files` needs a loaded session.
             let hint = match panel {
                 Panel::Files => Some("@ file completion needs a session: send a message first"),
-                _ if panel.needs_session() => Some(NO_SESSION),
+                _ if panel.needs_session() => Some("No session is open"),
                 _ => None,
             };
             if let Some(hint) = hint {
@@ -235,13 +248,23 @@ impl App {
             }
         }
         self.overlay = match panel {
-            Panel::Unconfirmed => unreachable!("local input review opens before session panels"),
+            Panel::Unconfirmed | Panel::AgentDelete => {
+                unreachable!("confirmation panels open before session panels")
+            }
             Panel::Sessions => Overlay::Sessions {
                 filter: String::new(),
                 selected: 0,
                 rows: self.session_rows(),
                 armed: None,
                 renaming: None,
+            },
+            Panel::Agents => Overlay::Agents {
+                filter: String::new(),
+                selected: self
+                    .agents
+                    .iter()
+                    .position(|agent| Some(&agent.id) == self.current_agent_id())
+                    .unwrap_or(0),
             },
             Panel::Models => Overlay::Models {
                 filter: String::new(),
@@ -269,8 +292,8 @@ impl App {
                 Overlay::Context
             }
             Panel::SessionInfo => {
-                self.count_items();
-                Overlay::SessionInfo { items: None }
+                self.refresh_context();
+                Overlay::SessionInfo
             }
             Panel::Help => Overlay::Help { scroll: 0 },
             Panel::Diff => Overlay::Diff(self.open_diff()),
@@ -279,6 +302,31 @@ impl App {
                 matches: Vec::new(),
                 current: 0,
             },
+        };
+    }
+
+    pub(super) fn confirm_agent_delete(&mut self, agent_id: AgentId) {
+        let Some(agent) = self.agents.iter().find(|agent| agent.id == agent_id) else {
+            self.notice(NoticeLevel::Error, "Agent is no longer in the catalog");
+            return;
+        };
+        self.overlay = Overlay::AgentDelete {
+            agent_id,
+            name: agent.name.clone(),
+            sessions: agent
+                .sessions
+                .iter()
+                .map(|session| {
+                    (
+                        session.id.clone(),
+                        session
+                            .title
+                            .clone()
+                            .unwrap_or_else(|| short_session_id(session.id.as_str()).to_owned()),
+                    )
+                })
+                .collect(),
+            selected: 0,
         };
     }
 
@@ -298,8 +346,7 @@ impl App {
             return None;
         }
         let (name, rest) = text.strip_prefix('/')?.split_once(char::is_whitespace)?;
-        matches!(name, "model" | "new" | "reasoning" | "theme" | "remote")
-            .then_some((name, rest.trim()))
+        matches!(name, "model" | "reasoning" | "theme" | "approval").then_some((name, rest.trim()))
     }
 
     /// The command list's rows as `(name, description)`: the commands for the
@@ -335,23 +382,15 @@ impl App {
             "model" => self
                 .models
                 .iter()
-                .map(|model| (model.id.clone(), sheets::model_details(model)))
-                .collect(),
-            "new" => self
-                .profiles
-                .iter()
-                .map(|profile| {
-                    let approval = profile.approval.as_deref().unwrap_or_default();
-                    (profile.id.clone(), format!("{} {approval}", profile.model))
-                })
+                .map(|model| (model.model.to_string(), sheets::model_details(model)))
                 .collect(),
             "reasoning" => self
                 .reasoning_levels()
                 .iter()
-                .map(|level| (level.label().to_owned(), String::new()))
+                .map(|level| (sheets::reasoning_label(*level).to_owned(), String::new()))
                 .collect(),
             "theme" => plain(&["dark", "light"]),
-            "remote" => plain(&["on", "off", "status", "password"]),
+            "approval" => plain(&["ask", "auto", "read_only"]),
             _ => unreachable!(),
         };
         rows.retain(|(value, _)| fuzzy_match(value, filter));
@@ -359,61 +398,43 @@ impl App {
         rows
     }
 
-    /// Asks how many history items the session holds.
-    fn count_items(&self) {
-        let fields =
-            json!({"limit": protocol::PROBE_LIMIT, "max_bytes": protocol::PROBE_MAX_BYTES});
-        self.call(
-            protocol::METHOD_SESSION_READ,
-            fields,
-            |result: Result<protocol::ReadSessionResult, _>| {
-                SessionOp::ItemCount(result.map(|page| page.total))
-            },
-        );
-    }
-
     /// Copies the foreground session's id.
     pub(super) fn copy_session_id(&mut self) {
         if let Some(session) = self.resident.current() {
-            let id = session.info.session_id.clone();
+            let id = session.info.id.to_string();
             self.copy(id);
         }
     }
 
     /// Ctrl+N in the sessions picker: edits the selected session's title.
     pub(super) fn start_rename(&mut self) {
-        if self.remote.active() {
-            self.remote_flash();
-            return;
-        }
         let Some(info) = self.selected_session() else {
             return;
         };
         let title = info.title.clone().unwrap_or_default();
+        let target = session_target(info);
         if let Overlay::Sessions { renaming, .. } = &mut self.overlay {
-            *renaming = Some(title);
+            *renaming = Some((target, title));
         }
     }
 
     /// Keys while a title is being typed in the sessions picker.
-    pub(super) fn on_rename_key(&mut self, key: KeyEvent) {
+    pub(super) fn on_rename_key(&mut self, key: KeyEvent) -> Option<Action> {
         let Overlay::Sessions {
-            renaming: Some(title),
+            renaming: Some((target, title)),
             ..
         } = &mut self.overlay
         else {
-            return;
+            return None;
         };
         match key.code {
             KeyCode::Enter => {
                 let title = std::mem::take(title);
-                let id = self.selected_session().map(|info| info.session_id.clone());
+                let target = target.clone();
                 if let Overlay::Sessions { renaming, .. } = &mut self.overlay {
                     *renaming = None;
                 }
-                if let Some(id) = id {
-                    self.rename_session(id, title);
-                }
+                return Some(Action::RenameSession { target, title });
             }
             KeyCode::Backspace => {
                 title.pop();
@@ -428,39 +449,7 @@ impl App {
             }
             _ => {}
         }
-    }
-
-    pub(super) fn rename_session(&self, session_id: String, title: String) {
-        let client = self.client.clone();
-        let load = self.live(&session_id).map(|session| session.load.clone());
-        self.spawn_msg(async move {
-            Msg::Renamed(
-                session_id.clone(),
-                tasks::renamed_session(client, session_id, title, load).await,
-            )
-        });
-    }
-
-    /// A renamed session replaces its entry in the picker, the catalog and the footer.
-    pub(super) fn on_renamed(&mut self, result: Result<SessionInfo, RpcError>) {
-        let Some(info) = self.ok(result) else {
-            return;
-        };
-        if let Overlay::Sessions { rows, .. } = &mut self.overlay
-            && let Some(row) = rows
-                .iter_mut()
-                .find(|row| row.session_id == info.session_id)
-        {
-            *row = info.clone();
-        }
-        if let Some(session) = self
-            .resident
-            .iter_mut()
-            .find(|session| session.info.session_id == info.session_id)
-        {
-            session.info = info.clone();
-        }
-        self.merge_catalog_info(info);
+        None
     }
 
     /// The `@token` that ends at the cursor, without its `@`.
@@ -482,39 +471,38 @@ impl App {
         let current = self.model_id();
         self.models
             .iter()
-            .position(|model| Some(model.id.as_str()) == current)
+            .position(|model| Some(model.model.as_str()) == current)
             .unwrap_or(0)
     }
 
     /// The known sessions: the live ones first (on screen, then the most
     /// recently left), then the current workspace's, then newest first.
-    fn session_rows(&self) -> Vec<SessionInfo> {
+    fn session_rows(&self) -> Vec<SessionSummary> {
         let workspace = self.workspace.to_string_lossy();
-        let live = |info: &SessionInfo| match self.resident.current() {
-            Some(session) if session.info.session_id == info.session_id => 0,
+        let live = |info: &SessionSummary| match self.resident.current() {
+            Some(session)
+                if session.info.id == info.id && session.info.agent_id == info.agent_id =>
+            {
+                0
+            }
             _ => self
                 .resident
                 .others()
-                .position(|session| session.info.session_id == info.session_id)
+                .position(|session| {
+                    session.info.id == info.id && session.info.agent_id == info.agent_id
+                })
                 .map_or(usize::MAX, |at| at + 1),
         };
-        let rank = |info: &SessionInfo| (info.workspace == workspace, info.updated_at.clone());
+        let rank = |info: &SessionSummary| {
+            (
+                info.workspace
+                    .as_ref()
+                    .is_some_and(|value| value.path == workspace),
+                info.last_activity_at,
+            )
+        };
         let mut rows = self.sessions.clone();
         rows.sort_by_cached_key(|info| (live(info), std::cmp::Reverse(rank(info))));
         rows
     }
-
-    /// Asks for the workspace files the `@` picker offers.
-    fn list_files(&self) {
-        self.call(
-            protocol::METHOD_WORKSPACE_FILES,
-            files_params("", 500),
-            |result: Result<FilesPage, _>| SessionOp::Files(result.map(FilesPage::files)),
-        );
-    }
-}
-
-/// `workspace.files` over the whole workspace for paths matching `query`.
-pub fn files_params(query: &str, limit: usize) -> serde_json::Value {
-    json!({"recursive": true, "query": query, "limit": limit, "max_bytes": 262_144})
 }

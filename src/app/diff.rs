@@ -1,11 +1,13 @@
 //! The diff view: its state and the reads that fill it.
 
-use serde_json::json;
-
-use super::{App, Overlay, SessionOp, tasks};
-use crate::protocol::changes::{DiffLine, DiffPage, LineKind};
-use crate::protocol::{self, ChangeKind, ChangeList, ChangeRef, RpcError};
+use super::{App, Overlay, SessionOp};
 use crate::wrap::sanitize;
+use minicore_host_protocol::{CallError, CallOptions, SessionIdentity};
+use minicore_host_transport::SessionClient;
+use minicore_host_workspace::{
+    ChangeKind, ChangeRecord, ChangeRef, ChangeScope, ChangesListRequest, DiffComparison, DiffLine,
+    DiffLineKind as LineKind, DiffRequest, DiffResult,
+};
 
 /// Which path's hunks a read is for.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -40,25 +42,25 @@ impl DiffRow {
     }
 }
 
-/// `changes.list` of the workspace's live Git changes, as the diff view reads them.
-pub fn workspace_changes() -> serde_json::Value {
-    json!({"scope": "workspace", "limit": 200, "max_bytes": 262_144})
-}
-
 /// Added and removed lines of one path's records.
-pub fn measure(pages: &[DiffPage]) -> (usize, usize) {
-    // Records are counted one by one: line indexes only identify a line within a record.
+pub fn measure(pages: &[DiffResult]) -> (usize, usize) {
     pages
         .iter()
-        .map(|page| protocol::changes::count_lines(std::slice::from_ref(page)))
-        .fold((0, 0), |sum, count| (sum.0 + count.0, sum.1 + count.1))
+        .flat_map(|page| &page.hunks)
+        .flat_map(|hunk| &hunk.lines)
+        .filter(|line| line.line_byte_offset == 0)
+        .fold((0, 0), |(added, removed), line| match line.kind {
+            LineKind::Added => (added + 1, removed),
+            LineKind::Removed => (added, removed + 1),
+            LineKind::Context => (added, removed),
+        })
 }
 
 pub fn sign(kind: LineKind) -> &'static str {
     match kind {
         LineKind::Added => "+",
         LineKind::Removed => "-",
-        LineKind::Context | LineKind::Unknown => " ",
+        LineKind::Context => " ",
     }
 }
 
@@ -77,7 +79,7 @@ pub fn text(diff: &DiffState) -> String {
 }
 
 /// Rows for every change record of one file, told apart by a separator naming the tool.
-pub fn rows(pages: &[DiffPage], tools: &[Option<String>]) -> Vec<DiffRow> {
+pub fn rows(pages: &[DiffResult], tools: &[Option<String>]) -> Vec<DiffRow> {
     if pages.len() <= 1 {
         return match pages.first() {
             Some(page) => hunk_rows(page),
@@ -101,17 +103,12 @@ pub fn rows(pages: &[DiffPage], tools: &[Option<String>]) -> Vec<DiffRow> {
 }
 
 /// Turns one `changes.diff` page into rows.
-pub(crate) fn hunk_rows(page: &DiffPage) -> Vec<DiffRow> {
+pub(crate) fn hunk_rows(page: &DiffResult) -> Vec<DiffRow> {
     if page.binary {
         return vec![DiffRow::Note("Binary file: the diff is not shown.".into())];
     }
     if page.hunks.is_empty() {
-        let note = match page.availability.as_deref() {
-            Some("unavailable") => "The original content is unavailable for this change.",
-            Some("partial") => "Only part of this diff is available.",
-            _ => "No differences.",
-        };
-        return vec![DiffRow::Note(note.into())];
+        return vec![DiffRow::Note("No differences.".into())];
     }
     let digits = page
         .hunks
@@ -130,10 +127,7 @@ pub(crate) fn hunk_rows(page: &DiffPage) -> Vec<DiffRow> {
     for hunk in &page.hunks {
         rows.push(DiffRow::Hunk(format!(
             "@@ -{},{} +{},{} @@",
-            unified_start(hunk.old_start, hunk.old_count),
-            hunk.old_count,
-            unified_start(hunk.new_start, hunk.new_count),
-            hunk.new_count
+            hunk.old_start, hunk.old_count, hunk.new_start, hunk.new_count
         )));
         // A long line arrives as several fragments; only the last one is
         // `line_complete`. They are joined back into one row.
@@ -162,14 +156,8 @@ pub(crate) fn hunk_rows(page: &DiffPage) -> Vec<DiffRow> {
     rows
 }
 
-/// A hunk start as unified diff prints it: the first line's 1-based number, or
-/// the line before an empty range.
-fn unified_start(start: u64, count: u64) -> u64 {
-    if count > 0 { start + 1 } else { start }
-}
-
 fn diff_row(line: &DiffLine, text: &str, digits: usize) -> DiffRow {
-    let number = |index: Option<u64>| index.map_or(String::new(), |index| (index + 1).to_string());
+    let number = |index: Option<usize>| index.map_or(String::new(), |index| index.to_string());
     // Diff text carries the original line terminator; the row already ends.
     DiffRow::Line {
         kind: line.kind,
@@ -192,7 +180,7 @@ pub struct DiffFile {
     pub lines: Option<(usize, usize)>,
     /// The read failed, so the row is not left looking unmeasured.
     pub failed: bool,
-    /// Agent-issued change references for this path.
+    /// Host-issued change references for this path.
     pub change_refs: Vec<ChangeRef>,
 }
 
@@ -241,13 +229,19 @@ impl DiffState {
 }
 
 impl App {
-    /// Opens the workspace's live Git changes through the Agent.
     pub(super) fn open_diff(&self) -> DiffState {
-        self.call(
-            protocol::METHOD_CHANGES_LIST,
-            workspace_changes(),
-            SessionOp::ChangeFiles,
-        );
+        let Some(session) = self.resident.current() else {
+            return DiffState {
+                status: "No Session selected.".into(),
+                ..Default::default()
+            };
+        };
+        let epoch = session.epoch;
+        let client = session.client.clone();
+        let source = session_source(session);
+        self.spawn_for(epoch, async move {
+            SessionOp::ChangeFiles(read_changes(&client, &source).await)
+        });
         DiffState {
             status: "Loading working-tree changes…".into(),
             ..Default::default()
@@ -255,14 +249,14 @@ impl App {
     }
 
     /// Fills the file column, then reads every path once for its counts.
-    pub(super) fn on_change_files(&mut self, result: Result<ChangeList, RpcError>) {
+    pub(super) fn on_change_files(&mut self, result: Result<Vec<ChangeRecord>, CallError>) {
         let Overlay::Diff(diff) = &mut self.overlay else {
             return;
         };
         let list = match result {
             Ok(list) => list,
             Err(error) => {
-                diff.status = error.message;
+                diff.status = error.to_string();
                 return;
             }
         };
@@ -270,7 +264,7 @@ impl App {
         // the same set.
         let previous = std::mem::take(&mut diff.files);
         let mut files: Vec<DiffFile> = Vec::new();
-        for record in &list.records {
+        for record in &list {
             match files.iter_mut().find(|file| file.path == record.path) {
                 Some(file) => file.change_refs.push(record.change_ref.clone()),
                 None => {
@@ -292,22 +286,7 @@ impl App {
         }
         diff.set_files(files);
         if diff.files.is_empty() {
-            diff.status = if list
-                .warnings
-                .iter()
-                .any(|warning| warning == "no_repository")
-            {
-                "Git working tree unavailable."
-            } else if list
-                .warnings
-                .iter()
-                .any(|warning| warning == "status_incomplete")
-            {
-                "Git status is incomplete."
-            } else {
-                "No changes in the working tree"
-            }
-            .into();
+            diff.status = "No changes in the working tree".into();
             return;
         }
         diff.status.clear();
@@ -331,7 +310,7 @@ impl App {
     }
 
     /// Starts the next unmeasured file's read; one at a time keeps within the
-    /// Agent's query allowance.
+    /// Host workspace reads.
     fn measure_next_diff_row(&mut self) {
         let Overlay::Diff(diff) = &mut self.overlay else {
             return;
@@ -369,18 +348,18 @@ impl App {
         let Some(session) = self.resident.current() else {
             return;
         };
-        let client = self.client.clone();
-        let session_id = session.info.session_id.clone();
-        self.spawn(async move {
-            let pages = tasks::read_diffs(client, session_id, refs).await;
-            SessionOp::DiffFile(query, pages)
+        let epoch = session.epoch;
+        let client = session.client.clone();
+        let source = session_source(session);
+        self.spawn_for(epoch, async move {
+            SessionOp::DiffFile(query, read_diffs(&client, &source, refs).await)
         });
     }
 
     pub(super) fn on_diff_file(
         &mut self,
         query: DiffQuery,
-        result: Result<Vec<DiffPage>, RpcError>,
+        result: Result<Vec<DiffResult>, CallError>,
     ) {
         let Overlay::Diff(diff) = &mut self.overlay else {
             return;
@@ -401,9 +380,17 @@ impl App {
                     let tools: Vec<Option<String>> = pages
                         .iter()
                         .map(|page| {
-                            let key = page.tool_ref.as_ref()?;
-                            let call = self.resident.current()?.transcript.find_tool(key)?;
-                            Some(call.name.clone())
+                            let ChangeRef::Tool { tool_call, .. } = &page.change_ref else {
+                                return None;
+                            };
+                            Some(
+                                self.resident
+                                    .current()?
+                                    .transcript
+                                    .find_tool(tool_call)?
+                                    .name
+                                    .clone(),
+                            )
                         })
                         .collect();
                     diff.rows = rows(&pages, &tools);
@@ -414,6 +401,11 @@ impl App {
                         .all(|page| page.hunks.is_empty() && !page.binary);
                     diff.status = if unchanged {
                         "No line changes (content unchanged).".into()
+                    } else if pages
+                        .iter()
+                        .any(|page| page.stale || page.versions_refreshed)
+                    {
+                        "Workspace changed after the file list; this diff shows the latest available versions.".into()
                     } else {
                         String::new()
                     };
@@ -425,12 +417,138 @@ impl App {
                 }
                 if shown {
                     diff.rows.clear();
-                    diff.status = error.message;
+                    diff.status = error.to_string();
                 }
             }
         }
         self.measure_next_diff_row();
     }
+}
+
+fn session_source(session: &super::Session) -> SessionIdentity {
+    SessionIdentity {
+        host_id: session.state.host_id.clone(),
+        host_incarnation: session.state.host_incarnation.clone(),
+        agent_id: session.info.agent_id.clone(),
+        session_id: session.info.id.clone(),
+    }
+}
+
+pub async fn read_changes(
+    client: &SessionClient,
+    source: &SessionIdentity,
+) -> Result<Vec<ChangeRecord>, CallError> {
+    let mut records = Vec::new();
+    let mut cursor = None;
+    loop {
+        let page = client
+            .changes_list(
+                ChangesListRequest {
+                    scope: ChangeScope::Workspace,
+                    cursor: cursor.clone(),
+                    limit: 200,
+                },
+                CallOptions::default(),
+            )
+            .await?;
+        if &page.source != source {
+            return Err(CallError::Protocol {
+                message: "workspace changes belong to another Session or Host incarnation".into(),
+            });
+        }
+        let page = page.data;
+        if page.next_cursor.is_some() && page.next_cursor == cursor {
+            return Err(CallError::Protocol {
+                message: "workspace changes cursor did not advance".into(),
+            });
+        }
+        records.extend(page.records);
+        cursor = page.next_cursor;
+        if cursor.is_none() {
+            return Ok(records);
+        }
+    }
+}
+
+pub async fn read_diffs(
+    client: &SessionClient,
+    source: &SessionIdentity,
+    references: Vec<ChangeRef>,
+) -> Result<Vec<DiffResult>, CallError> {
+    let mut diffs = Vec::new();
+    for change_ref in references {
+        let comparison = match change_ref {
+            ChangeRef::Tool { .. } => DiffComparison::ToolBeforeAfter,
+            ChangeRef::Workspace { .. } => DiffComparison::HeadToWorktree,
+        };
+        let mut cursor = None;
+        let mut complete: Option<DiffResult> = None;
+        loop {
+            let page = client
+                .changes_diff(
+                    DiffRequest {
+                        change_ref: change_ref.clone(),
+                        comparison,
+                        context_lines: 3,
+                        max_bytes: 64 * 1024,
+                        cursor: cursor.clone(),
+                    },
+                    CallOptions::default(),
+                )
+                .await?;
+            if &page.source != source
+                || page.data.change_ref != change_ref
+                || page.data.comparison != comparison
+            {
+                return Err(CallError::Protocol {
+                    message: "workspace diff belongs to another source or comparison".into(),
+                });
+            }
+            let page = page.data;
+            if page.next_cursor.is_some() && page.next_cursor == cursor {
+                return Err(CallError::Protocol {
+                    message: "workspace diff cursor did not advance".into(),
+                });
+            }
+            cursor = page.next_cursor.clone();
+            match &mut complete {
+                None => complete = Some(page),
+                Some(held) => merge_diff_page(held, page),
+            }
+            if cursor.is_none() {
+                break;
+            }
+        }
+        diffs.push(complete.expect("one diff page was read"));
+    }
+    Ok(diffs)
+}
+
+fn merge_diff_page(held: &mut DiffResult, page: DiffResult) {
+    for hunk in page.hunks {
+        if let Some(previous) = held.hunks.last_mut()
+            && (
+                previous.old_start,
+                previous.old_count,
+                previous.new_start,
+                previous.new_count,
+            ) == (
+                hunk.old_start,
+                hunk.old_count,
+                hunk.new_start,
+                hunk.new_count,
+            )
+        {
+            previous.lines.extend(hunk.lines);
+        } else {
+            held.hunks.push(hunk);
+        }
+    }
+    held.complete = page.complete;
+    held.truncated = page.truncated;
+    held.next_cursor = page.next_cursor;
+    held.stale |= page.stale;
+    held.versions_refreshed |= page.versions_refreshed;
 }
 
 #[cfg(test)]
@@ -474,5 +592,66 @@ mod tests {
         assert_eq!(diff.scroll, 6, "the last page stays full");
         diff.scroll_by(-99, 4);
         assert_eq!(diff.scroll, 0);
+    }
+
+    fn fragmented_diff(text: &str, offset: usize, complete: bool) -> DiffResult {
+        use minicore_host_protocol::{ToolCallId, ToolCallRef};
+        use minicore_host_workspace::{ChangeOrigin, DiffCursor, DiffHunk};
+        DiffResult {
+            change_ref: ChangeRef::Tool {
+                session_id: "00000000000000000001".parse().unwrap(),
+                index: 0,
+                tool_call: ToolCallRef {
+                    turn_id: "00000000000000000002".parse().unwrap(),
+                    tool_call_id: ToolCallId("call".into()),
+                },
+            },
+            comparison: DiffComparison::ToolBeforeAfter,
+            origin: ChangeOrigin::Tool,
+            hunks: vec![DiffHunk {
+                old_start: 0,
+                old_count: 0,
+                new_start: 1,
+                new_count: 1,
+                lines: vec![DiffLine {
+                    kind: LineKind::Added,
+                    old_index: None,
+                    new_index: Some(1),
+                    line_byte_offset: offset,
+                    text: text.into(),
+                    line_complete: complete,
+                }],
+            }],
+            binary: false,
+            stale: false,
+            versions_refreshed: false,
+            next_cursor: (!complete).then_some(DiffCursor {
+                fingerprint: "fixture".into(),
+                hunk_index: 0,
+                line_index: 0,
+                line_byte_offset: 3,
+            }),
+            complete,
+            truncated: !complete,
+        }
+    }
+
+    #[test]
+    fn native_unicode_fragments_join_once_and_keep_one_based_line_numbers() {
+        let mut first = fragmented_diff("你", 0, false);
+        merge_diff_page(&mut first, fragmented_diff("好\n", 3, true));
+        assert_eq!(measure(std::slice::from_ref(&first)), (1, 0));
+        assert!(first.complete && !first.truncated);
+        let rendered = hunk_rows(&first);
+        assert_eq!(rendered[0], DiffRow::Hunk("@@ -0,0 +1,1 @@".into()));
+        assert_eq!(
+            rendered[1],
+            DiffRow::Line {
+                kind: LineKind::Added,
+                gutter: "  1 ".into(),
+                text: "你好".into()
+            }
+        );
+        assert_eq!(rendered.len(), 2);
     }
 }

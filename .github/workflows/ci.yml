@@ -7,7 +7,7 @@ on:
 
 jobs:
   quality:
-    name: quality (fmt, clippy, docs, deps, web)
+    name: quality (fmt, clippy, docs, deps)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -15,11 +15,6 @@ jobs:
         with:
           toolchain: stable
           components: rustfmt, clippy
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      - name: Phone protocol tests
-        run: node --test tests/remote_web.mjs
       - name: Fetch locked dependencies
         run: cargo fetch --locked
       - name: Check formatting
@@ -86,17 +81,17 @@ jobs:
         env:
           EXE: ${{ runner.os == 'Windows' && '.exe' || '' }}
         run: |
-          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
+          version=$(cargo metadata --locked --no-deps --format-version 1 | jq -r '.packages[0].version')
           name="minicore-tui-$version-${{ matrix.target }}"
           # The executable sits in bin/; the TUI directory is chosen with --home or MINICORE_HOME.
           mkdir -p "$name/bin" "$name/docs"
           cp "target/${{ matrix.target }}/release/minicore-tui$EXE" "$name/bin/"
           cp README.md CHANGELOG.md "$name/"
           cp docs/configuration.md "$name/docs/"
-          # The built-in Agent and its Runtime, as Cargo.lock pins them.
+          # The embedded Host workspace revision, as Cargo.lock pins it.
           {
             echo "minicore-tui $version $GITHUB_SHA"
-            sed -En 's@^source = "git\+.*/(minicore-[a-z]+)[?](tag|rev)=([^#]+)#([0-9a-f]+)"$@\1 \3 \4@p' Cargo.lock
+            sed -En 's@^source = "git\+.*/(minicore-[a-z]+)[?](tag|rev)=([^#]+)#([0-9a-f]+)"$@\1 \3 \4@p' Cargo.lock | sort -u
           } > "$name/BUILD.txt"
           # A tarball keeps the executable bits, which artifact zips drop.
           if [ -z "$EXE" ]; then

@@ -1,125 +1,134 @@
-//! The starter files written when the TUI directory has no settings yet.
+//! First-run templates use the Host's native JSON configuration types.
 
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
+use minicore_host_core::{HostConfig, LogOutput, LogSettings, OpenAiModelApi, OpenAiModelSettings};
+use minicore_host_protocol::{AgentConfig, Role, SessionDefaults, ToolBinding};
+
 use super::Home;
 
 const CONFIG: &str = "\
-# minicore-tui system settings. Providers and models are in models.toml.
-# Every path here is relative to this directory unless it is absolute.
+# Terminal preferences. Execution settings use native Host JSON files.
+# host-config.json initializes a new Host; saved Host configuration wins later.
+# agent-defaults.json supplies Role and defaults only when creating an Agent.
 
-# The profile a new session uses; --profile picks another.
-default_profile = \"coding\"
-
-[profiles.coding]
-model = \"main\"          # a model id from models.toml
-reasoning = \"medium\"    # must be in that model's `reasoning` list
-approval = \"ask\"        # ask | auto | read_only
-# tools = [\"read\", \"write\", \"edit\", \"apply_patch\", \"bash\"]   # the default
-# prompt = \"prompt/other.md\"    # default: prompt/SYSTEM_PROMPT.md
-
-# [ui]
-# theme = \"dark\"                  # dark | light
-# bell = true
-# editor = [\"code\", \"--wait\"]     # default: $VISUAL, then $EDITOR
-
-# [agent]
-# binary = \"bin/minicore-agent\"   # an external Agent; default: the built-in one
-
-# [compaction]                    # Agent defaults shown
-# enabled = true
-# trigger_percent = 95
-# target_percent = 50
-
-# [loop]                          # seconds unless the name says otherwise
-# model_timeout_seconds = 600
-# tool_timeout_seconds = 1800
-# model_retry_attempts = 2
+[ui]
+theme = \"dark\"                  # dark | light
+bell = true
+# editor = [\"code\", \"--wait\"]  # default: $VISUAL, then $EDITOR
 ";
 
-/// The example is active text; the file carries it commented out.
-pub(super) const MODELS_EXAMPLE: &str = "\
-[providers.openai]
-api = \"open_ai_responses\"            # the only API the Agent speaks
-base_url = \"https://api.openai.com/v1\"
-api_key_env = \"OPENAI_API_KEY\"       # the NAME of the variable, never the key
-
-[models.main]                        # the id profiles refer to
-provider = \"openai\"
-model = \"your-model-id\"              # the name sent to the API; default: the id
-context_window = 200000
-max_output_tokens = 24000
-reasoning = [\"auto\", \"low\", \"medium\", \"high\"]";
-
-const MODELS_HEADER: &str = "\
-# Providers and models. Secrets never go here: api_key_env names an
-# environment variable. Uncomment the example and fill in the model id,
-# base_url and api_key_env, then start minicore-tui again.
-# Optional per model: safety_margin_tokens, tools, request_timeout_seconds.
-
-";
-
-const SYSTEM_PROMPT: &str = "\
-You are a coding agent working in the user's workspace.
-
-Inspect the code before changing it. Use the tools when they help, make focused
-changes, run the relevant checks, and explain the result briefly.
-";
-
-/// Writes whichever starter files are missing and returns the ones it created.
 pub(super) fn write(home: &Home) -> io::Result<Vec<PathBuf>> {
-    let models = format!("{MODELS_HEADER}{}\n", commented(MODELS_EXAMPLE));
-    let files = [
-        (home.config_file(), CONFIG),
-        (home.models_file(), models.as_str()),
-        (home.system_prompt_file(), SYSTEM_PROMPT),
-    ];
+    let tools = ["read", "write", "edit", "apply_patch", "bash", "agent"]
+        .map(|name| ToolBinding { name: name.into() })
+        .to_vec();
+    let model: minicore_host_protocol::ModelRef =
+        "provider/chat".parse().expect("literal model reference");
+    let log_path = home.dir().join("minicore-tui.log");
+    let log_path = log_path
+        .to_str()
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "TUI home must be representable as UTF-8 for the native logging path",
+            )
+        })?
+        .to_owned();
+    let host = HostConfig {
+        name: "MiniCore TUI".into(),
+        models: vec![OpenAiModelSettings {
+            model: model.clone(),
+            api: OpenAiModelApi::ChatCompletions,
+            endpoint: "https://provider.example.invalid/v1/chat/completions".into(),
+            provider_model: "replace-with-provider-model".into(),
+            api_key_env: "MINICORE_MODEL_KEY".into(),
+            context_window: 128_000,
+            supported_reasoning: vec![Default::default()],
+            supports_tools: true,
+            request_timeout_ms: Some(120_000),
+        }],
+        tools: tools.clone(),
+        logging: LogSettings {
+            output: LogOutput::File { path: log_path },
+            ..LogSettings::default()
+        },
+        ..HostConfig::default()
+    };
+    let agent = AgentConfig {
+        role: Role {
+            name: "Coding assistant".into(),
+            description: "Works in the selected workspace".into(),
+            instructions: "Inspect the code before changing it. Make focused changes, run relevant checks, and explain the result clearly.".into(),
+        },
+        session_defaults: SessionDefaults {
+            model,
+            tools,
+            ..SessionDefaults::default()
+        },
+    };
+    let host = json(&host)?;
+    let agent = json(&agent)?;
     let mut created = Vec::new();
-    for (path, text) in files {
+    for (path, text) in [
+        (home.config_file(), CONFIG),
+        (home.host_config_file(), host.as_str()),
+        (home.agent_defaults_file(), agent.as_str()),
+    ] {
         if create_new(&path, text)? {
             created.push(path);
         }
     }
+    std::fs::create_dir_all(home.commands_dir())?;
     Ok(created)
 }
 
-fn commented(text: &str) -> String {
-    text.lines()
-        .map(|line| match line.is_empty() {
-            true => "#".to_owned(),
-            false => format!("# {line}"),
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+fn json(value: &impl serde::Serialize) -> io::Result<String> {
+    serde_json::to_string_pretty(value)
+        .map(|text| format!("{text}\n"))
+        .map_err(io::Error::other)
 }
 
 fn create_new(path: &Path, text: &str) -> io::Result<bool> {
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
     }
-    match std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
     {
-        Ok(mut file) => file.write_all(text.as_bytes()).map(|()| true),
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    match options.open(path) {
+        Ok(mut file) => {
+            file.write_all(text.as_bytes())?;
+            Ok(true)
+        }
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Ok(false),
         Err(error) => Err(error),
     }
 }
 
-/// What the first run tells the user before it exits.
 pub(super) fn first_run_message(home: &Home, created: &[PathBuf]) -> String {
-    let files: String = created
+    let files = created
         .iter()
-        .map(|path| format!("  {}\n", path.display()))
-        .collect();
+        .map(|path| format!("  {}", path.display()))
+        .collect::<Vec<_>>()
+        .join("\n");
     format!(
-        "minicore-tui: first run, wrote starter files in {}\n{files}\n\
-         Next: edit models.toml (uncomment the example; set the model id, base_url and\n\
-         api_key_env), export the variable api_key_env names, then run minicore-tui again.\n\
-         Profiles are in config.toml, the system prompt in prompt/SYSTEM_PROMPT.md.\n",
-        home.dir().display()
+        "Created initial configuration:\n{files}\n\n\
+Edit {} with your provider's full endpoint, model and declared capabilities.\n\
+Set api to chat_completions or responses; the Host never guesses or falls back.\n\
+api_key_env names an environment variable: export the key there, never in JSON.\n\
+Edit {} for the initial Agent's Role and Session defaults.\n\
+A new Session inherits its Agent defaults; explicit Session settings override them.\n\
+Run minicore-tui again when ready. Host data is stored in {}.\n\
+Saved Host/Agent/Session configuration takes precedence on later launches.\n\
+Use an explicit Host reload to publish configuration changes; files are not watched.\n\
+The old minicore-agent session store is not imported or modified.",
+        home.host_config_file().display(),
+        home.agent_defaults_file().display(),
+        home.data_root().display()
     )
 }

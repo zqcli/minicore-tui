@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+## 0.10.0 — 2026-11-13
+
+- Embed Host 0.11.0 at immutable revision 32f074c57868533af81b0c6491440bae24b872c8
+  and use its typed in-process Rust client. Remove the old Agent subcommand,
+  child process, stdio RPC client and frontend protocol DTOs.
+- Remove Webpage/phone operation, listeners, authentication, TLS/pairing state,
+  browser assets and remote settings from the TUI.
+- Split terminal preferences, native Host configuration and new-Agent defaults.
+  Preserve saved native configuration; old Agent stores are not migrated.
+- Add Agent selection/creation/start/stop/deletion and default management, native
+  Session lifecycle/residency/scheduling actions, and revision-checked settings.
+- Bind sends, cancellation, interaction answers and asynchronous results to their
+  original native identities. Retain uncertain acceptance for explicit F8 review.
+- Use native observation, fixed byte-range output recovery, canonical history
+  positions, fixed pagination windows and complete streaming Markdown export.
+- Display complete tool arguments, native progress/delegations, actual retry and
+  persistence state, native context facts and paged workspace diffs.
+- Preserve the terminal editor, Markdown, selection, scrolling, folding, cached
+  rendering and platform-specific input handling. Event delivery is bounded and
+  idle views do not tick.
+- Restore the terminal before supervising real graceful Host shutdown. Keep
+  blocked cleanup visible; force shutdown requires explicit user action.
+- Replace old RPC harnesses with real in-process Host regression tests and local
+  Chat Completions/Responses provider integration, including persistence/reopen.
+  Update Linux/macOS/Windows checks and all four package manifests.
+
 ## 0.9.9 — 2026-11-02
 
 - Bundle Agent 0.9.5, preserving one execution owner while a turn finishes and

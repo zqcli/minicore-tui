@@ -1,3 +1,5 @@
+> Historical design for the pre-0.10 Agent frontend. For the current native Host architecture, see [design-host.md](design-host.md) and [architecture.md](architecture.md).
+
 # minicore-tui v0.4 — Rewrite Design
 
 > **Design record.** This is the plan the v0.4 rewrite started from. The

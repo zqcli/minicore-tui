@@ -1,5 +1,5 @@
-//! Rendering from `&App`: the transcript, the remote status screen or a
-//! full-screen view, then the dock below it, where a bottom sheet takes the
+//! Rendering from `&App`: the transcript or a full-screen view, then the
+//! dock below it, where a bottom sheet takes the
 //! editor's place. Only the transcript's layout cache and the rows recorded
 //! for copy are written.
 
@@ -27,7 +27,6 @@ use ratatui::widgets::Widget;
 use unicode_width::UnicodeWidthChar;
 
 use crate::app::{App, Overlay};
-use crate::wrap;
 
 use self::theme::Styles;
 
@@ -74,11 +73,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Option<Position> {
         ..area
     };
     if !views::draw(frame, main, app, styles) {
-        if app.remote.active() {
-            views::remote::draw(frame, main, app, styles);
-        } else {
-            transcript::draw(frame, main, app, styles);
-        }
+        transcript::draw(frame, main, app, styles);
     }
     let skip = dock.above.len() - usize::from(above);
     draw_rows(frame, gutter(above_area), &dock.above[skip..]);
@@ -218,16 +213,6 @@ fn draw_fatal(frame: &mut Frame, area: Rect, fatal: &crate::app::Fatal) {
         Line::raw(""),
         Line::styled(fatal.reason.clone(), styles.text()),
     ];
-    if !fatal.stderr_tail.is_empty() {
-        lines.push(Line::raw(""));
-        lines.push(Line::styled("agent stderr (tail)", styles.dim()));
-        for line in fatal.stderr_tail.iter().rev().take(20).rev() {
-            lines.push(Line::styled(
-                wrap::sanitize(line).into_owned(),
-                styles.faint(),
-            ));
-        }
-    }
     lines.push(Line::raw(""));
     lines.push(Line::styled(
         "Press q to quit · F8 review local input confirmations",

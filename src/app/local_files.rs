@@ -12,7 +12,6 @@ use crate::{config::ThemeKind, prompt_history};
 struct Pending {
     history: Option<(PathBuf, Vec<prompt_history::Record>)>,
     theme: Option<(PathBuf, ThemeKind)>,
-    reload: Option<(Option<crate::config::Home>, bool)>,
     closing: bool,
 }
 
@@ -34,11 +33,6 @@ impl LocalFiles {
         self.wake(tx);
     }
 
-    pub fn reload(&mut self, tx: &Tx, home: Option<crate::config::Home>, composed: bool) {
-        self.pending.lock().unwrap().reload = Some((home, composed));
-        self.wake(tx);
-    }
-
     fn wake(&mut self, tx: &Tx) {
         if self.task.is_none() {
             let (pending, notify, tx) = (self.pending.clone(), self.notify.clone(), tx.clone());
@@ -52,34 +46,21 @@ impl LocalFiles {
                             // Recall history remains best effort, as on the synchronous path.
                             let _ = prompt_history::save(&path, &records);
                         }
-                        let theme = work.theme.map_or(Ok(()), |(path, theme)| {
+                        work.theme.map_or(Ok(()), |(path, theme)| {
                             crate::config::save_theme(&path, theme)
-                        });
-                        let reload = work.reload.map(|(home, composed)| {
-                            let templates = super::templates::load(home.as_ref());
-                            let result =
-                                home.as_ref().filter(|_| composed).map_or(Ok(()), |home| {
-                                    crate::config::load(home)
-                                        .and_then(|loaded| loaded.write(home))
-                                        .map(drop)
-                                        .map_err(|error| error.to_string())
-                                });
-                            (templates, result)
-                        });
-                        (theme, reload)
+                        })
                     })
                     .await;
                     match result {
-                        Ok((theme, reload)) => {
+                        Ok(theme) => {
                             if let Err(message) = theme {
-                                let _ = tx.send(Msg::Notice(NoticeLevel::Error, message));
-                            }
-                            if let Some((templates, result)) = reload {
-                                let _ = tx.send(Msg::Configured(templates, result));
+                                let _ = tx.send(Msg::Notice(NoticeLevel::Error, message)).await;
                             }
                         }
                         Err(error) => {
-                            let _ = tx.send(Msg::Notice(NoticeLevel::Error, error.to_string()));
+                            let _ = tx
+                                .send(Msg::Notice(NoticeLevel::Error, error.to_string()))
+                                .await;
                         }
                     }
                     if closing {
@@ -117,7 +98,7 @@ mod tests {
     async fn finishing_flushes_the_latest_accepted_history() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("history.jsonl");
-        let (tx, _) = tokio::sync::mpsc::unbounded_channel();
+        let (tx, _) = tokio::sync::mpsc::channel(super::super::MESSAGE_CAPACITY);
         let mut files = LocalFiles::default();
         for text in ["first", "latest"] {
             files.history(

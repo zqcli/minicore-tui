@@ -1,313 +1,160 @@
 # minicore-tui
 
-`minicore-tui` is a fullscreen terminal frontend for [`minicore-agent`]: a
-scrolling transcript, a status line, a composer and a footer. The Agent is built
-into the same executable: the TUI starts itself as `minicore-tui agent` in a
-child process and talks to it with stdio NDJSON JSON-RPC (Protocol v4), so one
-file is the whole program. See [CHANGELOG.md](CHANGELOG.md) for release history.
+`minicore-tui` is a fullscreen terminal frontend for
+[minicore-host](https://github.com/zqcli/minicore-host). Version 0.10.0 embeds
+Host 0.11.0 in the same executable and uses its typed Rust client through
+`HostClient::in_process`. Host owns Agents, Sessions, execution, tools,
+credentials, history and persistence; the TUI owns terminal interaction and
+presentation.
 
-## Requirements
+The backend is pinned to immutable commit
+[`32f074c57868533af81b0c6491440bae24b872c8`](https://github.com/zqcli/minicore-host/commit/32f074c57868533af81b0c6491440bae24b872c8).
+`Cargo.lock` fixes the complete dependency graph. There is no Agent child
+process, stdio RPC adapter, Webpage server, browser client or phone protocol.
+This executable runs a local embedded Host; connecting to a separately deployed
+Host is outside this version's interface.
 
-- current stable Rust (edition 2024) to build; no older toolchain is tested;
-- a terminal with an alternate screen, raw mode and bracketed paste. Mouse
-  reporting is used for the wheel, clicks and selection. `Shift+Enter` and
-  `Ctrl+Enter` need a terminal with the kitty keyboard protocol; `Ctrl+J` always
-  inserts a newline. `Alt+Enter` needs the terminal to pass Alt (on macOS, Option
-  as Meta or Esc+); see [docs/keybindings.md](docs/keybindings.md).
+## Build and first run
 
-Built-in backend: Agent 0.9.5 (development), which links Runtime 0.9.0;
-`Cargo.toml` pins the matching RPC v4 Agent by an immutable Git revision and
-`Cargo.lock` fixes both. An external Agent can still be named with `--agent`.
-At startup the TUI requires Protocol v4 and these Agent capabilities, and refuses
-an Agent that lacks one: `session.read`, `session.read.display`, `session.context`,
-`turn.result`, `tool.read`, `tool.read.display`, `tool.output`,
-`workspace.files`, `workspace.status`, `changes.list`, `changes.diff`.
-The phone WebSocket protocol remains v3.
-
-## Build and run
+Use current stable Rust and a terminal supporting an alternate screen, raw
+mode and bracketed paste. Mouse reporting enables selection and scrolling.
+`Ctrl+J` always inserts a newline; modified Enter keys depend on terminal support.
 
 ```bash
 cargo build --locked --release
-export MINICORE_HOME=~/minicore                  # the TUI directory
-target/release/minicore-tui --workspace ./project   # first run writes starter files
+target/release/minicore-tui --home ./minicore-home --workspace ./project
 ```
 
-Everything lives in one *TUI directory*: `--home`, else `$MINICORE_HOME`, else
-the directory of the executable.
-Providers and models are in `models.toml`, profiles and preferences in
-`config.toml`, the system prompt in `prompt/SYSTEM_PROMPT.md`, and every session
-in `session/`. On the first run the TUI writes commented starters, says what to
-fill in and exits; after that it validates both files, writes the Agent config
-to `session/agent.toml` and starts the built-in Agent with it
-(`minicore-tui agent --config session/agent.toml --stdio`) before the screen
-switches, so a bad configuration is an ordinary terminal error
-naming the file, line and key. The TUI then opens the session `--session` or
-`--continue` names. Otherwise it starts on an empty conversation with the editor
-and the footer, and creates the session only when you send the first message, so
-quitting first leaves no empty session behind. `--profile`, `--model`,
-`--reasoning`, `/model`, `/reasoning` and `/new <profile>` set what that session
-starts with. A draft typed meanwhile is kept. Full reference: [docs/configuration.md](docs/configuration.md).
+A fresh home gets starter configuration files and setup instructions, then
+exits. Edit the generated native Host model configuration with the provider's
+full endpoint, explicit `chat_completions` or `responses` API, model name and
+capabilities. Export the credential using the environment-variable name in
+`api_key_env`, then run the same command again. No live provider or credential
+is needed to run the automated tests.
 
-Prebuilt packages: every CI run uploads one per platform (Linux x86_64, macOS
-arm64 and x86_64, Windows x86_64) as a workflow artifact,
-`minicore-tui-<version>-<target>`. Each holds `bin/minicore-tui` (`.exe` on
-Windows), the Agent included, and `BUILD.txt` naming the three revisions. Unpack
-it anywhere and run `bin/minicore-tui --home <DIR>` (or set `MINICORE_HOME`) from
-the project directory; without either, the TUI directory is `bin/` itself. On
-macOS a downloaded binary may need `xattr -d com.apple.quarantine bin/*` first.
+| File or directory | Owner and purpose |
+|---|---|
+| `config.toml` | TUI preferences under `[ui]`: theme, editor, bell |
+| `host-config.json` | Native initial Host configuration and explicit `/reload` candidate |
+| `agent-defaults.json` | Native Role and Session defaults used to create an Agent |
+| `host/` | Persistent Host data; read and written by Host |
+| `prompt/commands/*.md` | Local slash-command prompt templates |
+| `history.jsonl` | Confirmed local input recall history |
+| `minicore-tui.log` | Default generated diagnostic destination |
 
-### Options
+On a new Host the TUI creates an Agent and its native default Session. Later
+starts use saved Host, Agent and Session configuration. An existing Agent's
+default Session opens unless `--session` or `--continue` selects another.
+`/new` explicitly creates a Session under the selected Agent. Session creation
+inherits that Agent's defaults, with explicit new-Session overrides applied by
+Host. Opening or switching a Session preserves its saved configuration.
+
+The old `minicore-agent` store is not imported or modified. Use a separate TUI
+home when moving from 0.9.x; see [configuration](docs/configuration.md).
+
+## Options
 
 | Option | Meaning |
 |---|---|
-| `--home <DIR>` | The TUI directory. Default: `$MINICORE_HOME`, else the executable's directory. |
-| `--agent <BIN>` | Run this external Agent executable instead of the built-in one. Default: `[agent] binary` in `config.toml`, if set. |
-| `--agent-config <FILE>` | Use this Agent config as is; no composition, no `models.toml`. For tests and advanced use. Replaces `--config`. |
-| `--workspace <DIR>` | Workspace of a new session. Default: the current directory. |
-| `--session <ID>` | Open this session. |
-| `--continue` | Open the most recent session of the workspace; with none, start on an empty conversation. Cannot be combined with `--session`. |
-| `--profile <ID>` | Profile of a new session (created by the first message). |
-| `--model <ID>` | Model for the session; applied to an opened session with `session.configure`. |
-| `--reasoning <LEVEL>` | `auto`, `disabled`, `low`, `medium`, `high`, `xhigh`, `max` or `ultra`; applied like `--model`. |
-| `--theme <dark\|light>` | Palette for this run. |
-| `--remote` | Start [remote mode](#remote-mode) at startup. |
-| `-h`, `--help`, `-V`, `--version` | Usage, version. |
+| `--home <DIR>` | TUI directory; otherwise `$MINICORE_HOME`, then the executable's directory |
+| `--data-root <DIR>` | Host persistence root; defaults to `<home>/host` |
+| `--host-config <FILE>` | Initial native Host JSON and `/reload` candidate; saved Host configuration takes precedence at startup |
+| `--agent-id <ID>` | Select this existing Host Agent |
+| `--workspace <DIR>` | Workspace override for a newly created Session; defaults to the current directory |
+| `--session <ID>` | Open this Session; an explicit Agent must match its actual owner |
+| `--continue` | Open the most recently active Session in the workspace, respecting an explicit Agent selection |
+| `--model <REF>` | Full native model reference, applied once to the startup Session or used when creating one |
+| `--reasoning <LEVEL>` | `auto`, `disabled`, `low`, `medium`, `high`, `xhigh`, `max`, `ultra`; the selected model must support it |
+| `--theme <dark\|light>` | Theme for this invocation |
+| `-h`, `--help`, `-V`, `--version` | Usage or version |
 
-Bad arguments print the usage and exit with status 2.
+`--session` and `--continue` cannot be combined. Removed options such as
+`--agent`, `--agent-config`, `--profile`, `--remote`, and the `agent` subcommand
+are rejected. Argument and configuration errors are printed before fullscreen
+startup.
 
-### Configuration
+## Terminal workflow
 
-`config.toml` (profiles, `[ui]`, `[agent]`, `[loop]`, `[compaction]`) and
-`models.toml` (providers and models, never keys: only `api_key_env`) replace the
-0.4 `~/.config/minicore-tui/config.toml`, which is no longer read.
+The rail layout, Markdown rendering, folding, mouse selection, incremental
+layout cache, multiline editor, paste handling, prompt recall, external editor
+and light/dark themes remain available. Idle rendering has no periodic tick.
 
-```toml
-# config.toml
-default_profile = "coding"
+- **Conversation:** stream answer and reasoning text, retain interrupted partial
+  output, show native Turn outcome and persistence state. Model retry phase and
+  attempt information come from Host.
+- **Tools:** display complete arguments, progress, output, result, failures and
+  native delegation references. Argument generation is not a separate progress
+  phase. Expanded cards and `/diff` expose details without changing execution.
+- **Input:** Enter sends steering input; Alt+Enter or Ctrl+Enter queues a
+  follow-up. Accepted `next_step` and `next_turn` entries come from Host. Esc
+  cancels the captured Turn and preserves queued input; `/pause` prevents later
+  queue execution and `/resume` allows it again. A mutation receipt alone never
+  marks a Turn complete or a queue entry delivered.
+- **Questions:** approvals support allow once or deny. Tool questions support
+  native text and single-choice answers. Each answer is bound to its original
+  Session, Load, Turn and interaction. Use `/approval ask|auto|read_only` for a
+  real Session execution policy; there is no fabricated per-tool allow cache.
+- **Agents and Sessions:** `/agents` selects a Host Agent, `/agent-new` creates
+  one, and the Session picker shows actual owning Agents and lifecycle states.
+  Background Sessions keep running when terminal selection changes. Rename,
+  close, delete, load, unload, pause and resume use native Host operations.
+  Agent deletion confirms the exact child-Session scope before submission.
+- **History:** reopening reads a recent native history window; older pages use
+  the same opaque cursor and fixed upper bound. Live output and canonical
+  records deduplicate by native identity and position. `/export` streams the
+  complete selected Session history independently of what is loaded onscreen.
+- **Context and workspace:** `/context` shows Host's actual history and usage
+  facts. Last-response token usage is not presented as a fabricated context
+  percentage. File completion, branch status, changes and paged diffs are read
+  through the Session's Host workspace API.
+- **Uncertain input:** F8 retains a send whose acceptance could not be verified.
+  It keeps its original target and requires explicit possible-duplicate
+  confirmation before resending with a fresh Message ID. It is never resent
+  automatically.
 
-[profiles.coding]
-model = "gpt-6-luna"               # a model id from models.toml
-reasoning = "max"
-approval = "auto"                  # ask | auto | read_only
+Full commands and key bindings: [docs/keybindings.md](docs/keybindings.md).
 
-[ui]
-theme = "dark"                     # /theme writes this key back
-editor = ["nvim"]                  # Ctrl+G; default $VISUAL, then $EDITOR
-bell = true                        # ring when a turn over 10 s ends or asks approval
-```
+## Configuration and shutdown
 
-```toml
-# models.toml
-[providers.luna]
-api = "open_ai_responses"
-base_url = "https://api.openai.com/v1"
-api_key_env = "LUNA_API_KEY"       # the NAME of the variable
+`/reload` loads the selected Host JSON candidate, follows the native reload
+receipt through preparation and application, and refreshes the model catalog
+only after actual application. Restart-required and failed outcomes remain
+explicit. It also refreshes local prompt templates and new-Agent defaults on
+successful application. `/agent-defaults` explicitly applies the defaults file
+to the selected Agent; it does not rewrite existing Sessions.
 
-[models.gpt-6-luna]
-provider = "luna"
-context_window = 64000
-max_output_tokens = 20000
-reasoning = ["auto", "low", "medium", "high", "max"]
-```
+The generated configuration writes diagnostics to a file so Host logs cannot
+corrupt the terminal. Embedded mode requires `network.listen` to be `null`.
+A configuration sending logs to terminal stderr is rejected before fullscreen;
+choose a file or redirect stderr.
 
-Command-line options win. A malformed file, an unknown key or a dangling
-reference stops the start with `file:line: key: reason`; nothing is ignored
-silently. `/theme` edits only the `theme` key and keeps comments. `/reload`
-composes the Agent config again, so editing `SYSTEM_PROMPT.md` or a profile and
-running `/reload` applies it, to open sessions too from their next turn. With `NO_COLOR` set the UI uses no colors. Prompt
-history is `history.jsonl` in the TUI directory.
+Quitting restores the terminal, flushes local preferences and prompt history,
+and requests graceful Host shutdown. The process waits for actual execution,
+cleanup and persistence to finish. Paused work or a save fault can keep shutdown
+pending; the terminal explains the state. Only an explicit Ctrl+C at that
+shutdown prompt requests force shutdown. Restarting the program reads durable
+history; it does not reconstruct the old process's active Turn.
 
-## Screen
-
-```text
-
- minicore-tui v0.9.9                                  (welcome header)
-
- esc interrupt · ctrl+c clear · / commands · @ files · ctrl+o expand · ctrl+r sessions
-
- ~/work/minicore-tui
-
- transcript (scrollable, 1-column gutter, ▎ rails)
- …
- ↳ follow-up 1  also update the README
- ⠋ Working (esc to interrupt) · Thinking · 1m12s · request 7 · 12 tools
-
- ▎ editor band (4–12 rows; the / and @ lists open inside it)
- ▸ minicore-tui@main · gpt 6 luna · max · working · 1m · queued   ↑50.5k ↓1.8k R33.8k · ctx 41.00%
-```
-
-The look follows pi-rail-ui. While something is in flight a Working line sits
-above the editor with the phase (`Thinking`, `Running <tool> <detail>`,
-`Waiting for approval`, `Compacting context`, …), elapsed time, request and
-tool counts. Queued messages show in the order the Agent runs them as
-`↗ steer` / `↳ follow-up N` rows above it, with a hint for the keys that act on
-them (a paused queue says how to go on).
-The latest notice is a railed line in the band: info fades after 5 seconds,
-errors stay until the next key press. Completion and saved-history recovery take
-turns across resident sessions, leaving one read workspace for foreground history
-and export. Capacity warnings clear when retained work is admitted again; gaps
-from dropped body events or missing unsaved turns stay visible. `/recover` in a
-stalled session retries its failed reads, which can free capacity for other
-sessions when they succeed. `Persistence blocked` stays visible until
-the Agent clears the block, without hiding a question that still needs an answer.
-
-The footer shows the workspace and git branch, the model and reasoning level,
-the state while not idle, the current or last turn's minutes, `queued`, token
-totals since the session was opened and `ctx N%` — the context usage the Agent
-reported for its last request (amber from 70 %), `ctx ?` once tokens were used
-without a report. The TUI never estimates it.
-
-## Features
-
-- **Conversation.** User messages and Markdown answers stream with an incremental
-  renderer. User messages are tinted cards; thinking has a purple rail and
-  folds to its newest three rows under `... (N earlier lines, ctrl+o to expand)`;
-  `Ctrl+T` collapses it to one `Thinking...` row.
-- **Tool cards** start folded to three rows on a state-coloured band (running,
-  done, failed). An answered tool-input question is done, not failed or still
-  pending. Each card shows the tool name, target (`$ cmd`, `path:range`, `pattern in path`)
-  and a hidden-line hint (`running…` while a running call has no output yet),
-  with duration, exit code or line changes on the right. `Ctrl+O` expands all
-  cards and thinking, and a click toggles one. Expanded cards show a plain
-  hidden-line count where output is cut: above the tail for `bash`, below the
-  head for other tools. Any row of an expanded card collapses it on click;
-  dragging over its output selects without collapsing.
-- **Turn end** is one dim line: outcome, duration, requests, tools and, when files
-  changed, `N files changed (+a −b)`. A cancelled turn shows its reason. A failed
-  turn names the cause in plain words with the provider's status and code
-  (`failed · rate limited · 429 rate_limit_exceeded`), then what to do about it,
-  then the provider's own message behind a `│` rail, three lines until `Ctrl+O`
-  opens it whole; a selection copies the message only.
-  The reply an interrupt cut short stays above that line, also after the
-  session is reopened.
-- **Sessions.** None exists until the first message: the first `Enter` creates
-  it with the profile, model and reasoning picked so far and sends the text.
-  `/new` leaves the open session and returns to that state. A session you leave
-  keeps running in the background and comes back instantly, as you left it,
-  from `Ctrl+R`; the footer counts the ones working or waiting for approval, and
-  a notice says when one finishes or needs you. Until then the
-  commands that read a session (`/compact`, `/context`, `/diff`,
-  `/rename`, `/export`, `/copy`, `/session`) and the `@` file picker say
-  `No session yet: send a message first`.
-- **Steering and queue.** The Agent keeps each session's queue. `Enter` sends a
-  steer, which reaches the running turn at its next request (or starts a turn
-  when idle); `Alt+Enter` (or `Ctrl+Enter`) queues a follow-up that starts a turn
-  of its own once the running one has ended. Steers run before follow-ups. An
-  interrupted or failed turn pauses a queue that still holds messages: `Enter`
-  on an empty draft resumes it. `Alt+↑` takes every queued message back; the web
-  tray offers Edit and Delete. `Esc` interrupts. A message sent while a
-  compaction is running waits in the queue until the session is idle.
-- **Compaction** shows as a status phase and leaves a `[compaction]` box with
-  the token counts and the summary behind `Ctrl+O`; loaded content is never
-  removed. `/compact` runs it manually.
-- **History.** Opening a session loads the latest items; scrolling to the top
-  loads older pages, including the history behind a compaction summary.
-  A card whose output is not loaded shows its line count. An incomplete,
-  unreadable or oversized history read keeps the content already shown and
-  reports the problem instead of replacing it with a partial page. Background
-  catch-up retains its verified newer window at each limit; `/recover` continues
-  the missing range. An unavailable turn keeps its identity, known outcome and
-  saved/unsaved marker even when no body was received.
-- **Views** replace the transcript and keep the footer: Git diff and help.
-  `/diff` shows the workspace's live tracked changes and untracked files,
-  also when opened by clicking a turn-end line. `Esc` returns; the
-  composer is dimmed meanwhile, because the view owns the keys.
-- **Completion and selectors.** `/` and `@` open a list inside the editor that
-  filters as you type (`Tab` inserts, `Enter` runs, `Esc` closes and keeps the
-  text). Sessions with delete (`Ctrl+R`), model (`Ctrl+L`), reasoning
-  (`Shift+Tab` cycles), find (`Ctrl+F`), session info (`/session`), context usage
-  (`/context`) and approval prompts replace the editor with a bordered sheet.
-- **Copy and export.** Dragging copies the selection on release (native
-  clipboard, OSC 52 fallback) and flashes `Copied!`; double-click selects a
-  word, triple-click a line. `/copy` copies the last answer, `/export [path]` writes the
-  conversation as Markdown (default `./minicore-<session>-<date>.md`).
-- **Unconfirmed local input.** F8 or `/unconfirmed` opens retained inputs whose
-  acceptance is uncertain, independently of the new draft and even on the fatal
-  screen. Edit in a separate buffer, copy, explicitly forget, or review a possible-
-  duplicate warning before resending to the original target with a new operation
-  ID. Enter/Esc cancels the warning; only `y` confirms. Uncertain submissions are
-  not ordinary prompt history and are never automatically resent. Retention is
-  in-process and bounded to 64 operations / 16 MiB; a full budget refuses a new
-  submission before calling the Agent and keeps its draft.
-- **Composer.** Grapheme-safe editing, undo and redo, accepted prompt history, paste
-  tokens for large pastes, external editor on `Ctrl+G`.
-- **Shutdown.** Quitting waits for the actual Agent child to finish its cleanup
-  after acknowledging shutdown, with bounded forced termination if it stalls.
-
-## Remote mode
-
-`--remote`, or `/remote on` in a running TUI, lets a phone drive the open session
-from its browser. The transcript area turns into a status screen with an address
-and a password: open the address on the phone and enter the password once; the
-phone remembers the sign-in. Each connected device views and drives its own
-session or new-session draft; switching on one never switches the others.
-Devices viewing the same session see the same conversation. The status screen
-names each phone's session and shows what the last active device's Agent is
-doing. Local sending is frozen and the footer shows `remote`; `/remote off`
-takes the keyboard back and shows that foreground transcript again. `/remote password` makes a new password and
-signs phones out. Without `--remote` nothing listens.
-
-The server listens on `127.0.0.1:8765` and `[::1]:8765` by default, which only
-the same machine can reach. A phone on the same LAN needs a non-loopback `bind` and either `tls = true` with
-your own certificate (`tls_cert`, `tls_key`) or `allow_insecure = true`, in which
-case the password crosses the network unencrypted. Across networks, keep the
-loopback bind and publish it through Tailscale, an SSH tunnel or a TLS reverse
-proxy, or listen with TLS on a forwarded port, then set
-`[remote] url` to the address the phone should open; a Cloudflare Tunnel to
-`http://127.0.0.1:8765` works as is. On iPhone, Safari's **Share → Add to Home
-Screen** installs the client as an app (it asks for the password once more);
-over HTTPS it opens even while the computer is asleep and reconnects when it
-wakes. The `[remote]` settings, Cloudflare notes and install steps are
-in [docs/configuration.md](docs/configuration.md) and the protocol in
-[docs/design-remote.md](docs/design-remote.md).
-
-Whoever signs in controls the session, can have the Agent run commands on this
-machine and answers its approvals: keep the password to yourself, change it with
-`/remote password` if it leaks, and run `/remote off` when done.
-
-## Keys and commands
-
-The complete map is [docs/keybindings.md](docs/keybindings.md). The essentials:
-
-- `Enter` send or steer, `Alt+Enter` follow-up, `Shift+Enter` / `Ctrl+J` newline,
-  `Esc` interrupt (idle: clear the draft), `Ctrl+C` clear / quit, `Ctrl+D` quit;
-- `Ctrl+R` sessions, `Ctrl+L` model, `Shift+Tab` reasoning, `Ctrl+O` tool cards,
-  `Ctrl+T` reasoning text, `Ctrl+F` find, `F1` help;
-- `PageUp` / `PageDown`, `Ctrl+Home` / `End`, `Ctrl+↑` / `Ctrl+↓` and the
-  wheel navigate; `/` opens the command palette and `@` the file picker;
-- `/new [profile]`, `/sessions` (`/resume`), `/session`, `/rename`, `/model [id]`,
-  `/reasoning`, `/compact`, `/diff`, `/context`, `/copy`, `/export`,
-  `/theme`, `/reload`, `/remote`, `/help`, `/quit`, and a command per prompt template in
-  `<home>/prompt/commands/*.md`; `Ctrl+P` cycles models.
-
-## Troubleshooting
-
-- **Agent not found:** the external Agent named by `--agent` or `[agent] binary`
-  does not exist; drop both to use the built-in one.
-- **Fatal screen:** the Agent exited, sent an unreadable frame or lacks a
-  required capability. The screen shows the reason and the last 20 lines of the
-  Agent's stderr; `q` or `Esc` quits.
-- **Older history does not load:** the history changed while it was read. The
-  read is retried once on its own; scroll up again if a notice says so.
-
-## Development
+## Checks and packages
 
 ```bash
-cargo fmt --check
-cargo clippy --all-targets -- -D warnings
-cargo test --locked
+cargo fmt --all -- --check
+cargo clippy --locked --all-targets -- -D warnings
+cargo test --locked --all-targets
+RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps
 ```
 
-Reducer tests drive the app through a scripted in-process Agent, and
-`TestBackend` snapshot tests cover the main screen states; only
-`tests/built_in_agent.rs` starts the real built-in Agent, with no provider.
-CI runs Clippy and the tests on Linux, macOS and Windows with stable Rust.
-Module layout and invariants are in [docs/architecture.md](docs/architecture.md);
-coding agents should read [AGENTS.md](AGENTS.md).
+Reducer tests use a real in-process Host with explicit model test doubles.
+Integration tests run the production resource builder and local HTTP fixtures
+for both provider protocols, persistence, reopening and shutdown. Rendering
+snapshots and platform-neutral terminal-input tests remain separate from
+execution evidence. Optional frame-cost checks are available with
+`cargo test --locked --lib perf_tests -- --ignored --nocapture`.
 
-## License
+CI checks Linux, macOS and Windows and produces Linux x86_64, macOS arm64,
+macOS x86_64 and Windows x86_64 packages. Each contains `bin/minicore-tui`
+(`.exe` on Windows), guides and `BUILD.txt` identifying the TUI and pinned Host
+revisions. Use `--home` or `MINICORE_HOME` to put data outside the package.
 
-Licensed under either the Apache License, Version 2.0 or the MIT license, at
-your option.
-
-[`minicore-agent`]: https://github.com/zqcli/minicore-agent
+See [architecture](docs/architecture.md), [migration design](docs/design-host.md)
+and [CHANGELOG.md](CHANGELOG.md).

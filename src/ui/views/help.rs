@@ -30,7 +30,7 @@ const KEYS: &[KeyRow] = &[
     },
     KeyRow {
         keys: "esc",
-        action: "close view · clear selection · interrupt turn · clear draft",
+        action: "close view · clear selection · interrupt turn, keep queue · clear draft",
     },
     KeyRow {
         keys: "ctrl+c",
@@ -46,7 +46,7 @@ const KEYS: &[KeyRow] = &[
     },
     KeyRow {
         keys: "alt+↑",
-        action: "take every queued message back",
+        action: "recall queued messages into the draft",
     },
     KeyRow {
         keys: "ctrl+x",
@@ -139,6 +139,22 @@ const KEYS: &[KeyRow] = &[
     KeyRow {
         keys: "text answer: enter / esc",
         action: "send the separate answer / cancel that turn; conversation draft stays",
+    },
+    KeyRow {
+        keys: "approval: y / n, esc",
+        action: "allow this call / deny this call",
+    },
+    KeyRow {
+        keys: "choice: ↑ ↓, enter / esc",
+        action: "select and answer / cancel that turn",
+    },
+    KeyRow {
+        keys: "sessions: ctrl+n / ctrl+d",
+        action: "rename / press twice to delete the selected session",
+    },
+    KeyRow {
+        keys: "agents: ctrl+d / y",
+        action: "review the selected Agent and its child sessions / delete that captured set",
     },
 ];
 

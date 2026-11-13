@@ -62,8 +62,8 @@ impl App {
             .filter(|session| !session.transcript.blocks().is_empty())
         {
             out.push_str(&format!(
-                "Resume: minicore-tui --session {}\n",
-                session.info.session_id
+                "Resume: minicore-tui --agent-id {} --session {}\n",
+                session.info.agent_id, session.info.id
             ));
         }
         out

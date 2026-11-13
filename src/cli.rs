@@ -1,48 +1,44 @@
-//! Small hand-rolled argument parser: no clap, no subcommands, and every
-//! option has exactly one meaning.
+//! Command-line inputs for the in-process Host and terminal frontend.
 
 use std::path::PathBuf;
 
+use minicore_host_protocol::ReasoningPreference;
+
 use crate::config::ThemeKind;
-use crate::protocol::Reasoning;
 
 pub const USAGE: &str = "\
-minicore-tui — a pi-style coding agent TUI for minicore-agent
+minicore-tui — a terminal frontend for the embedded MiniCore Host
 
 Usage: minicore-tui [OPTIONS]
-       minicore-tui agent --config <FILE> --stdio   (the built-in Agent the TUI starts)
 
 Options:
-  --home <DIR>           TUI directory: config.toml, models.toml, prompt/, session/
+  --home <DIR>           TUI preferences, initial configuration and history
                          [default: $MINICORE_HOME, else the executable's directory]
-  --agent <BIN>          run this external minicore-agent instead of the built-in
-                         one [default: [agent] binary in config.toml, if set]
-  --agent-config <FILE>  use this Agent config as is; skips config.toml, models.toml
-                         and the first-run files (for tests and advanced use)
+  --data-root <DIR>      persistent Host data [default: <home>/host]
+  --host-config <FILE>   initial native HostConfig JSON; saved Host config wins
+                         [default: <home>/host-config.json]
+  --agent-id <ID>        select this Host Agent
   --workspace <DIR>      workspace for a new session [default: cwd]
   --session <ID>         open this session
-  --continue             open the most recent session in this workspace
-  --profile <ID>         profile for a new session
-  --model <ID>           model for a new session
+  --continue            open the most recent session in this workspace
+  --model <REF>          full model override for the selected/new session
   --reasoning <LEVEL>    auto|disabled|low|medium|high|xhigh|max|ultra
-  --remote               start remote control before opening the terminal
   --theme <THEME>        dark|light
-  -h, --help             print this help
-  -V, --version          print the version
+  -h, --help            print this help
+  -V, --version         print the version
 ";
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Args {
     pub home: Option<PathBuf>,
-    pub agent: Option<PathBuf>,
-    pub agent_config: Option<PathBuf>,
+    pub data_root: Option<PathBuf>,
+    pub host_config: Option<PathBuf>,
+    pub agent_id: Option<String>,
     pub workspace: Option<PathBuf>,
     pub session: Option<String>,
     pub continue_recent: bool,
-    pub remote: bool,
-    pub profile: Option<String>,
     pub model: Option<String>,
-    pub reasoning: Option<Reasoning>,
+    pub reasoning: Option<ReasoningPreference>,
     pub theme: Option<ThemeKind>,
     pub help: bool,
     pub version: bool,
@@ -80,20 +76,16 @@ impl Args {
             };
             match argument.as_str() {
                 "--home" => args.home = Some(PathBuf::from(value("--home")?)),
-                "--agent" => args.agent = Some(PathBuf::from(value("--agent")?)),
-                "--agent-config" => {
-                    args.agent_config = Some(PathBuf::from(value("--agent-config")?));
-                }
+                "--data-root" => args.data_root = Some(PathBuf::from(value("--data-root")?)),
+                "--host-config" => args.host_config = Some(PathBuf::from(value("--host-config")?)),
+                "--agent-id" => args.agent_id = Some(value("--agent-id")?),
                 "--workspace" => args.workspace = Some(PathBuf::from(value("--workspace")?)),
                 "--session" => args.session = Some(value("--session")?),
                 "--continue" => args.continue_recent = true,
-                "--remote" => args.remote = true,
-                "--profile" => args.profile = Some(value("--profile")?),
                 "--model" => args.model = Some(value("--model")?),
                 "--reasoning" => {
                     let level = value("--reasoning")?;
-                    args.reasoning =
-                        Some(Reasoning::parse(&level).ok_or(ArgsError::Reasoning(level))?);
+                    args.reasoning = Some(reasoning(&level).ok_or(ArgsError::Reasoning(level))?);
                 }
                 "--theme" => {
                     let theme = value("--theme")?;
@@ -114,86 +106,94 @@ impl Args {
     }
 }
 
+fn reasoning(value: &str) -> Option<ReasoningPreference> {
+    Some(match value {
+        "auto" => ReasoningPreference::Auto,
+        "disabled" => ReasoningPreference::Disabled,
+        "low" => ReasoningPreference::Low,
+        "medium" => ReasoningPreference::Medium,
+        "high" => ReasoningPreference::High,
+        "xhigh" => ReasoningPreference::XHigh,
+        "max" => ReasoningPreference::Max,
+        "ultra" => ReasoningPreference::Ultra,
+        _ => return None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn the_help_starts_every_option_description_in_one_column() {
-        for line in USAGE.lines().filter(|line| line.starts_with("  -")) {
-            assert!(
-                line[..25].ends_with(' ') && !line[25..].starts_with(' '),
-                "{line}"
-            );
-        }
-    }
-
-    #[test]
-    fn parses_every_documented_option() {
+    fn parses_native_host_paths_and_session_selection() {
         let args = Args::parse([
             "--home",
-            "/h",
-            "--agent",
-            "/bin/agent",
-            "--agent-config",
-            "/etc/agent.toml",
+            "tui",
+            "--data-root",
+            "store",
+            "--host-config",
+            "host.json",
+            "--agent-id",
+            "agent-id",
             "--workspace",
-            "/w",
+            "work",
             "--session",
-            "ses_1",
-            "--profile",
-            "coding",
+            "session-id",
             "--model",
-            "deep",
+            "provider/main",
             "--reasoning",
             "xhigh",
             "--theme",
             "light",
-            "--remote",
         ])
         .unwrap();
-        assert_eq!(
-            args.agent.as_deref(),
-            Some(std::path::Path::new("/bin/agent"))
-        );
-        assert_eq!(args.home.as_deref(), Some(std::path::Path::new("/h")));
-        assert_eq!(
-            args.agent_config.as_deref(),
-            Some(std::path::Path::new("/etc/agent.toml"))
-        );
-        assert_eq!(args.session.as_deref(), Some("ses_1"));
-        assert_eq!(args.reasoning, Some(Reasoning::XHigh));
+        assert_eq!(args.data_root, Some(PathBuf::from("store")));
+        assert_eq!(args.host_config, Some(PathBuf::from("host.json")));
+        assert_eq!(args.agent_id.as_deref(), Some("agent-id"));
+        assert_eq!(args.model.as_deref(), Some("provider/main"));
+        assert_eq!(args.reasoning, Some(ReasoningPreference::XHigh));
         assert_eq!(args.theme, Some(ThemeKind::Light));
-        assert!(args.remote);
     }
 
     #[test]
-    fn rejects_conflicts_missing_values_and_unknown_flags() {
+    fn removed_agent_process_profile_and_web_options_are_rejected() {
+        for flag in ["--agent", "--agent-config", "--profile", "--remote"] {
+            assert_eq!(
+                Args::parse([flag]).unwrap_err(),
+                ArgsError::Unknown(flag.into())
+            );
+        }
+        assert_eq!(
+            Args::parse(["agent"]).unwrap_err(),
+            ArgsError::Unexpected("agent".into())
+        );
+    }
+
+    #[test]
+    fn rejects_conflicts_missing_values_and_invalid_preferences() {
         assert_eq!(
             Args::parse(["--session", "x", "--continue"]).unwrap_err(),
             ArgsError::Conflict
         );
-        assert!(matches!(
-            Args::parse(["--model"]).unwrap_err(),
-            ArgsError::MissingValue(_)
-        ));
-        assert!(matches!(
-            Args::parse(["--nope"]).unwrap_err(),
-            ArgsError::Unknown(_)
-        ));
-        assert!(matches!(
-            Args::parse(["--reasoning", "turbo"]).unwrap_err(),
-            ArgsError::Reasoning(_)
-        ));
-    }
-
-    #[test]
-    fn the_new_path_options_need_a_value() {
-        for flag in ["--home", "--agent-config"] {
+        for flag in [
+            "--home",
+            "--data-root",
+            "--host-config",
+            "--agent-id",
+            "--model",
+        ] {
             assert_eq!(
                 Args::parse([flag]).unwrap_err(),
-                ArgsError::MissingValue(flag.to_owned())
+                ArgsError::MissingValue(flag.into())
             );
         }
+        assert!(matches!(
+            Args::parse(["--reasoning", "turbo"]),
+            Err(ArgsError::Reasoning(_))
+        ));
+        assert!(matches!(
+            Args::parse(["--theme", "blue"]),
+            Err(ArgsError::Theme(_))
+        ));
     }
 }

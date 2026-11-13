@@ -1,120 +1,155 @@
-//! User-visible operations. Key bindings and slash commands both land in
-//! [`App::on_action`], which starts the IO the results of which `ops` applies.
+//! Terminal intents expressed through the existing typed Host client.
 
-use serde_json::{Value, json};
+use minicore_host_core::{ApprovalAnswer, InteractionAnswerData, InteractionRequestData};
+use minicore_host_protocol::*;
+use minicore_host_runtime::{
+    Text,
+    tools::{ToolInputAnswer, ToolInputAnswerKind},
+};
 
-use super::draft::NO_SESSION;
-use super::operation::Operation;
-use super::{App, InteractionKind, Msg, NoticeLevel, Scroll, SessionOp, commands, read, tasks};
+use super::{App, Msg, NoticeLevel, Scroll, SessionOp, tasks};
 use crate::config::ThemeKind;
-use crate::protocol::{self, InputMode, Reasoning};
-use crate::title::LONG_TURN;
 use crate::ui::theme::{Palette, Styles};
-
-/// How often the context report is asked for while a turn runs.
-const CONTEXT_EVERY: std::time::Duration = std::time::Duration::from_secs(2);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Action {
-    /// Enter: steer, which starts a turn when idle; with no draft, resume a paused queue.
-    Submit,
-    /// Alt+Enter or Ctrl+Enter: queue a follow-up.
-    QueueFollowUp,
-    OpenSession(String),
+    Submit {
+        follow: bool,
+    },
     NewSession,
-    /// `/new <profile>`.
-    NewSessionWith(String),
-    DeleteSession(String),
+    SelectAgent(AgentId),
+    CreateAgent(String),
+    OpenSession(SessionRef),
     Rename(String),
-    SetModel(String),
-    /// `/model <text>`: the text names a model, which may take some resolving.
+    RenameSession {
+        target: SessionRef,
+        title: String,
+    },
+    DeleteSession(SessionRef),
     SwitchModel(String),
-    /// Ctrl+P, or Shift+Ctrl+P backwards.
     CycleModel {
         forward: bool,
     },
-    SetReasoning(Reasoning),
-    SetTheme(ThemeKind),
-    ToggleTheme,
+    SetReasoning(ReasoningPreference),
     Compact,
     CopyLastAnswer,
     Export(Option<String>),
     EditDraft,
-    ReloadAgent,
-    RetryRecovery,
     Answer(Answer),
     LoadOlder,
     RecallQueued,
+    RetryRecovery,
+    SetTheme(ThemeKind),
+    ToggleTheme,
+    ReloadHost,
+    Pause,
+    Resume,
+    Load,
+    Unload,
+    CloseSession,
+    StartAgent,
+    StopAgent,
+    DeleteAgent {
+        agent_id: AgentId,
+        session_ids: Vec<SessionId>,
+    },
+    SetDefaultSession,
+    SetApproval(ApprovalMode),
+    ApplyAgentDefaults,
     Quit,
-    Remote(String),
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Answer {
     Allow,
-    /// Allow now and answer this tool's later approvals without asking.
-    AllowTool,
     Deny,
-    /// The row picked from the prompt's options; for an approval, row 0 allows.
     Choice(usize),
     Text(String),
 }
 
-impl Action {
-    /// Whether the action works on a session, so a draft has nothing for it.
-    fn needs_session(&self) -> bool {
-        matches!(
-            self,
-            Self::Rename(_)
-                | Self::Compact
-                | Self::CopyLastAnswer
-                | Self::Export(_)
-                | Self::LoadOlder
-        )
-    }
-}
-
 impl App {
     pub fn on_action(&mut self, action: Action) {
-        if !self.local_allowed(&action) {
-            self.remote_flash();
-            return;
-        }
-        if self.resident.current().is_none() && action.needs_session() {
-            self.notice(NoticeLevel::Info, NO_SESSION);
-            return;
-        }
         match action {
-            Action::Submit => self.submit_composer(false),
-            Action::QueueFollowUp => self.submit_composer(true),
-            Action::OpenSession(id) => self.open_session(id),
-            Action::NewSession => self.new_draft(None),
-            Action::NewSessionWith(profile) if self.profiles.iter().any(|p| p.id == profile) => {
-                self.new_draft(Some(profile));
+            Action::Submit { follow } => self.submit_composer(follow),
+            Action::NewSession => self.create_session(),
+            Action::SelectAgent(id) => {
+                self.selected_agent = Some(id.clone());
+                self.select_session(None);
+                if let Some(session_id) = self
+                    .agents
+                    .iter()
+                    .find(|agent| agent.id == id)
+                    .and_then(|a| a.default_session_id.clone())
+                {
+                    self.open_session(SessionRef {
+                        agent_id: id,
+                        session_id,
+                    });
+                }
             }
-            Action::NewSessionWith(profile) => {
-                self.notice(NoticeLevel::Error, format!("Unknown profile {profile}"));
-            }
-            Action::DeleteSession(id) => {
+            Action::CreateAgent(name) => {
+                if !self.require_control() {
+                    return;
+                }
                 let client = self.client.clone();
-                let load = self.live(&id).map(|session| session.load.clone());
-                self.spawn_msg(tasks::delete_session(client, id, load));
+                let config = self.new_agent.clone();
+                let overrides = self.creation_overrides();
+                self.launch = super::LaunchSettings::default();
+                self.open_generation += 1;
+                self.opening_target = None;
+                self.loading_session = false;
+                let generation = self.open_generation;
+                self.spawn_msg(async move {
+                    Msg::AgentCreated(
+                        generation,
+                        tasks::create_agent(&client, name, config, overrides).await,
+                    )
+                });
             }
-            Action::Rename(title) => self.rename(&title),
-            Action::SetModel(id) => self.set_model(id),
-            Action::SwitchModel(text) => match commands::resolve_model(&self.models, &text) {
-                Ok(model) => self.set_model(model.id.clone()),
-                Err(message) => self.notice(NoticeLevel::Error, message),
-            },
+            Action::OpenSession(target) => self.open_session(target),
+            Action::Rename(title) => {
+                if let Some(target) = self.resident.current().map(|s| s.address()) {
+                    self.rename_target(target, title);
+                }
+            }
+            Action::RenameSession { target, title } => self.rename_target(target, title),
+            Action::DeleteSession(target) => {
+                if !self.require_control() {
+                    return;
+                }
+                let client = self.client.clone();
+                let selected = self.selected_agent.clone();
+                self.spawn_msg(async move {
+                    let result = async {
+                        client
+                            .session(target)
+                            .delete(
+                                SessionDeleteRequest {
+                                    operation_id: tasks::operation_id()?,
+                                    close: true,
+                                },
+                                tasks::options(),
+                            )
+                            .await
+                            .map_err(|e| e.to_string())?;
+                        tasks::catalogs(&client, selected).await
+                    }
+                    .await;
+                    Msg::Catalogs(result)
+                });
+            }
+            Action::SwitchModel(text) => {
+                match super::commands::resolve_model(&self.models, &text) {
+                    Ok(model) => self.set_model(model.model.clone()),
+                    Err(error) => self.notice(NoticeLevel::Error, error),
+                }
+            }
             Action::CycleModel { forward } => self.cycle_model(forward),
-            Action::SetReasoning(level) => self.set_reasoning(level),
+            Action::SetReasoning(reasoning) => self.set_reasoning(reasoning),
             Action::Compact => self.compact(),
             Action::CopyLastAnswer => self.copy_last_answer(),
             Action::Export(path) => {
                 if let Some(session) = self.resident.current() {
-                    let client = self.client.clone();
-                    let session_id = session.info.session_id.clone();
-                    self.spawn_msg(tasks::export(client, session_id, path));
+                    self.spawn_msg(tasks::export(session.client.clone(), path));
                 }
             }
             Action::EditDraft => self.edit_request = Some(self.composer.take_for_editor()),
@@ -122,26 +157,256 @@ impl App {
             Action::LoadOlder => self.load_older(),
             Action::RecallQueued => self.recall_queued(),
             Action::RetryRecovery => {
-                if let Some(session) = self.resident.current_mut() {
-                    session.recovery.retry_failed();
-                    self.refresh_control();
-                    self.recover_completions();
+                if let Some(epoch) = self.resident.current().map(|s| s.epoch) {
+                    self.retry_failed_reads(epoch);
+                    self.resubscribe(epoch);
+                    self.refresh_history(epoch);
+                    self.refresh_control_for(epoch);
                 }
             }
-            Action::SetTheme(kind) => self.apply_theme(kind),
+            Action::SetTheme(theme) => self.apply_theme(theme),
             Action::ToggleTheme => self.apply_theme(match self.theme {
                 ThemeKind::Dark => ThemeKind::Light,
                 ThemeKind::Light => ThemeKind::Dark,
             }),
-            Action::ReloadAgent => {
-                self.local_files
-                    .reload(&self.tx, self.home.clone(), self.composed)
+            Action::ReloadHost => self.reload_host(),
+            Action::Pause => self.session_control("pause"),
+            Action::Resume => self.session_control("resume"),
+            Action::Load => self.session_control("load"),
+            Action::Unload => self.session_control("unload"),
+            Action::CloseSession => self.close_session(),
+            Action::StartAgent => self.control_agent(true),
+            Action::StopAgent => self.control_agent(false),
+            Action::DeleteAgent {
+                agent_id,
+                session_ids,
+            } => self.delete_agent(agent_id, session_ids),
+            Action::SetDefaultSession => self.set_default_session(),
+            Action::SetApproval(approval) => {
+                if let Some(session) = self.resident.current() {
+                    let mut execution = session.info.config.execution.clone();
+                    execution.approval = approval;
+                    self.update_session(SessionConfigPatch {
+                        execution: Some(execution),
+                        ..Default::default()
+                    });
+                } else {
+                    self.notice(
+                        NoticeLevel::Info,
+                        "Select a Session to change its approval policy",
+                    );
+                }
             }
+            Action::ApplyAgentDefaults => self.apply_agent_defaults(),
             Action::Quit => self.request_quit(),
-            Action::Remote(command) => self.remote_command(&command),
         }
     }
-
+    fn control_agent(&mut self, start: bool) {
+        if !self.require_control() {
+            return;
+        }
+        let Some(agent_id) = self.current_agent_id().cloned() else {
+            return;
+        };
+        let client = self.client.clone();
+        let selected = self.selected_agent.clone();
+        let tx = self.tx.clone();
+        self.spawn_msg(async move {
+            let result = async {
+                let target = AgentRef {
+                    host_id: client.initial_info().host_id.clone(),
+                    agent_id,
+                };
+                let operation_id = tasks::operation_id()?;
+                if start {
+                    client
+                        .start_agent(
+                            target.clone(),
+                            AgentStartRequest { operation_id },
+                            tasks::options(),
+                        )
+                        .await
+                        .map_err(|e| e.to_string())?;
+                } else {
+                    client
+                        .stop_agent(
+                            target.clone(),
+                            AgentStopRequest { operation_id },
+                            tasks::options(),
+                        )
+                        .await
+                        .map_err(|e| e.to_string())?;
+                }
+                Ok(target)
+            }
+            .await;
+            match result {
+                Ok(target) => {
+                    tasks::observe_agent(
+                        &client,
+                        &tx,
+                        target,
+                        selected,
+                        tasks::AgentWait::Lifecycle,
+                    )
+                    .await
+                }
+                Err(error) => Msg::Catalogs(Err(error)),
+            }
+        });
+    }
+    fn delete_agent(&mut self, agent_id: AgentId, session_ids: Vec<SessionId>) {
+        if !self.require_control() {
+            return;
+        }
+        let client = self.client.clone();
+        let selected = self.selected_agent.clone();
+        let tx = self.tx.clone();
+        self.spawn_msg(async move {
+            let result = async {
+                let target = AgentRef {
+                    host_id: client.initial_info().host_id.clone(),
+                    agent_id,
+                };
+                let scope = if session_ids.is_empty() {
+                    AgentDeleteScope::Empty {}
+                } else {
+                    AgentDeleteScope::Sessions {
+                        session_ids,
+                        close: true,
+                    }
+                };
+                client
+                    .delete_agent(
+                        target.clone(),
+                        AgentDeleteRequest {
+                            operation_id: tasks::operation_id()?,
+                            scope,
+                        },
+                        tasks::options(),
+                    )
+                    .await
+                    .map_err(|e| e.to_string())?;
+                Ok(target)
+            }
+            .await;
+            match result {
+                Ok(target) => {
+                    tasks::observe_agent(&client, &tx, target, selected, tasks::AgentWait::Deletion)
+                        .await
+                }
+                Err(error) => Msg::Catalogs(Err(error)),
+            }
+        });
+    }
+    fn set_default_session(&mut self) {
+        if !self.require_control() {
+            return;
+        }
+        let Some(target) = self.resident.current().map(|s| s.address()) else {
+            return;
+        };
+        let client = self.client.clone();
+        let selected = self.selected_agent.clone();
+        let tx = self.tx.clone();
+        self.spawn_msg(async move {
+            let result = async {
+                let agent = AgentRef {
+                    host_id: client.initial_info().host_id.clone(),
+                    agent_id: target.agent_id,
+                };
+                client
+                    .set_default_session(
+                        agent.clone(),
+                        AgentSetDefaultSessionRequest {
+                            operation_id: tasks::operation_id()?,
+                            session_id: Some(target.session_id),
+                        },
+                        tasks::options(),
+                    )
+                    .await
+                    .map_err(|e| e.to_string())?;
+                Ok(agent)
+            }
+            .await;
+            match result {
+                Ok(target) => {
+                    tasks::observe_agent(&client, &tx, target, selected, tasks::AgentWait::Metadata)
+                        .await
+                }
+                Err(error) => Msg::Catalogs(Err(error)),
+            }
+        });
+    }
+    fn apply_agent_defaults(&mut self) {
+        if !self.require_control() {
+            return;
+        }
+        let Some(agent_id) = self.current_agent_id().cloned() else {
+            return;
+        };
+        let client = self.client.clone();
+        let selected = self.selected_agent.clone();
+        let home = self.home.clone();
+        let fallback = self.new_agent.clone();
+        self.spawn_msg(async move {
+            let result = async {
+                let config = match home {
+                    Some(home) => {
+                        tokio::task::spawn_blocking(move || crate::config::load_new_agent(&home))
+                            .await
+                            .map_err(|e| e.to_string())?
+                            .map_err(|e| e.to_string())?
+                    }
+                    None => fallback,
+                };
+                let target = AgentRef {
+                    host_id: client.initial_info().host_id.clone(),
+                    agent_id,
+                };
+                let current = client
+                    .agent(target.clone(), tasks::options())
+                    .await
+                    .map_err(|e| e.to_string())?;
+                let receipt = client
+                    .update_agent(
+                        target.clone(),
+                        AgentUpdateRequest {
+                            operation_id: tasks::operation_id()?,
+                            expected_config_revision: current.info.config_revision,
+                            changes: AgentUpdateChanges {
+                                name: None,
+                                config: AgentConfigPatch {
+                                    role: Some(config.role),
+                                    session_defaults: Some(config.session_defaults),
+                                },
+                            },
+                        },
+                        tasks::options(),
+                    )
+                    .await
+                    .map_err(|e| e.to_string())?;
+                if matches!(receipt.result, MetadataUpdateResult::Saving { .. }) {
+                    loop {
+                        let current = client
+                            .agent(target.clone(), tasks::options())
+                            .await
+                            .map_err(|e| e.to_string())?;
+                        if let Some(error) = current.info.metadata_fault {
+                            return Err(error.to_string());
+                        }
+                        if !current.info.metadata_saving {
+                            break;
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+                    }
+                }
+                tasks::catalogs(&client, selected).await
+            }
+            .await;
+            Msg::Catalogs(result)
+        });
+    }
     fn submit_composer(&mut self, follow: bool) {
         if let super::Overlay::Unconfirmed { mode, .. } = &mut self.overlay {
             if let super::unconfirmed::ReviewMode::Edit(id) = *mode {
@@ -149,7 +414,7 @@ impl App {
             }
             return;
         }
-        if self.resident.current().is_none() && (!self.ready || self.loading_session) {
+        if !self.ready || self.loading_session || !self.require_control() {
             return;
         }
         if !self.composer.text().trim_end().is_empty() {
@@ -158,206 +423,387 @@ impl App {
             ) {
                 self.notice(
                     NoticeLevel::Error,
-                    "Local input confirmation budget is full; F8 to resolve retained inputs",
+                    "Local input confirmation budget is full; F8 to review retained inputs",
                 );
                 return;
             }
             let entry = self.composer.take_submission();
             self.submit_entry(entry, follow, None);
-        } else if !follow && self.resident.current().is_some_and(|s| s.queue.paused) {
-            self.call(protocol::METHOD_INPUT_RESUME, json!({}), SessionOp::Resumed);
+        } else if !follow && self.resident.current().is_some_and(|s| s.paused()) {
+            self.session_control("resume");
         }
     }
-
-    pub(super) fn submit_text(&mut self, text: String, follow: bool) {
-        self.submit_entry(super::composer::Entry::new(text), follow, None);
-    }
-
     pub(super) fn submit_entry(
         &mut self,
-        mut entry: super::composer::Entry,
+        entry: super::composer::Entry,
         follow: bool,
         retry_of: Option<u64>,
     ) {
-        if self.resident.current().is_none() {
-            if !self.local_input_room(entry.retained_bytes() + entry.text().len()) {
-                entry.discard_rollback();
+        if !self.require_control() {
+            self.composer.restore_submission(entry);
+            return;
+        }
+        if let Some(session) = self.resident.current() {
+            if session.state.data.lifecycle != SessionLifecycle::Open {
+                self.composer.restore_submission(entry);
+                self.notice(
+                    NoticeLevel::Error,
+                    "This Session is closed; create a new Session to send input",
+                );
+                return;
             }
+            let epoch = session.epoch;
+            if !session.is_busy() {
+                self.scroll = Scroll::Follow;
+            }
+            self.push_local_input(
+                epoch,
+                entry,
+                if follow {
+                    MessageMode::FollowUp
+                } else {
+                    MessageMode::Steer
+                },
+                retry_of,
+            );
+        } else {
             if !self.local_input_room(entry.retained_bytes() + entry.text().len()) {
                 self.composer.restore_submission(entry);
                 self.notice(
                     NoticeLevel::Error,
-                    "Local input confirmation budget is full; F8 to resolve retained inputs",
+                    "Local input confirmation budget is full; F8 to review retained inputs",
                 );
                 return;
             }
-            self.first_message = Some(entry.text().to_owned());
-            self.first_submission = Some(entry);
-            self.create_session();
-        } else {
-            if !self.is_busy() {
-                self.scroll = Scroll::Follow;
-            }
-            let mode = match follow {
-                true => InputMode::FollowUp,
-                false => InputMode::Steer,
-            };
-            self.push_local_input(
-                self.resident.current().unwrap().epoch,
-                entry,
-                mode,
-                retry_of,
+            self.start_session_creation(
+                Some(entry),
+                if follow {
+                    MessageMode::FollowUp
+                } else {
+                    MessageMode::Steer
+                },
             );
         }
     }
-
-    /// Esc on a running turn asks the Agent to cancel it; `turn.wait` ends it.
-    pub(super) fn interrupt(&mut self) {
-        let Some(live) = self
-            .resident
-            .current_mut()
-            .and_then(|session| session.live.as_mut())
-            .filter(|live| !live.interrupting)
-        else {
+    pub(super) fn create_session(&mut self) {
+        self.start_session_creation(None, MessageMode::Steer);
+    }
+    fn start_session_creation(&mut self, entry: Option<super::composer::Entry>, mode: MessageMode) {
+        if !self.require_control() {
+            if let Some(entry) = entry {
+                self.restore_creation_entry(entry);
+            }
+            return;
+        }
+        let Some(agent) = self.current_agent_id().cloned() else {
+            if let Some(entry) = entry {
+                self.restore_creation_entry(entry);
+            }
+            self.notice(NoticeLevel::Error, "Create or select an Agent first");
             return;
         };
-        live.interrupting = true;
-        let operation = Operation::CancelTurn(live.turn.loop_id.clone());
-        self.operate(self.resident.current().unwrap().epoch, operation);
+        if self.pending_creations.len() >= super::unconfirmed::MAX_OPERATIONS {
+            if let Some(entry) = entry {
+                self.restore_creation_entry(entry);
+            }
+            self.notice(
+                NoticeLevel::Error,
+                "Wait for pending Session creation to finish",
+            );
+            return;
+        }
+        self.open_generation += 1;
+        let generation = self.open_generation;
+        self.opening_target = None;
+        self.loading_session = true;
+        self.first_message = entry.as_ref().map(|entry| entry.text().to_owned());
+        self.pending_creations
+            .insert(generation, super::PendingCreation { entry, mode });
+        let client = self.client.clone();
+        let overrides = self.creation_overrides();
+        self.launch = super::LaunchSettings::default();
+        self.spawn_msg(async move {
+            Msg::Created(
+                generation,
+                tasks::create_session(&client, agent, overrides).await,
+            )
+        });
     }
-
-    /// Esc: interrupt a running turn, else cancel a compaction, else clear the draft.
+    pub(super) fn creation_failed(&mut self, generation: u64, error: String) {
+        if generation == self.open_generation {
+            self.loading_session = false;
+            self.first_message = None;
+        }
+        let creation = self
+            .pending_creations
+            .remove(&generation)
+            .expect("creation owns its failed result");
+        if let Some(entry) = creation.entry {
+            self.restore_creation_entry(entry);
+        }
+        self.notice(NoticeLevel::Error, error);
+    }
+    fn restore_creation_entry(&mut self, entry: super::composer::Entry) {
+        if self.resident.current().is_none() {
+            if self.composer.is_empty() {
+                self.composer.restore_submission(entry);
+            } else {
+                self.composer.insert(&format!("\n\n{}", entry.text()));
+            }
+        } else {
+            if !self.draft_text.is_empty() {
+                self.draft_text.push_str("\n\n");
+            }
+            self.draft_text.push_str(entry.text());
+        }
+    }
+    pub(super) fn request_session_open(&mut self, target: SessionRef) {
+        self.open_generation += 1;
+        let generation = self.open_generation;
+        self.first_message = None;
+        self.opening_target = Some((generation, target.clone()));
+        self.loading_session = true;
+        let client = self.client.clone();
+        let launch = std::mem::take(&mut self.launch);
+        self.spawn_msg(async move {
+            let result = tasks::open(client, target.clone(), launch).await;
+            Msg::Opened(generation, target, result)
+        });
+    }
+    pub(super) fn mutate(
+        &self,
+        epoch: u64,
+        label: &str,
+        work: impl Future<Output = Result<(), String>> + Send + 'static,
+    ) {
+        let label = label.to_owned();
+        self.spawn_for(epoch, async move {
+            SessionOp::Mutation {
+                label,
+                result: work.await,
+            }
+        });
+    }
+    fn session_control(&mut self, kind: &'static str) {
+        if !self.require_control() {
+            return;
+        }
+        let Some(session) = self.resident.current() else {
+            return;
+        };
+        let epoch = session.epoch;
+        let client = session.client.clone();
+        self.mutate(epoch, kind, async move {
+            let request = SessionControlRequest {
+                operation_id: tasks::operation_id()?,
+            };
+            match kind {
+                "pause" => client.pause(request, tasks::options()).await,
+                "resume" => client.resume(request, tasks::options()).await,
+                "load" => client.load(request, tasks::options()).await,
+                "unload" => client.unload(request, tasks::options()).await,
+                _ => unreachable!("terminal control action"),
+            }
+            .map(drop)
+            .map_err(|e| e.to_string())
+        });
+    }
+    fn close_session(&mut self) {
+        if !self.require_control() {
+            return;
+        }
+        let Some(session) = self.resident.current() else {
+            return;
+        };
+        let epoch = session.epoch;
+        let client = session.client.clone();
+        self.mutate(epoch, "close", async move {
+            client
+                .close(
+                    SessionCloseRequest {
+                        operation_id: tasks::operation_id()?,
+                    },
+                    tasks::options(),
+                )
+                .await
+                .map(drop)
+                .map_err(|e| e.to_string())
+        });
+    }
+    pub(super) fn interrupt(&mut self) {
+        if !self.require_control() {
+            return;
+        }
+        let Some(session) = self.resident.current_mut() else {
+            return;
+        };
+        let Some(turn_id) = session.state.data.active_turn_id.clone() else {
+            return;
+        };
+        if let Some(live) = &mut session.live {
+            if live.interrupting {
+                return;
+            }
+            live.interrupting = true;
+        }
+        let epoch = session.epoch;
+        let client = session.client.clone();
+        self.spawn_for(epoch, async move {
+            let result = async {
+                client
+                    .cancel_turn(
+                        TurnCancelRequest {
+                            operation_id: tasks::operation_id()?,
+                            turn_id: turn_id.clone(),
+                            keep_inbox: true,
+                        },
+                        tasks::options(),
+                    )
+                    .await
+                    .map(drop)
+                    .map_err(|e| e.to_string())
+            }
+            .await;
+            SessionOp::Cancelled { turn_id, result }
+        });
+    }
     pub fn escape(&mut self) {
         if self.is_busy() {
             self.interrupt();
-        } else if let Some(progress) = self
-            .resident
-            .current()
-            .and_then(|session| session.compaction.as_ref())
+            return;
+        }
+        let compact = self.resident.current().and_then(|s| {
+            s.state
+                .data
+                .compaction
+                .as_ref()
+                .map(|a| (s.epoch, s.client.clone(), a.source.clone()))
+        });
+        if let Some((
+            epoch,
+            client,
+            minicore_host_core::CompactionSource::Manual {
+                operation_id: target_operation_id,
+            },
+        )) = compact
         {
-            self.operate(
-                self.resident.current().unwrap().epoch,
-                Operation::CancelCompaction(progress.operation_id.clone()),
-            );
+            if !self.require_control() {
+                return;
+            }
+            self.mutate(epoch, "cancel compaction", async move {
+                client
+                    .cancel_compact(
+                        CompactCancelRequest {
+                            operation_id: tasks::operation_id()?,
+                            target_operation_id,
+                        },
+                        tasks::options(),
+                    )
+                    .await
+                    .map(drop)
+                    .map_err(|e| e.to_string())
+            });
         } else {
             self.composer.clear();
         }
     }
-
-    /// Asks for the context report now and then while a turn runs, because a
-    /// turn-start compaction has no event.
-    pub fn watch_context(&mut self) {
-        let Some(session) = self
-            .resident
-            .current_mut()
-            .filter(|session| session.is_busy())
-        else {
+    pub(super) fn compact(&mut self) {
+        if !self.require_control() {
+            return;
+        }
+        let Some(session) = self.resident.current() else {
             return;
         };
-        if session
-            .context_asked
-            .is_some_and(|asked| asked.elapsed() < CONTEXT_EVERY)
-        {
+        let epoch = session.epoch;
+        let client = session.client.clone();
+        self.mutate(epoch, "compact", async move {
+            client
+                .compact(
+                    CompactRequest {
+                        operation_id: tasks::operation_id()?,
+                    },
+                    tasks::options(),
+                )
+                .await
+                .map(drop)
+                .map_err(|e| e.to_string())
+        });
+    }
+    fn rename_target(&mut self, target: SessionRef, title: String) {
+        if !self.require_control() {
             return;
         }
-        session.context_asked = Some(tokio::time::Instant::now());
-        self.refresh_context();
-    }
-
-    pub(super) fn create_session(&mut self) {
-        self.opening_target = None;
-        self.loading_session = true;
-        // Without a profile the Agent picks its configured default; choosing
-        // one here would override that.
-        let params = self.create_fields();
         let client = self.client.clone();
+        let selected = self.selected_agent.clone();
         self.spawn_msg(async move {
-            Msg::Created(tasks::session(client, protocol::METHOD_SESSION_CREATE, params).await)
+            let result = async {
+                let session = client.session(target);
+                let info = session
+                    .info(tasks::options())
+                    .await
+                    .map_err(|e| e.to_string())?;
+                tasks::update(
+                    &session,
+                    info.config_revision,
+                    SessionUpdateChanges {
+                        title: NullablePatch::Set(title),
+                        config: SessionConfigPatch::default(),
+                    },
+                )
+                .await?;
+                tasks::catalogs(&client, selected).await
+            }
+            .await;
+            Msg::Catalogs(result)
         });
     }
-
-    pub(super) fn request_session_open(&mut self, id: String) {
-        self.open_generation = self
-            .open_generation
-            .checked_add(1)
-            .expect("open generation exhausted");
-        let generation = self.open_generation;
-        self.opening_target = Some((generation, id.clone()));
-        self.loading_session = true;
-        let client = self.client.clone();
-        self.spawn_msg(async move {
-            let params = json!({"session_id":id});
-            Msg::Opened(
-                generation,
-                id,
-                tasks::session(client, protocol::METHOD_SESSION_OPEN, params).await,
+    pub(super) fn update_session(&mut self, config: SessionConfigPatch) {
+        if !self.require_control() {
+            return;
+        }
+        let Some(session) = self.resident.current() else {
+            return;
+        };
+        let epoch = session.epoch;
+        let client = session.client.clone();
+        let revision = session.info.config_revision;
+        self.mutate(epoch, "update Session", async move {
+            tasks::update(
+                &client,
+                revision,
+                SessionUpdateChanges {
+                    title: NullablePatch::Unchanged,
+                    config,
+                },
             )
+            .await
         });
     }
-
-    pub(super) fn rename(&self, title: &str) {
-        if let Some(session) = self.resident.current() {
-            self.rename_for(session.epoch, title);
-        }
-    }
-
-    pub(super) fn rename_for(&self, epoch: u64, title: &str) {
-        if !title.trim().is_empty() {
-            self.operate(epoch, Operation::Rename(title.to_owned()));
-        }
-    }
-
-    pub(super) fn update_session(&self, fields: Value) {
-        if let Some(session) = self.resident.current() {
-            self.operate(session.epoch, Operation::Update(fields));
-        }
-    }
-
-    /// Ctrl+P: the next model in the catalog, wrapping at the end.
     fn cycle_model(&mut self, forward: bool) {
         if self.models.len() < 2 {
             self.notice(NoticeLevel::Info, "Only one model is available");
             return;
         }
-        let current = self.model_id();
         let at = self
             .models
             .iter()
-            .position(|model| Some(model.id.as_str()) == current);
-        let delta = if forward { 1 } else { -1 };
+            .position(|model| Some(model.model.as_str()) == self.model_id());
         let next = at.map_or(0, |at| {
-            crate::app::picker::step(at, delta, self.models.len())
+            super::picker::step(at, if forward { 1 } else { -1 }, self.models.len())
         });
-        self.set_model(self.models[next].id.clone());
+        self.set_model(self.models[next].model.clone());
     }
-
-    pub(super) fn compact(&mut self) {
-        let Some(session) = self.resident.current_mut() else {
-            return;
-        };
-        if session.is_busy() {
-            self.notice(NoticeLevel::Error, "Finish the running turn first");
-            return;
-        }
-        let epoch = session.epoch;
-        let operation = self.new_compaction();
-        self.operate(epoch, operation);
-    }
-
     fn copy_last_answer(&mut self) {
-        let text = self
+        match self
             .resident
             .current()
-            .and_then(|session| session.transcript.last_answer())
-            .map(str::to_owned);
-        match text {
+            .and_then(|s| s.transcript.last_answer())
+            .map(str::to_owned)
+        {
             Some(text) => self.copy(text),
-            None => self.notice(NoticeLevel::Error, "No answer to copy yet"),
+            None => self.notice(NoticeLevel::Info, "No answer to copy yet"),
         }
     }
-
-    /// Switches the palette and persists the choice, so `/theme` survives a
-    /// restart. A failed write is a notice, not a reason to keep the old theme.
     fn apply_theme(&mut self, kind: ThemeKind) {
         if let Some(home) = &self.home {
             self.local_files.theme(&self.tx, home.config_file(), kind);
@@ -366,204 +812,171 @@ impl App {
         self.styles = Styles::of(Palette::for_kind(kind));
         self.layout.clear();
     }
-
-    /// The editor command: config first, then `$VISUAL`/`$EDITOR`.
     pub fn editor_command(&self) -> Result<Vec<String>, String> {
-        crate::config::editor_command(&self.editor).ok_or_else(|| {
-            "No editor configured: set `editor` under [ui] in config.toml or $VISUAL/$EDITOR"
-                .to_owned()
-        })
+        crate::config::editor_command(&self.editor)
+            .ok_or_else(|| "No editor configured: set [ui] editor or $VISUAL/$EDITOR".into())
     }
-
-    /// Takes the draft Ctrl+G asked the main loop to edit; the terminal
-    /// belongs to the loop, which reports back through `Msg::DraftEdited`.
     pub fn take_edit_request(&mut self) -> Option<String> {
         self.edit_request.take()
     }
-
     pub(super) fn answer(&mut self, answer: Answer) {
-        if let Some(epoch) = self.resident.current().map(|session| session.epoch) {
-            self.answer_for(epoch, answer);
+        if !self.require_control() {
+            return;
         }
-    }
-
-    pub(super) fn answer_for(&mut self, epoch: u64, answer: Answer) {
-        let Some(interaction) = self
-            .resident
-            .get(epoch)
-            .and_then(|session| session.interaction.as_ref())
-        else {
+        let Some(session) = self.resident.current_mut() else {
             return;
         };
-        match super::operation::answer(interaction, answer) {
-            Ok(Some(operation)) => {
-                self.operate(epoch, operation);
-                self.refresh_control_for(epoch);
+        let Some(pending) = session.interaction.as_mut() else {
+            return;
+        };
+        if pending.submitted {
+            return;
+        }
+        let response = match (&pending.data.request, answer) {
+            (InteractionRequestData::Approval { .. }, Answer::Allow | Answer::Choice(0)) => {
+                Some(InteractionAnswerData::Approval {
+                    decision: ApprovalAnswer::AllowOnce,
+                })
             }
-            Ok(None) => {}
-            Err(message) => self.notice(NoticeLevel::Error, message),
-        }
-    }
-
-    /// A new approval: answered silently for a tool allowed for the session,
-    /// else its card is read for the input it would run, which an `edit`
-    /// card only has once it has run.
-    pub(super) fn on_approval_requested(&mut self, epoch: u64) {
-        let Some(session) = self.resident.get(epoch) else {
-            return;
+            (InteractionRequestData::Approval { .. }, Answer::Deny | Answer::Choice(_)) => {
+                Some(InteractionAnswerData::Approval {
+                    decision: ApprovalAnswer::Deny,
+                })
+            }
+            (InteractionRequestData::ToolInput { request }, Answer::Text(text))
+                if request.answer_kind == ToolInputAnswerKind::Text =>
+            {
+                Some(InteractionAnswerData::ToolInput {
+                    answer: ToolInputAnswer::Text(Text::new(text)),
+                })
+            }
+            (InteractionRequestData::ToolInput { request }, Answer::Choice(index))
+                if request.answer_kind == ToolInputAnswerKind::SingleChoice =>
+            {
+                Some(InteractionAnswerData::ToolInput {
+                    answer: ToolInputAnswer::Choice { index },
+                })
+            }
+            (InteractionRequestData::ToolInput { .. }, Answer::Deny) => None,
+            _ => return,
         };
-        let Some(interaction) = session.interaction.as_ref() else {
-            return;
+        let operation_id = match tasks::operation_id() {
+            Ok(id) => id,
+            Err(e) => {
+                self.error(e);
+                return;
+            }
         };
-        let approval = matches!(interaction.kind, InteractionKind::Approval);
-        if approval && session.allowed_tools.contains(&interaction.tool_name) {
-            self.answer_for(epoch, Answer::Allow);
-            return;
-        }
-        let card = session
-            .transcript
-            .find_tool_by_call_id(&interaction.tool_call_id)
-            .filter(|call| call.expanded_input.is_none());
-        if let Some(call) = card {
-            let key = call.key.clone();
-            let hydrated = key.clone();
-            self.read_tool(&key, move |read| {
-                SessionOp::ToolHydrated(hydrated, read.ok())
-            });
-        }
-        if !self.resident.is_current(epoch) {
-            self.background_approval(epoch);
-        } else {
-            self.ring |= self
-                .resident
-                .get(epoch)
-                .and_then(|session| session.live.as_ref())
-                .map(|live| live.started.elapsed())
-                >= Some(LONG_TURN);
-        }
-    }
-
-    pub(super) fn load_older_for(&mut self, epoch: u64) {
-        let Some(session) = self.resident.get_mut(epoch) else {
-            return;
-        };
-        if session.loading_older || session.loaded_from == 0 {
-            return;
-        }
-        session.loading_older = true;
-        // Below the display floor the transcript continues in the canonical
-        // history, behind the compaction summary.
-        let before = session.hidden_items();
-        let window = if session.loaded_from <= session.first_item {
-            read::Window::CanonicalBefore(before)
-        } else {
-            read::Window::Before(before)
-        };
-        self.read_history_for(epoch, window);
-    }
-    pub fn load_older(&mut self) {
-        if let Some(epoch) = self.resident.current().map(|session| session.epoch) {
-            self.load_older_for(epoch);
-        }
-    }
-
-    /// Reads a history window for the foreground session.
-    pub(super) fn read_history_for(&self, epoch: u64, window: read::Window) {
-        let Some(session) = self.resident.get(epoch) else {
-            return;
-        };
-        let (client, session_id) = (self.client.clone(), session.info.session_id.clone());
+        let turn_id = pending.turn_id.clone();
+        let load_id = pending.load_id.clone();
+        let interaction_id = pending.data.interaction_id.clone();
+        pending.submitted = true;
+        let epoch = session.epoch;
+        let client = session.client.clone();
         self.spawn_for(epoch, async move {
-            let tail = matches!(&window, read::Window::Tail);
-            let history = read::read_history(client, session_id, window).await;
-            if tail {
-                SessionOp::Tail(history)
-            } else {
-                SessionOp::Page(history)
+            let result = match response {
+                Some(answer) => client
+                    .answer_interaction(
+                        InteractionAnswerRequest {
+                            operation_id,
+                            turn_id: turn_id.clone(),
+                            load_id: load_id.clone(),
+                            interaction_id: interaction_id.clone(),
+                            answer,
+                        },
+                        tasks::options(),
+                    )
+                    .await
+                    .map(drop),
+                None => client
+                    .cancel_turn(
+                        TurnCancelRequest {
+                            operation_id,
+                            turn_id: turn_id.clone(),
+                            keep_inbox: true,
+                        },
+                        tasks::options(),
+                    )
+                    .await
+                    .map(drop),
+            }
+            .map_err(|e| e.to_string());
+            SessionOp::Answered {
+                turn_id,
+                load_id,
+                interaction_id,
+                result,
             }
         });
     }
-
-    /// Asks for a fresh context report.
-    pub fn refresh_context_for(&self, epoch: u64) {
-        self.call_for(
-            epoch,
-            protocol::METHOD_SESSION_CONTEXT,
-            json!({}),
-            SessionOp::Context,
-        );
-    }
-    pub fn refresh_context(&self) {
-        if let Some(epoch) = self.resident.current().map(|session| session.epoch) {
-            self.refresh_context_for(epoch);
+    pub fn load_older(&mut self) {
+        let Some(session) = self.resident.current_mut() else {
+            return;
+        };
+        if session.loading_older {
+            return;
         }
+        let Some(mut window) = session.history.take() else {
+            return;
+        };
+        if window.next_cursor.is_none() {
+            session.history = Some(window);
+            return;
+        }
+        session.loading_older = true;
+        let epoch = session.epoch;
+        let client = session.client.clone();
+        self.spawn_for(epoch, async move {
+            let result = window.older(&client, 60).await.map_err(|e| e.to_string());
+            SessionOp::Older { window, result }
+        });
     }
-
-    /// Asks for the footer's context usage.
-    pub(super) fn refresh_presentation_for(&mut self, epoch: u64) {
-        let session = self.session_mut(epoch);
-        session.presentation_asked = Some(tokio::time::Instant::now());
-        session.presentation_in_flight = true;
-        self.call_for(
-            epoch,
-            protocol::METHOD_SESSION_PRESENTATION,
-            json!({}),
-            SessionOp::Presentation,
-        );
-    }
-
-    /// Refreshes branch and context independently; periodic usage reads never run Git.
-    pub(super) fn refresh_session_details_for(&mut self, epoch: u64) {
-        self.refresh_presentation_for(epoch);
-        self.call_for(
-            epoch,
-            protocol::METHOD_WORKSPACE_STATUS,
-            json!({}),
-            SessionOp::WorkspaceStatus,
-        );
-    }
-
-    /// Alt+↑ takes every queued message back to an empty composer.
     fn recall_queued(&mut self) {
+        if !self.require_control() {
+            return;
+        }
         if !self.composer.is_empty() {
             self.notice(
                 NoticeLevel::Info,
-                "Clear the draft before recalling a queued message",
+                "Clear the draft before recalling queued input",
             );
-        } else if self
-            .resident
-            .current()
-            .is_some_and(|s| !s.queue.items.is_empty())
-        {
-            self.recall_queue();
+            return;
         }
-    }
-
-    /// Asks the Agent to give back every queued message.
-    pub(super) fn recall_queue(&self) {
-        self.call(
-            protocol::METHOD_INPUT_RECALL,
-            json!({}),
-            SessionOp::Recalled,
-        );
-    }
-
-    /// Returns refused text to the operation that sent it, else to the session, else to the composer.
-    ///
-    /// The only routing identity is the operation: text never follows whichever
-    /// device most recently sent something to the session.
-    pub(super) fn restore_draft(&mut self, text: &str) {
-        if let Some(session) = self.resident.current_mut() {
-            if self.remote.active() {
-                session.returned.push(text.to_owned());
-                return;
+        let Some(session) = self.resident.current() else {
+            return;
+        };
+        let epoch = session.epoch;
+        let client = session.client.clone();
+        self.spawn_for(epoch, async move {
+            let mut removed = Vec::new();
+            let result = async {
+                let inputs = client
+                    .inputs(tasks::options())
+                    .await
+                    .map_err(|e| e.to_string())?;
+                for input in inputs.next_step.into_iter().chain(inputs.next_turn) {
+                    client
+                        .remove_input(
+                            InputRemoveRequest {
+                                operation_id: tasks::operation_id()?,
+                                message_id: input.input.message_id.clone(),
+                                expected_controller_revision: None,
+                            },
+                            tasks::options(),
+                        )
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    removed.push(input);
+                }
+                Ok::<_, String>(())
             }
-            session.draft = Some(text.to_owned());
-        }
-        self.restore_to_composer(text);
+            .await;
+            SessionOp::Recalled {
+                removed,
+                error: result.err(),
+            }
+        });
     }
-
-    /// Puts `text` in the composer, behind a draft typed meanwhile.
     pub(super) fn restore_to_composer(&mut self, text: &str) {
         if self.composer.is_empty() {
             self.composer.restore_text(text);
@@ -571,8 +984,6 @@ impl App {
             self.composer.insert(text);
         }
     }
-
-    /// Copies `text` through the clipboard; success flashes, failure is a notice.
     pub fn copy(&mut self, text: String) {
         self.spawn_msg(async move {
             match crate::clipboard::copy(&text).await {
@@ -580,6 +991,102 @@ impl App {
                 Ok(crate::clipboard::Copied::Osc52) => Msg::Flash("Copied via OSC 52".into()),
                 Err(error) => Msg::Notice(NoticeLevel::Error, error),
             }
+        });
+    }
+    fn reload_host(&mut self) {
+        if !self.require_control() || self.reloading {
+            return;
+        }
+        let Some(path) = self.host_config_file.clone() else {
+            self.notice(NoticeLevel::Error, "No Host configuration file is selected");
+            return;
+        };
+        self.reloading = true;
+        let client = self.client.clone();
+        let tx = self.tx.clone();
+        let home = self.home.clone();
+        let defaults = self.new_agent.clone();
+        self.spawn_msg(async move {
+            let result = async {
+                let (config, new_agent, templates) = tokio::task::spawn_blocking(move || {
+                    let config =
+                        crate::config::load_host_config(&path).map_err(|e| e.to_string())?;
+                    let new_agent = match home.as_ref() {
+                        Some(home) => {
+                            crate::config::load_new_agent(home).map_err(|e| e.to_string())?
+                        }
+                        None => defaults,
+                    };
+                    Ok::<_, String>((config, new_agent, super::templates::load(home.as_ref())))
+                })
+                .await
+                .map_err(|e| e.to_string())??;
+                let current = client
+                    .config(tasks::options())
+                    .await
+                    .map_err(|e| e.to_string())?;
+                let operation_id = tasks::operation_id()?;
+                let mut receipt = client
+                    .reload(
+                        HostReloadRequest {
+                            operation_id: operation_id.clone(),
+                            expected_revision: current.config_revision,
+                            candidate: config,
+                        },
+                        tasks::options(),
+                    )
+                    .await
+                    .map_err(|e| format!("Host reload {operation_id}: {e}"))?;
+                let mut displayed = None;
+                loop {
+                    match &receipt.result {
+                        HostReloadResult::Applied { .. }
+                        | HostReloadResult::RestartRequired { .. } => break,
+                        HostReloadResult::Failed { error, .. } => {
+                            return Err(format!("Host reload {operation_id}: {error}"));
+                        }
+                        HostReloadResult::Preparing { .. } | HostReloadResult::Applying { .. } => {
+                            if displayed.as_ref() != Some(&receipt.result) {
+                                let stage =
+                                    if matches!(receipt.result, HostReloadResult::Preparing { .. })
+                                    {
+                                        "preparing resources"
+                                    } else {
+                                        "applying configuration"
+                                    };
+                                let _ = tx
+                                    .send(Msg::Notice(
+                                        NoticeLevel::Info,
+                                        format!("Host reload: {stage}"),
+                                    ))
+                                    .await;
+                                displayed = Some(receipt.result.clone());
+                            }
+                        }
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                    receipt = match client
+                        .receipt(operation_id.clone(), tasks::options())
+                        .await
+                        .map_err(|e| {
+                            format!("Host reload {operation_id} outcome is unconfirmed: {e}")
+                        })? {
+                        Receipt::HostReload(receipt) => receipt,
+                        _ => {
+                            return Err(format!(
+                                "Host reload {operation_id} returned a different operation kind"
+                            ));
+                        }
+                    };
+                }
+                Ok(super::Reloaded {
+                    result: receipt.result,
+                    new_agent,
+                    templates,
+                })
+            }
+            .await;
+            Msg::Reloaded(result.map(Box::new))
         });
     }
 }

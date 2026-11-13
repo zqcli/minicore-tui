@@ -6,8 +6,8 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crate::app::commands::{self, Executed};
 use crate::app::composer::Composer;
 use crate::app::{Action, App, NoticeLevel, Panel, Scroll};
-use crate::protocol::Reasoning;
 use crate::transcript::Block;
+use minicore_host_protocol::ReasoningPreference;
 
 /// A second Ctrl+C within this long of the first quits.
 const QUIT_WINDOW: std::time::Duration = std::time::Duration::from_millis(500);
@@ -80,7 +80,7 @@ impl App {
         }
         match key.code {
             // Ctrl+Enter is for terminals that cannot deliver Alt+Enter.
-            KeyCode::Enter if alt || ctrl => return Some(Action::QueueFollowUp),
+            KeyCode::Enter if alt || ctrl => return Some(Action::Submit { follow: true }),
             KeyCode::Enter if shift => self.composer.newline(),
             KeyCode::Enter => return self.submit_or_command(),
             KeyCode::Char('j') if ctrl => self.composer.newline(),
@@ -233,19 +233,18 @@ impl App {
             }
             return;
         }
-        if !self.remote.active()
-            && self.overlay.is_none()
+        if self.overlay.is_none()
             && self.fatal.is_none()
             && let Some(session) = self.resident.current_mut()
             && session
                 .interaction
                 .as_ref()
-                .is_some_and(|pending| matches!(pending.kind, crate::app::InteractionKind::Text))
+                .is_some_and(|pending| pending.is_text())
         {
             session.interaction_editor.insert(text);
             return;
         }
-        if (self.has_interaction() && !self.remote.active())
+        if self.has_interaction()
             || self.fatal.is_some()
             || !matches!(
                 self.overlay,
@@ -260,19 +259,6 @@ impl App {
         self.sync_completion(true, true);
     }
 
-    /// Whether this device may run `executed`; a refusal flashes and the draft stays.
-    pub(super) fn permitted(&mut self, executed: &Executed) -> bool {
-        let allowed = match executed {
-            Executed::Action(action) => self.local_allowed(action),
-            Executed::Panel(panel) => self.local_panel_allowed(panel),
-            Executed::Noop => true,
-        };
-        if !allowed {
-            self.remote_flash();
-        }
-        allowed
-    }
-
     /// A draft is a command only when its first word names one; anything else
     /// starting with `/` (a path, say) is a prompt.
     fn submit_or_command(&mut self) -> Option<Action> {
@@ -280,7 +266,6 @@ impl App {
         let executed =
             commands::parse(&text).and_then(|(name, argument)| commands::execute(name, argument));
         match executed {
-            Some(executed) if !self.permitted(&executed) => None,
             Some(Executed::Action(action)) => {
                 self.composer.clear();
                 Some(action)
@@ -302,10 +287,6 @@ impl App {
     /// A draft no built-in command claims: a template, a typo that Enter warns
     /// about once, or a prompt. `//` escapes a leading slash.
     fn submit_line(&mut self, text: &str) -> Option<Action> {
-        if self.remote.active() {
-            self.remote_flash();
-            return None;
-        }
         match self.prompt_text(text) {
             Ok(None) => {}
             Ok(Some(rewritten)) => self.composer.set_text(&rewritten),
@@ -321,7 +302,7 @@ impl App {
             }
             Err(_) => {}
         }
-        Some(Action::Submit)
+        Some(Action::Submit { follow: false })
     }
 
     fn page_rows(&self) -> isize {
@@ -361,7 +342,7 @@ impl App {
     }
 
     /// Shift+Tab: the next supported reasoning level.
-    fn next_reasoning(&self) -> Option<Reasoning> {
+    fn next_reasoning(&self) -> Option<ReasoningPreference> {
         let current = self.reasoning()?;
         let levels = self.reasoning_levels();
         let next = levels

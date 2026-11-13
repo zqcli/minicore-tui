@@ -50,10 +50,8 @@ impl Uses {
                 }
             }
             Block::Tool(call) => Self::expanded(call.expanded.is_none()),
-            Block::Compaction { .. } => Self::expanded(true),
-            Block::TurnEnd { outcome, .. } => {
-                Self::expanded(outcome.provider().is_some_and(|p| p.message.is_some()))
-            }
+            Block::Compaction { .. } | Block::Summary { .. } => Self::expanded(true),
+            Block::TurnEnd { reason, .. } => Self::expanded(reason.is_some()),
             _ => Self::expanded(false),
         }
     }
@@ -432,7 +430,7 @@ impl<S> Layout<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::read::UserKind;
+    use crate::transcript::UserKind;
 
     fn user(text: &str) -> Block {
         Block::User {
@@ -498,11 +496,9 @@ mod tests {
 
     fn card(expanded: Option<bool>) -> Block {
         let mut call = crate::transcript::ToolCall::new(
-            crate::protocol::ToolRef {
-                session_id: "s".into(),
-                loop_id: "l".into(),
-                request_index: 0,
-                tool_call_id: "c".into(),
+            minicore_host_protocol::ToolCallRef {
+                turn_id: "00000000000000000001".parse().unwrap(),
+                tool_call_id: minicore_host_protocol::ToolCallId("c".into()),
             },
             "bash",
         );
@@ -512,13 +508,14 @@ mod tests {
 
     fn answer(reasoning: &str) -> Block {
         Block::Assistant {
-            key: crate::transcript::RequestKey {
-                loop_id: "l".into(),
-                request_index: 0,
-            },
+            key: crate::transcript::RequestKey::response(
+                "00000000000000000001".parse().unwrap(),
+                0,
+            ),
             reasoning: reasoning.into(),
             text: "reply".into(),
             streaming: false,
+            partial: false,
             expanded: None,
         }
     }

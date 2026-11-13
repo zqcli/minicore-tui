@@ -1,790 +1,684 @@
-//! Durable history items as blocks, and the Markdown export of them.
+//! Native accepted records as blocks and streaming Markdown.
 
-use super::{Block, HistorySource, RequestKey, ToolCall, ToolState, Transcript};
-use crate::protocol::ToolRef;
-use crate::protocol::read::{
-    InterruptedRequest, RawHistoryItem, RuntimeAssistantPart, RuntimeItem, TurnRecord, UserKind,
-};
-use crate::protocol::stamp::unix_millis;
+use std::io::{self, Write};
 
-// Records and the display summary share an item position, but are not that raw item.
-const INTERRUPTED_PART: usize = usize::MAX - 2;
-const TERMINAL_PART: usize = usize::MAX - 1;
-const SUMMARY_PART: usize = usize::MAX;
+use minicore_host_core::{HistoryItemData, HistoryRecordData, TurnResultSnapshot};
+use minicore_host_protocol::{MessageMode, PersistenceState, ToolCallId, ToolCallRef};
+use minicore_host_runtime::model::{AssistantPart, Usage};
+
+use super::{Block, HistorySource, RequestKey, ToolCall, ToolKey, Transcript, UserKind};
 
 impl Transcript {
-    /// Maps a verified history window, keeping its source items separate from turn-result indices.
-    pub fn from_history(
-        items: &[RawHistoryItem],
-        records: &[TurnRecord],
-        session_id: &str,
-        from: usize,
-    ) -> Self {
+    pub fn from_history(records: &[HistoryRecordData]) -> Self {
         let mut transcript = Self::default();
-        append_history_from(&mut transcript, items, records, session_id, from);
+        transcript.install_history_records(records);
         transcript
     }
 
-    /// Keeps previously displayed source rows outside the incoming verified window.
-    pub fn with_previous_history(self, previous: &Self, covered: std::ops::Range<usize>) -> Self {
-        let mut rows: Vec<_> = previous
-            .metadata
+    /// Installs accepted records by position without rebuilding streamed bodies.
+    pub fn install_history_records(&mut self, records: &[HistoryRecordData]) {
+        for record in records {
+            append_record(self, record);
+        }
+        self.sort_history();
+    }
+
+    pub fn from_turn_result(result: &TurnResultSnapshot) -> Self {
+        let turn = &result.source.turn_id;
+        let mut records: Vec<_> = result
+            .data
+            .history
             .iter()
-            .enumerate()
-            .filter_map(|(at, meta)| {
-                meta.origin
-                    .history
-                    .filter(|source| {
-                        !covered.contains(&source.item) || source.part >= INTERRUPTED_PART
-                    })
-                    .map(|source| (source, false, at))
+            .map(|item| HistoryRecordData {
+                position: item.position,
+                recorded_at: item.recorded_at,
+                turn_id: Some(turn.clone()),
+                response_index: item.response_index,
+                item: item.item.clone(),
             })
             .chain(
-                self.metadata
+                result
+                    .data
+                    .partials
                     .iter()
-                    .enumerate()
-                    .filter_map(|(at, meta)| meta.origin.history.map(|source| (source, true, at))),
+                    .map(|partial| HistoryRecordData {
+                        position: partial.position,
+                        recorded_at: partial.recorded_at,
+                        turn_id: Some(turn.clone()),
+                        response_index: Some(partial.response_index),
+                        item: HistoryItemData::Partial {
+                            partial: partial.partial.clone(),
+                        },
+                    }),
             )
             .collect();
-        let mut last_items = std::collections::HashMap::new();
-        for (source, fresh, at) in &rows {
-            let transcript = if *fresh { &self } else { previous };
-            let loop_id = transcript.blocks[*at].loop_id().or_else(|| {
-                transcript
-                    .user_identity(*at)
-                    .map(|user| user.loop_id.as_str())
+        if let Some(saved) = &result.data.saved_terminal {
+            records.push(HistoryRecordData {
+                position: saved.position,
+                recorded_at: saved.recorded_at,
+                turn_id: Some(turn.clone()),
+                response_index: None,
+                item: HistoryItemData::TurnFinished {
+                    terminal: saved.terminal.clone(),
+                },
             });
-            if let Some(id) = loop_id {
-                let last = last_items.entry(id).or_insert(source.item);
-                *last = (*last).max(source.item);
+        }
+        records.sort_by_key(|record| record.position);
+        let mut transcript = Self::from_history(&records);
+        if result.data.saved_terminal.is_some()
+            && let Some(Block::TurnEnd { saving, .. }) = transcript
+                .blocks
+                .iter_mut()
+                .find(|block| matches!(block, Block::TurnEnd { turn_id, .. } if turn_id == turn))
+        {
+            *saving = Some(PersistenceState::Persisted);
+        }
+        if let Some(info) = &result.data.info
+            && let Some(outcome) = info.outcome
+        {
+            let block = Block::TurnEnd {
+                turn_id: turn.clone(),
+                outcome,
+                reason: info.fault.as_ref().map(|fault| fault.message().to_owned()),
+                duration: None,
+                requests: info.requests,
+                tool_rounds: info.tool_rounds,
+                usage: Usage::default(),
+                changes: None,
+                saving: Some(info.persistence),
+            };
+            let at = match transcript.blocks.iter().position(
+                |block| matches!(block, Block::TurnEnd { turn_id, .. } if turn_id == turn),
+            ) {
+                Some(at) => {
+                    transcript.blocks[at] = block;
+                    at
+                }
+                None => transcript.push(block),
+            };
+            if let (Some(position), Some(recorded_at)) = (info.history_position, info.recorded_at) {
+                transcript.add_history_source(
+                    at,
+                    HistorySource {
+                        position,
+                        recorded_at,
+                        turn_id: Some(turn.clone()),
+                        response_index: None,
+                        part: 0,
+                    },
+                );
             }
         }
-        for (source, fresh, at) in &mut rows {
-            if let Block::TurnEnd { loop_id, .. } =
-                &if *fresh { &self } else { previous }.blocks[*at]
-            {
-                source.item = last_items[loop_id.as_str()];
-            }
-        }
-        rows.sort_by_key(|(source, _, _)| *source);
-        let mut ends = std::collections::HashSet::new();
-        let mut replies = std::collections::HashSet::new();
-        let mut tools = std::collections::HashSet::new();
-        let mut summaries = std::collections::BTreeSet::new();
-        // A page's record can repeat the interrupted reply and terminal of a turn it cuts.
-        rows.reverse();
-        rows.retain(|(source, fresh, at)| {
-            match &if *fresh { &self } else { previous }.blocks[*at] {
-                Block::TurnEnd { loop_id, .. } => ends.insert(loop_id.clone()),
-                Block::Assistant { key, .. } => replies.insert(key.clone()),
-                Block::Tool(call) => tools.insert(call.key.clone()),
-                Block::Compaction { .. } => summaries.insert(*source),
-                _ => true,
-            }
-        });
-        rows.reverse();
-        let mut result = Self::default();
-        for (history, fresh, at) in rows {
-            let source = if fresh { &self } else { previous };
-            let inserted = result.len();
-            result.splice_copy(inserted..inserted, source, at..at + 1);
-            result.metadata[inserted].origin.history = Some(history);
-        }
-        result
+        transcript.sort_history();
+        transcript
     }
 }
 
-/// Identifies a block a reconcile kept although the canonical body omits it, so
-/// the reader is told that text is temporary rather than authoritative.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum PreservedKey {
-    Assistant(RequestKey),
-    AssistantText(RequestKey),
-    AssistantReasoning(RequestKey),
-    User(String),
-    Tool(ToolRef),
+pub fn append_history_record(transcript: &mut Transcript, record: &HistoryRecordData) {
+    transcript.install_history_records(std::slice::from_ref(record));
 }
 
-impl PreservedKey {
-    pub fn belongs_to(&self, block: &Block) -> bool {
-        match (self, block) {
-            (
-                Self::AssistantText(key) | Self::AssistantReasoning(key),
-                Block::Assistant { key: other, .. },
-            ) => key == other,
-            _ => self.matches_block(block),
-        }
-    }
-
-    pub(super) fn matches_block(&self, block: &Block) -> bool {
-        match (self, block) {
-            (Self::Assistant(key), Block::Assistant { key: other, .. }) => key == other,
-            (Self::User(text), Block::User { text: other, .. }) => text == other,
-            (Self::Tool(key), Block::Tool(call)) => key == &call.key,
-            _ => false,
-        }
-    }
-
-    pub fn of(block: &Block) -> Option<Self> {
-        match block {
-            Block::Assistant { key, .. } => Some(Self::Assistant(key.clone())),
-            Block::User { text, .. } => Some(Self::User(text.clone())),
-            Block::Tool(call) => Some(Self::Tool(call.key.clone())),
-            _ => None,
-        }
+fn source(record: &HistoryRecordData, part: usize) -> HistorySource {
+    HistorySource {
+        position: record.position,
+        recorded_at: record.recorded_at,
+        turn_id: record.turn_id.clone(),
+        response_index: record.response_index,
+        part,
     }
 }
 
-/// The canonical body with the live-only text kept, and the keys of that text.
-///
-/// The blocks of a turn's durable items with what only the live turn showed
-/// put back: card facts, thinking and text the items lack, and the blocks no
-/// item covers, such as the request an interrupt cut short.
-pub fn merge_live(
-    mut durable: Vec<Block>,
-    live: &[Block],
-) -> (Vec<Block>, Vec<PreservedKey>, Vec<usize>) {
-    let mut preserved = Vec::new();
-    for block in &mut durable {
-        match block {
-            Block::Tool(call) => {
-                if let Some(known) = live.iter().find_map(|live| match live {
-                    Block::Tool(known) if known.key == call.key => Some(known),
-                    _ => None,
-                }) {
-                    call.keep_live_facts(known);
+fn request_key(record: &HistoryRecordData) -> RequestKey {
+    match (&record.turn_id, record.response_index) {
+        (Some(turn_id), Some(response_index)) => {
+            RequestKey::response(turn_id.clone(), response_index)
+        }
+        _ => RequestKey::History {
+            position: record.position,
+        },
+    }
+}
+
+fn tool_key(record: &HistoryRecordData, tool_call_id: ToolCallId) -> ToolKey {
+    match &record.turn_id {
+        Some(turn_id) => ToolKey::Call(ToolCallRef {
+            turn_id: turn_id.clone(),
+            tool_call_id,
+        }),
+        None => ToolKey::History {
+            position: record.position,
+            tool_call_id,
+        },
+    }
+}
+
+fn append_record(transcript: &mut Transcript, record: &HistoryRecordData) {
+    if transcript.contains_history_position(record.position) {
+        for at in 0..transcript.metadata.len() {
+            let mut changed = false;
+            for source in &mut transcript.metadata[at].history {
+                if source.position == record.position
+                    && source.response_index.is_none()
+                    && record.response_index.is_some()
+                {
+                    source.response_index = record.response_index;
+                    changed = true;
                 }
             }
-            Block::Assistant {
+            if changed {
+                if let Block::Tool(call) = &mut transcript.blocks[at] {
+                    call.response_index = record.response_index;
+                }
+                transcript.bump(at);
+            }
+        }
+        return;
+    }
+    match &record.item {
+        HistoryItemData::User {
+            received_at,
+            text,
+            mode,
+            message_id,
+            ..
+        } => {
+            let at = transcript.push(Block::User {
+                text: text.clone(),
+                kind: match mode {
+                    Some(MessageMode::Steer) => UserKind::Steering,
+                    Some(MessageMode::FollowUp) => UserKind::FollowUp,
+                    None => UserKind::Prompt,
+                },
+                at: Some(received_at.unwrap_or(record.recorded_at)),
+            });
+            transcript.identify_user(at, record.turn_id.clone(), message_id.clone());
+            transcript.add_history_source(at, source(record, 0));
+        }
+        HistoryItemData::Assistant { response } => {
+            append_response(transcript, record, &response.content, false);
+        }
+        HistoryItemData::Partial { partial } => {
+            append_response(transcript, record, &partial.content, true);
+        }
+        HistoryItemData::ToolResult {
+            tool_call_id,
+            name,
+            result,
+        } => {
+            let key = tool_key(record, tool_call_id.clone());
+            let known = transcript.blocks.iter().rposition(|block| match block {
+                Block::Tool(call) => {
+                    call.key == key
+                        || (record.turn_id.is_none()
+                            && call.key.turn_id().is_none()
+                            && call.key.tool_call_id() == tool_call_id)
+                }
+                _ => false,
+            });
+            let at = known.unwrap_or_else(|| {
+                transcript.push(Block::Tool(Box::new(ToolCall::with_key(key, name))))
+            });
+            if let Block::Tool(call) = &mut transcript.blocks[at] {
+                call.response_index = record.response_index;
+                call.apply_result(result);
+            }
+            transcript.add_history_source(at, source(record, 0));
+        }
+        HistoryItemData::Summary { text } => {
+            let at = transcript.push(Block::Summary { text: text.clone() });
+            transcript.add_history_source(at, source(record, 0));
+        }
+        HistoryItemData::Compaction {
+            text,
+            source_position,
+            covered_items,
+        } => {
+            let at = transcript.push(Block::Compaction {
+                source_position: *source_position,
+                covered_items: *covered_items,
+                summary: text.clone(),
+            });
+            transcript.add_history_source(at, source(record, 0));
+        }
+        HistoryItemData::TurnFinished { terminal } => {
+            let Some(turn_id) = &record.turn_id else {
+                return;
+            };
+            let block = Block::TurnEnd {
+                turn_id: turn_id.clone(),
+                outcome: terminal.outcome,
+                reason: terminal.reason.clone(),
+                duration: None,
+                requests: terminal.requests,
+                tool_rounds: terminal.tool_rounds,
+                usage: Usage::default(),
+                changes: None,
+                saving: None,
+            };
+            let at = match transcript.blocks.iter().position(
+                |block| matches!(block, Block::TurnEnd { turn_id: known, .. } if known == turn_id),
+            ) {
+                Some(at) => {
+                    let mut block = block;
+                    if let (
+                        Block::TurnEnd {
+                            duration,
+                            changes,
+                            saving,
+                            ..
+                        },
+                        Block::TurnEnd {
+                            duration: old_duration,
+                            changes: old_changes,
+                            saving: old_saving,
+                            ..
+                        },
+                    ) = (&mut block, &transcript.blocks[at])
+                    {
+                        *duration = *old_duration;
+                        *changes = *old_changes;
+                        *saving = *old_saving;
+                    }
+                    transcript.blocks[at] = block;
+                    at
+                }
+                None => transcript.push(block),
+            };
+            transcript.add_history_source(at, source(record, 0));
+        }
+    }
+}
+
+fn append_response(
+    transcript: &mut Transcript,
+    record: &HistoryRecordData,
+    content: &[AssistantPart],
+    partial: bool,
+) {
+    let key = request_key(record);
+    let mut text = String::new();
+    let mut reasoning = String::new();
+    for part in content {
+        match part {
+            AssistantPart::Text(chunk) => text.push_str(chunk),
+            AssistantPart::Reasoning(chunk) => {
+                if let Some(chunk) = chunk.text().or(chunk.summary()) {
+                    reasoning.push_str(chunk);
+                }
+            }
+            AssistantPart::ToolCall(_) => {}
+        }
+    }
+    let at =
+        match transcript.blocks.iter().rposition(
+            |block| matches!(block, Block::Assistant { key: known, .. } if known == &key),
+        ) {
+            Some(at) => {
+                if let Block::Assistant {
+                    reasoning: known_reasoning,
+                    text: known_text,
+                    streaming,
+                    partial: known_partial,
+                    ..
+                } = &mut transcript.blocks[at]
+                {
+                    *known_reasoning = reasoning;
+                    *known_text = text;
+                    *streaming = false;
+                    *known_partial = partial;
+                }
+                at
+            }
+            None => transcript.push(Block::Assistant {
                 key,
                 reasoning,
                 text,
-                expanded,
-                ..
-            } => {
-                if let Some((known_reasoning, known_text, known_expanded)) =
-                    live.iter().find_map(|live| match live {
-                        Block::Assistant {
-                            key: known,
-                            reasoning,
-                            text,
-                            expanded,
-                            ..
-                        } if known == key => Some((reasoning, text, expanded)),
-                        _ => None,
-                    })
-                {
-                    if reasoning.is_empty() && !known_reasoning.is_empty() {
-                        reasoning.clone_from(known_reasoning);
-                        preserved.push(PreservedKey::AssistantReasoning(key.clone()));
-                    }
-                    if text.is_empty() && !known_text.is_empty() {
-                        text.clone_from(known_text);
-                        preserved.push(PreservedKey::AssistantText(key.clone()));
-                    }
-                    *expanded = expanded.or(*known_expanded);
-                }
-            }
-            // The turn's own read omits the time, which only the live block has.
-            Block::User { text, at, .. } if at.is_none() => {
-                *at = live.iter().find_map(|live| match live {
-                    Block::User {
-                        text: known,
-                        at: known_at,
-                        ..
-                    } if known == text => *known_at,
-                    _ => None,
-                });
-            }
-            _ => {}
-        }
-    }
-    let mut sources: Vec<usize> = (0..durable.len()).collect();
-    let uncovered: Vec<(usize, Block)> = live
-        .iter()
-        .enumerate()
-        .filter(|(_, block)| match block {
-            Block::Tool(call) => !durable
-                .iter()
-                .any(|kept| matches!(kept, Block::Tool(kept) if kept.key == call.key)),
-            Block::Assistant { key, .. } => !durable
-                .iter()
-                .any(|kept| matches!(kept, Block::Assistant { key: kept, .. } if kept == key)),
-            Block::User { text, .. } => !durable
-                .iter()
-                .any(|kept| matches!(kept, Block::User { text: kept, .. } if kept == text)),
-            Block::Compaction { .. } => true,
-            _ => false,
-        })
-        .map(|(index, block)| (durable.len() + index, block.clone()))
-        .collect();
-    // What no canonical item covers is text only the live turn had.
-    preserved.extend(
-        uncovered
-            .iter()
-            .filter_map(|(_, block)| PreservedKey::of(block)),
-    );
-    for (source, block) in uncovered {
-        sources.push(source);
-        durable.push(block);
-    }
-    let (durable, sources) = durable
-        .into_iter()
-        .zip(sources)
-        .filter(|(block, _)| !block.is_blank_assistant())
-        .unzip();
-    (durable, preserved, sources)
-}
-
-/// Appends history items, closing each turn that has a record with its
-/// turn-end line; the duration and changes are not stored, and the tool count
-/// is left out for a turn whose start is not among `items`.
-fn append_history_from(
-    transcript: &mut Transcript,
-    items: &[RawHistoryItem],
-    records: &[TurnRecord],
-    session_id: &str,
-    from: usize,
-) {
-    let close =
-        |transcript: &mut Transcript, loop_id: Option<&str>, whole: bool, item: Option<usize>| {
-            let Some(record) = loop_id.and_then(|id| records.iter().find(|r| r.loop_id == id))
-            else {
-                return;
-            };
-            let tools = match whole {
-                true => transcript
-                    .tool_calls()
-                    .filter(|call| call.key.loop_id == record.loop_id)
-                    .count() as u64,
-                false => 0,
-            };
-            if let Some(partial) = &record.interrupted {
-                push_interrupted(transcript, &record.loop_id, partial);
-                transcript.metadata.last_mut().unwrap().origin.history =
-                    item.map(|item| HistorySource {
-                        item,
-                        part: INTERRUPTED_PART,
-                    });
-            }
-            let terminal = transcript.push(Block::TurnEnd {
-                loop_id: record.loop_id.clone(),
-                outcome: record.outcome.clone(),
-                duration: None,
-                requests: record.requests,
-                tools,
-                usage: record.usage.clone(),
-                changes: None,
-                // A stored record exists, so the turn is in committed history.
-                saving: Some(crate::transcript::Saving::Saved),
-            });
-            transcript.metadata[terminal].origin.history = item.map(|item| HistorySource {
-                item,
-                part: TERMINAL_PART,
-            });
-        };
-    let mut open: Option<&str> = None;
-    // Whether the open turn's prompt is among `items`, so its cards are all here.
-    let mut whole = false;
-    let mut last = None;
-    for (offset, item) in items.iter().enumerate() {
-        match &item.item {
-            RuntimeItem::User(user) if user.kind != UserKind::Steering => {
-                close(transcript, open.take(), whole, last);
-                whole = true;
-                // A turn cut in its first request has no assistant item to open it.
-                open = records
-                    .iter()
-                    .find(|r| r.loop_id == user.loop_id && r.interrupted.is_some())
-                    .map(|r| r.loop_id.as_str());
-            }
-            RuntimeItem::Summary(_) => {
-                close(transcript, open.take(), whole, last);
-                whole = false;
-            }
-            RuntimeItem::Assistant(assistant) => open = Some(&assistant.loop_id),
-            _ => {}
-        }
-        let first = transcript.len();
-        append_history_item(transcript, item, session_id);
-        let index = from + offset;
-        last = Some(index);
-        for (part, meta) in transcript.metadata[first..].iter_mut().enumerate() {
-            meta.origin.history = Some(HistorySource {
-                item: index,
-                part: if matches!(item.item, RuntimeItem::Summary(_)) {
-                    SUMMARY_PART
-                } else {
-                    part
-                },
-            });
-        }
-        // A request that only called tools would add a second separator row.
-        if transcript
-            .blocks()
-            .get(first)
-            .is_some_and(Block::is_blank_assistant)
-        {
-            transcript.remove(first);
-        }
-    }
-    close(transcript, open, whole, last);
-}
-
-/// Appends the partial reply of a cancelled request as an assistant block.
-pub fn push_interrupted(transcript: &mut Transcript, loop_id: &str, partial: &InterruptedRequest) {
-    transcript.push(Block::Assistant {
-        key: RequestKey {
-            loop_id: loop_id.to_owned(),
-            request_index: partial.request_index,
-        },
-        reasoning: partial.reasoning.clone(),
-        text: partial.text.clone(),
-        streaming: false,
-        expanded: None,
-    });
-}
-
-/// Converts one decoded history item into blocks appended to the transcript,
-/// blank assistant blocks included.
-pub fn append_history_item(transcript: &mut Transcript, item: &RawHistoryItem, session_id: &str) {
-    match &item.item {
-        RuntimeItem::User(user) => {
-            let index = transcript.len();
-            transcript.push(Block::User {
-                text: user.input.text.clone(),
-                kind: user.kind,
-                at: item.timestamp.as_deref().and_then(unix_millis),
-            });
-            transcript.identify_user(index, &user.loop_id, None);
-        }
-        RuntimeItem::Assistant(assistant) => {
-            let mut reasoning = String::new();
-            let mut text = String::new();
-            let mut calls = Vec::new();
-            for part in &assistant.content {
-                match part {
-                    RuntimeAssistantPart::Text(chunk) => text.push_str(chunk),
-                    RuntimeAssistantPart::Reasoning {
-                        text: chunk,
-                        summary,
-                    } => {
-                        if let Some(chunk) = chunk.as_ref().or(summary.as_ref()) {
-                            reasoning.push_str(chunk);
-                        }
-                    }
-                    RuntimeAssistantPart::ToolCall {
-                        tool_call_id, name, ..
-                    } => {
-                        let key = ToolRef {
-                            session_id: session_id.to_owned(),
-                            loop_id: assistant.loop_id.clone(),
-                            request_index: assistant.request_index,
-                            tool_call_id: tool_call_id.clone(),
-                        };
-                        let mut call = ToolCall::new(key, name.clone());
-                        if let Some(summary) = item.summary(tool_call_id) {
-                            call.apply_summary(summary);
-                        }
-                        calls.push(call);
-                    }
-                }
-            }
-            transcript.push(Block::Assistant {
-                key: RequestKey {
-                    loop_id: assistant.loop_id.clone(),
-                    request_index: assistant.request_index,
-                },
-                reasoning,
-                text,
                 streaming: false,
+                partial,
                 expanded: None,
-            });
-            for call in calls {
-                transcript.push(Block::Tool(Box::new(call)));
-            }
+            }),
+        };
+    transcript.add_history_source(at, source(record, 0));
+    if partial {
+        return;
+    }
+    for (part_index, part) in content.iter().enumerate() {
+        let AssistantPart::ToolCall(call) = part else {
+            continue;
+        };
+        let key = tool_key(record, ToolCallId(call.tool_call_id().as_str().to_owned()));
+        let known = transcript
+            .blocks
+            .iter()
+            .rposition(|block| matches!(block, Block::Tool(known) if known.key == key));
+        let at = known.unwrap_or_else(|| {
+            transcript.push(Block::Tool(Box::new(ToolCall::with_key(
+                key,
+                call.name().as_str(),
+            ))))
+        });
+        if let Block::Tool(card) = &mut transcript.blocks[at] {
+            card.response_index = record.response_index;
+            card.set_arguments(call.arguments());
         }
-        RuntimeItem::ToolResult(result) => {
-            let Some(call) = transcript.blocks.iter_mut().find_map(|block| match block {
-                Block::Tool(call)
-                    if call.key.loop_id == result.loop_id
-                        && call.key.request_index == result.request_index
-                        && call.key.tool_call_id == result.call_id =>
-                {
-                    Some(call.as_mut())
-                }
-                _ => None,
-            }) else {
-                return;
-            };
-            call.state = match result.outcome.as_str() {
-                "success" | "input_provided" => ToolState::Succeeded,
-                "denied" => ToolState::Denied,
-                "cancelled" => ToolState::Cancelled,
-                _ => ToolState::Failed,
-            };
-            if let Some(output) = &result.output {
-                call.apply_result(&output.content);
-            }
-            call.settle();
-        }
-        RuntimeItem::Summary(summary) => {
-            transcript.push(Block::Compaction {
-                operation_id: String::new(),
-                before: None,
-                after: None,
-                coverage: None,
-                summary: Some(summary.content.clone()),
-            });
-        }
+        transcript.add_history_source(at, source(record, part_index + 1));
     }
 }
 
-/// Renders decoded canonical items as a Markdown conversation.
-pub fn to_markdown(items: &[RawHistoryItem]) -> String {
-    let mut out = String::with_capacity(4096);
-    for item in items {
-        match &item.item {
-            RuntimeItem::User(user) => {
-                let label = match user.kind {
-                    UserKind::Steering => "**Steering**",
-                    _ => "**You**",
-                };
-                out.push_str(label);
-                out.push_str("\n\n");
-                out.push_str(user.input.text.trim_end());
-                out.push_str("\n\n");
-            }
-            RuntimeItem::Assistant(assistant) => {
-                for part in &assistant.content {
-                    match part {
-                        RuntimeAssistantPart::Reasoning { text: thinking, .. } => {
-                            if let Some(thinking) = thinking {
-                                out.push_str("> ");
-                                out.push_str(&thinking.replace('\n', "\n> "));
-                                out.push_str("\n\n");
-                            }
-                        }
-                        RuntimeAssistantPart::Text(text) => {
-                            out.push_str(text.trim_end());
-                            out.push_str("\n\n");
-                        }
-                        RuntimeAssistantPart::ToolCall { name, .. } => {
-                            out.push_str(&format!("`{name}`\n\n"));
-                        }
+pub fn to_markdown(records: &[HistoryRecordData]) -> String {
+    let mut out = Vec::new();
+    write_markdown(&mut out, records).expect("writing to a vector succeeds");
+    String::from_utf8(out).expect("Markdown contains UTF-8")
+}
+
+/// Writes native records directly, without bounded tool-card output or screen state.
+pub fn write_markdown(writer: &mut impl Write, records: &[HistoryRecordData]) -> io::Result<()> {
+    for record in records {
+        let stamp = serde_json::to_value(record.recorded_at).expect("Timestamp serializes");
+        write!(
+            writer,
+            "<!-- record {} · {}",
+            record.position,
+            stamp.as_str().expect("Timestamp is text")
+        )?;
+        if let Some(turn) = &record.turn_id {
+            write!(writer, " · turn {turn}")?;
+        }
+        if let Some(response) = record.response_index {
+            write!(writer, " · response {response}")?;
+        }
+        writeln!(writer, " -->\n")?;
+        match &record.item {
+            HistoryItemData::User { text, mode, .. } => {
+                writeln!(
+                    writer,
+                    "**{}**\n\n{text}\n",
+                    if *mode == Some(MessageMode::Steer) {
+                        "Steering"
+                    } else {
+                        "You"
                     }
+                )?;
+            }
+            HistoryItemData::Assistant { response } => {
+                write_parts(writer, &response.content, false)?
+            }
+            HistoryItemData::Partial { partial } => {
+                writeln!(writer, "**Incomplete assistant response**\n")?;
+                write_parts(writer, &partial.content, true)?;
+                for call in &partial.incomplete_tool_calls {
+                    writeln!(
+                        writer,
+                        "*Unfinished tool call `{}` (`{}`); not executed.*\n",
+                        call.tool_name, call.tool_call_id
+                    )?;
+                    write_fenced(writer, &call.arguments_text, "text")?;
                 }
             }
-            RuntimeItem::ToolResult(result) => {
-                if let Some(output) = &result.output
-                    && !output.content.trim().is_empty()
-                {
-                    out.push_str("```\n");
-                    out.push_str(output.content.trim_end());
-                    out.push_str("\n```\n\n");
-                }
+            HistoryItemData::ToolResult {
+                tool_call_id,
+                name,
+                result,
+            } => {
+                writeln!(
+                    writer,
+                    "**Tool result: {name}** (`{tool_call_id}`, {:?})\n",
+                    result.outcome
+                )?;
+                write_fenced(writer, result.output.content().as_str(), "text")?;
             }
-            RuntimeItem::Summary(summary) => {
-                out.push_str("---\n\n*Context summary*\n\n");
-                out.push_str(summary.content.trim_end());
-                out.push_str("\n\n");
+            HistoryItemData::Summary { text } => {
+                writeln!(writer, "---\n\n**Context summary**\n\n{text}\n")?
+            }
+            HistoryItemData::Compaction {
+                text,
+                source_position,
+                covered_items,
+            } => {
+                writeln!(
+                    writer,
+                    "---\n\n**Context compacted** · {covered_items} items · source position {source_position}\n\n{text}\n"
+                )?;
+            }
+            HistoryItemData::TurnFinished { terminal } => {
+                writeln!(
+                    writer,
+                    "*Turn {:?} · {} requests · {} tool rounds*\n",
+                    terminal.outcome, terminal.requests, terminal.tool_rounds
+                )?;
+                if let Some(reason) = &terminal.reason {
+                    writeln!(writer, "{reason}\n")?;
+                }
             }
         }
     }
-    out
+    Ok(())
+}
+
+fn write_parts(writer: &mut impl Write, parts: &[AssistantPart], partial: bool) -> io::Result<()> {
+    for part in parts {
+        match part {
+            AssistantPart::Text(text) => writeln!(writer, "{text}\n")?,
+            AssistantPart::Reasoning(reasoning) => {
+                if let Some(text) = reasoning.text().or(reasoning.summary()) {
+                    writeln!(writer, "> {}\n", text.replace('\n', "\n> "))?;
+                }
+            }
+            AssistantPart::ToolCall(call) => {
+                writeln!(
+                    writer,
+                    "**{}: {}** (`{}`)\n",
+                    if partial {
+                        "Unexecuted tool call in partial response"
+                    } else {
+                        "Tool call"
+                    },
+                    call.name(),
+                    call.tool_call_id()
+                )?;
+                write_fenced(
+                    writer,
+                    &serde_json::to_string_pretty(call.arguments()).expect("JSON serializes"),
+                    "json",
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn write_fenced(writer: &mut impl Write, text: &str, language: &str) -> io::Result<()> {
+    let fence = "`".repeat(
+        text.lines()
+            .map(|line| line.chars().take_while(|ch| *ch == '`').count())
+            .max()
+            .unwrap_or(0)
+            .max(2)
+            + 1,
+    );
+    writeln!(writer, "{fence}{language}\n{text}\n{fence}\n")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::read::decode_item;
     use serde_json::{Value, json};
 
-    fn key(call: &str) -> ToolRef {
-        ToolRef {
-            session_id: "s".into(),
-            loop_id: "l".into(),
-            request_index: 1,
-            tool_call_id: call.into(),
-        }
+    fn record(position: u64, item: Value) -> HistoryRecordData {
+        let mut value = json!({"position":position,"recorded_at":"2026-11-13T10:00:00Z",
+            "turn_id":"00000000000000000001","response_index":0});
+        value
+            .as_object_mut()
+            .unwrap()
+            .extend(item.as_object().unwrap().clone());
+        serde_json::from_value(value).unwrap()
     }
 
-    fn user_item(timestamp: Value) -> RawHistoryItem {
-        decode_item(
-            &json!({"item": {"type": "user", "data": {
-                "loop_id": "l", "kind": "prompt", "input": {"text": "hello"}
-            }}, "timestamp": timestamp})
-            .to_string(),
+    fn assistant(position: u64) -> HistoryRecordData {
+        record(
+            position,
+            json!({"kind":"assistant","response":{"content":[
+            {"type":"text","data":"working"},
+            {"type":"tool_call","data":{"tool_call_id":"call","name":"bash","arguments":{"command":"printf '你好'\necho done"},"call_index":0}}
+        ],"finish_reason":"tool_calls","usage":{}}}),
         )
-        .unwrap()
     }
 
     #[test]
-    fn a_user_block_carries_the_item_time_and_old_history_has_none() {
-        let mut transcript = Transcript::default();
-        append_history_item(
-            &mut transcript,
-            &user_item(json!("2026-10-20T21:38:00Z")),
-            "s",
+    fn repeated_message_ids_and_equal_text_keep_distinct_native_positions() {
+        let user =
+            json!({"kind":"user","text":"same","message_id":"00000000000000000002","mode":"steer"});
+        let records = [record(4, user.clone()), record(5, user)];
+        let mut transcript = Transcript::from_history(&records);
+        let revisions: Vec<_> = transcript.revisions().collect();
+        transcript.install_history_records(&records);
+        assert_eq!(transcript.len(), 2);
+        assert_eq!(transcript.history_source(0).unwrap().position, 4);
+        assert_eq!(transcript.history_source(1).unwrap().position, 5);
+        assert_eq!(transcript.revisions().collect::<Vec<_>>(), revisions);
+    }
+
+    #[test]
+    fn a_result_cut_by_the_tail_page_joins_its_later_loaded_invocation() {
+        let result = record(
+            2,
+            json!({"kind":"tool_result","tool_call_id":"call","name":"bash",
+            "result":{"outcome":"success","output":{"content":"你好\ndone"}}}),
         );
-        append_history_item(&mut transcript, &user_item(json!(null)), "s");
-        let times: Vec<Option<u64>> = transcript
-            .blocks()
+        let mut transcript = Transcript::from_history(&[result]);
+        assert_eq!(transcript.tool_calls().count(), 1);
+        transcript.install_history_records(&[assistant(1)]);
+        let call = transcript.tool_calls().next().unwrap();
+        assert_eq!(call.state, super::super::ToolState::Succeeded);
+        assert_eq!(
+            call.arguments.as_ref().unwrap()["command"],
+            "printf '你好'\necho done"
+        );
+        assert_eq!(call.output_content(), ["你好", "done"]);
+        assert_eq!(transcript.tool_calls().count(), 1);
+        let tool = transcript
+            .blocks
             .iter()
-            .map(|block| match block {
-                Block::User { at, .. } => *at,
-                _ => panic!("expected user"),
-            })
-            .collect();
-        assert_eq!(times, [unix_millis("2026-10-20T21:38:00Z"), None]);
+            .position(|block| matches!(block, Block::Tool(_)))
+            .unwrap();
+        assert_eq!(
+            transcript
+                .history_sources(tool)
+                .iter()
+                .map(|source| source.position)
+                .collect::<Vec<_>>(),
+            [1, 2]
+        );
     }
 
     #[test]
-    fn merging_keeps_the_live_prompt_time_the_turn_read_lacks() {
-        let mut durable = Transcript::default();
-        append_history_item(&mut durable, &user_item(json!(null)), "s");
-        let live = [Block::User {
-            text: "hello".into(),
-            kind: UserKind::Prompt,
-            at: Some(42),
-        }];
-        let (merged, _, _) = merge_live(durable.blocks, &live);
+    fn a_partial_is_neither_a_complete_response_nor_a_tool_execution() {
+        let partial = record(
+            3,
+            json!({"kind":"partial","partial":{"content":[{"type":"text","data":"unfinished α"}],
+            "incomplete_tool_calls":[{"part_index":1,"call_index":0,"tool_call_id":"fragment","tool_name":"bash","arguments_text":"{\"command\":"}],"usage":null}}),
+        );
+        let transcript = Transcript::from_history(std::slice::from_ref(&partial));
+        assert!(
+            matches!(&transcript.blocks()[0], Block::Assistant { partial: true, streaming: false, text, .. } if text == "unfinished α")
+        );
+        assert_eq!(transcript.tool_calls().count(), 0);
+        assert!(to_markdown(&[partial]).contains("not executed"));
+    }
+
+    #[test]
+    fn summaries_and_compactions_keep_all_prior_transcript_content() {
+        let records = [
+            record(0, json!({"kind":"user","text":"keep me"})),
+            record(1, json!({"kind":"summary","text":"literal summary"})),
+            record(
+                2,
+                json!({"kind":"compaction","text":"replacement context","source_position":2,"covered_items":2}),
+            ),
+        ];
+        let transcript = Transcript::from_history(&records);
+        assert_eq!(transcript.len(), 3);
+        assert!(matches!(transcript.blocks()[0], Block::User { .. }));
+        assert!(matches!(transcript.blocks()[1], Block::Summary { .. }));
         assert!(matches!(
-            merged.as_slice(),
-            [Block::User { at: Some(42), .. }]
+            transcript.blocks()[2],
+            Block::Compaction {
+                source_position: 2,
+                covered_items: 2,
+                ..
+            }
         ));
     }
 
     #[test]
-    fn history_items_produce_user_assistant_and_tool_blocks() {
-        let mut transcript = Transcript::default();
-        let user = decode_item(
-            &json!({"item": {"type": "user", "data": {
-                "loop_id": "l", "kind": "prompt", "input": {"text": "hello"}
-            }}})
-            .to_string(),
-        )
-        .unwrap();
-        append_history_item(&mut transcript, &user, "s");
-
-        let assistant = decode_item(
-            &json!({"item": {"type": "assistant", "data": {
-                "loop_id": "l", "request_index": 1, "model": "m",
-                "content": [
-                    {"type": "text", "data": "running tests"},
-                    {"type": "tool_call", "data": {"tool_call_id": "c1", "name": "bash"}}
-                ],
-                "finish_reason": "tool_calls"
-            }}, "tool_summaries": [{
-                "tool_ref": {"session_id": "s", "loop_id": "l", "request_index": 1, "tool_call_id": "c1"},
-                "tool_call_id": "c1", "name": "bash",
-                "display": {"detail": "$ pytest", "truncated": false},
-                "output_truncated": false
-            }]})
-            .to_string(),
-        )
-        .unwrap();
-        append_history_item(&mut transcript, &assistant, "s");
-
-        assert_eq!(transcript.len(), 3);
-        let Block::Tool(call) = &transcript.blocks()[2] else {
-            panic!("expected a tool card");
-        };
-        assert_eq!(call.detail, "$ pytest");
-        assert_eq!(
-            call.state,
-            ToolState::Pending,
-            "a call with no result or final state is not known succeeded"
-        );
-    }
-
-    #[test]
-    fn tool_result_updates_the_card_it_belongs_to() {
-        for outcome in ["success", "input_provided"] {
-            let mut transcript = Transcript::default();
-            let mut call = ToolCall::new(key("c1"), "bash");
-            call.state = ToolState::Running;
-            transcript.push(Block::Tool(Box::new(call)));
-            let result = decode_item(
-                &json!({"item": {"type": "tool_result", "data": {
-                    "loop_id": "l", "request_index": 1, "call_id": "c1",
-                    "tool_name": "bash", "outcome": outcome,
-                    "output": {"content": "ok"}
-                }}})
-                .to_string(),
-            )
-            .unwrap();
-            append_history_item(&mut transcript, &result, "s");
-            let Block::Tool(call) = &transcript.blocks()[0] else {
-                panic!("expected a tool card");
-            };
-            assert_eq!(call.state, ToolState::Succeeded);
-            assert_eq!(call.output, vec!["ok".to_owned()]);
-        }
-    }
-
-    #[test]
-    fn only_text_the_canonical_body_lacks_is_marked_preserved() {
-        let durable = vec![Block::Assistant {
-            key: RequestKey {
-                loop_id: "l".into(),
-                request_index: 0,
-            },
-            reasoning: String::new(),
-            text: "the canonical answer".into(),
-            streaming: false,
-            expanded: None,
-        }];
-        let live = vec![
+    fn seed_responses_keep_position_identity_without_inventing_a_turn() {
+        let mut record = assistant(8);
+        record.turn_id = None;
+        record.response_index = None;
+        let transcript = Transcript::from_history(&[record]);
+        assert!(matches!(
+            &transcript.blocks()[0],
             Block::Assistant {
-                key: RequestKey {
-                    loop_id: "l".into(),
-                    request_index: 0,
-                },
-                reasoning: String::new(),
-                text: "the canonical answer".into(),
-                streaming: false,
-                expanded: None,
-            },
-            // A request the canonical body does not contain, such as the one an
-            // interrupt cut short.
-            Block::Assistant {
-                key: RequestKey {
-                    loop_id: "l".into(),
-                    request_index: 1,
-                },
-                reasoning: String::new(),
-                text: "the interrupted reply".into(),
-                streaming: false,
-                expanded: None,
-            },
-        ];
-        let (merged, preserved, _) = merge_live(durable, &live);
-        assert_eq!(merged.len(), 2, "the live-only text is kept");
-        assert_eq!(
-            preserved,
-            [PreservedKey::Assistant(RequestKey {
-                loop_id: "l".into(),
-                request_index: 1,
-            })],
-            "only the text canonical does not contain is marked"
-        );
-    }
-
-    #[test]
-    fn a_live_only_channel_is_temporary_without_relabeling_the_canonical_channel() {
-        let key = RequestKey {
-            loop_id: "l".into(),
-            request_index: 0,
-        };
-        let block = |reasoning: &str, text: &str| Block::Assistant {
-            key: key.clone(),
-            reasoning: reasoning.into(),
-            text: text.into(),
-            streaming: false,
-            expanded: None,
-        };
-        let (blocks, preserved, _) = merge_live(
-            vec![block("", "canonical")],
-            &[block("live-only reasoning", "streamed")],
-        );
-        assert_eq!(
-            preserved,
-            vec![PreservedKey::AssistantReasoning(key.clone())]
-        );
-        let mut transcript = Transcript::default();
-        transcript.splice(0..0, blocks);
-        transcript.mark_preserved(preserved);
-        assert!(!transcript.is_preserved(0));
-        assert!(!transcript.is_preserved_channel(&key, false));
-        assert!(transcript.is_preserved_channel(&key, true));
-        transcript.splice(0..1, vec![block("canonical reasoning", "canonical")]);
+                key: RequestKey::History { position: 8 },
+                ..
+            }
+        ));
         assert!(
-            !transcript.is_preserved_channel(&key, true),
-            "a later verified channel clears its old temporary marker"
-        );
-    }
-
-    fn request_item(request_index: u64, content: Value) -> RawHistoryItem {
-        decode_item(
-            &json!({"item": {"type": "assistant", "data": {
-                "loop_id": "l", "request_index": request_index, "model": "m",
-                "content": content
-            }}})
-            .to_string(),
-        )
-        .unwrap()
-    }
-
-    fn call(id: &str) -> Value {
-        json!({"type": "tool_call", "data": {"tool_call_id": id, "name": "bash"}})
-    }
-
-    #[test]
-    fn merging_fills_a_blank_durable_block_in_place_and_drops_the_ones_left_blank() {
-        let mut durable = Transcript::default();
-        for (request, call_id) in [(0, "c0"), (1, "c1"), (2, "c2")] {
-            let reasoning = json!({"type": "reasoning", "data": {"text": null, "summary": null}});
-            let item = request_item(request, json!([reasoning, call(call_id)]));
-            append_history_item(&mut durable, &item, "s");
-        }
-        let live = [Block::Assistant {
-            key: RequestKey {
-                loop_id: "l".into(),
-                request_index: 1,
-            },
-            reasoning: String::new(),
-            text: "live words".into(),
-            streaming: false,
-            expanded: None,
-        }];
-        let (merged, _, _) = merge_live(durable.blocks, &live);
-        let shape: Vec<String> = merged
-            .iter()
-            .map(|block| match block {
-                Block::Assistant { text, .. } => format!("assistant {text}"),
-                Block::Tool(call) => format!("tool {}", call.key.tool_call_id),
-                _ => "other".into(),
-            })
-            .collect();
-        assert_eq!(
-            shape,
-            ["tool c0", "assistant live words", "tool c1", "tool c2"]
+            transcript
+                .tool_calls()
+                .next()
+                .unwrap()
+                .key
+                .call_ref()
+                .is_none()
         );
     }
 
     #[test]
-    fn reloading_history_keeps_no_assistant_block_without_thinking_or_text() {
-        let items = [
-            request_item(0, json!([{"type": "text", "data": "start"}, call("c0")])),
-            request_item(1, json!([call("c1")])),
-            request_item(2, json!([{"type": "text", "data": " \n"}, call("c2")])),
+    fn export_uses_complete_native_results_even_when_the_card_has_a_bounded_tail() {
+        let output = (0..900)
+            .map(|line| format!("line {line}\n"))
+            .collect::<String>();
+        let records = [
+            assistant(1),
+            record(
+                2,
+                json!({"kind":"tool_result","tool_call_id":"call","name":"bash",
+            "result":{"outcome":"success","output":{"content":output}}}),
+            ),
         ];
-        let transcript = Transcript::from_history(&items, &[], "s", 0);
-        let kinds: Vec<&str> = transcript
-            .blocks()
-            .iter()
-            .map(|block| match block {
-                Block::Assistant { .. } => "assistant",
-                Block::Tool(_) => "tool",
-                _ => "other",
-            })
-            .collect();
-        assert_eq!(kinds, ["assistant", "tool", "tool", "tool"]);
+        let transcript = Transcript::from_history(&records);
+        let call = transcript.tool_calls().next().unwrap();
+        assert!(!call.output_content().contains(&"line 0"));
+        let markdown = to_markdown(&records);
+        assert!(markdown.contains("line 0\n"));
+        assert!(markdown.contains("line 899\n"));
+        assert!(markdown.contains("printf '你好'\\necho done"));
+        assert!(markdown.contains("record 2 · 2026-11-13T10:00:00Z"));
     }
 
     #[test]
-    fn an_assistant_item_with_a_text_part_becomes_an_assistant_block() {
-        let raw = r#"{"item":{"type":"assistant","data":{"loop_id":"l0",
-            "request_index":0,"model":"mock","content":[
-            {"type":"text","data":"earlier answer"}]}}}"#;
-        let item = decode_item(raw).unwrap();
-        let mut transcript = Transcript::default();
-        append_history_item(&mut transcript, &item, "s1");
-        assert!(
-            matches!(transcript.blocks(), [Block::Assistant { text, .. }] if text == "earlier answer"),
-            "{:?}",
-            transcript.blocks()
+    fn history_completes_the_response_identity_missing_from_a_tool_finish_event() {
+        let mut event = record(
+            2,
+            json!({"kind":"tool_result","tool_call_id":"call","name":"bash",
+            "result":{"outcome":"success","output":{"content":"done"}}}),
+        );
+        event.response_index = None;
+        let mut transcript = Transcript::from_history(&[event.clone()]);
+        let anchor = transcript.history_source(0).unwrap().clone();
+        let mut canonical = event;
+        canonical.response_index = Some(7);
+        transcript.install_history_records(&[canonical]);
+        assert_eq!(transcript.len(), 1);
+        assert_eq!(transcript.find_history_source(&anchor), Some(0));
+        assert_eq!(
+            transcript.history_source(0).unwrap().response_index,
+            Some(7)
+        );
+        assert_eq!(
+            transcript.tool_calls().next().unwrap().response_index,
+            Some(7)
         );
     }
 }

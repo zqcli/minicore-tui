@@ -1,0 +1,18 @@
+
+  minicore-tui v0.10.0
+
+  esc interrupt · ctrl+c clear · / commands · @ files · ctrl+o expand · ctrl+r sessions
+
+
+ ─────────────────────────────────────────────────────────────────────────────────────────
+ Select Agent                                                                     2 agents
+ enter select · ctrl+d delete · esc close
+
+ >
+
+ → ✓ Coder active · memory · 0 sessions
+     Reviewer stopped · memory · 0 sessions
+   Agent 00000000000000000001
+   Default session: none
+ ─────────────────────────────────────────────────────────────────────────────────────────
+ ▸ minicore-tui · gpt 6 luna · max · agent Coder

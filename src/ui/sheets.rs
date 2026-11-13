@@ -6,13 +6,16 @@ use std::collections::HashMap;
 
 use ratatui::text::{Line, Span};
 
-use crate::app::overlay::{self, matching_models, session_label, short_session_id, workspace_name};
+use crate::app::overlay::{self, matching_models, short_session_id, workspace_name};
 use crate::app::picker;
-use crate::app::session::InteractionKind;
 use crate::app::{App, LiveStatus, Overlay, Session};
-use crate::protocol::stamp::{now_millis, unix_millis};
-use crate::protocol::{LoopOutcome, ModelInfo, Reasoning, SessionInfo};
 use crate::transcript::Block;
+use minicore_host_core::{InteractionRequestData, ModelDescription, SessionSummary};
+use minicore_host_protocol::{
+    AgentLifecycle, ReasoningPreference, Residency, Scheduling, SessionLifecycle, StorageMode,
+    Timestamp, TurnOutcome,
+};
+use minicore_host_runtime::tools::ToolInputAnswerKind;
 
 use super::blocks::plural;
 use super::panel::{Kind, Row, Sheet, Tone, body_lines, truncate};
@@ -40,7 +43,10 @@ pub fn sheet(app: &App, styles: Styles) -> Option<Sheet> {
                     .map(|input| {
                         Row::new(
                             format!("tui-{} · {}", input.id, input.status.label()),
-                            format!("{} · {}", input.target.session_id, input.target.load),
+                            format!(
+                                "{} · {}",
+                                input.target.session.agent_id, input.target.session.session_id
+                            ),
                         )
                     })
                     .collect(),
@@ -83,14 +89,50 @@ pub fn sheet(app: &App, styles: Styles) -> Option<Sheet> {
             let state = SessionsState {
                 filter,
                 selected: *selected,
-                armed: armed.as_deref(),
-                renaming: renaming.as_deref(),
+                armed: armed.as_ref(),
+                renaming: renaming.as_ref(),
             };
             sessions_sheet(app, rows, &state, styles)
         }
-        Overlay::SessionInfo { items } => session_info_sheet(app, *items, styles),
+        Overlay::SessionInfo => session_info_sheet(app, styles),
         Overlay::Context => context_sheet(app, styles),
         Overlay::Models { filter, selected } => models_sheet(app, filter, *selected, styles),
+        Overlay::Agents { filter, selected } => agents_sheet(app, filter, *selected, styles),
+        Overlay::AgentDelete {
+            name,
+            agent_id,
+            sessions,
+            selected,
+        } => Sheet::new(
+            format!("Delete Agent: {name}"),
+            "↑↓ review sessions · y delete captured scope · esc cancel",
+        )
+        .status(format!(
+            "Permanently delete Agent and {}",
+            plural(sessions.len() as u64, "session")
+        ))
+        .body(vec![
+            Line::styled(format!("Agent {agent_id}"), styles.failure()),
+            Line::styled(
+                "This deletes the listed sessions and their stored history.",
+                styles.failure(),
+            ),
+        ])
+        .rows(
+            sessions
+                .iter()
+                .map(|(id, title)| Row::new(title.clone(), id.to_string()).tone(Tone::Failure))
+                .collect(),
+        )
+        .selected(Some(*selected))
+        .notes(if sessions.is_empty() {
+            vec![Line::styled(
+                "No child sessions in the captured scope.",
+                styles.dim(),
+            )]
+        } else {
+            Vec::new()
+        }),
         Overlay::Reasoning { selected } => reasoning_sheet(app, *selected),
         Overlay::Find {
             query,
@@ -166,31 +208,34 @@ struct SessionsState<'a> {
     filter: &'a str,
     selected: usize,
     /// The session a first Ctrl+D asked to delete.
-    armed: Option<&'a str>,
+    armed: Option<&'a minicore_host_protocol::SessionRef>,
     /// The title being typed, when a rename is under way.
-    renaming: Option<&'a str>,
+    renaming: Option<&'a (minicore_host_protocol::SessionRef, String)>,
 }
 
-fn sessions_sheet(app: &App, rows: &[SessionInfo], state: &SessionsState, styles: Styles) -> Sheet {
+fn sessions_sheet(
+    app: &App,
+    rows: &[SessionSummary],
+    state: &SessionsState,
+    styles: Styles,
+) -> Sheet {
     let SessionsState {
         filter,
         selected,
         armed,
         renaming,
     } = *state;
-    let foreground = app
-        .resident
-        .current()
-        .map(|session| session.info.session_id.as_str());
-    let now = now_millis() / 1000;
+    let foreground = app.resident.current().map(Session::address);
+    let now = jiff::Timestamp::now().as_second();
     let shown = app.filtered_sessions(rows, filter);
-    if let Some(title) = renaming {
-        let target = shown
-            .get(selected)
+    if let Some((target, title)) = renaming {
+        let name = rows
+            .iter()
+            .find(|info| overlay::session_target(info) == *target)
             .map(|info| app.session_title(info))
-            .unwrap_or_default();
+            .unwrap_or_else(|| target.session_id.to_string());
         return Sheet::new("Rename Session", "enter save · esc cancel")
-            .status(target)
+            .status(name)
             .search(title);
     }
     let labels: Vec<String> = shown.iter().map(|info| app.session_title(info)).collect();
@@ -208,16 +253,21 @@ fn sessions_sheet(app: &App, rows: &[SessionInfo], state: &SessionsState, styles
         .iter()
         .zip(&labels)
         .map(|(info, label)| {
-            let current = foreground == Some(info.session_id.as_str());
-            let live = app.live(&info.session_id);
+            let target = overlay::session_target(info);
+            let current = foreground.as_ref() == Some(&target);
+            let live = app.resident.find(&target);
             let context = RowContext {
-                state: live.and_then(live_state),
+                state: live.and_then(live_state).or_else(|| catalog_state(info)),
                 current,
-                other_workspace: info.workspace != workspace,
+                other_workspace: info
+                    .workspace
+                    .as_ref()
+                    .is_some_and(|value| value.path != workspace),
+                agent: Some(agent_label(app, &info.agent_id)),
                 duplicate: shared[label.as_str()] > 1,
             };
             let row = session_row(info, label.clone(), &context, now);
-            if armed == Some(info.session_id.as_str()) || live.is_some_and(failed_unseen) {
+            if armed == Some(&target) || live.is_some_and(failed_unseen) {
                 row.tone(Tone::Failure)
             } else {
                 row
@@ -250,8 +300,8 @@ fn models_sheet(app: &App, filter: &str, selected: usize, styles: Styles) -> She
         .iter()
         .map(|model| {
             let provider = provider(model).map(|name| format!("[{name}]"));
-            Row::new(model.id.clone(), provider.unwrap_or_default())
-                .mark(Some(model.id.as_str()) == current)
+            Row::new(model.model.to_string(), provider.unwrap_or_default())
+                .mark(Some(model.model.as_str()) == current)
         })
         .collect::<Vec<_>>();
     let notes = match shown.get(selected) {
@@ -273,20 +323,129 @@ fn models_sheet(app: &App, filter: &str, selected: usize, styles: Styles) -> She
 }
 
 /// The provider part of a `provider/model` reference.
-fn provider(model: &ModelInfo) -> Option<&str> {
-    model
-        .model_ref
-        .as_deref()?
-        .split_once('/')
-        .map(|(name, _)| name)
+fn provider(model: &ModelDescription) -> Option<&str> {
+    model.model.as_str().split_once('/').map(|(name, _)| name)
 }
 
 /// The full reference and the context window, as the model note shows them.
-pub fn model_details(model: &ModelInfo) -> String {
-    let name = model.model_ref.as_deref().unwrap_or(&model.id);
-    match model.context_window {
-        Some(window) => format!("{name} · {} context", super::format_tokens(window)),
-        None => name.to_owned(),
+pub fn model_details(model: &ModelDescription) -> String {
+    format!(
+        "{} · {} context",
+        model.model,
+        super::format_tokens(model.context_window)
+    )
+}
+
+pub fn reasoning_label(level: ReasoningPreference) -> &'static str {
+    match level {
+        ReasoningPreference::Auto => "auto",
+        ReasoningPreference::Disabled => "disabled",
+        ReasoningPreference::Low => "low",
+        ReasoningPreference::Medium => "medium",
+        ReasoningPreference::High => "high",
+        ReasoningPreference::XHigh => "xhigh",
+        ReasoningPreference::Max => "max",
+        ReasoningPreference::Ultra => "ultra",
+    }
+}
+
+pub fn agent_label(app: &App, id: &minicore_host_protocol::AgentId) -> String {
+    let Some(agent) = app.agents.iter().find(|agent| &agent.id == id) else {
+        return short_session_id(id.as_str()).to_owned();
+    };
+    if app
+        .agents
+        .iter()
+        .filter(|other| other.name == agent.name)
+        .count()
+        > 1
+    {
+        format!("{} ({})", agent.name, short_session_id(id.as_str()))
+    } else {
+        agent.name.clone()
+    }
+}
+
+fn agents_sheet(app: &App, filter: &str, selected: usize, styles: Styles) -> Sheet {
+    let agents = overlay::matching_agents(&app.agents, filter);
+    let rows = agents
+        .iter()
+        .map(|agent| {
+            let state = match agent.lifecycle {
+                AgentLifecycle::Creating => "creating",
+                AgentLifecycle::Active => "active",
+                AgentLifecycle::Stopping => "stopping",
+                AgentLifecycle::Stopped => "stopped",
+                AgentLifecycle::Retiring => "retiring",
+                AgentLifecycle::Retired => "retired",
+            };
+            Row::new(
+                agent_label(app, &agent.id),
+                format!(
+                    "{state} · {} · {}",
+                    storage_label(agent.mode),
+                    plural(agent.sessions.len() as u64, "session")
+                ),
+            )
+            .mark(app.current_agent_id() == Some(&agent.id))
+        })
+        .collect();
+    let notes = agents
+        .get(selected)
+        .map(|agent| {
+            let mut notes = vec![
+                Line::styled(format!("  Agent {}", agent.id), styles.dim()),
+                Line::styled(
+                    format!(
+                        "  Default session: {}",
+                        agent
+                            .default_session_id
+                            .as_ref()
+                            .map_or_else(|| "none".to_owned(), ToString::to_string)
+                    ),
+                    styles.dim(),
+                ),
+            ];
+            if agent.metadata_saving {
+                notes.push(Line::styled("  Saving Agent metadata", styles.dim()));
+            }
+            if let Some(error) = &agent.metadata_fault {
+                notes.push(Line::styled(
+                    format!("  Agent metadata save failed: {error}"),
+                    styles.failure(),
+                ));
+            }
+            if let Some(deletion) = &agent.deletion {
+                use minicore_host_protocol::DataDeletion;
+                let (text, style) = match deletion {
+                    DataDeletion::Pending {} => ("  Deleting Agent data".into(), styles.dim()),
+                    DataDeletion::Deleted {} => ("  Agent data deleted".into(), styles.dim()),
+                    DataDeletion::Reclaimed {} => ("  Agent memory reclaimed".into(), styles.dim()),
+                    DataDeletion::NotAttempted {} => {
+                        ("  Agent data deletion not attempted".into(), styles.dim())
+                    }
+                    DataDeletion::Failed { error } => (
+                        format!("  Agent data deletion failed: {error}"),
+                        styles.failure(),
+                    ),
+                };
+                notes.push(Line::styled(text, style));
+            }
+            notes
+        })
+        .unwrap_or_else(|| vec![Line::styled("  No matching agents", styles.dim())]);
+    Sheet::new("Select Agent", "enter select · ctrl+d delete · esc close")
+        .search(filter)
+        .rows(rows)
+        .selected(Some(selected))
+        .notes(notes)
+        .status(plural(agents.len() as u64, "agent"))
+}
+
+fn storage_label(mode: StorageMode) -> &'static str {
+    match mode {
+        StorageMode::Memory => "memory",
+        StorageMode::Persistent => "persistent",
     }
 }
 
@@ -296,7 +455,8 @@ fn reasoning_sheet(app: &App, selected: usize) -> Sheet {
         .reasoning_levels()
         .iter()
         .map(|level| {
-            Row::new(level.label(), reasoning_description(*level)).mark(Some(*level) == current)
+            Row::new(reasoning_label(*level), reasoning_description(*level))
+                .mark(Some(*level) == current)
         })
         .collect();
     Sheet::new(
@@ -308,49 +468,72 @@ fn reasoning_sheet(app: &App, selected: usize) -> Sheet {
     .selected(Some(selected))
 }
 
-fn reasoning_description(level: Reasoning) -> &'static str {
+fn reasoning_description(level: ReasoningPreference) -> &'static str {
     match level {
-        Reasoning::Auto => "Model default",
-        Reasoning::Disabled => "No reasoning",
-        Reasoning::Low => "Light reasoning",
-        Reasoning::Medium => "Moderate reasoning",
-        Reasoning::High => "Deep reasoning",
-        Reasoning::XHigh => "Extra-high reasoning",
-        Reasoning::Max => "Maximum reasoning",
-        Reasoning::Ultra => "Beyond maximum reasoning",
-        Reasoning::Unknown => "",
+        ReasoningPreference::Auto => "Model default",
+        ReasoningPreference::Disabled => "No reasoning",
+        ReasoningPreference::Low => "Light reasoning",
+        ReasoningPreference::Medium => "Moderate reasoning",
+        ReasoningPreference::High => "Deep reasoning",
+        ReasoningPreference::XHigh => "Extra-high reasoning",
+        ReasoningPreference::Max => "Maximum reasoning",
+        ReasoningPreference::Ultra => "Beyond maximum reasoning",
     }
 }
 
 fn interaction_sheet(app: &App, styles: Styles) -> Option<Sheet> {
-    if app.remote.active() {
-        return None;
-    }
     let session = app.resident.current()?;
     let interaction = session.interaction.as_ref()?;
-    if matches!(interaction.kind, InteractionKind::Text) {
-        return None;
-    }
-    let options = interaction.options();
-    // The card is read at draw time: its detail and input can arrive after
-    // the prompt does.
-    let call = session
-        .transcript
-        .find_tool_by_call_id(&interaction.tool_call_id);
+    let (prompt, options, approval) = match interaction.request() {
+        InteractionRequestData::Approval { prompt, .. } => (
+            prompt.as_str(),
+            vec!["Allow once".to_owned(), "Deny".to_owned()],
+            true,
+        ),
+        InteractionRequestData::ToolInput { request } => {
+            if request.answer_kind == ToolInputAnswerKind::Text {
+                return None;
+            }
+            (
+                request.prompt.as_str(),
+                request
+                    .choices
+                    .iter()
+                    .map(|choice| choice.as_str().to_owned())
+                    .collect(),
+                false,
+            )
+        }
+    };
+    let call = session.transcript.tool_calls().find(|call| {
+        call.key.turn_id() == Some(&interaction.turn_id)
+            && call.key.tool_call_id() == interaction.tool_call_id()
+    });
     let subject = Subject {
-        tool: call.map_or(interaction.tool_name.as_str(), |call| call.name.as_str()),
+        tool: call.map_or(interaction.tool_name(), |call| call.name.as_str()),
         detail: call.map_or("", |call| call.detail.as_str()),
         input: call.and_then(|call| call.expanded_input.as_deref()),
     };
-    let approval = matches!(interaction.kind, InteractionKind::Approval);
-    Some(approval_sheet(
-        &interaction.prompt,
+    let mut sheet = approval_sheet(
+        prompt,
         &subject,
         &options,
         approval,
         interaction.selected,
         styles,
-    ))
+    );
+    if let InteractionRequestData::Approval { risk, .. } = interaction.request() {
+        let level = match risk {
+            minicore_host_core::ApprovalRiskData::Low => "low",
+            minicore_host_core::ApprovalRiskData::Medium => "medium",
+            minicore_host_core::ApprovalRiskData::High => "high",
+        };
+        sheet.status = Some(format!("Risk: {level}"));
+    }
+    if interaction.submitted {
+        sheet.hint = "Answer submitted · waiting for Host confirmation".into();
+    }
+    Some(sheet)
 }
 
 /// What an interaction is about: the tool, its one-line detail (a path, a
@@ -418,17 +601,14 @@ fn approval_sheet(
             match index {
                 0 => Row::new(option.clone(), "y").tone(Tone::Success),
                 1 => Row::new(option.clone(), "n").tone(Tone::Failure),
-                _ => Row::new(option.clone(), "a").tone(Tone::Success),
+                _ => Row::new(option.clone(), ""),
             }
         })
         .collect();
     let (title, hint) = if approval {
-        (
-            "Approval",
-            "enter confirm · y allow · a allow for session · n deny · esc deny",
-        )
+        ("Approval", "enter confirm · y allow · n deny · esc deny")
     } else {
-        ("Question", "enter choose · esc deny")
+        ("Question", "enter choose · esc cancel turn")
     };
     Sheet::new(title, hint)
         .kind(Kind::Column)
@@ -481,7 +661,11 @@ fn live_state(session: &Session) -> Option<String> {
             let started = session.live.as_ref()?.started;
             format!("running {}", super::status::minutes(started.elapsed()))
         }
-        LiveStatus::Approval => "needs approval".to_owned(),
+        LiveStatus::Approval => match session.interaction.as_ref()?.request() {
+            InteractionRequestData::Approval { .. } => "needs approval",
+            InteractionRequestData::ToolInput { .. } => "needs input",
+        }
+        .to_owned(),
         LiveStatus::Compacting => "compacting".to_owned(),
         LiveStatus::Idle if failed_unseen(session) => "failed".to_owned(),
         LiveStatus::Idle if session.unseen => "new".to_owned(),
@@ -495,14 +679,42 @@ fn failed_unseen(session: &Session) -> bool {
         && matches!(
             session.transcript.blocks().last(),
             Some(Block::TurnEnd {
-                outcome: LoopOutcome::Failed { .. },
+                outcome: TurnOutcome::Failed,
                 ..
             })
         )
 }
 
+fn catalog_state(info: &SessionSummary) -> Option<String> {
+    Some(if info.lifecycle != SessionLifecycle::Open {
+        match info.lifecycle {
+            SessionLifecycle::Closed => "closed",
+            _ => "closing",
+        }
+        .to_owned()
+    } else if info.pending_interactions > 0 {
+        "needs input".to_owned()
+    } else if info.active_turn_id.is_some() {
+        "running".to_owned()
+    } else if info.block_reason.is_some() {
+        "blocked".to_owned()
+    } else if info.scheduling == Scheduling::Paused {
+        "paused".to_owned()
+    } else if info.residency != Residency::Loaded {
+        match info.residency {
+            Residency::Unloaded => "unloaded",
+            Residency::Loading => "loading",
+            _ => "unloading",
+        }
+        .to_owned()
+    } else {
+        return None;
+    })
+}
+
 /// What sets one sessions-picker row apart from the others.
 struct RowContext {
+    agent: Option<String>,
     /// What a live session is doing.
     state: Option<String>,
     current: bool,
@@ -515,8 +727,18 @@ struct RowContext {
 /// what tells the session apart on the right, then its age. The current
 /// session says so, one in another workspace names it, and a label shared
 /// with another session gets its short id.
-fn session_row(info: &SessionInfo, label: String, context: &RowContext, now_seconds: u64) -> Row {
-    let mut parts: Vec<String> = context.state.iter().cloned().collect();
+fn session_row(
+    info: &SessionSummary,
+    label: String,
+    context: &RowContext,
+    now_seconds: i64,
+) -> Row {
+    let mut parts: Vec<String> = context
+        .agent
+        .iter()
+        .chain(&context.state)
+        .cloned()
+        .collect();
     if context.current {
         parts.push("current".to_owned());
     }
@@ -526,9 +748,9 @@ fn session_row(info: &SessionInfo, label: String, context: &RowContext, now_seco
         parts.push(name.into_owned());
     }
     if context.duplicate {
-        parts.push(short_session_id(&info.session_id).to_owned());
+        parts.push(short_session_id(info.id.as_str()).to_owned());
     }
-    let age = age_label(&info.updated_at, now_seconds);
+    let age = age_label(info.last_activity_at, now_seconds);
     if !age.is_empty() {
         parts.push(age);
     }
@@ -541,54 +763,81 @@ fn context_sheet(app: &App, styles: Styles) -> Sheet {
 }
 
 /// `/session`: the facts about the foreground session; Enter or `c` copies its id.
-fn session_info_sheet(app: &App, items: Option<usize>, styles: Styles) -> Sheet {
+fn session_info_sheet(app: &App, styles: Styles) -> Sheet {
     let sheet = Sheet::new("Session", "enter copy id · c copy id · esc close");
     let Some(session) = app.resident.current() else {
         return sheet.body(vec![Line::styled("  No session is open", styles.dim())]);
     };
     let info = &session.info;
-    let usage = &session.usage;
-    let tokens = if usage.input + usage.output + usage.cached > 0 {
-        let format = super::format_tokens;
-        format!(
-            "↑{} ↓{} R{}",
-            format(usage.input),
-            format(usage.output),
-            format(usage.cached)
-        )
-    } else {
-        "none yet".to_owned()
-    };
-    let profile = app
-        .profiles
-        .iter()
-        .find(|profile| profile.id == info.profile)
-        .and_then(|profile| profile.approval.as_deref());
-    let mut facts = vec![
-        ("id", info.session_id.clone()),
-        ("title", session_label(info, Some(session))),
-        ("workspace", info.workspace.clone()),
+    let tokens = session
+        .context
+        .as_ref()
+        .and_then(|context| context.data.history.as_ref())
+        .and_then(|history| history.latest_response.as_ref())
+        .map_or_else(
+            || "not reported".to_owned(),
+            |response| super::views::context::usage_text(&response.usage),
+        );
+    let facts = vec![
+        ("id", info.id.to_string()),
         (
-            "profile",
-            match profile {
-                Some(approval) => format!("{} ({approval} approval)", info.profile),
-                None => info.profile.clone(),
-            },
+            "agent",
+            format!("{} · {}", agent_label(app, &info.agent_id), info.agent_id),
+        ),
+        (
+            "title",
+            info.title
+                .clone()
+                .unwrap_or_else(|| "Untitled session".into()),
+        ),
+        (
+            "workspace",
+            info.config
+                .workspace
+                .as_ref()
+                .map_or_else(|| "none".into(), |workspace| workspace.path.clone()),
+        ),
+        ("storage", storage_label(info.mode).to_owned()),
+        (
+            "lifecycle",
+            format!("{:?}", session.state.data.lifecycle).to_lowercase(),
+        ),
+        (
+            "residency",
+            format!("{:?}", session.state.data.residency).to_lowercase(),
+        ),
+        (
+            "scheduling",
+            format!("{:?}", session.state.data.scheduling).to_lowercase(),
+        ),
+        (
+            "approval",
+            match info.config.execution.approval {
+                minicore_host_protocol::ApprovalMode::Ask => "ask",
+                minicore_host_protocol::ApprovalMode::Auto => "auto",
+                minicore_host_protocol::ApprovalMode::ReadOnly => "read_only",
+            }
+            .to_owned(),
         ),
         (
             "model",
-            format!("{} · {}", info.model, info.reasoning.label()),
+            format!(
+                "{} · {}",
+                info.config.model,
+                reasoning_label(info.config.reasoning)
+            ),
         ),
         (
             "items",
-            items.map_or_else(|| "…".to_owned(), |total| total.to_string()),
+            session
+                .context
+                .as_ref()
+                .and_then(|context| context.data.history.as_ref())
+                .map(|history| history.raw_items.to_string())
+                .unwrap_or_else(|| "unknown".to_owned()),
         ),
-        ("tokens", tokens),
+        ("last usage", tokens),
     ];
-    if !session.allowed_tools.is_empty() {
-        let tools: Vec<&str> = session.allowed_tools.iter().map(String::as_str).collect();
-        facts.push(("allowed", tools.join(", ")));
-    }
     let body = facts
         .into_iter()
         .map(|(name, value)| {
@@ -601,14 +850,11 @@ fn session_info_sheet(app: &App, items: Option<usize>, styles: Styles) -> Sheet 
     sheet.body(body)
 }
 
-/// `now`, `5m`, `3h`, `2d`, `1w`, `4mo` or `2y`; empty when the timestamp is not RFC 3339.
-fn age_label(updated_at: &str, now: u64) -> String {
-    let Some(then) = unix_millis(updated_at) else {
-        return String::new();
-    };
-    let seconds = now.saturating_sub(then / 1000);
+/// `now`, `5m`, `3h`, `2d`, `1w`, `4mo` or `2y` from the Host timestamp.
+fn age_label(updated_at: Timestamp, now: i64) -> String {
+    let seconds = now.saturating_sub(super::blocks::timestamp(updated_at).as_second());
     match seconds {
-        0..=59 => "now".into(),
+        ..=59 => "now".into(),
         60..=3599 => format!("{}m", seconds / 60),
         3600..=86_399 => format!("{}h", seconds / 3600),
         86_400..=604_799 => format!("{}d", seconds / 86_400),
@@ -694,17 +940,20 @@ mod tests {
         assert_eq!(width(&text(&rows[0])), 2 + 32 + 1);
     }
 
-    fn info() -> SessionInfo {
-        serde_json::from_value(json!({
-            "session_id": "ses_1acdef0123456789abcdef", "title": "Fix the parser",
-            "profile": "coding", "workspace": "", "model": "gpt-6-luna", "reasoning": "auto",
-            "loaded": false, "updated_at": "2026-01-02T03:04:05.006Z"
-        }))
-        .unwrap()
+    fn info() -> SessionSummary {
+        let fixture = crate::ui::snapshots::app();
+        let mut info = crate::ui::snapshots::catalog(fixture.resident.current().unwrap());
+        info.id = "1acdef0123456789abcd".parse().unwrap();
+        info.title = Some("Fix the parser".into());
+        info.workspace = None;
+        info.last_activity_at = stamp("2026-01-02T03:04:05.006Z");
+        info
     }
-
-    fn now() -> u64 {
-        unix_millis("2026-01-02T06:04:05.006Z").unwrap() / 1000
+    fn stamp(value: &str) -> Timestamp {
+        serde_json::from_value(json!(value)).unwrap()
+    }
+    fn now() -> i64 {
+        super::super::blocks::timestamp(stamp("2026-01-02T06:04:05.006Z")).as_second()
     }
 
     const NO_SUBJECT: Subject<'static> = Subject {
@@ -729,11 +978,7 @@ mod tests {
             styles(),
         );
         assert_eq!(sheet.title, "Approval");
-        assert!(
-            sheet
-                .hint
-                .contains("y allow · a allow for session · n deny")
-        );
+        assert!(sheet.hint.contains("y allow · n deny"));
         assert_eq!(sheet.rows[0].label, "Allow once");
         assert_eq!(sheet.rows[0].detail, "y");
         assert_eq!(sheet.rows[0].tone, Tone::Success);
@@ -811,6 +1056,7 @@ mod tests {
 
     fn context(current: bool, other_workspace: bool, duplicate: bool) -> RowContext {
         RowContext {
+            agent: None,
             state: None,
             current,
             other_workspace,
@@ -837,15 +1083,15 @@ mod tests {
     #[test]
     fn rows_that_look_alike_get_a_short_id_and_other_workspaces_are_named() {
         let mut other = info();
-        other.workspace = "/work/stockroom".into();
+        other.workspace = Some(serde_json::from_value(json!({"path":"/work/stockroom"})).unwrap());
         let row = session_row(&other, "Same".into(), &context(false, true, true), now());
-        assert_eq!(row.detail, "stockroom · ses_1acdef · 3h");
+        assert_eq!(row.detail, "stockroom · 1acdef · 3h");
     }
 
     #[test]
     fn ages_cover_every_unit() {
-        let stamp = "2026-01-02T03:04:05Z";
-        let base = unix_millis(stamp).unwrap() / 1000;
+        let stamp = stamp("2026-01-02T03:04:05Z");
+        let base = super::super::blocks::timestamp(stamp).as_second();
         let age = |seconds| age_label(stamp, base + seconds);
         assert_eq!(age(30), "now");
         assert_eq!(age(600), "10m");
@@ -854,21 +1100,17 @@ mod tests {
         assert_eq!(age(14 * 86_400), "2w");
         assert_eq!(age(100 * 86_400), "3mo");
         assert_eq!(age(800 * 86_400), "2y");
-        assert_eq!(age_label("not a timestamp", base), "");
     }
 
     #[test]
-    fn a_model_shows_its_provider_and_reference() {
-        let model: ModelInfo = serde_json::from_value(json!({
-            "id": "gpt-6-luna", "model_ref": "cus-oai/gpt-6-luna", "context_window": 400_000,
-            "supported_reasoning": ["low"]
-        }))
-        .unwrap();
+    fn a_model_shows_its_provider_and_declared_window() {
+        let model: ModelDescription = serde_json::from_value(json!({
+            "model":"cus-oai/gpt-6-luna","api":"responses","context_window":400_000,"supported_reasoning":["low"],"supports_tools":true
+        })).unwrap();
         assert_eq!(provider(&model), Some("cus-oai"));
         assert_eq!(model_details(&model), "cus-oai/gpt-6-luna · 400k context");
-        let bare: ModelInfo =
-            serde_json::from_value(json!({"id": "x", "supported_reasoning": []})).unwrap();
+        let bare: ModelDescription = serde_json::from_value(json!({"model":"x","api":"responses","context_window":32000,"supported_reasoning":[],"supports_tools":true})).unwrap();
         assert_eq!(provider(&bare), None);
-        assert_eq!(model_details(&bare), "x");
+        assert_eq!(model_details(&bare), "x · 32k context");
     }
 }

@@ -1,16 +1,5 @@
-//! Reducer tests through the real client and a scripted Agent.
-
-mod compaction;
-mod config;
-mod diff;
-mod draft;
 mod editor;
 mod harness;
-mod history;
-mod input;
-mod menus;
-mod phone;
-mod remote;
-mod session;
-mod sessions_live;
-mod turn;
+mod management;
+mod native;
+mod native_tools;

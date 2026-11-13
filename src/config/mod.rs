@@ -1,26 +1,18 @@
-//! Configuration. The TUI directory holds `config.toml` (system settings) and
-//! `models.toml` (providers and models); startup validates both and composes the
-//! one TOML file the Agent reads. No credentials are stored, only the name of the
-//! environment variable that holds each key.
+//! Terminal preferences and initial native Host/Agent configuration.
 
-mod compose;
 mod home;
-mod models;
-mod remote;
 mod scaffold;
 mod settings;
 
-use std::ops::Range;
 use std::path::{Path, PathBuf};
 
+use minicore_host_core::HostConfig;
+use minicore_host_protocol::AgentConfig;
 use serde::de::DeserializeOwned;
 
-use compose::AgentFile;
 pub use home::{Home, home_dir};
-pub use remote::{Remote, Tls};
 pub use settings::{Settings, ThemeKind, Ui, editor_command, save_theme};
 
-/// A configuration problem with the file, and the line when the parser knew it.
 #[derive(Debug, PartialEq, Eq)]
 pub struct ConfigError {
     file: PathBuf,
@@ -38,215 +30,125 @@ impl std::fmt::Display for ConfigError {
     }
 }
 
+impl std::error::Error for ConfigError {}
+
 impl ConfigError {
+    fn at(file: &Path, message: impl Into<String>) -> Self {
+        Self {
+            file: file.to_owned(),
+            line: None,
+            message: message.into(),
+        }
+    }
+
     fn io(file: &Path, error: &std::io::Error) -> Self {
         let message = if error.kind() == std::io::ErrorKind::NotFound {
             "not found".to_owned()
         } else {
             error.to_string()
         };
-        Self {
-            file: file.to_owned(),
-            line: None,
-            message,
-        }
+        Self::at(file, message)
     }
 }
 
-/// A settings file and its text, so errors can name a line.
-struct Source {
-    file: PathBuf,
-    text: String,
-}
-
-impl Source {
-    fn read(file: PathBuf) -> Result<Self, ConfigError> {
-        match std::fs::read_to_string(&file) {
-            Ok(text) => Ok(Self { file, text }),
-            Err(error) => Err(ConfigError::io(&file, &error)),
-        }
-    }
-
-    fn error(&self, span: Option<Range<usize>>, message: impl Into<String>) -> ConfigError {
-        let line = span.map(|span| self.text[..span.start].matches('\n').count() + 1);
-        ConfigError {
-            file: self.file.clone(),
-            line,
-            message: message.into(),
-        }
-    }
-
-    fn parse<T: DeserializeOwned>(&self) -> Result<T, ConfigError> {
-        toml::from_str(&self.text).map_err(|error| self.error(error.span(), error.message()))
-    }
-}
-
-/// Both files read, checked against each other and turned into Agent terms.
-pub struct Loaded {
-    pub ui: Ui,
-    pub remote: Remote,
-    binary: Option<PathBuf>,
-    agent: AgentFile,
-}
-
-/// Reads and validates `config.toml`, `models.toml` and the prompt files.
-pub fn load(home: &Home) -> Result<Loaded, ConfigError> {
-    let models_source = Source::read(home.models_file())?;
-    let models = models_source.parse::<models::ModelsFile>()?;
-    let models = models.build(&models_source)?;
-    let settings_source = Source::read(home.config_file())?;
-    let settings = settings_source.parse::<Settings>()?;
-    let agent = settings.build(&settings_source, models, home)?;
-    let remote = settings.remote.build(&settings_source)?;
-    Ok(Loaded {
-        remote,
-        ui: settings.ui,
-        binary: settings.agent.binary,
-        agent,
+fn read_json<T: DeserializeOwned>(file: &Path) -> Result<T, ConfigError> {
+    let text = std::fs::read_to_string(file).map_err(|error| ConfigError::io(file, &error))?;
+    serde_json::from_str(&text).map_err(|error| ConfigError {
+        file: file.to_owned(),
+        line: Some(error.line()),
+        message: error.to_string(),
     })
 }
 
-impl Loaded {
-    /// Writes the Agent config under `session/` and returns its path.
-    pub fn write(&self, home: &Home) -> Result<PathBuf, ConfigError> {
-        let file = home.agent_config_file();
-        let text = self
-            .agent
-            .render()
-            .map_err(|message| ConfigError::io(&file, &std::io::Error::other(message)))?;
-        std::fs::create_dir_all(home.session_dir())
-            .and_then(|()| write_atomic(&file, &text, 0o600))
-            .map_err(|error| ConfigError::io(&file, &error))?;
-        Ok(file)
-    }
-
-    /// Catches what would only fail at the first turn: a profile or model
-    /// named on the command line that does not exist, or a key that is not set.
-    fn check_launch(
-        &self,
-        profile: Option<&str>,
-        model: Option<&str>,
-        has_env: &dyn Fn(&str) -> bool,
-    ) -> Result<(), String> {
-        let defined = |ids: Vec<&String>| {
-            ids.into_iter()
-                .map(String::as_str)
-                .collect::<Vec<_>>()
-                .join(", ")
-        };
-        let profile_id = profile.unwrap_or(&self.agent.default_profile);
-        let Some(entry) = self.agent.profiles.get(profile_id) else {
-            return Err(format!(
-                "--profile {profile_id:?} is not defined in config.toml (defined: {})",
-                defined(self.agent.profiles.keys().collect())
-            ));
-        };
-        let model_id = model.unwrap_or(&entry.model);
-        let Some(entry) = self.agent.models.get(model_id) else {
-            return Err(format!(
-                "--model {model_id:?} is not defined in models.toml (defined: {})",
-                defined(self.agent.models.keys().collect())
-            ));
-        };
-        if !has_env(&entry.api_key_env) {
-            return Err(format!(
-                "environment variable {} is not set or empty (api_key_env of model {model_id:?} in models.toml); export it and start again",
-                entry.api_key_env
-            ));
-        }
-        Ok(())
-    }
+pub fn load_host_config(file: &Path) -> Result<HostConfig, ConfigError> {
+    read_json(file)
 }
 
-/// What the command line asks of startup.
+pub fn load_new_agent(home: &Home) -> Result<AgentConfig, ConfigError> {
+    let file = home.agent_defaults_file();
+    if !file.exists() {
+        return Ok(AgentConfig::default());
+    }
+    read_json(&file)
+}
+
+pub fn load_ui(home: &Home) -> Result<Ui, ConfigError> {
+    let file = home.config_file();
+    let text = match std::fs::read_to_string(&file) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Ui::default()),
+        Err(error) => return Err(ConfigError::io(&file, &error)),
+    };
+    toml::from_str::<Settings>(&text)
+        .map(|settings| settings.ui)
+        .map_err(|error| ConfigError {
+            file,
+            line: error
+                .span()
+                .map(|span| text[..span.start].matches('\n').count() + 1),
+            message: format!(
+                "{}; config.toml now contains only [ui]; use native host-config.json and agent-defaults.json for execution settings (the old Agent store is not migrated)",
+                error.message()
+            ),
+        })
+}
+
 #[derive(Default)]
 pub struct Request<'a> {
-    pub agent: Option<&'a Path>,
-    pub agent_config: Option<&'a Path>,
-    pub profile: Option<&'a str>,
-    pub model: Option<&'a str>,
+    pub data_root: Option<&'a Path>,
+    pub host_config: Option<&'a Path>,
 }
 
 pub struct Launch {
     pub ui: Ui,
-    pub remote: Remote,
-    pub agent_config: PathBuf,
-    /// An external Agent; `None` runs the one built into this executable.
-    pub agent_binary: Option<PathBuf>,
-    /// False when `--agent-config` named a raw file, so `/reload` cannot recompose.
-    pub composed: bool,
-    /// The profile a new session takes without `--profile`; unknown for a raw Agent config.
-    pub default_profile: Option<String>,
+    pub data_root: PathBuf,
+    pub host_config_file: PathBuf,
+    pub initial_config: HostConfig,
+    /// Applied only when a new Agent is explicitly created.
+    pub new_agent: AgentConfig,
 }
 
 pub enum Prepared {
-    /// Nothing was configured: starter files were written, and this says where.
     FirstRun(String),
     Launch(Box<Launch>),
 }
 
-/// Everything before the terminal is touched: scaffold, validate, compose.
-pub fn prepare(
-    home: &Home,
-    request: &Request,
-    has_env: &dyn Fn(&str) -> bool,
-) -> Result<Prepared, String> {
-    if let Some(raw) = request.agent_config {
-        let (ui, binary, remote) = raw_settings(home).map_err(|error| error.to_string())?;
-        return Ok(Prepared::Launch(Box::new(Launch {
-            remote,
-            ui,
-            agent_config: raw.to_owned(),
-            agent_binary: agent_binary(home, request.agent, binary),
-            composed: false,
-            default_profile: None,
-        })));
-    }
-    if home.is_fresh() {
+/// Loads startup inputs without reading or rewriting the Host's owned records.
+pub fn prepare(home: &Home, request: &Request<'_>) -> Result<Prepared, String> {
+    let data_root = match request.data_root {
+        Some(path) => std::path::absolute(path).map_err(|error| error.to_string())?,
+        None => home.data_root(),
+    };
+    let host_config_file = request
+        .host_config
+        .map(Path::to_owned)
+        .unwrap_or_else(|| home.host_config_file());
+    let saved_host = data_root.join("host.json").exists();
+    if request.host_config.is_none() && home.is_fresh() && !saved_host {
         let created = scaffold::write(home).map_err(|error| error.to_string())?;
         return Ok(Prepared::FirstRun(scaffold::first_run_message(
             home, &created,
         )));
     }
-    let loaded = load(home).map_err(|error| error.to_string())?;
-    loaded.check_launch(request.profile, request.model, has_env)?;
-    let agent_config = loaded.write(home).map_err(|error| error.to_string())?;
+    let initial_config = if host_config_file.exists() || request.host_config.is_some() {
+        load_host_config(&host_config_file).map_err(|error| error.to_string())?
+    } else if saved_host {
+        HostConfig::default()
+    } else {
+        return Err(format!(
+            "{}: not found; supply a native HostConfig with --host-config (the old Agent store is not migrated)",
+            host_config_file.display()
+        ));
+    };
     Ok(Prepared::Launch(Box::new(Launch {
-        agent_binary: agent_binary(home, request.agent, loaded.binary),
-        ui: loaded.ui,
-        remote: loaded.remote,
-        agent_config,
-        composed: true,
-        default_profile: Some(loaded.agent.default_profile),
+        ui: load_ui(home).map_err(|error| error.to_string())?,
+        data_root,
+        host_config_file,
+        initial_config,
+        new_agent: load_new_agent(home).map_err(|error| error.to_string())?,
     })))
 }
 
-/// What a raw launch takes from `config.toml`: its settings, or the defaults
-/// when the file does not exist.
-fn raw_settings(home: &Home) -> Result<(Ui, Option<PathBuf>, Remote), ConfigError> {
-    let file = home.config_file();
-    if !file.exists() {
-        let none = Source {
-            file,
-            text: String::new(),
-        };
-        let remote = remote::RemoteSection::default().build(&none)?;
-        return Ok((Ui::default(), None, remote));
-    }
-    let source = Source::read(file)?;
-    let settings = source.parse::<Settings>()?;
-    let remote = settings.remote.build(&source)?;
-    Ok((settings.ui, settings.agent.binary, remote))
-}
-
-/// `--agent`, else `[agent] binary`, else none: the built-in Agent.
-fn agent_binary(home: &Home, flag: Option<&Path>, configured: Option<PathBuf>) -> Option<PathBuf> {
-    flag.map(Path::to_owned)
-        .or_else(|| configured.map(|configured| home.join(&configured)))
-}
-
-/// Replaces `path` through a temporary file, so a crash leaves the old content
-/// or the new one.
 pub(crate) fn write_atomic(path: &Path, text: &str, mode: u32) -> std::io::Result<()> {
     use std::io::Write;
     let mut temp = path.as_os_str().to_owned();

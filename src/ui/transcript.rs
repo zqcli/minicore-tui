@@ -70,6 +70,7 @@ impl RenderState {
             text,
             streaming: true,
             expanded,
+            ..
         } = block
         else {
             return blocks::render(block, styles, width, fold).into();
@@ -131,11 +132,20 @@ pub fn inner(area: Rect) -> Rect {
 /// Draws the transcript into `area` and records the drawn rows for copy.
 pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, styles: Styles) {
     let area = inner(area);
-    let welcome = || header(styles, area.width, &app.workspace);
+    let workspace = match app.resident.current() {
+        Some(session) => session
+            .info
+            .config
+            .workspace
+            .as_ref()
+            .map(|workspace| Path::new(&workspace.path)),
+        None => Some(app.workspace.as_path()),
+    };
+    let welcome = || header(styles, area.width, workspace);
     let Some(session) = app.resident.current() else {
         // A draft shows the header; only waiting gets a line under it.
         let status = if !app.ready {
-            Some("Connecting to minicore-agent…")
+            Some("Starting MiniCore Host…")
         } else if app.first_message.is_some() {
             Some("Creating the session…")
         } else if app.loading_session {
@@ -165,35 +175,6 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, styles: Styles) {
     // transcript without being a block.
     let mut render = |state: &mut RenderState, index: usize, block: &Block| {
         let mut rows = state.render(block, key);
-        if let Block::TurnEnd { loop_id, .. } = block
-            && let Some(note) = session
-                .body_recovery
-                .iter()
-                .find(|note| note.loop_id == *loop_id)
-        {
-            let status = match note.status {
-                crate::app::recovery::RecoveryStatus::Partial => "partial",
-                crate::app::recovery::RecoveryStatus::Unavailable => "unavailable",
-                _ => "recovery failed",
-            };
-            let message = format!("{loop_id} · {status} · {}", note.message);
-            rows.prepend(
-                crate::wrap::wrap_line(&message, usize::from(width))
-                    .into_iter()
-                    .map(|text| crate::ui::rails::chrome(Line::styled(text, styles.failure())))
-                    .collect(),
-            );
-        }
-        // Text a reconcile kept because the canonical body omits it is told
-        // apart from the authoritative body rather than blended into it.
-        if session.transcript.is_preserved(index)
-            || matches!(block,Block::Assistant { key,.. } if session.transcript.is_preserved_channel(key,true) || session.transcript.is_preserved_channel(key,false))
-        {
-            rows.prepend(vec![crate::ui::rails::chrome(Line::from(Span::styled(
-                "kept from this session's live view",
-                styles.faint(),
-            )))]);
-        }
         if index == 0 {
             let header = welcome();
             state.header_rows = header.len();
@@ -315,7 +296,7 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, styles: Styles) {
 
 /// The welcome rows, each group set off by a blank row: name and version, the
 /// main bindings, the workspace.
-fn header(styles: Styles, width: u16, workspace: &Path) -> Vec<Line<'static>> {
+fn header(styles: Styles, width: u16, workspace: Option<&Path>) -> Vec<Line<'static>> {
     let mut lines = vec![
         Line::default(),
         Line::from(vec![
@@ -344,7 +325,10 @@ fn header(styles: Styles, width: u16, workspace: &Path) -> Vec<Line<'static>> {
     lines.push(hint_line(&row, styles));
     lines.push(Line::default());
     lines.push(Line::styled(
-        format!(" {}", home_relative(workspace).display()),
+        workspace.map_or_else(
+            || " No workspace".to_owned(),
+            |path| format!(" {}", home_relative(path).display()),
+        ),
         styles.faint(),
     ));
     lines.push(Line::default());
@@ -435,13 +419,11 @@ mod tests {
     fn a_stream_follows_its_request_when_the_blocks_around_it_move() {
         use crate::ui::theme::Palette;
         let live = |request_index, text: &str| Block::Assistant {
-            key: RequestKey {
-                loop_id: "l".into(),
-                request_index,
-            },
+            key: RequestKey::response("00000000000000000001".parse().unwrap(), request_index),
             reasoning: String::new(),
             text: text.into(),
             streaming: true,
+            partial: false,
             expanded: None,
         };
         let fold = Fold {
@@ -471,15 +453,13 @@ mod tests {
 
         use crate::ui::theme::Palette;
 
-        let request = RequestKey {
-            loop_id: "l".into(),
-            request_index: 0,
-        };
+        let request = RequestKey::response("00000000000000000001".parse().unwrap(), 0);
         let block = Block::Assistant {
             key: request.clone(),
             reasoning: "# Plan\n\nFirst step\nSecond step\nThird step\nFourth step".into(),
             text: "Stable **paragraph**.\n\nA changing tail.".into(),
             streaming: true,
+            partial: false,
             expanded: None,
         };
         let styles = Styles::of(Palette::dark());

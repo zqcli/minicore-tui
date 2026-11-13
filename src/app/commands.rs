@@ -2,7 +2,8 @@
 
 use super::Action;
 use super::templates::Template;
-use crate::protocol::{ModelInfo, Reasoning};
+use minicore_host_core::ModelDescription;
+use minicore_host_protocol::{ApprovalMode, ReasoningPreference};
 
 /// One palette entry: the command name, its argument hint and a one-line description.
 #[derive(Clone, Copy)]
@@ -25,6 +26,91 @@ pub const COMMANDS: &[Command<'static>] = &[
         description: "Set the reasoning level, or pick one",
     },
     Command {
+        name: "agents",
+        args: "",
+        description: "Select an Agent",
+    },
+    Command {
+        name: "agent-new",
+        args: "<name>",
+        description: "Create an Agent using the configured defaults",
+    },
+    Command {
+        name: "agent-start",
+        args: "",
+        description: "Start the selected Agent",
+    },
+    Command {
+        name: "agent-stop",
+        args: "",
+        description: "Stop the selected Agent",
+    },
+    Command {
+        name: "agent-delete",
+        args: "",
+        description: "Review and delete the selected Agent and its captured sessions",
+    },
+    Command {
+        name: "agent-defaults",
+        args: "",
+        description: "Apply agent-defaults.json to the selected Agent's future sessions",
+    },
+    Command {
+        name: "default-session",
+        args: "",
+        description: "Set this session as its Agent's default",
+    },
+    Command {
+        name: "approval",
+        args: "<ask|auto|read_only>",
+        description: "Set ask, auto or read_only approval for the next turn",
+    },
+    Command {
+        name: "new",
+        args: "",
+        description: "Start a new session in the selected Agent",
+    },
+    Command {
+        name: "session",
+        args: "",
+        description: "Show this session and its owning Agent",
+    },
+    Command {
+        name: "sessions",
+        args: "",
+        description: "Open, filter, rename or delete sessions",
+    },
+    Command {
+        name: "rename",
+        args: "<title>",
+        description: "Rename this session",
+    },
+    Command {
+        name: "pause",
+        args: "",
+        description: "Pause input consumption in this session",
+    },
+    Command {
+        name: "resume",
+        args: "",
+        description: "Resume this session",
+    },
+    Command {
+        name: "load",
+        args: "",
+        description: "Load this session without resuming it",
+    },
+    Command {
+        name: "unload",
+        args: "",
+        description: "Unload this session",
+    },
+    Command {
+        name: "close",
+        args: "",
+        description: "Close this session",
+    },
+    Command {
         name: "diff",
         args: "",
         description: "Show Git working-tree changes, including untracked files",
@@ -32,7 +118,12 @@ pub const COMMANDS: &[Command<'static>] = &[
     Command {
         name: "context",
         args: "",
-        description: "Show context usage",
+        description: "Show native context facts and past response usage",
+    },
+    Command {
+        name: "compact",
+        args: "",
+        description: "Compact the session context now",
     },
     Command {
         name: "export",
@@ -45,54 +136,19 @@ pub const COMMANDS: &[Command<'static>] = &[
         description: "Copy the last answer to the clipboard",
     },
     Command {
-        name: "rename",
-        args: "<title>",
-        description: "Rename this session",
-    },
-    Command {
         name: "theme",
         args: "[dark|light]",
         description: "Switch the colour theme",
     },
     Command {
-        name: "help",
-        args: "",
-        description: "Show keys and commands",
-    },
-    Command {
-        name: "new",
-        args: "[profile]",
-        description: "Start a new session",
-    },
-    Command {
-        name: "session",
-        args: "",
-        description: "Show this session's id, model and totals",
-    },
-    Command {
-        name: "compact",
-        args: "",
-        description: "Compact the session context now",
-    },
-    Command {
-        name: "resume",
-        args: "",
-        description: "Resume a different session",
-    },
-    Command {
-        name: "sessions",
-        args: "",
-        description: "Open, filter or delete sessions",
-    },
-    Command {
         name: "reload",
         args: "",
-        description: "Reload the agent configuration",
+        description: "Reload the Host configuration",
     },
     Command {
         name: "recover",
         args: "",
-        description: "Retry incomplete conversation recovery",
+        description: "Refresh the session state, history and observations",
     },
     Command {
         name: "unconfirmed",
@@ -100,9 +156,9 @@ pub const COMMANDS: &[Command<'static>] = &[
         description: "Review local inputs whose acceptance is unconfirmed",
     },
     Command {
-        name: "remote",
-        args: "[on|off|status|password [text]]",
-        description: "Let a phone drive this TUI, or set its password",
+        name: "help",
+        args: "",
+        description: "Show keys and commands",
     },
     Command {
         name: "quit",
@@ -161,14 +217,33 @@ pub fn parse(input: &str) -> Option<(&str, &str)> {
 pub fn execute(name: &str, arg: &str) -> Option<Executed> {
     Some(match name {
         "new" if arg.is_empty() => Executed::Action(Action::NewSession),
-        "new" => Executed::Action(Action::NewSessionWith(arg.to_owned())),
+        "new" => Executed::Noop,
+        "agents" => Executed::Panel(super::Panel::Agents),
+        "agent-start" => Executed::Action(Action::StartAgent),
+        "agent-stop" => Executed::Action(Action::StopAgent),
+        "agent-delete" => Executed::Panel(super::Panel::AgentDelete),
+        "agent-defaults" => Executed::Action(Action::ApplyAgentDefaults),
+        "default-session" => Executed::Action(Action::SetDefaultSession),
+        "approval" => match arg {
+            "ask" => Executed::Action(Action::SetApproval(ApprovalMode::Ask)),
+            "auto" => Executed::Action(Action::SetApproval(ApprovalMode::Auto)),
+            "read_only" => Executed::Action(Action::SetApproval(ApprovalMode::ReadOnly)),
+            _ => Executed::Noop,
+        },
+        "agent-new" if !arg.is_empty() => Executed::Action(Action::CreateAgent(arg.to_owned())),
+        "agent-new" => Executed::Noop,
         "session" => Executed::Panel(super::Panel::SessionInfo),
-        "sessions" | "resume" => Executed::Panel(super::Panel::Sessions),
+        "sessions" => Executed::Panel(super::Panel::Sessions),
+        "pause" => Executed::Action(Action::Pause),
+        "resume" => Executed::Action(Action::Resume),
+        "load" => Executed::Action(Action::Load),
+        "unload" => Executed::Action(Action::Unload),
+        "close" => Executed::Action(Action::CloseSession),
         "rename" if !arg.is_empty() => Executed::Action(Action::Rename(arg.to_owned())),
         "rename" => Executed::Noop,
         "model" if arg.is_empty() => Executed::Panel(super::Panel::Models),
         "model" => Executed::Action(Action::SwitchModel(arg.to_owned())),
-        "reasoning" => match Reasoning::parse(arg) {
+        "reasoning" => match parse_reasoning(arg) {
             Some(level) => Executed::Action(Action::SetReasoning(level)),
             None => Executed::Panel(super::Panel::Reasoning),
         },
@@ -185,12 +260,25 @@ pub fn execute(name: &str, arg: &str) -> Option<Executed> {
             "light" => Executed::Action(Action::SetTheme(crate::config::ThemeKind::Light)),
             _ => Executed::Noop,
         },
-        "reload" => Executed::Action(Action::ReloadAgent),
+        "reload" => Executed::Action(Action::ReloadHost),
         "recover" => Executed::Action(Action::RetryRecovery),
         "unconfirmed" => Executed::Panel(super::Panel::Unconfirmed),
         "help" => Executed::Panel(super::Panel::Help),
         "quit" => Executed::Action(Action::Quit),
-        "remote" => Executed::Action(Action::Remote(arg.to_owned())),
+        _ => return None,
+    })
+}
+
+pub fn parse_reasoning(value: &str) -> Option<ReasoningPreference> {
+    Some(match value {
+        "auto" => ReasoningPreference::Auto,
+        "disabled" => ReasoningPreference::Disabled,
+        "low" => ReasoningPreference::Low,
+        "medium" => ReasoningPreference::Medium,
+        "high" => ReasoningPreference::High,
+        "xhigh" => ReasoningPreference::XHigh,
+        "max" => ReasoningPreference::Max,
+        "ultra" => ReasoningPreference::Ultra,
         _ => return None,
     })
 }
@@ -258,8 +346,11 @@ pub fn unknown_notice(name: &str, closest: Option<&str>) -> String {
 }
 
 /// The model `arg` names: an exact id, else the one id it fuzzy-matches.
-pub fn resolve_model<'a>(models: &'a [ModelInfo], arg: &str) -> Result<&'a ModelInfo, String> {
-    if let Some(model) = models.iter().find(|model| model.id == arg) {
+pub fn resolve_model<'a>(
+    models: &'a [ModelDescription],
+    arg: &str,
+) -> Result<&'a ModelDescription, String> {
+    if let Some(model) = models.iter().find(|model| model.model.as_str() == arg) {
         return Ok(model);
     }
     let found = super::overlay::matching_models(models, arg);
@@ -267,7 +358,7 @@ pub fn resolve_model<'a>(models: &'a [ModelInfo], arg: &str) -> Result<&'a Model
         [] => Err(format!("Unknown model {arg}")),
         [model] => Ok(model),
         many => {
-            let ids: Vec<&str> = many.iter().map(|model| model.id.as_str()).collect();
+            let ids: Vec<&str> = many.iter().map(|model| model.model.as_str()).collect();
             Err(format!("{arg} matches {}: {}", many.len(), ids.join(", ")))
         }
     }
@@ -284,7 +375,11 @@ pub fn needs_argument(name: &str) -> String {
         .iter()
         .find(|command| command.name == name)
         .map_or("an argument", |command| command.args);
-    format!("/{name} needs {args}")
+    if args.is_empty() {
+        format!("/{name} takes no arguments")
+    } else {
+        format!("/{name} needs {args}")
+    }
 }
 
 #[cfg(test)]
@@ -317,9 +412,9 @@ mod tests {
     fn exact_and_prefix_matches_rank_first() {
         let names = |input| -> Vec<&str> { filter(input, &[]).iter().map(|c| c.name).collect() };
         assert_eq!(names("mo")[0], "model");
-        assert_eq!(names("res"), ["resume", "reasoning"]);
+        assert_eq!(names("res")[0], "resume");
         assert_eq!(names("re")[..3], ["reasoning", "rename", "resume"]);
-        assert_eq!(names("sess"), ["session", "sessions"]);
+        assert_eq!(names("sess"), ["session", "sessions", "default-session"]);
         assert_eq!(names("new")[0], "new");
     }
 
@@ -420,7 +515,7 @@ mod tests {
     }
 
     #[test]
-    fn model_and_new_take_an_argument() {
+    fn model_accepts_a_reference_and_new_uses_the_selected_agent() {
         assert!(matches!(
             execute("model", ""),
             Some(Executed::Panel(crate::app::Panel::Models))
@@ -429,10 +524,7 @@ mod tests {
             execute("model", "luna"),
             Some(Executed::Action(Action::SwitchModel("luna".into())))
         );
-        assert_eq!(
-            execute("new", "ask"),
-            Some(Executed::Action(Action::NewSessionWith("ask".into())))
-        );
+        assert_eq!(execute("new", "ask"), Some(Executed::Noop));
         assert_eq!(
             execute("new", ""),
             Some(Executed::Action(Action::NewSession))
@@ -443,15 +535,50 @@ mod tests {
         ));
     }
 
-    fn model(id: &str) -> ModelInfo {
-        serde_json::from_value(serde_json::json!({"id": id, "supported_reasoning": []})).unwrap()
+    #[test]
+    fn agent_and_session_control_commands_preserve_native_intents() {
+        for (name, action) in [
+            ("agent-start", Action::StartAgent),
+            ("agent-stop", Action::StopAgent),
+            ("agent-defaults", Action::ApplyAgentDefaults),
+            ("default-session", Action::SetDefaultSession),
+            ("pause", Action::Pause),
+            ("resume", Action::Resume),
+            ("load", Action::Load),
+            ("unload", Action::Unload),
+            ("close", Action::CloseSession),
+        ] {
+            assert_eq!(execute(name, ""), Some(Executed::Action(action)));
+        }
+        assert_eq!(
+            execute("agent-delete", ""),
+            Some(Executed::Panel(crate::app::Panel::AgentDelete))
+        );
+        for (name, mode) in [
+            ("ask", ApprovalMode::Ask),
+            ("auto", ApprovalMode::Auto),
+            ("read_only", ApprovalMode::ReadOnly),
+        ] {
+            assert_eq!(
+                execute("approval", name),
+                Some(Executed::Action(Action::SetApproval(mode)))
+            );
+        }
+        assert_eq!(execute("approval", "always"), Some(Executed::Noop));
+    }
+
+    fn model(id: &str) -> ModelDescription {
+        serde_json::from_value(serde_json::json!({"model": id, "api":"responses", "context_window":200000, "supported_reasoning": [], "supports_tools":true})).unwrap()
     }
 
     #[test]
     fn a_model_argument_resolves_exactly_then_by_a_unique_fuzzy_match() {
         let models = [model("luna"), model("gpt-6-luna"), model("deep")];
-        assert_eq!(resolve_model(&models, "luna").unwrap().id, "luna");
-        assert_eq!(resolve_model(&models, "dp").unwrap().id, "deep");
+        assert_eq!(
+            resolve_model(&models, "luna").unwrap().model.as_str(),
+            "luna"
+        );
+        assert_eq!(resolve_model(&models, "dp").unwrap().model.as_str(), "deep");
         assert_eq!(
             resolve_model(&models, "lun").unwrap_err(),
             "lun matches 2: luna, gpt-6-luna"

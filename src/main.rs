@@ -1,7 +1,6 @@
-//! Process entry point: parse arguments, load config, start the agent, then run
-//! the terminal loop.
+//! Process entry point: prepare a persistent Host and run the terminal loop.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use crossterm::event::{Event as TermEvent, EventStream};
@@ -9,16 +8,17 @@ use crossterm::event::{Event as TermEvent, EventStream};
 use futures_util::StreamExt;
 use tokio::sync::mpsc;
 
+use minicore_host_core::{AgentSummary, SessionSummary};
+use minicore_host_protocol::{
+    AgentId, HostLifecycle, HostShutdownRequest, HostShutdownStrategy, ModelRef, NullablePatch,
+    OperationId, SessionConfigPatch, SessionId, SessionOverrides, SessionRef, WorkspaceRef,
+};
 use minicore_tui::app::{App, Msg};
 use minicore_tui::cli::{Args, USAGE};
 use minicore_tui::config::{self, Home, Prepared, Request};
-use minicore_tui::protocol::SessionInfo;
-use minicore_tui::rpc::{self, Client, Incoming};
+use minicore_tui::host::Hosted;
 use minicore_tui::terminal;
 use minicore_tui::ui::theme::{Palette, Styles};
-
-#[cfg(feature = "e2e-observe")]
-mod application_gate;
 
 /// Frame cap: coalesce bursts instead of drawing on every event.
 const FRAME: Duration = Duration::from_millis(16);
@@ -44,28 +44,6 @@ struct Frames {
     draws: [u64; CAUSES.len()],
     elapsed: Vec<Duration>,
     report: bool,
-}
-
-async fn next_backend_message(
-    incoming: &mut mpsc::Receiver<Incoming>,
-    messages: &mut mpsc::UnboundedReceiver<Msg>,
-    agent_open: &mut bool,
-) -> Option<Msg> {
-    tokio::select! {
-        biased;
-        incoming = incoming.recv(), if *agent_open => match incoming {
-            Some(Incoming::Event { event, bytes }) => Some(Msg::Agent { event, bytes }),
-            Some(Incoming::Closed { status }) => {
-                *agent_open = false;
-                Some(Msg::AgentClosed(status.unwrap_or_else(|| "agent closed".into())))
-            }
-            None => {
-                *agent_open = false;
-                None
-            }
-        },
-        message = messages.recv() => message,
-    }
 }
 
 impl Frames {
@@ -131,19 +109,24 @@ impl Frames {
     }
 }
 
-fn main() -> std::io::Result<()> {
-    let mut args = std::env::args().skip(1).peekable();
-    if args
-        .next_if(|first| first == rpc::AGENT_SUBCOMMAND)
-        .is_some()
-    {
-        std::process::exit(minicore_agent::cli::run(args));
-    }
-    let runtime = tokio::runtime::Builder::new_current_thread()
+fn main() -> std::process::ExitCode {
+    std::panic::set_hook(Box::new(|_| {
+        eprintln!("minicore-tui: internal failure; controlled Host shutdown is not established");
+    }));
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
         .enable_all()
-        .build()?;
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(_) => {
+            eprintln!("minicore-tui: cannot initialize the execution runtime");
+            return std::process::ExitCode::FAILURE;
+        }
+    };
     let code = runtime.block_on(run());
-    std::process::exit(code);
+    runtime.shutdown_background();
+    std::process::ExitCode::from(code as u8)
 }
 
 async fn run() -> i32 {
@@ -170,16 +153,13 @@ async fn run() -> i32 {
         }
     };
     let request = Request {
-        agent: args.agent.as_deref(),
-        agent_config: args.agent_config.as_deref(),
-        profile: args.profile.as_deref(),
-        model: args.model.as_deref(),
+        data_root: args.data_root.as_deref(),
+        host_config: args.host_config.as_deref(),
     };
-    let has_env = |name: &str| std::env::var_os(name).is_some_and(|value| !value.is_empty());
-    let launch = match config::prepare(&home, &request, &has_env) {
+    let launch = match config::prepare(&home, &request) {
         Ok(Prepared::Launch(launch)) => *launch,
         Ok(Prepared::FirstRun(message)) => {
-            print!("{message}");
+            println!("{message}");
             return 1;
         }
         Err(error) => {
@@ -187,108 +167,130 @@ async fn run() -> i32 {
             return 2;
         }
     };
+    let selected_agent = match args
+        .agent_id
+        .as_deref()
+        .map(str::parse::<AgentId>)
+        .transpose()
+    {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("invalid --agent-id: {error}");
+            return 2;
+        }
+    };
+    let selected_session = match args
+        .session
+        .as_deref()
+        .map(str::parse::<SessionId>)
+        .transpose()
+    {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("invalid --session: {error}");
+            return 2;
+        }
+    };
+    let model = match args
+        .model
+        .as_deref()
+        .map(str::parse::<ModelRef>)
+        .transpose()
+    {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("invalid --model: {error}");
+            return 2;
+        }
+    };
     let theme = args.theme.unwrap_or(launch.ui.theme);
-    let workspace = args
+    let workspace = match args
         .workspace
         .clone()
-        .or_else(|| std::env::current_dir().ok())
-        .unwrap_or_else(|| PathBuf::from("."));
-
-    let remote = if args.remote {
-        match minicore_tui::remote::Bound::bind(&launch.remote, home.dir().join("remote.json"))
-            .await
-        {
-            Ok(bound) => Some(bound),
-            Err(error) => {
-                eprintln!("Remote: {error}");
-                return 1;
-            }
-        }
-    } else {
-        None
-    };
-
-    let (msg_tx, mut msg_rx) = mpsc::unbounded_channel::<Msg>();
-    let (incoming_tx, mut incoming_rx) = mpsc::channel::<Incoming>(256);
-    let client = match rpc::agent_command(launch.agent_binary.as_deref(), &launch.agent_config)
-        .map_err(|error| format!("cannot locate the running executable: {error}"))
-        .and_then(|command| Client::spawn(command, incoming_tx).map_err(|error| error.to_string()))
+        .map(Ok)
+        .unwrap_or_else(std::env::current_dir)
+        .and_then(std::fs::canonicalize)
     {
-        Ok(client) => client,
+        Ok(workspace) => workspace,
         Err(error) => {
-            eprintln!("{error}");
+            eprintln!("cannot resolve workspace: {error}");
+            return 2;
+        }
+    };
+    let workspace_path = match workspace.to_str() {
+        Some(path) => path.to_owned(),
+        None => {
+            eprintln!("workspace must be representable as UTF-8 for native Host configuration");
+            return 2;
+        }
+    };
+    let initial_session = SessionOverrides(SessionConfigPatch {
+        model: model.clone(),
+        reasoning: args.reasoning,
+        workspace: NullablePatch::Set(WorkspaceRef {
+            path: workspace_path,
+        }),
+        ..SessionConfigPatch::default()
+    });
+    let mut signals = match ExitSignals::new() {
+        Ok(signals) => signals,
+        Err(error) => {
+            eprintln!("cannot initialize shutdown signals: {error}");
             return 1;
         }
     };
+    let mut hosted = match Hosted::open(&launch).await {
+        Ok(hosted) => hosted,
+        Err(error) => {
+            eprintln!("minicore-tui: {error}");
+            return 2;
+        }
+    };
+    let client = hosted.client();
+    let (msg_tx, mut msg_rx) = mpsc::channel::<Msg>(minicore_tui::app::MESSAGE_CAPACITY);
 
     terminal::install_panic_hook();
     let mut guard = match terminal::Guard::enter() {
         Ok(guard) => guard,
         Err(error) => {
             eprintln!("terminal setup failed: {error}");
+            if let Err(error) = finish_host(&mut hosted).await {
+                eprintln!("minicore-tui: {error}");
+            }
             return 1;
         }
     };
 
     let mut app = App::new(client.clone(), msg_tx.clone(), workspace.clone());
-    #[cfg(feature = "e2e-observe")]
-    let mut apply_gate = match application_gate::ApplicationGate::from_env() {
-        Ok(gate) => gate,
-        Err(error) => {
-            eprintln!("acceptance application gate setup failed: {error}");
-            return 1;
-        }
-    };
-    #[cfg(feature = "e2e-observe")]
-    let mut apply_gate_failed = false;
-    #[cfg(feature = "e2e-observe")]
-    if let Some(path) = std::env::var_os("MINICORE_E2E_TRACE") {
-        match std::fs::OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(path)
-        {
-            Ok(file) => app.start_observer(file),
-            Err(error) => {
-                eprintln!("acceptance trace open failed: {error}");
-                return 1;
-            }
-        }
-    }
-    #[cfg(feature = "e2e-observe")]
-    if apply_gate.is_some() && app.observer.is_none() {
-        eprintln!("acceptance application gate requires MINICORE_E2E_TRACE");
-        return 1;
-    }
     app.launch = minicore_tui::app::LaunchSettings {
-        profile: args.profile.clone(),
-        model: args.model.clone(),
+        model,
         reasoning: args.reasoning,
     };
+    app.new_agent = launch.new_agent.clone();
+    app.selected_agent = selected_agent.clone();
+    app.host_config_file = Some(launch.host_config_file);
     app.theme = theme;
     app.notifier.bell = launch.ui.bell;
     app.editor = launch.ui.editor;
-    app.composed = launch.composed;
-    app.default_profile = launch.default_profile;
     app.composer = minicore_tui::app::composer::Composer::with_history(
         minicore_tui::prompt_history::load(&home.history_file()),
     );
     app.home = Some(home);
-    app.remote.config = Some(launch.remote);
-    if let Some(bound) = remote {
-        app.enter_remote(bound);
-    }
     app.styles = Styles::of(Palette::for_kind(theme));
 
     let boot = {
         let client = client.clone();
         let tx = msg_tx.clone();
-        tokio::spawn(async move { minicore_tui::app::bootstrap(client, tx).await })
+        let new_agent = launch.new_agent;
+        let selected = selected_agent.clone();
+        tokio::spawn(async move {
+            minicore_tui::app::bootstrap(client, tx, new_agent, selected, initial_session).await
+        })
     };
     // The loop must not poll `EventStream` itself: every poll fights the stream's
     // reader thread for the event lock and spins on `sched_yield` about 15 times.
     let (term_tx, mut term_rx) = mpsc::unbounded_channel::<TermEvent>();
-    tokio::spawn(async move {
+    let terminal_events = tokio::spawn(async move {
         let mut events = EventStream::new();
         #[cfg(windows)]
         terminal::input::forward(&mut events, &term_tx).await;
@@ -304,10 +306,8 @@ async fn run() -> i32 {
     let mut frames = Frames::new();
     let mut next_frame = tokio::time::Instant::now();
     let mut next_tick = tokio::time::Instant::now() + TICK;
-    let mut startup = Some(args.session.clone());
-    // A closed agent stays a closed agent: the channel is drained once and then
-    // left alone, so a `biased` select cannot spin on a permanently ready read.
-    let mut agent_open = true;
+    let mut startup = true;
+    let mut failed = None;
 
     loop {
         let wake = if app.animating() {
@@ -316,18 +316,22 @@ async fn run() -> i32 {
             app.next_expiry()
         };
         tokio::select! {
-            biased;
-            message = next_backend_message(&mut incoming_rx, &mut msg_rx, &mut agent_open) => {
-                if let Some(message) = message {
-                    #[cfg(feature = "e2e-observe")]
-                    if let Some(gate) = &mut apply_gate
-                        && let Err(error) = gate.before_apply(&message,&mut app).await {
-                        eprintln!("acceptance application gate failed: {error}");
-                        apply_gate_failed = true;
+            signal = signals.recv() => {
+                if let Err(error) = signal {
+                    failed = Some(format!("shutdown signal failed: {error}"));
+                }
+                app.quit = true;
+            }
+            message = msg_rx.recv() => {
+                match message {
+                    Some(message) => {
+                        app.on_msg(message);
+                        frames.mark(Cause::Event);
+                    }
+                    None => {
+                        failed = Some("application event channel closed".to_owned());
                         break;
                     }
-                    app.on_msg(message);
-                    frames.mark(Cause::Event);
                 }
             }
             maybe_event = term_rx.recv() => {
@@ -387,19 +391,23 @@ async fn run() -> i32 {
             frames.mark(Cause::Event);
         }
 
-        // Startup opens the session `--session` or `--continue` names, once;
-        // without one the screen is a draft that creates a session at its
-        // first message.
-        if app.ready
-            && let Some(session) = startup.take()
-        {
-            let recent = args
-                .continue_recent
-                .then(|| pick_recent(&app.sessions, &workspace))
-                .flatten();
-            if let Some(id) = session.or_else(|| recent.cloned()) {
-                app.open_session(id);
-                frames.mark(Cause::Event);
+        if app.ready && startup {
+            startup = false;
+            match startup_session(
+                &app.sessions,
+                &app.agents,
+                app.selected_agent.as_ref(),
+                selected_agent.as_ref(),
+                selected_session.as_ref(),
+                args.continue_recent,
+                &workspace,
+            ) {
+                Ok(Some(target)) => {
+                    app.open_session(target);
+                    frames.mark(Cause::Event);
+                }
+                Ok(None) => {}
+                Err(error) => app.notice(minicore_tui::app::NoticeLevel::Error, error),
             }
         }
 
@@ -408,10 +416,9 @@ async fn run() -> i32 {
             if guard.is_active()
                 && let Err(error) = guard.draw(|frame| minicore_tui::ui::draw(frame, &mut app))
             {
-                eprintln!("draw failed: {error}");
+                failed = Some(format!("draw failed: {error}"));
                 break;
             }
-            app.sync_remote();
             frames.drawn(started.elapsed());
             next_frame = tokio::time::Instant::now() + FRAME;
         }
@@ -421,30 +428,150 @@ async fn run() -> i32 {
         }
     }
 
-    #[cfg(feature = "e2e-observe")]
-    app.observe_checkpoint(true);
-    app.sync_remote();
+    terminal_events.abort();
+    boot.abort();
+    let _ = terminal_events.await;
+    let _ = boot.await;
+    if let Err(error) = guard.restore() {
+        failed = Some(format!("terminal restoration failed: {error}"));
+    }
+    msg_rx.close();
     app.local_files.finish().await;
-    app.remote.shutdown().await;
-    let _ = client.shutdown().await;
-    let _ = guard.restore();
     frames.print(&app);
     print!("{}", app.exit_output());
-    boot.abort();
-    #[cfg(feature = "e2e-observe")]
-    if apply_gate_failed {
+    drop(app);
+    drop(msg_rx);
+    drop(msg_tx);
+    if let Err(error) = finish_host(&mut hosted).await {
+        failed = Some(error);
+    }
+    if let Some(error) = failed {
+        eprintln!("minicore-tui: {error}");
         return 1;
     }
     0
 }
 
-/// The most recent session for this workspace, for `--continue`.
-fn pick_recent<'a>(sessions: &'a [SessionInfo], workspace: &Path) -> Option<&'a String> {
+struct ExitSignals {
+    #[cfg(unix)]
+    interrupt: tokio::signal::unix::Signal,
+    #[cfg(unix)]
+    terminate: tokio::signal::unix::Signal,
+}
+
+impl ExitSignals {
+    fn new() -> std::io::Result<Self> {
+        Ok(Self {
+            #[cfg(unix)]
+            interrupt: tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?,
+            #[cfg(unix)]
+            terminate: tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?,
+        })
+    }
+
+    async fn recv(&mut self) -> std::io::Result<()> {
+        #[cfg(unix)]
+        tokio::select! {
+            _ = self.interrupt.recv() => Ok(()),
+            _ = self.terminate.recv() => Ok(()),
+        }
+        #[cfg(not(unix))]
+        tokio::signal::ctrl_c().await
+    }
+}
+
+async fn finish_host(hosted: &mut Hosted) -> Result<(), String> {
+    eprintln!("Waiting for accepted Host work and saves; Ctrl+C requests force shutdown.");
+    hosted.request_shutdown(HostShutdownStrategy::Graceful)?;
+    let control = hosted.process_control();
+    let mut current = hosted.snapshot()?;
+    while current.lifecycle != HostLifecycle::Stopped {
+        if let Some(fault) = &current.shutdown_fault {
+            eprintln!(
+                "Host shutdown is blocked by {} ({}); cleanup is incomplete and the Host remains open.",
+                fault.type_name(),
+                fault.code()
+            );
+        }
+        tokio::select! {
+            changed = control.changed(&current) => {
+                current = changed.map_err(|fault| fault.message().to_owned())?;
+            }
+            signal = tokio::signal::ctrl_c() => {
+                signal.map_err(|_| "cannot listen for an explicit shutdown signal".to_owned())?;
+                eprintln!("Force shutdown requested; waiting for Host cancellation, saves and cleanup.");
+                control.shutdown(HostShutdownRequest {
+                    operation_id: OperationId::new().map_err(|error| error.to_string())?,
+                    strategy: HostShutdownStrategy::Force,
+                }).map_err(|fault| fault.message().to_owned())?;
+                current = hosted.snapshot()?;
+            }
+        }
+    }
+    hosted.finish_shutdown().await
+}
+
+fn startup_session(
+    sessions: &[SessionSummary],
+    agents: &[AgentSummary],
+    selected_agent: Option<&AgentId>,
+    explicit_agent: Option<&AgentId>,
+    requested: Option<&SessionId>,
+    continue_recent: bool,
+    workspace: &Path,
+) -> Result<Option<SessionRef>, String> {
+    let selected = if let Some(requested) = requested {
+        Some(
+            sessions
+                .iter()
+                .find(|session| {
+                    &session.id == requested
+                        && explicit_agent.is_none_or(|agent| &session.agent_id == agent)
+                })
+                .ok_or_else(|| {
+                    format!("session {requested} is not available under the selected Host/Agent")
+                })?,
+        )
+    } else if continue_recent {
+        pick_recent(sessions, selected_agent, workspace)
+    } else if let Some(agent) =
+        selected_agent.and_then(|id| agents.iter().find(|agent| &agent.id == id))
+    {
+        match &agent.default_session_id {
+            Some(id) => Some(
+                sessions
+                    .iter()
+                    .find(|session| &session.id == id && session.agent_id == agent.id)
+                    .ok_or_else(|| {
+                        format!("Agent {} default Session {id} is unavailable", agent.id)
+                    })?,
+            ),
+            None => None,
+        }
+    } else {
+        None
+    };
+    Ok(selected.map(|session| SessionRef {
+        agent_id: session.agent_id.clone(),
+        session_id: session.id.clone(),
+    }))
+}
+
+fn pick_recent<'a>(
+    sessions: &'a [SessionSummary],
+    agent: Option<&AgentId>,
+    workspace: &Path,
+) -> Option<&'a SessionSummary> {
     sessions
         .iter()
-        .filter(|session| session.workspace == workspace.to_string_lossy())
-        .max_by(|left, right| left.updated_at.cmp(&right.updated_at))
-        .map(|session| &session.session_id)
+        .filter(|session| agent.is_none_or(|id| &session.agent_id == id))
+        .filter(|session| {
+            session
+                .workspace
+                .as_ref()
+                .is_some_and(|bound| Path::new(&bound.path) == workspace)
+        })
+        .max_by(|left, right| left.last_activity_at.cmp(&right.last_activity_at))
 }
 
 #[cfg(test)]

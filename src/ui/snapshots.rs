@@ -1,63 +1,84 @@
-//! Full-screen render tests. Each one builds an `App`, draws it into a
-//! `TestBackend` and compares the text of the frame against a checked-in
-//! snapshot, so a visual regression shows up as a diff instead of a screenshot.
+//! Terminal rendering fixtures use native Host values and an in-process connection.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
+use minicore_host_core::{
+    AgentSummary, Host, ResourceFuture, ResourceResolver, SessionInfo, SessionSnapshot,
+    SessionSummary, TurnStateData,
+};
+use minicore_host_protocol::MessageMode::{FollowUp, Steer};
+use minicore_host_protocol::{
+    Fault, FaultKind, MessageMode, Scheduling, SessionConfig, SessionRef, Timestamp, ToolCallRef,
+    TurnId, TurnOutcome,
+};
+use minicore_host_transport::HostClient;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::style::Color;
+use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
-use crate::app::{App, Msg, Overlay, Scroll, Session};
-use crate::protocol::InputMode::{self, FollowUp, Steer};
-use crate::protocol::read::UserKind;
-use crate::protocol::stamp::unix_millis;
-use crate::protocol::{LoopOutcome, Reasoning, SessionInfo, ToolRef, TurnRef};
-use crate::transcript::{Block, ChangeSummary, RequestKey, ToolCall, ToolState, Transcript};
+use crate::app::{App, LiveTurn, Msg, Overlay, Scroll, Session};
+use crate::transcript::{Block, ChangeSummary, RequestKey, ToolCall, ToolState, UserKind};
 use crate::ui::theme::{Palette, Styles};
 
-/// A render fixture. The client talks to an Agent that closes at once, which no
-/// render observes.
-struct Fixture {
-    app: App,
-    _runtime: tokio::runtime::Runtime,
+pub(super) struct Fixture {
+    pub app: App,
+    pub _runtime: tokio::runtime::Runtime,
 }
-
 impl std::ops::Deref for Fixture {
     type Target = App;
-
     fn deref(&self) -> &App {
         &self.app
     }
 }
-
 impl std::ops::DerefMut for Fixture {
     fn deref_mut(&mut self) -> &mut App {
         &mut self.app
     }
 }
+struct NoExecution;
+impl ResourceResolver for NoExecution {
+    fn validate(&self, _: &SessionConfig) -> Result<(), Fault> {
+        Ok(())
+    }
+    fn resolve<'a>(&'a self, _: &'a SessionConfig) -> ResourceFuture<'a> {
+        Box::pin(async {
+            Err(Fault::new(
+                FaultKind::SessionResourceMissing,
+                "render fixture has no execution resources",
+            ))
+        })
+    }
+}
 
-fn app() -> Fixture {
+pub(super) fn native_id(index: u64) -> String {
+    format!("{index:020}")
+}
+pub(super) fn turn_id(index: u64) -> TurnId {
+    native_id(index).parse().unwrap()
+}
+fn stamp(value: &str) -> Option<Timestamp> {
+    Some(serde_json::from_value(json!(value)).unwrap())
+}
+
+pub(super) fn app() -> Fixture {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .expect("runtime");
-    let (tx, _rx) = mpsc::unbounded_channel::<Msg>();
-    let (incoming_tx, _incoming_rx) = mpsc::channel(4);
     let client = runtime.block_on(async {
-        crate::rpc::Client::start(
-            tokio::io::sink(),
-            tokio::io::empty(),
-            tokio::io::empty(),
-            incoming_tx,
-        )
+        HostClient::in_process(Host::memory(Arc::new(NoExecution)).unwrap()).unwrap()
     });
+    let (tx, _rx) = mpsc::channel::<Msg>(crate::app::tasks::MESSAGE_CAPACITY);
     let mut app = App::new(client, tx, PathBuf::from("/work/minicore-tui"));
     app.styles = Styles::of(Palette::dark());
     app.ready = true;
-    let mut session = Session::new(info(), 1, crate::testing::LOAD.into());
-    session.transcript = Transcript::default();
+    app.agents = vec![agent(1, "Coder")];
+    app.selected_agent = Some(native_id(1).parse().unwrap());
+    let session = session(&app, 1, "Cache the parser");
+    app.sessions = vec![catalog(&session)];
     app.resident.insert(session);
     app.resident.select(Some(1));
     Fixture {
@@ -66,26 +87,88 @@ fn app() -> Fixture {
     }
 }
 
-fn info() -> SessionInfo {
-    SessionInfo {
-        session_id: "ses_0123456789abcdef".into(),
-        title: Some("Cache the parser".into()),
-        profile: "coding".into(),
-        workspace: "/work/minicore-tui".into(),
-        model: "gpt-6-luna".into(),
-        reasoning: Reasoning::Max,
-        loaded: true,
-        updated_at: String::new(),
+pub(super) fn info(index: u64, title: &str) -> SessionInfo {
+    let mut config = serde_json::to_value(SessionConfig::default()).unwrap();
+    config["model"] = json!("gpt-6-luna");
+    config["reasoning"] = json!("max");
+    config["workspace"] = json!({"path":"/work/minicore-tui"});
+    serde_json::from_value(json!({
+        "id":native_id(index),"agent_id":native_id(1),"title":title,"mode":"memory",
+        "created_at":"2026-10-20T21:38:00Z","last_activity_at":"2026-10-20T21:38:00Z",
+        "agent_config_revision":0,"config_revision":0,"config":config
+    }))
+    .unwrap()
+}
+fn owned_work() -> Value {
+    json!({"model":false,"tools":[],"preparing":false,"history_save":false,"metadata_save":false,"compaction":null,"tool_cleanup":false,"scope_cleanup":false,"result_handoff":false})
+}
+pub(super) fn session(app: &App, index: u64, title: &str) -> Session {
+    let info = info(index, title);
+    let target = SessionRef {
+        agent_id: info.agent_id.clone(),
+        session_id: info.id.clone(),
+    };
+    let state: SessionSnapshot = serde_json::from_value(json!({
+        "host_id":native_id(1),"host_incarnation":native_id(1),"agent_id":info.agent_id,"session_id":info.id,
+        "data":{"owned_work":owned_work(),"end_reason":null,"deletion":null,"mode":"memory","controller_revision":0,
+        "lifecycle":"open","scheduling":"auto","pause_reasons":[],"residency":"loaded","load_id":native_id(1),"runner_revision":0,
+        "active_turn_id":null,"pending_interactions":[],"next_step":[],"next_turn":[],"preparing":false,"compaction":null,"saving":false,
+        "metadata_saving":false,"metadata_fault":null,"block_reason":null,"last_result":null}
+    })).unwrap();
+    Session::new(info, state, index, app.client.session(target))
+}
+pub(super) fn catalog(session: &Session) -> SessionSummary {
+    let info = &session.info;
+    let state = &session.state.data;
+    SessionSummary {
+        created_at: info.created_at,
+        last_activity_at: Timestamp::now(),
+        workspace: info.config.workspace.clone(),
+        model: info.config.model.clone(),
+        reasoning: info.config.reasoning,
+        id: info.id.clone(),
+        agent_id: info.agent_id.clone(),
+        title: info.title.clone(),
+        mode: info.mode,
+        config_revision: info.config_revision,
+        lifecycle: state.lifecycle,
+        scheduling: state.scheduling,
+        pause_reasons: state.pause_reasons.clone(),
+        residency: state.residency,
+        active_turn_id: state.active_turn_id.clone(),
+        next_step: state.next_step.len(),
+        next_turn: state.next_turn.len(),
+        pending_interactions: usize::from(session.interaction.is_some()),
+        owned_work: state.owned_work.clone(),
+        block_reason: state.block_reason.clone(),
+        metadata_fault: None,
+        deletion: None,
+        end_reason: None,
     }
 }
-
+fn agent(index: u64, name: &str) -> AgentSummary {
+    serde_json::from_value(json!({"id":native_id(index),"host_id":native_id(1),"name":name,"mode":"memory","lifecycle":"active",
+        "config_revision":0,"default_session_id":null,"metadata_saving":false,"metadata_fault":null,"deletion":null,"sessions":[]})).unwrap()
+}
+pub(super) fn live(start: usize, index: u64) -> LiveTurn {
+    let state: TurnStateData = serde_json::from_value(json!({"state":"running","runner_revision":0,"config_revision":0,
+        "outcome":null,"persistence":"not_applicable","requests":1,"tool_rounds":0,"phase":"model","model_retry":null,
+        "model_attempts":[1],"fault":null,"persistence_fault":null,"cleanup_faults":[]})).unwrap();
+    LiveTurn {
+        turn_id: turn_id(index),
+        load_id: Some(native_id(1).parse().unwrap()),
+        state,
+        started: tokio::time::Instant::now(),
+        running_tool: None,
+        start,
+        interrupting: false,
+    }
+}
 fn tool() -> ToolCall {
     let mut call = ToolCall::new(
-        ToolRef {
-            session_id: "ses_0123456789abcdef".into(),
-            loop_id: "loop_1".into(),
-            request_index: 1,
-            tool_call_id: "call_1".into(),
+        ToolCallRef {
+            turn_id: turn_id(1),
+            tool_call_id: "call_1".to_owned().into(),
         },
         "bash",
     );
@@ -107,22 +190,21 @@ fn conversation(app: &mut App) {
         at: None,
     });
     transcript.push(Block::Assistant {
-        key: RequestKey {
-            loop_id: "loop_1".into(),
-            request_index: 0,
-        },
+        key: RequestKey::response(turn_id(1), 0),
         reasoning: "The layout cache only keyed on the block revision...".into(),
         text: "It does not any more. The **streaming renderer** keeps the stable prefix and\nre-renders only the tail, so a delta costs one small parse.".into(),
         streaming: false,
+        partial: false,
         expanded: None,
     });
     transcript.push(Block::Tool(Box::new(tool())));
     transcript.push(Block::TurnEnd {
-        loop_id: "loop_1".into(),
-        outcome: LoopOutcome::Completed,
+        turn_id: turn_id(1),
+        outcome: TurnOutcome::Completed,
+        reason: None,
         duration: Some(std::time::Duration::from_secs(12)),
         requests: 2,
-        tools: 1,
+        tool_rounds: 1,
         usage: Default::default(),
         changes: Some(ChangeSummary {
             files: 2,
@@ -194,13 +276,8 @@ fn expanded_cards_show_hidden_lines_at_the_cut() {
 fn the_draft_is_the_welcome_header_over_the_editor_and_the_footer() {
     let mut app = app();
     app.resident = Default::default();
-    app.profiles = vec![
-        serde_json::from_value(
-            serde_json::json!({"id": "coding", "model": "gpt-6-luna", "reasoning": "max"}),
-        )
-        .expect("profile"),
-    ];
-    app.default_profile = Some("coding".into());
+    app.launch.model = Some("gpt-6-luna".parse().unwrap());
+    app.launch.reasoning = Some(minicore_host_protocol::ReasoningPreference::Max);
     let screen = render(&mut app, 70, 14);
     snapshot("draft", screen.clone());
     assert!(!screen.contains("No session"), "a draft shows no status");
@@ -208,7 +285,7 @@ fn the_draft_is_the_welcome_header_over_the_editor_and_the_footer() {
     app.ready = false;
     let screen = render(&mut app, 70, 16);
     assert!(screen.contains("minicore-tui v"), "{screen}");
-    assert!(screen.contains("Connecting to minicore-agent…"), "{screen}");
+    assert!(screen.contains("Starting MiniCore Host…"), "{screen}");
 }
 
 #[test]
@@ -219,16 +296,14 @@ fn the_screen_shows_earlier_content_while_streaming() {
     session.transcript.push(Block::User {
         text: "Now stream a longer answer.".into(),
         kind: UserKind::Prompt,
-        at: unix_millis("2026-10-20T21:41:09Z"),
+        at: stamp("2026-10-20T21:41:09Z"),
     });
     session.transcript.push(Block::Assistant {
-        key: RequestKey {
-            loop_id: "loop_2".into(),
-            request_index: 0,
-        },
+        key: RequestKey::response(turn_id(2), 0),
         reasoning: "I should explain the anchor rule first, then show it.".into(),
         text: "An anchored view keeps its block and row, so\nnew output below never moves the text you\nare reading. Only scrolling to the end returns\nto following.".into(),
         streaming: true,
+        partial: false,
         expanded: None,
     });
     snapshot("streaming", render(&mut app, 70, 20));
@@ -246,16 +321,14 @@ fn an_anchored_view_does_not_move_when_content_grows() {
     let before = render(&mut app, 70, 20);
     let session = app.resident.current_mut().expect("session");
     session.transcript.push(Block::Assistant {
-        key: RequestKey {
-            loop_id: "loop_3".into(),
-            request_index: 0,
-        },
+        key: RequestKey::response(turn_id(3), 0),
         reasoning: String::new(),
         text: (0..60)
             .map(|index| format!("appended line {index}"))
             .collect::<Vec<_>>()
             .join("\n\n"),
         streaming: true,
+        partial: false,
         expanded: None,
     });
     let after = render(&mut app, 70, 20);
@@ -322,44 +395,42 @@ fn the_footer_reports_model_and_reasoning_without_duplicate_status() {
 }
 
 #[test]
-fn the_footer_names_the_branch_and_right_aligns_the_totals() {
+fn the_footer_reports_past_response_usage_without_inventing_context_percent() {
     let mut app = app();
-    let session = app.resident.current_mut().expect("session");
+    let session = app.resident.current_mut().unwrap();
     session.branch = Some("main".into());
-    session.presentation = Some(
-        serde_json::from_value(serde_json::json!({
-            "session_id": "ses_0123456789abcdef",
-            "context": {"tokens": 16400, "window": 40000, "percent": 41.0, "kind": "reported"}
-        }))
-        .unwrap(),
-    );
-    session.usage = crate::protocol::UsageTotals {
-        input: 50_500,
-        output: 1_800,
-        cached: 33_800,
-    };
-    let rendered = render(&mut app, 100, 12);
-    let footer = rendered.lines().last().unwrap_or_default();
-    assert!(
-        footer.starts_with(" ▸ minicore-tui@main · gpt 6 luna"),
-        "{footer}"
-    );
-    assert!(!footer.contains("Cache the parser"), "{footer}");
-    assert!(
-        footer.ends_with("↑50.5k ↓1.8k R33.8k · ctx 41.00%"),
-        "{footer}"
-    );
-    assert_eq!(crate::wrap::width(footer), 100, "flush right: {footer}");
-    // On a narrow terminal the directory is cut first, then dropped; the
-    // model and level stay.
-    for (columns, identity) in [(60_u16, " ▸ mini…"), (50, " gpt")] {
+    session.context = Some(context(
+        session,
+        json!({"input_tokens":50500,"output_tokens":1800,"cache_read_tokens":33800}),
+    ));
+    let rendered = render(&mut app, 110, 12);
+    let footer = rendered.lines().last().unwrap();
+    assert!(footer.contains("minicore-tui@main"), "{footer}");
+    assert!(footer.ends_with("last ↑50.5k ↓1.8k R33.8k"), "{footer}");
+    assert!(!footer.contains("ctx") && !footer.contains('%'), "{footer}");
+    assert_eq!(crate::wrap::width(footer), 110);
+    for columns in [60, 50, 30] {
         let narrow = render(&mut app, columns, 12);
-        let footer = narrow.lines().last().unwrap_or_default();
-        assert!(footer.starts_with(identity), "{footer}");
-        assert!(footer.contains("gpt 6 luna · max"), "{footer}");
-        assert!(footer.ends_with("ctx 41.00%"), "{footer}");
-        assert_eq!(crate::wrap::width(footer), usize::from(columns), "{footer}");
+        assert!(
+            narrow
+                .lines()
+                .all(|row| crate::wrap::width(row) <= columns as usize)
+        );
     }
+}
+
+pub(super) fn context(
+    session: &Session,
+    usage: Value,
+) -> minicore_host_core::SessionContextSnapshot {
+    serde_json::from_value(json!({
+        "host_id":session.state.host_id,"host_incarnation":session.state.host_incarnation,"agent_id":session.info.agent_id,"session_id":session.info.id,
+        "data":{"controller_revision":0,"residency":"loaded","load_id":native_id(1),"history_loaded":true,"config_revision":0,
+        "model":"gpt-6-luna","compaction_settings":session.info.config.execution.compaction,"active_turn":null,
+        "queued_inputs":{"next_step":0,"next_turn":0},"history":{"position":8,"raw_items":6,"effective_items":6,"projection":null,
+        "latest_response":{"raw_item_index":5,"model":"gpt-6-luna","covered_by_compaction":false,"usage":usage}},"compaction":null,
+        "history_save":{"pending":false,"running":false,"fault":null},"block_reason":null}
+    })).unwrap()
 }
 
 /// The last transcript row never touches the stack below it, and the
@@ -425,23 +496,14 @@ fn the_status_spinner_moves_with_time() {
 }
 
 #[test]
-fn a_fatal_error_shows_the_stderr_tail() {
+fn a_fatal_host_error_explains_how_to_quit() {
     let mut app = app();
     app.fatal = Some(crate::app::Fatal {
-        reason: "agent exited (1)".into(),
-        stderr_tail: vec![
-            "error: could not read config".into(),
-            "error: giving up".into(),
-        ],
+        reason: "Host connection closed".into(),
     });
     let rendered = render(&mut app, 60, 14);
-    assert!(rendered.contains("Fatal error"), "{rendered}");
-    assert!(rendered.contains("agent exited (1)"), "{rendered}");
-    assert!(rendered.contains("could not read config"), "{rendered}");
-    assert!(
-        rendered.to_lowercase().contains("press q"),
-        "the fatal screen says how to quit:\n{rendered}"
-    );
+    assert!(rendered.contains("Fatal error") && rendered.contains("Host connection closed"));
+    assert!(rendered.to_lowercase().contains("press q"));
 }
 
 #[test]
@@ -498,17 +560,13 @@ fn an_open_overlay_is_not_drawn_over_the_composer() {
 }
 
 #[test]
-fn the_session_view_lists_the_tools_allowed_for_the_session_only_when_there_are_some() {
+fn the_session_view_identifies_its_agent_and_native_storage_mode() {
     let mut app = app();
-    app.overlay = Overlay::SessionInfo { items: Some(4) };
-    assert!(!render(&mut app, 80, 24).contains("allowed"));
-    app.resident
-        .current_mut()
-        .unwrap()
-        .allowed_tools
-        .extend(["edit".to_owned(), "bash".to_owned()]);
-    let screen = render(&mut app, 80, 24);
-    assert!(screen.contains("allowed   bash, edit"), "{screen}");
+    app.overlay = Overlay::SessionInfo;
+    let screen = render(&mut app, 100, 24);
+    assert!(screen.contains("Coder"), "{screen}");
+    assert!(screen.contains("storage   memory"), "{screen}");
+    assert!(!screen.contains("allowed"), "{screen}");
 }
 
 #[test]
@@ -529,17 +587,17 @@ fn a_view_dims_the_composer_and_keys_typed_in_it_do_not_edit_the_draft() {
     assert!(!rendered.contains("view open"), "{rendered}");
 }
 
-/// Mirrors the Agent's queue, which lists the entries in the order they run.
-fn queue(app: &mut App, messages: &[(&str, InputMode)]) {
-    let queue = &mut app.resident.current_mut().expect("session").queue;
-    for (text, mode) in messages {
-        queue.items.push(crate::protocol::QueueItem {
-            id: format!("inp_{}", queue.items.len()),
-            mode: *mode,
-            text: (*text).into(),
-            accepted_at: None,
-        });
-    }
+fn queue(app: &mut App, messages: &[(&str, MessageMode)]) {
+    let session = app.resident.current_mut().unwrap();
+    let rows: Vec<Value> = messages.iter().enumerate().map(|(index,(text,mode))| json!({
+        "input":{"message_id":native_id(index as u64+1),"text":text,"mode":mode},"source":{"kind":"user"},
+        "queue":mode.requested_queue(),"order":index as u64+1
+    })).collect();
+    session.queue = Some(serde_json::from_value(json!({
+        "host_id":session.state.host_id,"host_incarnation":session.state.host_incarnation,"agent_id":session.info.agent_id,"session_id":session.info.id,
+        "controller_revision":0,"next_step":rows.iter().filter(|row| row["queue"] == "next-step").collect::<Vec<_>>(),
+        "next_turn":rows.iter().filter(|row| row["queue"] == "next-turn").collect::<Vec<_>>()
+    })).unwrap());
 }
 
 /// The dock's key hint row, trimmed.
@@ -570,35 +628,19 @@ fn the_dock_lists_queued_messages_in_the_order_the_agent_runs_them_with_the_keys
 }
 
 #[test]
-fn an_unrecoverable_gap_is_said_in_the_dock_rather_than_silently_computed() {
-    let mut fixture = app();
-    conversation(&mut fixture);
-    fixture
-        .resident
-        .current_mut()
-        .unwrap()
-        .recovery
-        .truncated_gap = true;
-    assert!(
-        render(&mut fixture, 70, 14)
-            .contains("Some unsaved turns may be missing outside the completion catalog"),
-        "a truncated completion window must be shown"
-    );
-    let mut fixture = app();
-    conversation(&mut fixture);
-    fixture.resident.current_mut().unwrap().ordering_gap = true;
-    assert!(
-        render(&mut fixture, 70, 14)
-            .contains("Turn order is incomplete; reload the session to read it in order"),
-        "an unplaceable completion must be shown"
-    );
+fn observation_failure_stays_visible_without_claiming_an_empty_history() {
+    let mut app = app();
+    conversation(&mut app);
+    app.resident.current_mut().unwrap().observation_error =
+        Some("History read interrupted; refresh required".into());
+    assert!(render(&mut app, 70, 14).contains("History read interrupted; refresh required"));
 }
 
 #[test]
 fn a_paused_queue_says_how_to_go_on() {
     let mut app = app();
     queue(&mut app, &[("after the stop", FollowUp)]);
-    app.resident.current_mut().unwrap().queue.paused = true;
+    app.resident.current_mut().unwrap().state.data.scheduling = Scheduling::Paused;
     assert_eq!(
         hint_row(&render(&mut app, 70, 12)),
         Some("paused · enter resumes · alt+↑ edit")
@@ -650,45 +692,23 @@ fn a_long_queued_message_is_cut_to_the_dock_width() {
     );
     let rendered = render(&mut app, 30, 12);
     assert!(
-        rendered.contains("↳ follow-up 1  a very long…"),
+        rendered.contains("↳ next turn  a very long f…"),
         "{rendered}"
     );
 }
 
 #[test]
 fn a_running_turn_keeps_elapsed_time_only_in_the_footer() {
-    for (width, tool, requests, working_ends) in [
-        (70, None, 1, " · Thinking"),
-        (
-            110,
-            Some(("read".to_owned(), "src/main.rs".to_owned())),
-            3,
-            "Running read src/main.rs · request 3",
-        ),
-    ] {
-        let mut app = app();
-        let session = app.resident.current_mut().expect("session");
-        let mut live = crate::app::LiveTurn::new(
-            TurnRef {
-                session_id: session.info.session_id.clone(),
-                loop_id: "loop_9".into(),
-            },
-            0,
-        );
-        live.running_tool = tool;
-        live.requests = requests;
-        session.live = Some(live);
-        let rendered = render(&mut app, width, 12);
-        let working = rendered
-            .lines()
-            .find(|line| line.contains("Working (esc to interrupt)"))
-            .expect("working row");
-        assert!(working.ends_with(working_ends), "{working}");
-        let footer = rendered.lines().last().unwrap();
-        assert!(footer.contains("gpt 6 luna · max"), "{footer}");
-        assert!(!footer.contains("working"), "{footer}");
-        assert!(footer.ends_with(" · 0m"), "{rendered}");
-    }
+    let mut app = app();
+    running_bash(&mut app);
+    let rendered = render(&mut app, 110, 14);
+    let working = rendered
+        .lines()
+        .find(|line| line.contains("Working (esc to interrupt)"))
+        .unwrap();
+    assert!(working.contains("Running bash"), "{working}");
+    assert!(!working.contains("0m"), "{working}");
+    assert!(rendered.lines().last().unwrap().contains("0m"));
 }
 
 /// A left press and release on one cell: a click, not a drag.
@@ -843,31 +863,27 @@ fn collapsing_a_card_while_following_leaves_no_blank_rows_under_the_content() {
     assert!(!collapsed.contains("Jump to latest"), "{collapsed}");
 }
 
-/// A prompt and its turn end, which `outcome` made a failure.
-fn failed_turn(app: &mut App, outcome: serde_json::Value) {
-    let transcript = &mut app.resident.current_mut().expect("session").transcript;
+fn failed_turn(app: &mut App, reason: &str) {
+    let transcript = &mut app.resident.current_mut().unwrap().transcript;
     transcript.push(Block::User {
         text: "Summarise the changes".into(),
         kind: UserKind::Prompt,
         at: None,
     });
     transcript.push(Block::TurnEnd {
-        loop_id: "loop_1".into(),
-        outcome: serde_json::from_value(outcome).expect("outcome"),
+        turn_id: turn_id(1),
+        outcome: TurnOutcome::Failed,
+        reason: Some(reason.into()),
         duration: Some(std::time::Duration::from_secs(47)),
         requests: 1,
-        tools: 2,
+        tool_rounds: 2,
         usage: Default::default(),
         changes: None,
         saving: None,
     });
 }
-
-fn rate_limited() -> serde_json::Value {
-    serde_json::json!({"type": "failed", "kind": "model", "model_error": {
-        "kind": "rate_limited", "delivery": "not_started", "retry_after_millis": 12000,
-        "provider": {"status": 429, "code": "rate_limit_exceeded", "type": "requests",
-            "message": "Rate limit reached for gpt-6-luna in organization org-7Zq on tokens per min (TPM): Limit 30000, Used 29250, Requested 4012.\nPlease try again in 8.524s. Visit https://platform.example/account/rate-limits to learn more."}}})
+fn rate_limited() -> &'static str {
+    "Rate limit reached for gpt-6-luna in organization org-7Zq on tokens per min (TPM): Limit 30000, Used 29250, Requested 4012.\nPlease try again in 8.524s. Visit https://platform.example/account/rate-limits to learn more."
 }
 
 #[test]
@@ -891,16 +907,10 @@ fn ctrl_o_opens_the_whole_provider_message_and_closes_it_again() {
 }
 
 #[test]
-fn a_failure_without_provider_details_shows_its_hint_and_nothing_quoted() {
+fn a_short_host_failure_keeps_its_actual_message() {
     let mut app = app();
-    failed_turn(
-        &mut app,
-        serde_json::json!({"type": "failed", "kind": "model", "model_error": {"kind": "timeout"}}),
-    );
-    failed_turn(
-        &mut app,
-        serde_json::json!({"type": "failed", "kind": "output_limit"}),
-    );
+    failed_turn(&mut app, "Model request timed out");
+    failed_turn(&mut app, "Output limit reached");
     snapshot("failed-plain", render(&mut app, 80, 18));
 }
 
@@ -962,110 +972,6 @@ fn a_drag_over_a_card_header_selects_instead_of_toggling() {
     }
     let after = render(app, 70, 20);
     assert!(after.contains("ctrl+o to expand"), "still folded:\n{after}");
-}
-
-/// Feeds one Agent event through the reducer, as the live loop does.
-fn emit(app: &mut App, kind: &str, mut data: serde_json::Value) {
-    data["meta"] = serde_json::json!({"session_id": "ses_0123456789abcdef", "dropped_before": 0});
-    let event = serde_json::from_value(serde_json::json!({"type": kind, "data": data})).unwrap();
-    app.resident.current_mut().unwrap().apply_event(event);
-}
-
-/// A live turn whose bash call is announced by a preview, the way the Agent does.
-fn previewed_bash(app: &mut App) -> ToolRef {
-    let turn = TurnRef::new("ses_0123456789abcdef", "loop_1");
-    app.resident.current_mut().unwrap().live = Some(crate::app::LiveTurn::new(turn.clone(), 0));
-    emit(
-        app,
-        "tool_arguments_preview",
-        serde_json::json!({
-            "turn": turn, "request_index": 1, "tool_call_id": "call_1", "tool_name": "bash",
-            "state": "generating", "display": {"detail": "$ cargo test --lib"},
-        }),
-    );
-    tool().key
-}
-
-#[test]
-fn a_running_card_without_output_shows_running_until_output_arrives() {
-    let mut fixture = app();
-    let app = &mut fixture.app;
-    let key = previewed_bash(app);
-    assert!(!render(app, 70, 30).contains("running…"));
-    emit(
-        app,
-        "tool_started",
-        serde_json::json!({
-            "turn": TurnRef::new("ses_0123456789abcdef", "loop_1"), "request_index": 1,
-            "tool_call_id": "call_1", "tool_name": "bash",
-        }),
-    );
-    let folded = render(app, 70, 30);
-    let header = row_of(&folded, " ▎ bash");
-    assert_eq!(row_of(&folded, " ▎ running…"), header + 2);
-    let drag = crate::app::selection::Drag {
-        from: (1, header),
-        to: (69, header + 2),
-    };
-    assert_eq!(
-        app.selected_text(drag).as_deref(),
-        Some("bash\n$ cargo test --lib")
-    );
-
-    click(app, 10, header + 2);
-    let open = render(app, 70, 30);
-    assert!(open.contains(" ▎ $ cargo test --lib"), "{open}");
-    assert!(open.contains(" ▎ running…"), "{open}");
-    click(app, 10, row_of(&open, " ▎ running…"));
-    assert!(render(app, 70, 30).contains(" ▎ running…"));
-
-    let session = app.resident.current_mut().unwrap();
-    session
-        .transcript
-        .find_tool_mut(&key)
-        .unwrap()
-        .push_output("Compiling\n");
-    let streaming = render(app, 70, 30);
-    assert!(
-        streaming.contains("(1 more line, click or ctrl+o to expand)"),
-        "{streaming}"
-    );
-    assert!(!streaming.contains("running…"), "{streaming}");
-
-    let session = app.resident.current_mut().unwrap();
-    session
-        .transcript
-        .find_tool_mut(&key)
-        .unwrap()
-        .output
-        .clear();
-    emit(
-        app,
-        "tool_finished",
-        serde_json::json!({
-            "turn": TurnRef::new("ses_0123456789abcdef", "loop_1"), "request_index": 1,
-            "tool_call_id": "call_1", "result": {"outcome": "success", "content_bytes": 0},
-        }),
-    );
-    assert!(!render(app, 70, 30).contains("running…"));
-}
-
-#[test]
-fn a_card_waiting_for_approval_does_not_say_running() {
-    let mut fixture = app();
-    let app = &mut fixture.app;
-    let key = previewed_bash(app);
-    emit(
-        app,
-        "tool_execution",
-        serde_json::json!({
-            "turn": TurnRef::new("ses_0123456789abcdef", "loop_1"),
-            "data": {"tool_ref": key, "state": "awaiting_policy", "result_truncated": false},
-        }),
-    );
-    let call = app.resident.current().unwrap().transcript.find_tool(&key);
-    assert_eq!(call.unwrap().state, ToolState::Running);
-    assert!(!render(app, 70, 20).contains("running…"));
 }
 
 #[test]
@@ -1267,419 +1173,281 @@ fn the_scrollbar_shows_after_a_scroll_and_its_track_jumps() {
     assert_eq!(app.scroll, Scroll::Follow, "dragged to the end");
     assert_eq!(app.selection, None, "the bar never selects");
 }
-/// The approval sheet says what would run, from the card, and the status line
-/// says what Esc does while it waits.
+fn approval() -> crate::app::PendingInteraction {
+    interaction(
+        json!({"kind":"approval","prompt":"Allow tool `write` for this call?","risk":"medium"}),
+        "write",
+        "call_w",
+    )
+}
+fn interaction(request: Value, name: &str, call: &str) -> crate::app::PendingInteraction {
+    crate::app::PendingInteraction {
+        data:serde_json::from_value(json!({"interaction_id":native_id(1),"tool_call_id":call,"name":name,"request":request})).unwrap(),
+        turn_id:turn_id(9),load_id:native_id(1).parse().unwrap(),selected:0,submitted:false,
+    }
+}
+
 #[test]
 fn an_approval_shows_the_tool_its_target_and_its_input() {
     let mut app = app();
-    let session = app.resident.current_mut().expect("session");
-    let turn = TurnRef {
-        session_id: "ses_0123456789abcdef".into(),
-        loop_id: "loop_9".into(),
-    };
-    session.live = Some(crate::app::LiveTurn::new(turn.clone(), 0));
+    let session = app.resident.current_mut().unwrap();
+    let mut previous = ToolCall::new(
+        ToolCallRef {
+            turn_id: turn_id(8),
+            tool_call_id: "call_w".to_owned().into(),
+        },
+        "write",
+    );
+    previous.detail = "previous-turn.txt".into();
+    previous.expanded_input = Some("Wrong turn input".into());
+    session.transcript.push(Block::Tool(Box::new(previous)));
     let mut call = ToolCall::new(
-        ToolRef {
-            session_id: "ses_0123456789abcdef".into(),
-            loop_id: "loop_9".into(),
-            request_index: 0,
-            tool_call_id: "call_w".into(),
+        ToolCallRef {
+            turn_id: turn_id(9),
+            tool_call_id: "call_w".to_owned().into(),
         },
         "write",
     );
     call.detail = "notes/approval.txt".into();
     call.expanded_input = Some("Approval fixture executed.\nsecond line".into());
     session.transcript.push(Block::Tool(Box::new(call)));
-    session.interaction = Some(crate::app::PendingInteraction {
-        turn,
-        interaction_id: "i1".into(),
-        tool_call_id: "call_w".into(),
-        tool_name: "write".into(),
-        prompt: "Allow tool `write` for this call?".into(),
-        kind: crate::app::InteractionKind::Approval,
-        selected: 0,
-    });
+    session.interaction = Some(approval());
     let rendered = render(&mut app, 80, 24);
     assert!(rendered.contains("write  notes/approval.txt"), "{rendered}");
     assert!(
-        rendered.contains("  Approval fixture executed."),
+        rendered.contains("Approval fixture executed.") && rendered.contains("Allow once"),
         "{rendered}"
     );
-    assert!(rendered.contains("Allow once"), "{rendered}");
     assert!(
         rendered.contains("Waiting for approval") && rendered.contains("esc to deny"),
         "{rendered}"
     );
+    assert!(!rendered.contains("allow for session"));
+    assert!(!rendered.contains("Wrong turn input"));
 }
 
 #[test]
-fn a_text_question_shows_its_separate_editor_without_exposing_the_conversation_draft() {
+fn a_choice_question_uses_input_wording_and_its_native_choice_index() {
+    use crossterm::event::{KeyCode, KeyEvent};
+    let mut app = app();
+    app.resident.current_mut().unwrap().interaction = Some(interaction(
+        json!({"kind":"tool_input","request":{"prompt":"Which branch?","choices":["main","feature"],"answer_kind":"single_choice"}}),
+        "question",
+        "question",
+    ));
+    let screen = render(&mut app, 90, 24);
+    assert!(screen.contains("Waiting for input"), "{screen}");
+    assert!(screen.contains("esc cancel turn"), "{screen}");
+    assert!(!screen.contains("Waiting for approval"), "{screen}");
+    assert!(app.on_key(KeyEvent::from(KeyCode::Char('y'))).is_none());
+    app.on_key(KeyEvent::from(KeyCode::Down));
+    assert_eq!(
+        app.on_key(KeyEvent::from(KeyCode::Enter)),
+        Some(crate::app::Action::Answer(crate::app::Answer::Choice(1)))
+    );
+}
+
+#[test]
+fn pending_and_submitted_interactions_allow_session_navigation_without_losing_the_answer() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    let mut app = app();
+    app.composer.set_text("conversation draft");
+    let original = app.resident.current().unwrap().address();
+    for request in [
+        json!({"kind":"approval","prompt":"Allow this call?","risk":"low"}),
+        json!({"kind":"tool_input","request":{"prompt":"Choose","choices":["one","two"],"answer_kind":"single_choice"}}),
+        json!({"kind":"tool_input","request":{"prompt":"Answer","choices":[],"answer_kind":"text"}}),
+    ] {
+        for submitted in [false, true] {
+            let session = app.resident.current_mut().unwrap();
+            let mut pending = interaction(request.clone(), "question", "call-question");
+            pending.submitted = submitted;
+            let turn_id = pending.turn_id.clone();
+            let interaction_id = pending.data.interaction_id.clone();
+            session.interaction = Some(pending);
+            session.interaction_editor.set_text("retained answer");
+            assert!(
+                app.on_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL))
+                    .is_none()
+            );
+            assert!(matches!(app.overlay, Overlay::Sessions { .. }));
+            app.on_key(KeyEvent::from(KeyCode::Esc));
+            let session = app.resident.current().unwrap();
+            let pending = session.interaction.as_ref().unwrap();
+            assert_eq!(session.address(), original);
+            assert_eq!(pending.turn_id, turn_id);
+            assert_eq!(pending.data.interaction_id, interaction_id);
+            assert_eq!(pending.submitted, submitted);
+            assert_eq!(session.interaction_editor.text(), "retained answer");
+            assert_eq!(app.composer.text(), "conversation draft");
+        }
+    }
+}
+
+#[test]
+fn a_text_question_uses_its_separate_editor_without_exposing_the_draft() {
     let mut app = app();
     app.composer.set_text("unsent conversation draft");
     let session = app.resident.current_mut().unwrap();
-    session.interaction = Some(crate::app::PendingInteraction {
-        turn: TurnRef::new(&session.info.session_id, "text-loop"),
-        interaction_id: "text-question".into(),
-        tool_call_id: "question".into(),
-        tool_name: "question".into(),
-        prompt: "Which branch should be used?".into(),
-        kind: crate::app::InteractionKind::Text,
-        selected: 0,
-    });
+    session.interaction = Some(interaction(
+        json!({"kind":"tool_input","request":{"prompt":"Which branch should be used?","choices":[],"answer_kind":"text"}}),
+        "question",
+        "question",
+    ));
     session.interaction_editor.set_text("feature/answer-editor");
     let rendered = render(&mut app, 90, 25);
     assert!(
-        rendered.contains("Which branch should be used?"),
+        rendered.contains("Which branch should be used?") && rendered.contains("question · input"),
         "{rendered}"
     );
     assert!(
-        rendered.contains("question · input"),
-        "the tool name must remain visible without a tool card: {rendered}"
-    );
-    assert!(rendered.contains("feature/answer-editor"), "{rendered}");
-    assert!(rendered.contains("Waiting for input"), "{rendered}");
-    assert!(
-        !rendered.contains("unsent conversation draft"),
+        rendered.contains("feature/answer-editor") && rendered.contains("Waiting for input"),
         "{rendered}"
     );
-    assert!(!rendered.contains("Allow once"), "{rendered}");
+    assert!(
+        !rendered.contains("unsent conversation draft") && !rendered.contains("Allow once"),
+        "{rendered}"
+    );
     assert_eq!(app.composer.text(), "unsent conversation draft");
 }
 
-/// Remote control listening at a fixed address with a fixed password.
-fn listening(app: &mut App) {
-    let dir = tempfile::tempdir().expect("dir");
-    let mut auth = crate::remote::auth::Auth::load(dir.path().join("remote.json")).expect("auth");
-    auth.set_password(Some("k7mq-x2pa-n9dt")).expect("password");
-    app.remote.auth = Some(std::sync::Arc::new(std::sync::Mutex::new(auth)));
-    app.remote.url = Some("http://192.168.20.207:8765".into());
-    app.remote.listening = vec![
-        "0.0.0.0:8765".parse().expect("address"),
-        "[::]:8765".parse().expect("address"),
-    ];
-}
-
-/// Admits phone `name`, connected since `at` (UTC).
-fn admit(app: &mut App, name: &str, at: &str) {
-    let (outbound, _output) = mpsc::channel(1);
-    let (close, _closing) = tokio::sync::watch::channel(None);
-    app.remote.phones.push(crate::remote::Phone {
-        connection: crate::remote::Connection {
-            id: app.remote.phones.len() as u64 + 1,
-            generation: 0,
-            device: crate::remote::auth::Device {
-                name: name.into(),
-                token_sha256: name.into(),
-                paired_at: String::new(),
-            },
-            outbound,
-            close,
-        },
-        view: crate::remote::PhoneView::foreground(app),
-        projection: Default::default(),
-        connected_at: at.parse().expect("time"),
-        queries: 0,
-    });
-}
-
-/// A phone connected since 14:02.
-fn connected(app: &mut App) {
-    listening(app);
-    admit(app, "iPhone Safari", "2026-10-25T14:02:00Z");
-}
-
-/// A turn running `bash` in the foreground session, its spinner on its first frame.
 fn running_bash(app: &mut App) {
-    let session = app.resident.current_mut().expect("session");
-    let mut live = crate::app::LiveTurn::new(
-        TurnRef {
-            session_id: "ses_0123456789abcdef".into(),
-            loop_id: "loop_2".into(),
-        },
-        session.transcript.len(),
-    );
-    live.running_tool = Some(("bash".into(), "cargo test --workspace".into()));
+    let session = app.resident.current_mut().unwrap();
+    let mut live = live(session.transcript.len(), 2);
+    live.running_tool = Some("bash".into());
+    session.state.data.active_turn_id = Some(live.turn_id.clone());
     session.live = Some(live);
     app.started = std::time::Instant::now();
 }
 
 #[test]
-fn the_remote_status_screen_waits_for_a_phone_on_a_draft() {
+fn the_sessions_picker_shows_live_and_unloaded_sessions_across_agents() {
     let mut app = app();
-    app.resident = Default::default();
-    app.profiles = vec![
-        serde_json::from_value(
-            serde_json::json!({"id": "coding", "model": "gpt-6-luna", "reasoning": "max"}),
-        )
-        .expect("profile"),
-    ];
-    app.default_profile = Some("coding".into());
-    listening(&mut app);
-    snapshot("remote-waiting", render(&mut app, 80, 24));
-}
-
-#[test]
-fn the_remote_status_screen_shows_the_phone_the_work_the_queue_and_refused_sign_ins() {
-    let mut app = app();
-    conversation(&mut app);
-    connected(&mut app);
-    running_bash(&mut app);
-    queue(
-        &mut app,
-        &[
-            ("then update the docs", FollowUp),
-            ("and the changelog", FollowUp),
-        ],
-    );
-    app.remote.failed_logins = 3;
-    app.remote.paused_until =
-        Some(tokio::time::Instant::now() + std::time::Duration::from_secs(30));
-    snapshot("remote-busy", render(&mut app, 80, 24));
-}
-
-#[test]
-fn the_remote_status_screen_marks_listening_addresses_served_over_tls() {
-    let mut app = app();
-    listening(&mut app);
-    app.remote.tls = true;
-    let screen = render(&mut app, 80, 24);
-    assert!(
-        screen
-            .lines()
-            .any(|line| line == "    Listening  0.0.0.0:8765 · [::]:8765 · TLS"),
-        "{screen}"
-    );
-}
-
-#[test]
-fn a_narrow_remote_status_screen_cuts_values_and_keeps_labels() {
-    let mut app = app();
-    conversation(&mut app);
-    listening(&mut app);
-    let screen = render(&mut app, 44, 24);
-    for label in [
-        "Address",
-        "Listening",
-        "Password",
-        "Phones",
-        "Session",
-        "Workspace",
-        "Model",
-        "Now",
-    ] {
-        assert!(
-            screen
-                .lines()
-                .any(|line| line.starts_with(&format!("    {label}"))),
-            "{label}:\n{screen}"
-        );
-    }
-    let phone = screen
-        .lines()
-        .find(|line| line.contains("Phones"))
-        .expect("phone row");
-    assert!(
-        phone.contains("none yet · open the") && phone.ends_with('…'),
-        "{screen}"
-    );
-}
-
-#[test]
-fn the_remote_status_screen_and_footer_count_several_phones_and_list_each() {
-    let mut app = app();
-    conversation(&mut app);
-    connected(&mut app);
-    admit(&mut app, "Mac Edge", "2026-10-25T14:30:00Z");
-    let draft = crate::remote::PhoneView::Draft(crate::remote::DraftSettings {
-        workspace: app.workspace.clone(),
-        launch: Default::default(),
-    });
-    app.remote.phones[1].set_view(draft);
-    let screen = render(&mut app, 100, 24);
-    assert!(screen.contains("● 2 phones connected"), "{screen}");
-    assert!(
-        screen.contains("iPhone Safari · Cache the parser · connected at 14:02\n               Mac Edge · new session · connected at 14:30\n"),
-        "{screen}"
-    );
-    assert!(screen.contains("remote · 2 phones"), "{screen}");
-}
-
-#[test]
-fn a_remote_approval_waits_on_the_phone() {
-    let mut app = app();
-    listening(&mut app);
-    let session = app.resident.current_mut().expect("session");
-    let mut call = tool();
-    call.key.tool_call_id = "call_rm".into();
-    call.detail = "rm -rf build".into();
-    call.state = ToolState::Pending;
-    session.transcript.push(Block::Tool(Box::new(call)));
-    session.interaction = Some(crate::app::PendingInteraction {
-        turn: TurnRef {
-            session_id: "ses_0123456789abcdef".into(),
-            loop_id: "loop_9".into(),
-        },
-        interaction_id: "i1".into(),
-        tool_call_id: "call_rm".into(),
-        tool_name: "bash".into(),
-        prompt: "Allow tool `bash` for this call?".into(),
-        kind: crate::app::InteractionKind::Approval,
-        selected: 0,
-    });
-    let screen = render(&mut app, 80, 24);
-    assert!(
-        screen.contains("Waiting for approval on the phone · bash · rm -rf build"),
-        "{screen}"
-    );
-    assert!(!screen.contains("Allow once"), "{screen}");
-    assert!(!screen.contains("esc to deny"), "{screen}");
-}
-
-#[test]
-fn an_idle_remote_status_screen_reports_the_last_turn() {
-    let mut app = app();
-    conversation(&mut app);
-    listening(&mut app);
-    let screen = render(&mut app, 80, 24);
-    assert!(
-        screen.contains("Now        Idle · last turn completed in 12s"),
-        "{screen}"
-    );
-}
-
-#[test]
-fn the_remote_status_screen_counts_busy_background_sessions() {
-    let mut app = app();
-    listening(&mut app);
-    let other = SessionInfo {
-        session_id: "ses_other".into(),
-        ..info()
-    };
-    let mut session = Session::new(other, 2, crate::testing::LOAD.into());
-    session.live = Some(crate::app::LiveTurn::new(
-        TurnRef {
-            session_id: "ses_other".into(),
-            loop_id: "loop_1".into(),
-        },
-        0,
-    ));
-    app.resident.insert(session);
-    let screen = render(&mut app, 80, 24);
-    assert!(screen.contains("    Others     1 running"), "{screen}");
-}
-
-#[test]
-fn a_full_screen_view_draws_over_the_remote_status_screen() {
-    let mut app = app();
-    listening(&mut app);
-    app.overlay = Overlay::Help { scroll: 0 };
-    let screen = render(&mut app, 80, 24);
-    assert!(screen.contains("← Help"), "{screen}");
-    assert!(!screen.contains("Password"), "{screen}");
-}
-
-#[test]
-fn remote_control_hides_the_transcript_until_it_is_turned_off() {
-    let mut app = app();
-    conversation(&mut app);
-    listening(&mut app);
-    let screen = render(&mut app, 80, 24);
-    assert!(screen.contains("Remote control"), "{screen}");
-    assert!(!screen.contains("re-parse the whole message"), "{screen}");
-    app.remote.stop("remote_off");
-    let screen = render(&mut app, 80, 24);
-    assert!(screen.contains("re-parse the whole message"), "{screen}");
-    assert!(!screen.contains("Password"), "{screen}");
-}
-
-#[test]
-fn the_remote_footer_mark_gives_way_before_the_rest() {
-    let mut app = app();
-    conversation(&mut app);
-    listening(&mut app);
-    let footer = |app: &mut App, width| {
-        let screen = render(app, width, 20);
-        screen.lines().last().expect("footer").to_owned()
-    };
-    assert!(footer(&mut app, 80).contains("remote"), "waiting is marked");
-    let narrow = footer(&mut app, 30);
-    assert!(!narrow.contains("remote"), "{narrow}");
-    assert!(
-        narrow.contains("max"),
-        "the reasoning level stays: {narrow}"
-    );
-}
-
-#[test]
-fn the_sessions_picker_shows_what_live_sessions_are_doing() {
-    let mut app = app();
-    let catalog = |id: &str, title: &str| SessionInfo {
-        session_id: id.into(),
-        title: Some(title.into()),
-        updated_at: String::new(),
-        ..info()
-    };
-    let turn = |id: &str| TurnRef {
-        session_id: id.into(),
-        loop_id: "loop_1".into(),
-    };
-    let mut running = Session::new(
-        catalog("ses_running", "Port the lexer"),
-        2,
-        crate::testing::LOAD.into(),
-    );
-    running.live = Some(crate::app::LiveTurn::new(turn("ses_running"), 0));
-    let mut asking = Session::new(
-        catalog("ses_asking", "Clean the build"),
-        3,
-        crate::testing::LOAD.into(),
-    );
-    asking.live = Some(crate::app::LiveTurn::new(turn("ses_asking"), 0));
-    asking.interaction = Some(crate::app::PendingInteraction {
-        turn: turn("ses_asking"),
-        interaction_id: "i1".into(),
-        tool_call_id: "call_1".into(),
-        tool_name: "bash".into(),
-        prompt: "Allow tool `bash` for this call?".into(),
-        kind: crate::app::InteractionKind::Approval,
-        selected: 0,
-    });
-    let mut done = Session::new(
-        catalog("ses_done", "Write the docs"),
-        4,
-        crate::testing::LOAD.into(),
-    );
+    let mut running = session(&app, 2, "Port the lexer");
+    running.state.data.active_turn_id = Some(turn_id(2));
+    running.live = Some(live(0, 2));
+    let mut asking = session(&app, 3, "Clean the build");
+    asking.interaction = Some(approval());
+    let mut done = session(&app, 4, "Write the docs");
     done.unseen = true;
-    let mut failed = Session::new(
-        catalog("ses_failed", "Fix the flaky test"),
-        5,
-        crate::testing::LOAD.into(),
-    );
-    failed.unseen = true;
-    failed.transcript.push(Block::TurnEnd {
-        loop_id: "loop_1".into(),
-        outcome: LoopOutcome::Failed {
-            kind: "model".into(),
-            model_error: None,
-        },
-        duration: None,
-        requests: 1,
-        tools: 0,
-        usage: Default::default(),
-        changes: None,
-        saving: None,
-    });
-    app.sessions = vec![
-        catalog("ses_old", "An old session"),
-        done.info.clone(),
-        failed.info.clone(),
-        asking.info.clone(),
-        running.info.clone(),
-        info(),
-    ];
-    for session in [running, asking, done, failed] {
+    let mut other = catalog(&session(&app, 5, "Review the parser"));
+    other.agent_id = native_id(2).parse().unwrap();
+    other.residency = minicore_host_protocol::Residency::Unloaded;
+    app.agents.push(agent(2, "Reviewer"));
+    app.sessions
+        .extend([catalog(&running), catalog(&asking), catalog(&done), other]);
+    for session in [running, asking, done] {
         app.resident.insert(session);
     }
     app.open_panel(crate::app::Panel::Sessions);
-    snapshot("sessions-picker-live", render(&mut app, 80, 20));
+    let rendered = render(&mut app, 100, 20);
+    assert!(
+        rendered.contains("Reviewer") && rendered.contains("unloaded"),
+        "{rendered}"
+    );
+    snapshot("sessions-picker-live", rendered);
+}
+
+#[test]
+fn the_agent_picker_uses_real_owners_including_stopped_agents() {
+    let mut app = app();
+    let mut other = agent(2, "Reviewer");
+    other.lifecycle = minicore_host_protocol::AgentLifecycle::Stopped;
+    app.agents.push(other);
+    app.open_panel(crate::app::Panel::Agents);
+    let rendered = render(&mut app, 90, 18);
+    assert!(
+        rendered.contains("Coder") && rendered.contains("Reviewer") && rendered.contains("stopped"),
+        "{rendered}"
+    );
+    snapshot("agents-picker", rendered);
+}
+
+#[test]
+fn deleting_an_agent_requires_a_key_and_keeps_the_captured_session_scope() {
+    use crossterm::event::{KeyCode, KeyEvent};
+    let mut app = app();
+    let child = catalog(&session(&app, 2, "Captured session"));
+    app.agents[0].sessions.push(child.clone());
+    app.open_panel(crate::app::Panel::AgentDelete);
+    assert!(app.on_key(KeyEvent::from(KeyCode::Enter)).is_none());
+    assert!(matches!(app.overlay, Overlay::AgentDelete { .. }));
+    let screen = render(&mut app, 100, 20);
+    assert!(
+        screen.contains("Captured session")
+            && screen.contains("Permanently delete Agent and 1 session"),
+        "{screen}"
+    );
+    let later = catalog(&session(&app, 3, "Later session"));
+    app.agents[0].sessions.push(later);
+    match app.on_key(KeyEvent::from(KeyCode::Char('y'))) {
+        Some(crate::app::Action::DeleteAgent {
+            agent_id,
+            session_ids,
+        }) => {
+            assert_eq!(agent_id, child.agent_id);
+            assert_eq!(session_ids, vec![child.id]);
+        }
+        other => panic!("expected captured deletion, got {other:?}"),
+    }
+}
+
+#[test]
+fn session_picker_identity_and_confirmation_include_the_owning_agent() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    let mut app = app();
+    let original = app.resident.current().unwrap().address();
+    let mut same_id = app.sessions[0].clone();
+    same_id.agent_id = native_id(2).parse().unwrap();
+    same_id.title = Some("Other Agent's session".into());
+    app.agents.push(agent(2, "Reviewer"));
+    app.sessions.push(same_id.clone());
+    app.open_panel(crate::app::Panel::Sessions);
+    let sheet = crate::ui::sheets::sheet(&app, app.styles).unwrap();
+    assert_eq!(
+        sheet
+            .rows
+            .iter()
+            .filter(|row| row.mark == Some(true))
+            .count(),
+        1
+    );
+    app.on_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
+    if let Overlay::Sessions {
+        selected, armed, ..
+    } = &mut app.overlay
+    {
+        assert_eq!(armed.as_ref(), Some(&original));
+        *selected = 1;
+    }
+    app.on_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
+    match &app.overlay {
+        Overlay::Sessions { armed, .. } => assert_eq!(
+            armed.as_ref(),
+            Some(&crate::app::overlay::session_target(&same_id))
+        ),
+        _ => panic!("session picker closed before explicit confirmation"),
+    }
+}
+
+#[test]
+fn session_rename_keeps_its_target_when_the_catalog_reorders() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    let mut app = app();
+    let original = app.resident.current().unwrap().address();
+    let other = catalog(&session(&app, 2, "Later session"));
+    app.sessions.push(other);
+    app.open_panel(crate::app::Panel::Sessions);
+    app.on_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL));
+    if let Overlay::Sessions { rows, .. } = &mut app.overlay {
+        rows.reverse();
+    }
+    app.on_key(KeyEvent::from(KeyCode::Char('!')));
+    assert_eq!(
+        app.on_key(KeyEvent::from(KeyCode::Enter)),
+        Some(crate::app::Action::RenameSession {
+            target: original,
+            title: "Cache the parser!".to_owned(),
+        })
+    );
 }

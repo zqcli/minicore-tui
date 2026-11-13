@@ -25,8 +25,6 @@ pub fn max_rows(height: u16) -> usize {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Editor {
     Live,
-    /// It takes input but cannot send: a phone has the session.
-    Remote,
     /// A full-screen view owns the keys.
     View,
 }
@@ -36,7 +34,6 @@ impl Editor {
     fn placeholder(self) -> Option<&'static str> {
         match self {
             Self::Live => None,
-            Self::Remote => Some("Remote control is on · /remote off to take back"),
             Self::View => Some("view open · esc to return"),
         }
     }

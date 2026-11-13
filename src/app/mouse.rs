@@ -22,12 +22,11 @@ impl App {
         );
         let editor = (!self.has_interaction()
             || uncertain_edit
-            || self.remote.active()
             || self.resident.current().is_some_and(|session| {
                 session
                     .interaction
                     .as_ref()
-                    .is_some_and(|pending| matches!(pending.kind, super::InteractionKind::Text))
+                    .is_some_and(|pending| pending.is_text())
             }))
             && (self.fatal.is_none() || uncertain_edit)
             && matches!(
@@ -78,15 +77,6 @@ impl App {
         }
         // A full-screen view hides the transcript the press would land on.
         let view = self.overlay.is_view();
-        let wheel = matches!(
-            mouse.kind,
-            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
-        );
-        // The remote status screen neither scrolls nor selects; an open list
-        // still takes the wheel.
-        if self.remote.active() && !view && !(wheel && !self.overlay.is_none()) {
-            return false;
-        }
         match mouse.kind {
             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
                 let step = if mouse.modifiers.contains(KeyModifiers::ALT) {
@@ -300,9 +290,8 @@ impl App {
         match session.transcript.blocks().get(index) {
             Some(Block::Tool(call)) => {
                 let expanded = call.is_expanded(all_expanded);
-                let key = call.key.clone();
                 if (expanded || !text.is_empty())
-                    && let Some(call) = session.transcript.find_tool_mut(&key)
+                    && let Some(Block::Tool(call)) = session.transcript.block_mut(index)
                 {
                     call.toggle_expanded(all_expanded);
                     self.pin_view();

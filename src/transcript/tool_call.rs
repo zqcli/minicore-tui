@@ -1,40 +1,72 @@
-//! A tool call card: its state, facts and the bounded tail of its output.
+//! Real tool invocations and their bounded presentation output.
 
 use std::time::{Duration, Instant};
 
-use crate::protocol::event::{CommandResult, ProcessChunk, ProcessStream};
-use crate::protocol::{
-    ToolDisplay, ToolExecution, ToolExecutionState, ToolInvocation, ToolReadResult, ToolRef,
-    ToolSummary,
+use minicore_host_core::{
+    DelegationAssociation, ToolCallData, ToolCallState, ToolCallStateData, ToolInvocationData,
+    ToolResultData,
 };
+use minicore_host_local_tools::{CommandResult, OutputData};
+use minicore_host_protocol::{ToolCallId, ToolCallRef, TurnId};
+use minicore_host_runtime::tools::ToolResultOutcome;
+use serde_json::Value;
 
-/// One tool call card with a bounded output tail.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub enum ToolKey {
+    Call(ToolCallRef),
+    History {
+        position: u64,
+        tool_call_id: ToolCallId,
+    },
+}
+
+impl ToolKey {
+    pub fn turn_id(&self) -> Option<&TurnId> {
+        match self {
+            Self::Call(key) => Some(&key.turn_id),
+            Self::History { .. } => None,
+        }
+    }
+
+    pub fn tool_call_id(&self) -> &ToolCallId {
+        match self {
+            Self::Call(key) => &key.tool_call_id,
+            Self::History { tool_call_id, .. } => tool_call_id,
+        }
+    }
+
+    pub fn call_ref(&self) -> Option<&ToolCallRef> {
+        match self {
+            Self::Call(key) => Some(key),
+            Self::History { .. } => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ToolCall {
-    pub key: ToolRef,
+    pub key: ToolKey,
+    pub response_index: Option<u64>,
     pub name: String,
+    pub arguments: Option<Value>,
     pub detail: String,
-    /// The display body: the command for `bash`, the content for `write`, the
-    /// diff for `edit` and `apply_patch`.
     pub expanded_input: Option<String>,
-    /// Lines in the whole input, which can exceed what `expanded_input` holds.
     pub input_lines: Option<usize>,
     pub state: ToolState,
-    pub recording: Option<crate::protocol::ToolRecordingState>,
+    pub delegations: Vec<DelegationAssociation>,
+    pub progress: Option<String>,
+    /// A native local-tool operation error, distinct from its execution outcome.
+    pub result_error: Option<String>,
     pub started_at: Option<Instant>,
     pub duration: Option<Duration>,
     pub exit_code: Option<i64>,
-    /// The output tail; the last entry is the line still being written.
     pub output: Vec<String>,
-    /// Lines dropped from the front of `output` to keep it bounded.
     pub output_dropped: usize,
-    /// Lines of the model-facing result, as the Agent counted them.
     pub output_lines: Option<usize>,
     pub truncated: bool,
-    /// The reader's per-card fold; `None` follows the global Ctrl+O.
     pub expanded: Option<bool>,
-    /// Next expected byte offset per stream; `None` until the first chunk sets it.
-    pub stream_offsets: [Option<u64>; 2],
+    output_from_result: bool,
+    arguments_display: Option<(String, bool)>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -55,31 +87,34 @@ impl ToolState {
         )
     }
 
-    pub fn from_execution(state: ToolExecutionState) -> Self {
-        match state {
-            ToolExecutionState::Requested => Self::Pending,
-            ToolExecutionState::AwaitingPolicy
-            | ToolExecutionState::Running
-            | ToolExecutionState::Cancelling => Self::Running,
-            ToolExecutionState::Succeeded | ToolExecutionState::InputProvided => Self::Succeeded,
-            ToolExecutionState::Failed => Self::Failed,
-            ToolExecutionState::Denied => Self::Denied,
-            ToolExecutionState::Cancelled => Self::Cancelled,
-            ToolExecutionState::Unknown => Self::Pending,
+    pub fn from_outcome(outcome: ToolResultOutcome) -> Self {
+        match outcome {
+            ToolResultOutcome::Success | ToolResultOutcome::InputProvided => Self::Succeeded,
+            ToolResultOutcome::Failed => Self::Failed,
+            ToolResultOutcome::Denied => Self::Denied,
+            ToolResultOutcome::Cancelled => Self::Cancelled,
         }
     }
 }
 
 impl ToolCall {
-    pub fn new(key: ToolRef, name: impl Into<String>) -> Self {
+    pub fn new(key: ToolCallRef, name: impl Into<String>) -> Self {
+        Self::with_key(ToolKey::Call(key), name)
+    }
+
+    pub fn with_key(key: ToolKey, name: impl Into<String>) -> Self {
         Self {
             key,
+            response_index: None,
             name: name.into(),
+            arguments: None,
             detail: String::new(),
             expanded_input: None,
             input_lines: None,
             state: ToolState::Pending,
-            recording: None,
+            delegations: Vec::new(),
+            progress: None,
+            result_error: None,
             started_at: None,
             duration: None,
             exit_code: None,
@@ -88,173 +123,195 @@ impl ToolCall {
             output_lines: None,
             truncated: false,
             expanded: None,
-            stream_offsets: [None, None],
+            output_from_result: false,
+            arguments_display: None,
         }
     }
 
-    /// Advances the state; a terminal state is not reopened by a late or replayed update.
     pub fn set_state(&mut self, state: ToolState) {
-        if self.state.is_terminal() && !state.is_terminal() {
-            return;
-        }
-        self.state = state;
-    }
-
-    pub fn apply_display(&mut self, display: &ToolDisplay) {
-        if !display.detail.is_empty() {
-            self.detail = display.detail.clone();
-        }
-        if display.expanded_input.is_some() {
-            self.expanded_input = display.expanded_input.clone();
-        }
-        self.input_lines = display.input_line_count.or(self.input_lines);
-    }
-
-    /// Fills only a missing detail: the display detail is the Agent's one-line
-    /// summary, the subject can be a whole script.
-    pub fn apply_invocation(&mut self, invocation: &ToolInvocation) {
-        if !invocation.name.is_empty() {
-            self.name = invocation.name.clone();
-        }
-        if self.detail.is_empty() {
-            self.detail = invocation.detail();
+        if !self.state.is_terminal() || state.is_terminal() {
+            self.state = state;
         }
     }
 
-    /// A command record; a later one without an exit code keeps the known one.
-    pub fn apply_command(&mut self, command: &CommandResult) {
-        self.exit_code = command.exit_code.or(self.exit_code);
+    /// Only complete invocation arguments enter the card.
+    pub fn set_arguments(&mut self, arguments: &Value) {
+        self.arguments = Some(arguments.clone());
+        self.arguments_display = Some(argument_display(arguments));
+        let string = |key: &str| arguments.get(key).and_then(Value::as_str);
+        self.detail = string("path")
+            .or_else(|| string("command"))
+            .or_else(|| string("query"))
+            .or_else(|| string("pattern"))
+            .or_else(|| string("description"))
+            .unwrap_or("")
+            .lines()
+            .next()
+            .unwrap_or("")
+            .to_owned();
+        let body = match self.name.as_str() {
+            "bash" => string("command").map(str::to_owned),
+            "write" => string("content").map(str::to_owned),
+            "apply_patch" => string("patch").map(str::to_owned),
+            "edit" => string("old_text")
+                .zip(string("new_text"))
+                .map(|(old, new)| {
+                    old.lines()
+                        .map(|line| format!("-{line}\n"))
+                        .chain(new.lines().map(|line| format!("+{line}\n")))
+                        .collect()
+                }),
+            _ => None,
+        };
+        self.input_lines = body.as_deref().map(|body| body.lines().count());
+        self.expanded_input = body;
     }
 
-    /// An execution record: state, duration, counts and the command's exit code.
-    pub fn apply_execution(&mut self, execution: &ToolExecution) {
-        self.set_state(ToolState::from_execution(execution.state));
-        self.recording = execution.recording.or(self.recording);
-        self.duration = execution.duration().or(self.duration);
-        self.output_lines = execution.output_line_count.or(self.output_lines);
-        self.truncated |= execution.result_truncated;
-        if let Some(command) = &execution.command {
-            self.apply_command(command);
-        }
+    /// A bounded, already formatted view of the complete native arguments.
+    pub fn argument_display(&self) -> Option<(&str, bool)> {
+        self.arguments_display
+            .as_ref()
+            .map(|(text, truncated)| (text.as_str(), *truncated))
     }
 
-    /// A `tool.read` answer: whatever of display, invocation and execution it holds.
-    pub fn apply_read(&mut self, read: &ToolReadResult) {
-        if let Some(display) = &read.display {
-            self.apply_display(display);
-        }
-        if let Some(invocation) = &read.invocation {
-            self.apply_invocation(invocation);
-        }
-        if let Some(execution) = &read.execution {
-            self.apply_execution(execution);
-        }
-    }
-
-    /// The model-facing result: a `bash` result gives its exit code and keeps its
-    /// tail, any other keeps its head.
-    pub fn apply_result(&mut self, content: &str) {
-        let bash = (self.name == "bash")
-            .then(|| split_bash_result(content))
-            .flatten();
-        if let Some((code, _, _)) = bash {
-            self.exit_code = self.exit_code.or(code);
-        }
-        // Live process output is the better source.
-        if !self.output.is_empty() {
-            return;
-        }
-        match bash {
-            Some((_, stdout, stderr)) => {
-                self.push_output(stdout);
-                self.push_output(stderr);
-            }
-            None => self.push_head(content),
+    pub fn apply_invocation(&mut self, invocation: &ToolInvocationData) {
+        self.name.clone_from(&invocation.name);
+        self.set_arguments(&invocation.arguments);
+        self.set_state(ToolState::Running);
+        if !self.state.is_terminal() && self.started_at.is_none() {
+            self.started_at = Some(Instant::now());
         }
     }
 
-    /// Stores the head of a result within the card bounds.
-    fn push_head(&mut self, content: &str) {
-        let body = content.strip_suffix('\n').unwrap_or(content);
-        let mut bytes = 0;
-        for line in body.lines().take(OUTPUT_TAIL_LINES) {
-            if bytes > OUTPUT_TAIL_BYTES {
-                break;
-            }
-            let mut kept = String::new();
-            self.truncated |= append_capped(&mut kept, line);
-            bytes += kept.len() + 1;
-            self.output.push(kept);
-        }
-    }
-
-    /// Keeps only the expanded rows of a finished card: the tail for `bash`, otherwise the head.
-    pub fn settle(&mut self) {
-        let content = self.output_content().len();
-        if content <= EXPANDED_ROWS {
-            return;
-        }
-        if self.name == "bash" {
-            // The open last line stays so the kept lines are the same ones.
-            let drop = self.output.len().saturating_sub(EXPANDED_ROWS + 1);
-            self.output.drain(..drop);
-            self.output_dropped += drop;
+    pub fn apply_state(&mut self, state: &ToolCallStateData) {
+        self.name.clone_from(&state.name);
+        self.response_index = Some(state.response_index);
+        self.delegations.clone_from(&state.delegations);
+        self.progress = state
+            .progress
+            .as_ref()
+            .and_then(|progress| progress.message.clone());
+        if let Some(outcome) = state.outcome {
+            self.set_state(ToolState::from_outcome(outcome));
         } else {
-            self.output_lines = Some(self.output_lines.unwrap_or(0).max(content));
-            self.output.truncate(EXPANDED_ROWS);
+            match state.state {
+                ToolCallState::Pending => self.set_state(ToolState::Pending),
+                ToolCallState::Running => self.set_state(ToolState::Running),
+                ToolCallState::Finished => {}
+            }
         }
-        self.output.shrink_to_fit();
     }
 
-    /// Carries over what only live events knew when history replaces this card.
-    pub fn keep_live_facts(&mut self, live: &ToolCall) {
-        if self.detail.is_empty() {
-            self.detail.clone_from(&live.detail);
+    pub fn apply_read(&mut self, read: &ToolCallData) {
+        self.apply_state(&read.state);
+        self.set_arguments(&read.arguments);
+        if let Some(result) = &read.result {
+            self.apply_result(result);
         }
-        if self.expanded_input.is_none() {
-            self.expanded_input.clone_from(&live.expanded_input);
-            self.input_lines = self.input_lines.or(live.input_lines);
+    }
+
+    pub fn apply_result(&mut self, result: &ToolResultData) {
+        self.set_state(ToolState::from_outcome(result.outcome));
+        self.duration = self
+            .duration
+            .or_else(|| self.started_at.map(|start| start.elapsed()));
+        let content = result.output.content().as_str();
+        let command = (self.name == "bash")
+            .then(|| serde_json::from_str::<CommandResult>(content).ok())
+            .flatten();
+        if let Some(command) = &command {
+            self.exit_code = command.exit_code.map(i64::from).or(self.exit_code);
         }
-        if self.detail.is_empty()
-            && self.name == "bash"
-            && let Some(script) = self
-                .expanded_input
-                .as_deref()
-                .and_then(|input| input.lines().next())
-        {
-            self.detail = format!("$ {script}");
+        let parsed = command
+            .is_none()
+            .then(|| serde_json::from_str::<Value>(content).ok())
+            .flatten();
+        if matches!(
+            self.name.as_str(),
+            "read" | "write" | "edit" | "apply_patch"
+        ) {
+            self.result_error = parsed
+                .as_ref()
+                .filter(|value| value["status"] == "failed")
+                .and_then(|value| value["error"]["message"].as_str())
+                .map(str::to_owned);
         }
+        if self.output.is_empty() {
+            match command
+                .as_ref()
+                .map(|command| (&command.stdout.output, &command.stderr.output))
+            {
+                Some((OutputData::Utf8(stdout), OutputData::Utf8(stderr))) => {
+                    self.output_lines = Some(stdout.lines().count() + stderr.lines().count());
+                    self.push_output(stdout);
+                    self.push_output(stderr);
+                }
+                _ => {
+                    let read_text = parsed
+                        .as_ref()
+                        .filter(|value| {
+                            self.name == "read"
+                                && value["status"] == "ok"
+                                && value["kind"] == "file"
+                        })
+                        .and_then(|value| value["text"].as_str());
+                    let formatted = parsed.as_ref().map(|value| {
+                        serde_json::to_string_pretty(value).expect("JSON values serialize")
+                    });
+                    let body = read_text.or(formatted.as_deref()).unwrap_or(content);
+                    self.output_lines = Some(body.lines().count());
+                    if self.name == "bash" {
+                        self.push_output(body);
+                    } else {
+                        self.push_head(body);
+                    }
+                }
+            }
+            self.output_from_result = true;
+        }
+        self.settle();
+    }
+
+    pub fn keep_live_facts(&mut self, live: &Self) {
+        self.expanded = live.expanded;
+        self.started_at = self.started_at.or(live.started_at);
         self.duration = self.duration.or(live.duration);
         self.exit_code = self.exit_code.or(live.exit_code);
-        self.recording = self.recording.or(live.recording);
-        self.expanded = self.expanded.or(live.expanded);
-        if live.stream_offsets.iter().any(Option::is_some) {
+        if self.result_error.is_none() {
+            self.result_error.clone_from(&live.result_error);
+        }
+        if self.arguments.is_none()
+            && let Some(arguments) = &live.arguments
+        {
+            self.set_arguments(arguments);
+        }
+        if self.delegations.is_empty() {
+            self.delegations.clone_from(&live.delegations);
+        }
+        if !live.output.is_empty() && !live.output_from_result {
             self.output.clone_from(&live.output);
             self.output_dropped = live.output_dropped;
             self.truncated |= live.truncated;
+            self.output_from_result = false;
+        }
+        if !self.state.is_terminal() {
+            self.state = live.state;
         }
     }
 
-    /// A call that has started and not finished; one still waiting on approval
-    /// or input has not.
     pub fn is_running(&self) -> bool {
-        !self.state.is_terminal() && self.started_at.is_some()
+        self.state == ToolState::Running
     }
 
-    /// Whether the card shows its expanded body under the global fold.
     pub fn is_expanded(&self, all_expanded: bool) -> bool {
         self.expanded.unwrap_or(all_expanded)
     }
 
-    /// Flips this card; one back in line with the global fold follows it again.
     pub fn toggle_expanded(&mut self, all_expanded: bool) {
         let expanded = !self.is_expanded(all_expanded);
         self.expanded = (expanded != all_expanded).then_some(expanded);
     }
 
-    /// The header detail: the command that ran for `bash`, since the Agent's
-    /// summary can name another one; the paths of a patch replace its
-    /// `tool apply_patch` placeholder.
     pub fn header_detail(&self) -> String {
         if self.name == "bash"
             && let Some(command) = self
@@ -264,32 +321,26 @@ impl ToolCall {
         {
             return format!("$ {}", command.trim());
         }
-        if !self.detail.is_empty() && !self.detail.starts_with("tool ") {
+        if !self.detail.is_empty() {
             return self.detail.clone();
         }
-        let paths = self.patch_paths();
-        if paths.is_empty() {
-            self.detail.clone()
-        } else {
-            paths.join(", ")
-        }
+        self.patch_paths().join(", ")
     }
 
     fn patch_paths(&self) -> Vec<&str> {
-        const PREFIXES: [&str; 6] = [
-            "*** Update File: ",
-            "*** Add File: ",
-            "*** Delete File: ",
-            "*** Move to: ",
-            "+++ b/",
-            "--- a/",
-        ];
-        let mut paths: Vec<&str> = Vec::new();
+        let mut paths = Vec::new();
         for line in self.expanded_input.as_deref().unwrap_or("").lines() {
-            let path = PREFIXES
-                .iter()
-                .find_map(|prefix| line.strip_prefix(prefix))
-                .map(str::trim);
+            let path = [
+                "*** Update File: ",
+                "*** Add File: ",
+                "*** Delete File: ",
+                "*** Move to: ",
+                "+++ b/",
+                "--- a/",
+            ]
+            .iter()
+            .find_map(|prefix| line.strip_prefix(prefix))
+            .map(str::trim);
             if let Some(path) = path
                 && !path.is_empty()
                 && !paths.contains(&path)
@@ -300,13 +351,11 @@ impl ToolCall {
         paths
     }
 
-    /// Added and removed lines of a file-changing call: diff lines for `edit`
-    /// and `apply_patch`, every line for `write`.
     pub fn line_changes(&self) -> Option<(usize, usize)> {
         let input = self.expanded_input.as_deref()?;
         match self.name.as_str() {
-            "write" => Some((input.lines().count() + self.hidden_input_lines(), 0)),
-            "edit" | "apply_patch" | "patch" => {
+            "write" => Some((input.lines().count(), 0)),
+            "edit" | "apply_patch" => {
                 let mut counts = (0, 0);
                 for line in input.lines() {
                     if line.starts_with("+++ ") || line.starts_with("--- ") {
@@ -324,113 +373,76 @@ impl ToolCall {
         }
     }
 
-    /// Input lines the Agent left out of `expanded_input` to bound it.
     pub fn hidden_input_lines(&self) -> usize {
-        let Some(input) = self.expanded_input.as_deref() else {
-            return 0;
-        };
-        // The Agent counts a trailing newline as starting one more line.
-        let sent = if input.is_empty() {
-            0
-        } else {
-            input.matches('\n').count() + 1
-        };
-        self.input_lines
-            .map_or(0, |total| total.saturating_sub(sent))
+        0
     }
 
-    /// The output lines to show, without an empty open line.
     pub fn output_content(&self) -> Vec<&str> {
-        let mut lines: Vec<&str> = self.output.iter().map(String::as_str).collect();
+        let mut lines: Vec<_> = self.output.iter().map(String::as_str).collect();
         if lines.last() == Some(&"") {
             lines.pop();
         }
         lines
     }
 
-    pub fn apply_summary(&mut self, summary: &ToolSummary) {
-        self.apply_display(&summary.display);
-        self.output_lines = summary.output_line_count.or(self.output_lines);
-        self.truncated |= summary.output_truncated;
-        self.state = match summary.state.as_deref() {
-            Some("failed") => ToolState::Failed,
-            Some("denied") => ToolState::Denied,
-            Some("cancelled") => ToolState::Cancelled,
-            Some("succeeded" | "input_provided") => ToolState::Succeeded,
-            _ => self.state,
-        };
+    pub fn settle(&mut self) {
+        let content = self.output_content().len();
+        if content <= EXPANDED_ROWS {
+            return;
+        }
+        if self.name == "bash" {
+            let drop = self.output.len().saturating_sub(EXPANDED_ROWS + 1);
+            self.output.drain(..drop);
+            self.output_dropped += drop;
+        } else {
+            self.output_lines = Some(self.output_lines.unwrap_or(0).max(content));
+            self.output.truncate(EXPANDED_ROWS);
+        }
+        self.output.shrink_to_fit();
     }
 
-    /// The text of a new chunk for `stream`, or `None` for a duplicate, stale or expired one.
-    pub fn accept_chunk(
-        &mut self,
-        stream: ProcessStream,
-        chunk: &ProcessChunk,
-        text: String,
-    ) -> Option<String> {
-        let slot = match stream {
-            ProcessStream::Stdout => 0,
-            ProcessStream::Stderr => 1,
-            ProcessStream::Other => return Some(text),
-        };
-        if chunk.expired {
-            return None;
-        }
-        match self.stream_offsets[slot] {
-            Some(expected) if chunk.base_offset == expected => {}
-            Some(expected) if chunk.base_offset < expected => return None,
-            Some(_) => {
-                // The Agent dropped bytes: say so rather than joining halves.
-                self.stream_offsets[slot] = Some(chunk.next_offset);
-                self.mark_gap();
-                return Some(text);
+    fn push_head(&mut self, content: &str) {
+        let mut bytes = 0;
+        for line in content.lines().take(OUTPUT_TAIL_LINES) {
+            let remaining = OUTPUT_TAIL_BYTES.saturating_sub(bytes + 1);
+            if remaining < '…'.len_utf8() {
+                break;
             }
-            None => {}
+            let mut kept = String::new();
+            self.truncated |= append_capped_to(&mut kept, line, remaining);
+            bytes += kept.len() + 1;
+            self.output.push(kept);
         }
-        self.stream_offsets[slot] = Some(chunk.next_offset);
-        Some(text)
+        self.truncated |= content.lines().count() > self.output.len();
     }
 
-    /// Puts a `…` line where output is missing and starts a new line after it.
-    fn mark_gap(&mut self) {
-        if self.output.last().is_some_and(String::is_empty) {
-            self.output.pop();
-        }
-        self.output.push("…".to_owned());
-        self.output.push(String::new());
-    }
-
-    /// Appends to the open last line, keeping a tail bounded by lines and bytes.
+    /// The caller supplies only verified contiguous UTF-8 from the SDK OutputBuffer.
     pub fn push_output(&mut self, text: &str) {
         if text.is_empty() {
             return;
         }
+        if self.output_from_result {
+            self.output.clear();
+            self.output_dropped = 0;
+            self.truncated = false;
+            self.output_from_result = false;
+        }
         let mut pieces = text.split('\n');
-        let first = pieces.next().unwrap_or_default();
-        match self.output.last_mut() {
-            Some(open) => self.truncated |= append_capped(open, first),
-            None => {
-                let mut line = String::new();
-                self.truncated |= append_capped(&mut line, first);
-                self.output.push(line);
-            }
+        let first = pieces.next().expect("split has one piece");
+        if let Some(line) = self.output.last_mut() {
+            self.truncated |= append_capped(line, first);
+        } else {
+            let mut line = String::new();
+            self.truncated |= append_capped(&mut line, first);
+            self.output.push(line);
         }
-        for line in pieces {
-            let mut capped = String::new();
-            self.truncated |= append_capped(&mut capped, line);
-            self.output.push(capped);
+        for piece in pieces {
+            let mut line = String::new();
+            self.truncated |= append_capped(&mut line, piece);
+            self.output.push(line);
         }
-        self.bound_output();
-    }
-
-    fn bound_output(&mut self) {
         let mut drop = self.output.len().saturating_sub(OUTPUT_TAIL_LINES);
-        // One line can be megabytes long, so the byte budget bounds the tail
-        // too; the newest line stays so a card never goes blank.
-        let mut bytes = self.output[drop..]
-            .iter()
-            .map(|line| line.len() + 1)
-            .sum::<usize>();
+        let mut bytes: usize = self.output[drop..].iter().map(|line| line.len() + 1).sum();
         while bytes > OUTPUT_TAIL_BYTES && drop + 1 < self.output.len() {
             bytes -= self.output[drop].len() + 1;
             drop += 1;
@@ -443,24 +455,60 @@ impl ToolCall {
     }
 }
 
-/// Maximum body rows of an expanded card.
 pub const EXPANDED_ROWS: usize = 200;
-/// Lines of process output kept per running card.
 pub const OUTPUT_TAIL_LINES: usize = 400;
-/// Byte cap for a card's stored output tail.
 pub const OUTPUT_TAIL_BYTES: usize = 64 * 1024;
 
-/// Appends to one stored line within the byte cap; returns whether anything was cut.
+fn argument_display(arguments: &Value) -> (String, bool) {
+    struct DisplayWriter {
+        bytes: Vec<u8>,
+        truncated: bool,
+    }
+    impl std::io::Write for DisplayWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            let remaining = OUTPUT_TAIL_BYTES.saturating_sub(self.bytes.len());
+            let count = bytes.len().min(remaining);
+            self.bytes.extend_from_slice(&bytes[..count]);
+            if count < bytes.len() {
+                self.truncated = true;
+                if count == 0 {
+                    return Err(std::io::Error::other("argument display budget reached"));
+                }
+            }
+            Ok(count)
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut writer = DisplayWriter {
+        bytes: Vec::new(),
+        truncated: false,
+    };
+    let formatted = serde_json::to_writer_pretty(&mut writer, arguments);
+    debug_assert!(formatted.is_ok() || writer.truncated);
+    if let Err(error) = std::str::from_utf8(&writer.bytes) {
+        writer.bytes.truncate(error.valid_up_to());
+    }
+    (
+        String::from_utf8(writer.bytes).expect("JSON display ends at a UTF-8 boundary"),
+        writer.truncated,
+    )
+}
+
 fn append_capped(line: &mut String, text: &str) -> bool {
-    if line.len() >= OUTPUT_TAIL_BYTES && line.ends_with('…') {
-        // Already cut and marked.
+    append_capped_to(line, text, OUTPUT_TAIL_BYTES)
+}
+
+fn append_capped_to(line: &mut String, text: &str, limit: usize) -> bool {
+    if line.len() >= limit && line.ends_with('…') {
         return !text.is_empty();
     }
     line.push_str(text);
-    if line.len() <= OUTPUT_TAIL_BYTES {
+    if line.len() <= limit {
         return false;
     }
-    let mut end = OUTPUT_TAIL_BYTES;
+    let mut end = limit - '…'.len_utf8();
     while !line.is_char_boundary(end) {
         end -= 1;
     }
@@ -469,367 +517,200 @@ fn append_capped(line: &mut String, text: &str) -> bool {
     true
 }
 
-/// Splits a `bash` result into its exit code, stdout and stderr.
-fn split_bash_result(content: &str) -> Option<(Option<i64>, &str, &str)> {
-    let (code, rest) = content.strip_prefix("exit_code: ")?.split_once('\n')?;
-    let body = rest.strip_prefix("stdout:\n")?;
-    let (stdout, stderr) = match (body.strip_prefix("stderr:\n"), body.rfind("\nstderr:\n")) {
-        (Some(stderr), _) => ("", stderr),
-        (None, Some(at)) => (&body[..=at], &body[at + "\nstderr:\n".len()..]),
-        (None, None) => (body, ""),
-    };
-    Some((code.trim().parse().ok(), stdout, stderr))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn key(call: &str) -> ToolRef {
-        ToolRef {
-            session_id: "s".into(),
-            loop_id: "l".into(),
-            request_index: 1,
-            tool_call_id: call.into(),
-        }
-    }
-
-    #[test]
-    fn a_finished_tool_never_goes_back_to_running() {
-        let mut call = ToolCall::new(key("c"), "bash");
-        call.set_state(ToolState::Succeeded);
-        call.set_state(ToolState::Running);
-        assert_eq!(call.state, ToolState::Succeeded);
-        // A terminal state can still be corrected, e.g. cancelled then failed.
-        call.set_state(ToolState::Failed);
-        assert_eq!(call.state, ToolState::Failed);
-    }
-
-    #[test]
-    fn a_pending_tool_still_advances_to_running() {
-        let mut call = ToolCall::new(key("c"), "bash");
-        call.set_state(ToolState::Pending);
-        call.set_state(ToolState::Running);
-        assert_eq!(call.state, ToolState::Running);
-    }
-
-    #[test]
-    fn execution_state_maps_to_card_state() {
-        assert_eq!(
-            ToolState::from_execution(ToolExecutionState::AwaitingPolicy),
-            ToolState::Running
-        );
-        assert_eq!(
-            ToolState::from_execution(ToolExecutionState::Denied),
-            ToolState::Denied
-        );
-    }
-
-    #[test]
-    fn a_provided_input_is_terminal_in_hydrated_and_summary_tool_cards() {
-        let read: ToolReadResult = serde_json::from_value(serde_json::json!({"execution":{
-            "tool_ref":{"session_id":"s","loop_id":"l","request_index":1,"tool_call_id":"c"},
-            "state":"input_provided","result_truncated":false
-        }}))
-        .unwrap();
-        let mut hydrated = ToolCall::new(key("c"), "question");
-        hydrated.apply_read(&read);
-        assert_eq!(
-            hydrated.state,
-            ToolState::Succeeded,
-            "a provided answer is a terminal tool result"
-        );
-        hydrated.set_state(ToolState::Running);
-        assert_eq!(
-            hydrated.state,
-            ToolState::Succeeded,
-            "a late running fact cannot reopen an answered input"
-        );
-        let summary: ToolSummary = serde_json::from_value(serde_json::json!({"tool_call_id":"c","name":"question",
-            "display":{"detail":"a question","truncated":false},"state":"input_provided","output_truncated":false
-        })).unwrap();
-        let mut from_history = ToolCall::new(key("c"), "question");
-        from_history.apply_summary(&summary);
-        assert_eq!(from_history.state, ToolState::Succeeded);
-    }
-
-    #[test]
-    fn a_single_huge_line_cannot_bloat_a_card() {
-        let mut call = ToolCall::new(key("c"), "bash");
-        call.push_output(&"x".repeat(OUTPUT_TAIL_BYTES * 3));
-        assert_eq!(call.output.len(), 1);
-        assert!(
-            call.output[0].len() <= OUTPUT_TAIL_BYTES + 4,
-            "{}",
-            call.output[0].len()
-        );
-        assert!(call.output[0].ends_with('…'));
-        assert!(call.truncated);
-    }
-
-    #[test]
-    fn the_output_tail_is_bounded_by_bytes_as_well_as_lines() {
-        let mut call = ToolCall::new(key("c"), "bash");
-        let line = format!("{}\n", "y".repeat(1024));
-        for _ in 0..200 {
-            call.push_output(&line);
-        }
-        let bytes: usize = call.output.iter().map(|line| line.len() + 1).sum();
-        assert!(bytes <= OUTPUT_TAIL_BYTES, "{bytes} bytes kept");
-        assert!(call.truncated);
-    }
-
-    #[test]
-    fn tool_output_keeps_a_bounded_tail() {
-        let mut call = ToolCall::new(key("c"), "bash");
-        for line in 0..OUTPUT_TAIL_LINES + 20 {
-            call.push_output(&format!("line {line}\n"));
-        }
-        assert!(call.truncated);
-        assert!(call.output.len() <= OUTPUT_TAIL_LINES + 1);
-        assert_eq!(call.output.last().unwrap(), "");
-        assert!(call.output.iter().any(|line| line == "line 419"));
-        assert_eq!(
-            call.output_dropped + call.output_content().len(),
-            OUTPUT_TAIL_LINES + 20,
-            "dropped and kept lines add up to what arrived"
-        );
-    }
-
-    #[test]
-    fn settling_a_bash_card_keeps_the_tail_an_expanded_card_shows() {
-        let mut call = ToolCall::new(key("c"), "bash");
-        for line in 0..400 {
-            call.push_output(&format!("line {line}\n"));
-        }
-        call.settle();
-        assert_eq!(call.output.len(), EXPANDED_ROWS + 1);
-        assert_eq!(call.output_content().last(), Some(&"line 399"));
-        assert_eq!(
-            call.output_dropped + call.output_content().len(),
-            400,
-            "dropped and kept lines still add up"
-        );
-    }
-
-    #[test]
-    fn settling_a_read_card_keeps_the_head_and_the_total() {
-        let mut call = ToolCall::new(key("c"), "read");
-        let content: String = (0..399).map(|line| format!("line {line}\n")).collect();
-        call.apply_result(&format!("{content}[truncated]\n"));
-        call.output_lines = Some(400);
-        call.settle();
-        assert_eq!(call.output.len(), EXPANDED_ROWS);
-        assert_eq!(call.output[0], "line 0");
-        assert_eq!(call.output_lines, Some(400));
-    }
-
-    #[test]
-    fn a_short_card_is_left_alone() {
-        let mut call = ToolCall::new(key("c"), "bash");
-        call.push_output("a\nb\n");
-        let before = call.output.clone();
-        call.settle();
-        assert_eq!(call.output, before);
-        assert_eq!(call.output_dropped, 0);
-    }
-
-    #[test]
-    fn chunks_split_mid_line_join_into_one_line() {
-        let mut call = ToolCall::new(key("c"), "bash");
-        call.push_output("hello wo");
-        call.push_output("rld\nnext\n");
-        call.push_output("last\n");
-        assert_eq!(call.output_content(), ["hello world", "next", "last"]);
-    }
-
-    #[test]
-    fn a_bash_result_gives_its_exit_code_and_drops_the_labels() {
-        let mut call = ToolCall::new(key("c"), "bash");
-        call.apply_result("exit_code: 3\nstdout:\nRan 2 tests\nFAILED\nstderr:\nboom\n");
-        assert_eq!(call.exit_code, Some(3));
-        assert_eq!(call.output_content(), ["Ran 2 tests", "FAILED", "boom"]);
-
-        let mut quiet = ToolCall::new(key("c"), "bash");
-        quiet.apply_result("exit_code: 0\nstdout:\nstderr:\n");
-        assert_eq!(quiet.exit_code, Some(0));
-        assert!(quiet.output_content().is_empty());
-    }
-
-    #[test]
-    fn result_text_does_not_decide_whether_output_was_truncated() {
-        for name in ["read", "bash"] {
-            let mut call = ToolCall::new(key("c"), name);
-            let text = "before\n[truncated]\nafter\n[truncated]\n";
-            if name == "bash" {
-                call.apply_result(&format!("exit_code: 0\nstdout:\n{text}stderr:\n"));
-            } else {
-                call.apply_result(text);
-            }
-            assert_eq!(
-                call.output_content(),
-                ["before", "[truncated]", "after", "[truncated]"]
-            );
-            assert!(!call.truncated);
-            call.settle();
-            assert_eq!(call.output_content().len(), 4);
-        }
-    }
-
-    #[test]
-    fn a_result_does_not_replace_live_output() {
-        let mut call = ToolCall::new(key("c"), "bash");
-        call.push_output("live\n");
-        call.apply_result("exit_code: 1\nstdout:\npreview\nstderr:\n");
-        assert_eq!(call.output_content(), ["live"]);
-        assert_eq!(call.exit_code, Some(1), "the exit code still lands");
-    }
-
-    #[test]
-    fn a_command_record_without_an_exit_code_keeps_the_known_one() {
-        use crate::protocol::event::CommandResult;
-        let record = |exit_code| CommandResult { exit_code };
-        let mut call = ToolCall::new(key("c"), "bash");
-        call.apply_command(&record(Some(2)));
-        call.apply_command(&record(None));
-        assert_eq!(call.exit_code, Some(2));
-    }
-
-    #[test]
-    fn an_invocation_does_not_override_the_card_detail() {
-        use crate::protocol::tool::ToolSubject;
-        let invocation = ToolInvocation {
-            tool_ref: key("c"),
-            name: "bash".into(),
-            subject: ToolSubject::Command {
-                script: "make\nmake test".into(),
+    fn card() -> ToolCall {
+        ToolCall::new(
+            ToolCallRef {
+                turn_id: "00000000000000000001".parse().unwrap(),
+                tool_call_id: ToolCallId("call".into()),
             },
+            "bash",
+        )
+    }
+
+    #[test]
+    fn complete_arguments_are_not_shortened_to_the_header() {
+        let mut call = card();
+        let command = "printf '你好'\n".repeat(300);
+        let arguments = serde_json::json!({"command":command,"timeout_seconds":5});
+        call.set_arguments(&arguments);
+        assert_eq!(call.arguments.as_ref(), Some(&arguments));
+        assert_eq!(
+            call.expanded_input.as_deref(),
+            arguments["command"].as_str()
+        );
+        assert_eq!(call.hidden_input_lines(), 0);
+    }
+
+    #[test]
+    fn argument_display_is_cached_bounded_utf8_while_native_arguments_stay_complete() {
+        let mut call = card();
+        let command = "中🙂\n\"quoted\"".repeat(20_000);
+        let arguments = serde_json::json!({"command":command,"timeout_seconds":5});
+        call.set_arguments(&arguments);
+        let (display, truncated) = call.argument_display().unwrap();
+        assert!(truncated);
+        assert!(display.len() <= OUTPUT_TAIL_BYTES);
+        assert!(display.starts_with("{\n  \"command\": \"中🙂\\n\\\"quoted\\\""));
+        assert!(!display.contains('\u{fffd}'));
+        let address = display.as_ptr();
+        let cached = display.to_owned();
+        call.push_output("one new output line\n");
+        assert_eq!(call.argument_display().unwrap().0.as_ptr(), address);
+        assert_eq!(call.argument_display().unwrap().0, cached);
+        assert_eq!(call.arguments.as_ref(), Some(&arguments));
+        assert_eq!(
+            call.expanded_input.as_deref(),
+            arguments["command"].as_str()
+        );
+    }
+
+    #[test]
+    fn huge_unicode_output_is_bounded_without_splitting_characters() {
+        let mut call = card();
+        call.push_output(&"中".repeat(100_000));
+        assert!(call.output[0].len() <= OUTPUT_TAIL_BYTES);
+        assert!(call.output[0].ends_with('…'));
+        call.push_output("\ntail");
+        assert_eq!(call.output_content().last(), Some(&"tail"));
+    }
+
+    #[test]
+    fn terminal_input_result_is_not_reopened_by_a_late_start() {
+        let mut call = card();
+        call.apply_result(&ToolResultData {
+            outcome: ToolResultOutcome::InputProvided,
+            output: minicore_host_runtime::tools::ToolOutput::new("accepted").unwrap(),
+        });
+        call.apply_invocation(&ToolInvocationData {
+            name: "question".into(),
+            arguments: serde_json::json!({"question":"continue?"}),
+        });
+        assert_eq!(call.state, ToolState::Succeeded);
+        assert!(call.started_at.is_none());
+    }
+
+    #[test]
+    fn late_verified_stream_output_replaces_the_result_fallback_once() {
+        let mut call = card();
+        call.apply_result(&ToolResultData {
+            outcome: ToolResultOutcome::Success,
+            output: minicore_host_runtime::tools::ToolOutput::new("fallback result").unwrap(),
+        });
+        call.push_output("actual ");
+        call.push_output("stream");
+        assert_eq!(call.output_content(), ["actual stream"]);
+        assert_eq!(call.state, ToolState::Succeeded);
+    }
+
+    fn result(value: impl serde::Serialize) -> ToolResultData {
+        ToolResultData {
+            outcome: ToolResultOutcome::Success,
+            output: minicore_host_runtime::tools::ToolOutput::new(
+                serde_json::to_string(&value).unwrap(),
+            )
+            .unwrap(),
+        }
+    }
+
+    #[test]
+    fn native_command_result_supplies_real_streams_and_exit_status() {
+        use minicore_host_local_tools::{CommandFileChanges, CommandStatus, CommandStream};
+        let mut call = card();
+        call.set_arguments(&serde_json::json!({"command":"\n  printf actual","cwd":"."}));
+        let command = CommandResult {
+            status: CommandStatus::Exited,
+            pid: 12,
+            exit_code: Some(3),
+            signal: None,
+            process_waited: true,
+            cleanup_confirmed: true,
+            stdout: CommandStream {
+                output: OutputData::Utf8("actual\n".into()),
+                complete: true,
+            },
+            stderr: CommandStream {
+                output: OutputData::Utf8("diagnostic\n".into()),
+                complete: true,
+            },
+            file_changes: CommandFileChanges::Unknown,
+            cleanup_errors: Vec::new(),
         };
-        let mut call = ToolCall::new(key("c"), "bash");
-        call.apply_invocation(&invocation);
-        assert_eq!(
-            call.detail, "$ make\nmake test",
-            "it fills a missing detail"
-        );
-        call.detail = "$ make".into();
-        call.apply_invocation(&invocation);
-        assert_eq!(call.detail, "$ make");
+        call.apply_result(&result(&command));
+        assert_eq!(call.header_detail(), "$ printf actual");
+        assert_eq!(call.exit_code, Some(3));
+        assert_eq!(call.output_content(), ["actual", "diagnostic"]);
+        assert_eq!(call.state, ToolState::Succeeded);
+        let mut bytes = command;
+        bytes.stdout.output = OutputData::Bytes(vec![255, 0]);
+        let mut binary = card();
+        binary.apply_result(&result(bytes));
+        let shown = binary.output.join("\n");
+        assert!(shown.contains("\"encoding\":\"bytes\",\"data\":[255,0]"));
+        assert!(!shown.contains('\u{fffd}'));
+        assert_eq!(binary.exit_code, Some(3));
     }
 
     #[test]
-    fn an_apply_patch_header_names_the_files_it_touches() {
-        let mut call = ToolCall::new(key("c"), "apply_patch");
-        call.detail = "tool apply_patch".into();
-        call.expanded_input = Some(
-            "*** Begin Patch\n*** Update File: src/a.rs\n@@\n-old\n+new\n+more\n\
-             *** Add File: src/b.rs\n+fresh\n*** End Patch"
-                .into(),
-        );
-        assert_eq!(call.header_detail(), "src/a.rs, src/b.rs");
-        assert_eq!(call.line_changes(), Some((3, 1)));
-
-        let mut unified = ToolCall::new(key("c"), "apply_patch");
-        unified.expanded_input = Some("--- a/app.py\n+++ b/app.py\n@@ -1 +1 @@\n-a\n+b".into());
-        assert_eq!(unified.header_detail(), "app.py");
-        assert_eq!(
-            unified.line_changes(),
-            Some((1, 1)),
-            "file headers are not lines"
-        );
+    fn native_read_result_keeps_its_head_and_arguments_do_not_hide_it() {
+        let mut call = card();
+        call.name = "read".into();
+        let arguments = serde_json::json!({"path":"src/lib.rs","offset":1,"limit":500});
+        call.set_arguments(&arguments);
+        let text: String = (0..500).map(|line| format!("line {line}\n")).collect();
+        call.apply_result(&result(serde_json::json!({
+            "status":"ok","kind":"file","path":"src/lib.rs","offset":1,
+            "lines":500,"text":text,"next_offset":null,"eof":true
+        })));
+        assert_eq!(call.arguments.as_ref(), Some(&arguments));
+        assert!(call.expanded_input.is_none());
+        assert_eq!(call.output.first().map(String::as_str), Some("line 0"));
+        assert_eq!(call.output.last().map(String::as_str), Some("line 199"));
+        assert_eq!(call.output_lines, Some(500));
     }
 
     #[test]
-    fn a_written_file_counts_every_line_as_added() {
-        let mut call = ToolCall::new(key("c"), "write");
-        call.expanded_input = Some("a\nb".into());
-        call.input_lines = Some(40);
-        assert_eq!(call.line_changes(), Some((40, 0)));
+    fn native_file_failure_does_not_change_the_execution_outcome() {
+        let mut call = card();
+        call.name = "write".into();
+        call.set_arguments(&serde_json::json!({"path":"file","content":"proposed"}));
+        call.apply_result(&result(serde_json::json!({
+            "status":"failed","error":{"code":"filesystem","message":"permission denied"}
+        })));
+        assert_eq!(call.state, ToolState::Succeeded);
+        assert_eq!(call.result_error.as_deref(), Some("permission denied"));
+        assert!(call.output.join("\n").contains("permission denied"));
+        assert_eq!(call.expanded_input.as_deref(), Some("proposed"));
     }
 
     #[test]
-    fn a_card_toggle_overrides_the_global_fold_until_it_matches_again() {
-        let mut call = ToolCall::new(key("c"), "bash");
-        assert!(!call.is_expanded(false));
-        call.toggle_expanded(false);
-        assert!(call.is_expanded(false));
-        assert!(call.is_expanded(true));
-        call.toggle_expanded(false);
-        assert_eq!(call.expanded, None, "back in line, it follows Ctrl+O again");
-        assert!(call.is_expanded(true));
-    }
-
-    fn chunk(stream: ProcessStream, base: u64, next: u64, expired: bool) -> ProcessChunk {
-        ProcessChunk {
-            stream,
-            encoding: "base64".into(),
-            data: String::new(),
-            base_offset: base,
-            next_offset: next,
-            expired,
-        }
+    fn native_edit_arguments_keep_the_complete_requested_replacement() {
+        let mut call = card();
+        call.name = "edit".into();
+        let arguments = serde_json::json!({
+            "path":"file","old_text":"one\ntwo\n","new_text":"three\n","replace_all":true
+        });
+        call.set_arguments(&arguments);
+        assert_eq!(call.arguments.as_ref(), Some(&arguments));
+        assert_eq!(call.expanded_input.as_deref(), Some("-one\n-two\n+three\n"));
+        assert_eq!(call.line_changes(), Some((1, 2)));
     }
 
     #[test]
-    fn stdout_and_stderr_keep_independent_cursors() {
-        let mut call = ToolCall::new(key("c"), "bash");
-        let out = ProcessStream::Stdout;
-        let err = ProcessStream::Stderr;
-        assert!(
-            call.accept_chunk(out, &chunk(out, 0, 10, false), "a".into())
-                .is_some()
-        );
-        // stderr starts at its own zero; the stdout cursor must not apply.
-        assert!(
-            call.accept_chunk(err, &chunk(err, 0, 4, false), "b".into())
-                .is_some()
-        );
-        assert!(
-            call.accept_chunk(out, &chunk(out, 10, 20, false), "c".into())
-                .is_some()
-        );
-        assert_eq!(call.stream_offsets, [Some(20), Some(4)]);
-    }
-
-    #[test]
-    fn a_replayed_chunk_is_ignored() {
-        let mut call = ToolCall::new(key("c"), "bash");
-        let out = ProcessStream::Stdout;
-        call.accept_chunk(out, &chunk(out, 0, 10, false), "a".into());
-        assert!(
-            call.accept_chunk(out, &chunk(out, 0, 10, false), "a".into())
-                .is_none()
-        );
-    }
-
-    /// Feeds one chunk exactly as the reducer does.
-    fn feed(call: &mut ToolCall, stream: ProcessStream, base: u64, next: u64, text: &str) {
-        if let Some(text) =
-            call.accept_chunk(stream, &chunk(stream, base, next, false), text.into())
-        {
-            call.push_output(&text);
-        }
-    }
-
-    #[test]
-    fn a_dropped_range_is_marked_instead_of_spliced() {
-        let mut call = ToolCall::new(key("c"), "bash");
-        let out = ProcessStream::Stdout;
-        feed(&mut call, out, 0, 10, "a");
-        // Bytes 10..30 were evicted: the cursor jumps and a gap is shown.
-        feed(&mut call, out, 30, 40, "c");
-        assert_eq!(call.output, vec!["a", "…", "c"]);
-        assert_eq!(call.stream_offsets, [Some(40), None]);
-    }
-
-    #[test]
-    fn an_expired_chunk_is_dropped() {
-        let mut call = ToolCall::new(key("c"), "bash");
-        let out = ProcessStream::Stdout;
-        assert!(
-            call.accept_chunk(out, &chunk(out, 0, 10, true), "a".into())
-                .is_none()
-        );
-        assert!(call.output.is_empty());
-        assert_eq!(call.stream_offsets, [None, None]);
+    fn the_head_budget_accounts_for_all_retained_lines() {
+        let mut call = card();
+        call.name = "read".into();
+        call.apply_result(&ToolResultData {
+            outcome: ToolResultOutcome::Success,
+            output: minicore_host_runtime::tools::ToolOutput::new(
+                format!("{}\n", "中".repeat(10_000)).repeat(5),
+            )
+            .unwrap(),
+        });
+        assert!(call.output.iter().map(|line| line.len() + 1).sum::<usize>() <= OUTPUT_TAIL_BYTES);
+        assert!(call.truncated);
     }
 }

@@ -45,20 +45,20 @@ fn searchable(block: &Block, show_reasoning: bool) -> Vec<(Field, Cow<'_, str>)>
             (Field::Detail, call.detail.as_str().into()),
             (Field::Output, call.output_content().join("\n").into()),
         ],
+        Block::Summary { text } => vec![(Field::Text, text.as_str().into())],
         Block::Compaction {
-            before,
-            after,
-            coverage,
+            source_position,
+            covered_items,
             summary,
-            ..
         } => {
-            let label = blocks::compaction_label(*before, *after, *coverage);
-            let label = format!("[compaction] {label}");
-            [Cow::Owned(label)]
-                .into_iter()
-                .chain(summary.as_deref().map(Cow::Borrowed))
-                .map(|text| (Field::Text, text))
-                .collect()
+            let label = format!(
+                "[compaction] {}",
+                blocks::compaction_label(*source_position, *covered_items)
+            );
+            vec![
+                (Field::Text, label.into()),
+                (Field::Text, summary.as_str().into()),
+            ]
         }
         Block::TurnEnd { .. } | Block::EarlierHistory { .. } => Vec::new(),
     }
@@ -237,7 +237,7 @@ mod tests {
     use ratatui::style::Color;
 
     use super::*;
-    use crate::protocol::read::UserKind;
+    use crate::transcript::UserKind;
 
     fn user(text: &str) -> Block {
         Block::User {
@@ -249,24 +249,23 @@ mod tests {
 
     fn assistant(reasoning: &str, text: &str) -> Block {
         Block::Assistant {
-            key: crate::transcript::RequestKey {
-                loop_id: "l".into(),
-                request_index: 0,
-            },
+            key: crate::transcript::RequestKey::response(
+                "00000000000000000001".parse().unwrap(),
+                0,
+            ),
             reasoning: reasoning.into(),
             text: text.into(),
             streaming: false,
+            partial: false,
             expanded: None,
         }
     }
 
     fn tool(detail: &str, output: &[&str]) -> Block {
         let mut call = crate::transcript::ToolCall::new(
-            crate::protocol::ToolRef {
-                session_id: "s".into(),
-                loop_id: "l".into(),
-                request_index: 0,
-                tool_call_id: "c".into(),
+            minicore_host_protocol::ToolCallRef {
+                turn_id: "00000000000000000001".parse().unwrap(),
+                tool_call_id: minicore_host_protocol::ToolCallId("c".into()),
             },
             "bash",
         );
@@ -309,21 +308,14 @@ mod tests {
 
     #[test]
     fn a_compaction_marker_is_found_by_its_label_and_its_summary() {
-        let marker = |summary: Option<&str>| Block::Compaction {
-            operation_id: "op".into(),
-            before: Some(32_400),
-            after: Some(7_000),
-            coverage: None,
-            summary: summary.map(Into::into),
+        let marker = |summary: &str| Block::Compaction {
+            source_position: 4,
+            covered_items: 3,
+            summary: summary.into(),
         };
-        // A live marker has no summary, only the label it shows.
-        assert_eq!(find_matches(&[marker(None)], "compaction", true).len(), 1);
+        assert_eq!(find_matches(&[marker("")], "compaction", true).len(), 1);
         assert_eq!(
-            find_matches(&[marker(None)], "compacted from", true).len(),
-            1
-        );
-        assert_eq!(
-            find_matches(&[marker(Some("kept the plan"))], "the plan", true).len(),
+            find_matches(&[marker("kept the plan")], "the plan", true).len(),
             1
         );
     }

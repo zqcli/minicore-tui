@@ -8,7 +8,7 @@ pub fn home_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-/// The TUI directory: settings, prompts, sessions and history all live here.
+/// The TUI directory contains initial configuration and separate Host data.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Home(pub(super) PathBuf);
 
@@ -40,30 +40,23 @@ impl Home {
         self.0.join("config.toml")
     }
 
-    pub fn models_file(&self) -> PathBuf {
-        self.0.join("models.toml")
+    pub fn host_config_file(&self) -> PathBuf {
+        self.0.join("host-config.json")
     }
 
-    pub fn system_prompt_file(&self) -> PathBuf {
-        self.0.join("prompt").join("SYSTEM_PROMPT.md")
+    pub fn agent_defaults_file(&self) -> PathBuf {
+        self.0.join("agent-defaults.json")
     }
 
     pub fn commands_dir(&self) -> PathBuf {
         self.0.join("prompt").join("commands")
     }
 
-    /// The Agent's `data_dir`: every session and Agent store file.
-    pub fn session_dir(&self) -> PathBuf {
-        self.0.join("session")
+    /// Host owns this directory, independently of the old Agent's session store.
+    pub fn data_root(&self) -> PathBuf {
+        self.0.join("host")
     }
 
-    /// The generated Agent config, rewritten on every start.
-    pub fn agent_config_file(&self) -> PathBuf {
-        self.session_dir().join("agent.toml")
-    }
-
-    /// Prompt history is the composer's, not the Agent's, so it stays out of
-    /// `session/`, which can be wiped without losing it.
     pub fn history_file(&self) -> PathBuf {
         self.0.join("history.jsonl")
     }
@@ -73,9 +66,11 @@ impl Home {
         self.0.join(path)
     }
 
-    /// True when neither settings file exists, which means a first run.
+    /// Existing Agent settings require an explicit migration, never scaffolding over them.
     pub fn is_fresh(&self) -> bool {
-        !self.config_file().exists() && !self.models_file().exists()
+        !self.config_file().exists()
+            && !self.host_config_file().exists()
+            && !self.0.join("models.toml").exists()
     }
 }
 
@@ -111,13 +106,13 @@ mod tests {
     fn every_path_sits_under_the_directory_with_the_documented_names() {
         let home = Home(PathBuf::from("/h"));
         assert_eq!(home.config_file(), Path::new("/h/config.toml"));
-        assert_eq!(home.models_file(), Path::new("/h/models.toml"));
+        assert_eq!(home.host_config_file(), Path::new("/h/host-config.json"));
         assert_eq!(
-            home.system_prompt_file(),
-            Path::new("/h/prompt/SYSTEM_PROMPT.md")
+            home.agent_defaults_file(),
+            Path::new("/h/agent-defaults.json")
         );
         assert_eq!(home.commands_dir(), Path::new("/h/prompt/commands"));
-        assert_eq!(home.agent_config_file(), Path::new("/h/session/agent.toml"));
+        assert_eq!(home.data_root(), Path::new("/h/host"));
         assert_eq!(home.join(Path::new("p/x.md")), Path::new("/h/p/x.md"));
         assert_eq!(home.join(Path::new("/abs.md")), Path::new("/abs.md"));
     }

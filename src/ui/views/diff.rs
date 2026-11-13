@@ -5,8 +5,7 @@ use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
 
 use crate::app::diff::{DiffFile, DiffRow, DiffState, sign};
-use crate::protocol::ChangeKind;
-use crate::protocol::changes::LineKind;
+use minicore_host_workspace::{ChangeKind, DiffLineKind as LineKind};
 
 use super::{chrome, styled};
 use crate::ui::panel::truncate;
@@ -29,7 +28,7 @@ impl DiffRow {
                 let style = match kind {
                     LineKind::Added => styles.added(),
                     LineKind::Removed => styles.removed(),
-                    LineKind::Context | LineKind::Unknown => styles.dim(),
+                    LineKind::Context => styles.dim(),
                 };
                 Line::from(vec![
                     Span::styled(gutter.clone(), styles.faint()),
@@ -107,7 +106,9 @@ fn marker(kind: ChangeKind) -> &'static str {
         ChangeKind::Deleted => "D",
         ChangeKind::Renamed => "R",
         ChangeKind::Conflict => "!",
-        ChangeKind::Modified | ChangeKind::Unknown => "M",
+        ChangeKind::Modified => "M",
+        ChangeKind::Unchanged => "=",
+        ChangeKind::Unknown => "?",
     }
 }
 
@@ -222,35 +223,56 @@ fn render_hunks(frame: &mut Frame, area: Rect, styles: Styles, diff: &DiffState)
 mod tests {
     use super::*;
     use crate::app::diff::{hunk_rows, rows, text};
-    use crate::protocol::changes::DiffPage;
+    use minicore_host_workspace::DiffResult;
     use serde_json::json;
 
     use super::super::capture;
     use crate::ui::theme::Palette;
 
-    fn page() -> DiffPage {
-        serde_json::from_value(json!({
+    fn diff_fixture(mut value: serde_json::Value) -> DiffResult {
+        value["change_ref"] = json!({"kind":"tool","session_id":"00000000000000000001","index":0,
+            "tool_call":{"turn_id":"00000000000000000001","tool_call_id":"write"}});
+        value["comparison"] = json!("tool_before_after");
+        value["origin"] = json!("tool");
+        value["versions_refreshed"] = json!(false);
+        value["next_cursor"] = serde_json::Value::Null;
+        value.as_object_mut().unwrap().remove("path");
+        for hunk in value["hunks"].as_array_mut().unwrap() {
+            let mut offset = 0;
+            for line in hunk["lines"].as_array_mut().unwrap() {
+                line["line_byte_offset"] = json!(offset);
+                offset = if line["line_complete"] == true {
+                    0
+                } else {
+                    offset + line["text"].as_str().unwrap().len()
+                };
+            }
+        }
+        serde_json::from_value(value).unwrap()
+    }
+
+    fn page() -> DiffResult {
+        diff_fixture(json!({
             "binary": false, "stale": false, "truncated": false,
             "path": "src/main.rs", "complete": true,
-            "hunks": [{"old_start": 9, "old_count": 2, "new_start": 9, "new_count": 3,
+            "hunks": [{"old_start": 10, "old_count": 2, "new_start": 10, "new_count": 3,
                        "lines": [
-                         {"kind": "context", "old_index": 9, "new_index": 9,
+                         {"kind": "context", "old_index": 10, "new_index": 10,
                           "text": " fn main() {", "line_complete": true},
-                         {"kind": "removed", "old_index": 10, "text": "  old();",
+                         {"kind": "removed", "old_index": 11, "text": "  old();",
                           "line_complete": true},
-                         {"kind": "added", "new_index": 10, "text": "  new();",
+                         {"kind": "added", "new_index": 11, "text": "  new();",
                           "line_complete": true},
                        ]}]
         }))
-        .unwrap()
     }
 
-    fn hunk_lines(page: &DiffPage, styles: Styles) -> Vec<Line<'static>> {
+    fn hunk_lines(page: &DiffResult, styles: Styles) -> Vec<Line<'static>> {
         hunk_rows(page).iter().map(|row| row.line(styles)).collect()
     }
 
     fn records_lines(
-        pages: &[DiffPage],
+        pages: &[DiffResult],
         tools: &[Option<String>],
         styles: Styles,
     ) -> Vec<Line<'static>> {
@@ -287,20 +309,18 @@ mod tests {
         assert_eq!(lines[3].spans[1].style.fg, Some(palette.added));
     }
 
-    /// The Agent's starts are 0-based indexes; a header prints the 1-based
-    /// first line, or the line before an empty range, as unified diff does.
+    /// Host coordinates already use unified diff numbering.
     #[test]
     fn hunk_headers_use_unified_one_based_numbers() {
         let styles = Styles::of(Palette::dark());
-        let page: DiffPage = serde_json::from_value(json!({
+        let page: DiffResult = diff_fixture(json!({
             "binary": false, "stale": false, "truncated": false,
             "path": "a.py", "complete": true,
             "hunks": [
-                {"old_start": 0, "old_count": 2, "new_start": 0, "new_count": 2, "lines": []},
-                {"old_start": 5, "old_count": 0, "new_start": 5, "new_count": 1, "lines": []}
+                {"old_start": 1, "old_count": 2, "new_start": 1, "new_count": 2, "lines": []},
+                {"old_start": 5, "old_count": 0, "new_start": 6, "new_count": 1, "lines": []}
             ]
-        }))
-        .unwrap();
+        }));
         let text: Vec<String> = hunk_lines(&page, styles).iter().map(row_text).collect();
         assert_eq!(text, ["@@ -1,2 +1,2 @@", "@@ -5,0 +6,1 @@"]);
     }
@@ -308,16 +328,15 @@ mod tests {
     #[test]
     fn a_line_split_into_fragments_is_one_row() {
         let styles = Styles::of(Palette::dark());
-        let page: DiffPage = serde_json::from_value(json!({
+        let page: DiffResult = diff_fixture(json!({
             "binary": false, "stale": false, "truncated": false,
             "path": "a.py", "complete": true,
-            "hunks": [{"old_start": 0, "old_count": 0, "new_start": 0, "new_count": 1,
+            "hunks": [{"old_start": 0, "old_count": 0, "new_start": 1, "new_count": 1,
                        "lines": [
-                         {"kind": "added", "new_index": 0, "text": "long ", "line_complete": false},
-                         {"kind": "added", "new_index": 0, "text": "line\n", "line_complete": true}
+                         {"kind": "added", "new_index": 1, "text": "long ", "line_complete": false},
+                         {"kind": "added", "new_index": 1, "text": "line\n", "line_complete": true}
                        ]}]
-        }))
-        .unwrap();
+        }));
         let text: Vec<String> = hunk_lines(&page, styles).iter().map(row_text).collect();
         assert_eq!(text[1..], ["  1 +long line"]);
     }
@@ -353,7 +372,7 @@ mod tests {
     #[test]
     fn diff_text_never_leaks_the_original_line_terminator() {
         let styles = Styles::of(Palette::dark());
-        let page: DiffPage = serde_json::from_value(json!({
+        let page: DiffResult = diff_fixture(json!({
             "binary": false, "stale": false, "truncated": false,
             "path": "a.rs", "complete": true,
             "hunks": [{"old_start": 1, "old_count": 0, "new_start": 1, "new_count": 2,
@@ -361,8 +380,7 @@ mod tests {
                          {"kind": "added", "text": "added();\n", "line_complete": true},
                          {"kind": "removed", "text": "gone();\r\n", "line_complete": true},
                        ]}]
-        }))
-        .unwrap();
+        }));
         let lines = hunk_lines(&page, styles);
         let text: Vec<String> = lines
             .iter()
@@ -376,11 +394,10 @@ mod tests {
     #[test]
     fn an_empty_page_explains_itself_instead_of_drawing_nothing() {
         let styles = Styles::of(Palette::dark());
-        let page = |binary: bool| -> DiffPage {
-            serde_json::from_value(json!({
+        let page = |binary: bool| -> DiffResult {
+            diff_fixture(json!({
                 "hunks": [], "complete": false, "binary": binary, "stale": false, "truncated": false
             }))
-            .unwrap()
         };
         let (empty, binary) = (page(false), page(true));
         assert_eq!(hunk_lines(&empty, styles).len(), 1);

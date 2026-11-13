@@ -1,19 +1,13 @@
-//! minicore-tui: a pi-style coding-agent TUI for minicore-agent over stdio
-//! JSON-RPC.
-//!
-//! Module direction: `protocol` ← `rpc` ← `transcript` ← `app` ← `ui`; `ui`
-//! reads `&App` and draws it, and `app` keeps only the layout cache's render state
-//! and the style palette from `ui`.
+//! A terminal frontend using the native embedded MiniCore Host client.
 
 pub mod app;
 pub mod cli;
 pub mod clipboard;
 pub mod config;
 pub mod editor;
+pub mod history;
+pub mod host;
 pub mod prompt_history;
-pub mod protocol;
-pub mod remote;
-pub mod rpc;
 pub mod terminal;
 #[cfg(test)]
 pub mod testing;

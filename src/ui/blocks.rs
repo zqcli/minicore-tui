@@ -4,15 +4,16 @@
 
 use std::sync::LazyLock;
 
-use jiff::Timestamp;
+use jiff::Timestamp as WallTime;
 use jiff::tz::TimeZone;
+use minicore_host_protocol::{PersistenceState, Timestamp, TurnOutcome};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use super::markdown;
 use super::rails::{chrome, chrome_span, fill, indent, rail_row, surface_row};
 use super::theme::Styles;
-use crate::protocol::read::UserKind;
+use crate::transcript::UserKind;
 use crate::transcript::layout::Fold;
 use crate::transcript::{Block, ToolCall};
 use crate::transcript::{EXPANDED_ROWS, ToolState};
@@ -51,6 +52,7 @@ pub fn render(block: &Block, styles: Styles, width: u16, fold: Fold) -> Vec<Line
             reasoning,
             text,
             expanded,
+            partial,
             ..
         } => {
             let thinking = markdown::render(
@@ -60,21 +62,32 @@ pub fn render(block: &Block, styles: Styles, width: u16, fold: Fold) -> Vec<Line
                 thinking_style(styles),
             );
             let reply = markdown::render(text, text_width(width), &styles, styles.text());
-            assistant_rows(
+            let mut rows = assistant_rows(
                 &thinking,
                 &reply,
                 expanded.unwrap_or(fold.expanded),
                 fold.show_reasoning,
                 styles,
                 width,
-            )
+            );
+            if *partial {
+                rows.push(chrome(indent(
+                    Line::styled(
+                        wrap::truncate("Partial model response", width - INSET),
+                        styles.warning(),
+                    ),
+                    INSET,
+                )));
+            }
+            rows
         }
         Block::Tool(call) => tool(call, styles, width, call.is_expanded(fold.expanded)),
         Block::TurnEnd {
             outcome,
+            reason,
             duration,
             requests,
-            tools,
+            tool_rounds,
             changes,
             saving,
             ..
@@ -83,13 +96,13 @@ pub fn render(block: &Block, styles: Styles, width: u16, fold: Fold) -> Vec<Line
                 outcome,
                 *duration,
                 *requests,
-                *tools,
+                *tool_rounds,
                 changes.as_ref(),
                 *saving,
             );
             let style = match outcome {
-                crate::protocol::LoopOutcome::Completed => styles.meta(),
-                crate::protocol::LoopOutcome::Failed { .. } => styles.failure(),
+                TurnOutcome::Completed => styles.meta(),
+                TurnOutcome::Failed => styles.failure(),
                 _ => styles.warning(),
             };
             let room = width - INSET;
@@ -102,31 +115,27 @@ pub fn render(block: &Block, styles: Styles, width: u16, fold: Fold) -> Vec<Line
                 spans.push(Span::styled(next, styles.dim()));
             }
             let mut lines = vec![chrome(indent(Line::from(spans), INSET))];
-            if let Some(failure) = outcome.failure() {
-                if !failure.hint.is_empty() {
-                    lines.extend(
-                        wrap::wrap_line(&failure.hint, text_width(width))
-                            .into_iter()
-                            .map(|row| chrome(indent(Line::styled(row, styles.dim()), INSET))),
-                    );
-                }
-                if let Some(message) = outcome.provider().and_then(|p| p.message.as_deref()) {
-                    lines.extend(quote(message, styles, width, fold.expanded));
-                }
+            if let Some(reason) = reason.as_deref().filter(|reason| !reason.is_empty()) {
+                lines.extend(quote(reason, styles, width, fold.expanded));
             }
             lines
         }
+        Block::Summary { text } => summary(
+            "summary",
+            "History summary",
+            text,
+            styles,
+            width,
+            fold.expanded,
+        ),
         Block::Compaction {
-            operation_id: _,
-            before,
-            after,
-            coverage,
-            summary,
-        } => compaction(
-            *before,
-            *after,
-            *coverage,
-            summary.as_deref(),
+            source_position,
+            covered_items,
+            summary: body,
+        } => summary(
+            "compaction",
+            &compaction_label(*source_position, *covered_items),
+            body,
             styles,
             width,
             fold.expanded,
@@ -146,7 +155,8 @@ pub fn plain_text(block: &Block) -> String {
     match block {
         Block::User { text, .. } | Block::Assistant { text, .. } => text.clone(),
         Block::Tool(call) => format!("{} {}", call.name, call.header_detail()),
-        Block::Compaction { summary, .. } => summary.clone().unwrap_or_default(),
+        Block::Summary { text } => text.clone(),
+        Block::Compaction { summary, .. } => summary.clone(),
         _ => String::new(),
     }
 }
@@ -159,7 +169,7 @@ pub const MIN_WIDTH: usize = 8;
 fn user(
     text: &str,
     kind: UserKind,
-    at: Option<u64>,
+    at: Option<Timestamp>,
     styles: Styles,
     width: usize,
 ) -> Vec<Line<'static>> {
@@ -171,7 +181,7 @@ fn user(
         lines.push(row(padded(line.spans)));
     }
     let mut meta = Vec::new();
-    meta.extend(at.and_then(|at| stamp_label(at, local_zone())));
+    meta.extend(at.map(|at| stamp_label(at, local_zone())));
     if kind == UserKind::Steering {
         meta.push("↗ steering".to_owned());
     }
@@ -185,19 +195,21 @@ fn user(
     lines
 }
 
-/// `HH:MM · MM/DD/YYYY` for a Unix-millisecond instant in `zone`.
-fn stamp_label(millis: u64, zone: &TimeZone) -> Option<String> {
-    let local = Timestamp::from_millisecond(i64::try_from(millis).ok()?)
-        .ok()?
-        .to_zoned(zone.clone());
-    Some(local.strftime("%H:%M · %m/%d/%Y").to_string())
+/// `HH:MM · MM/DD/YYYY` for an owner timestamp in `zone`.
+fn stamp_label(at: Timestamp, zone: &TimeZone) -> String {
+    timestamp(at)
+        .to_zoned(zone.clone())
+        .strftime("%H:%M · %m/%d/%Y")
+        .to_string()
 }
 
-/// `HH:MM` of `at` in the local zone.
-pub fn clock_label(at: Timestamp) -> String {
-    at.to_zoned(local_zone().clone())
-        .strftime("%H:%M")
-        .to_string()
+pub(crate) fn timestamp(at: Timestamp) -> WallTime {
+    let value = serde_json::to_value(at).expect("timestamp serializes");
+    value
+        .as_str()
+        .expect("timestamp is RFC3339")
+        .parse()
+        .expect("Host timestamp is valid")
 }
 
 fn local_zone() -> &'static TimeZone {
@@ -310,10 +322,11 @@ fn expand_hint(
 }
 
 fn tool(call: &ToolCall, styles: Styles, width: usize, expanded: bool) -> Vec<Line<'static>> {
-    let (rail, surface) = match call.state {
-        ToolState::Pending | ToolState::Running => (styles.card_rail(), styles.card()),
-        ToolState::Succeeded => (styles.card_success_rail(), styles.card_success()),
-        ToolState::Failed | ToolState::Denied | ToolState::Cancelled => {
+    let (rail, surface) = match (call.state, call.result_error.is_some()) {
+        (_, true) => (styles.card_failure_rail(), styles.card_failure()),
+        (ToolState::Pending | ToolState::Running, false) => (styles.card_rail(), styles.card()),
+        (ToolState::Succeeded, false) => (styles.card_success_rail(), styles.card_success()),
+        (ToolState::Failed | ToolState::Denied | ToolState::Cancelled, false) => {
             (styles.card_failure_rail(), styles.card_failure())
         }
     };
@@ -340,11 +353,35 @@ fn tool(call: &ToolCall, styles: Styles, width: usize, expanded: bool) -> Vec<Li
                 styles.tool_output(),
             )])));
         }
+        if let Some(progress) = &call.progress {
+            lines.push(chrome(row(padded(vec![Span::styled(
+                wrap::truncate(progress, inner),
+                styles.meta(),
+            )]))));
+        }
         if let Some(error) = error_line(call) {
             lines.push(row(padded(vec![Span::styled(
                 one_line(error),
                 styles.failure(),
             )])));
+        }
+        for delegation in call.delegations.iter().take(3) {
+            lines.push(row(padded(vec![Span::styled(
+                wrap::truncate(
+                    &format!(
+                        "child {} · agent {}",
+                        delegation.child.session_id, delegation.child.agent_id
+                    ),
+                    inner,
+                ),
+                styles.meta(),
+            )])));
+        }
+        if call.delegations.len() > 3 {
+            lines.push(chrome(row(padded(vec![Span::styled(
+                format!("{} more child sessions", call.delegations.len() - 3),
+                styles.meta(),
+            )]))));
         }
         let hidden = body.lines.len() + body.hidden;
         if hidden > 0 {
@@ -380,7 +417,57 @@ fn tool(call: &ToolCall, styles: Styles, width: usize, expanded: bool) -> Vec<Li
         }));
     }
 
-    let failed = call.state == ToolState::Failed && !bash;
+    if let Some(progress) = &call.progress {
+        lines.push(chrome(row(padded(vec![Span::styled(
+            wrap::truncate(progress, inner),
+            styles.meta(),
+        )]))));
+    }
+    if let Some((value, truncated)) = call.argument_display() {
+        lines.push(spacer());
+        lines.push(chrome(row(padded(vec![Span::styled(
+            "Arguments",
+            styles.meta(),
+        )]))));
+        let mut argument_rows = value
+            .lines()
+            .flat_map(|line| wrap::wrap_line(&wrap::sanitize(line), inner));
+        for argument in argument_rows.by_ref().take(EXPANDED_ROWS) {
+            lines.push(row(padded(vec![Span::styled(
+                argument,
+                styles.tool_output(),
+            )])));
+        }
+        if truncated || argument_rows.next().is_some() {
+            lines.push(chrome(row(padded(vec![Span::styled(
+                "… more arguments · /export for full JSON",
+                styles.meta(),
+            )]))));
+        }
+    }
+    for delegation in call.delegations.iter().take(EXPANDED_ROWS) {
+        lines.push(spacer());
+        for detail in [
+            format!("Child Agent: {}", delegation.child.agent_id),
+            format!("Child Session: {}", delegation.child.session_id),
+            format!("Task Message: {}", delegation.task_message_id),
+        ] {
+            for line in wrap::wrap_line(&detail, inner) {
+                lines.push(row(padded(vec![Span::styled(line, styles.meta())])));
+            }
+        }
+    }
+    if call.delegations.len() > EXPANDED_ROWS {
+        lines.push(chrome(row(padded(vec![Span::styled(
+            format!(
+                "{} more child sessions",
+                call.delegations.len() - EXPANDED_ROWS
+            ),
+            styles.meta(),
+        )]))));
+    }
+
+    let failed = (call.state == ToolState::Failed || call.result_error.is_some()) && !bash;
     let mut body_rows: Vec<Line<'static>> = body
         .lines
         .iter()
@@ -465,6 +552,9 @@ fn card_title(call: &ToolCall) -> String {
 
 /// Why a call failed without running to an exit code, for its collapsed card.
 fn error_line(call: &ToolCall) -> Option<&str> {
+    if let Some(error) = call.result_error.as_deref() {
+        return Some(error);
+    }
     if call.state != ToolState::Failed || call.exit_code.is_some() {
         return None;
     }
@@ -514,7 +604,8 @@ fn meta(call: &ToolCall, styles: Styles, facts: bool) -> Vec<Span<'static>> {
     if matches!(
         call.state,
         ToolState::Pending | ToolState::Running | ToolState::Succeeded
-    ) && let Some((added, removed)) = call.line_changes()
+    ) && call.result_error.is_none()
+        && let Some((added, removed)) = call.line_changes()
         && added + removed > 0
     {
         items.push(vec![
@@ -574,7 +665,7 @@ struct Body<'a> {
 /// `bash` shows its output tail; `edit`, `apply_patch` and `write` the head of
 /// their input; `read`, failed and other tools the head of their result.
 fn card_body(call: &ToolCall) -> Body<'_> {
-    let failed = call.state == ToolState::Failed;
+    let failed = call.state == ToolState::Failed || call.result_error.is_some();
     if call.name == "bash" {
         let output = call.output_content();
         let shown = EXPANDED_ROWS.min(output.len());
@@ -652,13 +743,12 @@ pub fn format_duration(duration: std::time::Duration) -> String {
 
 const QUOTE_RAIL: &str = "│ ";
 const QUOTE_MORE: &str = " · ctrl+o full message";
-/// Rows of a provider message shown before its expand hint.
+/// Rows of a Host failure shown before its expand hint.
 const QUOTE_ROWS: usize = 3;
 
-/// The provider's message behind a quote rail; the rail and the hint are chrome.
+/// The Host failure behind a quote rail; the rail and the hint are chrome.
 fn quote(message: &str, styles: Styles, width: usize, expanded: bool) -> Vec<Line<'static>> {
     let room = text_width(width) - wrap::width(QUOTE_RAIL);
-    // A tab is the one control character the Agent leaves in.
     let rows = wrap::wrap(wrap::sanitize(message.trim()).as_ref(), room);
     let cut = !expanded && rows.len() > QUOTE_ROWS;
     let shown = if cut { QUOTE_ROWS } else { rows.len() };
@@ -683,37 +773,38 @@ fn quote(message: &str, styles: Styles, width: usize, expanded: bool) -> Vec<Lin
         .collect()
 }
 
-/// `completed in 3m07s · 12 requests · 11 tools · 3 files changed (+40 −7)`;
-/// a turn that did not complete leads with its reason and the provider's
-/// identifiers instead.
+/// `completed in 3m07s · 12 requests · 11 tool rounds · 3 files changed (+40 −7)`;
+/// a turn that did not complete leads with its native outcome.
 pub fn turn_end_line(
-    outcome: &crate::protocol::LoopOutcome,
+    outcome: &TurnOutcome,
     duration: Option<std::time::Duration>,
-    requests: u32,
-    tools: u64,
+    requests: u64,
+    tool_rounds: u64,
     changes: Option<&crate::transcript::ChangeSummary>,
-    saving: Option<crate::transcript::Saving>,
+    saving: Option<PersistenceState>,
 ) -> String {
-    let completed = outcome.is_completed();
+    let completed = *outcome == TurnOutcome::Completed;
     let mut parts: Vec<String> = Vec::new();
     match (completed, duration) {
         (true, Some(duration)) => parts.push(format!("completed in {}", format_duration(duration))),
         (true, None) => parts.push("completed".into()),
         (false, duration) => {
-            parts.push(outcome.label());
-            parts.extend(
-                outcome
-                    .provider()
-                    .and_then(|provider| provider.identifiers()),
+            parts.push(
+                match outcome {
+                    TurnOutcome::Completed => "completed",
+                    TurnOutcome::Failed => "failed",
+                    TurnOutcome::Cancelled => "cancelled",
+                }
+                .to_owned(),
             );
             parts.extend(duration.map(format_duration));
         }
     }
     if completed && requests > 0 {
-        parts.push(plural(u64::from(requests), "request"));
+        parts.push(plural(requests, "request"));
     }
-    if tools > 0 {
-        parts.push(plural(tools, "tool"));
+    if tool_rounds > 0 {
+        parts.push(plural(tool_rounds, "tool round"));
     }
     if let Some(changes) = changes.filter(|changes| !changes.is_empty()) {
         let files = format!("{} changed", plural(changes.files as u64, "file"));
@@ -722,63 +813,45 @@ pub fn turn_end_line(
             None => files,
         });
     }
-    // A turn only this process can still show says so where it ends.
-    if let Some(saving) = saving.filter(|saving| !saving.is_persisted()) {
-        parts.push(saving.label().to_owned());
+    match saving {
+        Some(PersistenceState::Pending) => parts.push("save pending".into()),
+        Some(PersistenceState::Failed) => parts.push("save failed".into()),
+        Some(PersistenceState::NotApplicable) => parts.push("save not applicable".into()),
+        Some(PersistenceState::Persisted) => parts.push("saved".into()),
+        None => {}
     }
     wrap::sanitize(&parts.join(" · ")).into_owned()
 }
 
-/// The marker's one-line account: token figures, else the item counts.
-pub fn compaction_label(
-    before: Option<u64>,
-    after: Option<u64>,
-    coverage: Option<(Option<usize>, Option<usize>)>,
-) -> String {
-    match (before, after) {
-        (Some(before), Some(after)) => format!(
-            "Compacted from {} to {} tokens",
-            crate::ui::format_tokens(before),
-            crate::ui::format_tokens(after)
-        ),
-        // An automatic compaction usually reports no token figures; the item
-        // counts say what it did instead of leaving a bare marker.
-        _ => match coverage {
-            Some((covered, kept)) => {
-                let items = covered.map(|n| format!("{n} items"));
-                let kept = kept.map(|n| format!("{n} kept"));
-                let parts: Vec<String> = items.into_iter().chain(kept).collect();
-                format!("Compacted {}", parts.join(" · "))
-            }
-            None => "Context compacted".to_owned(),
-        },
-    }
+/// The committed marker's covered item count and source position.
+pub fn compaction_label(source_position: u64, covered_items: u64) -> String {
+    format!(
+        "Compacted {} · through position {source_position}",
+        plural(covered_items, "item")
+    )
 }
 
-/// A compaction marker: a labelled box whose summary opens with Ctrl+O.
-fn compaction(
-    before: Option<u64>,
-    after: Option<u64>,
-    coverage: Option<(Option<usize>, Option<usize>)>,
-    summary: Option<&str>,
+fn summary(
+    kind: &str,
+    heading: &str,
+    summary: &str,
     styles: Styles,
     width: usize,
     expanded: bool,
 ) -> Vec<Line<'static>> {
-    let text = compaction_label(before, after, coverage);
     let surface = styles.custom_message();
     let row = |spans: Vec<Span<'static>>| Line::from(fill(surface, spans, width));
     let label = |spans: Vec<Span<'static>>| chrome(row(spans));
-    let text = wrap::truncate(&text, width - INSET);
+    let text = wrap::truncate(heading, width - INSET);
     let mut lines = vec![
         label(Vec::new()),
         label(padded(vec![Span::styled(
-            "[compaction]",
+            format!("[{kind}]"),
             styles.reasoning_rail().add_modifier(Modifier::BOLD),
         )])),
         label(Vec::new()),
     ];
-    match summary.filter(|summary| !summary.trim().is_empty()) {
+    match (!summary.trim().is_empty()).then_some(summary) {
         Some(summary) if expanded => {
             lines.push(label(padded(vec![Span::styled(text, styles.bold())])));
             lines.push(label(Vec::new()));
@@ -801,11 +874,11 @@ fn compaction(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::read::UserKind;
-    use crate::protocol::{LoopOutcome, ToolRef};
+    use crate::transcript::UserKind;
     use crate::transcript::{ChangeSummary, RequestKey};
     use crate::ui::rails::content_cells;
     use crate::ui::theme::Palette;
+    use minicore_host_protocol::{ToolCallRef, TurnId};
     use std::time::Duration;
 
     fn styles() -> Styles {
@@ -835,13 +908,11 @@ mod tests {
 
     fn assistant(text: &str, reasoning: &str, streaming: bool) -> Block {
         Block::Assistant {
-            key: RequestKey {
-                loop_id: "l".into(),
-                request_index: 0,
-            },
+            key: RequestKey::response(turn_id(), 0),
             reasoning: reasoning.into(),
             text: text.into(),
             streaming,
+            partial: false,
             expanded: None,
         }
     }
@@ -873,19 +944,23 @@ mod tests {
         assert_eq!(body[2], "▎ ↗ steering");
     }
 
-    fn sent(stamp: &str) -> Option<u64> {
-        crate::protocol::stamp::unix_millis(stamp)
+    fn turn_id() -> TurnId {
+        "00000000000000000001".parse().unwrap()
+    }
+
+    fn sent(stamp: &str) -> Option<Timestamp> {
+        serde_json::from_value(serde_json::json!(stamp)).ok()
     }
 
     #[test]
     fn the_stamp_reads_in_the_given_zone_and_the_date_follows_it() {
         let at = sent("2026-10-20T21:38:05.250Z").unwrap();
         let zone = |hours| TimeZone::fixed(jiff::tz::Offset::constant(hours));
-        assert_eq!(stamp_label(at, &zone(0)).unwrap(), "21:38 · 10/20/2026");
-        assert_eq!(stamp_label(at, &zone(-5)).unwrap(), "16:38 · 10/20/2026");
-        assert_eq!(stamp_label(at, &zone(8)).unwrap(), "05:38 · 10/21/2026");
+        assert_eq!(stamp_label(at, &zone(0)), "21:38 · 10/20/2026");
+        assert_eq!(stamp_label(at, &zone(-5)), "16:38 · 10/20/2026");
+        assert_eq!(stamp_label(at, &zone(8)), "05:38 · 10/21/2026");
         let early = sent("2026-01-02T03:04:00Z").unwrap();
-        assert_eq!(stamp_label(early, &zone(0)).unwrap(), "03:04 · 01/02/2026");
+        assert_eq!(stamp_label(early, &zone(0)), "03:04 · 01/02/2026");
     }
 
     #[test]
@@ -997,11 +1072,9 @@ mod tests {
 
     fn call() -> ToolCall {
         let mut call = ToolCall::new(
-            ToolRef {
-                session_id: "s".into(),
-                loop_id: "l".into(),
-                request_index: 0,
-                tool_call_id: "c".into(),
+            ToolCallRef {
+                turn_id: turn_id(),
+                tool_call_id: "c".to_owned().into(),
             },
             "bash",
         );
@@ -1040,10 +1113,9 @@ mod tests {
         quiet
     }
 
-    // The live path: the invocation makes a Pending card and `tool_started`
-    // only stamps `started_at`.
+    // Running is a native state, independent of observing its local start time.
     fn started() -> ToolCall {
-        let mut started = quiet(ToolState::Pending);
+        let mut started = quiet(ToolState::Running);
         started.started_at = Some(std::time::Instant::now());
         started
     }
@@ -1067,14 +1139,16 @@ mod tests {
 
     #[test]
     fn a_card_that_has_not_started_says_nothing_running() {
-        // `awaiting_policy` maps to Running while the call waits for approval.
-        for state in [ToolState::Pending, ToolState::Running] {
-            for mode in [fold(), expanded()] {
-                let body = card(quiet(state), mode).join("\n");
-                assert!(!body.contains("running…"), "{state:?}: {body}");
-            }
+        for mode in [fold(), expanded()] {
+            let body = card(quiet(ToolState::Pending), mode).join("\n");
+            assert!(!body.contains("running…"), "{body}");
         }
-        assert_eq!(card(quiet(ToolState::Running), fold()).len(), 2);
+        assert_eq!(card(quiet(ToolState::Pending), fold()).len(), 2);
+        assert!(
+            card(quiet(ToolState::Running), fold())
+                .join("\n")
+                .contains("running…")
+        );
     }
 
     #[test]
@@ -1250,14 +1324,12 @@ mod tests {
     fn patch_card() -> ToolCall {
         let mut card = call();
         card.name = "apply_patch".into();
-        card.detail = "tool apply_patch".into();
         card.exit_code = None;
         card.output = vec!["Applied".into()];
-        card.expanded_input = Some(
+        card.set_arguments(&serde_json::json!({"patch":
             "diff --git a/app.py b/app.py\nindex 1..2 100644\n--- a/app.py\n+++ b/app.py\n\
              @@ -1,2 +1,3 @@\n def greet(name):\n+    \"\"\"Greet.\"\"\"\n     return name"
-                .into(),
-        );
+        }));
         card
     }
 
@@ -1283,9 +1355,16 @@ mod tests {
             body[1],
             format!("▎ apply-patch app.py{}0.4s · +1 −0", " ".repeat(27))
         );
-        assert_eq!(body[7], "▎ @@ -1,2 +1,3 @@");
-        assert_eq!(body[9], "▎ +    \"\"\"Greet.\"\"\"");
-        assert_eq!(lines[9].spans[2].style.fg, Some(Palette::dark().added));
+        assert!(body.iter().any(|row| row == "▎ @@ -1,2 +1,3 @@"));
+        let added = body
+            .iter()
+            .position(|row| row == "▎ +    \"\"\"Greet.\"\"\"")
+            .unwrap();
+        assert_eq!(lines[added].spans[2].style.fg, Some(Palette::dark().added));
+        assert!(
+            body.iter().any(|row| row.contains("\"patch\":")),
+            "{body:?}"
+        );
     }
 
     #[test]
@@ -1300,7 +1379,7 @@ mod tests {
         read.output = Vec::new();
         // Structured metadata identifies a preview cut inside line 5.
         read.truncated = true;
-        read.apply_result("1: alpha\n2: beta\n3: gamma\n4: delta\n1");
+        read.push_output("1: alpha\n2: beta\n3: gamma\n4: delta\n1");
         assert_eq!(
             card(read.clone(), fold())[2],
             "▎ ... (2000 more lines, click or ctrl+o to expand)"
@@ -1370,11 +1449,12 @@ mod tests {
     #[test]
     fn a_turn_end_line_is_quiet_and_names_the_change_size() {
         let block = Block::TurnEnd {
-            loop_id: "l".into(),
-            outcome: LoopOutcome::Completed,
+            turn_id: turn_id(),
+            outcome: TurnOutcome::Completed,
+            reason: None,
             duration: Some(Duration::from_secs(187)),
             requests: 12,
-            tools: 11,
+            tool_rounds: 11,
             usage: Default::default(),
             changes: Some(ChangeSummary {
                 files: 3,
@@ -1385,19 +1465,20 @@ mod tests {
         let lines = render(&block, styles(), 100, fold());
         assert_eq!(
             lines[0].to_string(),
-            "  completed in 3m07s · 12 requests · 11 tools · 3 files changed (+40 −7) · /diff"
+            "  completed in 3m07s · 12 requests · 11 tool rounds · 3 files changed (+40 −7) · /diff"
         );
         assert_eq!(lines[0].spans[1].style.fg, Some(Palette::dark().meta));
         assert_eq!(lines[0].spans[2].style.fg, Some(Palette::dark().dim));
     }
 
-    fn ended(outcome: LoopOutcome, files: usize) -> Block {
+    fn ended(outcome: TurnOutcome, files: usize) -> Block {
         Block::TurnEnd {
-            loop_id: "l".into(),
+            turn_id: turn_id(),
             outcome,
+            reason: None,
             duration: Some(Duration::from_secs(31)),
             requests: 3,
-            tools: 6,
+            tool_rounds: 6,
             usage: Default::default(),
             changes: (files > 0).then_some(ChangeSummary { files, lines: None }),
             saving: None,
@@ -1406,82 +1487,68 @@ mod tests {
 
     #[test]
     fn a_turn_end_line_that_changed_files_points_to_the_diff_when_it_fits() {
-        let interrupted = LoopOutcome::Cancelled {
-            reason: crate::protocol::CancelReason::User,
-        };
+        let interrupted = TurnOutcome::Cancelled;
         let line = |block: &Block, width| text(&render(block, styles(), width, fold()))[0].clone();
         assert_eq!(
-            line(&ended(interrupted, 2), 80),
-            "  interrupted · 31s · 6 tools · 2 files changed · /diff"
+            line(&ended(interrupted, 2), 100),
+            "  cancelled · 31s · 6 tool rounds · 2 files changed · /diff"
         );
         assert_eq!(
-            line(&ended(LoopOutcome::Completed, 0), 80),
-            "  completed in 31s · 3 requests · 6 tools"
+            line(&ended(TurnOutcome::Completed, 0), 80),
+            "  completed in 31s · 3 requests · 6 tool rounds"
         );
         // A hint that does not fit is dropped whole, not cut.
+        let expected = "  completed in 31s · 3 requests · 6 tool rounds · 2 files changed";
         assert_eq!(
-            line(&ended(LoopOutcome::Completed, 2), 60),
-            "  completed in 31s · 3 requests · 6 tools · 2 files changed"
+            line(
+                &ended(TurnOutcome::Completed, 2),
+                wrap::width(expected) as u16 + 2
+            ),
+            expected
         );
     }
 
     fn compaction_block(summary: Option<&str>) -> Block {
         Block::Compaction {
-            operation_id: "tui-1".into(),
-            before: Some(32_200),
-            after: Some(2_700),
-            coverage: None,
-            summary: summary.map(Into::into),
+            source_position: 190,
+            covered_items: 177,
+            summary: summary.unwrap_or_default().into(),
         }
     }
 
     #[test]
-    fn a_compaction_marker_shows_what_it_saved_and_opens_its_summary() {
+    fn a_compaction_marker_shows_native_coverage_and_opens_its_summary() {
         let folded = text(&render(
             &compaction_block(Some("kept the plan")),
             styles(),
-            80,
+            90,
             fold(),
         ));
         assert_eq!(folded[1], " [compaction]");
         assert_eq!(
             folded[3],
-            " Compacted from 32.2k to 2.7k tokens (ctrl+o to expand)"
+            " Compacted 177 items · through position 190 (ctrl+o to expand)"
         );
         let open = text(&render(
             &compaction_block(Some("kept the plan")),
             styles(),
-            80,
+            90,
             expanded(),
         ));
         assert_eq!(open[5], " kept the plan", "{open:?}");
-        let bare = text(&render(&compaction_block(None), styles(), 80, fold()));
-        assert_eq!(bare[3], " Compacted from 32.2k to 2.7k tokens");
+        let bare = text(&render(&compaction_block(None), styles(), 90, fold()));
+        assert_eq!(bare[3], " Compacted 177 items · through position 190");
     }
 
-    /// An automatic compaction reports no token figures, so the marker says what
-    /// it covered instead of degenerating to a bare line.
     #[test]
-    fn a_compaction_without_token_figures_reports_its_coverage() {
-        let block = Block::Compaction {
-            operation_id: "auto-boundary-lup_1-1".into(),
-            before: None,
-            after: None,
-            coverage: Some((Some(177), Some(0))),
-            summary: None,
+    fn an_imported_summary_does_not_claim_compaction_coverage() {
+        let block = Block::Summary {
+            text: "Retained summary".into(),
         };
-        let body = text(&render(&block, styles(), 80, fold()));
-        assert_eq!(body[3], " Compacted 177 items · 0 kept");
-
-        let block = Block::Compaction {
-            operation_id: "auto-boundary-lup_1-2".into(),
-            before: None,
-            after: None,
-            coverage: Some((Some(332), None)),
-            summary: None,
-        };
-        let body = text(&render(&block, styles(), 80, fold()));
-        assert_eq!(body[3], " Compacted 332 items");
+        let body = text(&render(&block, styles(), 80, expanded())).join("\n");
+        assert!(body.contains("[summary]"));
+        assert!(body.contains("Retained summary"));
+        assert!(!body.contains("Compacted"));
     }
 
     #[test]
@@ -1493,7 +1560,6 @@ mod tests {
 
     #[test]
     fn running_cards_have_no_spinner_or_elapsed_time() {
-        // A card made from a preview is `Pending` until its end, though it started.
         for name in ["bash", "read", "apply_patch"] {
             for state in [ToolState::Pending, ToolState::Running] {
                 for mode in [fold(), expanded()] {
@@ -1535,10 +1601,36 @@ mod tests {
     }
 
     #[test]
+    fn a_completed_tool_with_a_failed_file_result_shows_the_result_error() {
+        let mut call = patch_card();
+        call.result_error = Some("No matching file".into());
+        call.output = vec!["No matching file".into()];
+        let block = Block::Tool(Box::new(call));
+        let collapsed = render(&block, styles(), 70, fold());
+        let rows = text(&collapsed);
+        assert!(
+            rows.iter().any(|row| row.contains("No matching file")),
+            "{rows:?}"
+        );
+        assert!(!rows[0].contains("+1"), "failed changes are not applied");
+        assert_eq!(collapsed[0].spans[0].style, styles().card_failure_rail());
+        let expanded = text(&render(&block, styles(), 70, expanded())).join("\n");
+        assert!(expanded.contains("No matching file"), "{expanded}");
+        assert!(
+            !expanded
+                .lines()
+                .any(|row| row == "▎ +    \"\"\"Greet.\"\"\"")
+        );
+        assert!(matches!(block, Block::Tool(call) if call.state == ToolState::Succeeded));
+    }
+
+    #[test]
     fn a_bash_card_shows_the_command_that_ran_not_the_summary() {
         let mut bash = call();
+        bash.set_arguments(&serde_json::json!({
+            "command":"\ngit diff -- README.md && git diff --check\necho done"
+        }));
         bash.detail = "git diff --check && git diff --".into();
-        bash.expanded_input = Some("\ngit diff -- README.md && git diff --check\necho done".into());
         assert_eq!(
             card(bash, fold())[1],
             "▎ $ git diff -- README.md && git diff --check"
@@ -1575,20 +1667,14 @@ mod tests {
             Block::Tool(Box::new(call())),
             Block::Tool(Box::new(open)),
             compaction_block(Some("summary")),
-            ended(
-                serde_json::from_value(serde_json::json!({"type": "failed", "kind": "model",
-                    "model_error": {"kind": "rate_limited", "provider": {"status": 429,
-                    "message": "a very long message without any break opportunity\nsecond\nthird\nfourth"}}}))
-                .unwrap(),
-                0,
-            ),
+            ended(TurnOutcome::Failed, 0),
         ] {
             for width in 3..12 {
                 for line in render(&block, styles(), width, fold()) {
                     assert!(
                         crate::wrap::width(&line.to_string()) <= width as usize,
                         "{:?} at width {width}: {line:?}",
-                        block.loop_id()
+                        block.turn_id()
                     );
                 }
             }
@@ -1596,47 +1682,111 @@ mod tests {
     }
 
     #[test]
-    fn turn_end_lines_read_as_sentences() {
-        let failed: crate::protocol::LoopOutcome = serde_json::from_value(serde_json::json!({
-            "type": "failed", "kind": "model", "model_error": {"kind": "provider_unavailable",
-            "delivery": "unknown", "retryable": false,
-            "provider": {"status": 503, "code": "overloaded", "type": "overloaded"}}
-        }))
-        .unwrap();
+    fn turn_end_lines_preserve_native_tool_rounds_and_persistence() {
         assert_eq!(
-            turn_end_line(&failed, Some(Duration::from_millis(20)), 1, 0, None, None),
-            "failed · provider unavailable · 503 overloaded · 0.0s"
+            turn_end_line(
+                &TurnOutcome::Failed,
+                Some(Duration::from_millis(20)),
+                1,
+                0,
+                None,
+                None
+            ),
+            "failed · 0.0s"
         );
-        let changes = crate::transcript::ChangeSummary {
+        let changes = ChangeSummary {
             files: 1,
             lines: Some((2, 1)),
         };
-        let completed = crate::protocol::LoopOutcome::Completed;
         assert_eq!(
             turn_end_line(
-                &completed,
+                &TurnOutcome::Completed,
                 Some(Duration::from_secs(5)),
                 1,
                 1,
                 Some(&changes),
                 None
             ),
-            "completed in 5.0s · 1 request · 1 tool · 1 file changed (+2 −1)"
+            "completed in 5.0s · 1 request · 1 tool round · 1 file changed (+2 −1)"
         );
         assert_eq!(
-            turn_end_line(&completed, None, 8, 7, None, None),
-            "completed · 8 requests · 7 tools"
+            turn_end_line(
+                &TurnOutcome::Completed,
+                None,
+                8,
+                7,
+                None,
+                Some(PersistenceState::Failed)
+            ),
+            "completed · 8 requests · 7 tool rounds · save failed"
         );
-        let relayed: crate::protocol::LoopOutcome = serde_json::from_value(serde_json::json!({
-            "type": "failed", "kind": "model", "model_error": {"kind": "provider_unavailable",
-            "delivery": "unknown", "retryable": false,
-            "provider": {"status": 502, "code": "gate\u{202e}way\u{1b}[31m"}}
-        }))
-        .unwrap();
-        assert_eq!(
-            turn_end_line(&relayed, None, 1, 0, None, None),
-            "failed · provider unavailable · 502 gate\\u{202e}way"
-        );
+        for (persistence, label) in [
+            (PersistenceState::Pending, "save pending"),
+            (PersistenceState::Persisted, "saved"),
+            (PersistenceState::NotApplicable, "save not applicable"),
+        ] {
+            assert_eq!(
+                turn_end_line(&TurnOutcome::Completed, None, 0, 0, None, Some(persistence)),
+                format!("completed · {label}")
+            );
+        }
         assert_eq!(format_duration(Duration::from_secs(187)), "3m07s");
+    }
+
+    #[test]
+    fn a_partial_response_is_visible_and_its_label_is_excluded_from_copy() {
+        let mut block = assistant("retained text", "", false);
+        if let Block::Assistant { partial, .. } = &mut block {
+            *partial = true;
+        }
+        let lines = render(&block, styles(), 60, fold());
+        assert!(
+            text(&lines)
+                .iter()
+                .any(|line| line.contains("Partial model response"))
+        );
+        assert!(content_cells(lines.last().unwrap()).is_empty());
+        for width in 3..20 {
+            assert!(
+                render(&block, styles(), width, fold())
+                    .iter()
+                    .all(|line| { crate::wrap::width(&line.to_string()) <= width as usize })
+            );
+        }
+    }
+
+    #[test]
+    fn expanded_tools_show_complete_arguments_and_delegated_session_identity() {
+        let mut call = call();
+        call.set_arguments(&serde_json::json!({"command":"cargo test", "timeout_ms":30000}));
+        call.delegations.push(
+            serde_json::from_value(serde_json::json!({
+                "child":{"agent_id":"00000000000000000002","session_id":"00000000000000000003"},
+                "task_message_id":"00000000000000000004"
+            }))
+            .unwrap(),
+        );
+        let block = Block::Tool(Box::new(call));
+        let rendered = text(&render(&block, styles(), 80, expanded())).join("\n");
+        assert!(rendered.contains("\"timeout_ms\": 30000"), "{rendered}");
+        assert!(
+            rendered.contains("Child Agent: 00000000000000000002"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("Child Session: 00000000000000000003"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("Task Message: 00000000000000000004"),
+            "{rendered}"
+        );
+        for width in 3..20 {
+            assert!(
+                render(&block, styles(), width, expanded())
+                    .iter()
+                    .all(|line| { crate::wrap::width(&line.to_string()) <= width as usize })
+            );
+        }
     }
 }

@@ -1,283 +1,252 @@
 # Keys and Commands
 
-The keymap is compiled into the binary; there is no user binding file. Input
-goes to the frontmost surface, in this order: the fatal screen, an open picker
-or view, a pending approval prompt, then the composer and transcript. Any key
-press clears the notices.
+The keymap is compiled into the binary. `F1` opens the same key and command
+reference inside the terminal. An open picker or view owns its keys; otherwise
+a pending interaction owns them, then the conversation composer. `F8` opens
+local input confirmations even from the fatal screen. A key press clears the
+transient notices, while native blocking and observation errors remain visible.
 
-`Shift+Enter` and `Ctrl+Enter` are distinct keys only in terminals that support
-the kitty keyboard protocol (and on Windows consoles); `Ctrl+J` always inserts
-a newline.
+`Shift+Enter` and `Ctrl+Enter` depend on the terminal reporting their modifiers.
+`Ctrl+J` inserts a newline, and `Alt+Enter` and `Ctrl+Enter` request a follow-up.
+If the terminal reserves one of these combinations, configure it to pass the
+key through or use the other combination.
 
-A steer and a follow-up are different: a steer (`Enter`) reaches the session as
-soon as possible, at the running turn's next request or as a new turn when the
-session is idle. A follow-up (`Alt+Enter`) waits until the running turn has
-ended and then starts a new turn. The Agent keeps the queue: every steer runs
-before any follow-up, in the order sent, and each follow-up starts a turn of its
-own, oldest first. The dock lists `↗ steer  <text>` and numbered
-`↳ follow-up 1  <text>` rows in the order the Agent will run them, three rows
-and `+N more queued`; a message leaves the list the moment the turn takes it.
-A hint row under the Working line names the keys that act now:
-`enter steer · alt+enter follow-up` while a draft waits during a turn, and
-`alt+↑ edit queued` while any message is queued.
+## Agents, Sessions and input queues
 
-A turn that ends interrupted or failed pauses a queue that still holds messages:
-nothing starts by itself, and the hint row reads
-`paused · enter resumes · alt+↑ edit`. `Enter` on an empty draft resumes it;
-`Enter` on a draft sends it and resumes the queue, the older messages going
-first.
+`/agents` selects an actual Host Agent. Each Session belongs to one Agent; the
+sessions picker shows that owner and uses the full Agent and Session identity
+for opening, renaming and deleting. The Agent picker includes lifecycle,
+storage mode, Session count and default Session. Selecting an Agent opens its
+default Session when one is configured; otherwise it leaves a new-conversation
+draft. `/new` creates a Session in the selected Agent. Sending the first prompt
+from a draft also creates a Session and sends that prompt after creation.
 
-### Alt+Enter by terminal
+Agent controls follow the Host's actual progress. A stop remains `stopping`
+until its owned work settles, and deletion follows the native lifecycle
+until the Agent is removed. The picker shows metadata saves and native save
+or deletion faults. Changing the default Session stays bound to its original
+Agent even if the terminal switches to another Agent while the save runs.
 
-`Alt+Enter` queues a follow-up; `Ctrl+Enter` does the same where the terminal
-reports it. If neither reaches the TUI, `Enter` steers instead, so check the
-dock label before sending.
+Switching Sessions does not interrupt their work. A resident Session keeps its
+draft and transcript scroll position. The Session catalog also shows Sessions
+that are not open in this terminal, including their native lifecycle,
+residency, scheduling and pending-input status. The footer identifies the
+selected Agent when there is room and reports background work as `N running`
+and `N needs input`. Open a Session to answer its interaction.
 
-- Linux (GNOME Terminal and other VTE terminals, Konsole, xterm, Alacritty,
-  kitty, WezTerm, foot) and tmux: `Alt+Enter` works as it is.
-- macOS: Option is not Alt by default. Terminal.app: Settings → Profiles →
-  Keyboard → "Use Option as Meta key". iTerm2: Settings → Profiles → Keys →
-  Left Option key → "Esc+". Ghostty: `macos-option-as-alt = true`. kitty:
-  `macos_option_as_alt yes`. WezTerm works by default. Or use `Ctrl+Enter` in a
-  kitty-protocol terminal.
-- Windows Terminal: `Alt+Enter` toggles full screen by default. Use
-  `Ctrl+Enter`, or free the key with `{ "command": "unbound", "keys": "alt+enter" }`
-  in the `actions` list of `settings.json`. The legacy console host (conhost)
-  also takes `Alt+Enter` for full screen; use `Ctrl+Enter` there.
+`Enter` sends `Steer`; `Alt+Enter` or `Ctrl+Enter` sends `FollowUp`. These are
+requests to Host scheduling, with different intended queues:
+
+| Input | Requested queue | Meaning |
+|---|---|---|
+| Steer | next-step | Make the input available to the active Turn at a step boundary, or start work when the Session can consume input. |
+| Follow-up | next-turn | Wait for a new Turn. |
+
+The Host decides the actual queue. For example, a steer accepted while a Turn
+is cancelling or finalizing can go to next-turn. The dock displays the actual
+unbound records as `↗ next step` and `↳ next turn`, with at most three preview
+rows and a count of the remaining records. It does not predict delivery from
+the key that was pressed.
+
+`/pause` pauses input consumption; `/resume` asks the Host to resume. An empty
+`Enter` also resumes a paused Session. Sending a nonempty draft submits input;
+the displayed scheduling state determines whether consumption is paused.
+`/load` loads a Session without resuming paused input. `/unload` and `/close`
+are separate native operations. Host lifecycle or resource failures are shown
+as errors, without an automatic stop-and-retry sequence.
+
+Esc cancels the captured Turn and preserves accepted queued inputs. Cancellation
+does not imply that scheduling is paused: subsequent input follows the Host's
+actual scheduling state. Use `/pause` before cancelling when queued work must
+stay pending, then `/resume` when it should continue.
+
+`Alt+↑` recalls queued inputs into an empty draft. Only records whose native
+removal succeeds are returned; an input already consumed by a Turn cannot be
+recalled. The returned text is separated by blank lines. Clearing a local
+confirmation in `F8` does not remove an accepted input from the Host queue.
 
 ## Composer
 
 | Key | Action |
 |---|---|
-| `Enter` | Steer: start a turn when the session is idle, reach the running turn's next request when it is busy. With no draft, resume a paused queue. A draft whose first word names a command (`/model`, `/rename x`) or a prompt template runs it. A bare `/word` that names nothing (`/modle`) is not sent: a notice offers the nearest command, and a second `Enter` (or a leading `//`, which sends the rest) sends it as text. Any other draft, `/usr/bin/env is broken` and `/usr/bin` included, is a prompt. |
-| `Alt+Enter`, `Ctrl+Enter` | While a turn runs or a compaction is under way, queue the draft as a follow-up: the Agent starts it when the session is idle, one per turn, oldest first. When idle it starts a turn with the draft. With no draft it does nothing. See the terminal notes above; where a terminal reports `Ctrl+Enter` as `Enter`, it steers. |
-| `Shift+Enter`, `Ctrl+J` | Newline. |
-| `Esc` | Close an open picker or view first; in the editor, cancel an active selection before interrupting a turn, cancelling a compaction or clearing the draft. |
-| `Ctrl+C` | Copy the editor selection when one exists; otherwise clear the draft, with a second press within 500 ms quitting. |
-| `Ctrl+D` | Quit when the draft is empty; otherwise delete the character after the cursor. |
-| `↑` / `↓` | Move between lines of a multi-line draft; on the first or last line, browse prompt history. The last 100 accepted prompts, paste chips included, are kept in `history.jsonl` in the TUI directory and survive a restart; a prompt over 32 KiB stays in memory only. |
-| `Alt+↑` | Take every queued message back into an empty draft, in the order the Agent would have run them and separated by blank lines. A message the running turn already took cannot be taken back. |
-| `Ctrl+X` | Cut the editor selection when one exists; otherwise copy the last assistant answer, as `/copy` does. |
-| `Ctrl+G` | Edit the draft in `[ui] editor` from `config.toml`, else `$VISUAL`, else `$EDITOR`. |
-| `/` at the start of the draft | Open the command palette. `Enter` runs the highlighted command; with no match it sends the line as a prompt. |
-| `@` at the start of a word | Open the workspace file picker. In the middle of a word (`me@example.com`) it is plain text. Before the first message there is no session to list files from: `@` stays text and a notice says so. |
-| `Home` / `End`, `Ctrl+A` / `Ctrl+E` | Start or end of the current line (`Home` with an empty draft and `End` also scroll, see below). |
-| `←` / `→` | Move by character. |
-| `Ctrl+←` / `Ctrl+→`, `Alt+←` / `Alt+→` | Move by word. |
-| `Backspace` / `Delete` | Delete the selection, or the character before or after the cursor. |
-| `Ctrl+W`, `Ctrl+Backspace` (terminals that send it as `Ctrl+H` too), `Alt+Backspace` | Delete the previous word. |
-| `Alt+D`, `Alt+Delete` | Delete to the end of the next word. |
-| `Ctrl+U` / `Ctrl+K` | Delete to the start or end of the line. |
-| `Ctrl+Z` / `Ctrl+Y` | Undo / redo (200 steps). |
-| Paste | Insert as one edit, replacing the selection. Newlines, including a trailing newline, are draft text rather than send commands. A paste of more than 10 lines or 1000 characters shows as a `[paste #N +L lines]` (or `[paste #N C chars]`) chip and expands on send; recalling a prompt from history brings the chip back. |
+| `Enter` | Send a steer; with an empty draft, resume a paused Session. A recognized slash command runs instead of sending text. |
+| `Alt+Enter`, `Ctrl+Enter` | Send the draft as a follow-up; an empty draft does nothing. |
+| `Shift+Enter`, `Ctrl+J` | Insert a newline. |
+| `Esc` | Close a picker or view first. In the composer, clear a selection, otherwise interrupt the active Turn while preserving queued inputs, cancel manual compaction, or clear an idle draft. |
+| `Ctrl+C` | Copy an editor selection; otherwise clear the draft. A second press within 500 ms quits. |
+| `Ctrl+D` | Quit with an empty draft; otherwise delete after the cursor. |
+| `↑`, `↓` | Move within a multiline draft, then browse prompt history at its first or last line. |
+| `Alt+↑` | Recall still-queued inputs into an empty draft. |
+| `Ctrl+X` | Cut an editor selection; otherwise copy the last assistant answer. |
+| `Ctrl+G` | Open the external editor configured by `[ui] editor`, then `$VISUAL`, then `$EDITOR`. |
+| `/` at draft start | Open the command palette. |
+| `@` at word start | Open the Host workspace file picker; an `@` within a word stays text. |
+| `Home`, `End`, `Ctrl+A`, `Ctrl+E` | Move to the line start or end. `Home` with an empty draft and `End` also navigate the transcript as described below. |
+| `←`, `→` | Move by grapheme. |
+| `Ctrl+←`, `Ctrl+→`, `Alt+←`, `Alt+→` | Move by word. |
+| `Backspace`, `Delete` | Delete a selection or the adjacent grapheme. |
+| `Ctrl+W`, `Ctrl+Backspace`, `Ctrl+H`, `Alt+Backspace` | Delete the previous word. |
+| `Alt+D`, `Alt+Delete` | Delete the next word. |
+| `Ctrl+U`, `Ctrl+K` | Delete to the line start or end. |
+| `Ctrl+Z`, `Ctrl+Y` | Undo or redo. |
+| Paste | Insert one edit. Newlines stay draft text; a large paste becomes a chip that expands on send. |
 
-Hold `Shift` with Left/Right, Up/Down, Home/End to extend or shrink a selection;
-Ctrl/Alt+Shift+Left/Right extends by word. Typing, pasting or inserting a newline
-replaces the selection. Plain Left/Right collapses it to the corresponding end.
-Edits and selection replacements support undo/redo.
+Hold `Shift` with arrows, Home or End to extend an editor selection;
+Ctrl/Alt+Shift+Left/Right extends by word. Typing, paste or newline replaces the
+selection. Plain Left/Right collapses it to the corresponding edge. Graphemes
+and paste chips remain whole during movement and deletion. Recalling a prompt
+restores its paste chips and preserves the draft that Down returns to.
 
-Cursor movement and deletion respect whole graphemes and treat a paste token as
-one unit. With no selection, `Esc` while busy only interrupts; it does not clear
-the draft. Copying or cutting a selection drops it, so `Ctrl+C` can quit again;
-a cut too large for the clipboard is refused and leaves the text. With no draft,
-`Shift+Home` and `Shift+End` scroll like `Home` and `End`. Selecting in a
-recalled prompt keeps the draft that `↓` returns to. The editor requests a
-non-blinking block cursor and restores the terminal default on exit or
-external-editor handoff.
+A bare unknown `/word` produces a suggestion before it is sent. Press `Enter`
+again to send it as text, or start with `//` to escape the initial slash.
+Paths such as `/usr/bin` and ordinary sentences remain prompts. Prompt
+templates appear alongside commands and expand before submission.
 
-On Windows the console reports a bracketed paste as its keys, so the TUI decodes
-the markers itself; a paste whose end marker does not come within a second is
-taken as it is. Unbracketed text that ends with Enter and arrives within 30 ms
-counts as one paste, which delays typed keys by that much on Windows only. A
-paste slower than that is indistinguishable from typing.
+## Transcript and mouse
 
-## Before the first message
-
-With no session open (a start without `--session` or `--continue`, or after
-`/new`) the screen shows the welcome header over an empty transcript and no
-session exists; the header stays at the top of the new session. `Enter` or `Alt+Enter`
-with text creates the session with the profile, model and reasoning chosen so
-far and sends the text as its first message; if the creation fails the text is
-back in the editor with the error. While the session is being created another
-`Enter` leaves its text in the editor. `/model`, `/reasoning`, `Ctrl+L`,
-`Ctrl+P` and `Shift+Tab` choose the settings of that session and confirm with a
-notice, and `/new <profile>` chooses its profile. `Ctrl+R` opens a stored
-session; the picker lists live sessions first and shows each one's time since
-its last activity (a finished turn counts). It has no pins; those are in the web
-client.
-
-Leaving a session (`/new`, or opening another) does not stop it: its turn,
-queued follow-ups and approvals carry on in the background, and its draft stays
-with it. Opening it again from the picker or `/resume` is instant and shows what
-it did meanwhile, scrolled where you left it. Keys act on the session on screen
-only: `Esc` stops its turn, and an approval is answered after switching to its
-session. A background turn that ends or asks for approval shows a notice such
-as `"Fix parser" needs approval · ctrl+r` and rings the bell, and the footer
-shows `2 running · 1 needs approval` while any background session works. Commands that need a session (`/compact`, `/context`, `/diff`,
-`/rename`, `/export`, `/copy`, `/session`) answer
-`No session yet: send a message first`. Quitting creates nothing.
-
-## Transcript and global keys
-
-| Key | Action |
+| Key or gesture | Action |
 |---|---|
-| `PageUp` / `PageDown` | Scroll one viewport minus four rows. |
-| `Ctrl+Home`, or `Home` with an empty draft | Jump to the top of the loaded history and load older items. |
-| `End` | Move to the end of the line and follow the tail again. |
-| `Ctrl+↑` / `Ctrl+↓` | Put the previous or next user message at the top; past the last one, follow the tail. |
-| `Ctrl+R` | Sessions picker. |
-| `Ctrl+L` | Model picker. |
-| `Ctrl+P` / `Shift+Ctrl+P` | Switch to the next or previous model in the catalog (`Shift+Ctrl+P` needs the kitty keyboard protocol; other terminals send `Ctrl+P` for both). |
-| `Shift+Tab` | Switch to the next reasoning level the model supports. |
-| `Ctrl+O` | Expand or collapse all tool cards, thinking, compaction summaries and a failed turn's provider message. The top of the view stays put, so blocks open and close downward. |
-| `Ctrl+T` | Collapse thinking to one `Thinking...` row, or show it again; the top of the view stays put. |
-| `Ctrl+F` | Find in the transcript. |
-| `F1` | Help view. |
-| `F8` | Review retained local input confirmations, also from the fatal screen. New conversation draft stays separate. |
-| `q` or `Esc` | Quit from the fatal screen. |
+| `PageUp`, `PageDown` | Scroll by a viewport minus four rows. |
+| `Ctrl+Home`, or `Home` with an empty draft | Jump to the top of the loaded history and request an older page. |
+| `End` | Move to the line end and follow new output again. |
+| `Ctrl+↑`, `Ctrl+↓` | Jump between user messages. |
+| `Ctrl+O` | Expand or fold tool cards, thinking, summaries and failure details. |
+| `Ctrl+T` | Hide or show thinking. |
+| `Ctrl+F` | Find within the loaded transcript. |
+| `Ctrl+R` | Open the Sessions picker. |
+| `Ctrl+L` | Open the model picker. |
+| `Ctrl+P`, `Shift+Ctrl+P` | Select the next or previous model when those modifiers are reported. |
+| `Shift+Tab` | Cycle the selected model's supported reasoning preferences, including auto. |
+| `F1` | Open help. |
+| `F8` | Review local input confirmations. |
+| `q`, `Esc` on the fatal screen | Quit. |
+| Wheel | Scroll one row, or five with Alt. Over a picker, move its selection; over a view, scroll that view. |
+| Click a tool card | Toggle its folded state. Dragging selects instead. |
+| Click a Turn-end line | Open the live workspace Git diff. |
+| Click or drag in the editor | Place the caret or select draft text, respecting grapheme and paste-chip boundaries. |
+| Shift+click in the editor | Extend its selection, when the terminal passes the gesture through. |
+| Drag, double-click or triple-click in the transcript | Select text, a word or a line; release copies it. |
 
-Any upward scroll anchors the view to the content you are reading; new output
-does not move it, and a ` ↓ Jump to latest message · End ` label shows while you
-are above the bottom. `End` or scrolling to the bottom resumes following the tail.
+Scrolling upward anchors the content being read. New output does not move that
+anchor. A `Jump to latest message · End` row appears above the bottom; click it
+or press End to follow again. Folding opens and closes downward from the
+anchored view.
 
-## Mouse
+Only content is copied from the transcript. Rails, padding, timestamps,
+durations, expansion hints, partial-response labels and Turn-end summaries are
+excluded. Expanded tool cards include complete invocation arguments, retained
+output and any native child Agent/Session association. Long cards retain a
+bounded visible preview; `/export` reads the complete native history. Partial
+model responses are marked explicitly, and compaction markers report actual
+source position and covered items.
 
-| Gesture | Action |
+## Pickers and reports
+
+Most pickers and reports use a bottom sheet. `Esc` closes it. In selectable
+lists, arrows and Tab move one row and wrap; PageUp/PageDown move ten rows.
+The inline command and file lists stay below the editor and show five rows at
+a time.
+
+| Surface | Actions and facts |
 |---|---|
-| Wheel | Scroll one row per notch, five with `Alt`. With a view open it scrolls that view (help three rows per notch, diff); over a picker it moves the selection. It never scrolls the transcript behind an open view or sheet. |
-| Click a folded tool card's text, or any row of an expanded card | Toggle that card. It opens and closes downward: the rows above it stay put, and `End` follows the tail again. Dragging over a card selects instead. |
-| Click a turn-end line | Open the workspace's live Git diff (the same as `/diff`). |
-| Click in the editor | Place the caret at a grapheme or paste-chip boundary, respecting wrapping, padding and editor scrolling. |
-| Drag in the editor | Select draft text; releasing copies it and keeps it highlighted. Typing replaces it. Moving outside the editor reaches adjacent rows and scrolls the draft. |
-| Shift+click in the editor | Extend the selection from its fixed anchor. Many terminals keep Shift+click for their own selection and never send it. |
-| Drag in the transcript | Select transcript text; releasing copies it. Only content is taken: rails, padding, card durations, expand hints, timestamps, turn-end lines and the welcome header are neither highlighted nor copied. |
+| Commands | Type to fuzzy-filter. Enter runs the selected command; Tab completes its name. Argument completion is available for model, reasoning, theme and approval. |
+| Agents | Filter by name or ID. Enter selects the Agent. Ctrl+D opens a confirmation with its name, ID and captured child Session list; only `y` deletes that set. Enter does not confirm. Sessions added after confirmation opens are not included. |
+| Sessions | Filter by title, first loaded prompt, Session ID, Agent ID or workspace folder. Enter opens the selected Session. Ctrl+N captures that Session for renaming; Enter saves and Esc cancels. Ctrl+D twice confirms deletion of the same Agent/Session identity. |
+| Session (`/session`) | Show Agent and Session IDs, title, workspace, storage, lifecycle, residency, scheduling, approval mode, model, reasoning, raw history count and latest response usage. Enter or `c` copies the Session ID. |
+| Context (`/context`) | Show configured and active model facts, native history/projection counts, queue counts, compaction and save state. `r` refreshes; `c` copies. |
+| Models | Filter model references; Enter selects one. The declared context window is model metadata. |
+| Reasoning | Enter applies the selected native preference. |
+| Files (`@`) | Filter the returned workspace paths. Enter or Tab inserts `@path `. Enter with no match does nothing. This inserts text, not an attachment. |
+| Find | Type a case-insensitive query. Enter, Down or Tab advances; Shift+Enter or Up goes back. Matching folded content opens. Esc leaves the transcript at the selected match. |
 
-Editor clicks are accepted while an inline command or file completion list is
-open, but completion rows are not editor text. Full-screen views, approval
-prompts and bottom sheets do not expose the hidden draft for mouse editing.
+The Context report does not display an invented current token total or
+percentage. Provider input/output/cache/reasoning counts belong to the latest
+complete response, and absent fields stay unknown. A compaction request-token
+estimate is labeled as an estimate; it is not a measurement of current context
+occupancy. The footer's `last ↑… ↓… R…` also refers to a past complete response.
 
-## Pickers and sheets
+## Approvals and tool questions
 
-Pickers, session and context reports, the approval prompt and find share one
-bottom sheet that takes the editor's place. `Esc` closes it without changing
-anything. `↑` / `↓` move the selection and wrap at the ends, as do `Tab`; `PageUp` / `PageDown` move ten
-rows (in Find they step through matches). The command and `@` lists are not
-sheets: they sit under the editor text, five rows at a time with an `(i/N)`
-counter.
+The pending native interaction identifies the Turn, load, interaction and tool
+call being answered. Approval cards show the Host's risk level and the known
+invocation. There is no terminal shortcut that grants permanent approval to a
+tool.
 
-| Sheet | Keys |
+| Interaction | Keys |
 |---|---|
-| Command list | The text after `/` stays in the composer and filters the commands fuzzily, best match first. `Enter` runs the highlighted command with the argument typed after its name; `Tab` completes `/name ` without running. After `/model `, `/new `, `/reasoning ` or `/theme ` the list offers that command's arguments (model ids, profiles, levels) and `Enter` runs the command with the highlighted one. Prompt templates are listed with their description. `Esc` closes the list and leaves the draft as it is; deleting the `/` closes it too. |
-| Sessions | Type to filter by title (an untitled session by its first prompt) or workspace folder. `Enter` opens the session. `Ctrl+N` renames the selected one (`Enter` saves, `Esc` cancels; an empty title clears it). `Ctrl+D` twice deletes the selected one; the open session cannot be deleted. Sessions of this workspace come first, newest first. Each row ends with its last activity; the open one says `current`, one from another workspace names it, and a title shared with another row adds the short id. |
-| Session (`/session`) | Id, title, workspace, profile, model, history items, token totals and the tools allowed for the session (when there are any). `Enter` or `c` copies the id. |
-| Context (`/context`) | Show context usage. `r` re-reads the report (it also reads on open); `c` copies it; `Esc` closes. |
-| Model | Type to filter by id. `Enter` switches to the highlighted model; the current one is marked `✓`. |
-| Reasoning | `Enter` applies the highlighted level; the current one is marked `✓`. |
-| Files (`@`) | The `@word` before the cursor filters workspace paths (up to 500 files). `Enter` or `Tab` replaces it with `@path `; with no match `Enter` does nothing. `Esc` closes the list and leaves the text. |
-| Find | Type to search (case-insensitive; every occurrence counts: messages, notices, thinking, tool details and loaded tool output, compaction summaries); the view lands on the row of match 1 as you type, opens the folded thinking or tool output that holds it, and highlights the matches on screen. `Enter`, `↓`, `Tab` go to the next match; `Shift+Enter`, `↑` to the previous. `Esc` closes and leaves the view where it is. |
+| Approval | `y` allows this call; `n` or Esc denies it. Arrows select Allow once or Deny; Enter submits that choice. |
+| Single-choice question | Arrows select an option; Enter sends its native index. Esc cancels the requesting Turn. `y` and `n` are not answer shortcuts. |
+| Text question | Type in a separate answer editor; Shift+Enter or Ctrl+J inserts a newline. Enter sends the answer, and Esc cancels the requesting Turn. |
 
-## Approval and choice prompts
+Answer keys are armed after half a second; unrelated typing during the initial
+window postpones approval/choice arming. Esc remains available immediately.
+The text answer editor preserves whitespace and the conversation draft. Host
+validation errors remain visible and leave the answer editable. Once an
+answer is submitted, further answers wait for the Host result.
 
-While an interaction is pending, only these keys act; the rest are ignored.
-The answer keys (`y`, `a`, `n`, `Enter`) act once the prompt has been up for
-half a second. Any other key pressed before then, such as a sentence you were
-still typing, restarts the half second, so it cannot answer the prompt by
-accident; an answer key pressed too early is ignored. `Esc` and `↑` / `↓` always
-act.
+Ctrl+R remains available during every pending interaction, including while an
+answer is awaiting confirmation. It opens the Session picker without changing
+the interaction's target or its separate answer draft.
 
-| Key | Action |
-|---|---|
-| `y` | Allow once (approval). |
-| `a` | Allow once and answer every later approval of the same tool for the rest of this session (the footer shows `allow <tool>`). |
-| `n`, `Esc` | Deny (approval). |
-| `↑` / `↓`, `Enter` | Select a row and submit it. For an approval the rows are `Allow once`, `Deny` and `Allow <tool> this session`. An `edit` or patch approval shows its diff. |
-| `PageUp` / `PageDown`, `Ctrl+↑` / `Ctrl+↓`, `End`, `Ctrl+O`, `Ctrl+T` | Read the transcript while the prompt waits: scroll, jump between prompts, return to the latest, fold tool output and thinking. |
-
-### Text-input questions
-
-A tool's text question opens a separate answer editor beneath the prompt. Typing,
-pasting, cursor movement and undo act on that answer, not the conversation draft
-or prompt history. `y`, `a` and `n` are literal text. `Enter` submits after the
-same initial half-second arming window; `Esc` cancels the exact turn that asked.
-The Agent accepts 1–8192 UTF-8 bytes without control characters; whitespace is
-kept, not trimmed. Invalid answers remain editable and are not sent or truncated.
-Repeated snapshots of the same interaction preserve the editor. A different
-interaction starts a new editor, and a delayed old answer cannot replace it.
+PageUp/PageDown, Ctrl+Up/Down, Ctrl+O and Ctrl+T remain available for reading the
+transcript while a question waits. Approval and choice sheets also accept End
+to return to the latest content. Full-screen views and bottom sheets do not
+expose the hidden conversation draft for mouse editing.
 
 ## Views
 
-`Esc` returns from a view to the transcript with its scroll position intact.
-A view owns the keys: the composer below it is dimmed and reads `view open · esc to return`, and the keys the view does not bind do nothing.
-
 | View | Keys |
 |---|---|
-| Git diff | Live tracked changes and untracked files in the workspace. `↑` / `↓` select a file; `PageUp` / `PageDown`, `Home` / `End` and the wheel scroll the diff; `c` copies it. |
-| Help | `↑` / `↓` scroll three rows, `PageUp` / `PageDown` thirty. |
+| Git diff | Up/Down selects a file. PageUp/PageDown, Home/End and wheel scroll; `c` copies the diff. Native workspace failures and stale-version notices are shown. |
+| Help | Up/Down scrolls three rows; PageUp/PageDown scrolls thirty. |
+
+Esc returns to the transcript with its scroll position intact. The dimmed
+composer says `view open · esc to return`; unbound view keys do not edit it.
 
 ## Commands
 
-Type `/` for the palette, or the whole line and press `Enter`. Arguments follow
-the name.
-
 | Command | Effect |
 |---|---|
-| `/new [profile]` | Leave the open session for an empty conversation; the first message creates the new session, with the Agent's default profile or the named one. |
-| `/sessions`, `/resume` | Open the sessions picker. Live sessions come first, each row starting with its state: `running 2m`, `needs approval`, `compacting`, `new` (a turn ended unseen) or `failed` (that turn failed). Opening a live one switches at once; a session that is still working cannot be deleted (`Stop "<title>" first: open it and press Esc`). |
-| `/rename <title>` | Rename the current session (an empty title is an error). |
-| `/model [id]` | Switch to the model (an exact id or a unique fuzzy match), or open the picker. When the model does not support the current reasoning level, the switch also moves to the nearest level it supports (the higher one on a tie) and a notice names it. `Ctrl+P` and `Ctrl+L` do the same, and a draft adjusts the level its session will start with. |
-| `/session` | Show the open session's id, workspace, profile, model, item count, token totals and the tools allowed for the session. |
-| `/reasoning [level]` | Set the level directly, or open the picker when no valid level is given. |
-| `/compact` | Run manual compaction; refused while a turn runs. |
-| `/diff` | Show the workspace's live Git working-tree changes, including untracked files. |
-| `/context` | Show context usage. |
+| `/agents` | Select an Agent from the Host catalog. |
+| `/agent-new <name>` | Create an Agent using the configured Agent defaults. |
+| `/agent-start` | Start the selected Agent through its native lifecycle operation. |
+| `/agent-stop` | Stop the selected Agent through its native lifecycle operation. |
+| `/agent-delete` | Review and explicitly confirm deleting the selected Agent and the captured child Session set. |
+| `/agent-defaults` | Apply `agent-defaults.json` to the selected Agent's defaults for future Sessions. |
+| `/new` | Create and open a Session in the selected Agent. |
+| `/sessions` | Open the Sessions picker. |
+| `/session` | Show the current Session and its owning Agent. |
+| `/default-session` | Make the current Session its Agent's default. |
+| `/rename <title>` | Rename the current Session. |
+| `/pause` | Pause input consumption in the current Session. |
+| `/resume` | Resume the current Session. |
+| `/load` | Load the current Session without resuming paused input. |
+| `/unload` | Request native unload of the current Session. |
+| `/close` | Close the current Session. |
+| `/model [reference]` | Select an exact model reference or unique fuzzy match; with no argument, open the picker. |
+| `/reasoning [level]` | Apply a native reasoning preference, or open the picker. |
+| `/approval <ask\|auto\|read_only>` | Update the current Session's approval policy for subsequent Turns. |
+| `/compact` | Request manual context compaction; Host reports acceptance or refusal. |
+| `/context` | Read native context facts and past response usage. |
+| `/diff` | Read live Git changes, including untracked files, from the Session's Host workspace. |
 | `/copy` | Copy the last assistant answer as Markdown. |
-| `/export [path]` | Write the conversation as Markdown; the default is `./minicore-<session>-<date>.md`. |
-| `/theme [dark\|light]` | Switch the palette and save it; without an argument, toggle. |
-| `/reload` | Compose the Agent config again from `config.toml`, `models.toml` and the prompt, reload the Agent and the templates. |
-| `/unconfirmed` | Review retained local input operations. `e`/Enter edits separately without deciding acceptance; `r` or Enter from the editor opens a possible-duplicate warning, only `y` resends. Enter/Esc cancels the warning. `c` copies; `d` then `y` forgets without cancelling Agent work. A resend uses a new ID and the original session/load/mode; unavailable old targets are not silently retargeted. |
-| `/recover` | Retry failed conversation reads in the viewed session or continue its missing range after a bounded history catch-up. Verified newer content stays visible; no input is resent and execution is not restarted. Older history also remains available through normal paging. |
-| `/remote [on\|off\|status\|password [text]]` | Phone control: start listening and show the status screen, stop and unfreeze local input, or set a new password (generated, or `<text>` of at least 8 characters), which signs phones out. `/remote` with remote control off says how to start it. See [Remote mode](#remote-mode). |
-| `/help` | Open the help view. |
-| `/quit` | Quit. |
+| `/export [path]` | Export native history to Markdown; the default is `./minicore-<session>-<date>.md`. |
+| `/theme [dark\|light]` | Choose and save a palette; no argument toggles it. |
+| `/reload` | Reload the selected Host configuration, local templates and defaults for newly created Agents. |
+| `/recover` | Refresh current Session state, history and observations without resending inputs. |
+| `/unconfirmed` | Review local inputs whose acceptance is uncertain or was rejected. |
+| `/help` | Open help. |
+| `/quit` | Quit the terminal. |
 
-## Remote mode
+Model, reasoning and approval changes are Session configuration updates. An
+active Turn keeps the configuration already bound to it. Host validation is
+authoritative; the terminal does not silently substitute a different reasoning
+level. With no Session open, model and reasoning selections apply when a new
+Session is created. Updating Agent defaults does not rewrite existing Sessions.
 
-While remote control is on, the transcript area is a status screen: the address
-to open on the phone, the password to enter there, each connected phone and when
-it connected, the session, workspace and model, what the Agent is doing now
-(running a tool, waiting for an approval on the phone, compacting, or idle with
-the last turn's outcome), queued messages and refused sign-ins. It is read-only:
-the wheel and clicks over it do nothing. The footer shows `remote`,
-`remote · <device>` with one phone connected, or `remote · 2 phones`.
-
-The phones send messages and answer approvals; the keyboard cannot. The editor
-keeps its draft and slash commands, an empty one reads `Remote control is on ·
-/remote off to take back`, and a refused action flashes the same text. What
-stays available:
-
-- `Esc` interrupts a running turn or cancels a compaction.
-- Looking and copying: `/theme`, `/copy` (`Ctrl+X`), `/export`, `F1` help and
-  `/diff` (which draw over the status screen), `/session`, `/context` and the
-  sessions picker (picking is refused).
-- `/remote password [text]` sets a new password; `/remote off` stops the
-  listener, shows the transcript again and returns the editor to normal.
-- Quitting asks twice: `Ctrl+C` or `/quit` flashes `quit again to end it`, and a
-  second request within 3 seconds quits.
-
-## Prompt templates
-
-Each `*.md` file in `prompt/commands/` of the TUI directory is a command named after the file; they are
-read at start and by `/reload`. A template shadows no built-in command. An
-optional `---` front matter gives `description:` and `argument-hint:`; without a
-description the first line is used. `/name args` expands `$1`, `$2`, …, `$@` (or
-`$ARGUMENTS`) and `${1:-default}` from the shell-quoted arguments and sends the
-text, as pi does.
-
-## Terminal title, bell and resume hint
-
-The window title is `workspace · session title · idle|working|approval`, written
-only when it changes. The terminal bell rings when a turn that ran more than
-10 s ends or asks for approval, in any session, and when a background session
-asks for approval; leaving a running session does not ring. `bell = false` under `[ui]` in `config.toml` turns it off.
-Quitting restores the title and prints `Resume: minicore-tui --session <id>` for
-a session with history.
+In `F8` or `/unconfirmed`, `e` or Enter opens a separate editor; `r` reviews a
+resend, `c` copies and `d` reviews forgetting the local record. Resend and forget
+require `y`; Enter, Esc or `n` cancels that confirmation. A resend is a new
+message to the captured original Session and may duplicate work already
+accepted. An unavailable original target is not silently replaced with the
+current Session, and forgetting a local record does not cancel Host work.

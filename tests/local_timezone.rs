@@ -2,8 +2,7 @@
 //! tests these exercise actual system-zone discovery and the production label.
 use jiff::{Timestamp, tz::TimeZone};
 use minicore_tui::{
-    protocol::read::UserKind,
-    transcript::{Block, layout::Fold},
+    transcript::{Block, UserKind, layout::Fold},
     ui::{
         blocks,
         theme::{Palette, Styles},
@@ -21,7 +20,10 @@ fn system_zone_is_available_and_production_user_card_uses_it() {
     let block = Block::User {
         text: "local time check".into(),
         kind: UserKind::Prompt,
-        at: Some(stamp.as_millisecond() as u64),
+        at: Some(
+            minicore_host_protocol::Timestamp::from_unix_milliseconds(stamp.as_millisecond())
+                .unwrap(),
+        ),
     };
     let rows = blocks::render(
         &block,
