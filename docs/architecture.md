@@ -1,7 +1,7 @@
 # Architecture
 
 The executable owns one persistent MiniCore Host and one terminal application.
-It links Host 0.12.0 at the immutable revision in `Cargo.toml`; all native
+It links Host 0.12.1 at the immutable revision in `Cargo.toml`; all native
 components come from that revision. The frontend calls `HostClient::in_process`
 and the typed `SessionClient` APIs. There is no frontend protocol model, child
 Agent, transport adapter, Webpage service or remote view layer.

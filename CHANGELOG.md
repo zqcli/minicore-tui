@@ -2,6 +2,9 @@
 
 ## 0.12.1 — 2026-11-14
 
+- Embed Host 0.12.1 at immutable revision
+  `c7bd16b4e36c94f587aa4802b3298617dc088478`, retaining shared JSON configuration
+  and the Host's local fixes.
 - Stop terminal event reading during Ctrl+G external editing and restore the
   fullscreen view without a cursor-position query. Retain the edited file and
   report its path if terminal restoration fails.
