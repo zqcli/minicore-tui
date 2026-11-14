@@ -78,7 +78,7 @@ confirmation in `F8` does not remove an accepted input from the Host queue.
 | `↑`, `↓` | Move within a multiline draft, then browse prompt history at its first or last line. |
 | `Alt+↑` | Recall still-queued inputs into an empty draft. |
 | `Ctrl+X` | Cut an editor selection; otherwise copy the last assistant answer. |
-| `Ctrl+G` | Open the external editor configured by `[ui] editor`, then `$VISUAL`, then `$EDITOR`. Failures preserve the original draft. |
+| `Ctrl+G` | Open the external editor configured by `[ui] editor`, then `$VISUAL`, then `$EDITOR`. Failures preserve the original draft; if terminal restoration fails, the error names the retained edited file. |
 | `/` at draft start | Open the command palette. |
 | `@` at word start | Open the Host workspace file picker; an `@` within a word stays text. |
 | `Home`, `End`, `Ctrl+A`, `Ctrl+E` | Move to the line start or end. `Home` with an empty draft and `End` also navigate the transcript as described below. |

@@ -287,22 +287,7 @@ async fn run() -> i32 {
             minicore_tui::app::bootstrap(client, tx, new_agent, selected, initial_session).await
         })
     };
-    // The loop must not poll `EventStream` itself: every poll fights the stream's
-    // reader thread for the event lock and spins on `sched_yield` about 15 times.
-    let (term_tx, mut term_rx) = mpsc::unbounded_channel::<TermEvent>();
-    let terminal_events = tokio::spawn(async move {
-        let mut events = EventStream::new();
-        #[cfg(windows)]
-        terminal::input::forward(&mut events, &term_tx).await;
-        #[cfg(not(windows))]
-        while let Some(event) = events.next().await {
-            if let Ok(event) = event
-                && term_tx.send(event).is_err()
-            {
-                break;
-            }
-        }
-    });
+    let (mut terminal_events, mut term_rx) = start_terminal_events();
     let mut frames = Frames::new();
     let mut next_frame = tokio::time::Instant::now();
     let mut next_tick = tokio::time::Instant::now() + TICK;
@@ -375,7 +360,14 @@ async fn run() -> i32 {
         if let Some(draft) = app.take_edit_request() {
             let result = match app.editor_command() {
                 Ok(command) => {
-                    minicore_tui::editor::edit_in_terminal(&mut guard, &command, &draft).await
+                    // Await cancellation so EventStream is dropped before the child
+                    // owns stdin. Merely ignoring forwarded events keeps reading it.
+                    terminal_events.abort();
+                    let _ = (&mut terminal_events).await;
+                    let result =
+                        minicore_tui::editor::edit_in_terminal(&mut guard, &command, &draft).await;
+                    (terminal_events, term_rx) = start_terminal_events();
+                    result
                 }
                 Err(error) => Err(error),
             };
@@ -450,6 +442,29 @@ async fn run() -> i32 {
         return 1;
     }
     0
+}
+
+fn start_terminal_events() -> (
+    tokio::task::JoinHandle<()>,
+    mpsc::UnboundedReceiver<TermEvent>,
+) {
+    // Keep stream polling out of the frame loop: it contends with the reader
+    // thread's event lock even when no input is ready.
+    let (term_tx, term_rx) = mpsc::unbounded_channel();
+    let task = tokio::spawn(async move {
+        let mut events = EventStream::new();
+        #[cfg(windows)]
+        terminal::input::forward(&mut events, &term_tx).await;
+        #[cfg(not(windows))]
+        while let Some(event) = events.next().await {
+            if let Ok(event) = event
+                && term_tx.send(event).is_err()
+            {
+                break;
+            }
+        }
+    });
+    (task, term_rx)
 }
 
 struct ExitSignals {

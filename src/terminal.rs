@@ -153,7 +153,7 @@ impl Guard {
         self.enhanced_keys = push_keyboard_flags(&mut stdout).is_ok();
         enter_screen(&mut stdout)?;
         self.active = true;
-        self.terminal.clear()
+        refresh_screen(&mut self.terminal)
     }
 
     pub fn restore(&mut self) -> io::Result<()> {
@@ -171,6 +171,12 @@ impl Guard {
         self.active = false;
         Ok(())
     }
+}
+
+fn refresh_screen<B: Backend>(terminal: &mut Terminal<B>) -> Result<(), B::Error> {
+    // Fullscreen resize clears and invalidates the previous frame without clear()'s
+    // cursor query. The editor's cursor position is irrelevant to our next frame.
+    terminal.resize(terminal.size()?.into())
 }
 
 impl Drop for Guard {
@@ -266,7 +272,7 @@ mod frame_tests {
         }
 
         fn get_cursor_position(&mut self) -> io::Result<Position> {
-            Ok(self.inner.cursor_position())
+            Err(io::Error::other("cursor queries are unavailable"))
         }
 
         fn set_cursor_position<P: Into<Position>>(&mut self, position: P) -> io::Result<()> {
@@ -302,6 +308,30 @@ mod frame_tests {
             self.ops.push(Op::Flush);
             Ok(())
         }
+    }
+
+    #[test]
+    fn editor_return_refreshes_size_and_repaints_without_cursor_queries() {
+        let mut terminal = Terminal::new(RecordingBackend::new()).unwrap();
+        draw_frame(&mut terminal, |frame| {
+            paint(frame, 0);
+            None
+        })
+        .unwrap();
+        terminal.backend_mut().inner.clear().unwrap();
+        refresh_screen(&mut terminal).unwrap();
+        draw_frame(&mut terminal, |frame| {
+            paint(frame, 0);
+            None
+        })
+        .unwrap();
+        assert_eq!(terminal.backend().inner.buffer()[(0, 0)].symbol(), "s");
+        terminal.backend_mut().inner.resize(60, 20);
+        refresh_screen(&mut terminal).unwrap();
+        assert_eq!(
+            terminal.get_frame().area(),
+            ratatui::layout::Rect::new(0, 0, 60, 20)
+        );
     }
 
     fn paint(frame: &mut Frame, step: u16) {

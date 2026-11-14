@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Stop terminal event reading during Ctrl+G external editing and restore the
+  fullscreen view without a cursor-position query. Retain the edited file and
+  report its path if terminal restoration fails.
+
 ## 0.11.0 — 2026-11-14
 
 - Index native history positions and identities per installation batch; preserve

@@ -78,6 +78,8 @@ startup.
 The rail layout, Markdown rendering, folding, mouse selection, incremental
 layout cache, multiline editor, paste handling, prompt recall, external editor
 and light/dark themes remain available. Idle rendering has no periodic tick.
+`Ctrl+G` hands terminal input to the external editor and restores the edited draft
+on return. If terminal restoration fails, the error names the retained draft file.
 
 - **Conversation:** stream answer and reasoning text, retain interrupted partial
   output, show native Turn outcome and persistence state. Model retry phase and

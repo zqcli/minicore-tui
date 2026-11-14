@@ -22,19 +22,40 @@ pub async fn edit_in_terminal(
     guard
         .suspend()
         .map_err(|error| format!("cannot hand the terminal to the editor: {error}"))?;
-    let result = edit(command, draft).await;
-    // The editor may have written anything; always take the screen back.
-    let resumed = guard.resume();
-    match (result, resumed) {
-        (Ok(text), Ok(())) => Ok(text),
-        (Err(error), _) => Err(error),
-        (Ok(_), Err(error)) => Err(format!("cannot restore the terminal: {error}")),
-    }
+    edit_and_resume(command, draft, || guard.resume()).await
 }
 
 /// Writes `draft` to a temporary Markdown file, runs `command` (program plus
 /// arguments) on it and returns the new contents. Failed edits retain the file.
 pub async fn edit(command: &[String], draft: &str) -> Result<String, String> {
+    edit_and_resume(command, draft, || Ok(())).await
+}
+
+async fn edit_and_resume(
+    command: &[String],
+    draft: &str,
+    resume: impl FnOnce() -> std::io::Result<()>,
+) -> Result<String, String> {
+    let result = edit_file(command, draft).await;
+    // The editor may have written anything; always take the screen back.
+    let resumed = resume();
+    match (result, resumed) {
+        (Ok((text, path)), Ok(())) => {
+            let _ = std::fs::remove_file(path);
+            Ok(text)
+        }
+        (Err(error), Ok(())) => Err(error),
+        (Err(error), Err(restore)) => {
+            Err(format!("{error}; cannot restore the terminal: {restore}"))
+        }
+        (Ok((_, path)), Err(error)) => Err(format!(
+            "cannot restore the terminal: {error}; edited draft file: {}",
+            path.display()
+        )),
+    }
+}
+
+async fn edit_file(command: &[String], draft: &str) -> Result<(String, PathBuf), String> {
     let (program, args) = command
         .split_first()
         .ok_or("no editor is configured: set `editor` in the TUI config or $VISUAL/$EDITOR")?;
@@ -48,8 +69,7 @@ pub async fn edit(command: &[String], draft: &str) -> Result<String, String> {
         .map_err(|error| format!("{error}; draft file: {}", path.display()))?;
     let text = std::fs::read_to_string(&path)
         .map_err(|error| format!("cannot read edited draft {}: {error}", path.display()))?;
-    let _ = std::fs::remove_file(&path);
-    Ok(text)
+    Ok((text, path))
 }
 
 fn temp_path() -> PathBuf {
@@ -83,6 +103,32 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    async fn restore_failure_retains_edited_file_and_reports_its_path() {
+        let directory = tempfile::tempdir().unwrap();
+        let recorded = directory.path().join("draft-path");
+        let command = [
+            "sh".into(),
+            "-c".into(),
+            r#"printf 'new 中文\nsecond line\n' > "$2"; printf '%s' "$2" > "$1""#.into(),
+            "sh".into(),
+            recorded.to_str().unwrap().into(),
+        ];
+        let error = edit_and_resume(&command, "old draft", || {
+            Err(std::io::Error::other("injected restore failure"))
+        })
+        .await
+        .unwrap_err();
+        let path = std::fs::read_to_string(recorded).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("edited file must survive"),
+            "new 中文\nsecond line\n"
+        );
+        assert!(error.contains(&path), "{error}");
+        assert!(error.contains("injected restore failure"), "{error}");
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[tokio::test]
     async fn an_empty_command_names_the_config_and_the_environment() {
         let error = edit(&[], "draft").await.unwrap_err();
         assert!(error.contains("editor"), "{error}");
@@ -108,15 +154,25 @@ mod tests {
 
     #[tokio::test]
     async fn the_edited_text_comes_back_and_the_temp_file_is_removed() {
-        // `sh -c` receives the path as its positional parameter.
-        let command = vec![
-            "sh".to_owned(),
-            "-c".to_owned(),
-            "printf 'edited' > \"$1\"".to_owned(),
-            "sh".to_owned(),
+        let directory = tempfile::tempdir().unwrap();
+        let recorded = directory.path().join("draft-path");
+        let command = [
+            "sh".into(),
+            "-c".into(),
+            r#"printf 'edited' > "$2"; printf '%s' "$2" > "$1""#.into(),
+            "sh".into(),
+            recorded.to_str().unwrap().into(),
         ];
-        let text = edit(&command, "draft").await.expect("editor runs");
+        let text = edit_and_resume(&command, "draft", || {
+            let path = std::fs::read_to_string(&recorded).unwrap();
+            assert_eq!(std::fs::read_to_string(path).unwrap(), "edited");
+            Ok(())
+        })
+        .await
+        .expect("editor runs");
         assert_eq!(text, "edited");
+        let path = std::fs::read_to_string(recorded).unwrap();
+        assert!(!Path::new(&path).exists());
     }
 
     #[tokio::test]
@@ -156,6 +212,26 @@ mod tests {
         let path = std::fs::read_to_string(recorded).unwrap();
         assert!(error.contains(&path));
         assert_eq!(std::fs::read(&path).unwrap(), [255]);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn editor_and_restore_failures_are_both_reported_and_keep_the_file() {
+        let error = edit_and_resume(&["false".into()], "keep me", || {
+            Err(std::io::Error::other("injected restore failure"))
+        })
+        .await
+        .unwrap_err();
+        assert!(error.contains("exited with"), "{error}");
+        assert!(error.contains("injected restore failure"), "{error}");
+        let path = error
+            .split("draft file: ")
+            .nth(1)
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap();
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "keep me");
         std::fs::remove_file(path).unwrap();
     }
 
