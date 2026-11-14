@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.12.1 — 2026-11-14
 
 - Stop terminal event reading during Ctrl+G external editing and restore the
   fullscreen view without a cursor-position query. Retain the edited file and
@@ -12,6 +12,23 @@
 - Report asynchronous native compaction failures once in the conversation notice,
   including the Host fault and the originating background Session. Preserve the
   reading position; acceptance, success, unchanged and cancellation are not failures.
+
+## 0.12.0 — 2026-11-14
+
+- Embed Host 0.12.0 at immutable revision
+  `2f5344d2e8cfb6e49d11cf1b188381264f8ee7fa`, following SPEC 4.11.0.
+
+- Use `--config-dir` for shared JSON configuration and `--data-root` for runtime
+  storage. Read local preferences from `tui.json`; store accepted input recall
+  in `<data-root>/tui/history.jsonl`. Remove old path flags, TOML and the global
+  Agent-defaults file and command.
+- Let Host load `host.json`, reusable Roles and keyed Agent declarations at
+  startup and directory reload. Preserve native Agent identities and existing
+  Session settings; show actual partial reload results without automatic retry.
+- Create dynamic Agents by copying the selected Agent's native Role, instructions
+  and Session defaults without file management metadata or Session overrides.
+- Reuse Host's shared JSON starter generator and retain terminal interaction,
+  Session controls and the production resource/diagnostic startup boundary.
 
 ## 0.11.0 — 2026-11-14
 

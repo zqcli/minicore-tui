@@ -1,7 +1,7 @@
 # Architecture
 
 The executable owns one persistent MiniCore Host and one terminal application.
-It links Host 0.11.0 at the immutable revision in `Cargo.toml`; all native
+It links Host 0.12.0 at the immutable revision in `Cargo.toml`; all native
 components come from that revision. The frontend calls `HostClient::in_process`
 and the typed `SessionClient` APIs. There is no frontend protocol model, child
 Agent, transport adapter, Webpage service or remote view layer.
@@ -11,8 +11,8 @@ Agent, transport adapter, Webpage service or remote view layer.
 | Module | Responsibility |
 |---|---|
 | `main.rs` | Startup, selection, terminal ownership, frame scheduling, signals, graceful Host shutdown |
-| `host.rs`, `host/diagnostics.rs` | Production resource preparation, saved Host opening, process control, diagnostics lifetime |
-| `config/`, `cli.rs` | TUI paths/preferences, native initial configuration files, explicit command-line inputs |
+| `host.rs`, `host/diagnostics.rs` | Directory Host startup, production resources, process control, diagnostics lifetime |
+| `config/`, `cli.rs` | Shared configuration paths, local JSON preferences and command-line inputs |
 | `app/mod.rs` | Terminal reducer and immutable messages from asynchronous work |
 | `app/tasks.rs` | Typed Host reads/mutations, bounded UI delivery, subscription pumps and fixed-window catch-up |
 | `app/resident.rs`, `app/live.rs` | Full Session addresses, local epochs, per-Session drafts and foreground navigation |
@@ -35,17 +35,29 @@ editor drafts and user-requested exports.
 
 ## Startup and lifetime
 
-Configuration preparation occurs before entering fullscreen. A new Host root
-uses the provided initial configuration; an existing root uses its saved Host
-configuration before resources and logging are prepared. The Host retains its
-exclusive data-root lease for its full lifetime.
+Configuration preparation occurs before entering fullscreen. The shared
+`host-config` library resolves `--config-dir` and `--data-root` and generates
+initial Host/Role/Agent JSON. The TUI adds and reads `tui.json`, then passes the
+same resolved directory to `Host::open_directory_configured`. Host alone parses
+business files and retains the exclusive data-root lease for its lifetime.
 
-A new Agent is created only when the Host has none or the user explicitly
-requests one. Native Agent creation also creates its default Session. Selection
-uses full Agent and Session identities and actual `last_activity_at` values.
-The current directory is an override for new Session creation, not a rewrite of
-an opened Session's workspace. Startup model/reasoning overrides are consumed
-once. Later navigation reads the selected Session's saved settings.
+Host reconciles file declarations at startup and explicit directory reload.
+Stable declaration keys preserve Agent IDs and default Sessions across restart,
+renaming and reintroduction. Bootstrap only reads native catalogs. Explicit
+`/agent-new` reads the selected Agent's native configuration and copies it into
+a dynamic Agent without source metadata, Session overrides or history. There
+is no global frontend Agent template or fallback Agent creation.
+
+`/reload` carries an operation ID and expected version, with no candidate or
+path. Full and partial application refresh actual catalogs; partial results
+remain visible and are never automatically retried. Templates reload locally;
+terminal preferences do not participate in Host configuration publication.
+
+Selection uses full Agent and Session identities and actual `last_activity_at`
+values. The current directory overrides newly created Sessions, not an opened
+Session's workspace. The shared starter records the initialization workspace
+for its default Agent. Startup model/reasoning overrides are consumed once.
+Later navigation reads the selected Session's saved settings.
 
 The main loop owns the terminal guard and external-editor handoff. It restores
 the terminal before supervising shutdown. Graceful shutdown waits for the real
@@ -159,8 +171,8 @@ status hints, timestamps and layout rails.
 
 ## Native meaning in the UI
 
-The model catalog and reasoning choices come directly from Host. Unknown Agent
-creation defaults are not displayed as if read from a selected saved Agent.
+The model catalog and reasoning choices come directly from Host. A Session displays its native committed settings; an unopened draft shows only
+explicit launch choices.
 Session updates use expected configuration revisions, and active Turns keep
 their already prepared configuration snapshots. Rename completion refreshes the
 catalog and reads metadata for the original resident Session, independent of

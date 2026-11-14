@@ -76,8 +76,7 @@ pub struct Ready {
 
 pub struct Reloaded {
     pub result: HostReloadResult,
-    pub new_agent: AgentConfig,
-    pub templates: Vec<templates::Template>,
+    pub templates: Option<Vec<templates::Template>>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -132,7 +131,6 @@ pub struct App {
     pub sessions: Vec<SessionSummary>,
     pub agents: Vec<AgentSummary>,
     pub selected_agent: Option<AgentId>,
-    pub new_agent: AgentConfig,
     pub(super) catalog_loading: bool,
     pub(super) catalog_due: bool,
     pub models: Vec<ModelDescription>,
@@ -169,8 +167,7 @@ pub struct App {
     pub(super) opening_target: Option<(u64, SessionRef)>,
     pub epoch: u64,
     pub templates: Vec<templates::Template>,
-    pub home: Option<crate::config::Home>,
-    pub host_config_file: Option<PathBuf>,
+    pub config_directory: Option<crate::config::ConfigDirectory>,
     pub(super) reloading: bool,
     pub editor: Vec<String>,
     pub armed_unknown: Option<String>,
@@ -198,7 +195,6 @@ impl App {
             sessions: Vec::new(),
             agents: Vec::new(),
             selected_agent: None,
-            new_agent: AgentConfig::default(),
             catalog_loading: false,
             catalog_due: false,
             models: Vec::new(),
@@ -235,8 +231,7 @@ impl App {
             opening_target: None,
             epoch: 0,
             templates: Vec::new(),
-            home: None,
-            host_config_file: None,
+            config_directory: None,
             reloading: false,
             editor: Vec::new(),
             armed_unknown: None,
@@ -252,7 +247,7 @@ impl App {
             Msg::Ready(result) => match result {
                 Ok(ready) => {
                     self.install_catalogs(ready);
-                    self.templates = templates::load(self.home.as_ref());
+                    self.templates = templates::load(self.config_directory.as_ref());
                     self.ready = true;
                     self.start_host_observation();
                 }
@@ -336,26 +331,56 @@ impl App {
             Msg::Reloaded(result) => {
                 self.reloading = false;
                 match result {
-                    Ok(reloaded) => match reloaded.result {
-                        HostReloadResult::Applied { config_revision } => {
-                            self.new_agent = reloaded.new_agent;
-                            self.templates = reloaded.templates;
-                            self.refresh_catalogs();
-                            self.notice(NoticeLevel::Info, format!("Host configuration {config_revision} applied; Agent creation defaults and templates reloaded"));
-                        }
-                        HostReloadResult::RestartRequired { fields, .. } => {
-                            let fields = fields
+                    Ok(reloaded) => {
+                        match reloaded.result {
+                            HostReloadResult::Applied {
+                                config_revision, ..
+                            } => {
+                                if let Some(templates) = reloaded.templates {
+                                    self.templates = templates;
+                                }
+                                self.refresh_catalogs();
+                                self.notice(NoticeLevel::Info, format!("Host configuration {config_revision} and declared Agents applied"));
+                            }
+                            HostReloadResult::PartiallyApplied {
+                                config_revision,
+                                agents,
+                            } => {
+                                if let Some(templates) = reloaded.templates {
+                                    self.templates = templates;
+                                }
+                                self.refresh_catalogs();
+                                let failed = agents
                                 .iter()
-                                .map(|field| match field {
-                                    RestartField::NetworkListen => "network listener",
-                                    RestartField::Logging => "logging",
+                                .filter_map(|result| match result {
+                                    AgentConfigurationResult::Failed { key, error, .. } => Some(
+                                        format!("{key}: {} ({})", error.type_name(), error.code()),
+                                    ),
+                                    AgentConfigurationResult::Created { key, .. }
+                                        if !result.succeeded() =>
+                                    {
+                                        Some(format!("{key}: Agent or default Session creation is incomplete"))
+                                    }
+                                    _ => None,
                                 })
                                 .collect::<Vec<_>>()
                                 .join(", ");
-                            self.notice(NoticeLevel::Info, format!("Host configuration requires a restart for: {fields}. The current configuration remains active"));
+                                self.notice(NoticeLevel::Error, format!("Host configuration {config_revision} applied with partial Agent results; inspect the Agent catalog. Failed declarations: {failed}"));
+                            }
+                            HostReloadResult::RestartRequired { fields, .. } => {
+                                let fields = fields
+                                    .iter()
+                                    .map(|field| match field {
+                                        RestartField::NetworkListen => "network listener",
+                                        RestartField::Logging => "logging",
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join(", ");
+                                self.notice(NoticeLevel::Info, format!("Host configuration requires a restart for: {fields}. The current configuration remains active"));
+                            }
+                            _ => unreachable!("reload worker returns a completed native result"),
                         }
-                        _ => unreachable!("reload worker returns a completed native result"),
-                    },
+                    }
                     Err(error) => self.notice(NoticeLevel::Error, error),
                 }
             }

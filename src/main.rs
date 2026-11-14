@@ -10,12 +10,12 @@ use tokio::sync::mpsc;
 
 use minicore_host_core::{AgentSummary, SessionSummary};
 use minicore_host_protocol::{
-    AgentId, HostLifecycle, HostShutdownRequest, HostShutdownStrategy, ModelRef, NullablePatch,
-    OperationId, SessionConfigPatch, SessionId, SessionOverrides, SessionRef, WorkspaceRef,
+    AgentId, HostLifecycle, HostShutdownRequest, HostShutdownStrategy, ModelRef, OperationId,
+    SessionId, SessionRef,
 };
 use minicore_tui::app::{App, Msg};
 use minicore_tui::cli::{Args, USAGE};
-use minicore_tui::config::{self, Home, Prepared, Request};
+use minicore_tui::config::{self, ConfigDirectory, Prepared};
 use minicore_tui::host::Hosted;
 use minicore_tui::terminal;
 use minicore_tui::ui::theme::{Palette, Styles};
@@ -145,18 +145,15 @@ async fn run() -> i32 {
         println!("minicore-tui {}", env!("CARGO_PKG_VERSION"));
         return 0;
     }
-    let home = match Home::resolve(args.home.as_deref()) {
-        Ok(home) => home,
-        Err(error) => {
-            eprintln!("{error}");
-            return 2;
-        }
-    };
-    let request = Request {
-        data_root: args.data_root.as_deref(),
-        host_config: args.host_config.as_deref(),
-    };
-    let launch = match config::prepare(&home, &request) {
+    let directory =
+        match ConfigDirectory::resolve(args.config_dir.as_deref(), args.data_root.as_deref()) {
+            Ok(directory) => directory,
+            Err(error) => {
+                eprintln!("{error}");
+                return 2;
+            }
+        };
+    let launch = match config::prepare(&directory, args.workspace.as_deref()) {
         Ok(Prepared::Launch(launch)) => *launch,
         Ok(Prepared::FirstRun(message)) => {
             println!("{message}");
@@ -217,21 +214,10 @@ async fn run() -> i32 {
             return 2;
         }
     };
-    let workspace_path = match workspace.to_str() {
-        Some(path) => path.to_owned(),
-        None => {
-            eprintln!("workspace must be representable as UTF-8 for native Host configuration");
-            return 2;
-        }
-    };
-    let initial_session = SessionOverrides(SessionConfigPatch {
-        model: model.clone(),
-        reasoning: args.reasoning,
-        workspace: NullablePatch::Set(WorkspaceRef {
-            path: workspace_path,
-        }),
-        ..SessionConfigPatch::default()
-    });
+    if workspace.to_str().is_none() {
+        eprintln!("workspace must be representable as UTF-8 for native Host configuration");
+        return 2;
+    }
     let mut signals = match ExitSignals::new() {
         Ok(signals) => signals,
         Err(error) => {
@@ -266,26 +252,21 @@ async fn run() -> i32 {
         model,
         reasoning: args.reasoning,
     };
-    app.new_agent = launch.new_agent.clone();
     app.selected_agent = selected_agent.clone();
-    app.host_config_file = Some(launch.host_config_file);
     app.theme = theme;
     app.notifier.bell = launch.ui.bell;
     app.editor = launch.ui.editor;
     app.composer = minicore_tui::app::composer::Composer::with_history(
-        minicore_tui::prompt_history::load(&home.history_file()),
+        minicore_tui::prompt_history::load(&directory.history_file()),
     );
-    app.home = Some(home);
+    app.config_directory = Some(directory);
     app.styles = Styles::of(Palette::for_kind(theme));
 
     let boot = {
         let client = client.clone();
         let tx = msg_tx.clone();
-        let new_agent = launch.new_agent;
         let selected = selected_agent.clone();
-        tokio::spawn(async move {
-            minicore_tui::app::bootstrap(client, tx, new_agent, selected, initial_session).await
-        })
+        tokio::spawn(async move { minicore_tui::app::bootstrap(client, tx, selected).await })
     };
     let (mut terminal_events, mut term_rx) = start_terminal_events();
     let mut frames = Frames::new();

@@ -1,75 +1,80 @@
 # Configuration
 
-Version 0.11 uses the native Host 0.11 configuration types. Terminal preferences,
-Host resources, Agent defaults and saved Session settings have distinct owners.
-The TUI does not compose an Agent TOML file or import an old Agent store.
+Version 0.12 uses one JSON configuration directory for the embedded Host and
+terminal frontend. Host owns `host.json`, Agent declarations and reusable Roles.
+The TUI reads and writes only `tui.json`; it passes the resolved directory to
+Host's Rust startup API.
 
 ## Paths and first run
 
-The TUI home is `--home`, otherwise `$MINICORE_HOME`, otherwise the executable's
-directory. Relative command-line paths are resolved from the working directory.
-`--data-root` selects the Host data directory; the default is `<home>/host`.
-`--host-config` selects a native JSON candidate; its default is
-`<home>/host-config.json`.
+`--config-dir <DIR>` selects the configuration directory. The default is
+`config/` beside the running executable. Relative paths are resolved from the
+startup working directory. `--data-root <DIR>` independently selects runtime
+storage; its default is `<config-dir>/data`.
 
-A fresh home writes `config.toml`, `host-config.json`, `agent-defaults.json` and
-creates `prompt/commands/`. It prints the files to edit and exits with status 1.
-The starter endpoint uses an invalid example domain: it must be replaced with
-your real provider configuration. Subsequent configuration or argument errors
-exit with status 2 before the terminal switches to fullscreen.
+A fresh directory gets a shared Host starter configuration, one Role, one Agent,
+`tui.json` and `prompt/commands/`. Setup prints the files and exits with status 1.
+The sample Agent records the absolute `--workspace` directory, or the current
+working directory, at initialization. Its example provider endpoint must be
+replaced before use. Argument and configuration failures exit with status 2
+before fullscreen startup.
 
-| Scope | Configuration source | When it applies |
-|---|---|---|
-| TUI | `config.toml` `[ui]` | Startup; theme changes are saved immediately |
-| Host | Saved native Host configuration, or initial `host-config.json` for a new root | Host startup; explicit `/reload` for changes |
-| New Agent | `agent-defaults.json` | Agent creation; explicit `/agent-defaults` to update the selected Agent |
-| New Session | Selected Agent's saved Session defaults plus explicit overrides | Session creation |
-| Existing Session | Its saved native Session configuration | Reopening; explicit model, reasoning or approval update |
+| Path | Owner and purpose |
+|---|---|
+| `<config-dir>/host.json` | Host resources, framework instructions, logging and network settings |
+| `<config-dir>/roles/*.json` | Reusable Role values referenced by Agent declarations |
+| `<config-dir>/agents/*.json` | Named Agent declarations with stable keys and Session defaults |
+| `<config-dir>/tui.json` | Local theme, editor and bell preferences |
+| `<config-dir>/prompt/commands/*.md` | Local slash-command templates |
+| `<data-root>/` | Host identities, committed configuration, Sessions and history |
+| `<data-root>/tui/history.jsonl` | Confirmed TUI input recall |
 
-Saved Host configuration wins over the candidate file at startup. An existing
-Host does not parse the default candidate until `/reload`; an explicit
-`--host-config` is still parsed at startup to report argument errors. Editing a
-file does not watch, reload or rewrite existing objects. Opening a Session does
-not reapply new-Agent defaults. Startup `--model` and `--reasoning` apply to the
-startup Session once; later navigation keeps the selected Session's settings.
+Host reads its directory on every startup and on explicit `/reload`. Saved
+records preserve identity and history; current file declarations supply Host
+and managed Agent configuration. Existing Sessions retain their own committed
+configuration. Files are not watched automatically.
 
 ## Terminal preferences
 
-```toml
-[ui]
-theme = "dark"                     # dark | light
-bell = true
-editor = ["code", "--wait"]         # optional; otherwise $VISUAL, then $EDITOR
+`tui.json` uses standard JSON:
+
+```json
+{
+  "ui": {
+    "theme": "dark",
+    "editor": ["code", "--wait"],
+    "bell": true
+  }
+}
 ```
 
-`/theme` and F4 update only the theme key while preserving comments. The editor
-is an executable and argument vector; Ctrl+G appends the temporary draft path.
-An empty edited file clears the draft. A failed editor or unreadable result
-keeps the original draft and reports the temporary path for recovery.
-`NO_COLOR` disables colors. Prompt recall is stored in `history.jsonl`; input
-enters it only after verified acceptance.
+The theme is `dark` or `light`. An omitted file or field uses the terminal's
+defaults. Unknown fields and invalid values are errors. JSON comments are not
+supported. `/theme` and F4 save the theme while preserving editor and bell.
+Host does not read this file; a UI error does not invalidate Host configuration.
 
-Only `[ui]` belongs in this file. Legacy `[agent]`, `[profiles]`, `[loop]`,
-`[compaction]`, remote settings and `default_profile` are rejected rather than
-silently interpreted as native Host settings.
+The editor is an executable and argument vector. If it is empty, Ctrl+G uses
+`VISUAL`, then `EDITOR`, and appends the temporary draft path. An empty edited
+file clears the draft. Editor failure or unreadable output preserves the draft
+and reports its recovery path. `NO_COLOR` disables colors. Input enters recall
+history only after Host confirms acceptance.
 
-## Native Host resources
+## Host resources
 
-Edit the generated `host-config.json`. It has these required top-level fields:
+Edit the generated `host.json` using native Host configuration fields:
 
 | Field | Meaning |
 |---|---|
 | `name` | Human-readable Host name |
-| `framework_instructions` | Shared framework instructions |
+| `framework_instructions` | Optional shared framework text; empty by default |
 | `models` | Explicit model resources and declared capabilities |
-| `tools` | Built-in tool bindings made available by this Host |
+| `tools` | Tool bindings available from this Host |
+| `workspace_roots` | Allowed workspace catalog roots |
 | `network` | Native network settings; embedded TUI requires `listen: null` |
-| `logging` | Native diagnostic level and destination |
+| `logging` | Diagnostic level and destination |
 
-Each model entry contains a full native reference such as `provider/chat`, an
-explicit API, a complete endpoint, the provider's model name, a credential
-source, context-window declaration, supported reasoning levels and tool support.
-For example, replace the corresponding entry in the generated file with:
+Each model has a full reference, explicit API, complete endpoint, provider model
+name, credential source and declared capabilities. A model entry looks like:
 
 ```json
 {
@@ -86,85 +91,91 @@ For example, replace the corresponding entry in the generated file with:
 ```
 
 For Responses select `"api": "responses"` and the provider's full Responses
-endpoint. Endpoint text does not choose the API and there is no fallback from
-one protocol to another. Use only capabilities the actual provider/model
-supports. `/model` and `/reasoning` display the Host catalog; the TUI does not
-invent reasoning levels or silently substitute another model.
+endpoint. Host does not infer the API from the endpoint or fall back to another
+protocol. `/model` and `/reasoning` use the Host catalog and its actual declared
+capabilities. `api_key_env` names an environment variable; it never contains the
+credential itself. Production resource preparation resolves that variable.
 
-`api_key_env` is an environment-variable **name**, never the credential itself.
-The native resource preparation step resolves its value. The TUI does not copy
-it into an Agent child, config dump or frontend state.
+The starter enables `read`, `write`, `edit`, `apply_patch`, `bash` and `agent`.
+Agent and Session configuration select tools and execution policy. Host owns
+resource validation and execution.
 
-The generated tool bindings are `read`, `write`, `edit`, `apply_patch`, `bash`
-and `agent`. The selected Agent and Session configuration determine the enabled
-set and execution policy. Tools execute in Host's resource/runtime layer.
+The starter logs to an absolute file path so diagnostics cannot corrupt the
+terminal. Keep that path or choose another file whose parent exists. Logs may
+not target Host metadata or Session history. Stderr logging is accepted only
+when stderr is redirected away from the terminal.
 
-### Logs and networking
+`network.listen` must be `null`. This executable runs one local embedded Host.
+It exposes no browser server, phone protocol or remote connection interface.
+Web deployment uses its own `web.json` and is independent of this TUI directory.
 
-The starter uses an absolute file path `<home>/minicore-tui.log`:
+## Roles, Agents and Sessions
 
-```json
-{
-  "level": "info",
-  "output": { "kind": "file", "path": "/absolute/path/minicore-tui.log" }
-}
-```
+Each `roles/<role>.json` contains `name`, `description` and optional
+`instructions`. Each Agent file contains:
 
-Keep the generated platform-native path, or choose another absolute path whose
-parent exists. Logs cannot target Host metadata or Session history. Native
-stderr logging is accepted only when stderr is redirected away from the
-terminal, so diagnostics cannot interleave with fullscreen output.
+| Field | Meaning |
+|---|---|
+| `key` | Stable unique configuration identity, such as `coding` |
+| `name` | Display name, such as `Coding assistant` |
+| `role` | Role filename stem, such as `coding` for `roles/coding.json` |
+| `instructions` | Optional Agent-specific text; empty by default |
+| `session_defaults` | Complete native defaults for model, reasoning, tools, execution and workspace |
 
-`network.listen` must remain `null`. This executable exposes no HTTP, WS, WSS,
-phone pairing, browser authentication or Webpage assets. Independent Host
-network deployment belongs to the Host application, not this embedded TUI.
+Retain the complete generated `session_defaults` object when editing values.
+`role` names exactly one file stem in `roles/`. It cannot contain a path.
+Missing Roles, duplicate Agent keys, unknown fields and invalid resources fail
+validation before publication.
 
-## Agent and Session configuration
+The stable `key` binds a declaration to one persistent Agent. Changing its
+filename or display name preserves the Agent ID and existing default Session.
+Host creates new declared Agents and their default Sessions. Removing a file
+and reloading releases file management while preserving the Agent, its key,
+Sessions and history. Reintroducing the key reuses that Agent.
 
-`agent-defaults.json` is a native `AgentConfig`, with `role` and
-`session_defaults`. Edit the generated Role name, description and instructions,
-and the Session model, reasoning, tools and execution policy. The old
-`prompt/SYSTEM_PROMPT.md` composition path is replaced by explicit native
-instructions.
+Managed Agents cannot be changed or deleted through ordinary Agent mutation
+operations. Edit their declarations and `/reload`; to delete an Agent, first
+remove its declaration and reload, then use `/agent-delete`. Start/stop, default
+Session selection and Session updates keep their native behavior.
 
-A new Host creates the first Agent and its default Session. `/agent-new <name>`
-creates another Agent from this file's currently loaded defaults. `/new` creates
-a Session under the selected Agent, inheriting that Agent's **saved** defaults.
-`--workspace` supplies a new Session's workspace; switching an existing Session
-reads its own workspace.
+`/agent-new <name>` copies the currently selected Agent's native configuration
+into a new dynamic Agent. It copies Role, Agent instructions and Session defaults;
+it does not copy file management, Session overrides or history. With no selected
+Agent, add an Agent declaration and `/reload` first. `/new` creates a Session
+from the selected Agent's current defaults, with the current `--workspace`
+override. Opening an existing Session preserves its saved workspace.
 
-`/agent-defaults` rereads this file and performs a revision-checked native Agent
-update. It affects future Sessions. Existing Sessions keep their saved
-configuration; `/model`, `/reasoning` and `/approval ask|auto|read_only` update
-the current Session explicitly. A running Turn keeps its prepared execution
-snapshot; changes become available to subsequent work according to Host's
-native configuration semantics.
-
-`/default-session` sets the selected Session as its Agent's actual default.
-Selecting a row in the TUI alone does not change that default.
+Host assembles nonempty prompt layers in order: framework, Role, Agent, workspace
+and history. Empty instruction strings add no placeholder prompt. Role name and
+description do not substitute for instructions. Updating Role or Agent files
+changes future Session defaults; existing Sessions and already running Turns
+keep their committed snapshots. `/model`, `/reasoning` and `/approval` update
+the current Session explicitly. Startup model and reasoning flags apply once.
 
 ## Reload
 
-`/reload` reads the selected Host candidate file, checks the current native
-configuration revision and submits one reload request. Preparing and applying
-are progress states. Only native `applied` refreshes the model catalog and
-publishes the reloaded local command templates/new-Agent defaults.
+`/reload` sends only an operation ID and the expected native configuration
+revision. Host rereads its bound directory, validates the complete candidate,
+prepares resources and reports real owner progress. The TUI does not send JSON
+candidates or choose another directory during reload.
 
-A failed request shows its failure. A restart-required result lists the native
-fields and leaves the effective configuration unchanged. Network listener and
-logging changes cannot be applied live. The candidate file is not a way to
-silently replace the saved configuration on the next start; use Host's native
-configuration/deployment workflow for restart-only changes, or initialize a
-new data root with the intended startup configuration.
+After full or partial application, the TUI refreshes the actual Agent, Session
+and model catalogs and reloads local command templates. Partial application
+means the Host configuration was published and some Agent operations failed;
+the notice identifies failed declarations. Completed changes remain applied,
+and the TUI does not retry automatically. Existing Sessions are not rewritten.
 
-Existing Agents and Sessions are not reset to the new-Agent defaults by
-`/reload`. `/agent-defaults` is the explicit Agent-default update operation.
+Restart-required changes, including logging and the network listener, leave
+both Host and Agent configuration unchanged. Restart with the same directory
+to load those changes. Preparation or validation failures leave the active
+configuration unchanged. UI preferences are independent of Host reload; edit
+`tui.json` and restart to load editor or bell changes.
 
 ## Prompt templates
 
-Put a Markdown file in `prompt/commands/`; its filename becomes a slash command.
-A built-in command name cannot be shadowed. Optional front matter supplies
-`description` and `argument-hint`.
+Put Markdown in `<config-dir>/prompt/commands/`; each filename becomes a slash
+command. Built-in command names cannot be shadowed. Optional front matter gives
+`description` and `argument-hint`:
 
 ```markdown
 ---
@@ -174,20 +185,15 @@ argument-hint: <area>
 Review $1 for correctness and tests. Additional instructions: $ARGUMENTS
 ```
 
-`$1`, `$2`, `$@`, `$ARGUMENTS` and `${1:-default}` expand arguments. These are
-text templates, not shell commands. Templates load at startup and after a
-successful `/reload`.
+`$1`, `$2`, `$@`, `$ARGUMENTS` and `${1:-default}` expand arguments as text.
+Templates load at startup and after full or partial Host application.
 
-## Upgrading from 0.9.x
+## Removed configuration paths
 
-Use a new home and let the current version generate its native starter files.
-Copy the provider endpoint/model declarations, credential-variable names and
-desired instructions into the new files explicitly. Reuse prompt template
-Markdown if desired.
-The old `models.toml`, profiles, composed `session/agent.toml` and Agent Session
-store are not automatically translated, opened or modified.
+`--home`, `--host-config`, `MINICORE_HOME`, `config.toml`, `agent-defaults.json`
+and `/agent-defaults` are removed. There is no conversion or compatibility
+loader. Create a new JSON directory and explicitly transfer desired provider
+settings and instructions. The old standalone Agent store is not imported.
 
-`--agent`, `--agent-config`, `--profile`, `--remote` and `minicore-tui agent` no
-longer exist. Webpage/phone configuration and assets have been removed. The
-native Host directory must have one owning Host process; attaching a second TUI
-to that same directory is not a remote connection.
+A data root has one owning Host process. Opening it in a second TUI is not a
+remote connection and cannot bypass the exclusive owner lease.

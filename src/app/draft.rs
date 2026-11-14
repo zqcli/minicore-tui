@@ -61,13 +61,11 @@ mod tests {
     use crate::testing::NativeHost;
 
     #[tokio::test(start_paused = true)]
-    async fn an_unopened_agent_never_inherits_the_new_agent_configuration_for_display() {
+    async fn an_unopened_agent_displays_only_explicit_launch_settings() {
         let fixture = NativeHost::new().await;
         let (tx, _) = tokio::sync::mpsc::channel(crate::app::tasks::MESSAGE_CAPACITY);
         let mut app = App::new(fixture.client.clone(), tx, std::path::PathBuf::from("."));
         app.selected_agent = Some(fixture.target.agent_id.clone());
-        app.new_agent.session_defaults.model = "startup/not-selected".parse().unwrap();
-        app.new_agent.session_defaults.reasoning = ReasoningPreference::High;
         assert_eq!(app.model_id(), None);
         assert_eq!(app.reasoning(), None);
         assert!(app.reasoning_levels().is_empty());

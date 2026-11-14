@@ -55,7 +55,6 @@ pub enum Action {
     },
     SetDefaultSession,
     SetApproval(ApprovalMode),
-    ApplyAgentDefaults,
     Quit,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -91,7 +90,17 @@ impl App {
                     return;
                 }
                 let client = self.client.clone();
-                let config = self.new_agent.clone();
+                let Some(agent_id) = self.current_agent_id().cloned() else {
+                    self.notice(
+                        NoticeLevel::Error,
+                        "Select an Agent to copy, or add agents/*.json and run /reload first",
+                    );
+                    return;
+                };
+                let source = AgentRef {
+                    host_id: client.initial_info().host_id.clone(),
+                    agent_id,
+                };
                 let overrides = self.creation_overrides();
                 self.launch = super::LaunchSettings::default();
                 self.open_generation += 1;
@@ -101,7 +110,16 @@ impl App {
                 self.spawn_msg(async move {
                     Msg::AgentCreated(
                         generation,
-                        tasks::create_agent(&client, name, config, overrides).await,
+                        async {
+                            let config = client
+                                .agent(source, tasks::options())
+                                .await
+                                .map_err(|error| error.to_string())?
+                                .info
+                                .config;
+                            tasks::create_agent(&client, name, config, overrides).await
+                        }
+                        .await,
                     )
                 });
             }
@@ -196,7 +214,6 @@ impl App {
                     );
                 }
             }
-            Action::ApplyAgentDefaults => self.apply_agent_defaults(),
             Action::Quit => self.request_quit(),
         }
     }
@@ -325,65 +342,6 @@ impl App {
             }
         });
     }
-    fn apply_agent_defaults(&mut self) {
-        if !self.require_control() {
-            return;
-        }
-        let Some(agent_id) = self.current_agent_id().cloned() else {
-            return;
-        };
-        let client = self.client.clone();
-        let tx = self.tx.clone();
-        let home = self.home.clone();
-        let fallback = self.new_agent.clone();
-        self.spawn_msg(async move {
-            let result = async {
-                let config = match home {
-                    Some(home) => {
-                        tokio::task::spawn_blocking(move || crate::config::load_new_agent(&home))
-                            .await
-                            .map_err(|e| e.to_string())?
-                            .map_err(|e| e.to_string())?
-                    }
-                    None => fallback,
-                };
-                let target = AgentRef {
-                    host_id: client.initial_info().host_id.clone(),
-                    agent_id,
-                };
-                let current = client
-                    .agent(target.clone(), tasks::options())
-                    .await
-                    .map_err(|e| e.to_string())?;
-                client
-                    .update_agent(
-                        target.clone(),
-                        AgentUpdateRequest {
-                            operation_id: tasks::operation_id()?,
-                            expected_config_revision: current.info.config_revision,
-                            changes: AgentUpdateChanges {
-                                name: None,
-                                config: AgentConfigPatch {
-                                    role: Some(config.role),
-                                    session_defaults: Some(config.session_defaults),
-                                },
-                            },
-                        },
-                        tasks::options(),
-                    )
-                    .await
-                    .map_err(|e| e.to_string())?;
-                Ok(target)
-            }
-            .await;
-            match result {
-                Ok(target) => {
-                    tasks::observe_agent(&client, &tx, target, tasks::AgentWait::Metadata).await
-                }
-                Err(error) => Msg::RefreshCatalogs(Err(error)),
-            }
-        });
-    }
     fn submit_composer(&mut self, follow: bool) {
         if let super::Overlay::Unconfirmed { mode, .. } = &mut self.overlay {
             if let super::unconfirmed::ReviewMode::Edit(id) = *mode {
@@ -476,7 +434,10 @@ impl App {
             if let Some(entry) = entry {
                 self.restore_creation_entry(entry);
             }
-            self.notice(NoticeLevel::Error, "Create or select an Agent first");
+            self.notice(
+                NoticeLevel::Error,
+                "Select an Agent, or add agents/*.json and run /reload first",
+            );
             return;
         };
         if self.pending_creations.len() >= super::unconfirmed::MAX_OPERATIONS {
@@ -777,16 +738,17 @@ impl App {
         }
     }
     fn apply_theme(&mut self, kind: ThemeKind) {
-        if let Some(home) = &self.home {
-            self.local_files.theme(&self.tx, home.config_file(), kind);
+        if let Some(home) = &self.config_directory {
+            self.local_files.theme(&self.tx, home.ui_file(), kind);
         }
         self.theme = kind;
         self.styles = Styles::of(Palette::for_kind(kind));
         self.layout.clear();
     }
     pub fn editor_command(&self) -> Result<Vec<String>, String> {
-        crate::config::editor_command(&self.editor)
-            .ok_or_else(|| "No editor configured: set [ui] editor or $VISUAL/$EDITOR".into())
+        crate::config::editor_command(&self.editor).ok_or_else(|| {
+            "No editor configured: set ui.editor in tui.json or $VISUAL/$EDITOR".into()
+        })
     }
     pub fn take_edit_request(&mut self) -> Option<String> {
         self.edit_request.take()
@@ -969,30 +931,12 @@ impl App {
         if !self.require_control() || self.reloading {
             return;
         }
-        let Some(path) = self.host_config_file.clone() else {
-            self.notice(NoticeLevel::Error, "No Host configuration file is selected");
-            return;
-        };
         self.reloading = true;
         let client = self.client.clone();
         let tx = self.tx.clone();
-        let home = self.home.clone();
-        let defaults = self.new_agent.clone();
+        let home = self.config_directory.clone();
         self.spawn_msg(async move {
             let result = async {
-                let (config, new_agent, templates) = tokio::task::spawn_blocking(move || {
-                    let config =
-                        crate::config::load_host_config(&path).map_err(|e| e.to_string())?;
-                    let new_agent = match home.as_ref() {
-                        Some(home) => {
-                            crate::config::load_new_agent(home).map_err(|e| e.to_string())?
-                        }
-                        None => defaults,
-                    };
-                    Ok::<_, String>((config, new_agent, super::templates::load(home.as_ref())))
-                })
-                .await
-                .map_err(|e| e.to_string())??;
                 let current = client
                     .config(tasks::options())
                     .await
@@ -1003,7 +947,6 @@ impl App {
                         HostReloadRequest {
                             operation_id: operation_id.clone(),
                             expected_revision: current.config_revision,
-                            candidate: config,
                         },
                         tasks::options(),
                     )
@@ -1013,6 +956,7 @@ impl App {
                 loop {
                     match &receipt.result {
                         HostReloadResult::Applied { .. }
+                        | HostReloadResult::PartiallyApplied { .. }
                         | HostReloadResult::RestartRequired { .. } => break,
                         HostReloadResult::Failed { error, .. } => {
                             return Err(format!("Host reload {operation_id}: {error}"));
@@ -1051,9 +995,25 @@ impl App {
                         }
                     };
                 }
+                let templates = if matches!(
+                    receipt.result,
+                    HostReloadResult::Applied { .. } | HostReloadResult::PartiallyApplied { .. }
+                ) {
+                    match tokio::task::spawn_blocking(move || super::templates::load(home.as_ref())).await {
+                        Ok(templates) => Some(templates),
+                        Err(error) => {
+                            let _ = tx.send(Msg::Notice(
+                                NoticeLevel::Error,
+                                format!("Host applied configuration; local template reload failed: {error}"),
+                            )).await;
+                            None
+                        }
+                    }
+                } else {
+                    None
+                };
                 Ok(super::Reloaded {
                     result: receipt.result,
-                    new_agent,
                     templates,
                 })
             }

@@ -2,8 +2,8 @@
 
 ## Scope
 
-TUI 0.11.0 embeds MiniCore Host 0.11.0 at commit
-`32f074c57868533af81b0c6491440bae24b872c8`. The frontend uses
+TUI 0.12.1 embeds MiniCore Host 0.12.0 at the immutable revision in
+`Cargo.toml`. The frontend uses
 `HostClient::in_process` and native Host DTOs. Host owns execution, storage,
 configuration, tools and credentials. There is no Agent subprocess, replacement
 wire protocol, generic backend trait or second business-state owner.
@@ -57,10 +57,14 @@ client does not require these removed servers.
 - Reported usage is labelled with its actual coverage. Missing usage is unknown,
   not zero. A recent response's token count is not current prompt occupancy or a
   whole-Session total.
-- UI preferences remain local. Native Host configuration and Agent defaults
-  replace composed Agent TOML. Existing saved Host configuration wins on reopen;
-  default templates only initialize new data. Old Agent storage is not migrated
-  implicitly.
+- UI preferences remain local in `tui.json`. The shared `--config-dir` is
+  passed to Host, which reads `host.json`, Role files and Agent declarations at
+  startup and explicit reload. Stable declaration keys preserve identity;
+  existing Sessions retain their configuration. Dynamic Agent creation copies
+  the selected Agent's native configuration without source management metadata.
+- Reload requests contain no candidate or path. Host applies declared changes
+  through actual owners and reports full or partial results. The TUI refreshes
+  actual state after either outcome and never retries partial work implicitly.
 - Session configuration changes bind to later Turns. Workspace queries use the
   addressed Host Session. TUI does not read the backend store or run Git/tools
   to replace missing Host APIs.
@@ -69,7 +73,7 @@ client does not require these removed servers.
 
 ## Verification and delivery
 
-The 0.11 frontend keeps these ownership contracts while removing unused
+The frontend keeps these ownership contracts while removing unused
 conversion paths and duplicate input bodies. Catalog reads have one coalescing
 owner; workspace status is queried independently of scheduling controls.
 History installation indexes native identities within each batch and leaves
