@@ -9,6 +9,9 @@
   details agree, including when navigation precedes completion.
 - Reject invalid explicit `/reasoning` levels with supported values and preserve
   the current setting; only the argument-free command opens the picker.
+- Report asynchronous native compaction failures once in the conversation notice,
+  including the Host fault and the originating background Session. Preserve the
+  reading position; acceptance, success, unchanged and cancellation are not failures.
 
 ## 0.11.0 — 2026-11-14
 

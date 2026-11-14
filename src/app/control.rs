@@ -160,6 +160,16 @@ impl App {
         if compaction != previous_compaction {
             self.refresh_history(epoch);
             self.refresh_context_for(epoch);
+            if let Some(activity) = &snapshot.data.compaction
+                && let CompactionState::Finished {
+                    result: CompactionOutcome::Failed { fault },
+                } = &activity.state
+            {
+                let target = self.session_mut(epoch).address();
+                self.with_notice_for(&target, |app| {
+                    app.notice(NoticeLevel::Error, format!("Compaction failed: {fault}"));
+                });
+            }
         }
         if let Some(result) = snapshot.data.last_result
             && result.session_id == self.session_mut(epoch).info.id

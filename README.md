@@ -92,7 +92,9 @@ on return. If terminal restoration fails, the error names the retained draft fil
   follow-up. Accepted `next_step` and `next_turn` entries come from Host. Esc
   cancels the captured Turn and preserves queued input; `/pause` prevents later
   queue execution and `/resume` allows it again. A mutation receipt alone never
-  marks a Turn complete or a queue entry delivered.
+  marks a Turn complete or a queue entry delivered. Asynchronous compaction
+  failures show the native fault once in the conversation notice without moving
+  the reading position; background failures name their originating Session.
 - **Questions:** approvals support allow once or deny. Tool questions support
   native text and single-choice answers. Each answer is bound to its original
   Session, Load, Turn and interaction. Use `/approval ask|auto|read_only` for a

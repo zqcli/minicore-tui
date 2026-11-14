@@ -1,11 +1,267 @@
 use crossterm::event::KeyCode;
-use minicore_host_protocol::{MessageMode, SessionRef, TurnId, TurnOutcome};
+use minicore_host_protocol::{
+    CompactRequest, CompactionOutcome, CompactionState, ExecutionSettings, MessageMode,
+    OperationId, SessionConfigPatch, SessionOverrides, SessionRef, TurnId, TurnOutcome,
+};
 
 use super::harness::Harness;
 use crate::app::{Action, App, Msg};
 use crate::history::HistoryWindow;
 use crate::testing::{ModelCall, real_bounded};
 use crate::transcript::Block;
+
+async fn compaction_session(h: &mut Harness) -> SessionRef {
+    let mut execution = ExecutionSettings::default();
+    execution.compaction.target_percent = 1;
+    let target = real_bounded(crate::app::tasks::create_session(
+        &h.native.client,
+        h.native.target.agent_id.clone(),
+        SessionOverrides(SessionConfigPatch {
+            execution: Some(execution),
+            ..Default::default()
+        }),
+    ))
+    .await
+    .unwrap();
+    h.open(&target).await;
+    target
+}
+
+async fn compaction_history(h: &mut Harness, target: &SessionRef) {
+    for count in 1..=2 {
+        submit(h, &"historical context to summarize\n".repeat(400), false);
+        let call = h.next_call().await;
+        call.text("recorded");
+        call.finish();
+        h.until(|app| terminal_count(app, target) == count && !app.is_busy())
+            .await;
+    }
+}
+
+async fn request_compaction(h: &mut Harness, target: &SessionRef) {
+    real_bounded(h.native.client.session(target.clone()).compact(
+        CompactRequest {
+            operation_id: OperationId::new().unwrap(),
+        },
+        Default::default(),
+    ))
+    .await
+    .expect("native compaction admission");
+}
+
+fn compaction_result<'a>(app: &'a App, target: &SessionRef) -> Option<&'a CompactionOutcome> {
+    match &app
+        .resident
+        .find(target)?
+        .state
+        .data
+        .compaction
+        .as_ref()?
+        .state
+    {
+        CompactionState::Finished { result } => Some(result),
+        _ => None,
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn compaction_failure_is_visible_once_without_moving_the_reading_anchor() {
+    let mut h = Harness::opened().await;
+    let target = compaction_session(&mut h).await;
+    compaction_history(&mut h, &target).await;
+    h.app.notices.clear();
+    request_compaction(&mut h, &target).await;
+    let call = h.next_call().await;
+    h.until(App::compacting).await;
+    assert!(h.notices().is_empty(), "admission is not a terminal result");
+    let anchor = crate::app::Scroll::Anchor {
+        block: 0,
+        offset: 1,
+    };
+    h.app.scroll = anchor;
+    let epoch = h.app.resident.find(&target).unwrap().epoch;
+    let preparing = h.app.resident.find(&target).unwrap().state.clone();
+    // A finished utility response with no summary is a real asynchronous Host failure.
+    call.finish();
+    h.until(|app| {
+        matches!(
+            compaction_result(app, &target),
+            Some(CompactionOutcome::Failed { .. })
+        )
+    })
+    .await;
+    let Some(CompactionOutcome::Failed { fault }) = compaction_result(&h.app, &target) else {
+        unreachable!()
+    };
+    let expected = format!("Compaction failed: {fault}");
+    assert_eq!(h.notices(), [expected.as_str()]);
+    assert_eq!(h.app.scroll, anchor);
+    assert!(matches!(h.app.overlay, crate::app::Overlay::None));
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(180, 30)).unwrap();
+    terminal
+        .draw(|frame| {
+            crate::ui::draw(frame, &mut h.app);
+        })
+        .unwrap();
+    let screen: String = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect();
+    assert!(
+        screen.contains(&expected),
+        "ordinary conversation must show the native fault"
+    );
+    assert_eq!(h.app.scroll, anchor);
+
+    let finished = h.app.resident.find(&target).unwrap().state.clone();
+    h.app.apply_snapshot(epoch, finished.clone());
+    h.app.apply_snapshot(epoch, preparing);
+    assert_eq!(h.notices(), [expected.as_str()]);
+    h.app.notices.clear();
+    h.app.apply_snapshot(epoch, finished.clone());
+    h.app.on_action(Action::Pause);
+    h.until(|app| {
+        app.resident
+            .find(&target)
+            .unwrap()
+            .state
+            .data
+            .controller_revision
+            > finished.data.controller_revision
+    })
+    .await;
+    assert!(
+        h.notices().is_empty(),
+        "a new revision with the same failure must stay quiet"
+    );
+    let other = h.native.target.clone();
+    h.open(&other).await;
+    let other_epoch = h.app.resident.current().unwrap().epoch;
+    h.app.apply_snapshot(other_epoch, finished);
+    assert!(
+        h.app
+            .resident
+            .current()
+            .unwrap()
+            .state
+            .data
+            .compaction
+            .is_none()
+    );
+    assert!(
+        h.notices().is_empty(),
+        "a mismatched Session must reject the snapshot"
+    );
+    h.open(&target).await;
+    assert!(
+        h.notices().is_empty(),
+        "reopening must not replay the failure"
+    );
+    assert_eq!(h.app.scroll, anchor);
+    h.finish().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn compaction_failure_after_navigation_names_its_original_session() {
+    let mut h = Harness::opened().await;
+    let target = compaction_session(&mut h).await;
+    compaction_history(&mut h, &target).await;
+    let other = h.native.target.clone();
+    for _ in 0..2 {
+        h.open(&target).await;
+        request_compaction(&mut h, &target).await;
+        let call = h.next_call().await;
+        h.until(App::compacting).await;
+        h.open(&other).await;
+        h.app.composer.set_text("unrelated draft");
+        h.app.notices.clear();
+        call.finish();
+        h.until(|app| {
+            matches!(
+                compaction_result(app, &target),
+                Some(CompactionOutcome::Failed { .. })
+            )
+        })
+        .await;
+        let Some(CompactionOutcome::Failed { fault }) = compaction_result(&h.app, &target) else {
+            unreachable!()
+        };
+        let session = h.app.resident.find(&target).unwrap();
+        let owner = session
+            .info
+            .title
+            .as_deref()
+            .unwrap_or(target.session_id.as_str());
+        let expected = format!("\"{owner}\": Compaction failed: {fault}");
+        assert_eq!(
+            h.notices(),
+            [expected.as_str()],
+            "each new operation reports its own failure"
+        );
+        assert_eq!(h.app.resident.current().unwrap().address(), other);
+        assert_eq!(h.app.composer.text(), "unrelated draft");
+        assert!(
+            h.app
+                .resident
+                .current()
+                .unwrap()
+                .state
+                .data
+                .compaction
+                .is_none()
+        );
+    }
+    h.finish().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn compaction_unchanged_cancelled_and_compacted_do_not_report_failure() {
+    let mut h = Harness::opened().await;
+    let target = compaction_session(&mut h).await;
+    h.app.notices.clear();
+    request_compaction(&mut h, &target).await;
+    h.until(|app| {
+        matches!(
+            compaction_result(app, &target),
+            Some(CompactionOutcome::Unchanged)
+        )
+    })
+    .await;
+    assert!(h.notices().is_empty());
+
+    compaction_history(&mut h, &target).await;
+    request_compaction(&mut h, &target).await;
+    let cancelled = h.next_call().await;
+    h.until(App::compacting).await;
+    h.press(KeyCode::Esc);
+    h.until(|app| {
+        matches!(
+            compaction_result(app, &target),
+            Some(CompactionOutcome::Cancelled)
+        )
+    })
+    .await;
+    assert!(cancelled.context.cancellation.is_cancelled());
+    assert!(h.notices().is_empty());
+    drop(cancelled);
+
+    request_compaction(&mut h, &target).await;
+    let call = h.next_call().await;
+    call.text("Recorded historical context.");
+    call.finish();
+    h.until(|app| {
+        matches!(
+            compaction_result(app, &target),
+            Some(CompactionOutcome::Compacted { .. })
+        )
+    })
+    .await;
+    assert!(h.notices().is_empty());
+    h.finish().await;
+}
 
 fn assert_users(call: &ModelCall, expected: &[&str]) {
     let users = call.users();

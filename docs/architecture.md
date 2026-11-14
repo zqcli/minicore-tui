@@ -76,7 +76,11 @@ reads; they do not synthesize successful execution, delivery, cancellation or
 saving. The global state subscription updates nonresident catalog rows; local
 resident views also receive completion, message, interaction and output events.
 Fresh catalogs are overlaid with already observed state to avoid downgrading the
-view with an older read result.
+view with an older read result. Resident compaction state changes refresh history
+and context; a native terminal failure also emits one original-target notice with
+the Host fault. Snapshot identity/revision merging and the previous compaction
+comparison suppress replay without changing the reading anchor or treating
+admission, successful completion, unchanged or cancellation as failure.
 
 Post-bootstrap catalog reads share one coalescing gate. Mutations and Agent
 progress request a refresh; requests arriving during a read coalesce into its

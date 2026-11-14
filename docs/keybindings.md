@@ -5,6 +5,10 @@ reference inside the terminal. An open picker or view owns its keys; otherwise
 a pending interaction owns them, then the conversation composer. `F8` opens
 local input confirmations even from the fatal screen. A key press clears the
 transient notices, while native blocking and observation errors remain visible.
+Asynchronous compaction failure notices preserve the reading position and name
+the originating Session when it is in the background. Repeated snapshots and
+navigation do not replay the same failure; successful, unchanged and cancelled
+compactions do not produce failure notices.
 
 `Shift+Enter` and `Ctrl+Enter` depend on the terminal reporting their modifiers.
 `Ctrl+J` inserts a newline, and `Alt+Enter` and `Ctrl+Enter` request a follow-up.
@@ -226,7 +230,7 @@ composer says `view open · esc to return`; unbound view keys do not edit it.
 | `/model [reference]` | Select an exact model reference or unique fuzzy match; with no argument, open the picker. |
 | `/reasoning [level]` | Apply a native reasoning preference; omit the argument to open the picker. Invalid values show the supported levels without changing the current value. |
 | `/approval <ask\|auto\|read_only>` | Update the current Session's approval policy for subsequent Turns. |
-| `/compact` | Request manual context compaction; Host reports acceptance or refusal. |
+| `/compact` | Request manual context compaction; acceptance is not completion. A terminal failure shows its native fault once in a conversation notice; `/context` retains the details. |
 | `/context` | Read native context facts and past response usage. |
 | `/diff` | Read live Git changes, including untracked files, from the Session's Host workspace. |
 | `/copy` | Copy the last assistant answer as Markdown. |
