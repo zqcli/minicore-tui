@@ -133,23 +133,13 @@ pub async fn catalogs(client: &HostClient, selected: Option<AgentId>) -> Result<
     })
 }
 
-pub async fn bootstrap(
-    client: HostClient,
-    tx: Tx,
-    new_agent: AgentConfig,
-    selected: Option<AgentId>,
-    overrides: SessionOverrides,
-) {
+pub async fn bootstrap(client: HostClient, tx: Tx, selected: Option<AgentId>) {
     let result = async {
-        let mut ready = catalogs(&client, selected.clone()).await?;
+        let ready = catalogs(&client, selected.clone()).await?;
         if let Some(id) = selected.as_ref()
             && !ready.agents.iter().any(|agent| agent.id == *id)
         {
             return Err(format!("Agent {id} does not exist in this Host"));
-        }
-        if ready.agents.is_empty() && client.initial_info().can_operate {
-            let target = create_agent(&client, "Assistant".into(), new_agent, overrides).await?;
-            ready = catalogs(&client, Some(target.agent_id)).await?;
         }
         Ok(ready)
     }

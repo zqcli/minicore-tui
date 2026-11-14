@@ -23,14 +23,14 @@ pub struct Hosted {
 }
 
 impl Hosted {
-    /// Opens the actual saved configuration before preparing production resources.
+    /// Lets Host load its bound directory before preparing production resources.
     pub async fn open(launch: &Launch) -> Result<Self, String> {
         let builder = HostResourceBuilder::builtins().map_err(startup_fault)?;
         let mut diagnostics = None;
         let mut preparation_error = None;
-        let host = Host::open_configured(
+        let host = Host::open_directory_configured(
             &launch.data_root,
-            launch.initial_config.clone(),
+            &launch.config_dir,
             |config| async {
                 if config.network.listen.is_some() {
                     let message = "this TUI embeds a local Host and does not start a network listener; network.listen must be null";

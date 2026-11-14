@@ -594,7 +594,42 @@ async fn agent_creation_opens_its_actual_default_and_late_results_preserve_navig
     let client = HostClient::in_process(host.clone()).unwrap();
     let (tx, mut messages) = mpsc::channel(tasks::MESSAGE_CAPACITY);
     let mut app = App::new(client.clone(), tx, directory.path().to_path_buf());
-    app.on_msg(Msg::Ready(tasks::catalogs(&client, None).await));
+    tasks::bootstrap(client.clone(), app.tx.clone(), None).await;
+    app.on_msg(messages.recv().await.unwrap());
+    assert!(app.ready);
+    app.on_action(Action::CreateAgent("No source".into()));
+    assert!(
+        app.notices
+            .back()
+            .unwrap()
+            .text
+            .contains("Select an Agent to copy")
+    );
+    assert!(
+        tasks::catalogs(&client, None)
+            .await
+            .unwrap()
+            .agents
+            .is_empty()
+    );
+
+    let mut source_config = AgentConfig::default();
+    source_config.role.instructions = "Source Role instructions".into();
+    source_config.instructions = "Source Agent instructions".into();
+    let source = tasks::create_agent(
+        &client,
+        "Source Agent".into(),
+        source_config.clone(),
+        SessionOverrides(SessionConfigPatch {
+            instructions: Some("Session-only instructions".into()),
+            ..Default::default()
+        }),
+    )
+    .await
+    .unwrap();
+    app.on_msg(Msg::Catalogs(
+        tasks::catalogs(&client, Some(source.agent_id)).await,
+    ));
 
     app.on_action(Action::CreateAgent("First Agent".into()));
     let (created, first) = take_agent_created(&mut app, &mut messages).await;
@@ -617,6 +652,17 @@ async fn agent_creation_opens_its_actual_default_and_late_results_preserve_navig
     );
     assert_eq!(native.sessions.len(), 1);
     assert_eq!(native.sessions[0].id, first.session_id);
+    assert_eq!(native.info.config, source_config);
+    assert!(native.info.configuration_source.is_none());
+    let copied_session = client
+        .session(first.clone())
+        .info(tasks::options())
+        .await
+        .unwrap();
+    assert_eq!(
+        copied_session.config.instructions,
+        "Source Agent instructions"
+    );
 
     app.on_action(Action::CreateAgent("Late Agent".into()));
     let (created, late) = take_agent_created(&mut app, &mut messages).await;
@@ -639,4 +685,62 @@ async fn agent_creation_opens_its_actual_default_and_late_results_preserve_navig
     assert_eq!(native.info.default_session_id, Some(late.session_id));
     assert_eq!(native.sessions.len(), 1);
     finish_host(app, messages, host, client).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn partial_reload_result_projection_refreshes_native_state_and_preserves_the_session() {
+    let mut h = Harness::opened().await;
+    let target = h.app.resident.current().unwrap().address();
+    h.app.reloading = true;
+    h.app
+        .on_msg(Msg::Reloaded(Ok(Box::new(crate::app::Reloaded {
+            result: HostReloadResult::PartiallyApplied {
+                config_revision: ConfigRevision::default(),
+                agents: vec![AgentConfigurationResult::Failed {
+                    key: "coding".into(),
+                    agent_id: Some(target.agent_id.clone()),
+                    error: Fault::new(
+                        FaultKind::HostStorageUnavailable,
+                        "explicit reload-result fixture",
+                    ),
+                }],
+            },
+            templates: Some(Vec::new()),
+        }))));
+    assert!(!h.app.reloading);
+    assert!(h.app.catalog_loading);
+    assert!(h.app.notices.iter().any(|notice| {
+        notice.level == crate::app::NoticeLevel::Error
+            && notice.text.contains("partial Agent results")
+            && notice.text.contains("coding")
+    }));
+    h.until(|app| !app.catalog_loading).await;
+    assert_eq!(h.app.resident.current().unwrap().address(), target);
+    h.finish().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn accepted_prompt_recall_uses_the_overridden_data_root() {
+    let mut h = Harness::opened().await;
+    let temp = tempfile::tempdir().unwrap();
+    let config = temp.path().join("config");
+    let data = temp.path().join("runtime");
+    let directory = crate::config::ConfigDirectory::resolve(Some(&config), Some(&data)).unwrap();
+    h.app.config_directory = Some(directory.clone());
+    h.app
+        .composer
+        .set_text("Remember only after native acceptance");
+    h.app.on_action(Action::Submit { follow: false });
+    let call = h.next_call().await;
+    call.finish();
+    h.until(|app| app.local_inputs.is_empty()).await;
+    h.app.local_files.finish().await;
+    assert_eq!(
+        crate::prompt_history::load(&directory.history_file())[0].text,
+        "Remember only after native acceptance"
+    );
+    assert!(data.join("tui").join("history.jsonl").is_file());
+    assert!(!config.join("history.jsonl").exists());
+    assert!(!config.join("data").exists());
+    h.finish().await;
 }

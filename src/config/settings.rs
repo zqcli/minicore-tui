@@ -2,11 +2,11 @@
 
 use std::path::Path;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use super::write_atomic;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ThemeKind {
     #[default]
@@ -22,16 +22,9 @@ impl ThemeKind {
             _ => None,
         }
     }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::Dark => "dark",
-            Self::Light => "light",
-        }
-    }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Ui {
     pub theme: ThemeKind,
@@ -50,7 +43,7 @@ impl Default for Ui {
     }
 }
 
-#[derive(Default, Deserialize)]
+#[derive(Default, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
     pub ui: Ui,
@@ -72,20 +65,15 @@ pub fn editor_command(configured: &[String]) -> Option<Vec<String>> {
     None
 }
 
-/// Saves the theme without replacing comments or other terminal preferences.
+/// Saves valid JSON while preserving the other terminal preferences.
 pub fn save_theme(file: &Path, kind: ThemeKind) -> Result<(), String> {
-    let text = match std::fs::read_to_string(file) {
-        Ok(text) => text,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(error) => return Err(format!("{}: {error}", file.display())),
-    };
-    let mut document = text
-        .parse::<toml_edit::DocumentMut>()
+    let mut settings = super::load_settings(file).map_err(|error| error.to_string())?;
+    settings.ui.theme = kind;
+    let text = serde_json::to_string_pretty(&settings)
         .map_err(|error| format!("{}: {error}", file.display()))?;
-    document.entry("ui").or_insert(toml_edit::table())["theme"] = toml_edit::value(kind.label());
     if let Some(parent) = file.parent() {
         std::fs::create_dir_all(parent).map_err(|error| format!("{}: {error}", file.display()))?;
     }
-    write_atomic(file, &document.to_string(), 0o644)
+    write_atomic(file, &format!("{text}\n"), 0o600)
         .map_err(|error| format!("{}: {error}", file.display()))
 }

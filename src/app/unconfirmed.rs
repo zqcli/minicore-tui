@@ -185,7 +185,7 @@ impl App {
             Ok(receipt) => {
                 let input = self.local_inputs.remove(index).unwrap();
                 if self.composer.remember(input.entry)
-                    && let Some(home) = &self.home
+                    && let Some(home) = &self.config_directory
                 {
                     self.local_files.history(
                         &self.tx,

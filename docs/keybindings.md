@@ -78,7 +78,7 @@ confirmation in `F8` does not remove an accepted input from the Host queue.
 | `↑`, `↓` | Move within a multiline draft, then browse prompt history at its first or last line. |
 | `Alt+↑` | Recall still-queued inputs into an empty draft. |
 | `Ctrl+X` | Cut an editor selection; otherwise copy the last assistant answer. |
-| `Ctrl+G` | Open the external editor configured by `[ui] editor`, then `$VISUAL`, then `$EDITOR`. Failures preserve the original draft. |
+| `Ctrl+G` | Open the external editor configured by `ui.editor` in `tui.json`, then `$VISUAL`, then `$EDITOR`. Failures preserve the original draft. |
 | `/` at draft start | Open the command palette. |
 | `@` at word start | Open the Host workspace file picker; an `@` within a word stays text. |
 | `Home`, `End`, `Ctrl+A`, `Ctrl+E` | Move to the line start or end. `Home` with an empty draft and `End` also navigate the transcript as described below. |
@@ -208,11 +208,10 @@ composer says `view open · esc to return`; unbound view keys do not edit it.
 | Command | Effect |
 |---|---|
 | `/agents` | Select an Agent from the Host catalog. |
-| `/agent-new <name>` | Create an Agent using the configured Agent defaults. |
+| `/agent-new <name>` | Copy the selected Agent's native configuration into a new dynamic Agent. |
 | `/agent-start` | Start the selected Agent through its native lifecycle operation. |
 | `/agent-stop` | Stop the selected Agent through its native lifecycle operation. |
 | `/agent-delete` | Review and explicitly confirm deleting the selected Agent and the captured child Session set. |
-| `/agent-defaults` | Apply `agent-defaults.json` to the selected Agent's defaults for future Sessions. |
 | `/new` | Create and open a Session in the selected Agent. |
 | `/sessions` | Open the Sessions picker. |
 | `/session` | Show the current Session and its owning Agent. |
@@ -232,7 +231,7 @@ composer says `view open · esc to return`; unbound view keys do not edit it.
 | `/copy` | Copy the last assistant answer as Markdown. |
 | `/export [path]` | Export native history to Markdown; the default is `./minicore-<session>-<date>.md`. |
 | `/theme [dark\|light]` | Choose and save a palette; no argument toggles it. |
-| `/reload` | Reload the selected Host configuration, local templates and defaults for newly created Agents. |
+| `/reload` | Ask Host to reload its bound JSON directory; refresh actual catalogs and local templates after full or partial application. |
 | `/recover` | Refresh current Session state, history and observations without resending inputs. |
 | `/unconfirmed` | Review local inputs whose acceptance is uncertain or was rejected. |
 | `/help` | Open help. |
@@ -242,7 +241,9 @@ Model, reasoning and approval changes are Session configuration updates. An
 active Turn keeps the configuration already bound to it. Host validation is
 authoritative; the terminal does not silently substitute a different reasoning
 level. With no Session open, model and reasoning selections apply when a new
-Session is created. Updating Agent defaults does not rewrite existing Sessions.
+Session is created. Reloading Agent declarations does not rewrite existing Sessions. File-managed
+Agents must be changed through their declarations; remove a declaration and
+reload before deleting the corresponding Agent.
 
 In `F8` or `/unconfirmed`, `e` or Enter opens a separate editor; `r` reviews a
 resend, `c` copies and `d` reviews forgetting the local record. Resend and forget

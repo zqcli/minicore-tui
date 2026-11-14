@@ -1049,8 +1049,8 @@ checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
 name = "minicore-host-compaction"
-version = "0.11.0"
-source = "git+https://github.com/zqcli/minicore-host?rev=32f074c57868533af81b0c6491440bae24b872c8#32f074c57868533af81b0c6491440bae24b872c8"
+version = "0.12.0"
+source = "git+https://github.com/zqcli/minicore-host?rev=1d2e12d7cec89e95d47250e3fec9be927c00bb43#1d2e12d7cec89e95d47250e3fec9be927c00bb43"
 dependencies = [
  "minicore-host-protocol",
  "minicore-host-runtime",
@@ -1059,12 +1059,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "minicore-host-config"
+version = "0.12.0"
+source = "git+https://github.com/zqcli/minicore-host?rev=1d2e12d7cec89e95d47250e3fec9be927c00bb43#1d2e12d7cec89e95d47250e3fec9be927c00bb43"
+dependencies = [
+ "minicore-host-protocol",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "minicore-host-core"
-version = "0.11.0"
-source = "git+https://github.com/zqcli/minicore-host?rev=32f074c57868533af81b0c6491440bae24b872c8#32f074c57868533af81b0c6491440bae24b872c8"
+version = "0.12.0"
+source = "git+https://github.com/zqcli/minicore-host?rev=1d2e12d7cec89e95d47250e3fec9be927c00bb43#1d2e12d7cec89e95d47250e3fec9be927c00bb43"
 dependencies = [
  "futures-util",
  "minicore-host-compaction",
+ "minicore-host-config",
  "minicore-host-diagnostics",
  "minicore-host-protocol",
  "minicore-host-runtime",
@@ -1081,8 +1092,8 @@ dependencies = [
 
 [[package]]
 name = "minicore-host-diagnostics"
-version = "0.11.0"
-source = "git+https://github.com/zqcli/minicore-host?rev=32f074c57868533af81b0c6491440bae24b872c8#32f074c57868533af81b0c6491440bae24b872c8"
+version = "0.12.0"
+source = "git+https://github.com/zqcli/minicore-host?rev=1d2e12d7cec89e95d47250e3fec9be927c00bb43#1d2e12d7cec89e95d47250e3fec9be927c00bb43"
 dependencies = [
  "minicore-host-protocol",
  "serde",
@@ -1094,8 +1105,8 @@ dependencies = [
 
 [[package]]
 name = "minicore-host-local-tools"
-version = "0.11.0"
-source = "git+https://github.com/zqcli/minicore-host?rev=32f074c57868533af81b0c6491440bae24b872c8#32f074c57868533af81b0c6491440bae24b872c8"
+version = "0.12.0"
+source = "git+https://github.com/zqcli/minicore-host?rev=1d2e12d7cec89e95d47250e3fec9be927c00bb43#1d2e12d7cec89e95d47250e3fec9be927c00bb43"
 dependencies = [
  "minicore-host-runtime",
  "minicore-host-workspace",
@@ -1113,8 +1124,8 @@ dependencies = [
 
 [[package]]
 name = "minicore-host-protocol"
-version = "0.11.0"
-source = "git+https://github.com/zqcli/minicore-host?rev=32f074c57868533af81b0c6491440bae24b872c8#32f074c57868533af81b0c6491440bae24b872c8"
+version = "0.12.0"
+source = "git+https://github.com/zqcli/minicore-host?rev=1d2e12d7cec89e95d47250e3fec9be927c00bb43#1d2e12d7cec89e95d47250e3fec9be927c00bb43"
 dependencies = [
  "getrandom 0.4.3",
  "serde",
@@ -1124,8 +1135,8 @@ dependencies = [
 
 [[package]]
 name = "minicore-host-provider"
-version = "0.11.0"
-source = "git+https://github.com/zqcli/minicore-host?rev=32f074c57868533af81b0c6491440bae24b872c8#32f074c57868533af81b0c6491440bae24b872c8"
+version = "0.12.0"
+source = "git+https://github.com/zqcli/minicore-host?rev=1d2e12d7cec89e95d47250e3fec9be927c00bb43#1d2e12d7cec89e95d47250e3fec9be927c00bb43"
 dependencies = [
  "bytes",
  "futures-util",
@@ -1144,8 +1155,8 @@ dependencies = [
 
 [[package]]
 name = "minicore-host-resources"
-version = "0.11.0"
-source = "git+https://github.com/zqcli/minicore-host?rev=32f074c57868533af81b0c6491440bae24b872c8#32f074c57868533af81b0c6491440bae24b872c8"
+version = "0.12.0"
+source = "git+https://github.com/zqcli/minicore-host?rev=1d2e12d7cec89e95d47250e3fec9be927c00bb43#1d2e12d7cec89e95d47250e3fec9be927c00bb43"
 dependencies = [
  "minicore-host-core",
  "minicore-host-protocol",
@@ -1158,8 +1169,8 @@ dependencies = [
 
 [[package]]
 name = "minicore-host-runtime"
-version = "0.11.0"
-source = "git+https://github.com/zqcli/minicore-host?rev=32f074c57868533af81b0c6491440bae24b872c8#32f074c57868533af81b0c6491440bae24b872c8"
+version = "0.12.0"
+source = "git+https://github.com/zqcli/minicore-host?rev=1d2e12d7cec89e95d47250e3fec9be927c00bb43#1d2e12d7cec89e95d47250e3fec9be927c00bb43"
 dependencies = [
  "futures-util",
  "getrandom 0.4.3",
@@ -1172,8 +1183,8 @@ dependencies = [
 
 [[package]]
 name = "minicore-host-storage"
-version = "0.11.0"
-source = "git+https://github.com/zqcli/minicore-host?rev=32f074c57868533af81b0c6491440bae24b872c8#32f074c57868533af81b0c6491440bae24b872c8"
+version = "0.12.0"
+source = "git+https://github.com/zqcli/minicore-host?rev=1d2e12d7cec89e95d47250e3fec9be927c00bb43#1d2e12d7cec89e95d47250e3fec9be927c00bb43"
 dependencies = [
  "minicore-host-protocol",
  "minicore-host-runtime",
@@ -1189,8 +1200,8 @@ dependencies = [
 
 [[package]]
 name = "minicore-host-tools"
-version = "0.11.0"
-source = "git+https://github.com/zqcli/minicore-host?rev=32f074c57868533af81b0c6491440bae24b872c8#32f074c57868533af81b0c6491440bae24b872c8"
+version = "0.12.0"
+source = "git+https://github.com/zqcli/minicore-host?rev=1d2e12d7cec89e95d47250e3fec9be927c00bb43#1d2e12d7cec89e95d47250e3fec9be927c00bb43"
 dependencies = [
  "minicore-host-core",
  "minicore-host-local-tools",
@@ -1205,8 +1216,8 @@ dependencies = [
 
 [[package]]
 name = "minicore-host-transport"
-version = "0.11.0"
-source = "git+https://github.com/zqcli/minicore-host?rev=32f074c57868533af81b0c6491440bae24b872c8#32f074c57868533af81b0c6491440bae24b872c8"
+version = "0.12.0"
+source = "git+https://github.com/zqcli/minicore-host?rev=1d2e12d7cec89e95d47250e3fec9be927c00bb43#1d2e12d7cec89e95d47250e3fec9be927c00bb43"
 dependencies = [
  "futures-util",
  "minicore-host-core",
@@ -1224,8 +1235,8 @@ dependencies = [
 
 [[package]]
 name = "minicore-host-workspace"
-version = "0.11.0"
-source = "git+https://github.com/zqcli/minicore-host?rev=32f074c57868533af81b0c6491440bae24b872c8#32f074c57868533af81b0c6491440bae24b872c8"
+version = "0.12.0"
+source = "git+https://github.com/zqcli/minicore-host?rev=1d2e12d7cec89e95d47250e3fec9be927c00bb43#1d2e12d7cec89e95d47250e3fec9be927c00bb43"
 dependencies = [
  "ignore",
  "minicore-host-protocol",
@@ -1240,13 +1251,14 @@ dependencies = [
 
 [[package]]
 name = "minicore-tui"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "base64 0.22.1",
  "clipboard-win",
  "crossterm",
  "futures-util",
  "jiff",
+ "minicore-host-config",
  "minicore-host-core",
  "minicore-host-diagnostics",
  "minicore-host-local-tools",
@@ -1264,8 +1276,6 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tokio",
- "toml",
- "toml_edit",
  "tracing",
  "unicode-segmentation",
  "unicode-width",
@@ -1863,15 +1873,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "serde_spanned"
-version = "1.1.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9c187e0a369471c550af028cba56d4f4fa2a489ad28151ae95a4d340a2a8b782"
-dependencies = [
- "serde_core",
-]
-
-[[package]]
 name = "serde_urlencoded"
 version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2221,58 +2222,6 @@ dependencies = [
  "pin-project-lite",
  "tokio",
 ]
-
-[[package]]
-name = "toml"
-version = "1.2.1+spec-1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d5755c51863cdac711f1956baf8eb9588e060755f7d3c4c979e70ea1e1f32cd7"
-dependencies = [
- "indexmap",
- "serde_core",
- "serde_spanned",
- "toml_datetime",
- "toml_parser",
- "toml_writer",
- "winnow",
-]
-
-[[package]]
-name = "toml_datetime"
-version = "1.1.3+spec-1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "173f25c883cd2176a2d8212155638c0a60d484a9d84546d270866f40f56b6e49"
-dependencies = [
- "serde_core",
-]
-
-[[package]]
-name = "toml_edit"
-version = "0.25.19+spec-1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dd43688c4858d7264ae1cf9a9f874a67c3feb74a883b1cd7bebd6a4ea8307218"
-dependencies = [
- "indexmap",
- "toml_datetime",
- "toml_parser",
- "toml_writer",
- "winnow",
-]
-
-[[package]]
-name = "toml_parser"
-version = "1.1.5+spec-1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "baa693a8032d7e1cada7d0041e96126df243179ff061456783ac7f12bda4744c"
-dependencies = [
- "winnow",
-]
-
-[[package]]
-name = "toml_writer"
-version = "1.2.0+spec-1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "009dbb7700f11c55ef83aebbe4c0e9cf1f1ac0844bd8d6f00dc38f302026e13a"
 
 [[package]]
 name = "tower"
@@ -2809,15 +2758,6 @@ name = "windows_x86_64_msvc"
 version = "0.52.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
-
-[[package]]
-name = "winnow"
-version = "1.0.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8c3b93199df0ab874cdf0c6a94f0a0dc3423fe41f1cafb62b8bd7b1deb277aef"
-dependencies = [
- "memchr",
-]
 
 [[package]]
 name = "winsafe"

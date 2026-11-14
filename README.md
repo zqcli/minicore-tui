@@ -1,14 +1,13 @@
 # minicore-tui
 
 `minicore-tui` is a fullscreen terminal frontend for
-[minicore-host](https://github.com/zqcli/minicore-host). Version 0.11.0 embeds
-Host 0.11.0 in the same executable and uses its typed Rust client through
+[minicore-host](https://github.com/zqcli/minicore-host). Version 0.12.0 embeds
+Host 0.12.0 in the same executable and uses its typed Rust client through
 `HostClient::in_process`. Host owns Agents, Sessions, execution, tools,
 credentials, history and persistence; the TUI owns terminal interaction and
 presentation.
 
-The backend is pinned to immutable commit
-[`32f074c57868533af81b0c6491440bae24b872c8`](https://github.com/zqcli/minicore-host/commit/32f074c57868533af81b0c6491440bae24b872c8).
+The backend is pinned to an immutable Git revision in `Cargo.toml`.
 `Cargo.lock` fixes the complete dependency graph. There is no Agent child
 process, stdio RPC adapter, Webpage server, browser client or phone protocol.
 This executable runs a local embedded Host; connecting to a separately deployed
@@ -22,10 +21,10 @@ mode and bracketed paste. Mouse reporting enables selection and scrolling.
 
 ```bash
 cargo build --locked --release
-target/release/minicore-tui --home ./minicore-home --workspace ./project
+target/release/minicore-tui --config-dir ./config --workspace ./project
 ```
 
-A fresh home gets starter configuration files and setup instructions, then
+A fresh configuration directory gets JSON starter files and setup instructions, then
 exits. Edit the generated native Host model configuration with the provider's
 full endpoint, explicit `chat_completions` or `responses` API, model name and
 capabilities. Export the credential using the environment-variable name in
@@ -34,31 +33,27 @@ is needed to run the automated tests.
 
 | File or directory | Owner and purpose |
 |---|---|
-| `config.toml` | TUI preferences under `[ui]`: theme, editor, bell |
-| `host-config.json` | Native initial Host configuration and explicit `/reload` candidate |
-| `agent-defaults.json` | Native Role and Session defaults used to create an Agent |
-| `host/` | Persistent Host data; read and written by Host |
+| `tui.json` | TUI preferences under `ui`: theme, editor, bell |
+| `host.json` | Native Host configuration, read at startup and explicit `/reload` |
+| `roles/*.json` | Reusable Role names, descriptions and instructions |
+| `agents/*.json` | Agent declarations with stable keys and Session defaults |
+| `data/` | Persistent Host data, including `tui/history.jsonl` for input recall |
 | `prompt/commands/*.md` | Local slash-command prompt templates |
-| `history.jsonl` | Confirmed local input recall history |
-| `minicore-tui.log` | Default generated diagnostic destination |
 
-On a new Host the TUI creates an Agent and its native default Session. Later
-starts use saved Host, Agent and Session configuration. An existing Agent's
-default Session opens unless `--session` or `--continue` selects another.
-`/new` explicitly creates a Session under the selected Agent. Session creation
-inherits that Agent's defaults, with explicit new-Session overrides applied by
-Host. Opening or switching a Session preserves its saved configuration.
-
-The old `minicore-agent` store is not imported or modified. Use a separate TUI
-home when moving from 0.9.x; see [configuration](docs/configuration.md).
+Host creates declared Agents and their default Sessions. Startup rereads the
+configuration directory while preserving existing Host/Agent identities,
+Sessions and history. An Agent's default Session opens unless `--session` or
+`--continue` selects another. `/new` creates a Session from the selected Agent's
+current defaults with explicit overrides. Existing Sessions keep their saved
+configuration. See [configuration](docs/configuration.md) for declaration
+ownership, JSON examples and removed configuration paths.
 
 ## Options
 
 | Option | Meaning |
 |---|---|
-| `--home <DIR>` | TUI directory; otherwise `$MINICORE_HOME`, then the executable's directory |
-| `--data-root <DIR>` | Host persistence root; defaults to `<home>/host` |
-| `--host-config <FILE>` | Initial native Host JSON and `/reload` candidate; saved Host configuration takes precedence at startup |
+| `--config-dir <DIR>` | JSON configuration directory; defaults to `config/` beside the executable |
+| `--data-root <DIR>` | Runtime storage; defaults to `<config-dir>/data` |
 | `--agent-id <ID>` | Select this existing Host Agent |
 | `--workspace <DIR>` | Workspace override for a newly created Session; defaults to the current directory |
 | `--session <ID>` | Open this Session; an explicit Agent must match its actual owner |
@@ -69,7 +64,8 @@ home when moving from 0.9.x; see [configuration](docs/configuration.md).
 | `-h`, `--help`, `-V`, `--version` | Usage or version |
 
 `--session` and `--continue` cannot be combined. Removed options such as
-`--agent`, `--agent-config`, `--profile`, `--remote`, and the `agent` subcommand
+`--home`, `--host-config`, `--agent`, `--agent-config`, `--profile`, `--remote`,
+and the `agent` subcommand
 are rejected. Argument and configuration errors are printed before fullscreen
 startup.
 
@@ -94,8 +90,8 @@ and light/dark themes remain available. Idle rendering has no periodic tick.
   native text and single-choice answers. Each answer is bound to its original
   Session, Load, Turn and interaction. Use `/approval ask|auto|read_only` for a
   real Session execution policy; there is no fabricated per-tool allow cache.
-- **Agents and Sessions:** `/agents` selects a Host Agent, `/agent-new` creates
-  one, and the Session picker shows actual owning Agents and lifecycle states.
+- **Agents and Sessions:** `/agents` selects a Host Agent, `/agent-new` copies
+  its native configuration into a new dynamic Agent, and the Session picker shows actual owning Agents and lifecycle states.
   Background Sessions keep running when terminal selection changes. Rename,
   close, delete, load, unload, pause and resume use native Host operations.
   Agent deletion confirms the exact child-Session scope before submission.
@@ -116,12 +112,12 @@ Full commands and key bindings: [docs/keybindings.md](docs/keybindings.md).
 
 ## Configuration and shutdown
 
-`/reload` loads the selected Host JSON candidate, follows the native reload
-receipt through preparation and application, and refreshes the model catalog
-only after actual application. Restart-required and failed outcomes remain
-explicit. It also refreshes local prompt templates and new-Agent defaults on
-successful application. `/agent-defaults` explicitly applies the defaults file
-to the selected Agent; it does not rewrite existing Sessions.
+`/reload` asks Host to reread its bound JSON directory and follows the native
+receipt through preparation and owner application. Full and partial results
+refresh actual catalogs and local command templates. Partial application,
+restart-required changes and failures remain explicit. Agent file changes
+supply defaults for future Sessions; existing Sessions retain their settings.
+The TUI reads and saves its own `tui.json` independently of Host configuration.
 
 The generated configuration writes diagnostics to a file so Host logs cannot
 corrupt the terminal. Embedded mode requires `network.listen` to be `null`.
@@ -154,7 +150,8 @@ execution evidence. Optional frame-cost checks are available with
 CI checks Linux, macOS and Windows and produces Linux x86_64, macOS arm64,
 macOS x86_64 and Windows x86_64 packages. Each contains `bin/minicore-tui`
 (`.exe` on Windows), guides and `BUILD.txt` identifying the TUI and pinned Host
-revisions. Use `--home` or `MINICORE_HOME` to put data outside the package.
+revisions. Use `--config-dir` and optional `--data-root` to keep configuration
+and data outside the package.
 
 See [architecture](docs/architecture.md), [migration design](docs/design-host.md),
 [0.11.0 performance and size](docs/performance-0.11.0.md) and

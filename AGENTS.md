@@ -8,7 +8,7 @@ and fix the inaccurate description.
 ## Project and boundaries
 
 `minicore-tui` is a Rust 2024 fullscreen terminal frontend using ratatui and
-crossterm. It embeds MiniCore Host 0.11.0 and calls its typed Rust client through
+crossterm. It embeds MiniCore Host 0.12.0 and calls its typed Rust client through
 `HostClient::in_process`. The executable contains the native resource builder,
 provider implementations and built-in tools. Host owns execution, credentials,
 Agents, Sessions, persistence, compaction and workspace operations. The TUI owns
@@ -29,7 +29,7 @@ Historical design notes are not the current interface specification.
 |---|---|
 | `src/main.rs` | Startup, terminal loop, frame pacing, signals and Host shutdown |
 | `src/host.rs`, `src/host/` | Persistent embedded Host, production resources, diagnostics |
-| `src/config/`, `src/cli.rs` | Local preferences, native initial config, explicit startup selection |
+| `src/config/`, `src/cli.rs` | Local JSON preferences, shared configuration paths, explicit startup selection |
 | `src/app/` | Reducer, actions, original-target async work, input, overlays and navigation |
 | `src/app/control.rs`, `src/app/session/` | Native state/observation projection and canonical installation |
 | `src/app/tasks.rs` | Typed Host operations and bounded event delivery |
@@ -123,8 +123,10 @@ frame counts/timings on exit.
   percentage. Show actual retry, partial result, persistence and shutdown state.
 - Preserve scroll anchors when installing history or folding. Selection copies
   content only; mark rails, hints, timestamps and decorations as chrome.
-- Saved Host/Agent/Session configuration remains authoritative. New-Agent file
-  defaults do not rewrite existing Sessions. Files are not watched implicitly.
+- Host owns directory parsing and declared Agent identity. TUI reads only its
+  own `tui.json`; reload carries no candidate. Declared defaults do not rewrite
+  existing Sessions. Dynamic Agent copies omit source metadata and Session
+  overrides. Files are not watched implicitly.
 - Keep the Host and data-root lease until actual shutdown completion. Timeout,
   lost observation or a save fault does not prove success. Force shutdown needs
   the user's explicit shutdown-prompt action.

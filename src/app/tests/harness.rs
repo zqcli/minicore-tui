@@ -1,5 +1,5 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use minicore_host_protocol::{AgentConfig, SessionOverrides, SessionRef};
+use minicore_host_protocol::{SessionOverrides, SessionRef};
 use ratatui::{Terminal, backend::TestBackend};
 use tokio::sync::mpsc;
 
@@ -24,9 +24,7 @@ impl Harness {
         tasks::bootstrap(
             native.client.clone(),
             tx,
-            AgentConfig::default(),
             Some(native.target.agent_id.clone()),
-            SessionOverrides::default(),
         )
         .await;
         let mut harness = Self {

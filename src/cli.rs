@@ -12,11 +12,8 @@ minicore-tui — a terminal frontend for the embedded MiniCore Host
 Usage: minicore-tui [OPTIONS]
 
 Options:
-  --home <DIR>           TUI preferences, initial configuration and history
-                         [default: $MINICORE_HOME, else the executable's directory]
-  --data-root <DIR>      persistent Host data [default: <home>/host]
-  --host-config <FILE>   initial native HostConfig JSON; saved Host config wins
-                         [default: <home>/host-config.json]
+  --config-dir <DIR>     shared JSON configuration [default: executable directory/config]
+  --data-root <DIR>      persistent data [default: <config-dir>/data]
   --agent-id <ID>        select this Host Agent
   --workspace <DIR>      workspace for a new session [default: cwd]
   --session <ID>         open this session
@@ -30,9 +27,8 @@ Options:
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Args {
-    pub home: Option<PathBuf>,
+    pub config_dir: Option<PathBuf>,
     pub data_root: Option<PathBuf>,
-    pub host_config: Option<PathBuf>,
     pub agent_id: Option<String>,
     pub workspace: Option<PathBuf>,
     pub session: Option<String>,
@@ -75,9 +71,8 @@ impl Args {
                     .ok_or_else(|| ArgsError::MissingValue(name.to_owned()))
             };
             match argument.as_str() {
-                "--home" => args.home = Some(PathBuf::from(value("--home")?)),
+                "--config-dir" => args.config_dir = Some(PathBuf::from(value("--config-dir")?)),
                 "--data-root" => args.data_root = Some(PathBuf::from(value("--data-root")?)),
-                "--host-config" => args.host_config = Some(PathBuf::from(value("--host-config")?)),
                 "--agent-id" => args.agent_id = Some(value("--agent-id")?),
                 "--workspace" => args.workspace = Some(PathBuf::from(value("--workspace")?)),
                 "--session" => args.session = Some(value("--session")?),
@@ -127,12 +122,10 @@ mod tests {
     #[test]
     fn parses_native_host_paths_and_session_selection() {
         let args = Args::parse([
-            "--home",
+            "--config-dir",
             "tui",
             "--data-root",
             "store",
-            "--host-config",
-            "host.json",
             "--agent-id",
             "agent-id",
             "--workspace",
@@ -148,7 +141,7 @@ mod tests {
         ])
         .unwrap();
         assert_eq!(args.data_root, Some(PathBuf::from("store")));
-        assert_eq!(args.host_config, Some(PathBuf::from("host.json")));
+        assert_eq!(args.config_dir, Some(PathBuf::from("tui")));
         assert_eq!(args.agent_id.as_deref(), Some("agent-id"));
         assert_eq!(args.model.as_deref(), Some("provider/main"));
         assert_eq!(args.reasoning, Some(ReasoningPreference::XHigh));
@@ -157,7 +150,14 @@ mod tests {
 
     #[test]
     fn removed_agent_process_profile_and_web_options_are_rejected() {
-        for flag in ["--agent", "--agent-config", "--profile", "--remote"] {
+        for flag in [
+            "--agent",
+            "--agent-config",
+            "--profile",
+            "--remote",
+            "--home",
+            "--host-config",
+        ] {
             assert_eq!(
                 Args::parse([flag]).unwrap_err(),
                 ArgsError::Unknown(flag.into())
@@ -175,13 +175,7 @@ mod tests {
             Args::parse(["--session", "x", "--continue"]).unwrap_err(),
             ArgsError::Conflict
         );
-        for flag in [
-            "--home",
-            "--data-root",
-            "--host-config",
-            "--agent-id",
-            "--model",
-        ] {
+        for flag in ["--config-dir", "--data-root", "--agent-id", "--model"] {
             assert_eq!(
                 Args::parse([flag]).unwrap_err(),
                 ArgsError::MissingValue(flag.into())

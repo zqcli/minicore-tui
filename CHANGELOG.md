@@ -1,6 +1,21 @@
 # Changelog
 
-## Unreleased
+## 0.12.0 — 2026-11-14
+
+- Embed Host 0.12.0 at immutable revision
+  `1d2e12d7cec89e95d47250e3fec9be927c00bb43`, following SPEC 4.11.0.
+
+- Use `--config-dir` for shared JSON configuration and `--data-root` for runtime
+  storage. Read local preferences from `tui.json`; store accepted input recall
+  in `<data-root>/tui/history.jsonl`. Remove old path flags, TOML and the global
+  Agent-defaults file and command.
+- Let Host load `host.json`, reusable Roles and keyed Agent declarations at
+  startup and directory reload. Preserve native Agent identities and existing
+  Session settings; show actual partial reload results without automatic retry.
+- Create dynamic Agents by copying the selected Agent's native Role, instructions
+  and Session defaults without file management metadata or Session overrides.
+- Reuse Host's shared JSON starter generator and retain terminal interaction,
+  Session controls and the production resource/diagnostic startup boundary.
 
 ## 0.11.0 — 2026-11-14
 

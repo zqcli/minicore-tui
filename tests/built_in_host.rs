@@ -9,13 +9,12 @@ use minicore_host_core::{
     HistoryItemData, HostConfig, LogOutput, LogSettings, OpenAiModelApi, OpenAiModelSettings,
 };
 use minicore_host_protocol::{
-    AgentConfig, AgentCreate, CallOptions, HistoryDirection, HistoryReadRequest, HostLifecycle,
-    HostShutdownStrategy, MessageId, MessageInput, MessageMode, OperationId, SessionRef,
-    StorageMode, TurnState,
+    AgentConfig, AgentRef, CallOptions, HistoryDirection, HistoryReadRequest, HostLifecycle,
+    HostShutdownStrategy, MessageId, MessageInput, MessageMode, SessionRef, TurnState,
 };
 use minicore_host_runtime::model::AssistantPart;
 use minicore_tui::{
-    config::{self, Home, Launch, Prepared, Request},
+    config::{self, ConfigDirectory, Launch, Prepared},
     host::Hosted,
 };
 use serde_json::{Value, json};
@@ -30,7 +29,7 @@ const KEY_NAME: &str = "MINICORE_TUI_EMBED_FIXTURE_KEY";
 const ANSWER: &str = "Native in-process answer 🐈";
 
 #[tokio::test]
-async fn embedded_chat_completion_survives_shutdown_and_reopen_with_saved_config() {
+async fn embedded_chat_completion_survives_directory_reopen_with_stable_agent_identity() {
     let temp = tempfile::tempdir().unwrap();
     probe("chat", temp.path()).await;
     probe("reopen", temp.path()).await;
@@ -101,34 +100,44 @@ async fn embedded_host_probe() {
     let client = hosted.client();
     let initial = client.initial_info().clone();
     let effective = client.config(CallOptions::default()).await.unwrap();
-    assert_eq!(effective.config, launch.initial_config);
+    let loaded = minicore_host_config::load_config_directory(home.dir()).unwrap();
+    assert_eq!(effective.config, loaded.host);
     assert!(
         Hosted::open(&launch).await.is_err(),
         "a second owner must not acquire the same persistent root"
     );
-    let receipt = client
-        .create_agent(
-            AgentCreate {
-                operation_id: OperationId::new().unwrap(),
-                name: "Native integration".into(),
-                mode: StorageMode::Persistent,
-                config: launch.new_agent.clone(),
-                default_session: None,
-                initial_message: None,
+    let agents = client.agents(CallOptions::default()).await.unwrap();
+    assert_eq!(agents.len(), 1);
+    let target = SessionRef {
+        agent_id: agents[0].id.clone(),
+        session_id: agents[0].default_session_id.clone().unwrap(),
+    };
+    let native_agent = client
+        .agent(
+            AgentRef {
+                host_id: initial.host_id.clone(),
+                agent_id: target.agent_id.clone(),
             },
             CallOptions::default(),
         )
         .await
         .unwrap();
-    assert!(receipt.result.steps.agent.succeeded());
-    assert!(receipt.result.steps.session.succeeded());
-    let target = SessionRef {
-        agent_id: receipt.agent_id.unwrap(),
-        session_id: receipt.session_id.unwrap(),
-    };
+    assert_eq!(
+        native_agent.info.configuration_source.as_ref().unwrap().key,
+        "fixture"
+    );
+    assert!(
+        native_agent
+            .info
+            .configuration_source
+            .as_ref()
+            .unwrap()
+            .managed
+    );
     let session = client.session(target.clone());
     let info = session.info(CallOptions::default()).await.unwrap();
-    assert_eq!(info.config.role, launch.new_agent.role);
+    assert_eq!(info.config.role, loaded.agents[0].config.role);
+    assert_eq!(info.config.instructions, "Native Agent fixture");
     let accepted = session
         .send(
             MessageInput {
@@ -229,11 +238,29 @@ async fn embedded_host_probe() {
 }
 
 async fn reopen(root: &Path) {
-    let home = Home::resolve(Some(root)).unwrap();
+    let home = ConfigDirectory::resolve(Some(root), None).unwrap();
     let saved: Value =
         serde_json::from_slice(&std::fs::read(root.join("observed.json")).unwrap()).unwrap();
-    let original = config::load_host_config(&home.host_config_file()).unwrap();
-    std::fs::write(home.host_config_file(), "{ invalid default candidate").unwrap();
+    let mut loaded = minicore_host_config::load_config_directory(home.dir()).unwrap();
+    std::fs::write(
+        home.dir().join("host.json"),
+        "{ invalid directory configuration",
+    )
+    .unwrap();
+    assert!(Hosted::open(&launch(&home)).await.is_err());
+    loaded.host.name = "Directory configuration on reopen".into();
+    std::fs::write(
+        home.dir().join("host.json"),
+        serde_json::to_vec(&loaded.host).unwrap(),
+    )
+    .unwrap();
+    let source = home.dir().join("agents").join("fixture.json");
+    let renamed = home.dir().join("agents").join("renamed.json");
+    let mut declaration: Value = serde_json::from_slice(&std::fs::read(&source).unwrap()).unwrap();
+    declaration["name"] = "Renamed declared Agent".into();
+    declaration["instructions"] = "Instructions for future Sessions".into();
+    std::fs::rename(source, &renamed).unwrap();
+    std::fs::write(renamed, serde_json::to_vec(&declaration).unwrap()).unwrap();
     let mut hosted = Hosted::open(&launch(&home)).await.unwrap();
     let client = hosted.client();
     assert_eq!(
@@ -246,10 +273,28 @@ async fn reopen(root: &Path) {
     );
     assert_eq!(
         client.config(CallOptions::default()).await.unwrap().config,
-        original
+        loaded.host
     );
     let target: SessionRef = serde_json::from_value(saved["target"].clone()).unwrap();
+    let agents = client.agents(CallOptions::default()).await.unwrap();
+    assert_eq!(agents.len(), 1);
+    assert_eq!(agents[0].id, target.agent_id);
+    assert_eq!(agents[0].name, "Renamed declared Agent");
+    assert_eq!(agents[0].sessions.len(), 1);
+    assert_eq!(
+        agents[0].default_session_id.as_ref(),
+        Some(&target.session_id)
+    );
     let session = client.session(target);
+    assert_eq!(
+        session
+            .info(CallOptions::default())
+            .await
+            .unwrap()
+            .config
+            .instructions,
+        "Native Agent fixture"
+    );
     let state = session.state(CallOptions::default()).await.unwrap();
     assert!(
         state.data.active_turn_id.is_none(),
@@ -292,15 +337,15 @@ fn assistant_answer(item: &HistoryItemData) -> bool {
     matches!(item, HistoryItemData::Assistant { response } if response.content.iter().any(|part| matches!(part, AssistantPart::Text(text) if text.as_ref() == ANSWER)))
 }
 
-fn launch(home: &Home) -> Box<Launch> {
-    let Prepared::Launch(launch) = config::prepare(home, &Request::default()).unwrap() else {
+fn launch(home: &ConfigDirectory) -> Box<Launch> {
+    let Prepared::Launch(launch) = config::prepare(home, None).unwrap() else {
         panic!("configured fixture must launch");
     };
     launch
 }
 
-fn fixture(root: &Path, endpoint: &str, api: OpenAiModelApi) -> Home {
-    let home = Home::resolve(Some(root)).unwrap();
+fn fixture(root: &Path, endpoint: &str, api: OpenAiModelApi) -> ConfigDirectory {
+    let home = ConfigDirectory::resolve(Some(root), None).unwrap();
     let model = "fixture/native".parse().unwrap();
     let config = HostConfig {
         name: "Embedded integration fixture".into(),
@@ -325,23 +370,42 @@ fn fixture(root: &Path, endpoint: &str, api: OpenAiModelApi) -> Home {
     };
     let mut agent = AgentConfig::default();
     agent.role.instructions = "Native Role fixture".into();
+    agent.instructions = "Native Agent fixture".into();
     agent.session_defaults.model = config.models[0].model.clone();
     agent.session_defaults.execution.model_retry_attempts = 1;
     agent.session_defaults.execution.compaction.enabled = false;
-    std::fs::write(home.config_file(), "[ui]\nbell = false\n").unwrap();
+    std::fs::write(home.ui_file(), r#"{"ui":{"bell":false}}"#).unwrap();
     std::fs::write(
-        home.host_config_file(),
+        home.dir().join("host.json"),
         serde_json::to_vec_pretty(&config).unwrap(),
     )
     .unwrap();
-    std::fs::write(
-        home.agent_defaults_file(),
-        serde_json::to_vec_pretty(&agent).unwrap(),
-    )
-    .unwrap();
+    write_agent(&home, &agent);
     std::fs::create_dir_all(root.join("session")).unwrap();
     std::fs::write(root.join("session/old-agent.data"), "not migrated").unwrap();
     home
+}
+
+fn write_agent(directory: &ConfigDirectory, config: &AgentConfig) {
+    std::fs::create_dir_all(directory.dir().join("roles")).unwrap();
+    std::fs::create_dir_all(directory.dir().join("agents")).unwrap();
+    std::fs::write(
+        directory.dir().join("roles").join("fixture.json"),
+        serde_json::to_vec_pretty(&config.role).unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        directory.dir().join("agents").join("fixture.json"),
+        serde_json::to_vec_pretty(&json!({
+            "key": "fixture",
+            "name": "Native integration",
+            "role": "fixture",
+            "instructions": config.instructions,
+            "session_defaults": config.session_defaults,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
 }
 
 async fn reload_frontend(root: &Path) {
@@ -359,33 +423,55 @@ async fn reload_frontend(root: &Path) {
     let client = hosted.client();
     let (tx, mut messages) = tokio::sync::mpsc::channel(MESSAGE_CAPACITY);
     let mut app = App::new(client.clone(), tx, root.into());
-    app.home = Some(home.clone());
-    app.host_config_file = Some(home.host_config_file());
-    app.new_agent = launch.new_agent.clone();
+    app.config_directory = Some(home.clone());
+    std::fs::write(home.ui_file(), "{ UI settings are not Host reload input").unwrap();
 
-    let mut candidate = launch.initial_config.clone();
+    let loaded = minicore_host_config::load_config_directory(home.dir()).unwrap();
+    let mut candidate = loaded.host;
+    let agents = client.agents(CallOptions::default()).await.unwrap();
+    let agent_id = agents[0].id.clone();
+    let session = client.session(SessionRef {
+        agent_id: agent_id.clone(),
+        session_id: agents[0].default_session_id.clone().unwrap(),
+    });
+    let existing_session = session.info(CallOptions::default()).await.unwrap().config;
     candidate.name = "Applied through the real frontend".into();
     candidate.models[0].model = "fixture/reloaded".parse().unwrap();
-    let mut defaults = launch.new_agent.clone();
+    let mut defaults = loaded.agents[0].config.clone();
     defaults.session_defaults.model = candidate.models[0].model.clone();
-    defaults.role.instructions = "Reloaded creation instructions".into();
+    defaults.role.instructions = "Reloaded Role instructions".into();
+    defaults.instructions = "Reloaded Agent instructions".into();
     std::fs::write(
-        home.host_config_file(),
+        home.dir().join("host.json"),
         serde_json::to_vec(&candidate).unwrap(),
     )
     .unwrap();
-    std::fs::write(
-        home.agent_defaults_file(),
-        serde_json::to_vec(&defaults).unwrap(),
-    )
-    .unwrap();
+    write_agent(&home, &defaults);
     std::fs::create_dir_all(home.commands_dir()).unwrap();
     std::fs::write(home.commands_dir().join("review-fixture.md"), "Review $1").unwrap();
     assert!(matches!(
         run_reload(&mut app, &mut messages).await.unwrap(),
         HostReloadResult::Applied { .. }
     ));
-    assert_eq!(app.new_agent, defaults);
+    assert_eq!(
+        client
+            .agent(
+                AgentRef {
+                    host_id: client.initial_info().host_id.clone(),
+                    agent_id: agent_id.clone(),
+                },
+                CallOptions::default()
+            )
+            .await
+            .unwrap()
+            .info
+            .config,
+        defaults
+    );
+    assert_eq!(
+        session.info(CallOptions::default()).await.unwrap().config,
+        existing_session
+    );
     assert_eq!(app.templates[0].name, "review-fixture");
     while app.models.is_empty() {
         app.on_msg(messages.recv().await.unwrap());
@@ -394,10 +480,39 @@ async fn reload_frontend(root: &Path) {
     let applied = client.config(CallOptions::default()).await.unwrap();
     assert_eq!(applied.config, candidate);
 
+    app.selected_agent = Some(agent_id.clone());
+    app.on_action(minicore_tui::app::Action::CreateAgent(
+        "Dynamic copy".into(),
+    ));
+    let copied = loop {
+        let message = messages.recv().await.unwrap();
+        if let Msg::AgentCreated(_, result) = &message {
+            let target = result.clone().unwrap();
+            app.on_msg(message);
+            break target;
+        }
+        app.on_msg(message);
+    };
+    let copied_agent = client
+        .agent(
+            AgentRef {
+                host_id: client.initial_info().host_id.clone(),
+                agent_id: copied.agent_id,
+            },
+            CallOptions::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(copied_agent.info.config, defaults);
+    assert!(copied_agent.info.configuration_source.is_none());
+
     let mut restart = candidate.clone();
     restart.logging.level = LogLevel::Debug;
+    let mut restart_defaults = defaults.clone();
+    restart_defaults.instructions = "Must wait for restart".into();
+    write_agent(&home, &restart_defaults);
     std::fs::write(
-        home.host_config_file(),
+        home.dir().join("host.json"),
         serde_json::to_vec(&restart).unwrap(),
     )
     .unwrap();
@@ -415,10 +530,26 @@ async fn reload_frontend(root: &Path) {
         applied
     );
 
+    assert_eq!(
+        client
+            .agent(
+                AgentRef {
+                    host_id: client.initial_info().host_id.clone(),
+                    agent_id: agent_id.clone(),
+                },
+                CallOptions::default()
+            )
+            .await
+            .unwrap()
+            .info
+            .config,
+        defaults
+    );
+
     let mut failing = candidate.clone();
     failing.models[0].endpoint = "not a provider URL".into();
     std::fs::write(
-        home.host_config_file(),
+        home.dir().join("host.json"),
         serde_json::to_vec(&failing).unwrap(),
     )
     .unwrap();
@@ -427,7 +558,25 @@ async fn reload_frontend(root: &Path) {
         client.config(CallOptions::default()).await.unwrap(),
         applied
     );
-    assert_eq!(app.new_agent, defaults);
+    assert_eq!(
+        client
+            .agent(
+                AgentRef {
+                    host_id: client.initial_info().host_id.clone(),
+                    agent_id: agent_id.clone(),
+                },
+                CallOptions::default()
+            )
+            .await
+            .unwrap()
+            .info
+            .config,
+        defaults
+    );
+    assert_eq!(
+        session.info(CallOptions::default()).await.unwrap().config,
+        existing_session
+    );
     assert!(
         app.notices
             .iter()

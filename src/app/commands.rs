@@ -33,7 +33,7 @@ pub const COMMANDS: &[Command<'static>] = &[
     Command {
         name: "agent-new",
         args: "<name>",
-        description: "Create an Agent using the configured defaults",
+        description: "Copy the selected Agent's configuration into a new dynamic Agent",
     },
     Command {
         name: "agent-start",
@@ -49,11 +49,6 @@ pub const COMMANDS: &[Command<'static>] = &[
         name: "agent-delete",
         args: "",
         description: "Review and delete the selected Agent and its captured sessions",
-    },
-    Command {
-        name: "agent-defaults",
-        args: "",
-        description: "Apply agent-defaults.json to the selected Agent's future sessions",
     },
     Command {
         name: "default-session",
@@ -143,7 +138,7 @@ pub const COMMANDS: &[Command<'static>] = &[
     Command {
         name: "reload",
         args: "",
-        description: "Reload the Host configuration",
+        description: "Reload Host and Agent JSON from the bound configuration directory",
     },
     Command {
         name: "recover",
@@ -222,7 +217,6 @@ pub fn execute(name: &str, arg: &str) -> Option<Executed> {
         "agent-start" => Executed::Action(Action::StartAgent),
         "agent-stop" => Executed::Action(Action::StopAgent),
         "agent-delete" => Executed::Panel(super::Panel::AgentDelete),
-        "agent-defaults" => Executed::Action(Action::ApplyAgentDefaults),
         "default-session" => Executed::Action(Action::SetDefaultSession),
         "approval" => match arg {
             "ask" => Executed::Action(Action::SetApproval(ApprovalMode::Ask)),
@@ -540,7 +534,6 @@ mod tests {
         for (name, action) in [
             ("agent-start", Action::StartAgent),
             ("agent-stop", Action::StopAgent),
-            ("agent-defaults", Action::ApplyAgentDefaults),
             ("default-session", Action::SetDefaultSession),
             ("pause", Action::Pause),
             ("resume", Action::Resume),
