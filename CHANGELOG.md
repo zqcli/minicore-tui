@@ -3,7 +3,7 @@
 ## 0.12.0 — 2026-11-14
 
 - Embed Host 0.12.0 at immutable revision
-  `1d2e12d7cec89e95d47250e3fec9be927c00bb43`, following SPEC 4.11.0.
+  `bf5e59cc7cea2c4dfce91e4e08a1f40134371e81`, following SPEC 4.11.0.
 
 - Use `--config-dir` for shared JSON configuration and `--data-root` for runtime
   storage. Read local preferences from `tui.json`; store accepted input recall
