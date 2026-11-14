@@ -158,7 +158,10 @@ status hints, timestamps and layout rails.
 The model catalog and reasoning choices come directly from Host. Unknown Agent
 creation defaults are not displayed as if read from a selected saved Agent.
 Session updates use expected configuration revisions, and active Turns keep
-their already prepared configuration snapshots.
+their already prepared configuration snapshots. Rename completion refreshes the
+catalog and reads metadata for the original resident Session, independent of
+foreground selection. The existing identity/revision checks install that read;
+the update receipt never supplies synthetic metadata or controller state.
 
 The context view displays actual raw-history counts, compaction information and
 last-response usage. Last-response tokens are not a current context-window

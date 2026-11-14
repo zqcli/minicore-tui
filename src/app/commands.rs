@@ -23,7 +23,7 @@ pub const COMMANDS: &[Command<'static>] = &[
     Command {
         name: "reasoning",
         args: "[level]",
-        description: "Set the reasoning level, or pick one",
+        description: "Set a valid reasoning level; omit it to pick one",
     },
     Command {
         name: "agents",
@@ -243,9 +243,10 @@ pub fn execute(name: &str, arg: &str) -> Option<Executed> {
         "rename" => Executed::Noop,
         "model" if arg.is_empty() => Executed::Panel(super::Panel::Models),
         "model" => Executed::Action(Action::SwitchModel(arg.to_owned())),
+        "reasoning" if arg.is_empty() => Executed::Panel(super::Panel::Reasoning),
         "reasoning" => match parse_reasoning(arg) {
             Some(level) => Executed::Action(Action::SetReasoning(level)),
-            None => Executed::Panel(super::Panel::Reasoning),
+            None => Executed::Noop,
         },
         "compact" => Executed::Action(Action::Compact),
         "diff" => Executed::Panel(super::Panel::Diff),
@@ -371,6 +372,10 @@ pub fn is_command_line(composer: &str) -> bool {
 
 /// The notice for a command run without the argument it needs.
 pub fn needs_argument(name: &str) -> String {
+    if name == "reasoning" {
+        return "Invalid reasoning level; expected auto|disabled|low|medium|high|xhigh|max|ultra"
+            .into();
+    }
     let args = COMMANDS
         .iter()
         .find(|command| command.name == name)

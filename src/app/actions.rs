@@ -710,7 +710,7 @@ impl App {
         let client = self.client.clone();
         self.spawn_msg(async move {
             let result = async {
-                let session = client.session(target);
+                let session = client.session(target.clone());
                 let info = session
                     .info(tasks::options())
                     .await
@@ -726,7 +726,7 @@ impl App {
                 .await
             }
             .await;
-            Msg::RefreshCatalogs(result)
+            Msg::SessionRenamed(target, result)
         });
     }
     pub(super) fn update_session(&mut self, config: SessionConfigPatch) {

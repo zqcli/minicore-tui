@@ -217,14 +217,14 @@ composer says `view open · esc to return`; unbound view keys do not edit it.
 | `/sessions` | Open the Sessions picker. |
 | `/session` | Show the current Session and its owning Agent. |
 | `/default-session` | Make the current Session its Agent's default. |
-| `/rename <title>` | Rename the current Session. |
+| `/rename <title>` | Rename the current Session and refresh its list and detail metadata, even after switching Sessions. |
 | `/pause` | Pause input consumption in the current Session. |
 | `/resume` | Resume the current Session. |
 | `/load` | Load the current Session without resuming paused input. |
 | `/unload` | Request native unload of the current Session. |
 | `/close` | Close the current Session. |
 | `/model [reference]` | Select an exact model reference or unique fuzzy match; with no argument, open the picker. |
-| `/reasoning [level]` | Apply a native reasoning preference, or open the picker. |
+| `/reasoning [level]` | Apply a native reasoning preference; omit the argument to open the picker. Invalid values show the supported levels without changing the current value. |
 | `/approval <ask\|auto\|read_only>` | Update the current Session's approval policy for subsequent Turns. |
 | `/compact` | Request manual context compaction; Host reports acceptance or refusal. |
 | `/context` | Read native context facts and past response usage. |

@@ -83,7 +83,8 @@ on return. If terminal restoration fails, the error names the retained draft fil
 
 - **Conversation:** stream answer and reasoning text, retain interrupted partial
   output, show native Turn outcome and persistence state. Model retry phase and
-  attempt information come from Host.
+  attempt information come from Host. `/reasoning` opens the picker without an
+  argument; an invalid explicit level reports an error and preserves the setting.
 - **Tools:** display complete arguments, progress, output, result, failures and
   native delegation references. Argument generation is not a separate progress
   phase. Expanded cards and `/diff` expose details without changing execution.
@@ -100,7 +101,8 @@ on return. If terminal restoration fails, the error names the retained draft fil
   one, and the Session picker shows actual owning Agents and lifecycle states.
   Background Sessions keep running when terminal selection changes. Rename,
   close, delete, load, unload, pause and resume use native Host operations.
-  Agent deletion confirms the exact child-Session scope before submission.
+  Renaming refreshes the original Session's list and detail metadata even after
+  navigation. Agent deletion confirms the exact child-Session scope before submission.
 - **History:** reopening reads a recent native history window; older pages use
   the same opaque cursor and fixed upper bound. Live output and canonical
   records deduplicate by native identity and position. `/export` streams the

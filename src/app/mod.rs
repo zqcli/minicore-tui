@@ -52,6 +52,7 @@ pub enum Msg {
     Ready(Result<Ready, String>),
     Catalogs(Result<Ready, String>),
     RefreshCatalogs(Result<(), String>),
+    SessionRenamed(SessionRef, Result<(), String>),
     HostState(Box<StateEvent>),
     Opened(u64, SessionRef, Result<Box<tasks::Opened>, String>),
     Created(u64, Result<SessionRef, String>),
@@ -266,6 +267,12 @@ impl App {
                 if std::mem::take(&mut self.catalog_due) {
                     self.refresh_catalogs();
                 }
+            }
+            Msg::SessionRenamed(target, result) => {
+                if let Some(epoch) = self.resident.find(&target).map(|session| session.epoch) {
+                    self.refresh_session_info_for(epoch);
+                }
+                self.on_msg(Msg::RefreshCatalogs(result));
             }
             Msg::RefreshCatalogs(result) => {
                 if let Err(error) = result {

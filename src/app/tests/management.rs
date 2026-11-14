@@ -10,6 +10,180 @@ use super::harness::Harness;
 use crate::app::{Action, App, Msg, SessionOp, tasks};
 use crate::testing::real_bounded;
 
+fn assert_info_eq(
+    actual: &minicore_host_core::SessionInfo,
+    expected: &minicore_host_core::SessionInfo,
+) {
+    assert_eq!(
+        serde_json::to_value(actual).unwrap(),
+        serde_json::to_value(expected).unwrap()
+    );
+}
+
+async fn rename_refreshes_metadata(navigate: bool) {
+    let mut h = Harness::opened().await;
+    let original = h.native.target.clone();
+    let other = h.another_session().await;
+    h.open(&other).await;
+    let other_info = h.app.resident.current().unwrap().info.clone();
+    h.open(&original).await;
+    let old_info = h.app.resident.current().unwrap().info.clone();
+    h.app.composer.set_text("/rename Updated title");
+    h.press(KeyCode::Enter);
+    // Hold the actual completion so navigation deterministically precedes it.
+    let completion = real_bounded(async {
+        loop {
+            let message = h.messages.recv().await.unwrap();
+            match message {
+                Msg::SessionRenamed(_, Ok(())) | Msg::RefreshCatalogs(Ok(())) => break message,
+                Msg::SessionRenamed(_, Err(error)) | Msg::RefreshCatalogs(Err(error)) => {
+                    panic!("rename failed: {error}")
+                }
+                _ => h.app.on_msg(message),
+            }
+        }
+    })
+    .await;
+    if navigate {
+        h.open(&other).await;
+    }
+    assert_eq!(
+        h.app.resident.find(&original).unwrap().info.title,
+        old_info.title
+    );
+    h.app.on_msg(completion);
+    // A receipt requests a read; it must not synthesize metadata or control state.
+    assert_eq!(
+        h.app.resident.find(&original).unwrap().info.title,
+        old_info.title
+    );
+    h.until(|app| {
+        app.sessions.iter().any(|session| {
+            session.id == original.session_id && session.title.as_deref() == Some("Updated title")
+        }) && app.resident.find(&original).unwrap().info.title.as_deref() == Some("Updated title")
+    })
+    .await;
+    let native = h
+        .native
+        .client
+        .session(original.clone())
+        .info(tasks::options())
+        .await
+        .unwrap();
+    assert_info_eq(&h.app.resident.find(&original).unwrap().info, &native);
+    assert_info_eq(&h.app.resident.find(&other).unwrap().info, &other_info);
+    let expected = if navigate { &other } else { &original };
+    assert_eq!(&h.app.resident.current().unwrap().address(), expected);
+    h.open(&original).await;
+    h.app.composer.set_text("/session");
+    h.press(KeyCode::Enter);
+    assert!(matches!(h.app.overlay, crate::app::Overlay::SessionInfo));
+    assert_eq!(
+        h.app.resident.current().unwrap().info.title.as_deref(),
+        Some("Updated title")
+    );
+    h.finish().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn rename_refreshes_resident_metadata_and_reselection() {
+    rename_refreshes_metadata(false).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn rename_refreshes_original_metadata_after_navigation() {
+    rename_refreshes_metadata(true).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn failed_rename_preserves_resident_metadata() {
+    let mut h = Harness::opened().await;
+    let before = h.app.resident.current().unwrap().info.clone();
+    h.app.on_action(Action::RenameSession {
+        target: SessionRef {
+            agent_id: before.agent_id.clone(),
+            session_id: SessionId::new().unwrap(),
+        },
+        title: "Must not leak".into(),
+    });
+    h.until(|app| {
+        app.notices
+            .iter()
+            .any(|notice| notice.level == crate::app::NoticeLevel::Error)
+    })
+    .await;
+    assert_info_eq(&h.app.resident.current().unwrap().info, &before);
+    assert_info_eq(
+        &h.native
+            .client
+            .session(h.native.target.clone())
+            .info(tasks::options())
+            .await
+            .unwrap(),
+        &before,
+    );
+    h.finish().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn reasoning_arguments_distinguish_picker_valid_and_invalid_values() {
+    let mut h = Harness::opened().await;
+    let before = h.app.resident.current().unwrap().info.clone();
+    h.app.composer.set_text("/reasoning");
+    h.press(KeyCode::Enter);
+    assert!(matches!(
+        h.app.overlay,
+        crate::app::Overlay::Reasoning { .. }
+    ));
+    h.press(KeyCode::Esc);
+    for (command, expected) in [
+        (
+            "/reasoning invalid-not-a-level",
+            "auto|disabled|low|medium|high|xhigh|max|ultra",
+        ),
+        ("/theme invalid-not-a-theme", "dark|light"),
+        ("/approval invalid-not-a-mode", "ask|auto|read_only"),
+    ] {
+        let theme = h.app.theme;
+        h.app.composer.set_text(command);
+        h.press(KeyCode::Enter);
+        assert!(matches!(h.app.overlay, crate::app::Overlay::None));
+        let notice = h
+            .app
+            .notices
+            .back()
+            .expect("invalid argument needs an error");
+        assert_eq!(notice.level, crate::app::NoticeLevel::Error);
+        assert!(notice.text.contains(expected), "{}", notice.text);
+        assert_eq!(h.app.theme, theme);
+        assert_info_eq(&h.app.resident.current().unwrap().info, &before);
+        assert_info_eq(
+            &h.native
+                .client
+                .session(h.native.target.clone())
+                .info(tasks::options())
+                .await
+                .unwrap(),
+            &before,
+        );
+    }
+    h.app.composer.set_text("/reasoning auto");
+    h.press(KeyCode::Enter);
+    h.until(|app| app.resident.current().unwrap().info.config_revision > before.config_revision)
+        .await;
+    assert_eq!(h.app.reasoning(), Some(ReasoningPreference::Auto));
+    assert_info_eq(
+        &h.native
+            .client
+            .session(h.native.target.clone())
+            .info(tasks::options())
+            .await
+            .unwrap(),
+        &h.app.resident.current().unwrap().info,
+    );
+    h.finish().await;
+}
+
 fn agent_ref(client: &HostClient, agent_id: AgentId) -> AgentRef {
     AgentRef {
         host_id: client.initial_info().host_id.clone(),
@@ -287,8 +461,10 @@ async fn catalog_mutations_share_one_reader_and_final_metadata_cannot_roll_back(
         while requests < 3 {
             let message = h.messages.recv().await.unwrap();
             match &message {
-                Msg::RefreshCatalogs(Ok(())) => requests += 1,
-                Msg::RefreshCatalogs(Err(error)) => panic!("mutation failed: {error}"),
+                Msg::RefreshCatalogs(Ok(())) | Msg::SessionRenamed(_, Ok(())) => requests += 1,
+                Msg::RefreshCatalogs(Err(error)) | Msg::SessionRenamed(_, Err(error)) => {
+                    panic!("mutation failed: {error}")
+                }
                 Msg::Catalogs(_) => panic!("mutation bypassed the active catalog reader"),
                 _ => {}
             }
