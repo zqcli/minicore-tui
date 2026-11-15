@@ -33,7 +33,7 @@ impl ConfigDirectory {
     }
 
     pub fn commands_dir(&self) -> PathBuf {
-        self.directory.join("prompt").join("commands")
+        self.directory.join("commands")
     }
 
     pub fn data_root(&self) -> &Path {
@@ -46,8 +46,6 @@ impl ConfigDirectory {
 
     pub(super) fn is_fresh(&self) -> bool {
         !self.directory.join("host.json").exists()
-            && !self.directory.join("agents").exists()
-            && !self.directory.join("roles").exists()
     }
 }
 
@@ -65,13 +63,25 @@ mod tests {
         assert_eq!(directory.ui_file(), config.join("tui.json"));
         assert_eq!(
             directory.commands_dir(),
-            config.join("prompt").join("commands")
+            config.join("commands")
         );
         assert_eq!(directory.data_root(), data);
         assert_eq!(
             directory.history_file(),
             data.join("tui").join("history.jsonl")
         );
+    }
+
+    #[test]
+    fn missing_host_is_fresh_even_when_agent_and_role_directories_exist() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = temp.path().join("config");
+        std::fs::create_dir_all(config.join("agents")).unwrap();
+        std::fs::create_dir_all(config.join("roles")).unwrap();
+        let directory = ConfigDirectory::resolve(Some(&config), None).unwrap();
+        assert!(directory.is_fresh());
+        std::fs::write(config.join("host.json"), "{}").unwrap();
+        assert!(!directory.is_fresh());
     }
 
     #[test]

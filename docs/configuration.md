@@ -13,7 +13,7 @@ startup working directory. `--data-root <DIR>` independently selects runtime
 storage; its default is `<config-dir>/data`.
 
 A fresh directory gets a shared Host starter configuration, one Role, one Agent,
-`tui.json` and `prompt/commands/`. Setup prints the files and exits with status 1.
+`tui.json` and `commands/`. Setup prints the files and exits with status 1.
 The sample Agent records the absolute `--workspace` directory, or the current
 working directory, at initialization. Its example provider endpoint must be
 replaced before use. Argument and configuration failures exit with status 2
@@ -25,7 +25,7 @@ before fullscreen startup.
 | `<config-dir>/roles/*.json` | Reusable Role values referenced by Agent declarations |
 | `<config-dir>/agents/*.json` | Named Agent declarations with stable keys and Session defaults |
 | `<config-dir>/tui.json` | Local theme, editor and bell preferences |
-| `<config-dir>/prompt/commands/*.md` | Local slash-command templates |
+| `<config-dir>/commands/*.md` | Local slash-command templates |
 | `<data-root>/` | Host identities, committed configuration, Sessions and history |
 | `<data-root>/tui/history.jsonl` | Confirmed TUI input recall |
 
@@ -173,7 +173,7 @@ configuration unchanged. UI preferences are independent of Host reload; edit
 
 ## Prompt templates
 
-Put Markdown in `<config-dir>/prompt/commands/`; each filename becomes a slash
+Put Markdown in `<config-dir>/commands/`; each filename becomes a slash
 command. Built-in command names cannot be shadowed. Optional front matter gives
 `description` and `argument-hint`:
 
