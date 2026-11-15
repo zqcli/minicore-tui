@@ -12,8 +12,8 @@ minicore-tui — a terminal frontend for the embedded MiniCore Host
 Usage: minicore-tui [OPTIONS]
 
 Options:
-  --config-dir <DIR>     shared JSON configuration [default: executable directory/config]
-  --data-root <DIR>      persistent data [default: <config-dir>/data]
+  --config-dir <DIR>     shared JSON configuration [default: ~/.minicore/config]
+  --data-root <DIR>      persistent data [default: ~/.minicore/data]
   --agent-id <ID>        select this Host Agent
   --workspace <DIR>      workspace for a new session [default: cwd]
   --session <ID>         open this session

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.12.2 — 2026-11-15
+
+- Embed Host 0.12.2 at immutable revision
+  `92dfed01e72de0a63ca0ab82bffdc5495e4a8d7b`, with SPEC 4.11.1
+  configuration references and flat schema-3 storage. File-managed defaults require their declarations; no snapshot recovery
+  or old-data migration is performed. Session configuration stays independent.
+- Share independent native-home config/data defaults, read `tui.json` locally,
+  and use `config/commands/` without searching the old template path.
+- Initialize missing example files when `host.json` is absent, including when
+  empty Agent/Role directories already exist; never overwrite user files.
+- Protect flat Agent metadata and Session history from diagnostic log output.
+  Preserve the existing terminal layout, rendering and interaction behavior.
+
 ## 0.12.1 — 2026-11-14
 
 - Embed Host 0.12.1 at immutable revision

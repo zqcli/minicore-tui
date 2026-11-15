@@ -69,7 +69,10 @@ fn validate_output(data_root: &Path, output: &LogOutput) -> Result<(), &'static 
         Err(_) => return Err("cannot inspect diagnostic output"),
     };
     // Diagnostics may never append into Host metadata or Session history.
-    if resolved == root.join("host.json") || resolved.starts_with(root.join("agents")) {
+    if resolved == root.join("host.json")
+        || resolved.starts_with(root.join("agents"))
+        || resolved.starts_with(root.join("sessions"))
+    {
         return Err("diagnostic output conflicts with Host business storage");
     }
     Ok(())
@@ -83,8 +86,13 @@ mod tests {
     fn diagnostic_append_cannot_target_host_records_or_session_history() {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path();
-        std::fs::create_dir_all(root.join("agents").join("a")).unwrap();
-        for path in [root.join("host.json"), root.join("agents/a/history.jsonl")] {
+        std::fs::create_dir_all(root.join("agents")).unwrap();
+        std::fs::create_dir_all(root.join("sessions").join("s")).unwrap();
+        for path in [
+            root.join("host.json"),
+            root.join("agents/a.json"),
+            root.join("sessions/s/history.jsonl"),
+        ] {
             assert_eq!(
                 validate_output(
                     root,

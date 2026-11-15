@@ -246,8 +246,9 @@ active Turn keeps the configuration already bound to it. Host validation is
 authoritative; the terminal does not silently substitute a different reasoning
 level. With no Session open, model and reasoning selections apply when a new
 Session is created. Reloading Agent declarations does not rewrite existing Sessions. File-managed
-Agents must be changed through their declarations; remove a declaration and
-reload before deleting the corresponding Agent.
+Agents must be changed through their declarations. To remove one permanently,
+remove its declaration and explicitly delete that Agent before reloading;
+a missing bound declaration makes reload fail instead of releasing ownership.
 
 In `F8` or `/unconfirmed`, `e` or Enter opens a separate editor; `r` reviews a
 resend, `c` copies and `d` reviews forgetting the local record. Resend and forget

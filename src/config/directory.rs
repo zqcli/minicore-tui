@@ -1,10 +1,8 @@
 use std::path::{Path, PathBuf};
 
-/// The user's home directory, when the platform's variable names one.
+/// The current user's native home directory.
 pub fn home_dir() -> Option<PathBuf> {
-    std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
+    std::env::home_dir()
 }
 
 /// One resolved configuration directory shared with the embedded Host.
@@ -82,9 +80,12 @@ mod tests {
     }
 
     #[test]
-    fn data_root_defaults_to_the_resolved_config_directory() {
+    fn data_root_default_is_independent_of_the_config_override() {
         let directory = ConfigDirectory::resolve(Some(Path::new("relative-config")), None).unwrap();
         assert!(directory.dir().is_absolute());
-        assert_eq!(directory.data_root(), directory.dir().join("data"));
+        assert_eq!(
+            directory.data_root(),
+            std::env::home_dir().unwrap().join(".minicore/data")
+        );
     }
 }

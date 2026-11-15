@@ -2,7 +2,8 @@ use super::*;
 
 fn directory() -> (tempfile::TempDir, ConfigDirectory) {
     let temp = tempfile::tempdir().unwrap();
-    let directory = ConfigDirectory::resolve(Some(temp.path()), None).unwrap();
+    let directory =
+        ConfigDirectory::resolve(Some(temp.path()), Some(&temp.path().join("runtime"))).unwrap();
     (temp, directory)
 }
 
@@ -135,7 +136,11 @@ fn saving_theme_does_not_replace_invalid_preferences() {
 #[test]
 fn saving_theme_can_create_only_terminal_preferences() {
     let temp = tempfile::tempdir().unwrap();
-    let directory = ConfigDirectory::resolve(Some(&temp.path().join("config")), None).unwrap();
+    let directory = ConfigDirectory::resolve(
+        Some(&temp.path().join("config")),
+        Some(&temp.path().join("data")),
+    )
+    .unwrap();
     save_theme(&directory.ui_file(), ThemeKind::Light).unwrap();
     assert_eq!(load_ui(&directory).unwrap().theme, ThemeKind::Light);
     assert!(!directory.dir().join("host.json").exists());

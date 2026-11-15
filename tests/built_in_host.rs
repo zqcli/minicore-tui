@@ -126,13 +126,29 @@ async fn embedded_host_probe() {
         native_agent.info.configuration_source.as_ref().unwrap().key,
         "fixture"
     );
+    let saved_host: Value =
+        serde_json::from_slice(&std::fs::read(home.data_root().join("host.json")).unwrap())
+            .unwrap();
+    assert_eq!(saved_host["schema_version"], 3);
+    assert_eq!(saved_host["data"]["configuration"]["source"], "file");
+    assert!(saved_host["data"]["configuration"].get("config").is_none());
+    let saved_agent: Value = serde_json::from_slice(
+        &std::fs::read(
+            home.data_root()
+                .join("agents")
+                .join(format!("{}.json", target.agent_id)),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(saved_agent["data"]["configuration"]["key"], "fixture");
+    assert!(saved_agent["data"]["configuration"].get("config").is_none());
     assert!(
-        native_agent
-            .info
-            .configuration_source
-            .as_ref()
-            .unwrap()
-            .managed
+        home.data_root()
+            .join("sessions")
+            .join(target.session_id.as_str())
+            .join("session.json")
+            .is_file()
     );
     let session = client.session(target.clone());
     let info = session.info(CallOptions::default()).await.unwrap();
@@ -238,7 +254,7 @@ async fn embedded_host_probe() {
 }
 
 async fn reopen(root: &Path) {
-    let home = ConfigDirectory::resolve(Some(root), None).unwrap();
+    let home = ConfigDirectory::resolve(Some(root), Some(&root.join("data"))).unwrap();
     let saved: Value =
         serde_json::from_slice(&std::fs::read(root.join("observed.json")).unwrap()).unwrap();
     let mut loaded = minicore_host_config::load_config_directory(home.dir()).unwrap();
@@ -345,7 +361,7 @@ fn launch(home: &ConfigDirectory) -> Box<Launch> {
 }
 
 fn fixture(root: &Path, endpoint: &str, api: OpenAiModelApi) -> ConfigDirectory {
-    let home = ConfigDirectory::resolve(Some(root), None).unwrap();
+    let home = ConfigDirectory::resolve(Some(root), Some(&root.join("data"))).unwrap();
     let model = "fixture/native".parse().unwrap();
     let config = HostConfig {
         name: "Embedded integration fixture".into(),

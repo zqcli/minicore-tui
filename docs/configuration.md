@@ -1,6 +1,6 @@
 # Configuration
 
-Version 0.12 uses one JSON configuration directory for the embedded Host and
+Version 0.12.2 uses one JSON configuration directory for the embedded Host and
 terminal frontend. Host owns `host.json`, Agent declarations and reusable Roles.
 The TUI reads and writes only `tui.json`; it passes the resolved directory to
 Host's Rust startup API.
@@ -8,11 +8,13 @@ Host's Rust startup API.
 ## Paths and first run
 
 `--config-dir <DIR>` selects the configuration directory. The default is
-`config/` beside the running executable. Relative paths are resolved from the
-startup working directory. `--data-root <DIR>` independently selects runtime
-storage; its default is `<config-dir>/data`.
+`~/.minicore/config`. Relative paths are resolved from the startup working
+directory. `--data-root <DIR>` independently selects runtime storage; its default
+is `~/.minicore/data`, even when only `--config-dir` is overridden.
 
-A fresh directory gets a shared Host starter configuration, one Role, one Agent,
+When `host.json` is missing, initialization creates only missing example files,
+even if empty `agents/` or `roles/` directories already exist. These include one
+shared Host starter configuration, one Role, one Agent,
 `tui.json` and `commands/`. Setup prints the files and exits with status 1.
 The sample Agent records the absolute `--workspace` directory, or the current
 working directory, at initialization. Its example provider endpoint must be
@@ -100,8 +102,8 @@ The starter enables `read`, `write`, `edit`, `apply_patch`, `bash` and `agent`.
 Agent and Session configuration select tools and execution policy. Host owns
 resource validation and execution.
 
-The starter logs to an absolute file path so diagnostics cannot corrupt the
-terminal. Keep that path or choose another file whose parent exists. Logs may
+The starter logs to `~/.minicore/logs/host.log` using an absolute native-home
+path; initialization creates its parent so diagnostics cannot corrupt the terminal. Keep that path or choose another file whose parent exists. Logs may
 not target Host metadata or Session history. Stderr logging is accepted only
 when stderr is redirected away from the terminal.
 
@@ -129,14 +131,17 @@ validation before publication.
 
 The stable `key` binds a declaration to one persistent Agent. Changing its
 filename or display name preserves the Agent ID and existing default Session.
-Host creates new declared Agents and their default Sessions. Removing a file
-and reloading releases file management while preserving the Agent, its key,
-Sessions and history. Reintroducing the key reuses that Agent.
+Host creates new declared Agents and their default Sessions. Removing a bound
+declaration makes startup or reload fail before any publication or record write.
+A failed reload keeps the existing in-memory configuration; a restart cannot
+recover deleted defaults from Session history or stored fingerprints.
 
-Managed Agents cannot be changed or deleted through ordinary Agent mutation
-operations. Edit their declarations and `/reload`; to delete an Agent, first
-remove its declaration and reload, then use `/agent-delete`. Start/stop, default
-Session selection and Session updates keep their native behavior.
+File-managed Agent name/default updates require editing the declaration and
+`/reload`. Explicit deletion still uses the native exact-scope operation. To
+remove such an Agent permanently, remove its declaration and use `/agent-delete`
+before reloading. Deletion never edits source files; a retained declaration
+creates a new Agent on a later reload. Start/stop, default Session selection and
+Session updates keep their native behavior.
 
 `/agent-new <name>` copies the currently selected Agent's native configuration
 into a new dynamic Agent. It copies Role, Agent instructions and Session defaults;
@@ -197,3 +202,15 @@ settings and instructions. The old standalone Agent store is not imported.
 
 A data root has one owning Host process. Opening it in a second TUI is not a
 remote connection and cannot bypass the exclusive owner lease.
+
+## Storage format 3
+
+Host metadata is `data/host.json`, Agent metadata is `data/agents/<id>.json`, and
+all Session folders are `data/sessions/<id>/`. Each Session retains `session.json`
+and `history.jsonl`. File-managed Host/Agent records contain references and
+fingerprints, not duplicate configuration bodies; dynamic Agents retain inline
+configuration. Existing Sessions keep independent effective settings.
+
+The embedded Host rejects old object schemas and nested storage without migration
+or automatic rewriting. Back up old roots and use a fresh `--data-root` for the
+new format. Moving the old files alone is not a supported conversion.

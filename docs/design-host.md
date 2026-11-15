@@ -2,7 +2,7 @@
 
 ## Scope
 
-TUI 0.12.1 embeds MiniCore Host 0.12.1 at the immutable revision in
+TUI 0.12.2 embeds MiniCore Host 0.12.2 at the immutable revision in
 `Cargo.toml`. The frontend uses
 `HostClient::in_process` and native Host DTOs. Host owns execution, storage,
 configuration, tools and credentials. There is no Agent subprocess, replacement
