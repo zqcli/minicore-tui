@@ -3,7 +3,7 @@
 ## 0.12.2 — 2026-11-15
 
 - Embed Host 0.12.2 at immutable revision
-  `92dfed01e72de0a63ca0ab82bffdc5495e4a8d7b`, with SPEC 4.11.1
+  `2f149145304c7cf6fd3271da937000b6e8593cbd`, with SPEC 4.11.1
   configuration references and flat schema-3 storage. File-managed defaults require their declarations; no snapshot recovery
   or old-data migration is performed. Session configuration stays independent.
 - Share independent native-home config/data defaults, read `tui.json` locally,
