@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.12.4 — 2026-11-15
+
+- Accept terminal paste in Find and the Sessions, Models and Agents filters.
+  Append normalized single-line text, refresh matches and selection, and
+  preserve the conversation draft. A changed Session filter clears pending
+  deletion confirmation.
+- Make forward Delete and nonempty Ctrl+D separate undoable edits, including
+  graphemes, selections and complete paste chips. Real deletion clears an
+  abandoned redo branch; deleting at the end preserves valid redo.
+- Show the existing stable short Session ID on every picker row and reserve
+  it before clipping long titles and optional details, including while Sessions
+  run and after renaming. Keep full native targets and stored titles unchanged.
+- Embed Host 0.12.4 at immutable revision
+  `667f0923b827fea9b5fdb60f75a21f5369e44193`, following SPEC 4.11.3.
+  This Host release updates the specification and version metadata without
+  adding backend execution or storage behavior.
+
 ## 0.12.3 — 2026-11-15
 
 - Embed Host 0.12.3 at immutable revision

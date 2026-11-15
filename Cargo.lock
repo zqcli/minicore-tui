@@ -1049,8 +1049,8 @@ checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
 name = "minicore-host-compaction"
-version = "0.12.3"
-source = "git+https://github.com/zqcli/minicore-host?rev=dbaaa8175780759b84d26e0519aa4b27ced5f8f4#dbaaa8175780759b84d26e0519aa4b27ced5f8f4"
+version = "0.12.4"
+source = "git+https://github.com/zqcli/minicore-host?rev=667f0923b827fea9b5fdb60f75a21f5369e44193#667f0923b827fea9b5fdb60f75a21f5369e44193"
 dependencies = [
  "minicore-host-protocol",
  "minicore-host-runtime",
@@ -1060,8 +1060,8 @@ dependencies = [
 
 [[package]]
 name = "minicore-host-config"
-version = "0.12.3"
-source = "git+https://github.com/zqcli/minicore-host?rev=dbaaa8175780759b84d26e0519aa4b27ced5f8f4#dbaaa8175780759b84d26e0519aa4b27ced5f8f4"
+version = "0.12.4"
+source = "git+https://github.com/zqcli/minicore-host?rev=667f0923b827fea9b5fdb60f75a21f5369e44193#667f0923b827fea9b5fdb60f75a21f5369e44193"
 dependencies = [
  "minicore-host-protocol",
  "serde",
@@ -1070,8 +1070,8 @@ dependencies = [
 
 [[package]]
 name = "minicore-host-core"
-version = "0.12.3"
-source = "git+https://github.com/zqcli/minicore-host?rev=dbaaa8175780759b84d26e0519aa4b27ced5f8f4#dbaaa8175780759b84d26e0519aa4b27ced5f8f4"
+version = "0.12.4"
+source = "git+https://github.com/zqcli/minicore-host?rev=667f0923b827fea9b5fdb60f75a21f5369e44193#667f0923b827fea9b5fdb60f75a21f5369e44193"
 dependencies = [
  "futures-util",
  "minicore-host-compaction",
@@ -1092,8 +1092,8 @@ dependencies = [
 
 [[package]]
 name = "minicore-host-diagnostics"
-version = "0.12.3"
-source = "git+https://github.com/zqcli/minicore-host?rev=dbaaa8175780759b84d26e0519aa4b27ced5f8f4#dbaaa8175780759b84d26e0519aa4b27ced5f8f4"
+version = "0.12.4"
+source = "git+https://github.com/zqcli/minicore-host?rev=667f0923b827fea9b5fdb60f75a21f5369e44193#667f0923b827fea9b5fdb60f75a21f5369e44193"
 dependencies = [
  "minicore-host-protocol",
  "serde",
@@ -1105,8 +1105,8 @@ dependencies = [
 
 [[package]]
 name = "minicore-host-local-tools"
-version = "0.12.3"
-source = "git+https://github.com/zqcli/minicore-host?rev=dbaaa8175780759b84d26e0519aa4b27ced5f8f4#dbaaa8175780759b84d26e0519aa4b27ced5f8f4"
+version = "0.12.4"
+source = "git+https://github.com/zqcli/minicore-host?rev=667f0923b827fea9b5fdb60f75a21f5369e44193#667f0923b827fea9b5fdb60f75a21f5369e44193"
 dependencies = [
  "minicore-host-runtime",
  "minicore-host-workspace",
@@ -1124,8 +1124,8 @@ dependencies = [
 
 [[package]]
 name = "minicore-host-protocol"
-version = "0.12.3"
-source = "git+https://github.com/zqcli/minicore-host?rev=dbaaa8175780759b84d26e0519aa4b27ced5f8f4#dbaaa8175780759b84d26e0519aa4b27ced5f8f4"
+version = "0.12.4"
+source = "git+https://github.com/zqcli/minicore-host?rev=667f0923b827fea9b5fdb60f75a21f5369e44193#667f0923b827fea9b5fdb60f75a21f5369e44193"
 dependencies = [
  "getrandom 0.4.3",
  "serde",
@@ -1135,8 +1135,8 @@ dependencies = [
 
 [[package]]
 name = "minicore-host-provider"
-version = "0.12.3"
-source = "git+https://github.com/zqcli/minicore-host?rev=dbaaa8175780759b84d26e0519aa4b27ced5f8f4#dbaaa8175780759b84d26e0519aa4b27ced5f8f4"
+version = "0.12.4"
+source = "git+https://github.com/zqcli/minicore-host?rev=667f0923b827fea9b5fdb60f75a21f5369e44193#667f0923b827fea9b5fdb60f75a21f5369e44193"
 dependencies = [
  "bytes",
  "futures-util",
@@ -1155,8 +1155,8 @@ dependencies = [
 
 [[package]]
 name = "minicore-host-resources"
-version = "0.12.3"
-source = "git+https://github.com/zqcli/minicore-host?rev=dbaaa8175780759b84d26e0519aa4b27ced5f8f4#dbaaa8175780759b84d26e0519aa4b27ced5f8f4"
+version = "0.12.4"
+source = "git+https://github.com/zqcli/minicore-host?rev=667f0923b827fea9b5fdb60f75a21f5369e44193#667f0923b827fea9b5fdb60f75a21f5369e44193"
 dependencies = [
  "minicore-host-core",
  "minicore-host-protocol",
@@ -1169,8 +1169,8 @@ dependencies = [
 
 [[package]]
 name = "minicore-host-runtime"
-version = "0.12.3"
-source = "git+https://github.com/zqcli/minicore-host?rev=dbaaa8175780759b84d26e0519aa4b27ced5f8f4#dbaaa8175780759b84d26e0519aa4b27ced5f8f4"
+version = "0.12.4"
+source = "git+https://github.com/zqcli/minicore-host?rev=667f0923b827fea9b5fdb60f75a21f5369e44193#667f0923b827fea9b5fdb60f75a21f5369e44193"
 dependencies = [
  "futures-util",
  "getrandom 0.4.3",
@@ -1183,8 +1183,8 @@ dependencies = [
 
 [[package]]
 name = "minicore-host-storage"
-version = "0.12.3"
-source = "git+https://github.com/zqcli/minicore-host?rev=dbaaa8175780759b84d26e0519aa4b27ced5f8f4#dbaaa8175780759b84d26e0519aa4b27ced5f8f4"
+version = "0.12.4"
+source = "git+https://github.com/zqcli/minicore-host?rev=667f0923b827fea9b5fdb60f75a21f5369e44193#667f0923b827fea9b5fdb60f75a21f5369e44193"
 dependencies = [
  "minicore-host-protocol",
  "minicore-host-runtime",
@@ -1200,8 +1200,8 @@ dependencies = [
 
 [[package]]
 name = "minicore-host-tools"
-version = "0.12.3"
-source = "git+https://github.com/zqcli/minicore-host?rev=dbaaa8175780759b84d26e0519aa4b27ced5f8f4#dbaaa8175780759b84d26e0519aa4b27ced5f8f4"
+version = "0.12.4"
+source = "git+https://github.com/zqcli/minicore-host?rev=667f0923b827fea9b5fdb60f75a21f5369e44193#667f0923b827fea9b5fdb60f75a21f5369e44193"
 dependencies = [
  "minicore-host-core",
  "minicore-host-local-tools",
@@ -1216,8 +1216,8 @@ dependencies = [
 
 [[package]]
 name = "minicore-host-transport"
-version = "0.12.3"
-source = "git+https://github.com/zqcli/minicore-host?rev=dbaaa8175780759b84d26e0519aa4b27ced5f8f4#dbaaa8175780759b84d26e0519aa4b27ced5f8f4"
+version = "0.12.4"
+source = "git+https://github.com/zqcli/minicore-host?rev=667f0923b827fea9b5fdb60f75a21f5369e44193#667f0923b827fea9b5fdb60f75a21f5369e44193"
 dependencies = [
  "futures-util",
  "minicore-host-core",
@@ -1235,8 +1235,8 @@ dependencies = [
 
 [[package]]
 name = "minicore-host-workspace"
-version = "0.12.3"
-source = "git+https://github.com/zqcli/minicore-host?rev=dbaaa8175780759b84d26e0519aa4b27ced5f8f4#dbaaa8175780759b84d26e0519aa4b27ced5f8f4"
+version = "0.12.4"
+source = "git+https://github.com/zqcli/minicore-host?rev=667f0923b827fea9b5fdb60f75a21f5369e44193#667f0923b827fea9b5fdb60f75a21f5369e44193"
 dependencies = [
  "ignore",
  "minicore-host-protocol",
@@ -1251,7 +1251,7 @@ dependencies = [
 
 [[package]]
 name = "minicore-tui"
-version = "0.12.3"
+version = "0.12.4"
 dependencies = [
  "base64 0.22.1",
  "clipboard-win",

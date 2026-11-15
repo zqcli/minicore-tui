@@ -1,7 +1,7 @@
 # Architecture
 
 The executable owns one persistent MiniCore Host and one terminal application.
-It links Host 0.12.3 at the immutable revision in `Cargo.toml`; all native
+It links Host 0.12.4 at the immutable revision in `Cargo.toml`; all native
 components come from that revision. The frontend calls `HostClient::in_process`
 and the typed `SessionClient` APIs. There is no frontend protocol model, child
 Agent, transport adapter, Webpage service or remote view layer.
@@ -60,6 +60,12 @@ values. The current directory overrides newly created Sessions, not an opened
 Session's workspace. The shared starter records the initialization workspace
 for its default Agent. Startup model/reasoning overrides are consumed once.
 Later navigation reads the selected Session's saved settings.
+
+The Session picker always places the existing six-character native Session ID
+first in its detail column. The layout reserves that identity before clipping
+the title and optional details, so different long titles remain distinguishable
+by ID. Filtering and actions still use full native addresses; this display
+rule creates no title cache, collision registry or Host metadata.
 
 The main loop owns the terminal guard and external-editor handoff. It restores
 the terminal before supervising shutdown. Graceful shutdown waits for the real
@@ -186,6 +192,15 @@ Rendering does no Host or filesystem I/O. Clipboard selection omits chrome,
 status hints, timestamps and layout rails.
 
 ## Native meaning in the UI
+
+Local query paste belongs to the focused Find, Sessions, Models or Agents
+overlay. Single-line normalization reuses terminal sanitization, and pasted and
+typed text share the same query-change path for matching and selection reset.
+Changing a Session filter clears pending deletion. Other editors and native
+interaction answers retain their own paste ownership; a hidden conversation
+draft is never edited by a query paste. Actual forward deletion uses the
+composer's existing complete undo snapshot, including paste chips and selection;
+an end-of-draft no-op preserves valid redo.
 
 The model catalog and reasoning choices come directly from Host. A Session displays its native committed settings; an unopened draft shows only
 explicit launch choices.

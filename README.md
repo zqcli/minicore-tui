@@ -1,8 +1,8 @@
 # minicore-tui
 
 `minicore-tui` is a fullscreen terminal frontend for
-[minicore-host](https://github.com/zqcli/minicore-host). Version 0.12.3 embeds
-Host 0.12.3 in the same executable and uses its typed Rust client through
+[minicore-host](https://github.com/zqcli/minicore-host). Version 0.12.4 embeds
+Host 0.12.4 in the same executable and uses its typed Rust client through
 `HostClient::in_process`. Host owns Agents, Sessions, execution, tools,
 credentials, history and persistence; the TUI owns terminal interaction and
 presentation.
@@ -76,6 +76,9 @@ layout cache, multiline editor, paste handling, prompt recall, external editor
 and light/dark themes remain available. Idle rendering has no periodic tick.
 `Ctrl+G` hands terminal input to the external editor and restores the edited draft
 on return. If terminal restoration fails, the error names the retained draft file.
+Find and the Sessions, Models and Agents filters accept terminal paste without
+changing the draft. Forward Delete and nonempty Ctrl+D are separate undoable
+edits; Ctrl+Z and Ctrl+Y restore or replay them.
 
 - **Conversation:** stream answer and reasoning text, retain interrupted partial
   output, show native Turn outcome and persistence state. Model retry phase and
@@ -103,7 +106,9 @@ on return. If terminal restoration fails, the error names the retained draft fil
   Session, Load, Turn and interaction. Use `/approval ask|auto|read_only` for a
   real Session execution policy; there is no fabricated per-tool allow cache.
 - **Agents and Sessions:** `/agents` selects a Host Agent, `/agent-new` copies
-  its native configuration into a new dynamic Agent, and the Session picker shows actual owning Agents and lifecycle states.
+  its native configuration into a new dynamic Agent, and the Session picker shows
+  actual owning Agents, lifecycle states and a stable short Session ID on every
+  row. The ID remains visible when long titles are clipped.
   Background Sessions keep running when terminal selection changes. Rename,
   close, delete, load, unload, pause and resume use native Host operations.
   Renaming refreshes the original Session's list and detail metadata even after

@@ -1364,6 +1364,150 @@ fn the_sessions_picker_shows_live_and_unloaded_sessions_across_agents() {
     snapshot("sessions-picker-live", rendered);
 }
 
+fn session_picker_row<'a>(screen: &'a str, short_id: &str) -> &'a str {
+    screen
+        .lines()
+        .find(|line| line.contains(short_id))
+        .unwrap_or_else(|| panic!("missing Session {short_id}:\n{screen}"))
+}
+
+#[test]
+fn session_picker_keeps_ids_when_distinct_long_titles_clip_alike() {
+    const FIRST: u64 = 11_111_100_000_000_000_001;
+    const SECOND: u64 = 12_222_200_000_000_000_002;
+    let mut app = app();
+    let prefix = "Daily inventory review: inspect source inputs, validate business rules, compare reports, and prepare the requested updates for";
+    let mut first = session(&app, FIRST, &format!("{prefix} CASE_CHARLIE"));
+    let mut second = session(&app, SECOND, &format!("{prefix} CASE_DELTA"));
+    for session in [&first, &second] {
+        let mut info = catalog(session);
+        info.residency = minicore_host_protocol::Residency::Unloaded;
+        app.sessions.push(info);
+    }
+    app.open_panel(crate::app::Panel::Sessions);
+    let idle = render(&mut app, 134, 20);
+    let first_row = session_picker_row(&idle, "111111");
+    let second_row = session_picker_row(&idle, "122222");
+    assert!(first_row.contains("unloaded") && second_row.contains("unloaded"));
+    assert_eq!(
+        first_row.split_once("111111").unwrap().0.trim(),
+        second_row.split_once("122222").unwrap().0.trim()
+    );
+    assert!(
+        first_row.contains('…') && second_row.contains('…'),
+        "{idle}"
+    );
+    assert!(!idle.contains("CASE_CHARLIE") && !idle.contains("CASE_DELTA"));
+
+    for session in [&mut first, &mut second] {
+        session.state.data.active_turn_id = Some(turn_id(session.epoch));
+        session.live = Some(live(0, session.epoch));
+        let info = app
+            .sessions
+            .iter_mut()
+            .find(|info| info.id == session.info.id)
+            .unwrap();
+        *info = catalog(session);
+    }
+    app.resident.insert(first);
+    app.resident.insert(second);
+    app.open_panel(crate::app::Panel::Sessions);
+    let running = render(&mut app, 134, 20);
+    let first_row = session_picker_row(&running, "111111");
+    let second_row = session_picker_row(&running, "122222");
+    assert!(first_row.contains("running 0m") && second_row.contains("running 0m"));
+    assert_eq!(
+        first_row.split_once("111111").unwrap().0.trim(),
+        second_row.split_once("122222").unwrap().0.trim()
+    );
+    assert!(
+        first_row.contains('…') && second_row.contains('…'),
+        "{running}"
+    );
+    assert!(!running.contains("CASE_CHARLIE") && !running.contains("CASE_DELTA"));
+
+    app.resident.select(Some(FIRST));
+    app.open_panel(crate::app::Panel::Sessions);
+    let current = render(&mut app, 134, 20);
+    let first_row = session_picker_row(&current, "111111");
+    let second_row = session_picker_row(&current, "122222");
+    assert!(first_row.contains("running 0m · current"), "{current}");
+    assert!(second_row.contains("running 0m") && !second_row.contains("current"));
+    assert!(
+        first_row.contains('…') && second_row.contains('…'),
+        "{current}"
+    );
+    assert!(!current.contains("CASE_CHARLIE") && !current.contains("CASE_DELTA"));
+}
+
+#[test]
+fn session_picker_keeps_ids_for_duplicate_and_renamed_titles() {
+    let mut app = app();
+    for index in [11_111_100_000_000_000_001, 12_222_200_000_000_000_002] {
+        let session = session(&app, index, "SAME_NAME_CONTROL");
+        app.sessions.push(catalog(&session));
+    }
+    app.open_panel(crate::app::Panel::Sessions);
+    let screen = render(&mut app, 100, 20);
+    for id in ["111111", "122222"] {
+        let row = session_picker_row(&screen, id);
+        assert!(row.contains("SAME_NAME_CONTROL"), "{screen}");
+        assert!(row.contains("Coder"), "{screen}");
+    }
+
+    let first_id = native_id(11_111_100_000_000_000_001);
+    let first = app
+        .sessions
+        .iter_mut()
+        .find(|info| info.id.as_str() == first_id)
+        .unwrap();
+    first.title = Some("RENAMED_SESSION".into());
+    app.open_panel(crate::app::Panel::Sessions);
+    let renamed = render(&mut app, 100, 20);
+    assert!(session_picker_row(&renamed, "111111").contains("RENAMED_SESSION"));
+    assert!(session_picker_row(&renamed, "122222").contains("SAME_NAME_CONTROL"));
+
+    if let Overlay::Sessions { filter, .. } = &mut app.overlay {
+        *filter = "RENAMED_SESSION".into();
+    }
+    let filtered = render(&mut app, 100, 20);
+    assert!(session_picker_row(&filtered, "111111").contains("RENAMED_SESSION"));
+    assert!(!filtered.contains("122222"));
+    app.open_panel(crate::app::Panel::Sessions);
+    let reopened = render(&mut app, 100, 20);
+    assert!(session_picker_row(&reopened, "111111").contains("RENAMED_SESSION"));
+    assert!(session_picker_row(&reopened, "122222").contains("SAME_NAME_CONTROL"));
+}
+
+#[test]
+fn session_picker_keeps_ids_when_narrow_rows_have_long_unicode_metadata() {
+    let mut app = app();
+    app.agents[0].name = "工作代理名称".repeat(20);
+    for (index, suffix) in [
+        (11_111_100_000_000_000_001, "甲"),
+        (12_222_200_000_000_000_002, "乙"),
+    ] {
+        let title = format!("{}{suffix}", "共享会话标题".repeat(20));
+        let mut session = session(&app, index, &title);
+        session.info.config.workspace = Some(
+            serde_json::from_value(json!({"path":format!("/work/{}", "项目工作区".repeat(20))}))
+                .unwrap(),
+        );
+        session.state.data.active_turn_id = Some(turn_id(index));
+        session.live = Some(live(0, index));
+        app.sessions.push(catalog(&session));
+        app.resident.insert(session);
+    }
+    app.open_panel(crate::app::Panel::Sessions);
+    for columns in [9, 10, 11, 24, 40, 80] {
+        let screen = render(&mut app, columns, 20);
+        for id in ["111111", "122222"] {
+            let row = session_picker_row(&screen, id);
+            assert_eq!(row.contains('…'), columns >= 11, "{screen}");
+        }
+    }
+}
+
 #[test]
 fn the_agent_picker_uses_real_owners_including_stopped_agents() {
     let mut app = app();

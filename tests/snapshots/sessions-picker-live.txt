@@ -1,5 +1,5 @@
 
-  minicore-tui v0.12.3
+  minicore-tui v0.12.4
 
   esc interrupt · ctrl+c clear · / commands · @ files · ctrl+o expand · ctrl+r sessions
 
@@ -11,10 +11,10 @@
 
  >
 
- › Cache the parser                                                            Coder · current · now
-   Port the lexer                                                           Coder · running 0m · now
-   Clean the build                                                      Coder · needs approval · now
-   Write the docs                                                                  Coder · new · now
-   Review the parser                                                       Reviewer · unloaded · now
+ › Cache the parser                                                   000000 · Coder · current · now
+   Port the lexer                                                  000000 · Coder · running 0m · now
+   Clean the build                                             000000 · Coder · needs approval · now
+   Write the docs                                                         000000 · Coder · new · now
+   Review the parser                                              000000 · Reviewer · unloaded · now
  ───────────────────────────────────────────────────────────────────────────────────────────────────
  ▸ minicore-tui · gpt 6 luna · max · agent Coder · 1 running · 1 needs input

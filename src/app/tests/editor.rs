@@ -1,6 +1,6 @@
 use super::harness::*;
-use crate::app::{Overlay, Panel};
-use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use crate::app::{Action, Overlay, Panel};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
 fn mouse(h: &mut Harness, kind: MouseEventKind, x: u16, y: u16) {
     assert!(h.app.on_mouse(MouseEvent {
@@ -169,6 +169,423 @@ async fn a_multiline_paste_is_draft_text_and_never_runs_a_command() {
         assert!(h.native.calls.try_recv().is_err());
         h.finish().await;
     }
+}
+
+fn query_state(overlay: &Overlay) -> (&str, usize) {
+    match overlay {
+        Overlay::Find { query, current, .. } => (query, *current),
+        Overlay::Sessions {
+            filter, selected, ..
+        }
+        | Overlay::Models { filter, selected }
+        | Overlay::Agents { filter, selected } => (filter, *selected),
+        _ => panic!("query overlay closed unexpectedly"),
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn query_paste_normalizes_single_line_text_on_all_four_surfaces() {
+    let mut h = Harness::opened().await;
+    h.app.composer.set_text("retained 中文 draft");
+    h.key(KeyCode::Left, KeyModifiers::SHIFT);
+    let cursor = h.app.composer.cursor();
+    let selection = h.app.composer.selection();
+    let version = h.app.composer.version();
+    let pasted = "\r\n中\r文\n👩‍💻\te\u{301}\u{1b}[31mred\u{1b}[0m\u{1b}]52;c;cGF5bG9hZA==\u{7}\u{feff}\u{7}\u{7f}\u{202e}";
+    let expected = "prefix 中 文 👩‍💻    e\u{301}red␇␡\\u{202e}";
+    for panel in [Panel::Find, Panel::Sessions, Panel::Models, Panel::Agents] {
+        h.app.open_panel(panel.clone());
+        h.type_text("prefix");
+        h.app.on_paste(pasted);
+        assert_eq!(query_state(&h.app.overlay), (expected, 0));
+        h.press(KeyCode::Esc);
+        assert_eq!(h.app.composer.text(), "retained 中文 draft");
+        assert_eq!(h.app.composer.cursor(), cursor);
+        assert_eq!(h.app.composer.selection(), selection);
+        assert_eq!(h.app.composer.version(), version);
+        h.app.open_panel(panel);
+        h.type_text(expected);
+        assert_eq!(query_state(&h.app.overlay), (expected, 0));
+        h.press(KeyCode::Esc);
+    }
+    assert!(h.app.local_inputs.is_empty());
+    assert!(h.native.calls.try_recv().is_err());
+    assert!(!h.app.quit);
+    h.finish().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn session_query_paste_targets_native_identity_and_resets_delete_confirmation() {
+    let mut h = Harness::opened().await;
+    h.another_session().await;
+    h.app.refresh_catalogs();
+    h.until(|app| app.sessions.len() == 2).await;
+    h.app.composer.set_text("keep this draft");
+    h.ctrl(KeyCode::Char('r'));
+    h.press(KeyCode::Down);
+    let target = crate::app::overlay::session_target(h.app.selected_session().unwrap());
+    h.ctrl(KeyCode::Char('d'));
+    assert!(
+        matches!(&h.app.overlay, Overlay::Sessions { selected: 1, armed: Some(armed), .. } if *armed == target)
+    );
+    h.app.on_paste("\u{1b}[2J\u{feff}");
+    assert_eq!(query_state(&h.app.overlay), ("", 1));
+    assert!(
+        matches!(&h.app.overlay, Overlay::Sessions { armed: Some(armed), .. } if *armed == target)
+    );
+
+    let id = target.session_id.as_str();
+    h.app.on_paste(&id[..6]);
+    assert_eq!(query_state(&h.app.overlay), (&id[..6], 0));
+    assert!(matches!(
+        h.app.overlay,
+        Overlay::Sessions { armed: None, .. }
+    ));
+    h.app.on_paste(&id[6..]);
+    assert_eq!(query_state(&h.app.overlay), (id, 0));
+    assert_eq!(
+        crate::app::overlay::session_target(h.app.selected_session().unwrap()),
+        target
+    );
+    assert_eq!(h.app.resident.current().unwrap().address(), h.native.target);
+
+    h.ctrl(KeyCode::Char('d'));
+    h.press(KeyCode::Backspace);
+    assert!(matches!(
+        h.app.overlay,
+        Overlay::Sessions { armed: None, .. }
+    ));
+    h.ctrl(KeyCode::Char('d'));
+    h.type_text(&id[id.len() - 1..]);
+    assert!(matches!(
+        h.app.overlay,
+        Overlay::Sessions { armed: None, .. }
+    ));
+    h.press(KeyCode::Esc);
+    assert_eq!(h.app.composer.text(), "keep this draft");
+    h.ctrl(KeyCode::Char('r'));
+    h.type_text(id);
+    assert_eq!(query_state(&h.app.overlay), (id, 0));
+    let action = h
+        .app
+        .on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(matches!(action, Some(Action::OpenSession(found)) if found == target));
+    h.native
+        .client
+        .session(target)
+        .info(Default::default())
+        .await
+        .unwrap();
+    h.finish().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn agent_and_model_query_paste_only_selects_the_matching_native_values() {
+    use minicore_host_core::{ModelDescription, OpenAiModelApi};
+    use minicore_host_protocol::{AgentConfig, AgentCreate, OperationId, StorageMode};
+
+    let mut h = Harness::opened().await;
+    let created = h
+        .native
+        .client
+        .create_agent(
+            AgentCreate {
+                operation_id: OperationId::new().unwrap(),
+                name: "Paste 中文 Agent".into(),
+                mode: StorageMode::Memory,
+                config: AgentConfig::default(),
+                default_session: None,
+                initial_message: None,
+            },
+            Default::default(),
+        )
+        .await
+        .unwrap();
+    let agent_id = created.agent_id.unwrap();
+    h.app.refresh_catalogs();
+    h.until(|app| app.agents.len() == 2).await;
+    h.app.composer.set_text("retained draft");
+    h.app.open_panel(Panel::Agents);
+    h.app.on_paste("Paste ");
+    h.app.on_paste("中文");
+    assert_eq!(query_state(&h.app.overlay), ("Paste 中文", 0));
+    let action = h
+        .app
+        .on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(matches!(action, Some(Action::SelectAgent(found)) if found == agent_id));
+    assert_eq!(h.app.current_agent_id(), Some(&h.native.target.agent_id));
+
+    // Native catalog values exercise filtering only; no model execution is claimed.
+    h.app.models = ["fixture/base", "fixture/chat-alt"]
+        .into_iter()
+        .map(|model| ModelDescription {
+            model: model.parse().unwrap(),
+            api: OpenAiModelApi::ChatCompletions,
+            context_window: 8192,
+            supported_reasoning: Vec::new(),
+            supports_tools: true,
+        })
+        .collect();
+    h.app.open_panel(Panel::Models);
+    h.press(KeyCode::Down);
+    assert_eq!(query_state(&h.app.overlay), ("", 1));
+    h.app.on_paste("\u{1b}]0;ignored\u{7}\u{feff}");
+    assert_eq!(query_state(&h.app.overlay), ("", 1));
+    h.app.on_paste("fixture/");
+    h.app.on_paste("chat-alt");
+    assert_eq!(query_state(&h.app.overlay), ("fixture/chat-alt", 0));
+    let action = h
+        .app
+        .on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(matches!(action, Some(Action::SwitchModel(model)) if model == "fixture/chat-alt"));
+    assert_eq!(h.app.composer.text(), "retained draft");
+    assert!(h.native.calls.try_recv().is_err());
+    h.finish().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn find_query_paste_appends_and_recomputes_actual_transcript_matches() {
+    let mut h = Harness::opened().await;
+    h.type_text("show fixture");
+    h.press(KeyCode::Enter);
+    let call = h.next_call().await;
+    call.text("Search 中文 token once\nSearch 中文 token twice\nSearch elsewhere");
+    call.finish();
+    h.until(|app| {
+        !app.is_busy()
+            && app
+                .transcript_blocks()
+                .iter()
+                .any(|block| matches!(block, crate::transcript::Block::TurnEnd { .. }))
+    })
+    .await;
+    h.app.composer.set_text("keep my draft");
+    h.screen(80, 24);
+    h.ctrl(KeyCode::Char('f'));
+    h.app.on_paste("Search ");
+    assert!(
+        matches!(&h.app.overlay, Overlay::Find { matches, current: 0, .. } if matches.len() == 3)
+    );
+    h.press(KeyCode::Enter);
+    assert_eq!(query_state(&h.app.overlay), ("Search ", 1));
+    let scroll = h.app.scroll;
+    h.app.on_paste("\u{1b}[0m\u{feff}");
+    assert_eq!(query_state(&h.app.overlay), ("Search ", 1));
+    assert_eq!(h.app.scroll, scroll);
+    h.app.on_paste("中文 token");
+    assert_eq!(query_state(&h.app.overlay), ("Search 中文 token", 0));
+    let Overlay::Find { matches, .. } = &h.app.overlay else {
+        unreachable!()
+    };
+    assert_eq!(matches.len(), 2);
+    let pasted_matches: Vec<_> = matches
+        .iter()
+        .map(|found| (found.block, found.field, found.ordinal))
+        .collect();
+    assert!(
+        matches!(h.app.scroll, crate::app::Scroll::Anchor { block, .. } if block == matches[0].block)
+    );
+    h.press(KeyCode::Esc);
+    assert_eq!(h.app.composer.text(), "keep my draft");
+    h.ctrl(KeyCode::Char('f'));
+    h.type_text("Search 中文 token");
+    let Overlay::Find {
+        matches, current, ..
+    } = &h.app.overlay
+    else {
+        unreachable!()
+    };
+    assert_eq!(*current, 0);
+    assert_eq!(
+        matches
+            .iter()
+            .map(|found| (found.block, found.field, found.ordinal))
+            .collect::<Vec<_>>(),
+        pasted_matches
+    );
+    h.finish().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn query_paste_dispatch_preserves_other_editors_and_read_only_boundaries() {
+    let mut h = Harness::opened().await;
+    h.type_text("/");
+    h.app.on_paste("help");
+    assert_eq!(h.app.composer.text(), "/help");
+    assert!(matches!(h.app.overlay, Overlay::Palette { .. }));
+    h.app.composer.set_text("@");
+    h.app.overlay = Overlay::Files {
+        selected: 1,
+        paths: vec!["src/main.rs".into()],
+    };
+    h.app.on_paste("src");
+    assert_eq!(h.app.composer.text(), "@src");
+    assert!(matches!(h.app.overlay, Overlay::Files { selected: 0, .. }));
+
+    h.app.overlay = Overlay::Unconfirmed {
+        selected: 0,
+        mode: crate::app::unconfirmed::ReviewMode::Edit(0),
+    };
+    h.app.on_paste("line one\r\nline two");
+    assert_eq!(h.app.unconfirmed_editor.text(), "line one\nline two");
+    assert_eq!(h.app.composer.text(), "@src");
+    for panel in [
+        Panel::Help,
+        Panel::Error,
+        Panel::SessionInfo,
+        Panel::Reasoning,
+    ] {
+        h.app.open_panel(panel);
+        h.app.on_paste("/new\ny\n");
+        assert_eq!(h.app.composer.text(), "@src");
+    }
+    h.app.open_panel(Panel::Sessions);
+    h.ctrl(KeyCode::Char('n'));
+    let Overlay::Sessions {
+        renaming: Some((target, title)),
+        ..
+    } = &h.app.overlay
+    else {
+        unreachable!()
+    };
+    let before = (target.clone(), title.clone());
+    h.app.on_paste("unrequested rename change");
+    assert!(
+        matches!(&h.app.overlay, Overlay::Sessions { filter, renaming: Some(value), .. } if filter.is_empty() && *value == before)
+    );
+    h.app.open_panel(Panel::Find);
+    h.app.fatal = Some(crate::app::Fatal {
+        reason: "terminal fixture failure".into(),
+    });
+    h.app.on_paste("blocked query");
+    assert_eq!(query_state(&h.app.overlay), ("", 0));
+    assert_eq!(h.app.composer.text(), "@src");
+    assert!(h.native.calls.try_recv().is_err());
+    h.finish().await;
+}
+
+#[tokio::test]
+async fn query_paste_keeps_native_interaction_answers_on_their_focused_surface() {
+    use crate::app::Answer;
+    use crate::testing::{production::with_input_tool, real_bounded};
+
+    let (native, mut provider) = real_bounded(with_input_tool()).await;
+    let mut h = Harness::from_native(native).await;
+    h.type_text("request interactive fixture tool");
+    h.press(KeyCode::Enter);
+    h.until(|app| app.has_interaction()).await;
+    provider.request().await;
+    h.app.composer.set_text("retained composer");
+    h.app.on_paste("y\n");
+    assert_eq!(h.app.composer.text(), "retained composer");
+    assert!(
+        !h.app
+            .resident
+            .current()
+            .unwrap()
+            .interaction
+            .as_ref()
+            .unwrap()
+            .submitted
+    );
+    h.app.on_action(Action::Answer(Answer::Allow));
+    h.until(|app| {
+        app.resident
+            .current()
+            .unwrap()
+            .interaction
+            .as_ref()
+            .is_some_and(|pending| pending.is_text())
+    })
+    .await;
+    h.app.on_paste("answer\r\n中文");
+    assert_eq!(
+        h.app.resident.current().unwrap().interaction_editor.text(),
+        "answer\n中文"
+    );
+    assert_eq!(h.app.composer.text(), "retained composer");
+    h.ctrl(KeyCode::Char('r'));
+    h.app.on_paste(h.native.target.session_id.as_str());
+    assert_eq!(
+        query_state(&h.app.overlay),
+        (h.native.target.session_id.as_str(), 0)
+    );
+    assert_eq!(
+        h.app.resident.current().unwrap().interaction_editor.text(),
+        "answer\n中文"
+    );
+    h.press(KeyCode::Esc);
+    h.app
+        .on_action(Action::Answer(Answer::Text("answer\n中文".into())));
+    h.until(|app| {
+        !app.is_busy()
+            && !app.has_interaction()
+            && app
+                .transcript_blocks()
+                .iter()
+                .any(|block| matches!(block, crate::transcript::Block::TurnEnd { .. }))
+    })
+    .await;
+    let request = provider.request().await;
+    let tool = request["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|message| message["role"] == "tool")
+        .unwrap();
+    let result: serde_json::Value =
+        serde_json::from_str(tool["content"].as_str().unwrap()).unwrap();
+    assert_eq!(result["answer"], "answer\n中文");
+    assert_eq!(h.app.composer.text(), "retained composer");
+    h.finish().await;
+    provider.finish().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn forward_delete_keys_restore_their_edit_and_discard_only_abandoned_redo() {
+    let mut h = Harness::opened().await;
+    for (key, modifiers) in [
+        (KeyCode::Delete, KeyModifiers::NONE),
+        (KeyCode::Char('d'), KeyModifiers::CONTROL),
+    ] {
+        for paste in [false, true] {
+            h.app.composer.set_text("");
+            if paste {
+                h.app.on_paste("abc");
+            } else {
+                h.type_text("abc");
+            }
+            h.press(KeyCode::Home);
+            h.key(key, modifiers);
+            assert_eq!(h.app.composer.text(), "bc");
+            h.ctrl(KeyCode::Char('z'));
+            assert_eq!(h.app.composer.text(), "abc");
+            h.ctrl(KeyCode::Char('y'));
+            assert_eq!(h.app.composer.text(), "bc");
+            h.press(KeyCode::End);
+            h.type_text("x");
+            h.ctrl(KeyCode::Char('z'));
+            assert_eq!(h.app.composer.text(), "bc");
+            h.press(KeyCode::Home);
+            h.key(key, modifiers);
+            h.ctrl(KeyCode::Char('y'));
+            assert_eq!(h.app.composer.text(), "c");
+            h.ctrl(KeyCode::Char('z'));
+            assert_eq!(h.app.composer.text(), "bc");
+            h.press(KeyCode::End);
+            h.key(key, modifiers);
+            h.ctrl(KeyCode::Char('y'));
+            assert_eq!(h.app.composer.text(), "c");
+            assert!(!h.app.quit);
+        }
+    }
+    h.app.composer.set_text("");
+    assert!(matches!(
+        h.app
+            .on_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL)),
+        Some(Action::Quit)
+    ));
+    h.finish().await;
 }
 
 #[tokio::test(start_paused = true)]

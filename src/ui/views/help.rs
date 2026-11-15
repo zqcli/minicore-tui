@@ -38,7 +38,11 @@ const KEYS: &[KeyRow] = &[
     },
     KeyRow {
         keys: "ctrl+d",
-        action: "quit when the composer is empty",
+        action: "delete after the cursor; quit when the composer is empty",
+    },
+    KeyRow {
+        keys: "delete · ctrl+z / ctrl+y",
+        action: "delete as one edit · undo / redo, including paste chips",
     },
     KeyRow {
         keys: "↑ ↓",
@@ -78,7 +82,7 @@ const KEYS: &[KeyRow] = &[
     },
     KeyRow {
         keys: "ctrl+r",
-        action: "sessions",
+        action: "sessions; each row shows its stable short ID",
     },
     KeyRow {
         keys: "ctrl+l",
@@ -103,6 +107,10 @@ const KEYS: &[KeyRow] = &[
     KeyRow {
         keys: "ctrl+f",
         action: "find in the transcript",
+    },
+    KeyRow {
+        keys: "query: paste",
+        action: "append to Find, Sessions, Models or Agents filter; preserve the draft",
     },
     KeyRow {
         keys: "pgup/pgdn, wheel",

@@ -247,8 +247,10 @@ impl App {
             session.interaction_editor.insert(text);
             return;
         }
+        if self.fatal.is_some() || self.on_overlay_paste(text) {
+            return;
+        }
         if self.has_interaction()
-            || self.fatal.is_some()
             || !matches!(
                 self.overlay,
                 crate::app::Overlay::None

@@ -1,6 +1,6 @@
 # Configuration
 
-Version 0.12.3 uses one JSON configuration directory for the embedded Host and
+Version 0.12.4 uses one JSON configuration directory for the embedded Host and
 terminal frontend. Host owns `host.json`, Agent declarations and reusable Roles.
 The TUI reads and writes only `tui.json`; it passes the resolved directory to
 Host's Rust startup API.

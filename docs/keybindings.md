@@ -22,7 +22,9 @@ key through or use the other combination.
 
 `/agents` selects an actual Host Agent. Each Session belongs to one Agent; the
 sessions picker shows that owner and uses the full Agent and Session identity
-for opening, renaming and deleting. The Agent picker includes lifecycle,
+for opening, renaming and deleting. Every Session row includes its stable
+six-character ID prefix, even when long titles clip to the same text; renaming
+or changing running state does not change that ID. The Agent picker includes lifecycle,
 storage mode, Session count and default Session. Selecting an Agent opens its
 default Session when one is configured; otherwise it leaves a new-conversation
 draft. `/new` creates a Session in the selected Agent. Sending the first prompt
@@ -104,6 +106,11 @@ selection. Plain Left/Right collapses it to the corresponding edge. Graphemes
 and paste chips remain whole during movement and deletion. Recalling a prompt
 restores its paste chips and preserves the draft that Down returns to.
 
+Each actual forward Delete or nonempty Ctrl+D is a separate undo step and
+clears an abandoned redo branch. Deleting at the end with nothing to remove
+preserves valid redo. Undo and redo restore the complete text, cursor,
+selection and paste chips together.
+
 A bare unknown `/word` produces a suggestion before it is sent. Press `Enter`
 again to send it as text, or start with `//` to escape the initial slash.
 Paths such as `/usr/bin` and ordinary sentences remain prompts. Prompt
@@ -160,6 +167,14 @@ Most pickers and reports use a bottom sheet. `Esc` closes it. In selectable
 lists, arrows and Tab move one row and wrap; PageUp/PageDown move ten rows.
 The inline command and file lists stay below the editor and show five rows at
 a time.
+
+Find and the Sessions, Models and Agents query fields accept terminal paste
+and append it to existing text. Matches refresh and selection returns to the
+first result, just as when typing. Newlines become spaces, tabs become four
+spaces, terminal escape sequences are removed and other controls are shown
+with visible escapes. Ordinary Unicode is preserved. Paste does not accept a
+row or alter the conversation draft; Esc returns to that draft. Changing a
+Session filter clears its pending delete confirmation.
 
 | Surface | Actions and facts |
 |---|---|

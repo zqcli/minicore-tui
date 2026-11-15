@@ -2,8 +2,6 @@
 //! model and reasoning pickers, the approval prompt and the find bar each turn
 //! app state into one [`Sheet`]; the command and `@` file lists are plain rows.
 
-use std::collections::HashMap;
-
 use ratatui::text::{Line, Span};
 
 use crate::app::overlay::{self, matching_models, short_session_id, workspace_name};
@@ -239,11 +237,6 @@ fn sessions_sheet(
             .status(name)
             .search(title);
     }
-    let labels: Vec<String> = shown.iter().map(|info| app.session_title(info)).collect();
-    let mut shared: HashMap<&str, usize> = HashMap::new();
-    for label in &labels {
-        *shared.entry(label).or_default() += 1;
-    }
     let workspace = app.workspace.to_string_lossy();
     let status = if shown.len() == rows.len() {
         plural(rows.len() as u64, "session")
@@ -252,8 +245,7 @@ fn sessions_sheet(
     };
     let list = shown
         .iter()
-        .zip(&labels)
-        .map(|(info, label)| {
+        .map(|info| {
             let target = overlay::session_target(info);
             let current = foreground.as_ref() == Some(&target);
             let live = app.resident.find(&target);
@@ -265,9 +257,8 @@ fn sessions_sheet(
                     .as_ref()
                     .is_some_and(|value| value.path != workspace),
                 agent: Some(agent_label(app, &info.agent_id)),
-                duplicate: shared[label.as_str()] > 1,
             };
-            let row = session_row(info, label.clone(), &context, now);
+            let row = session_row(info, app.session_title(info), &context, now);
             if armed == Some(&target) || live.is_some_and(failed_unseen) {
                 row.tone(Tone::Failure)
             } else {
@@ -720,26 +711,19 @@ struct RowContext {
     state: Option<String>,
     current: bool,
     other_workspace: bool,
-    /// Another listed session has the same label.
-    duplicate: bool,
 }
 
 /// One sessions-picker row: `label` (the title, or the first prompt), with
-/// what tells the session apart on the right, then its age. The current
-/// session says so, one in another workspace names it, and a label shared
-/// with another session gets its short id.
+/// its short ID first in the right-hand detail so clipped titles and long
+/// metadata do not hide the identity.
 fn session_row(
     info: &SessionSummary,
     label: String,
     context: &RowContext,
     now_seconds: i64,
 ) -> Row {
-    let mut parts: Vec<String> = context
-        .agent
-        .iter()
-        .chain(&context.state)
-        .cloned()
-        .collect();
+    let mut parts = vec![short_session_id(info.id.as_str()).to_owned()];
+    parts.extend(context.agent.iter().chain(&context.state).cloned());
     if context.current {
         parts.push("current".to_owned());
     }
@@ -747,9 +731,6 @@ fn session_row(
         && let Some(name) = workspace_name(info)
     {
         parts.push(name.into_owned());
-    }
-    if context.duplicate {
-        parts.push(short_session_id(info.id.as_str()).to_owned());
     }
     let age = age_label(info.last_activity_at, now_seconds);
     if !age.is_empty() {
@@ -1055,13 +1036,12 @@ mod tests {
         assert_eq!(sheet.status.as_deref(), Some("3 of 5"));
     }
 
-    fn context(current: bool, other_workspace: bool, duplicate: bool) -> RowContext {
+    fn context(current: bool, other_workspace: bool) -> RowContext {
         RowContext {
             agent: None,
             state: None,
             current,
             other_workspace,
-            duplicate,
         }
     }
 
@@ -1070,23 +1050,26 @@ mod tests {
         let row = session_row(
             &info(),
             "Fix the parser".into(),
-            &context(true, false, false),
+            &context(true, false),
             now(),
         );
         assert_eq!(row.label, "Fix the parser");
         assert_eq!(row.mark, Some(true));
-        assert_eq!(row.detail, "current · 3h");
-        let row = session_row(&info(), "x".into(), &context(false, false, false), now());
+        assert_eq!(row.detail, "1acdef · current · 3h");
+        let row = session_row(&info(), "x".into(), &context(false, false), now());
         assert_eq!(row.mark, Some(false));
-        assert_eq!(row.detail, "3h");
+        assert_eq!(row.detail, "1acdef · 3h");
     }
 
     #[test]
-    fn rows_that_look_alike_get_a_short_id_and_other_workspaces_are_named() {
+    fn a_session_id_precedes_agent_state_and_workspace_details() {
         let mut other = info();
         other.workspace = Some(serde_json::from_value(json!({"path":"/work/stockroom"})).unwrap());
-        let row = session_row(&other, "Same".into(), &context(false, true, true), now());
-        assert_eq!(row.detail, "stockroom · 1acdef · 3h");
+        let mut context = context(false, true);
+        context.agent = Some("Coder".into());
+        context.state = Some("running 0m".into());
+        let row = session_row(&other, "Same".into(), &context, now());
+        assert_eq!(row.detail, "1acdef · Coder · running 0m · stockroom · 3h");
     }
 
     #[test]

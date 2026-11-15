@@ -263,8 +263,22 @@ impl Sheet {
             styles.dim()
         };
 
-        let detail = sanitize(&row.detail).into_owned();
         let room = cells.saturating_sub(POINTER + width(mark));
+        let detail = sanitize(&row.detail);
+        let detail = if session {
+            // Session details begin with the ID; optional spacing and an
+            // ellipsis must not displace it when only that ID fits.
+            let id = detail
+                .split_once(" · ")
+                .map_or(detail.as_ref(), |(id, _)| id);
+            if room <= width(id) + 1 {
+                wrap::truncate(id, room)
+            } else {
+                wrap::truncate(&detail, room.saturating_sub(1))
+            }
+        } else {
+            detail.into_owned()
+        };
         let (label, gap) = match self.kind {
             Kind::Arrow => (truncate(&row.label, room), 1),
             Kind::Column => {
@@ -274,7 +288,7 @@ impl Sheet {
             }
             Kind::Session => {
                 let label = truncate(&row.label, room.saturating_sub(width(&detail) + 2));
-                let gap = room.saturating_sub(width(&label) + width(&detail)).max(1);
+                let gap = room.saturating_sub(width(&label) + width(&detail));
                 (label, gap)
             }
         };
@@ -524,6 +538,25 @@ mod tests {
         let lines = capture(&sheet, 24);
         assert_eq!(lines[2], "  a very long ses…  3 2h");
         assert_eq!(width(&lines[2]), 24);
+    }
+
+    #[test]
+    fn oversized_session_details_keep_the_leading_id_within_the_row() {
+        for metadata in ["long agent name ".repeat(20), "工作代理名称".repeat(20)] {
+            let sheet = Sheet::new("Resume", "")
+                .kind(Kind::Session)
+                .rows(vec![Row::new(
+                    "a very long session title indeed",
+                    format!("1acdef · {metadata} · running 0m · current · now"),
+                )]);
+            for cells in [8, 9, 10, 24, 40, 80] {
+                let lines = capture(&sheet, cells);
+                let row = &lines[2];
+                assert!(row.trim_start().starts_with("1acdef"), "{row:?}");
+                assert_eq!(row.ends_with('…'), cells >= 10, "{row:?}");
+                assert!(width(row) <= usize::from(cells), "{row:?}");
+            }
+        }
     }
 
     #[test]

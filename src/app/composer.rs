@@ -805,7 +805,7 @@ impl Composer {
             Some(paste) => paste.range.end,
             None => next_grapheme(&self.text, self.cursor),
         };
-        self.delete_range(start..end, false);
+        self.delete_range(start..end, true);
         self.cursor = start;
     }
 
@@ -1804,6 +1804,136 @@ mod undo_gesture_tests {
         assert_eq!(c.text(), "a");
         assert!(c.redo());
         assert_eq!(c.text(), "apasted");
+    }
+
+    #[test]
+    fn forward_delete_after_pasting_or_typing_is_a_separate_undo_step() {
+        for typed in [false, true] {
+            let mut c = Composer::new();
+            if typed {
+                for ch in "abc".chars() {
+                    c.type_char(ch);
+                }
+            } else {
+                c.insert("abc");
+            }
+            c.move_home();
+            c.delete();
+            assert_eq!(c.text(), "bc");
+            assert_eq!(c.cursor(), 0);
+            assert!(c.undo());
+            assert_eq!(c.text(), "abc");
+            assert_eq!(c.cursor(), 0);
+            assert!(c.undo());
+            assert!(c.is_empty());
+            assert!(!c.undo());
+            assert!(c.redo());
+            assert_eq!(c.text(), "abc");
+            assert!(c.redo());
+            assert_eq!(c.text(), "bc");
+            assert_eq!(c.cursor(), 0);
+            assert!(!c.redo());
+        }
+    }
+
+    #[test]
+    fn forward_delete_after_undo_discards_the_redo_branch() {
+        let mut c = Composer::new();
+        c.insert("abc");
+        c.type_char('x');
+        assert!(c.undo());
+        assert_eq!(c.text(), "abc");
+        c.move_home();
+        c.delete();
+        assert_eq!(c.text(), "bc");
+        assert!(!c.redo());
+        assert!(c.undo());
+        assert_eq!(c.text(), "abc");
+        assert!(c.redo());
+        assert_eq!(c.text(), "bc");
+        assert!(!c.redo());
+    }
+
+    #[test]
+    fn forward_delete_at_the_end_preserves_redo_without_an_edit() {
+        let mut c = Composer::new();
+        c.insert("abc");
+        c.type_char('x');
+        assert!(c.undo());
+        assert_eq!(c.text(), "abc");
+        let version = c.version();
+        c.delete();
+        assert_eq!(c.text(), "abc");
+        assert_eq!(c.cursor(), 3);
+        assert_eq!(c.version(), version);
+        assert!(c.redo());
+        assert_eq!(c.text(), "abcx");
+        assert!(c.undo());
+        assert_eq!(c.text(), "abc");
+        assert!(c.undo());
+        assert!(c.is_empty());
+        assert!(!c.undo());
+    }
+
+    #[test]
+    fn forward_delete_restores_preloaded_graphemes_and_cursor() {
+        for grapheme in ["中", "e\u{301}", "👨‍👩‍👧‍👦"] {
+            let text = format!("a{grapheme}z");
+            let mut c = Composer::new();
+            c.set_text(&text);
+            c.place_cursor(1, false);
+            c.delete();
+            assert_eq!(c.text(), "az");
+            assert_eq!(c.cursor(), 1);
+            assert!(c.undo());
+            assert_eq!(c.text(), text);
+            assert_eq!(c.cursor(), 1);
+            assert!(!c.undo());
+            assert!(c.redo());
+            assert_eq!(c.text(), "az");
+            assert_eq!(c.cursor(), 1);
+            assert!(!c.redo());
+        }
+    }
+
+    #[test]
+    fn forward_delete_restores_a_whole_paste_chip_and_its_selection() {
+        let payload = "line\n".repeat(12);
+        for selected in [false, true] {
+            let mut c = Composer::new();
+            c.set_text("head ");
+            c.insert(&payload);
+            c.insert(" tail");
+            c.place_cursor(5, false);
+            if selected {
+                c.place_cursor(5 + payload.len(), true);
+            }
+            let cursor = c.cursor();
+            let anchor = c.anchor;
+            let pastes = c.pastes().to_vec();
+            c.delete();
+            assert_eq!(c.text(), "head  tail");
+            assert_eq!(c.cursor(), 5);
+            assert!(c.selection().is_none());
+            assert!(c.pastes().is_empty());
+            assert!(c.undo());
+            assert_eq!(c.text(), format!("head {payload} tail"));
+            assert_eq!(c.cursor(), cursor);
+            assert_eq!(c.anchor, anchor);
+            assert_eq!(c.pastes(), pastes);
+            assert!(c.undo());
+            assert_eq!(c.text(), format!("head {payload}"));
+            assert!(c.redo());
+            assert_eq!(c.text(), format!("head {payload} tail"));
+            assert_eq!(c.cursor(), cursor);
+            assert_eq!(c.anchor, anchor);
+            assert_eq!(c.pastes(), pastes);
+            assert!(c.redo());
+            assert_eq!(c.text(), "head  tail");
+            assert_eq!(c.cursor(), 5);
+            assert!(c.selection().is_none());
+            assert!(c.pastes().is_empty());
+        }
     }
 
     #[test]

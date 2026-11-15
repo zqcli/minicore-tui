@@ -7,6 +7,27 @@ use crate::app::picker;
 use crate::app::{Action, App, NoticeLevel, Overlay, find};
 
 impl App {
+    pub(super) fn on_overlay_paste(&mut self, text: &str) -> bool {
+        if !matches!(
+            self.overlay,
+            Overlay::Find { .. }
+                | Overlay::Sessions { renaming: None, .. }
+                | Overlay::Models { .. }
+                | Overlay::Agents { .. }
+        ) {
+            return false;
+        }
+        let single_line = text.replace("\r\n", " ").replace(['\r', '\n'], " ");
+        let text = crate::wrap::sanitize(&single_line);
+        if !text.is_empty() {
+            self.edit_overlay_filter(|filter| {
+                filter.push_str(&text);
+                true
+            });
+        }
+        true
+    }
+
     pub(super) fn on_overlay_key(&mut self, key: KeyEvent) -> Option<Action> {
         if matches!(self.overlay, Overlay::AgentDelete { .. }) {
             match key.code {
@@ -175,12 +196,16 @@ impl App {
 
     /// Types `character` into the overlay's filter, or deletes the last one.
     fn overlay_filter_push(&mut self, character: Option<char>) {
-        let edit = |text: &mut String| match character {
-            Some(character) => text.push(character),
-            None => {
-                text.pop();
+        self.edit_overlay_filter(|text| match character {
+            Some(character) => {
+                text.push(character);
+                true
             }
-        };
+            None => text.pop().is_some(),
+        });
+    }
+
+    fn edit_overlay_filter(&mut self, edit: impl FnOnce(&mut String) -> bool) {
         let show_reasoning = self.show_reasoning;
         let blocks = self
             .resident
@@ -188,11 +213,21 @@ impl App {
             .map_or(&[][..], |session| session.transcript.blocks());
         match &mut self.overlay {
             Overlay::Sessions {
-                filter, selected, ..
+                filter,
+                selected,
+                armed,
+                ..
+            } => {
+                if !edit(filter) {
+                    return;
+                }
+                *selected = 0;
+                *armed = None;
             }
-            | Overlay::Models { filter, selected }
-            | Overlay::Agents { filter, selected } => {
-                edit(filter);
+            Overlay::Models { filter, selected } | Overlay::Agents { filter, selected } => {
+                if !edit(filter) {
+                    return;
+                }
                 *selected = 0;
             }
             Overlay::Find {
@@ -200,11 +235,13 @@ impl App {
                 matches,
                 current,
             } => {
-                edit(query);
+                if !edit(query) {
+                    return;
+                }
                 *matches = find::find_matches(blocks, query, show_reasoning);
                 *current = 0;
             }
-            _ => {}
+            _ => return,
         }
         self.show_match();
     }
