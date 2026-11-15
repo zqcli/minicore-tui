@@ -48,6 +48,38 @@ client does not require these removed servers.
 - Delegated Session and task-message associations are displayed as reported by
   Host. Finishing the parent tool is distinct from finishing the child task.
 
+## Modified Enter on macOS and Unix terminals
+
+The 0.12.6 frontend repair keeps Host's existing input contract. In the
+conversation composer, Alt+Enter and Ctrl+Enter request `FollowUp`; on Unix,
+legacy ESC LF is decoded by crossterm as Ctrl+Alt+J and requests the same
+action. This alias belongs only to the composer key handler, after the existing
+focused-surface routing. It does not replace the terminal decoder, create a
+local input queue or add a key-sequence timeout. Windows retains its existing
+Ctrl+Alt+J editing behavior and paste decoder.
+
+Ordinary Enter continues to request `Steer`. Plain Ctrl+J and Shift+Enter
+continue to insert newlines. An empty draft sends no message. Picker/view,
+completion, unconfirmed-input and pending-interaction ownership remains intact;
+paste is text and cannot trigger a send. When the composer requests a follow-up,
+the existing native Host path handles both idle Sessions and next-turn queuing
+while a Turn runs. It preserves the original Session and message identity.
+
+Restore terminal-specific Option-as-Meta guidance from the Agent-era frontend
+and describe the actual boundary: ESC CR and reported modified Enter already
+work, and ESC LF receives the composer alias above. If a terminal sends the
+same plain CR or LF as an unmodified key, the frontend cannot recover the lost
+modifier. Configure the terminal profile to preserve it instead of changing
+ordinary Enter/Ctrl+J semantics or restoring the superseded Tab-send binding.
+
+Acceptance covers the actual crossterm decoding of CR, LF, ESC CR, ESC LF,
+modified Enter encodings and bracketed paste, plus decoded key routing into
+native `FollowUp` admission while idle and next-turn queuing while working.
+Confirm distinct Turn boundaries, empty drafts, newline/editing keys, focused
+overlays and pending interactions. Record byte/PTY probes separately from
+physical macOS terminal observations; platform CI alone does not prove the
+user's terminal profile emits a particular sequence.
+
 ## Local editing and Session picker identity
 
 SPEC 4.11.3 assigns these three repairs to the frontend. They add no Host
