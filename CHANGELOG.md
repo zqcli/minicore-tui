@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.12.5 — 2026-11-15
+
+- Keep real Responses reasoning parts and items on separate logical lines
+  during streaming, canonical display and history reopen. Token fragments
+  within a part still concatenate, and existing line breaks are preserved.
+- Use one separator row between visible transcript blocks. Empty Assistant
+  projections from tool-only responses consume no rows while retaining their
+  native identities for late-output suppression. Keep blank lines inside tool
+  output and code, including after folding, resizing and history reload.
+- Preserve unchanged body caches and align anchors, hit testing and selection
+  with actual visible rows; keep partial-response markers at narrow widths.
+- Embed Host 0.12.5 at immutable revision
+  `355d4b8bac4a3a634cd83a49fbf33fea7b67a262`, following SPEC 4.11.4.
+  The provider retains original reasoning replay items and raw validation while
+  including emitted separators in canonical reasoning checksums. Storage formats
+  and the external dependency graph remain unchanged.
+
 ## 0.12.4 — 2026-11-15
 
 - Accept terminal paste in Find and the Sessions, Models and Agents filters.

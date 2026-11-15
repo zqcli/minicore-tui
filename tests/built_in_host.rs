@@ -6,13 +6,16 @@ use std::{
 };
 
 use minicore_host_core::{
-    HistoryItemData, HostConfig, LogOutput, LogSettings, OpenAiModelApi, OpenAiModelSettings,
+    ActivityEvent, HistoryItemData, HostConfig, LogOutput, LogSettings, ObservationEvent,
+    ObservationNotification, OpenAiModelApi, OpenAiModelSettings,
 };
 use minicore_host_protocol::{
-    AgentConfig, AgentRef, CallOptions, HistoryDirection, HistoryReadRequest, HostLifecycle,
-    HostShutdownStrategy, MessageId, MessageInput, MessageMode, SessionRef, TurnState,
+    AgentConfig, AgentRef, CallOptions, EventCategory, HistoryDirection, HistoryReadRequest,
+    HostLifecycle, HostShutdownStrategy, MessageId, MessageInput, MessageMode, OutputSource,
+    SessionRef, SubscribeRequest, SubscriptionScope, TurnId, TurnState,
 };
 use minicore_host_runtime::model::AssistantPart;
+use minicore_host_transport::{ClientSubscription, OutputBuffer};
 use minicore_tui::{
     config::{self, ConfigDirectory, Launch, Prepared},
     host::Hosted,
@@ -27,6 +30,8 @@ use tokio::{
 
 const KEY_NAME: &str = "MINICORE_TUI_EMBED_FIXTURE_KEY";
 const ANSWER: &str = "Native in-process answer 🐈";
+const REASONING: &str =
+    "**Preparing project inspection**\n**Preparing project inspection**\n检查 🐈";
 
 #[tokio::test]
 async fn embedded_chat_completion_survives_directory_reopen_with_stable_agent_identity() {
@@ -36,9 +41,10 @@ async fn embedded_chat_completion_survives_directory_reopen_with_stable_agent_id
 }
 
 #[tokio::test]
-async fn embedded_responses_uses_the_selected_protocol_without_fallback() {
+async fn embedded_responses_preserves_reasoning_boundaries_after_directory_reopen() {
     let temp = tempfile::tempdir().unwrap();
     probe("responses", temp.path()).await;
+    probe("reopen", temp.path()).await;
 }
 
 #[tokio::test]
@@ -182,6 +188,26 @@ async fn embedded_host_probe() {
         .data
         .active_turn_id
         .expect("the gated provider owns a real active Turn");
+    let mut reasoning_observation = if api == OpenAiModelApi::Responses {
+        Some(
+            client
+                .subscribe(
+                    SubscribeRequest {
+                        scope: SubscriptionScope::Session {
+                            agent_id: target.agent_id.clone(),
+                            session_id: target.session_id.clone(),
+                        },
+                        categories: [EventCategory::Output, EventCategory::Completion].into(),
+                    },
+                    CallOptions::default(),
+                )
+                .await
+                .unwrap(),
+        )
+    } else {
+        None
+    };
+    let mut reasoning = None;
     if case == "drain" {
         hosted
             .request_shutdown(HostShutdownStrategy::Graceful)
@@ -221,6 +247,18 @@ async fn embedded_host_probe() {
                 .iter()
                 .any(|entry| assistant_answer(&entry.item))
         );
+        if let Some(observation) = &mut reasoning_observation {
+            let observed = read_reasoning(observation, &turn).await;
+            assert_eq!(observed, REASONING);
+            assert!(
+                result
+                    .data
+                    .history
+                    .iter()
+                    .any(|entry| { assistant_reasoning(&entry.item) == Some(observed.as_str()) })
+            );
+            reasoning = Some(observed);
+        }
         server.task.await.unwrap();
     }
     std::fs::write(
@@ -231,6 +269,7 @@ async fn embedded_host_probe() {
             "target": target,
             "turn": turn,
             "message": accepted.message_id,
+            "reasoning": reasoning,
         }))
         .unwrap(),
     )
@@ -335,6 +374,16 @@ async fn reopen(root: &Path) {
             .iter()
             .any(|entry| assistant_answer(&entry.item))
     );
+    if let Some(expected) = saved["reasoning"].as_str() {
+        assert_eq!(expected, REASONING);
+        assert!(
+            history
+                .data
+                .items
+                .iter()
+                .any(|entry| { assistant_reasoning(&entry.item) == Some(expected) })
+        );
+    }
     assert!(history.data.items.iter().any(|entry| matches!(&entry.item, HistoryItemData::User { message_id: Some(message_id), text, .. } if text == "fixture input" && serde_json::to_value(message_id).unwrap() == saved["message"])));
     let turn = serde_json::from_value(saved["turn"].clone()).unwrap();
     let result = session
@@ -351,6 +400,51 @@ async fn reopen(root: &Path) {
 
 fn assistant_answer(item: &HistoryItemData) -> bool {
     matches!(item, HistoryItemData::Assistant { response } if response.content.iter().any(|part| matches!(part, AssistantPart::Text(text) if text.as_ref() == ANSWER)))
+}
+
+fn assistant_reasoning(item: &HistoryItemData) -> Option<&str> {
+    let HistoryItemData::Assistant { response } = item else {
+        return None;
+    };
+    response.content.iter().find_map(|part| match part {
+        AssistantPart::Reasoning(reasoning) => reasoning.text(),
+        _ => None,
+    })
+}
+
+async fn read_reasoning(subscription: &mut ClientSubscription, turn: &TurnId) -> String {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let mut buffer: Option<OutputBuffer> = None;
+        loop {
+            let ObservationNotification::Event(push) = subscription.recv().await.unwrap().unwrap()
+            else {
+                panic!("the bounded fixture must retain its actual output events");
+            };
+            if let ObservationEvent::Activity(ActivityEvent::ModelOutput { source, data }) =
+                &push.event
+                && data.channel == "reasoning"
+            {
+                assert_eq!(&source.turn.turn_id, turn);
+                assert_eq!(source.response_index, 0);
+                buffer.get_or_insert_with(|| {
+                    OutputBuffer::new(
+                        OutputSource::Model {
+                            source: source.clone(),
+                        },
+                        "reasoning".into(),
+                    )
+                });
+            }
+            if let Some(buffer) = &mut buffer {
+                buffer.event(&push.event).unwrap();
+                if buffer.is_complete() {
+                    return buffer.text().to_owned();
+                }
+            }
+        }
+    })
+    .await
+    .expect("bounded native reasoning observation")
 }
 
 fn launch(home: &ConfigDirectory) -> Box<Launch> {
@@ -730,17 +824,42 @@ fn response(api: OpenAiModelApi) -> String {
     }
     let part = json!({"type":"output_text","text":ANSWER});
     let item = json!({"type":"message","id":"msg_fixture","role":"assistant","status":"completed","content":[part]});
-    [
+    let summary = json!({"type":"summary_text","text":"**Preparing project inspection**"});
+    let reasoning = json!({"type":"reasoning","id":"rs_fixture","status":"completed","summary":[summary,summary],"encrypted_content":"fixture-cipher"});
+    let completed_reasoning = json!({"type":"reasoning","id":"rs_completed","status":"completed","summary":[{"type":"summary_text","text":"检查 🐈"}],"encrypted_content":"completed-fixture-cipher"});
+    let mut events = vec![
         json!({"type":"response.created","response":{"id":"resp_fixture","status":"in_progress","output":[]}}),
-        json!({"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"msg_fixture","role":"assistant","status":"in_progress","content":[]}}),
-        json!({"type":"response.content_part.added","output_index":0,"item_id":"msg_fixture","content_index":0,"part":{"type":"output_text","text":""}}),
-        json!({"type":"response.output_text.delta","output_index":0,"item_id":"msg_fixture","content_index":0,"delta":ANSWER}),
-        json!({"type":"response.output_text.done","output_index":0,"item_id":"msg_fixture","content_index":0,"text":ANSWER}),
-        json!({"type":"response.content_part.done","output_index":0,"item_id":"msg_fixture","content_index":0,"part":part}),
-        json!({"type":"response.output_item.done","output_index":0,"item":item}),
-        json!({"type":"response.completed","response":{"id":"resp_fixture","status":"completed","output":[item]}}),
-    ].into_iter().enumerate().map(|(sequence, mut event)| {
-        event["sequence_number"] = json!(sequence);
-        format!("event: {}\ndata: {event}\n\n", event["type"].as_str().unwrap())
-    }).collect()
+        json!({"type":"response.output_item.added","output_index":0,"item":{"type":"reasoning","id":"rs_fixture","summary":[]}}),
+    ];
+    for index in 0..2 {
+        events.push(json!({"type":"response.reasoning_summary_part.added","output_index":0,"item_id":"rs_fixture","summary_index":index,"part":{"type":"summary_text","text":""}}));
+        for delta in ["**Preparing ", "", "project inspection**"] {
+            events.push(json!({"type":"response.reasoning_summary_text.delta","output_index":0,"item_id":"rs_fixture","summary_index":index,"delta":delta}));
+        }
+        events.push(json!({"type":"response.reasoning_summary_text.done","output_index":0,"item_id":"rs_fixture","summary_index":index,"text":summary["text"]}));
+        events.push(json!({"type":"response.reasoning_summary_part.done","output_index":0,"item_id":"rs_fixture","summary_index":index,"part":summary}));
+    }
+    events.extend([
+        json!({"type":"response.output_item.done","output_index":0,"item":reasoning}),
+        json!({"type":"response.output_item.added","output_index":1,"item":{"type":"reasoning","id":"rs_completed","summary":[]}}),
+        json!({"type":"response.output_item.done","output_index":1,"item":completed_reasoning}),
+        json!({"type":"response.output_item.added","output_index":2,"item":{"type":"message","id":"msg_fixture","role":"assistant","status":"in_progress","content":[]}}),
+        json!({"type":"response.content_part.added","output_index":2,"item_id":"msg_fixture","content_index":0,"part":{"type":"output_text","text":""}}),
+        json!({"type":"response.output_text.delta","output_index":2,"item_id":"msg_fixture","content_index":0,"delta":ANSWER}),
+        json!({"type":"response.output_text.done","output_index":2,"item_id":"msg_fixture","content_index":0,"text":ANSWER}),
+        json!({"type":"response.content_part.done","output_index":2,"item_id":"msg_fixture","content_index":0,"part":part}),
+        json!({"type":"response.output_item.done","output_index":2,"item":item}),
+        json!({"type":"response.completed","response":{"id":"resp_fixture","status":"completed","output":[reasoning,completed_reasoning,item]}}),
+    ]);
+    events
+        .into_iter()
+        .enumerate()
+        .map(|(sequence, mut event)| {
+            event["sequence_number"] = json!(sequence);
+            format!(
+                "event: {}\ndata: {event}\n\n",
+                event["type"].as_str().unwrap()
+            )
+        })
+        .collect()
 }

@@ -109,6 +109,7 @@ struct Cached {
     fold: Fold,
     uses: Uses,
     rows: Rows,
+    separated: bool,
 }
 
 impl Cached {
@@ -156,7 +157,7 @@ pub struct Layout<S = ()> {
     prefix: Vec<usize>,
     width: u16,
     fold: Fold,
-    /// The blank row that opens every block but the first.
+    /// The blank row between adjacent blocks that render content.
     separator: Arc<[Line<'static>]>,
     /// Renderer state the cache hands to the render callback, never inspects.
     pub state: S,
@@ -190,8 +191,8 @@ impl<S> Layout<S> {
 
     /// Brings the cache up to date. `render_block` runs for blocks that are new
     /// or changed. A block is found again by its revision wherever it moved to,
-    /// except across the first position, which carries no separator. Blocks a
-    /// new width or fold makes stale wait for [`Layout::settle`].
+    /// except across the first position, where the renderer adds the header.
+    /// Blocks a new width or fold makes stale wait for [`Layout::settle`].
     pub fn prepare<F, R>(
         &mut self,
         blocks: &[Block],
@@ -251,6 +252,11 @@ impl<S> Layout<S> {
         let to = top + 2 * height;
         let mut rendered = false;
         let mut index = self.block_at(top.saturating_sub(height)).0;
+        // Zero-height blocks share the next block's position and may become
+        // visible under the new width or fold.
+        while index > 0 && self.height(index - 1) == 0 {
+            index -= 1;
+        }
         while index < self.cached.len() && self.prefix[index] < to {
             if !self.cached[index].fits(self.width, self.fold) {
                 let revision = self.cached[index].revision;
@@ -276,16 +282,7 @@ impl<S> Layout<S> {
         F: FnMut(&mut S, usize, &Block) -> R,
         R: Into<Rows>,
     {
-        let mut rows: Rows = render_block(&mut self.state, index, block).into();
-        // The separator row belongs to the block below, so the last block
-        // leaves no trailing gap; an empty block still occupies a row.
-        if index > 0 {
-            rows.len += 1;
-            rows.chunks.insert(0, self.separator.clone());
-        }
-        if rows.len == 0 {
-            rows.push(Arc::from([Line::raw("")]));
-        }
+        let rows: Rows = render_block(&mut self.state, index, block).into();
         self.stats.blocks_rendered += 1;
         self.stats.rows_rendered += rows.len as u64;
         Cached {
@@ -294,6 +291,7 @@ impl<S> Layout<S> {
             fold: self.fold,
             uses: Uses::of(block),
             rows,
+            separated: false,
         }
     }
 
@@ -305,8 +303,20 @@ impl<S> Layout<S> {
             self.prefix.truncate(from + 1);
         }
         let mut row = *self.prefix.last().unwrap_or(&0);
-        for cached in &self.cached[from..] {
-            row += cached.rows.len().max(1);
+        for cached in &mut self.cached[from..] {
+            let body_height = cached.rows.len() - usize::from(cached.separated);
+            let separated = row > 0 && body_height > 0;
+            if separated != cached.separated {
+                if separated {
+                    cached.rows.chunks.insert(0, self.separator.clone());
+                    cached.rows.len += 1;
+                } else {
+                    cached.rows.chunks.remove(0);
+                    cached.rows.len -= 1;
+                }
+                cached.separated = separated;
+            }
+            row += cached.rows.len();
             self.prefix.push(row);
         }
     }
@@ -322,9 +332,7 @@ impl<S> Layout<S> {
 
     /// Height of a block in rows.
     fn height(&self, block: usize) -> usize {
-        self.cached
-            .get(block)
-            .map_or(0, |cached| cached.rows.len().max(1))
+        self.cached.get(block).map_or(0, |cached| cached.rows.len())
     }
 
     /// First screen row of `block`.
@@ -390,11 +398,7 @@ impl<S> Layout<S> {
     /// the window and on a block's separator row.
     pub fn hit(&self, column: u16, row: u16) -> Option<(usize, usize)> {
         let (block, offset) = self.line_at(self.row_at(column, row)?)?;
-        let line = if block == 0 {
-            offset
-        } else {
-            offset.checked_sub(1)?
-        };
+        let line = offset.checked_sub(usize::from(self.cached[block].separated))?;
         Some((block, line))
     }
 
@@ -771,6 +775,118 @@ mod tests {
         assert_eq!(layout.hit(5, 13), Some((1, 1)));
         assert_eq!(layout.hit(5, 9), None, "above the window");
         assert_eq!(layout.hit(5, 14), None, "below the window");
+    }
+
+    #[test]
+    fn empty_blocks_add_neither_rows_nor_separators_or_hit_targets() {
+        let mut layout = Layout::<()>::default();
+        let blocks = [
+            user(""),
+            user("one"),
+            user(""),
+            user(""),
+            user("two"),
+            user(""),
+        ];
+        layout.prepare(&blocks, 1..=6, 40, fold(), &mut |_, _, block| {
+            let Block::User { text, .. } = block else {
+                unreachable!()
+            };
+            (!text.is_empty())
+                .then(|| Line::raw(text.clone()))
+                .into_iter()
+                .collect::<Vec<_>>()
+        });
+        let rows: Vec<_> = layout
+            .visible(0, 20)
+            .into_iter()
+            .map(Line::to_string)
+            .collect();
+        assert_eq!(rows, ["one", "", "two"]);
+        assert_eq!(layout.total_rows(), 3);
+        layout.viewport = Viewport {
+            top: 0,
+            height: 4,
+            width: 40,
+            origin: (0, 10),
+        };
+        assert_eq!(layout.hit(5, 10), Some((1, 0)));
+        assert_eq!(layout.hit(5, 11), None);
+        assert_eq!(layout.hit(5, 12), Some((4, 0)));
+        assert_eq!(layout.hit(5, 13), None);
+        for row in 0..3 {
+            let (block, offset) = layout.anchor(row);
+            assert_eq!(layout.anchor_row(block, offset), row);
+        }
+        assert!(layout.visible(3, 5).is_empty());
+    }
+
+    #[test]
+    fn changing_visibility_reuses_the_neighbouring_body_chunks() {
+        let mut layout = Layout::<()>::default();
+        let mut blocks = [user(""), user("one"), user("two")];
+        let mut revisions = [1, 2, 3];
+        let mut rendered = Vec::new();
+        let mut render = |_: &mut (), index, block: &Block| {
+            rendered.push(index);
+            let Block::User { text, .. } = block else {
+                unreachable!()
+            };
+            (!text.is_empty())
+                .then(|| Line::raw(text.clone()))
+                .into_iter()
+                .collect::<Vec<_>>()
+        };
+        layout.prepare(&blocks, revisions, 40, fold(), &mut render);
+        let one = layout.cached[1].rows.chunks.last().unwrap().clone();
+        let two = layout.cached[2].rows.chunks.last().unwrap().clone();
+        for (revision, first, expected_height) in [(4, "new", 5), (5, "", 3)] {
+            blocks[0] = user(first);
+            revisions[0] = revision;
+            layout.prepare(&blocks, revisions, 40, fold(), &mut render);
+            assert_eq!(layout.total_rows(), expected_height);
+            assert!(Arc::ptr_eq(
+                &one,
+                layout.cached[1].rows.chunks.last().unwrap()
+            ));
+            assert!(Arc::ptr_eq(
+                &two,
+                layout.cached[2].rows.chunks.last().unwrap()
+            ));
+        }
+        assert_eq!(rendered, [0, 1, 2, 0, 0]);
+    }
+
+    #[test]
+    fn stale_zero_height_blocks_are_settled_at_the_window_boundary() {
+        let mut layout = Layout::<()>::default();
+        let blocks = [card(None), card(None), user("tail")];
+        layout.prepare(&blocks, [1, 2, 3], 40, fold(), &mut |_, index, _| {
+            lines(usize::from(index == 2))
+        });
+        assert_eq!(layout.total_rows(), 1);
+        let expanded = Fold {
+            expanded: true,
+            ..fold()
+        };
+        let mut rendered = Vec::new();
+        let mut render = |_: &mut (), index, _: &Block| {
+            rendered.push(index);
+            lines(2)
+        };
+        layout.prepare(&blocks, [1, 2, 3], 40, expanded, &mut render);
+        while layout.settle(&blocks, 0, 10, &mut render) {}
+        assert_eq!(rendered, [0, 1]);
+        assert_eq!(layout.total_rows(), 7);
+
+        let mut empty = Layout::<()>::default();
+        empty.prepare(&blocks, [1, 2, 3], 40, fold(), &mut |_, _, _| lines(0));
+        assert_eq!(empty.total_rows(), 0);
+        assert!(empty.visible(0, 10).is_empty());
+        let mut render = |_: &mut (), _: usize, _: &Block| lines(2);
+        empty.prepare(&blocks, [1, 2, 3], 50, fold(), &mut render);
+        while empty.settle(&blocks, 0, 10, &mut render) {}
+        assert_eq!(empty.total_rows(), 8);
     }
 
     #[test]

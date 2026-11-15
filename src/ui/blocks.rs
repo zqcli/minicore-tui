@@ -36,9 +36,13 @@ pub fn thinking_style(styles: Styles) -> Style {
     styles.dim().add_modifier(Modifier::ITALIC)
 }
 
-/// Renders one block at `width`. Always returns at least one line so a block
-/// occupies a row even when it has no content of its own.
+/// Renders one block at `width`. An assistant without visible content has no rows.
 pub fn render(block: &Block, styles: Styles, width: u16, fold: Fold) -> Vec<Line<'static>> {
+    if matches!(block, Block::Assistant { reasoning, text, partial: false, .. }
+        if reasoning.trim().is_empty() && text.trim().is_empty())
+    {
+        return Vec::new();
+    }
     if (width as usize) < MIN_WIDTH {
         return vec![Line::styled(
             wrap::truncate(&wrap::sanitize(&plain_text(block)), width as usize),

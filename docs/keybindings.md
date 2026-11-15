@@ -147,6 +147,11 @@ anchor. A `Jump to latest message · End` row appears above the bottom; click it
 or press End to follow again. Folding opens and closes downward from the
 anchored view.
 
+Separate Responses thinking parts retain their line breaks while streaming and
+after reopening a Session. Adjacent visible blocks use one separator row;
+tool-only responses do not add empty rows between cards. Expanding a card keeps
+blank lines inside its output.
+
 Only content is copied from the transcript. Rails, padding, timestamps,
 durations, expansion hints, partial-response labels and Turn-end summaries are
 excluded. Expanded tool cards include complete invocation arguments, retained

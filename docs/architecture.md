@@ -1,7 +1,7 @@
 # Architecture
 
 The executable owns one persistent MiniCore Host and one terminal application.
-It links Host 0.12.4 at the immutable revision in `Cargo.toml`; all native
+It links Host 0.12.5 at the immutable revision in `Cargo.toml`; all native
 components come from that revision. The frontend calls `HostClient::in_process`
 and the typed `SessionClient` APIs. There is no frontend protocol model, child
 Agent, transport adapter, Webpage service or remote view layer.
@@ -177,8 +177,17 @@ it owns only text and scroll geometry. Rendering and copying sanitize terminal
 control sequences without changing Host's stored message. There is no second
 error history, backend error classifier or automatic replay.
 
-Rendering uses per-block revisions and visible-row layout caches. Anchors are
-rebased when earlier records are inserted, and folding opens downward. Tool
+Responses reasoning boundaries are emitted by Host's provider and retained in
+native canonical text. Markdown rendering preserves those newlines as hard
+breaks. The frontend does not infer boundaries from fragments or headings.
+
+Rendering uses per-block revisions and visible-row layout caches. Exactly one
+separator row belongs between visible blocks. Zero-row entries consume no height
+or separator, but retain canonical identities for late-output suppression. The
+cache stores body rows independently of separators so changes in neighboring
+visibility preserve unchanged bodies. Internal tool/code whitespace remains
+content; anchors, hits and selection use the resulting visible geometry.
+Anchors are rebased when earlier records are inserted, and folding opens downward. Tool
 presentation tails and layout/undo caches retain their existing limits. Local
 unconfirmed inputs have a named operation/byte budget, and completed output
 buffers are released. The transcript itself retains loaded records: memory can

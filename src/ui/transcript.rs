@@ -75,6 +75,12 @@ impl RenderState {
         else {
             return blocks::render(block, styles, width, fold).into();
         };
+        if (width as usize) < blocks::MIN_WIDTH
+            && reasoning.trim().is_empty()
+            && text.trim().is_empty()
+        {
+            return blocks::render(block, styles, width, fold).into();
+        }
         let inner = blocks::text_width(width as usize);
         let stream = self.streams.entry(key.clone()).or_insert_with(|| Stream {
             text: StreamRenderer::new(inner, styles.text()).inset(blocks::INSET),
@@ -402,7 +408,12 @@ fn highlight(line: &Line<'static>, from: u16, to: u16) -> Line<'static> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use minicore_host_core::HistoryRecordData;
     use ratatui::style::Color;
+    use serde_json::json;
+
+    use crate::transcript::Transcript;
+    use crate::ui::theme::Palette;
 
     fn reversed(style: Style) -> bool {
         style.add_modifier.contains(Modifier::REVERSED)
@@ -413,6 +424,242 @@ mod tests {
             .iter()
             .map(|span| span.content.as_ref())
             .collect()
+    }
+
+    fn assistant(index: u64, text: &str, reasoning: &str, streaming: bool) -> Block {
+        Block::Assistant {
+            key: RequestKey::response("00000000000000000001".parse().unwrap(), index),
+            reasoning: reasoning.into(),
+            text: text.into(),
+            streaming,
+            partial: false,
+            expanded: None,
+        }
+    }
+
+    fn tool_history() -> Vec<HistoryRecordData> {
+        let mut records = Vec::new();
+        for (index, name) in ["alpha", "beta", "gamma"].into_iter().enumerate() {
+            let mut content = vec![json!({"type":"tool_call","data":{
+                "tool_call_id":name,"name":name,"arguments":{},"call_index":0
+            }})];
+            if index == 2 {
+                content.insert(
+                    0,
+                    json!({"type":"reasoning","data":{
+                        "text":"First step\nSecond step\nThird step\nLast step"
+                    }}),
+                );
+            }
+            let common = json!({
+                "recorded_at":"2026-11-15T10:00:00Z",
+                "turn_id":"00000000000000000001","response_index":index
+            });
+            for (position, item) in [
+                (
+                    index * 2,
+                    json!({"kind":"assistant","response":{
+                        "content":content,"finish_reason":"tool_calls","usage":{}
+                    }}),
+                ),
+                (
+                    index * 2 + 1,
+                    json!({"kind":"tool_result","tool_call_id":name,
+                        "name":name,"result":{"outcome":"success","output":{
+                            "content":format!("{name}-before\n\n\n{name}-after")
+                        }}
+                    }),
+                ),
+            ] {
+                let mut record = common.clone();
+                record["position"] = json!(position);
+                record
+                    .as_object_mut()
+                    .unwrap()
+                    .extend(item.as_object().unwrap().clone());
+                records.push(serde_json::from_value(record).unwrap());
+            }
+        }
+        records
+    }
+
+    fn prepare_layout(
+        layout: &mut Layout<RenderState>,
+        transcript: &Transcript,
+        width: u16,
+        fold: Fold,
+    ) -> Vec<Line<'static>> {
+        let styles = Styles::of(Palette::dark());
+        let blocks = transcript.blocks();
+        layout.state.prepare((width, styles), blocks);
+        let mut render = |state: &mut RenderState, _: usize, block: &Block| {
+            state.render(block, (width, fold, styles))
+        };
+        layout.prepare(blocks, transcript.revisions(), width, fold, &mut render);
+        while layout.settle(blocks, 0, 1000, &mut render) {}
+        layout.viewport = Viewport {
+            top: 0,
+            height: layout.total_rows(),
+            width,
+            origin: (0, 0),
+        };
+        layout
+            .visible(0, layout.total_rows())
+            .into_iter()
+            .cloned()
+            .collect()
+    }
+
+    #[test]
+    fn empty_assistants_stay_invisible_at_narrow_and_normal_widths() {
+        let styles = Styles::of(Palette::dark());
+        for width in (0..=10).chain([60]) {
+            for blank in ["", " \n\t"] {
+                for streaming in [true, false] {
+                    let block = assistant(0, blank, blank, streaming);
+                    let mut state = RenderState::default();
+                    let rows = state.render(&block, (width, Fold::default(), styles));
+                    assert_eq!(
+                        rows.iter_from(0).count(),
+                        0,
+                        "width {width}, streaming {streaming}"
+                    );
+                }
+            }
+            let mut partial = assistant(0, "", "", false);
+            if let Block::Assistant { partial, .. } = &mut partial {
+                *partial = true;
+            }
+            assert!(!blocks::render(&partial, styles, width, Fold::default()).is_empty());
+        }
+    }
+
+    #[test]
+    fn native_tool_only_responses_keep_one_gap_during_streaming_and_history_reload() {
+        let records = tool_history();
+        for width in [24, 72] {
+            for (expanded, show_reasoning) in
+                [(false, true), (true, true), (false, false), (true, false)]
+            {
+                let fold = Fold {
+                    expanded,
+                    show_reasoning,
+                };
+                let canonical = Transcript::from_history(&records);
+                let mut live = Transcript::default();
+                for block in canonical.blocks() {
+                    let mut block = block.clone();
+                    if let Block::Assistant { streaming, .. } = &mut block {
+                        *streaming = true;
+                    }
+                    live.push(block);
+                }
+                let mut layout = Layout::<RenderState>::default();
+                let streamed = prepare_layout(&mut layout, &live, width, fold);
+                live.install_history_records(&records);
+                let finalized = prepare_layout(&mut layout, &live, width, fold);
+                assert_eq!(streamed, finalized, "width {width}, fold {fold:?}");
+                let mut reloaded = Transcript::from_history(&records);
+                let mut reload_layout = Layout::<RenderState>::default();
+                assert_eq!(
+                    finalized,
+                    prepare_layout(&mut reload_layout, &reloaded, width, fold)
+                );
+                for index in 0..3 {
+                    let key = RequestKey::response("00000000000000000001".parse().unwrap(), index);
+                    assert!(live.has_canonical_response(&key));
+                    assert!(reloaded.has_canonical_response(&key));
+                }
+                assert_eq!(live.len(), 6, "empty canonical identities remain installed");
+
+                let mut next = 0;
+                for (index, block) in live.blocks().iter().enumerate() {
+                    let body = blocks::render(block, Styles::of(Palette::dark()), width, fold);
+                    if body.is_empty() {
+                        continue;
+                    }
+                    if next > 0 {
+                        assert_eq!(
+                            finalized[next].to_string(),
+                            "",
+                            "one separator before block {index}"
+                        );
+                        assert_eq!(layout.hit(2, next as u16), None);
+                        next += 1;
+                    }
+                    assert_eq!(&finalized[next..next + body.len()], body.as_slice());
+                    for offset in 0..body.len() {
+                        assert_eq!(layout.hit(2, (next + offset) as u16), Some((index, offset)));
+                        let (anchor, row) = layout.anchor(next + offset);
+                        assert_eq!(layout.anchor_row(anchor, row), next + offset);
+                    }
+                    next += body.len();
+                }
+                assert_eq!(next, finalized.len(), "no trailing separator");
+                let copied = selection::text(
+                    |row| {
+                        layout.row_line(row).map(|line| {
+                            (line.to_string(), super::super::rails::content_cells(line))
+                        })
+                    },
+                    layout.viewport.area(),
+                    selection::Drag {
+                        from: (0, 0),
+                        to: (width - 1, next as u16 - 1),
+                    },
+                );
+                assert!(copied.contains("alpha") && copied.contains("beta"));
+                assert!(
+                    !copied.contains('▎')
+                        && !copied.contains("Thinking...")
+                        && !copied.contains("to expand")
+                );
+                assert_eq!(copied.contains("Last step"), show_reasoning);
+
+                let rendered = reload_layout.stats.blocks_rendered;
+                reloaded.install_history_records(&records);
+                assert_eq!(
+                    prepare_layout(&mut reload_layout, &reloaded, width, fold),
+                    finalized
+                );
+                assert_eq!(
+                    reload_layout.stats.blocks_rendered, rendered,
+                    "unchanged history reuses rows"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn layout_preserves_blank_lines_inside_tool_output_and_fenced_code() {
+        let mut transcript = Transcript::from_history(&tool_history());
+        transcript.push(assistant(3, "", "", false));
+        transcript.push(assistant(
+            4,
+            "```text\ncode-before\n\n\ncode-after\n```",
+            "",
+            false,
+        ));
+        let rows = prepare_layout(
+            &mut Layout::default(),
+            &transcript,
+            72,
+            Fold {
+                expanded: true,
+                show_reasoning: true,
+            },
+        );
+        for name in ["alpha", "code"] {
+            let before = rows
+                .iter()
+                .position(|line| line.to_string().contains(&format!("{name}-before")))
+                .unwrap();
+            let after = rows
+                .iter()
+                .position(|line| line.to_string().contains(&format!("{name}-after")))
+                .unwrap();
+            assert_eq!(after - before, 3, "two content blank lines in {name}");
+        }
     }
 
     #[test]

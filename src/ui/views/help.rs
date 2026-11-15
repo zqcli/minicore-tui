@@ -102,7 +102,7 @@ const KEYS: &[KeyRow] = &[
     },
     KeyRow {
         keys: "ctrl+t",
-        action: "collapse or show thinking",
+        action: "collapse or show thinking with its original line breaks",
     },
     KeyRow {
         keys: "ctrl+f",

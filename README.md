@@ -1,8 +1,8 @@
 # minicore-tui
 
 `minicore-tui` is a fullscreen terminal frontend for
-[minicore-host](https://github.com/zqcli/minicore-host). Version 0.12.4 embeds
-Host 0.12.4 in the same executable and uses its typed Rust client through
+[minicore-host](https://github.com/zqcli/minicore-host). Version 0.12.5 embeds
+Host 0.12.5 in the same executable and uses its typed Rust client through
 `HostClient::in_process`. Host owns Agents, Sessions, execution, tools,
 credentials, history and persistence; the TUI owns terminal interaction and
 presentation.
@@ -81,9 +81,11 @@ changing the draft. Forward Delete and nonempty Ctrl+D are separate undoable
 edits; Ctrl+Z and Ctrl+Y restore or replay them.
 
 - **Conversation:** stream answer and reasoning text, retain interrupted partial
-  output, show native Turn outcome and persistence state. Model retry phase and
-  attempt information come from Host. `/reasoning` opens the picker without an
-  argument; an invalid explicit level reports an error and preserves the setting.
+  output, show native Turn outcome and persistence state. Separate Responses
+  reasoning parts keep their line breaks during streaming and after reopening.
+  Model retry phase and attempt information come from Host. `/reasoning` opens
+  the picker without an argument; an invalid explicit level reports an error
+  and preserves the setting.
 - **Errors:** failed Turns retain Host's upstream message in the conversation,
   reopened history and `/export`. `Ctrl+O` expands failure details; clicking a
   failure opens a scrollable view with `c` to copy the complete safe message.
@@ -94,6 +96,8 @@ edits; Ctrl+Z and Ctrl+Y restore or replay them.
 - **Tools:** display complete arguments, progress, output, result, failures and
   native delegation references. Argument generation is not a separate progress
   phase. Expanded cards and `/diff` expose details without changing execution.
+  Adjacent visible cards have one separator row; tool-only responses add no
+  empty row. Blank lines inside tool output remain intact.
 - **Input:** Enter sends steering input; Alt+Enter or Ctrl+Enter queues a
   follow-up. Accepted `next_step` and `next_turn` entries come from Host. Esc
   cancels the captured Turn and preserves queued input; `/pause` prevents later
