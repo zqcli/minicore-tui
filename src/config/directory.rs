@@ -61,10 +61,7 @@ mod tests {
         let directory = ConfigDirectory::resolve(Some(&config), Some(&data)).unwrap();
         assert_eq!(directory.dir(), config);
         assert_eq!(directory.ui_file(), config.join("tui.json"));
-        assert_eq!(
-            directory.commands_dir(),
-            config.join("commands")
-        );
+        assert_eq!(directory.commands_dir(), config.join("commands"));
         assert_eq!(directory.data_root(), data);
         assert_eq!(
             directory.history_file(),
