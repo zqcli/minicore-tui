@@ -48,6 +48,50 @@ client does not require these removed servers.
 - Delegated Session and task-message associations are displayed as reported by
   Host. Finishing the parent tool is distinct from finishing the child task.
 
+## Local editing and Session picker identity
+
+SPEC 4.11.3 assigns these three repairs to the frontend. They add no Host
+fields, lifecycle or storage behavior; Host -> Agent -> SessionController
+remains the execution ownership chain.
+
+- Terminal paste appends to the active Find query or Sessions, Models or Agents
+  filter. The resulting query uses the same refresh path as typed text: picker
+  selection resets to the first result, and Find recomputes matches and shows
+  the first match. A changed Sessions filter clears pending delete confirmation.
+- These query fields are single-line. Each CRLF pair, lone CR or LF becomes one
+  space; TAB becomes four spaces. Apply existing terminal sanitization: strip
+  ANSI/OSC sequences and BOMs, render other control and bidi-control characters
+  with the existing visible escapes, and preserve ordinary Unicode. Paste whose
+  normalized text is empty leaves the query, selection and confirmation intact.
+  Equivalent typed printable text has the same query and selection result.
+- Query paste never accepts a row, runs a command or changes the underlying
+  draft. Escape returns to that draft. Existing composer, Palette, Files,
+  unconfirmed-input and native interaction-answer paste routes retain their
+  ownership and guards; read-only sheets stay read-only. Session rename editing
+  is outside this repair.
+- Physical Delete and nonempty Ctrl+D make each actual forward deletion a
+  separate undo step, invalidating an abandoned redo branch. Undo and redo
+  restore text, graphemes, complete paste chips, cursor and selection together.
+  Selected deletion remains one step. A forward delete with nothing to remove
+  creates no edit and preserves valid redo; empty Ctrl+D keeps its quit meaning.
+- Every Sessions picker row displays the existing six-character native
+  Session-ID prefix, including unique, duplicate, automatic and fallback names.
+  Reserve room for this stable short ID before clipping the title and optional
+  details. Filtering, running state, ordering, renaming and reopening the picker
+  do not change it. Full `(agent_id, session_id)` identities continue to target
+  actions; short IDs are presentation only and need no collision registry.
+
+Acceptance covers all four paste surfaces with existing text, Unicode,
+line endings, controls, selection changes, delete confirmation and draft
+preservation. Both forward-delete keys must replay `abc` -> `bc` -> Undo `abc`
+-> Redo `bc`, including earlier edits, preloaded drafts, redo abandonment,
+no-op deletion, graphemes and paste chips. Frame assertions must show the short
+IDs when distinct long titles clip alike under the same Agent while idle or
+running, as well as narrow layouts, exact duplicate names and renamed rows.
+Retain full target and stored-title checks. Record reducer/editor/rendering
+results separately from any native-terminal verification; old failure evidence
+is not proof that the repaired build passed.
+
 ## History and configuration
 
 - Native history positions order user, assistant, tool-result, partial,
