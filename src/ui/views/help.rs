@@ -22,7 +22,11 @@ const KEYS: &[KeyRow] = &[
     },
     KeyRow {
         keys: "alt+enter, ctrl+enter",
-        action: "queue a follow-up while a turn runs",
+        action: "send a follow-up; wait for a new turn while busy",
+    },
+    KeyRow {
+        keys: "macOS: option+return",
+        action: "follow-up; enable Option as Meta / +Esc in the terminal profile",
     },
     KeyRow {
         keys: "shift+enter, ctrl+j",

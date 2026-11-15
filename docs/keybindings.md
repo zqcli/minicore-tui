@@ -18,6 +18,34 @@ compactions do not produce failure notices.
 If the terminal reserves one of these combinations, configure it to pass the
 key through or use the other combination.
 
+### Option+Return on macOS
+
+Use the terminal profile's Option-as-Alt/Meta setting so the modifier reaches
+the TUI. This restores the Agent-era frontend's terminal setup guidance:
+
+| Terminal | Setting |
+|---|---|
+| Terminal.app | Settings → Profiles → select the active profile → Keyboard → **Use Option as Meta key**. |
+| iTerm2 | Settings → Profiles → Keys → General → set the left or right Option key you use to **+Esc**. |
+| Ghostty | Set `macos-option-as-alt = true`, or `left` / `right` for one Option key. |
+| kitty | Set `macos_option_as_alt both`, or `left` / `right`, then open a new kitty process. |
+
+These settings affect other Option shortcuts too. For an iTerm2 mapping limited
+to this key, add Option+Return in the active profile's Keys → Key Mappings,
+choose **Send Hex Code**, and enter `0x1b 0x0d` (ESC CR).
+
+The composer accepts legacy ESC CR and reported Alt/Ctrl+Enter. On Unix, it also
+accepts ESC LF, which crossterm reports as Ctrl+Alt+J. Plain LF/Ctrl+J still
+inserts a newline, and plain Enter still steers. A terminal that sends only the
+same CR or LF as an unmodified key has discarded the modifier; the TUI cannot
+distinguish it. Check the actual queue label (`↳ next turn`) while a Turn runs.
+Windows key handling and paste behavior retain their existing meanings.
+
+Terminal references: [Apple](https://support.apple.com/guide/terminal/trmlkbrd/mac),
+[iTerm2](https://iterm2.com/documentation-preferences-profiles-keys.html),
+[Ghostty](https://ghostty.org/docs/config/reference#macos-option-as-alt),
+and [kitty](https://sw.kovidgoyal.net/kitty/conf/#opt-kitty.macos_option_as_alt).
+
 ## Agents, Sessions and input queues
 
 `/agents` selects an actual Host Agent. Each Session belongs to one Agent; the

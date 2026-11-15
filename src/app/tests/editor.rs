@@ -171,6 +171,155 @@ async fn a_multiline_paste_is_draft_text_and_never_runs_a_command() {
     }
 }
 
+#[tokio::test(start_paused = true)]
+async fn follow_up_keys_start_idle_sessions_and_queue_distinct_running_turns() {
+    use minicore_host_protocol::MessageMode;
+
+    fn user_texts(call: &crate::testing::ModelCall) -> Vec<&str> {
+        call.users()
+            .into_iter()
+            .map(|text| text.split_once("\n\n").expect("native input provenance").1)
+            .collect()
+    }
+
+    for (code, modifiers) in [
+        (KeyCode::Enter, KeyModifiers::ALT),
+        (KeyCode::Enter, KeyModifiers::CONTROL),
+        #[cfg(unix)]
+        (
+            KeyCode::Char('j'),
+            KeyModifiers::ALT | KeyModifiers::CONTROL,
+        ),
+    ] {
+        let mut h = Harness::opened().await;
+        h.key(code, modifiers);
+        assert!(h.app.local_inputs.is_empty(), "an empty draft never sends");
+        h.app.composer.set_text("idle follow-up");
+        h.key(code, modifiers);
+        assert_eq!(h.app.local_inputs[0].mode, MessageMode::FollowUp);
+        let first = h.next_call().await;
+        assert_eq!(user_texts(&first), ["idle follow-up"]);
+        h.until(|app| app.is_busy() && app.local_inputs.is_empty())
+            .await;
+
+        h.app.composer.set_text("queued follow-up");
+        h.key(code, modifiers);
+        let message_id = h.app.local_inputs[0].message_id.clone();
+        h.until(|app| {
+            app.local_inputs.is_empty()
+                && app
+                    .resident
+                    .current()
+                    .unwrap()
+                    .queue
+                    .as_ref()
+                    .is_some_and(|queue| queue.next_turn.len() == 1)
+        })
+        .await;
+        let queue = h
+            .native
+            .client
+            .session(h.native.target.clone())
+            .inputs(Default::default())
+            .await
+            .unwrap();
+        assert!(queue.next_step.is_empty());
+        assert_eq!(queue.next_turn.len(), 1);
+        assert_eq!(queue.next_turn[0].input.mode, MessageMode::FollowUp);
+        assert_eq!(queue.next_turn[0].input.text, "queued follow-up");
+        assert_eq!(queue.next_turn[0].input.message_id, message_id);
+        assert!(h.native.calls.try_recv().is_err());
+
+        let first_loop = first.context.loop_id;
+        first.text("first answer");
+        first.finish();
+        let follow = h.next_call().await;
+        assert_ne!(follow.context.loop_id, first_loop);
+        assert_eq!(follow.context.request_index, 0);
+        assert_eq!(user_texts(&follow), ["idle follow-up", "queued follow-up"]);
+        follow.text("follow-up answer");
+        follow.finish();
+        h.until(|app| {
+            !app.is_busy()
+                && app
+                    .transcript_blocks()
+                    .iter()
+                    .filter(|block| matches!(block, crate::transcript::Block::TurnEnd { .. }))
+                    .count()
+                    == 2
+        })
+        .await;
+        h.finish().await;
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn follow_up_alias_preserves_newlines_paste_and_focused_editors() {
+    let mut h = Harness::opened().await;
+    for (code, modifiers) in [
+        (KeyCode::Char('j'), KeyModifiers::CONTROL),
+        (KeyCode::Enter, KeyModifiers::SHIFT),
+        #[cfg(windows)]
+        (
+            KeyCode::Char('j'),
+            KeyModifiers::ALT | KeyModifiers::CONTROL,
+        ),
+    ] {
+        h.app.composer.set_text("draft");
+        h.key(code, modifiers);
+        assert_eq!(h.app.composer.text(), "draft\n");
+    }
+    assert!(matches!(
+        h.app.on_key(KeyEvent::from(KeyCode::Enter)),
+        Some(Action::Submit { follow: false })
+    ));
+    h.app.composer.set_text("draft");
+    h.app.on_paste("\x1b\n中文\n");
+    assert_eq!(h.app.composer.text(), "draft\n中文\n");
+
+    let legacy = KeyEvent::new(
+        KeyCode::Char('j'),
+        KeyModifiers::ALT | KeyModifiers::CONTROL,
+    );
+    #[cfg(unix)]
+    for (text, overlay) in [
+        ("/help", Overlay::Palette { selected: 0 }),
+        (
+            "@src",
+            Overlay::Files {
+                selected: 0,
+                paths: vec!["src/main.rs".into()],
+            },
+        ),
+    ] {
+        h.app.composer.set_text(text);
+        h.app.overlay = overlay;
+        assert!(matches!(
+            h.app.on_key(legacy),
+            Some(Action::Submit { follow: true })
+        ));
+        assert_eq!(h.app.composer.text(), text);
+    }
+    h.app.composer.set_text("retained draft");
+    for panel in [Panel::Help, Panel::Sessions, Panel::Find] {
+        h.app.open_panel(panel);
+        assert!(h.app.on_key(legacy).is_none());
+        assert!(!h.app.overlay.is_none());
+        assert_eq!(h.app.composer.text(), "retained draft");
+    }
+    h.app.overlay = Overlay::Unconfirmed {
+        selected: 0,
+        mode: crate::app::unconfirmed::ReviewMode::Edit(0),
+    };
+    h.app.unconfirmed_editor.set_text("review draft");
+    assert!(h.app.on_key(legacy).is_none());
+    assert_eq!(h.app.unconfirmed_editor.text(), "review draft\n");
+    assert_eq!(h.app.composer.text(), "retained draft");
+    assert!(h.app.local_inputs.is_empty());
+    assert!(h.native.calls.try_recv().is_err());
+    h.finish().await;
+}
+
 fn query_state(overlay: &Overlay) -> (&str, usize) {
     match overlay {
         Overlay::Find { query, current, .. } => (query, *current),
@@ -465,7 +614,7 @@ async fn query_paste_dispatch_preserves_other_editors_and_read_only_boundaries()
 }
 
 #[tokio::test]
-async fn query_paste_keeps_native_interaction_answers_on_their_focused_surface() {
+async fn paste_and_follow_up_alias_keep_native_interaction_focus() {
     use crate::app::Answer;
     use crate::testing::{production::with_input_tool, real_bounded};
 
@@ -477,6 +626,10 @@ async fn query_paste_keeps_native_interaction_answers_on_their_focused_surface()
     provider.request().await;
     h.app.composer.set_text("retained composer");
     h.app.on_paste("y\n");
+    h.key(
+        KeyCode::Char('j'),
+        KeyModifiers::ALT | KeyModifiers::CONTROL,
+    );
     assert_eq!(h.app.composer.text(), "retained composer");
     assert!(
         !h.app
@@ -499,9 +652,13 @@ async fn query_paste_keeps_native_interaction_answers_on_their_focused_surface()
     })
     .await;
     h.app.on_paste("answer\r\n中文");
+    h.key(
+        KeyCode::Char('j'),
+        KeyModifiers::ALT | KeyModifiers::CONTROL,
+    );
     assert_eq!(
         h.app.resident.current().unwrap().interaction_editor.text(),
-        "answer\n中文"
+        "answer\n中文\n"
     );
     assert_eq!(h.app.composer.text(), "retained composer");
     h.ctrl(KeyCode::Char('r'));
@@ -512,11 +669,11 @@ async fn query_paste_keeps_native_interaction_answers_on_their_focused_surface()
     );
     assert_eq!(
         h.app.resident.current().unwrap().interaction_editor.text(),
-        "answer\n中文"
+        "answer\n中文\n"
     );
     h.press(KeyCode::Esc);
     h.app
-        .on_action(Action::Answer(Answer::Text("answer\n中文".into())));
+        .on_action(Action::Answer(Answer::Text("answer\n中文\n".into())));
     h.until(|app| {
         !app.is_busy()
             && !app.has_interaction()
@@ -535,7 +692,7 @@ async fn query_paste_keeps_native_interaction_answers_on_their_focused_surface()
         .unwrap();
     let result: serde_json::Value =
         serde_json::from_str(tool["content"].as_str().unwrap()).unwrap();
-    assert_eq!(result["answer"], "answer\n中文");
+    assert_eq!(result["answer"], "answer\n中文\n");
     assert_eq!(h.app.composer.text(), "retained composer");
     h.finish().await;
     provider.finish().await;

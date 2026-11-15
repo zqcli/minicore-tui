@@ -81,6 +81,9 @@ impl App {
         match key.code {
             // Ctrl+Enter is for terminals that cannot deliver Alt+Enter.
             KeyCode::Enter if alt || ctrl => return Some(Action::Submit { follow: true }),
+            // Raw-mode crossterm decodes legacy ESC LF as Alt+Ctrl+J.
+            #[cfg(unix)]
+            KeyCode::Char('j') if alt && ctrl => return Some(Action::Submit { follow: true }),
             KeyCode::Enter if shift => self.composer.newline(),
             KeyCode::Enter => return self.submit_or_command(),
             KeyCode::Char('j') if ctrl => self.composer.newline(),

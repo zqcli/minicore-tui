@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.12.6 — 2026-11-15
+
+- Accept the Unix legacy ESC LF form of Option/Alt+Return as a follow-up in the
+  composer. Crossterm reports it as Ctrl+Alt+J; plain Ctrl+J remains a newline.
+  Use the existing Host admission and next-turn queue while idle or working.
+- Restore macOS terminal profile guidance for Terminal.app, iTerm2, Ghostty and
+  kitty, including an iTerm2 mapping limited to Option+Return. Explain that the
+  terminal must preserve the modifier and surface this setup in F1 help.
+- Retain focused picker and interaction ownership, paste text, ordinary Enter,
+  empty-draft behavior and Windows key handling. Keep the immutable Host 0.12.5
+  dependency and existing external dependency graph.
+
 ## 0.12.5 — 2026-11-15
 
 - Keep real Responses reasoning parts and items on separate logical lines

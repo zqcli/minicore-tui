@@ -1251,7 +1251,7 @@ dependencies = [
 
 [[package]]
 name = "minicore-tui"
-version = "0.12.5"
+version = "0.12.6"
 dependencies = [
  "base64 0.22.1",
  "clipboard-win",

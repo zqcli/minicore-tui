@@ -202,6 +202,13 @@ status hints, timestamps and layout rails.
 
 ## Native meaning in the UI
 
+The composer maps Alt/Ctrl+Enter to native `FollowUp` input. On Unix it also
+recognizes Ctrl+Alt+J, crossterm's decoded form of legacy ESC LF. This mapping
+follows focused-surface routing; overlays and pending interactions retain their
+keys, and paste remains text. Ordinary Enter steers and plain Ctrl+J inserts a
+newline. Terminal profiles must preserve modifiers; no timer or decoder tries
+to reconstruct a modifier from plain CR/LF.
+
 Local query paste belongs to the focused Find, Sessions, Models or Agents
 overlay. Single-line normalization reuses terminal sanitization, and pasted and
 typed text share the same query-change path for matching and selection reset.

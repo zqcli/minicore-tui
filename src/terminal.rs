@@ -42,10 +42,9 @@ pub fn draw_frame<B: Backend>(
     Ok(())
 }
 
-/// Shift+Enter and Alt+Enter only reach us as distinct keys when the terminal
-/// speaks the kitty keyboard protocol. The push is unconditional: terminals
-/// without support ignore the sequence, and probing support costs a blocking
-/// round trip on startup.
+/// Requests disambiguation for modified Enter and other keys. Legacy Alt+Enter
+/// also works through ESC-prefixed input. The push is unconditional: terminals
+/// without support ignore it, and probing costs a blocking startup round trip.
 fn push_keyboard_flags<W: Write>(writer: &mut W) -> io::Result<()> {
     execute!(
         writer,

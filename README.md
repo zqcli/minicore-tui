@@ -1,7 +1,7 @@
 # minicore-tui
 
 `minicore-tui` is a fullscreen terminal frontend for
-[minicore-host](https://github.com/zqcli/minicore-host). Version 0.12.5 embeds
+[minicore-host](https://github.com/zqcli/minicore-host). Version 0.12.6 embeds
 Host 0.12.5 in the same executable and uses its typed Rust client through
 `HostClient::in_process`. Host owns Agents, Sessions, execution, tools,
 credentials, history and persistence; the TUI owns terminal interaction and
@@ -18,6 +18,9 @@ Host is outside this version's interface.
 Use current stable Rust and a terminal supporting an alternate screen, raw
 mode and bracketed paste. Mouse reporting enables selection and scrolling.
 `Ctrl+J` always inserts a newline; modified Enter keys depend on terminal support.
+On macOS, enable Option as Meta / +Esc in the terminal profile for
+Option+Return follow-ups. See the [terminal setup guide](docs/keybindings.md#optionreturn-on-macos)
+for Terminal.app, iTerm2, Ghostty and kitty, including a mapping for just that key.
 
 ```bash
 cargo build --locked --release
