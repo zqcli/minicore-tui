@@ -122,7 +122,10 @@ impl App {
                     "collapsed"
                 };
                 // A flash leaves the dock alone, so the pinned view does not move.
-                self.flash = Some((format!("Tool output: {state}"), tokio::time::Instant::now()));
+                self.flash = Some((
+                    format!("Conversation details: {state}"),
+                    tokio::time::Instant::now(),
+                ));
             }
             KeyCode::Char('t') if ctrl => {
                 self.pin_view();

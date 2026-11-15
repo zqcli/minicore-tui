@@ -120,6 +120,57 @@ pub async fn with_input_tool() -> (NativeHost, ToolProvider) {
     let selection = vec![ToolBinding {
         name: "collect_input".into(),
     }];
+    let native = configured_host(endpoint, registry, selection).await;
+    (
+        native,
+        ToolProvider {
+            requests: incoming,
+            task: Some(task),
+            calls,
+        },
+    )
+}
+
+pub async fn with_provider_error(message: &str, streaming: bool) -> (NativeHost, ToolProvider) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}/chat/completions", listener.local_addr().unwrap());
+    let (requests, incoming) = mpsc::channel(1);
+    let error = json!({"error":{"type":"invalid_request_error","code":"invalid_request","message":message}});
+    let (status, content_type, body) = if streaming {
+        ("200 OK", "text/event-stream", format!("data: {error}\n\n"))
+    } else {
+        ("400 Bad Request", "application/json", error.to_string())
+    };
+    let task = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        requests
+            .send(read_request(&mut socket).await)
+            .await
+            .unwrap();
+        let head = format!(
+            "HTTP/1.1 {status}\r\ncontent-type: {content_type}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+            body.len()
+        );
+        socket.write_all(head.as_bytes()).await.unwrap();
+        socket.write_all(body.as_bytes()).await.unwrap();
+        socket.shutdown().await.unwrap();
+    });
+    let native = configured_host(endpoint, ToolRegistry::new(), Vec::new()).await;
+    (
+        native,
+        ToolProvider {
+            requests: incoming,
+            task: Some(task),
+            calls: Arc::new(AtomicUsize::new(0)),
+        },
+    )
+}
+
+async fn configured_host(
+    endpoint: String,
+    registry: ToolRegistry,
+    selection: Vec<ToolBinding>,
+) -> NativeHost {
     let model = "fixture/interaction".parse().unwrap();
     let config = HostConfig {
         models: vec![OpenAiModelSettings {
@@ -173,19 +224,12 @@ pub async fn with_input_tool() -> (NativeHost, ToolProvider) {
         session_id: receipt.session_id.unwrap(),
     };
     let (_, unused_calls) = mpsc::unbounded_channel();
-    (
-        NativeHost {
-            host,
-            client,
-            target,
-            calls: unused_calls,
-        },
-        ToolProvider {
-            requests: incoming,
-            task: Some(task),
-            calls,
-        },
-    )
+    NativeHost {
+        host,
+        client,
+        target,
+        calls: unused_calls,
+    }
 }
 
 async fn read_request(socket: &mut TcpStream) -> Value {

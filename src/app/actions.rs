@@ -138,7 +138,7 @@ impl App {
                 self.spawn_msg(async move {
                     let result = async {
                         client
-                            .session(target)
+                            .session(target.clone())
                             .delete(
                                 SessionDeleteRequest {
                                     operation_id: tasks::operation_id()?,
@@ -150,7 +150,8 @@ impl App {
                             .map(drop)
                             .map_err(|e| e.to_string())
                     }
-                    .await;
+                    .await
+                    .map_err(|error| tasks::session_error(&target, error));
                     Msg::RefreshCatalogs(result)
                 });
             }
@@ -227,10 +228,10 @@ impl App {
         let client = self.client.clone();
         let tx = self.tx.clone();
         self.spawn_msg(async move {
-            let result = async {
+            let result: Result<_, String> = async {
                 let target = AgentRef {
                     host_id: client.initial_info().host_id.clone(),
-                    agent_id,
+                    agent_id: agent_id.clone(),
                 };
                 let operation_id = tasks::operation_id()?;
                 if start {
@@ -259,7 +260,7 @@ impl App {
                 Ok(target) => {
                     tasks::observe_agent(&client, &tx, target, tasks::AgentWait::Lifecycle).await
                 }
-                Err(error) => Msg::RefreshCatalogs(Err(error)),
+                Err(error) => Msg::RefreshCatalogs(Err(format!("Agent: {agent_id}\n\n{error}"))),
             }
         });
     }
@@ -270,10 +271,10 @@ impl App {
         let client = self.client.clone();
         let tx = self.tx.clone();
         self.spawn_msg(async move {
-            let result = async {
+            let result: Result<_, String> = async {
                 let target = AgentRef {
                     host_id: client.initial_info().host_id.clone(),
-                    agent_id,
+                    agent_id: agent_id.clone(),
                 };
                 let scope = if session_ids.is_empty() {
                     AgentDeleteScope::Empty {}
@@ -301,7 +302,7 @@ impl App {
                 Ok(target) => {
                     tasks::observe_agent(&client, &tx, target, tasks::AgentWait::Deletion).await
                 }
-                Err(error) => Msg::RefreshCatalogs(Err(error)),
+                Err(error) => Msg::RefreshCatalogs(Err(format!("Agent: {agent_id}\n\n{error}"))),
             }
         });
     }
@@ -318,14 +319,14 @@ impl App {
             let result = async {
                 let agent = AgentRef {
                     host_id: client.initial_info().host_id.clone(),
-                    agent_id: target.agent_id,
+                    agent_id: target.agent_id.clone(),
                 };
                 client
                     .set_default_session(
                         agent.clone(),
                         AgentSetDefaultSessionRequest {
                             operation_id: tasks::operation_id()?,
-                            session_id: Some(target.session_id),
+                            session_id: Some(target.session_id.clone()),
                         },
                         tasks::options(),
                     )
@@ -334,11 +335,17 @@ impl App {
                 Ok(agent)
             }
             .await;
-            match result {
-                Ok(target) => {
-                    tasks::observe_agent(&client, &tx, target, tasks::AgentWait::Metadata).await
+            let message = match result {
+                Ok(agent) => {
+                    tasks::observe_agent(&client, &tx, agent, tasks::AgentWait::Metadata).await
                 }
                 Err(error) => Msg::RefreshCatalogs(Err(error)),
+            };
+            match message {
+                Msg::RefreshCatalogs(Err(error)) => {
+                    Msg::RefreshCatalogs(Err(tasks::session_error(&target, error)))
+                }
+                message => message,
             }
         });
     }

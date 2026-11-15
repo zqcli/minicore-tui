@@ -1,7 +1,7 @@
 # Architecture
 
 The executable owns one persistent MiniCore Host and one terminal application.
-It links Host 0.12.2 at the immutable revision in `Cargo.toml`; all native
+It links Host 0.12.3 at the immutable revision in `Cargo.toml`; all native
 components come from that revision. The frontend calls `HostClient::in_process`
 and the typed `SessionClient` APIs. There is no frontend protocol model, child
 Agent, transport adapter, Webpage service or remote view layer.
@@ -52,6 +52,8 @@ is no global frontend Agent template or fallback Agent creation.
 path. Full and partial application refresh actual catalogs; partial results
 remain visible and are never automatically retried. Templates reload locally;
 terminal preferences do not participate in Host configuration publication.
+Startup, partial reload and shutdown errors include Host's message as well as
+its fault identity. Text printed after terminal restoration is sanitized.
 
 Selection uses full Agent and Session identities and actual `last_activity_at`
 values. The current directory overrides newly created Sessions, not an opened
@@ -154,6 +156,20 @@ It is independent of loaded screen history and preserves Host's fixed export
 upper bound. Workspace files, status, change records and diff pages also use
 typed Session APIs. Fragmented native diff lines preserve their true line
 numbers and UTF-8 content.
+
+Turn failures use native `Fault.message` and saved `TurnTerminalData.reason`;
+the TUI neither parses provider bodies nor classifies provider failures. The
+same message flows into display and export. Collapsed failure quotes wrap only
+their visible prefix. Tool-result JSON head previews use bounded serialization
+and count pretty-printed lines from the parsed structure without a
+second complete formatted body. Native records remain the export source.
+
+Transient notices retain two summaries. One separate last-operation-error text
+supports `/error` after dismissal, with the captured Session identity when
+available. The error detail overlay is also used when clicking a failed Turn;
+it owns only text and scroll geometry. Rendering and copying sanitize terminal
+control sequences without changing Host's stored message. There is no second
+error history, backend error classifier or automatic replay.
 
 Rendering uses per-block revisions and visible-row layout caches. Anchors are
 rebased when earlier records are inserted, and folding opens downward. Tool

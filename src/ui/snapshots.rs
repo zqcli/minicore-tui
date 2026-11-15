@@ -915,6 +915,22 @@ fn a_short_host_failure_keeps_its_actual_message() {
 }
 
 #[test]
+fn clicking_a_failed_turn_opens_its_complete_safe_message() {
+    let mut fixture = app();
+    let _runtime = fixture._runtime.enter();
+    let app = &mut fixture.app;
+    let reason = format!("{}\nFinal detail 中文\u{1b}[2J", rate_limited());
+    failed_turn(app, &reason);
+    let folded = render(app, 80, 20);
+    click(app, 5, row_of(&folded, "   failed"));
+    assert!(matches!(&app.overlay, Overlay::Error { text, .. } if text.contains(&reason)));
+    let details = render(app, 100, 25);
+    assert!(details.contains("Error details"), "{details}");
+    assert!(details.contains("Final detail 中 文"), "{details}");
+    assert!(!details.contains('\u{1b}'));
+}
+
+#[test]
 fn a_drag_over_a_failed_turn_takes_the_message_without_rails_hints_or_ellipsis() {
     let mut app = app();
     failed_turn(&mut app, rate_limited());

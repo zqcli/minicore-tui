@@ -151,6 +151,11 @@ pub const COMMANDS: &[Command<'static>] = &[
         description: "Review local inputs whose acceptance is unconfirmed",
     },
     Command {
+        name: "error",
+        args: "",
+        description: "Read or copy the last operation error in full",
+    },
+    Command {
         name: "help",
         args: "",
         description: "Show keys and commands",
@@ -259,6 +264,7 @@ pub fn execute(name: &str, arg: &str) -> Option<Executed> {
         "recover" => Executed::Action(Action::RetryRecovery),
         "unconfirmed" => Executed::Panel(super::Panel::Unconfirmed),
         "help" => Executed::Panel(super::Panel::Help),
+        "error" => Executed::Panel(super::Panel::Error),
         "quit" => Executed::Action(Action::Quit),
         _ => return None,
     })

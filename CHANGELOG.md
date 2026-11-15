@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.12.3 — 2026-11-15
+
+- Embed Host 0.12.3 at immutable revision
+  `dbaaa8175780759b84d26e0519aa4b27ced5f8f4`, following SPEC 4.11.2.
+  Preserve its safe upstream HTTP and stream error messages
+  through live failure details, reopened native history and complete Markdown
+  export. Keep Host's fault cause in startup, partial reload and shutdown errors.
+- Add `/error` to recall and copy the last operation error after its notice is
+  dismissed, retaining its original Session identity. Clicking a failed Turn
+  opens its complete details; `Ctrl+O` and F1 help explicitly include failures.
+- Wrap only the visible prefix of collapsed failures. Bound JSON result head preview
+  serialization before allocating discarded output, retain accurate complete
+  line counts and point truncated previews to `/export`.
+- Verify HTTP and SSE error propagation with a loopback provider and real
+  in-process Host, including frontend reopen, pagination, display and export.
+
 ## 0.12.2 — 2026-11-15
 
 - Embed Host 0.12.2 at immutable revision

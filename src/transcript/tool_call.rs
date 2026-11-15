@@ -134,7 +134,7 @@ impl ToolCall {
     /// Only complete invocation arguments enter the card.
     pub fn set_arguments(&mut self, arguments: &Value) {
         self.arguments = Some(arguments.clone());
-        self.arguments_display = Some(argument_display(arguments));
+        self.arguments_display = Some(json_display(arguments));
         let string = |key: &str| arguments.get(key).and_then(Value::as_str);
         self.detail = string("path")
             .or_else(|| string("command"))
@@ -251,14 +251,19 @@ impl ToolCall {
                                 && value["kind"] == "file"
                         })
                         .and_then(|value| value["text"].as_str());
-                    let formatted = parsed
-                        .as_ref()
-                        .filter(|_| read_text.is_none())
-                        .map(|value| {
-                            serde_json::to_string_pretty(value).expect("JSON values serialize")
-                        });
-                    let body = read_text.or(formatted.as_deref()).unwrap_or(content);
-                    self.output_lines = Some(body.lines().count());
+                    let formatted = parsed.as_ref().filter(|_| read_text.is_none());
+                    let preview = formatted.filter(|_| self.name != "bash").map(json_display);
+                    // An unrecognized bash result keeps its existing pretty-JSON tail.
+                    let bash_json = formatted.filter(|_| self.name == "bash").map(|value| {
+                        serde_json::to_string_pretty(value).expect("JSON values serialize")
+                    });
+                    self.truncated |= preview.as_ref().is_some_and(|(_, truncated)| *truncated);
+                    let body = read_text
+                        .or(preview.as_ref().map(|(text, _)| text.as_str()))
+                        .or(bash_json.as_deref())
+                        .unwrap_or(content);
+                    self.output_lines =
+                        Some(formatted.map_or_else(|| body.lines().count(), json_lines));
                     if self.name == "bash" {
                         self.push_output(body);
                     } else {
@@ -426,7 +431,7 @@ pub const EXPANDED_ROWS: usize = 200;
 pub const OUTPUT_TAIL_LINES: usize = 400;
 pub const OUTPUT_TAIL_BYTES: usize = 64 * 1024;
 
-fn argument_display(arguments: &Value) -> (String, bool) {
+fn json_display(value: &Value) -> (String, bool) {
     struct DisplayWriter {
         bytes: Vec<u8>,
         truncated: bool,
@@ -439,7 +444,7 @@ fn argument_display(arguments: &Value) -> (String, bool) {
             if count < bytes.len() {
                 self.truncated = true;
                 if count == 0 {
-                    return Err(std::io::Error::other("argument display budget reached"));
+                    return Err(std::io::Error::other("JSON display budget reached"));
                 }
             }
             Ok(count)
@@ -452,7 +457,7 @@ fn argument_display(arguments: &Value) -> (String, bool) {
         bytes: Vec::new(),
         truncated: false,
     };
-    let formatted = serde_json::to_writer_pretty(&mut writer, arguments);
+    let formatted = serde_json::to_writer_pretty(&mut writer, value);
     debug_assert!(formatted.is_ok() || writer.truncated);
     if let Err(error) = std::str::from_utf8(&writer.bytes) {
         writer.bytes.truncate(error.valid_up_to());
@@ -461,6 +466,19 @@ fn argument_display(arguments: &Value) -> (String, bool) {
         String::from_utf8(writer.bytes).expect("JSON display ends at a UTF-8 boundary"),
         writer.truncated,
     )
+}
+
+/// Pretty JSON escapes string newlines; only nonempty containers add rows.
+fn json_lines(value: &Value) -> usize {
+    match value {
+        Value::Array(values) if !values.is_empty() => {
+            2 + values.iter().map(json_lines).sum::<usize>()
+        }
+        Value::Object(values) if !values.is_empty() => {
+            2 + values.values().map(json_lines).sum::<usize>()
+        }
+        _ => 1,
+    }
 }
 
 fn append_capped(line: &mut String, text: &str) -> bool {
@@ -710,5 +728,53 @@ mod tests {
         });
         assert!(call.output.iter().map(|line| line.len() + 1).sum::<usize>() <= OUTPUT_TAIL_BYTES);
         assert!(call.truncated);
+    }
+
+    #[test]
+    fn json_results_keep_a_bounded_preview_and_the_complete_line_count() {
+        let value = serde_json::json!({"rows":(0..2000).map(|index| serde_json::json!({"index":index,"text":"中🙂".repeat(100)})).collect::<Vec<_>>()});
+        let full = serde_json::to_string_pretty(&value).unwrap();
+        let mut call = card();
+        call.name = "fixture".into();
+        call.apply_result(&result(value));
+        assert!(call.truncated);
+        assert!(call.output.iter().map(|line| line.len() + 1).sum::<usize>() <= OUTPUT_TAIL_BYTES);
+        assert!(call.output.len() <= EXPANDED_ROWS);
+        assert_eq!(call.output_lines, Some(full.lines().count()));
+        assert!(!call.output.join("\n").contains('\u{fffd}'));
+        assert_eq!(call.output.first().unwrap(), "{");
+    }
+
+    #[test]
+    fn json_line_counts_include_empty_containers_and_escaped_newlines() {
+        for value in [
+            serde_json::json!(null),
+            serde_json::json!([]),
+            serde_json::json!({}),
+            serde_json::json!({"a":[{},[],"one\ntwo",{"b":[1,2]}]}),
+        ] {
+            assert_eq!(
+                json_lines(&value),
+                serde_json::to_string_pretty(&value)
+                    .unwrap()
+                    .lines()
+                    .count()
+            );
+        }
+    }
+
+    #[test]
+    fn unrecognized_bash_json_keeps_the_pretty_result_tail() {
+        let value = serde_json::json!({"rows":(0..300).collect::<Vec<_>>()});
+        let pretty = serde_json::to_string_pretty(&value).unwrap();
+        let mut call = card();
+        call.apply_result(&result(value));
+        let expected = pretty.lines().collect::<Vec<_>>();
+        assert_eq!(call.output_lines, Some(expected.len()));
+        assert_eq!(
+            call.output_content(),
+            expected[expected.len() - call.output.len()..]
+        );
+        assert!(call.output.len() > 1);
     }
 }

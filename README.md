@@ -1,8 +1,8 @@
 # minicore-tui
 
 `minicore-tui` is a fullscreen terminal frontend for
-[minicore-host](https://github.com/zqcli/minicore-host). Version 0.12.2 embeds
-Host 0.12.2 in the same executable and uses its typed Rust client through
+[minicore-host](https://github.com/zqcli/minicore-host). Version 0.12.3 embeds
+Host 0.12.3 in the same executable and uses its typed Rust client through
 `HostClient::in_process`. Host owns Agents, Sessions, execution, tools,
 credentials, history and persistence; the TUI owns terminal interaction and
 presentation.
@@ -81,6 +81,13 @@ on return. If terminal restoration fails, the error names the retained draft fil
   output, show native Turn outcome and persistence state. Model retry phase and
   attempt information come from Host. `/reasoning` opens the picker without an
   argument; an invalid explicit level reports an error and preserves the setting.
+- **Errors:** failed Turns retain Host's upstream message in the conversation,
+  reopened history and `/export`. `Ctrl+O` expands failure details; clicking a
+  failure opens a scrollable view with `c` to copy the complete safe message.
+  `/error` recalls the last operation error after its notice is dismissed,
+  including its original Session identity when the operation has one. Host
+  redacts bound credentials; the TUI removes terminal control sequences when
+  displaying or copying details. Startup, reload and shutdown retain the cause.
 - **Tools:** display complete arguments, progress, output, result, failures and
   native delegation references. Argument generation is not a separate progress
   phase. Expanded cards and `/diff` expose details without changing execution.

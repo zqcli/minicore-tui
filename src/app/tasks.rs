@@ -111,6 +111,13 @@ pub fn options() -> CallOptions {
     CallOptions::default()
 }
 
+pub(super) fn session_error(target: &SessionRef, error: impl std::fmt::Display) -> String {
+    format!(
+        "Agent: {}\nSession: {}\n\n{error}",
+        target.agent_id, target.session_id
+    )
+}
+
 pub async fn catalogs(client: &HostClient, selected: Option<AgentId>) -> Result<Ready, String> {
     let models = client.models(options()).await.map_err(|e| e.to_string())?;
     let agents = client.agents(options()).await.map_err(|e| e.to_string())?;
@@ -598,6 +605,7 @@ impl App {
 }
 
 pub async fn export(client: SessionClient, path: Option<String>) -> Msg {
+    let target = client.target().clone();
     let path = path.unwrap_or_else(|| {
         format!(
             "minicore-{}-{}.md",
@@ -621,7 +629,7 @@ pub async fn export(client: SessionClient, path: Option<String>) -> Msg {
     .and_then(|result| result);
     match result {
         Ok(()) => Msg::Notice(NoticeLevel::Info, format!("Exported to {path}")),
-        Err(error) => Msg::Notice(NoticeLevel::Error, error),
+        Err(error) => Msg::Notice(NoticeLevel::Error, session_error(&target, error)),
     }
 }
 

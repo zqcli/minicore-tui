@@ -62,6 +62,11 @@ pub enum Overlay {
     Help {
         scroll: usize,
     },
+    Error {
+        text: String,
+        scroll: usize,
+        visible_rows: usize,
+    },
     Diff(DiffState),
     /// Find in the transcript.
     Find {
@@ -78,7 +83,7 @@ impl Overlay {
 
     /// A full-screen view, which hides the transcript and the keys of the composer.
     pub fn is_view(&self) -> bool {
-        matches!(self, Self::Diff(_) | Self::Help { .. })
+        matches!(self, Self::Diff(_) | Self::Help { .. } | Self::Error { .. })
     }
 }
 
@@ -95,6 +100,7 @@ pub enum Panel {
     Context,
     SessionInfo,
     Help,
+    Error,
     Diff,
     Find,
 }
@@ -296,6 +302,14 @@ impl App {
                 Overlay::SessionInfo
             }
             Panel::Help => Overlay::Help { scroll: 0 },
+            Panel::Error => Overlay::Error {
+                text: self
+                    .last_error
+                    .clone()
+                    .unwrap_or_else(|| "No operation error has been recorded.".into()),
+                scroll: 0,
+                visible_rows: 0,
+            },
             Panel::Diff => Overlay::Diff(self.open_diff()),
             Panel::Find => Overlay::Find {
                 query: String::new(),

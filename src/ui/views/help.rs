@@ -94,7 +94,7 @@ const KEYS: &[KeyRow] = &[
     },
     KeyRow {
         keys: "ctrl+o",
-        action: "expand or fold tool cards and thinking",
+        action: "expand or fold tools, thinking, summaries and failure details",
     },
     KeyRow {
         keys: "ctrl+t",

@@ -889,6 +889,7 @@ async fn partial_reload_result_projection_refreshes_native_state_and_preserves_t
         notice.level == crate::app::NoticeLevel::Error
             && notice.text.contains("partial Agent results")
             && notice.text.contains("coding")
+            && notice.text.contains("explicit reload-result fixture")
     }));
     h.until(|app| !app.catalog_loading).await;
     assert_eq!(h.app.resident.current().unwrap().address(), target);

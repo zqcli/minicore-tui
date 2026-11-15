@@ -46,8 +46,12 @@ impl App {
             return self.on_rename_key(key);
         }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        let scrolling = matches!(self.overlay, Overlay::Diff(_));
-        let page = self.viewport_rows().saturating_sub(2) as isize;
+        let scrolling = matches!(self.overlay, Overlay::Diff(_) | Overlay::Error { .. });
+        let page = match &self.overlay {
+            Overlay::Error { visible_rows, .. } => *visible_rows,
+            _ => self.viewport_rows().saturating_sub(2),
+        }
+        .max(1) as isize;
         match key.code {
             KeyCode::Esc => self.overlay = Overlay::None,
             KeyCode::PageUp if scrolling => self.scroll_view(-page),
@@ -149,7 +153,9 @@ impl App {
                     self.load_selected_diff();
                 }
             }
-            Overlay::Help { scroll } => *scroll = scroll.saturating_add_signed(delta * 3),
+            Overlay::Help { scroll } | Overlay::Error { scroll, .. } => {
+                *scroll = scroll.saturating_add_signed(delta * 3)
+            }
             Overlay::Find { .. } => self.find_step(delta > 0),
             Overlay::Unconfirmed { .. } => self.move_local_input(delta),
             Overlay::Context | Overlay::SessionInfo | Overlay::None => {}
@@ -160,8 +166,10 @@ impl App {
     pub(crate) fn scroll_view(&mut self, delta: isize) {
         // The title and hint rows are not content.
         let rows = self.viewport_rows().saturating_sub(2);
-        if let Overlay::Diff(diff) = &mut self.overlay {
-            diff.scroll_by(delta, rows);
+        match &mut self.overlay {
+            Overlay::Diff(diff) => diff.scroll_by(delta, rows),
+            Overlay::Error { scroll, .. } => *scroll = scroll.saturating_add_signed(delta),
+            _ => {}
         }
     }
 
@@ -239,6 +247,7 @@ impl App {
             | Overlay::Files { .. }
             | Overlay::Context
             | Overlay::Help { .. }
+            | Overlay::Error { .. }
             | Overlay::Diff(_)
             | Overlay::None => None,
         }

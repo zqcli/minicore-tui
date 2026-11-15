@@ -1,9 +1,10 @@
-//! Full-screen views: diff and help. Each
+//! Full-screen views: diff, help and error details. Each
 //! replaces the transcript area right of its gutter and keeps the footer; the
 //! app owns scrolling and selection.
 
 pub mod context;
 pub mod diff;
+mod error;
 pub mod help;
 
 use ratatui::Frame;
@@ -58,11 +59,16 @@ fn chrome(frame: &mut Frame, area: Rect, styles: Styles, title: &str, hints: &[(
 }
 
 /// Draws whichever view owns the transcript area; false when none is open.
-pub fn draw(frame: &mut Frame, area: Rect, app: &App, styles: Styles) -> bool {
+pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, styles: Styles) -> bool {
     let area = super::transcript::inner(area);
-    match &app.overlay {
+    match &mut app.overlay {
         Overlay::Diff(diff) => diff::render(frame, area, styles, diff),
         Overlay::Help { scroll } => help::render(frame, area, styles, COMMANDS, *scroll),
+        Overlay::Error {
+            text,
+            scroll,
+            visible_rows,
+        } => error::render(frame, area, styles, text, scroll, visible_rows),
         _ => return false,
     }
     super::transcript::draw_flash(frame, area, app, styles);

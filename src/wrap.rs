@@ -18,34 +18,46 @@ pub fn width(text: &str) -> usize {
 /// Splits a line into `width`-cell chunks, ignoring word boundaries. Used for
 /// code and for words that do not fit on a line of their own.
 pub fn char_breaks(line: &str, cell_limit: usize) -> Vec<Range<usize>> {
+    char_ranges(line, cell_limit).collect()
+}
+
+fn char_ranges(line: &str, cell_limit: usize) -> impl Iterator<Item = Range<usize>> + '_ {
     let limit = cell_limit.max(1);
-    let mut out = Vec::new();
-    let mut start = 0;
-    let mut col = 0;
-    for (offset, grapheme) in line.grapheme_indices(true) {
-        let cells = width(grapheme);
-        if start < offset && col + cells > limit {
-            out.push(start..offset);
-            start = offset;
-            col = 0;
+    let mut graphemes = line.grapheme_indices(true).peekable();
+    let mut next_start = 0;
+    let mut finished = false;
+    std::iter::from_fn(move || {
+        if finished {
+            return None;
         }
-        col += cells;
-    }
-    out.push(start..line.len());
-    out
+        let start = next_start;
+        let mut col = 0;
+        while let Some(&(offset, grapheme)) = graphemes.peek() {
+            let cells = width(grapheme);
+            if start < offset && col + cells > limit {
+                next_start = offset;
+                return Some(start..offset);
+            }
+            col += cells;
+            graphemes.next();
+        }
+        finished = true;
+        Some(start..line.len())
+    })
 }
 
 /// Byte ranges of one logical line wrapped at `cell_limit` cells; whitespace at
 /// a break stays at the range end for [`wrap_line`] to trim.
 pub fn breaks(line: &str, cell_limit: usize) -> Vec<Range<usize>> {
+    breaks_up_to(line, cell_limit, usize::MAX)
+}
+
+fn breaks_up_to(line: &str, cell_limit: usize, rows: usize) -> Vec<Range<usize>> {
+    if rows == 0 {
+        return Vec::new();
+    }
     let limit = cell_limit.max(1);
-    if line.is_empty() {
-        return std::iter::once(0..0).collect();
-    }
     let units = units(line, limit);
-    if units.is_empty() {
-        return std::iter::once(0..line.len()).collect();
-    }
     let mut out = Vec::new();
     let mut start = 0;
     let mut end = 0;
@@ -55,6 +67,9 @@ pub fn breaks(line: &str, cell_limit: usize) -> Vec<Range<usize>> {
         let word_width = width(&line[word.clone()]);
         if col > 0 && col + gap_width + word_width > limit {
             out.push(start..end);
+            if out.len() == rows {
+                return out;
+            }
             start = word.start;
             col = 0;
         }
@@ -75,34 +90,38 @@ pub fn breaks(line: &str, cell_limit: usize) -> Vec<Range<usize>> {
 
 /// `(preceding whitespace, word)` pairs, with words wider than `limit` split
 /// into cell-sized chunks so every unit fits on one line.
-fn units(line: &str, limit: usize) -> Vec<(Range<usize>, Range<usize>)> {
-    let mut out = Vec::new();
+fn units(line: &str, limit: usize) -> impl Iterator<Item = (Range<usize>, Range<usize>)> + '_ {
     let mut gap_start = 0;
     let mut pos = 0;
-    while let Some(offset) = line[pos..].find(|ch: char| !ch.is_whitespace()) {
+    std::iter::from_fn(move || {
+        let offset = line[pos..].find(|ch: char| !ch.is_whitespace())?;
         let word_start = pos + offset;
         let word_end = line[word_start..]
             .find(char::is_whitespace)
             .map_or(line.len(), |offset| word_start + offset);
-        if width(&line[word_start..word_end]) <= limit {
-            out.push((gap_start..word_start, word_start..word_end));
-        } else {
-            for (index, chunk) in char_breaks(&line[word_start..word_end], limit)
-                .into_iter()
-                .enumerate()
-            {
-                let gap = if index == 0 {
-                    gap_start..word_start
-                } else {
-                    word_start..word_start
-                };
-                out.push((gap, word_start + chunk.start..word_start + chunk.end));
-            }
-        }
+        let word = (gap_start..word_start, word_start..word_end);
         gap_start = word_end;
         pos = word_end;
-    }
-    out
+        Some(word)
+    })
+    .flat_map(move |(gap, word)| {
+        let text = &line[word.clone()];
+        // Preserve whole-string width rules before splitting an oversized word.
+        let whole = width(text) <= limit;
+        whole
+            .then_some(0..text.len())
+            .into_iter()
+            .chain(char_ranges(text, limit).take(if whole { 0 } else { usize::MAX }))
+            .enumerate()
+            .map(move |(index, chunk)| {
+                let gap = if index == 0 {
+                    gap.clone()
+                } else {
+                    word.start..word.start
+                };
+                (gap, word.start + chunk.start..word.start + chunk.end)
+            })
+    })
 }
 
 /// Wraps one logical line, trimming the whitespace each break lands on.
@@ -118,6 +137,22 @@ pub fn wrap(text: &str, cell_limit: usize) -> Vec<String> {
     text.split('\n')
         .flat_map(|line| wrap_line(line, cell_limit))
         .collect()
+}
+
+/// Wraps only the requested prefix; long discarded rows are never allocated.
+pub fn wrap_prefix(text: &str, cell_limit: usize, rows: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in text.split('\n') {
+        if out.len() == rows {
+            break;
+        }
+        out.extend(
+            breaks_up_to(line, cell_limit, rows - out.len())
+                .into_iter()
+                .map(|range| line[range].trim_end().to_owned()),
+        );
+    }
+    out
 }
 
 /// Wraps styled spans into lines no wider than `width`, trimming the
@@ -509,5 +544,27 @@ mod tests {
         let text = "one two three four five six seven eight nine ten";
         let joined = wrap(text, 9).join(" ");
         assert_eq!(joined, text);
+    }
+
+    #[test]
+    fn bounded_wrapping_matches_the_complete_prefix() {
+        let long = "中文🙂e\u{301}".repeat(20_000);
+        for text in [
+            "",
+            "\n\n",
+            "  one two three  \n\nlast\n",
+            "中文混排 words 👩‍💻",
+            long.as_str(),
+        ] {
+            for width in [1, 2, 7, 20, 80] {
+                let complete = wrap(text, width);
+                for rows in [0, 1, 3, 4, 12] {
+                    assert_eq!(
+                        wrap_prefix(text, width, rows),
+                        complete.iter().take(rows).cloned().collect::<Vec<_>>()
+                    );
+                }
+            }
+        }
     }
 }

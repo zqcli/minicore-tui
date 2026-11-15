@@ -484,9 +484,8 @@ async fn finish_host(hosted: &mut Hosted) -> Result<(), String> {
     while current.lifecycle != HostLifecycle::Stopped {
         if let Some(fault) = &current.shutdown_fault {
             eprintln!(
-                "Host shutdown is blocked by {} ({}); cleanup is incomplete and the Host remains open.",
-                fault.type_name(),
-                fault.code()
+                "Host shutdown is blocked: {}; cleanup is incomplete and the Host remains open.",
+                minicore_tui::wrap::sanitize(&fault.to_string())
             );
         }
         tokio::select! {

@@ -194,10 +194,12 @@ impl App {
                     );
                 }
                 if let Some(error) = receipt.result.start_error {
-                    self.notice(
-                        NoticeLevel::Error,
-                        format!("Input tui-{id} was accepted; {}", error.message()),
-                    );
+                    self.with_notice_for(&target.session, |app| {
+                        app.notice(
+                            NoticeLevel::Error,
+                            format!("Input tui-{id} was accepted; {}", error.message()),
+                        )
+                    });
                 }
                 if self
                     .resident
@@ -221,13 +223,15 @@ impl App {
                     let input = self.local_inputs.remove(index).unwrap();
                     self.composer.restore_submission(input.entry);
                 }
-                self.notice(NoticeLevel::Error, error.message());
+                self.with_notice_for(&target.session, |app| {
+                    app.notice(NoticeLevel::Error, error.message())
+                });
             }
             Err(error) => {
                 let input = &mut self.local_inputs[index];
                 input.status = Status::Unconfirmed;
                 input.entry.discard_rollback();
-                self.notice(NoticeLevel::Error,format!("Input tui-{id} for {} is unconfirmed and may already be accepted; F8 to review: {}",target.session.session_id,error));
+                self.with_notice_for(&target.session, |app| app.notice(NoticeLevel::Error,format!("Input tui-{id} for {} is unconfirmed and may already be accepted; F8 to review: {}",target.session.session_id,error)));
             }
         }
     }
@@ -546,6 +550,7 @@ mod tests {
             app.resident
                 .insert(super::super::Session::new(info, state, 1, session));
             app.resident.select(Some(1));
+            app.epoch = 1;
             app.ready = true;
             Self {
                 host,
@@ -593,6 +598,7 @@ mod tests {
     #[tokio::test]
     async fn accepted_input_keeps_exact_text_and_history_even_with_a_start_error() {
         let mut fixture = Fixture::new().await;
+        let original = fixture.app.resident.current().unwrap().address();
         fixture.submit("  exact draft\n\n");
         let (id, result) = fixture.reply().await;
         let mut receipt = result.unwrap();
@@ -611,7 +617,39 @@ mod tests {
             FaultKind::SessionResourceMissing,
             "fixture startup failure",
         ));
-        fixture.app.on_local_pushed(id, Ok(receipt));
+        let other = super::super::tasks::create_session(
+            &fixture.app.client,
+            original.agent_id.clone(),
+            Default::default(),
+        )
+        .await
+        .unwrap();
+        let opened = super::super::tasks::open(
+            fixture.app.client.clone(),
+            other.clone(),
+            Default::default(),
+        )
+        .await
+        .unwrap();
+        fixture.app.adopt(*opened);
+        fixture.app.on_msg(Msg::LocalPushed(id, Ok(receipt)));
+        assert_eq!(fixture.app.resident.current().unwrap().address(), other);
+        assert!(
+            fixture
+                .app
+                .last_error
+                .as_ref()
+                .unwrap()
+                .contains(original.session_id.as_str())
+        );
+        assert!(
+            !fixture
+                .app
+                .last_error
+                .as_ref()
+                .unwrap()
+                .contains(other.session_id.as_str())
+        );
         assert!(fixture.app.local_inputs.is_empty());
         assert_eq!(
             fixture.app.composer.history_records()[0].text,

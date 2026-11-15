@@ -355,12 +355,21 @@ fn notice_line(notice: &Notice, styles: Styles, width: u16) -> Line<'static> {
         NoticeLevel::Info => styles.faint(),
     };
     let text = wrap::sanitize(&notice.text.replace('\n', " ")).into_owned();
+    let hint = if notice.level == NoticeLevel::Error && width >= 30 {
+        " · /error details"
+    } else {
+        ""
+    };
     Line::from(vec![
         Span::styled("▎", styles.status_rail()),
         Span::styled(
-            wrap::truncate(&text, usize::from(width).saturating_sub(1)),
+            wrap::truncate(
+                &text,
+                usize::from(width).saturating_sub(1 + wrap::width(hint)),
+            ),
             style,
         ),
+        Span::styled(hint, styles.dim()),
     ])
 }
 

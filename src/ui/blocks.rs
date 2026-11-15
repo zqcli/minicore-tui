@@ -502,6 +502,15 @@ fn tool(call: &ToolCall, styles: Styles, width: usize, expanded: bool) -> Vec<Li
             body_rows.push(hint);
         }
     }
+    if call.truncated {
+        body_rows.push(chrome(row(padded(vec![Span::styled(
+            wrap::truncate(
+                "… output preview truncated · /export for full result",
+                inner,
+            ),
+            styles.meta(),
+        )]))));
+    }
     if !body_rows.is_empty() {
         lines.push(spacer());
         lines.extend(body_rows);
@@ -744,7 +753,12 @@ const QUOTE_ROWS: usize = 3;
 /// The Host failure behind a quote rail; the rail and the hint are chrome.
 fn quote(message: &str, styles: Styles, width: usize, expanded: bool) -> Vec<Line<'static>> {
     let room = text_width(width) - wrap::width(QUOTE_RAIL);
-    let rows = wrap::wrap(wrap::sanitize(message.trim()).as_ref(), room);
+    let message = wrap::sanitize(message.trim());
+    let rows = if expanded {
+        wrap::wrap(&message, room)
+    } else {
+        wrap::wrap_prefix(&message, room, QUOTE_ROWS + 1)
+    };
     let cut = !expanded && rows.len() > QUOTE_ROWS;
     let shown = if cut { QUOTE_ROWS } else { rows.len() };
     rows.into_iter()

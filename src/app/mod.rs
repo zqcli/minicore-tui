@@ -143,6 +143,7 @@ pub struct App {
     pub composer_max_rows: usize,
     pub composer_dragging: bool,
     pub notices: VecDeque<Notice>,
+    pub last_error: Option<String>,
     pub scroll: Scroll,
     pub tools_expanded: bool,
     pub show_reasoning: bool,
@@ -207,6 +208,7 @@ impl App {
             composer_max_rows: crate::ui::composer::MIN_ROWS,
             composer_dragging: false,
             notices: VecDeque::new(),
+            last_error: None,
             scroll: Scroll::Follow,
             tools_expanded: false,
             show_reasoning: true,
@@ -267,7 +269,7 @@ impl App {
                 if let Some(epoch) = self.resident.find(&target).map(|session| session.epoch) {
                     self.refresh_session_info_for(epoch);
                 }
-                self.on_msg(Msg::RefreshCatalogs(result));
+                self.with_notice_for(&target, |app| app.on_msg(Msg::RefreshCatalogs(result)));
             }
             Msg::RefreshCatalogs(result) => {
                 if let Err(error) = result {
@@ -284,7 +286,9 @@ impl App {
                 self.loading_session = false;
                 match result {
                     Ok(opened) => self.adopt(*opened),
-                    Err(error) => self.notice(NoticeLevel::Error, error),
+                    Err(error) => {
+                        self.with_notice_for(&target, |app| app.notice(NoticeLevel::Error, error))
+                    }
                 }
             }
             Msg::Created(generation, result) => match result {
@@ -315,7 +319,9 @@ impl App {
                         self.push_local_input(epoch, entry, creation.mode, None);
                     }
                 }
-                Err(error) => self.creation_failed(generation, error),
+                Err(error) => {
+                    self.with_notice_for(&target, |app| app.creation_failed(generation, error))
+                }
             },
             Msg::AgentCreated(generation, result) => match result {
                 Ok(target) => {
@@ -331,56 +337,68 @@ impl App {
             Msg::Reloaded(result) => {
                 self.reloading = false;
                 match result {
-                    Ok(reloaded) => {
-                        match reloaded.result {
-                            HostReloadResult::Applied {
-                                config_revision, ..
-                            } => {
-                                if let Some(templates) = reloaded.templates {
-                                    self.templates = templates;
-                                }
-                                self.refresh_catalogs();
-                                self.notice(NoticeLevel::Info, format!("Host configuration {config_revision} and declared Agents applied"));
+                    Ok(reloaded) => match reloaded.result {
+                        HostReloadResult::Applied {
+                            config_revision, ..
+                        } => {
+                            if let Some(templates) = reloaded.templates {
+                                self.templates = templates;
                             }
-                            HostReloadResult::PartiallyApplied {
-                                config_revision,
-                                agents,
-                            } => {
-                                if let Some(templates) = reloaded.templates {
-                                    self.templates = templates;
-                                }
-                                self.refresh_catalogs();
-                                let failed = agents
+                            self.refresh_catalogs();
+                            self.notice(NoticeLevel::Info, format!("Host configuration {config_revision} and declared Agents applied"));
+                        }
+                        HostReloadResult::PartiallyApplied {
+                            config_revision,
+                            agents,
+                        } => {
+                            if let Some(templates) = reloaded.templates {
+                                self.templates = templates;
+                            }
+                            self.refresh_catalogs();
+                            let failed = agents
                                 .iter()
                                 .filter_map(|result| match result {
-                                    AgentConfigurationResult::Failed { key, error, .. } => Some(
-                                        format!("{key}: {} ({})", error.type_name(), error.code()),
-                                    ),
-                                    AgentConfigurationResult::Created { key, .. }
+                                    AgentConfigurationResult::Failed { key, error, .. } => {
+                                        Some(format!("{key}: {error}"))
+                                    }
+                                    AgentConfigurationResult::Created { key, receipt }
                                         if !result.succeeded() =>
                                     {
-                                        Some(format!("{key}: Agent or default Session creation is incomplete"))
+                                        let cause = [
+                                            ("Agent", &receipt.result.steps.agent),
+                                            ("default Session", &receipt.result.steps.session),
+                                        ]
+                                        .into_iter()
+                                        .find_map(|(step, result)| match result {
+                                            CreateStep::Failed { error } => {
+                                                Some(format!("{step}: {error}"))
+                                            }
+                                            _ => None,
+                                        })
+                                        .unwrap_or_else(|| {
+                                            "Agent or default Session creation is incomplete".into()
+                                        });
+                                        Some(format!("{key}: {cause}"))
                                     }
                                     _ => None,
                                 })
                                 .collect::<Vec<_>>()
                                 .join(", ");
-                                self.notice(NoticeLevel::Error, format!("Host configuration {config_revision} applied with partial Agent results; inspect the Agent catalog. Failed declarations: {failed}"));
-                            }
-                            HostReloadResult::RestartRequired { fields, .. } => {
-                                let fields = fields
-                                    .iter()
-                                    .map(|field| match field {
-                                        RestartField::NetworkListen => "network listener",
-                                        RestartField::Logging => "logging",
-                                    })
-                                    .collect::<Vec<_>>()
-                                    .join(", ");
-                                self.notice(NoticeLevel::Info, format!("Host configuration requires a restart for: {fields}. The current configuration remains active"));
-                            }
-                            _ => unreachable!("reload worker returns a completed native result"),
+                            self.notice(NoticeLevel::Error, format!("Host configuration {config_revision} applied with partial Agent results; inspect the Agent catalog. Failed declarations: {failed}"));
                         }
-                    }
+                        HostReloadResult::RestartRequired { fields, .. } => {
+                            let fields = fields
+                                .iter()
+                                .map(|field| match field {
+                                    RestartField::NetworkListen => "network listener",
+                                    RestartField::Logging => "logging",
+                                })
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            self.notice(NoticeLevel::Info, format!("Host configuration requires a restart for: {fields}. The current configuration remains active"));
+                        }
+                        _ => unreachable!("reload worker returns a completed native result"),
+                    },
                     Err(error) => self.notice(NoticeLevel::Error, error),
                 }
             }
@@ -468,6 +486,12 @@ impl App {
         self.notice_target = previous;
     }
     pub(super) fn push_notice(&mut self, level: NoticeLevel, text: String) {
+        if level == NoticeLevel::Error {
+            self.last_error = Some(match &self.notice_target {
+                Some(target) => tasks::session_error(target, &text),
+                None => text.clone(),
+            });
+        }
         self.notices.push_back(Notice {
             level,
             text,
@@ -662,16 +686,21 @@ impl App {
         (!text.is_empty()).then_some(text)
     }
 
-    /// Copies the diff or context report for `c`.
+    /// Copies the complete content of the current detail view for `c`.
     pub fn copy_view(&mut self) {
-        let text = match &self.overlay {
-            Overlay::Diff(diff) => diff::text(diff),
-            _ => views::context::text(self.resident.current(), self.styles),
-        };
+        let text = self.view_text();
         if text.trim().is_empty() {
             self.notice(NoticeLevel::Info, "Nothing to copy here");
         } else {
             self.copy(text);
+        }
+    }
+
+    fn view_text(&self) -> String {
+        match &self.overlay {
+            Overlay::Diff(diff) => diff::text(diff),
+            Overlay::Error { text, .. } => crate::wrap::sanitize(text).into_owned(),
+            _ => views::context::text(self.resident.current(), self.styles),
         }
     }
 }

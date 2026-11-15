@@ -5,6 +5,9 @@ reference inside the terminal. An open picker or view owns its keys; otherwise
 a pending interaction owns them, then the conversation composer. `F8` opens
 local input confirmations even from the fatal screen. A key press clears the
 transient notices, while native blocking and observation errors remain visible.
+`/error` retains the last operation error in full for this TUI process, including
+its original Session identity when known. Informational notices and navigation
+do not replace it; a later operation error does. It is not a separate history log.
 Asynchronous compaction failure notices preserve the reading position and name
 the originating Session when it is in the background. Repeated snapshots and
 navigation do not replay the same failure; successful, unchanged and cancelled
@@ -126,7 +129,8 @@ templates appear alongside commands and expand before submission.
 | `q`, `Esc` on the fatal screen | Quit. |
 | Wheel | Scroll one row, or five with Alt. Over a picker, move its selection; over a view, scroll that view. |
 | Click a tool card | Toggle its folded state. Dragging selects instead. |
-| Click a Turn-end line | Open the live workspace Git diff. |
+| Click a failed Turn's message or end line | Read its complete error, including its original Session and Turn identities. |
+| Click a Turn-end line with changes and no error | Open the live workspace Git diff. |
 | Click or drag in the editor | Place the caret or select draft text, respecting grapheme and paste-chip boundaries. |
 | Shift+click in the editor | Extend its selection, when the terminal passes the gesture through. |
 | Drag, double-click or triple-click in the transcript | Select text, a word or a line; release copies it. |
@@ -143,6 +147,12 @@ output and any native child Agent/Session association. Long cards retain a
 bounded visible preview; `/export` reads the complete native history. Partial
 model responses are marked explicitly, and compaction markers report actual
 source position and covered items.
+
+Failure messages initially show up to three wrapped rows. `Ctrl+O` expands them
+in place. The detail view and `c` copy contain the complete terminal-safe message;
+the native history export also retains Host's message independently of folding.
+Truncated tool-result previews name `/export` as the complete-result path; their
+line counts describe the complete result, not just the retained preview.
 
 ## Pickers and reports
 
@@ -203,6 +213,7 @@ expose the hidden conversation draft for mouse editing.
 |---|---|
 | Git diff | Up/Down selects a file. PageUp/PageDown, Home/End and wheel scroll; `c` copies the diff. Native workspace failures and stale-version notices are shown. |
 | Help | Up/Down scrolls three rows; PageUp/PageDown scrolls thirty. |
+| Error details | Up/Down scrolls three rows; PageUp/PageDown, Home/End and wheel scroll. `c` copies the complete message, including content outside the viewport. |
 
 Esc returns to the transcript with its scroll position intact. The dimmed
 composer says `view open · esc to return`; unbound view keys do not edit it.
@@ -238,6 +249,7 @@ composer says `view open · esc to return`; unbound view keys do not edit it.
 | `/reload` | Ask Host to reload its bound JSON directory; refresh actual catalogs and local templates after full or partial application. |
 | `/recover` | Refresh current Session state, history and observations without resending inputs. |
 | `/unconfirmed` | Review local inputs whose acceptance is uncertain or was rejected. |
+| `/error` | Read or copy the last operation error in full after its notice disappears. |
 | `/help` | Open help. |
 | `/quit` | Quit the terminal. |
 

@@ -143,6 +143,7 @@ pub fn sheet(app: &App, styles: Styles) -> Option<Sheet> {
         Overlay::Palette { .. }
         | Overlay::Files { .. }
         | Overlay::Help { .. }
+        | Overlay::Error { .. }
         | Overlay::Diff(_) => return None,
     })
 }

@@ -92,7 +92,7 @@ impl App {
                 // The transcript scrolls only while it is the visible surface.
                 match self.overlay {
                     Overlay::None | Overlay::Find { .. } => self.scroll_by(delta),
-                    Overlay::Diff(_) => self.scroll_view(delta),
+                    Overlay::Diff(_) | Overlay::Error { .. } => self.scroll_view(delta),
                     _ => self.overlay_move(delta.signum()),
                 }
                 true
@@ -305,7 +305,26 @@ impl App {
                     self.pin_view();
                 }
             }
-            Some(Block::TurnEnd { .. }) => self.open_panel(Panel::Diff),
+            Some(Block::TurnEnd {
+                turn_id,
+                reason: Some(reason),
+                ..
+            }) if !reason.is_empty() => {
+                self.overlay = Overlay::Error {
+                    text: format!(
+                        "Agent: {}\nSession: {}\nTurn: {turn_id}\n\n{reason}",
+                        session.info.agent_id, session.info.id
+                    ),
+                    scroll: 0,
+                    visible_rows: 0,
+                };
+            }
+            Some(Block::TurnEnd {
+                changes: Some(changes),
+                ..
+            }) if !changes.is_empty() => {
+                self.open_panel(Panel::Diff);
+            }
             _ => {}
         }
     }

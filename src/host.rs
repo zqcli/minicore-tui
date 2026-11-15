@@ -104,11 +104,10 @@ impl Hosted {
         let mut current = self.snapshot()?;
         while current.lifecycle != HostLifecycle::Stopped {
             if let Some(fault) = &current.shutdown_fault {
-                return Err(format!(
-                    "Host shutdown is blocked by {} ({}); cleanup is not complete",
-                    fault.type_name(),
-                    fault.code()
-                ));
+                return Err(crate::wrap::sanitize(&format!(
+                    "Host shutdown is blocked: {fault}; cleanup is not complete"
+                ))
+                .into_owned());
             }
             current = self
                 .control
@@ -138,9 +137,21 @@ impl Hosted {
 }
 
 fn startup_fault(fault: Fault) -> String {
-    format!(
-        "Host initialization failed: {} ({}); check native configuration, named credential environment variables and exclusive data-root access",
-        fault.type_name(),
-        fault.code()
-    )
+    crate::wrap::sanitize(&format!("Host initialization failed: {fault}")).into_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn startup_error_preserves_the_cause_without_terminal_controls() {
+        let message = startup_fault(Fault::new(
+            FaultKind::HostConfigInvalid,
+            "Cannot load model\nMissing named credential\u{1b}[2J",
+        ));
+        assert!(message.contains("Cannot load model\nMissing named credential"));
+        assert!(message.contains("HOST_CONFIG_INVALID (1601)"));
+        assert!(!message.contains('\u{1b}'));
+    }
 }

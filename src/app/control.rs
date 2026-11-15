@@ -315,6 +315,7 @@ impl App {
                         | Overlay::Sessions { .. }
                         | Overlay::Agents { .. }
                         | Overlay::Help { .. }
+                        | Overlay::Error { .. }
                 ) {
                     self.overlay = Overlay::None;
                 }
