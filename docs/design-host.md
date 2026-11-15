@@ -92,6 +92,29 @@ Retain full target and stored-title checks. Record reducer/editor/rendering
 results separately from any native-terminal verification; old failure evidence
 is not proof that the repaired build passed.
 
+## Reasoning boundaries and visible transcript spacing
+
+SPEC 4.11.4 keeps provider reasoning boundaries in Host and transcript geometry
+in the TUI. Responses emits a single LF between distinct nonempty reasoning
+parts/items when neither raw side already supplies CR/LF. Chunks within one
+part remain contiguous; empty parts and repeated completion snapshots add no
+line. The provider preserves raw replay items while checking the actual emitted
+reasoning text. The TUI keeps those native newlines as Markdown hard breaks;
+streaming and completed/history rendering agree.
+
+Exactly one layout separator belongs between adjacent visible blocks. A block
+that renders no rows occupies no row and adds no separator. Empty Assistant
+projections for tool-only responses keep their native positions and identities
+for canonical-response and late-output checks. A hidden-thinking hint is still
+visible content. Preserve meaningful blank lines inside tool output, code and
+prose; do not globally collapse whitespace.
+
+Folding, reasoning visibility, resizing, incremental updates and history reload
+must keep separators, scroll anchors, hit geometry, search and selection aligned
+with actual visible rows. Reuse unchanged body caches. Regression coverage uses
+real native history and production-provider fixtures as well as frame assertions;
+record any native-terminal observations separately from those fixtures.
+
 ## History and configuration
 
 - Native history positions order user, assistant, tool-result, partial,
