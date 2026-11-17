@@ -3,8 +3,10 @@
 use std::collections::HashMap;
 use std::io::{self, Write};
 
-use minicore_host_core::{HistoryItemData, HistoryRecordData};
-use minicore_host_protocol::{MessageMode, ToolCallId, ToolCallRef, TurnId};
+use minicore_host_core::{
+    HistoryItemData, HistoryRecordData, ModelFinishedData, ModelResponseData,
+};
+use minicore_host_protocol::{MessageMode, ModelOutputIdentity, ToolCallId, ToolCallRef, TurnId};
 use minicore_host_runtime::model::{AssistantPart, Usage};
 
 use super::{Block, HistorySource, RequestKey, ToolCall, ToolKey, Transcript, UserKind};
@@ -19,12 +21,62 @@ impl Transcript {
 
     /// Installs accepted records by position without rebuilding streamed bodies.
     pub fn install_history_records(&mut self, records: &[HistoryRecordData]) {
+        self.install_records(records, false);
+    }
+
+    pub fn install_preview_records(&mut self, records: &[HistoryRecordData]) {
+        let start = records
+            .len()
+            .saturating_sub(super::agent_card::PREVIEW_BLOCKS);
+        for record in &records[start..] {
+            self.install_records(std::slice::from_ref(record), true);
+            self.retain_recent(super::agent_card::PREVIEW_BLOCKS);
+        }
+    }
+
+    pub fn install_preview_response(
+        &mut self,
+        source: &ModelOutputIdentity,
+        data: &ModelFinishedData,
+    ) {
+        let record = HistoryRecordData {
+            position: data.history_position,
+            recorded_at: data.recorded_at,
+            turn_id: Some(source.turn.turn_id.clone()),
+            response_index: Some(source.response_index),
+            delegations: Vec::new(),
+            item: HistoryItemData::Assistant {
+                response: ModelResponseData {
+                    content: Vec::new(),
+                    finish_reason: data.result.finish_reason,
+                    usage: data.result.usage,
+                },
+            },
+        };
+        let mut index = HistoryIndex::new(self);
+        if !index.positions.contains_key(&record.position) {
+            append_response(self, &mut index, &record, &data.result.content, false, true);
+            self.sort_history();
+        }
+    }
+
+    fn install_records(&mut self, records: &[HistoryRecordData], preview: bool) {
         if records.is_empty() {
             return;
         }
         let mut index = HistoryIndex::new(self);
         let mut added = false;
         for record in records {
+            if preview
+                && !matches!(
+                    record.item,
+                    HistoryItemData::Assistant { .. }
+                        | HistoryItemData::Partial { .. }
+                        | HistoryItemData::ToolResult { .. }
+                )
+            {
+                continue;
+            }
             if let Some(blocks) = index.positions.get(&record.position) {
                 for &at in blocks {
                     let mut changed = false;
@@ -45,7 +97,7 @@ impl Transcript {
                     }
                 }
             } else {
-                append_record(self, &mut index, record);
+                append_record(self, &mut index, record, preview);
                 added = true;
             }
         }
@@ -142,6 +194,7 @@ fn append_record(
     transcript: &mut Transcript,
     index: &mut HistoryIndex,
     record: &HistoryRecordData,
+    preview: bool,
 ) {
     match &record.item {
         HistoryItemData::User {
@@ -152,7 +205,11 @@ fn append_record(
             ..
         } => {
             let at = transcript.push(Block::User {
-                text: text.clone(),
+                text: if preview {
+                    super::agent_card::tail(text, super::agent_card::PREVIEW_BYTES).to_owned()
+                } else {
+                    text.clone()
+                },
                 kind: match mode {
                     Some(MessageMode::Steer) => UserKind::Steering,
                     Some(MessageMode::FollowUp) => UserKind::FollowUp,
@@ -164,10 +221,10 @@ fn append_record(
             index.source(transcript, at, source(record, 0));
         }
         HistoryItemData::Assistant { response } => {
-            append_response(transcript, index, record, &response.content, false);
+            append_response(transcript, index, record, &response.content, false, preview);
         }
         HistoryItemData::Partial { partial } => {
-            append_response(transcript, index, record, &partial.content, true);
+            append_response(transcript, index, record, &partial.content, true, preview);
         }
         HistoryItemData::ToolResult {
             tool_call_id,
@@ -189,7 +246,11 @@ fn append_record(
             });
             if let Block::Tool(call) = &mut transcript.blocks[at] {
                 call.response_index = record.response_index.or(call.response_index);
-                call.apply_result(result);
+                if preview {
+                    call.apply_preview_result(result);
+                } else {
+                    call.apply_result(result);
+                }
             }
             index.source(transcript, at, source(record, 0));
         }
@@ -266,19 +327,30 @@ fn append_response(
     record: &HistoryRecordData,
     content: &[AssistantPart],
     partial: bool,
+    preview: bool,
 ) {
     let key = request_key(record);
-    let mut text = String::new();
-    let mut reasoning = String::new();
-    for part in content {
-        match part {
-            AssistantPart::Text(chunk) => text.push_str(chunk),
-            AssistantPart::Reasoning(chunk) => {
-                if let Some(chunk) = chunk.text().or(chunk.summary()) {
-                    reasoning.push_str(chunk);
+    let mut text = if preview {
+        preview_parts(content, false)
+    } else {
+        String::new()
+    };
+    let mut reasoning = if preview {
+        preview_parts(content, true)
+    } else {
+        String::new()
+    };
+    if !preview {
+        for part in content {
+            match part {
+                AssistantPart::Text(chunk) => text.push_str(chunk),
+                AssistantPart::Reasoning(chunk) => {
+                    if let Some(chunk) = chunk.text().or(chunk.summary()) {
+                        reasoning.push_str(chunk);
+                    }
                 }
+                AssistantPart::ToolCall(_) => {}
             }
-            AssistantPart::ToolCall(_) => {}
         }
     }
     let at = match index.responses.get(&key).copied() {
@@ -315,7 +387,18 @@ fn append_response(
     if partial {
         return;
     }
-    for (part_index, part) in content.iter().enumerate() {
+    let first_tool = if preview {
+        content
+            .iter()
+            .enumerate()
+            .rev()
+            .filter(|(_, part)| matches!(part, AssistantPart::ToolCall(_)))
+            .nth(super::agent_card::PREVIEW_BLOCKS - 2)
+            .map_or(0, |(index, _)| index)
+    } else {
+        0
+    };
+    for (part_index, part) in content.iter().enumerate().skip(first_tool) {
         let AssistantPart::ToolCall(call) = part else {
             continue;
         };
@@ -330,10 +413,40 @@ fn append_response(
         });
         if let Block::Tool(card) = &mut transcript.blocks[at] {
             card.response_index = record.response_index.or(card.response_index);
-            card.set_arguments(call.arguments());
+            if preview {
+                card.set_preview_arguments(call.arguments());
+            } else {
+                card.set_arguments(call.arguments());
+            }
         }
         index.source(transcript, at, source(record, part_index + 1));
     }
+}
+
+fn preview_parts(content: &[AssistantPart], reasoning: bool) -> String {
+    let mut remaining = super::agent_card::PREVIEW_BYTES;
+    let mut parts = Vec::new();
+    for part in content.iter().rev() {
+        let text = match part {
+            AssistantPart::Text(text) if !reasoning => Some(text.as_str()),
+            AssistantPart::Reasoning(text) if reasoning => text.text().or(text.summary()),
+            _ => None,
+        };
+        if let Some(text) = text.filter(|text| !text.is_empty()) {
+            let cut = text.len() > remaining;
+            let text = super::agent_card::tail(text, remaining);
+            remaining -= text.len();
+            parts.push(text);
+            if cut || remaining == 0 {
+                break;
+            }
+        }
+    }
+    let mut out = String::with_capacity(super::agent_card::PREVIEW_BYTES - remaining);
+    for text in parts.into_iter().rev() {
+        out.push_str(text);
+    }
+    out
 }
 
 pub fn to_markdown(records: &[HistoryRecordData]) -> String {

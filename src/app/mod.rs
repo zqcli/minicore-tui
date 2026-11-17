@@ -1,6 +1,7 @@
 //! Terminal state; Host owners remain authoritative for execution and persistence.
 
 pub mod actions;
+mod agent_cards;
 pub mod commands;
 pub mod composer;
 mod control;
@@ -31,7 +32,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use minicore_host_core::{
-    AgentSummary, ModelDescription, SessionSnapshot, SessionSummary, StateEvent,
+    AgentSummary, ModelDescription, ObservationEvent, SessionSnapshot, SessionSummary, StateEvent,
 };
 use minicore_host_protocol::*;
 use minicore_host_transport::HostClient;
@@ -54,6 +55,13 @@ pub enum Msg {
     RefreshCatalogs(Result<(), String>),
     SessionRenamed(SessionRef, Result<(), String>),
     HostState(Box<StateEvent>),
+    HostObserved(Box<ObservationEvent>),
+    HostBaseline(SubscribeResult<StateEvent>),
+    HostObservationError(String),
+    AgentCardRead(
+        crate::transcript::agent_card::DelegationKey,
+        Box<agent_cards::Read>,
+    ),
     Opened(u64, SessionRef, Result<Box<tasks::Opened>, String>),
     Created(u64, Result<SessionRef, String>),
     CreationOpened(u64, SessionRef, Result<Box<tasks::Opened>, String>),
@@ -175,6 +183,8 @@ pub struct App {
     pub notifier: crate::title::Notifier,
     pub(super) notice_target: Option<SessionRef>,
     pub(super) pending_states: HashMap<SessionRef, SessionSnapshot>,
+    pub(super) agent_cards: agent_cards::Cards,
+    pub(super) agent_location: Option<(SessionRef, ToolCallRef)>,
 }
 
 pub const NOTICE_TTL: Duration = Duration::from_secs(5);
@@ -240,6 +250,8 @@ impl App {
             notifier: crate::title::Notifier::default(),
             notice_target: None,
             pending_states: HashMap::new(),
+            agent_cards: agent_cards::Cards::default(),
+            agent_location: None,
         }
     }
     pub fn on_msg(&mut self, msg: Msg) {
@@ -250,7 +262,6 @@ impl App {
                 Ok(ready) => {
                     self.install_catalogs(ready);
                     self.templates = templates::load(self.config_directory.as_ref());
-                    self.ready = true;
                     self.start_host_observation();
                 }
                 Err(reason) => self.fatal = Some(Fatal { reason }),
@@ -278,6 +289,10 @@ impl App {
                 self.refresh_catalogs();
             }
             Msg::HostState(state) => self.on_host_state(*state),
+            Msg::HostObserved(event) => self.host_observed(*event),
+            Msg::HostBaseline(baseline) => self.host_baseline(baseline),
+            Msg::HostObservationError(error) => self.agent_observation_error(error),
+            Msg::AgentCardRead(key, read) => self.agent_card_read(key, *read),
             Msg::Opened(generation, target, result) => {
                 if self.opening_target.as_ref() != Some(&(generation, target.clone())) {
                     return;
@@ -412,6 +427,8 @@ impl App {
             Msg::Flash(text) => self.flash = Some((text, tokio::time::Instant::now())),
         }
         self.retire_removed_sessions();
+        self.retire_agent_observers();
+        self.resolve_agent_location();
     }
     fn install_catalogs(&mut self, ready: Ready) {
         self.models = ready.models;
@@ -439,6 +456,7 @@ impl App {
         if let Overlay::Sessions { rows, .. } = &mut self.overlay {
             *rows = self.sessions.clone();
         }
+        self.refresh_agent_names();
     }
     pub fn tick(&mut self) {
         self.notices.retain(|notice| {

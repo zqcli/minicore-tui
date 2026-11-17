@@ -232,6 +232,7 @@ mod tests {
             data: HistoryPageData {
                 items: range
                     .map(|position| HistoryRecordData {
+                        delegations: Vec::new(),
                         position,
                         recorded_at: Timestamp::from_unix_milliseconds(position as i64).unwrap(),
                         turn_id: None,

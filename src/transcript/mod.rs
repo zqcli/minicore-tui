@@ -1,5 +1,6 @@
 //! Presentation blocks and the per-block layout cache.
 
+pub mod agent_card;
 pub mod block;
 mod history;
 pub mod layout;
@@ -71,6 +72,13 @@ impl Transcript {
 
     pub fn is_empty(&self) -> bool {
         self.blocks.is_empty()
+    }
+
+    pub fn retain_recent(&mut self, count: usize) -> bool {
+        let dropped = self.blocks.len().saturating_sub(count);
+        self.blocks.drain(..dropped);
+        self.metadata.drain(..dropped);
+        dropped > 0
     }
 
     fn bump(&mut self, index: usize) {

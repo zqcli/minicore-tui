@@ -284,6 +284,34 @@ impl App {
             .unwrap_or_default()
             .trim()
             .to_owned();
+        let link = self.resident.current().and_then(|session| {
+            let Block::Tool(call) = session.transcript.blocks().get(index)? else {
+                return None;
+            };
+            if let Some(card) = &call.agent_card {
+                (line - header
+                    == crate::ui::agent_cards::footer_offset(call.is_expanded(all_expanded)))
+                .then(|| (card.association.clone(), true, card.history_unavailable))
+            } else {
+                (call.is_delegation_receipt() && line + 1 == self.layout.content_height(index))
+                    .then(|| call.delegations.first().cloned())
+                    .flatten()
+                    .map(|association| (association, false, false))
+            }
+        });
+        if let Some((association, child, unavailable)) = link {
+            if unavailable {
+                self.notice(
+                    super::NoticeLevel::Info,
+                    "Child history is unavailable; this card retains the observed preview",
+                );
+            } else if child {
+                self.open_session(association.child);
+            } else {
+                self.locate_agent_card(association.parent, association.origin);
+            }
+            return;
+        }
         let Some(session) = self.resident.current_mut() else {
             return;
         };

@@ -51,6 +51,7 @@ pub struct ToolCall {
     pub detail: String,
     pub state: ToolState,
     pub delegations: Vec<DelegationAssociation>,
+    pub agent_card: Option<Box<super::agent_card::AgentCard>>,
     pub progress: Option<String>,
     /// A native local-tool operation error, distinct from its execution outcome.
     pub result_error: Option<String>,
@@ -63,6 +64,7 @@ pub struct ToolCall {
     pub truncated: bool,
     pub expanded: Option<bool>,
     output_from_result: bool,
+    result_seen: bool,
     arguments_display: Option<(String, bool)>,
     edit_input: Option<String>,
 }
@@ -109,6 +111,7 @@ impl ToolCall {
             detail: String::new(),
             state: ToolState::Pending,
             delegations: Vec::new(),
+            agent_card: None,
             progress: None,
             result_error: None,
             started_at: None,
@@ -120,6 +123,7 @@ impl ToolCall {
             truncated: false,
             expanded: None,
             output_from_result: false,
+            result_seen: false,
             arguments_display: None,
             edit_input: None,
         }
@@ -206,7 +210,36 @@ impl ToolCall {
         }
     }
 
+    pub fn set_preview_arguments(&mut self, arguments: &Value) {
+        self.detail = ["command", "path", "query", "pattern", "description"]
+            .iter()
+            .find_map(|key| arguments.get(key).and_then(Value::as_str))
+            .map(|text| super::agent_card::head(text.lines().next().unwrap_or(""), 512).to_owned())
+            .unwrap_or_default();
+    }
+
+    pub fn apply_preview_result(&mut self, result: &ToolResultData) {
+        self.result_seen = true;
+        let content = result.output.content().as_str();
+        self.output.clear();
+        self.output_dropped = 0;
+        self.output_lines = None;
+        self.output_from_result = false;
+        if content.len() <= super::agent_card::PREVIEW_BYTES {
+            self.apply_result(result);
+        } else {
+            self.set_state(ToolState::from_outcome(result.outcome));
+            self.push_output(super::agent_card::tail(
+                content,
+                super::agent_card::PREVIEW_BYTES,
+            ));
+            self.truncated = true;
+            self.settle();
+        }
+    }
+
     pub fn apply_result(&mut self, result: &ToolResultData) {
+        self.result_seen = true;
         self.set_state(ToolState::from_outcome(result.outcome));
         self.duration = self
             .duration
@@ -229,6 +262,12 @@ impl ToolCall {
             self.result_error = parsed
                 .as_ref()
                 .filter(|value| value["status"] == "failed")
+                .and_then(|value| value["error"]["message"].as_str())
+                .map(str::to_owned);
+        }
+        if self.name == "agent" && result.outcome == ToolResultOutcome::Failed {
+            self.result_error = parsed
+                .as_ref()
                 .and_then(|value| value["error"]["message"].as_str())
                 .map(str::to_owned);
         }
@@ -278,6 +317,20 @@ impl ToolCall {
 
     pub fn is_running(&self) -> bool {
         self.state == ToolState::Running
+    }
+
+    pub fn has_result(&self) -> bool {
+        self.result_seen
+    }
+
+    pub fn is_delegation_receipt(&self) -> bool {
+        self.agent_card.is_none()
+            && !self.delegations.is_empty()
+            && self.key.call_ref().is_some_and(|key| {
+                self.delegations
+                    .iter()
+                    .all(|association| &association.origin != key)
+            })
     }
 
     pub fn is_expanded(&self, all_expanded: bool) -> bool {

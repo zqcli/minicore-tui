@@ -2,7 +2,7 @@
 
 ## Scope
 
-TUI 0.12.6 embeds MiniCore Host 0.12.5 at the immutable revision in
+TUI 0.12.7 embeds MiniCore Host 0.12.6 at the immutable revision in
 `Cargo.toml`. The frontend uses
 `HostClient::in_process` and native Host DTOs. Host owns execution, storage,
 configuration, tools and credentials. There is no Agent subprocess, replacement
@@ -47,6 +47,60 @@ client does not require these removed servers.
   load IDs. Session-wide grants are not fabricated by the frontend.
 - Delegated Session and task-message associations are displayed as reported by
   Host. Finishing the parent tool is distinct from finishing the child task.
+
+## Streaming delegated Agent cards
+
+The original startup tool invocation owns one stable card. Its acceptance or
+tool completion does not mean that the delegated work has completed. The card
+continues to display the child's actual reasoning, text, tool activity and
+terminal result after that tool returns. Host owns the delegation association,
+its accepted inputs, actual Turn membership and settlement. The frontend does
+not infer task completion from a tool receipt, Agent name or current Session
+activity, and does not introduce a scheduler or Task lifecycle.
+
+The association is addressed by the current Host incarnation, full child
+Session address and first task Message ID. Follow-up inputs belonging to that
+delegation continue its original card. A later delegation into the same Session
+has a new first Message ID and a separate card; the prior card remains frozen.
+Two Sessions under one Agent never share a card. Additional sends show a concise
+receipt with a route to the original card. Wait, control, inspect and update
+tools retain compact generic receipts; a wait is never assigned to one child.
+Creation without an initial task remains an ordinary tool receipt.
+
+Observation starts before dispatch and uses native subscriptions, output ranges
+and positioned history. It does not open or select a child Session. A very short
+memory child may finish before its association arrives, so bounded observation
+preparation must retain its actual recent content. Recovery reads the native
+history and respects Load identities, independent revisions and canonical
+deduplication. Released memory history is explicitly unavailable; a retained
+preview is never advertised as a reconstructed complete transcript.
+
+Cards retain the existing rails, colors and local folding behavior. The header
+identifies the Agent, Session and task. Native execution, waiting, approval,
+completion and failure facts determine the status. The collapsed preview shows
+about six visual rows of recent transcript; the expanded preview shows about
+eighteen. Preview limits apply after wrapping, retain tool context labels and
+preserve actual newlines and internal blank lines. Completed cards show the
+final answer; failures retain partial output and the actual error. More content
+is available through an explicit Open child Session action, or a truthful
+unavailable-history message. Nested delegations may use a concise child link.
+
+Clicking a card changes only its local expansion. Ctrl+O retains its existing
+global semantics. Child events do not reset expansion, reorder startup cards,
+move focus, alter the parent's draft, scroll anchor or selection, or redirect
+Enter, Alt+Enter or Escape. Approvals are answered in the real child Session.
+Opening that Session and returning preserves the parent's draft and anchor.
+Rendering performs no I/O. Retained preview bodies, recent blocks and unattached
+prepared cards have explicit limits. Native disjoint output gaps still require
+range recovery; these limits do not claim constant memory for arbitrary missing
+ranges. Unchanged bodies are reused and idle cards add no periodic timer.
+
+Verification uses real in-process Host execution with explicit controlled
+models/resources for output after tool return, interleaved children, Session
+reuse, follow-up boundaries, short memory children, completion and failure.
+Renderer assertions cover the visual limits, newline and tool-label fidelity,
+local/global folding, selection and anchors. These fixtures are not evidence of
+live provider or physical-terminal behavior.
 
 ## Modified Enter on macOS and Unix terminals
 

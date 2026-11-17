@@ -224,7 +224,10 @@ impl App {
                 self.session_mut(epoch).history = Some(window);
                 match result {
                     Ok(records) => self.install_records(epoch, &records),
-                    Err(error) => self.error(error),
+                    Err(error) => {
+                        self.agent_location = None;
+                        self.error(error);
+                    }
                 }
             }
             SessionOp::Turn(turn, result) => {

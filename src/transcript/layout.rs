@@ -49,7 +49,10 @@ impl Uses {
                     show_reasoning: thinking,
                 }
             }
-            Block::Tool(call) => Self::expanded(call.expanded.is_none()),
+            Block::Tool(call) => Self {
+                expanded: call.expanded.is_none(),
+                show_reasoning: call.agent_card.is_some(),
+            },
             Block::Compaction { .. } | Block::Summary { .. } => Self::expanded(true),
             Block::TurnEnd { reason, .. } => Self::expanded(reason.is_some()),
             _ => Self::expanded(false),
@@ -333,6 +336,12 @@ impl<S> Layout<S> {
     /// Height of a block in rows.
     fn height(&self, block: usize) -> usize {
         self.cached.get(block).map_or(0, |cached| cached.rows.len())
+    }
+
+    pub(crate) fn content_height(&self, block: usize) -> usize {
+        self.cached.get(block).map_or(0, |cached| {
+            cached.rows.len() - usize::from(cached.separated)
+        })
     }
 
     /// First screen row of `block`.

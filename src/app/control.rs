@@ -347,6 +347,14 @@ impl App {
         {
             return;
         }
+        if let ObservationEvent::Activity(
+            ActivityEvent::MessageAccepted { data, .. } | ActivityEvent::MessageBound { data, .. },
+        ) = &event
+        {
+            for association in &data.delegations {
+                self.register_delegation(association);
+            }
+        }
         self.observe_output(epoch, &event);
         match event {
             ObservationEvent::State(StateEvent::Host { .. }) => {}
@@ -373,6 +381,7 @@ impl App {
                     self.install_records(
                         epoch,
                         &[HistoryRecordData {
+                            delegations: data.delegations,
                             position,
                             recorded_at,
                             turn_id: Some(source.turn_id),
@@ -403,6 +412,7 @@ impl App {
                 self.install_records(
                     epoch,
                     &[HistoryRecordData {
+                        delegations: Vec::new(),
                         position: data.history_position,
                         recorded_at: data.recorded_at,
                         turn_id: Some(source.turn.turn_id),
@@ -439,6 +449,7 @@ impl App {
                     self.install_records(
                         epoch,
                         &[HistoryRecordData {
+                            delegations: Vec::new(),
                             position: data.history_position,
                             recorded_at: data.recorded_at,
                             turn_id: Some(source.turn.turn_id),
@@ -526,6 +537,7 @@ impl App {
                 self.install_records(
                     epoch,
                     &[HistoryRecordData {
+                        delegations: Vec::new(),
                         position,
                         recorded_at,
                         turn_id: Some(source.turn_id.clone()),
@@ -587,6 +599,9 @@ impl App {
             .expect("tool card inserted");
         call.apply_state(&data);
         let needs_arguments = call.arguments.is_none();
+        for association in &data.delegations {
+            self.register_delegation(association);
+        }
         if needs_arguments {
             self.read_tool(epoch, key);
         }
@@ -643,6 +658,7 @@ impl App {
             .history
             .into_iter()
             .map(|record| HistoryRecordData {
+                delegations: record.delegations,
                 position: record.position,
                 recorded_at: record.recorded_at,
                 turn_id: Some(turn_id.clone()),
@@ -655,6 +671,7 @@ impl App {
                     .partials
                     .into_iter()
                     .map(|partial| HistoryRecordData {
+                        delegations: Vec::new(),
                         position: partial.position,
                         recorded_at: partial.recorded_at,
                         turn_id: Some(turn_id.clone()),
@@ -667,6 +684,7 @@ impl App {
             .collect();
         if let Some(saved) = result.data.saved_terminal {
             records.push(HistoryRecordData {
+                delegations: Vec::new(),
                 position: saved.position,
                 recorded_at: saved.recorded_at,
                 turn_id: Some(turn_id.clone()),
@@ -756,6 +774,7 @@ impl App {
         {
             self.set_scroll_for(epoch, Scroll::Anchor { block, offset });
         }
+        self.install_delegation_records(epoch, records);
         self.advance_outputs(epoch);
     }
 
@@ -933,7 +952,7 @@ impl App {
     }
 }
 
-fn session_snapshot(source: SessionIdentity, data: SessionStateData) -> SessionSnapshot {
+pub(super) fn session_snapshot(source: SessionIdentity, data: SessionStateData) -> SessionSnapshot {
     SessionSnapshot {
         host_id: source.host_id,
         host_incarnation: source.host_incarnation,
@@ -954,7 +973,7 @@ fn output_turn(source: &OutputSource) -> &TurnIdentity {
         OutputSource::Toolcall { source } => &source.turn,
     }
 }
-fn event_turn(event: &ObservationEvent) -> Option<&TurnIdentity> {
+pub(super) fn event_turn(event: &ObservationEvent) -> Option<&TurnIdentity> {
     match event {
         ObservationEvent::State(StateEvent::Turn { source, .. }) => Some(source),
         ObservationEvent::State(StateEvent::Toolcall { source, .. }) => Some(&source.turn),
@@ -974,7 +993,7 @@ fn event_turn(event: &ObservationEvent) -> Option<&TurnIdentity> {
         _ => None,
     }
 }
-fn event_session(event: &ObservationEvent) -> Option<&SessionIdentity> {
+pub(super) fn event_session(event: &ObservationEvent) -> Option<&SessionIdentity> {
     event_turn(event).map(|turn| &turn.session).or(match event {
         ObservationEvent::State(StateEvent::Session { source, .. })
         | ObservationEvent::Activity(
@@ -1247,6 +1266,7 @@ mod tests {
                 source: source.clone(),
                 message_id: "00000000000000000003".parse().unwrap(),
                 data: MessageEventData {
+                    delegations: Vec::new(),
                     received_at: stamp(),
                     history_position: Some(position),
                     recorded_at: Some(stamp()),

@@ -1,3 +1,4 @@
+mod agent_cards;
 mod editor;
 mod errors;
 mod harness;

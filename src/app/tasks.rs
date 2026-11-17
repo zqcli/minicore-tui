@@ -233,6 +233,15 @@ pub async fn subscribe_session(
     client: &HostClient,
     target: SessionRef,
 ) -> Result<ClientSubscription, String> {
+    native_session_subscription(client, target)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+pub(super) async fn native_session_subscription(
+    client: &HostClient,
+    target: SessionRef,
+) -> Result<ClientSubscription, CallError> {
     client
         .subscribe(
             SubscribeRequest {
@@ -252,7 +261,6 @@ pub async fn subscribe_session(
             options(),
         )
         .await
-        .map_err(|e| e.to_string())
 }
 
 pub async fn open(
@@ -333,6 +341,7 @@ impl App {
         let client = self.client.clone();
         let tx = self.tx.clone();
         self.tasks.spawn(async move {
+            let mut established = false;
             loop {
                 let result = client
                     .subscribe(
@@ -340,7 +349,14 @@ impl App {
                             scope: SubscriptionScope::Host {
                                 host_id: client.initial_info().host_id.clone(),
                             },
-                            categories: [EventCategory::State].into(),
+                            categories: [
+                                EventCategory::State,
+                                EventCategory::Output,
+                                EventCategory::Completion,
+                                EventCategory::Message,
+                                EventCategory::Interaction,
+                            ]
+                            .into(),
                         },
                         options(),
                     )
@@ -348,30 +364,48 @@ impl App {
                 let mut subscription = match result {
                     Ok(value) => value,
                     Err(error) => {
-                        let _ = tx
-                            .send(Msg::Notice(NoticeLevel::Error, error.to_string()))
-                            .await;
+                        let message = if established {
+                            Msg::HostObservationError(error.to_string())
+                        } else {
+                            Msg::Failed(error.to_string())
+                        };
+                        let _ = tx.send(message).await;
                         return;
                     }
                 };
-                for state in &subscription.result().initial_states {
-                    let _ = tx.send(Msg::HostState(Box::new(state.clone()))).await;
+                if tx
+                    .send(Msg::HostBaseline(subscription.result().clone()))
+                    .await
+                    .is_err()
+                {
+                    return;
                 }
+                established = true;
                 loop {
                     match subscription.recv().await {
                         Ok(Some(ObservationNotification::Event(push))) => {
-                            if let ObservationEvent::State(state) = push.event
-                                && tx.send(Msg::HostState(Box::new(state))).await.is_err()
+                            if tx
+                                .send(Msg::HostObserved(Box::new(push.event)))
+                                .await
+                                .is_err()
                             {
                                 return;
                             }
                         }
-                        Ok(Some(ObservationNotification::ResyncRequired(_))) => break,
-                        Ok(None) => return,
-                        Err(error) => {
+                        Ok(Some(ObservationNotification::ResyncRequired(required))) => {
                             let _ = tx
-                                .send(Msg::Notice(NoticeLevel::Error, error.to_string()))
+                                .send(Msg::HostObservationError(required.fault.to_string()))
                                 .await;
+                            break;
+                        }
+                        Ok(None) => {
+                            let _ = tx
+                                .send(Msg::HostObservationError("Host observation ended".into()))
+                                .await;
+                            return;
+                        }
+                        Err(error) => {
+                            let _ = tx.send(Msg::HostObservationError(error.to_string())).await;
                             return;
                         }
                     }
@@ -572,29 +606,7 @@ impl App {
             .clone();
         self.spawn_for(epoch, async move {
             let channel = request.channel.clone();
-            let result = match &source {
-                OutputSource::Model { source } => client
-                    .turn_output(
-                        source.turn.turn_id.clone(),
-                        source.response_index,
-                        request,
-                        options(),
-                    )
-                    .await
-                    .map(OutputRead::Model),
-                OutputSource::Toolcall { source } => client
-                    .tool_output(
-                        ToolCallRef {
-                            turn_id: source.turn.turn_id.clone(),
-                            tool_call_id: source.tool_call_id.clone(),
-                        },
-                        request,
-                        options(),
-                    )
-                    .await
-                    .map(OutputRead::Tool),
-            }
-            .map_err(|e| e.to_string());
+            let result = output(&client, &source, request).await;
             SessionOp::Output {
                 source,
                 channel,
@@ -602,6 +614,36 @@ impl App {
             }
         });
     }
+}
+
+pub(super) async fn output(
+    client: &SessionClient,
+    source: &OutputSource,
+    request: TextReadRequest,
+) -> Result<OutputRead, String> {
+    match source {
+        OutputSource::Model { source } => client
+            .turn_output(
+                source.turn.turn_id.clone(),
+                source.response_index,
+                request,
+                options(),
+            )
+            .await
+            .map(OutputRead::Model),
+        OutputSource::Toolcall { source } => client
+            .tool_output(
+                ToolCallRef {
+                    turn_id: source.turn.turn_id.clone(),
+                    tool_call_id: source.tool_call_id.clone(),
+                },
+                request,
+                options(),
+            )
+            .await
+            .map(OutputRead::Tool),
+    }
+    .map_err(|error| error.to_string())
 }
 
 pub async fn export(client: SessionClient, path: Option<String>) -> Msg {

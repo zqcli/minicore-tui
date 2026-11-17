@@ -85,6 +85,16 @@ pub fn render(block: &Block, styles: Styles, width: u16, fold: Fold) -> Vec<Line
             }
             rows
         }
+        Block::Tool(call) if call.agent_card.is_some() => super::agent_cards::render(
+            call,
+            styles,
+            width,
+            call.is_expanded(fold.expanded),
+            fold.show_reasoning,
+        ),
+        Block::Tool(call) if call.is_delegation_receipt() => {
+            super::agent_cards::receipt(call, styles, width, call.is_expanded(fold.expanded))
+        }
         Block::Tool(call) => tool(call, styles, width, call.is_expanded(fold.expanded)),
         Block::TurnEnd {
             outcome,
@@ -325,7 +335,12 @@ fn expand_hint(
     spans
 }
 
-fn tool(call: &ToolCall, styles: Styles, width: usize, expanded: bool) -> Vec<Line<'static>> {
+pub(super) fn tool(
+    call: &ToolCall,
+    styles: Styles,
+    width: usize,
+    expanded: bool,
+) -> Vec<Line<'static>> {
     let (rail, surface) = match (call.state, call.result_error.is_some()) {
         (_, true) => (styles.card_failure_rail(), styles.card_failure()),
         (ToolState::Pending | ToolState::Running, false) => (styles.card_rail(), styles.card()),
@@ -1788,8 +1803,11 @@ mod tests {
         call.set_arguments(&serde_json::json!({"command":"cargo test", "timeout_ms":30000}));
         call.delegations.push(
             serde_json::from_value(serde_json::json!({
+                "parent":{"agent_id":"00000000000000000002","session_id":"00000000000000000003"},
+                "origin":{"turn_id":call.key.turn_id(),"tool_call_id":call.key.tool_call_id()},
                 "child":{"agent_id":"00000000000000000002","session_id":"00000000000000000003"},
-                "task_message_id":"00000000000000000004"
+                "task_message_id":"00000000000000000004", "accepted_message_ids":["00000000000000000004"],
+                "inputs":[], "completion":null
             }))
             .unwrap(),
         );

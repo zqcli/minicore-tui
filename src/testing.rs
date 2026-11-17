@@ -6,10 +6,12 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
-use minicore_host_core::{BoundResources, Host, ResourceFuture, ResourceResolver};
+use minicore_host_core::{
+    BoundResources, Host, PreparedTurnBinding, ResourceFuture, ResourceResolver,
+};
 use minicore_host_protocol::{
     AgentConfig, AgentCreate, CallOptions, Fault, HostLifecycle, HostShutdownRequest,
-    HostShutdownStrategy, OperationId, SessionConfig, SessionRef, StorageMode,
+    HostShutdownStrategy, OperationId, SessionConfig, SessionRef, StorageMode, ToolBinding,
 };
 use minicore_host_runtime::{
     ExecutionConfig, ExecutionOptions,
@@ -20,6 +22,7 @@ use minicore_host_runtime::{
     prompt::DefaultPromptProvider,
     tools::ToolSet,
 };
+use minicore_host_tools::{AgentToolFactory, CoreTurnPort, ScopeManager, ToolRegistry};
 use minicore_host_transport::HostClient;
 use tokio::sync::{mpsc, oneshot};
 
@@ -63,6 +66,65 @@ impl ModelCall {
     pub fn text(&self, text: &str) {
         self.events.send(Ok(ModelEvent::text_delta(text))).unwrap();
     }
+    pub fn reasoning(&self, text: &str) {
+        self.events
+            .send(Ok(ModelEvent::reasoning_delta(text)))
+            .unwrap();
+    }
+    pub fn tool(self, id: &str, arguments: serde_json::Value) {
+        let id: minicore_host_runtime::ToolCallId = id.parse().unwrap();
+        self.events
+            .send(Ok(ModelEvent::ToolCallStart {
+                tool_call_id: id.clone(),
+                tool_name: "agent".parse().unwrap(),
+            }))
+            .unwrap();
+        self.events
+            .send(Ok(ModelEvent::tool_call_arguments_delta(
+                id.clone(),
+                arguments.to_string(),
+            )))
+            .unwrap();
+        self.events
+            .send(Ok(ModelEvent::ToolCallEnd { tool_call_id: id }))
+            .unwrap();
+        self.events
+            .send(Ok(ModelEvent::Finish {
+                reason: ModelFinishReason::ToolCalls,
+            }))
+            .unwrap();
+    }
+    pub fn tool_result(&self) -> Option<serde_json::Value> {
+        self.request
+            .messages()
+            .iter()
+            .rev()
+            .find_map(|message| match message {
+                ModelMessage::Tool { output, .. } => {
+                    Some(serde_json::from_str(output.content().as_str()).unwrap())
+                }
+                _ => None,
+            })
+    }
+    pub fn fail(self, message: &str) {
+        use minicore_host_runtime::{
+            Text,
+            error::{DiagnosticCategory, DiagnosticCode, DiagnosticSummary},
+            model::ModelErrorKind,
+        };
+        self.events
+            .send(Err(ModelError::started(
+                ModelErrorKind::InvalidProviderResponse,
+                DiagnosticSummary::new(
+                    DiagnosticCode::ModelMalformedResponse,
+                    DiagnosticCategory::Model,
+                    Text::new(message),
+                    false,
+                )
+                .unwrap(),
+            )))
+            .unwrap();
+    }
     pub fn finish(self) {
         self.events
             .send(Ok(ModelEvent::Finish {
@@ -102,7 +164,10 @@ impl Model for GatedModelDouble {
     }
 }
 
-struct TestResourcesDouble(Arc<GatedModelDouble>);
+struct TestResourcesDouble {
+    model: Arc<GatedModelDouble>,
+    tools: ToolRegistry,
+}
 impl ResourceResolver for TestResourcesDouble {
     fn validate(&self, _: &SessionConfig) -> Result<(), Fault> {
         Ok(())
@@ -111,9 +176,29 @@ impl ResourceResolver for TestResourcesDouble {
         Box::pin(async {
             Ok(BoundResources {
                 execution: ExecutionConfig::new(
-                    self.0.clone(),
+                    self.model.clone(),
                     ReasoningPreference::Auto,
                     ToolSet::default(),
+                    None,
+                    Arc::new(DefaultPromptProvider::new(None)),
+                )
+                .unwrap(),
+                options: ExecutionOptions::default(),
+            })
+        })
+    }
+    fn resolve_for_turn<'a>(
+        &'a self,
+        config: &'a SessionConfig,
+        binding: PreparedTurnBinding,
+    ) -> ResourceFuture<'a> {
+        Box::pin(async move {
+            Ok(BoundResources {
+                execution: ExecutionConfig::new(
+                    self.model.clone(),
+                    ReasoningPreference::Auto,
+                    self.tools
+                        .bind(&config.tools, CoreTurnPort::prepared(binding))?,
                     None,
                     Arc::new(DefaultPromptProvider::new(None)),
                 )
@@ -133,6 +218,14 @@ pub struct NativeHost {
 
 impl NativeHost {
     pub async fn new() -> Self {
+        Self::with_tools(false).await
+    }
+
+    pub async fn with_agent_tool() -> Self {
+        Self::with_tools(true).await
+    }
+
+    async fn with_tools(agent: bool) -> Self {
         let (requests, calls) = mpsc::unbounded_channel();
         let model = GatedModelDouble {
             descriptor: ModelDescriptor::new(
@@ -144,10 +237,25 @@ impl NativeHost {
             .unwrap(),
             calls: requests,
         };
-        let host = Host::memory(Arc::new(TestResourcesDouble(Arc::new(model)))).unwrap();
+        let mut tools = ToolRegistry::new();
+        if agent {
+            tools
+                .register(Arc::new(AgentToolFactory::new(ScopeManager::new())))
+                .unwrap();
+        }
+        let host = Host::memory(Arc::new(TestResourcesDouble {
+            model: Arc::new(model),
+            tools,
+        }))
+        .unwrap();
         let client = HostClient::in_process(Arc::clone(&host)).unwrap();
         let mut config = AgentConfig::default();
         config.session_defaults.model = "fixture/gated".parse().unwrap();
+        if agent {
+            config.session_defaults.tools.push(ToolBinding {
+                name: "agent".into(),
+            });
+        }
         let receipt = client
             .create_agent(
                 AgentCreate {
