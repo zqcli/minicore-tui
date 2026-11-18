@@ -94,6 +94,9 @@ Rendering performs no I/O. Retained preview bodies, recent blocks and unattached
 prepared cards have explicit limits. Native disjoint output gaps still require
 range recovery; these limits do not claim constant memory for arbitrary missing
 ranges. Unchanged bodies are reused and idle cards add no periodic timer.
+Native structured tool results are decoded through the existing result types;
+temporary JSON decoding memory can grow with the original result. The bounded
+preview does not claim a constant-memory parser for arbitrarily large inputs.
 
 Verification uses real in-process Host execution with explicit controlled
 models/resources for output after tool return, interleaved children, Session

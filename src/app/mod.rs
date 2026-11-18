@@ -183,7 +183,7 @@ pub struct App {
     pub notifier: crate::title::Notifier,
     pub(super) notice_target: Option<SessionRef>,
     pub(super) pending_states: HashMap<SessionRef, SessionSnapshot>,
-    pub(super) agent_cards: agent_cards::Cards,
+    agent_cards: agent_cards::Cards,
     pub(super) agent_location: Option<(SessionRef, ToolCallRef)>,
 }
 

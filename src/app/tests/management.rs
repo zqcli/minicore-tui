@@ -771,8 +771,7 @@ async fn agent_creation_opens_its_actual_default_and_late_results_preserve_navig
     let (tx, mut messages) = mpsc::channel(tasks::MESSAGE_CAPACITY);
     let mut app = App::new(client.clone(), tx, directory.path().to_path_buf());
     tasks::bootstrap(client.clone(), app.tx.clone(), None).await;
-    app.on_msg(messages.recv().await.unwrap());
-    assert!(app.ready);
+    until(&mut app, &mut messages, |app| app.ready).await;
     app.on_action(Action::CreateAgent("No source".into()));
     assert!(
         app.notices

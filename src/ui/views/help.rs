@@ -141,6 +141,10 @@ const KEYS: &[KeyRow] = &[
         action: "select text, a word, a line; copies on release",
     },
     KeyRow {
+        keys: "agent card: click / footer",
+        action: "fold preview / open child; later sends link to the original card",
+    },
+    KeyRow {
         keys: "f8",
         action: "review retained local confirmations; edit separately, warn before resend, no automatic retry",
     },

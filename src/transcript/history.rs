@@ -100,6 +100,27 @@ impl Transcript {
                 append_record(self, &mut index, record, preview);
                 added = true;
             }
+            if let HistoryItemData::ToolResult { .. } = record.item {
+                for &at in index.positions.get(&record.position).into_iter().flatten() {
+                    let Block::Tool(call) = &mut self.blocks[at] else {
+                        continue;
+                    };
+                    let before = call.delegations.len();
+                    for association in &record.delegations {
+                        if !call.delegations.iter().any(|known| {
+                            known.parent == association.parent
+                                && known.origin == association.origin
+                                && known.child == association.child
+                                && known.task_message_id == association.task_message_id
+                        }) {
+                            call.delegations.push(association.clone());
+                        }
+                    }
+                    if call.delegations.len() != before {
+                        self.bump(at);
+                    }
+                }
+            }
         }
         if added {
             self.sort_history();
@@ -428,7 +449,7 @@ fn preview_parts(content: &[AssistantPart], reasoning: bool) -> String {
     let mut parts = Vec::new();
     for part in content.iter().rev() {
         let text = match part {
-            AssistantPart::Text(text) if !reasoning => Some(text.as_str()),
+            AssistantPart::Text(text) if !reasoning => Some(text.as_ref()),
             AssistantPart::Reasoning(text) if reasoning => text.text().or(text.summary()),
             _ => None,
         };
@@ -614,6 +635,61 @@ mod tests {
             json!({"kind":"tool_result","tool_call_id":"call","name":"bash",
                 "result":{"outcome":"success","output":{"content":"done"}}}),
         )
+    }
+
+    #[test]
+    fn saved_followup_keeps_its_origin_link_without_the_original_history_page() {
+        let followup = record(
+            9,
+            json!({"kind":"tool_result","tool_call_id":"supplement","name":"agent",
+            "result":{"outcome":"success","output":{"content":"accepted"}},
+            "delegations":[{
+                "parent":{"agent_id":"00000000000000000002","session_id":"00000000000000000003"},
+                "origin":{"turn_id":"00000000000000000001","tool_call_id":"original"},
+                "child":{"agent_id":"00000000000000000002","session_id":"00000000000000000004"},
+                "task_message_id":"00000000000000000005",
+                "accepted_message_ids":["00000000000000000005"],
+                "inputs":[],"completion":null
+            }]}),
+        );
+        for live_first in [false, true] {
+            let mut transcript = Transcript::default();
+            if live_first {
+                let mut live = followup.clone();
+                live.delegations.clear();
+                transcript.install_history_records(&[live]);
+            }
+            transcript.install_history_records(std::slice::from_ref(&followup));
+            let call = transcript.tool_calls().next().unwrap();
+            assert!(call.is_delegation_receipt());
+            assert_eq!(call.delegations, followup.delegations);
+            assert!(
+                transcript
+                    .find_tool(&followup.delegations[0].origin)
+                    .is_none()
+            );
+            let revisions: Vec<_> = transcript.revisions().collect();
+            transcript.install_history_records(std::slice::from_ref(&followup));
+            assert_eq!(transcript.revisions().collect::<Vec<_>>(), revisions);
+            assert_eq!(transcript.tool_calls().next().unwrap().delegations.len(), 1);
+        }
+    }
+
+    #[test]
+    fn preview_text_keeps_utf8_tail_and_native_part_boundaries() {
+        use minicore_host_runtime::model::ReasoningContent;
+        let large = "界".repeat(super::super::agent_card::PREVIEW_BYTES);
+        let parts = [
+            AssistantPart::Text(large.clone().into()),
+            AssistantPart::Reasoning(
+                ReasoningContent::new(Some("first\nsecond".into()), None, None, None).unwrap(),
+            ),
+            AssistantPart::Text("\nlast real line".into()),
+        ];
+        let text = preview_parts(&parts, false);
+        assert!(text.len() <= super::super::agent_card::PREVIEW_BYTES);
+        assert!(format!("{large}\nlast real line").ends_with(&text));
+        assert_eq!(preview_parts(&parts, true), "first\nsecond");
     }
 
     #[test]

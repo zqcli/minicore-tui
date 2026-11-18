@@ -1,8 +1,8 @@
 # minicore-tui
 
 `minicore-tui` is a fullscreen terminal frontend for
-[minicore-host](https://github.com/zqcli/minicore-host). Version 0.12.6 embeds
-Host 0.12.5 in the same executable and uses its typed Rust client through
+[minicore-host](https://github.com/zqcli/minicore-host). Version 0.12.7 embeds
+Host 0.12.6 in the same executable and uses its typed Rust client through
 `HostClient::in_process`. Host owns Agents, Sessions, execution, tools,
 credentials, history and persistence; the TUI owns terminal interaction and
 presentation.
@@ -101,6 +101,12 @@ edits; Ctrl+Z and Ctrl+Y restore or replay them.
   phase. Expanded cards and `/diff` expose details without changing execution.
   Adjacent visible cards have one separator row; tool-only responses add no
   empty row. Blank lines inside tool output remain intact.
+- **Delegated Agent cards:** the original startup card keeps streaming the
+  child's recent conversation after the tool returns. Later sends link back to
+  that card; a new delegation into the same Session gets a new card. Click the
+  card to expand its preview or its footer to open the child Session. Completion
+  comes from Host's settled delegation, not tool acceptance. Released child
+  history is explicitly unavailable; retained previews are not full histories.
 - **Input:** Enter sends steering input; Alt+Enter or Ctrl+Enter queues a
   follow-up. Accepted `next_step` and `next_turn` entries come from Host. Esc
   cancels the captured Turn and preserves queued input; `/pause` prevents later

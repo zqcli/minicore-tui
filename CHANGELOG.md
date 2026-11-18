@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.12.7 — 2026-11-18
+
+- Keep delegated child conversations in the original startup Agent card after
+  the tool returns. Show native reasoning, responses, tool activity, partial
+  failures and settled completion in bounded recent previews.
+- Link later sends to the original card; give a new delegation into the same
+  Session its own card. Opening a child preserves the parent's draft and view.
+  Released child history is explicitly unavailable, not reconstructed.
+- Preserve native identities, original result bodies, keyboard ownership,
+  local/global folding, selection and transcript spacing. Read native history
+  metadata without restoring child execution or adding a frontend scheduler.
+- Embed Host 0.12.6 at immutable revision
+  `02c7558b7eff324f2f83557305d921912a4dce74`, following SPEC 4.11.5.
+  Keep the existing external dependency graph.
+
 ## 0.12.6 — 2026-11-15
 
 - Accept the Unix legacy ESC LF form of Option/Alt+Return as a follow-up in the

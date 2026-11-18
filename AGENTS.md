@@ -8,13 +8,13 @@ and fix the inaccurate description.
 ## Project and boundaries
 
 `minicore-tui` is a Rust 2024 fullscreen terminal frontend using ratatui and
-crossterm. It embeds MiniCore Host 0.12.5 and calls its typed Rust client through
+crossterm. It embeds MiniCore Host 0.12.6 and calls its typed Rust client through
 `HostClient::in_process`. The executable contains the native resource builder,
 provider implementations and built-in tools. Host owns execution, credentials,
 Agents, Sessions, persistence, compaction and workspace operations. The TUI owns
 terminal interaction and presentation.
 
-There is no child Agent, stdio RPC adapter, frontend protocol DTO layer,
+There is no child Agent process, stdio RPC adapter, frontend protocol DTO layer,
 Webpage server, browser assets, phone protocol or remote-control mode. Do not
 restore them as compatibility shims. A backend defect belongs in Host, not in
 a frontend imitation of Host state. Only change a backend repository after

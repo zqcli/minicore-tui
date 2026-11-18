@@ -219,26 +219,19 @@ impl ToolCall {
     }
 
     pub fn apply_preview_result(&mut self, result: &ToolResultData) {
-        self.result_seen = true;
-        let content = result.output.content().as_str();
         self.output.clear();
         self.output_dropped = 0;
         self.output_lines = None;
         self.output_from_result = false;
-        if content.len() <= super::agent_card::PREVIEW_BYTES {
-            self.apply_result(result);
-        } else {
-            self.set_state(ToolState::from_outcome(result.outcome));
-            self.push_output(super::agent_card::tail(
-                content,
-                super::agent_card::PREVIEW_BYTES,
-            ));
-            self.truncated = true;
-            self.settle();
-        }
+        self.truncated = false;
+        self.apply_result_inner(result, true);
     }
 
     pub fn apply_result(&mut self, result: &ToolResultData) {
+        self.apply_result_inner(result, false);
+    }
+
+    fn apply_result_inner(&mut self, result: &ToolResultData, preview: bool) {
         self.result_seen = true;
         self.set_state(ToolState::from_outcome(result.outcome));
         self.duration = self
@@ -278,6 +271,15 @@ impl ToolCall {
             {
                 Some((OutputData::Utf8(stdout), OutputData::Utf8(stderr))) => {
                     self.output_lines = Some(stdout.lines().count() + stderr.lines().count());
+                    let limit = if preview {
+                        super::agent_card::PREVIEW_BYTES
+                    } else {
+                        usize::MAX
+                    };
+                    self.truncated |= stdout.len().saturating_add(stderr.len()) > limit;
+                    let stderr = super::agent_card::tail(stderr, limit);
+                    let stdout =
+                        super::agent_card::tail(stdout, limit.saturating_sub(stderr.len()));
                     self.push_output(stdout);
                     self.push_output(stderr);
                 }
@@ -291,19 +293,37 @@ impl ToolCall {
                         })
                         .and_then(|value| value["text"].as_str());
                     let formatted = parsed.as_ref().filter(|_| read_text.is_none());
-                    let preview = formatted.filter(|_| self.name != "bash").map(json_display);
+                    let display =
+                        formatted
+                            .filter(|_| self.name != "bash" || preview)
+                            .map(|value| {
+                                if preview {
+                                    json_tail(value)
+                                } else {
+                                    json_display(value)
+                                }
+                            });
                     // An unrecognized bash result keeps its existing pretty-JSON tail.
-                    let bash_json = formatted.filter(|_| self.name == "bash").map(|value| {
-                        serde_json::to_string_pretty(value).expect("JSON values serialize")
-                    });
-                    self.truncated |= preview.as_ref().is_some_and(|(_, truncated)| *truncated);
+                    let bash_json =
+                        formatted
+                            .filter(|_| self.name == "bash" && !preview)
+                            .map(|value| {
+                                serde_json::to_string_pretty(value).expect("JSON values serialize")
+                            });
+                    self.truncated |= display.as_ref().is_some_and(|(_, truncated)| *truncated);
                     let body = read_text
-                        .or(preview.as_ref().map(|(text, _)| text.as_str()))
+                        .or(display.as_ref().map(|(text, _)| text.as_str()))
                         .or(bash_json.as_deref())
                         .unwrap_or(content);
                     self.output_lines =
                         Some(formatted.map_or_else(|| body.lines().count(), json_lines));
-                    if self.name == "bash" {
+                    if preview {
+                        self.truncated |= body.len() > super::agent_card::PREVIEW_BYTES;
+                        self.push_output(super::agent_card::tail(
+                            body,
+                            super::agent_card::PREVIEW_BYTES,
+                        ));
+                    } else if self.name == "bash" {
                         self.push_output(body);
                     } else {
                         self.push_head(body);
@@ -312,7 +332,14 @@ impl ToolCall {
             }
             self.output_from_result = true;
         }
-        self.settle();
+        if preview {
+            let drop = self.output.len().saturating_sub(EXPANDED_ROWS + 1);
+            self.output.drain(..drop);
+            self.output_dropped += drop;
+            self.output.shrink_to_fit();
+        } else {
+            self.settle();
+        }
     }
 
     pub fn is_running(&self) -> bool {
@@ -521,6 +548,41 @@ fn json_display(value: &Value) -> (String, bool) {
     )
 }
 
+fn json_tail(value: &Value) -> (String, bool) {
+    use super::agent_card::PREVIEW_BYTES;
+    use std::collections::VecDeque;
+    #[derive(Default)]
+    struct TailWriter {
+        bytes: VecDeque<u8>,
+        truncated: bool,
+    }
+    impl std::io::Write for TailWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            let discard = (self.bytes.len() + bytes.len()).saturating_sub(PREVIEW_BYTES);
+            self.truncated |= discard > 0;
+            let previous = self.bytes.len();
+            self.bytes.drain(..discard.min(previous));
+            self.bytes
+                .extend(&bytes[discard.saturating_sub(previous)..]);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut writer = TailWriter::default();
+    serde_json::to_writer_pretty(&mut writer, value).expect("JSON values serialize");
+    let bytes = writer
+        .bytes
+        .into_iter()
+        .skip_while(|byte| *byte & 0xc0 == 0x80)
+        .collect();
+    (
+        String::from_utf8(bytes).expect("JSON tail starts at a UTF-8 boundary"),
+        writer.truncated,
+    )
+}
+
 /// Pretty JSON escapes string newlines; only nonempty containers add rows.
 fn json_lines(value: &Value) -> usize {
     match value {
@@ -721,6 +783,87 @@ mod tests {
         assert!(shown.contains("\"encoding\":\"bytes\",\"data\":[255,0]"));
         assert!(!shown.contains('\u{fffd}'));
         assert_eq!(binary.exit_code, Some(3));
+    }
+
+    #[test]
+    fn large_native_result_previews_keep_decoded_recent_lines() {
+        use minicore_host_local_tools::{CommandFileChanges, CommandStatus, CommandStream};
+        let text = format!(
+            "{}last first\n\nlast second\n",
+            "actual output 日本語\n".repeat(600)
+        );
+        let command = CommandResult {
+            status: CommandStatus::Exited,
+            pid: 12,
+            exit_code: Some(3),
+            signal: None,
+            process_waited: true,
+            cleanup_confirmed: true,
+            stdout: CommandStream {
+                output: OutputData::Utf8(text.clone()),
+                complete: true,
+            },
+            stderr: CommandStream {
+                output: OutputData::Utf8("diagnostic\n".into()),
+                complete: true,
+            },
+            file_changes: CommandFileChanges::Unknown,
+            cleanup_errors: Vec::new(),
+        };
+        let mut bash = card();
+        bash.push_output("older observed output");
+        bash.apply_preview_result(&result(command));
+        assert_eq!(bash.exit_code, Some(3));
+        assert!(
+            bash.output_content()
+                .ends_with(&["last first", "", "last second", "diagnostic"])
+        );
+        assert!(bash.truncated);
+        assert!(
+            bash.output.iter().map(|line| line.len() + 1).sum::<usize>()
+                <= super::super::agent_card::PREVIEW_BYTES + 1
+        );
+
+        let mut read = card();
+        read.name = "read".into();
+        read.apply_preview_result(&result(
+            serde_json::json!({"status":"ok","kind":"file","text":text}),
+        ));
+        assert!(
+            read.output_content()
+                .ends_with(&["last first", "", "last second"])
+        );
+        assert!(read.truncated);
+        assert!(!read.output.join("\n").contains("\\n"));
+        assert!(
+            read.output.iter().map(|line| line.len() + 1).sum::<usize>()
+                <= super::super::agent_card::PREVIEW_BYTES + 1
+        );
+
+        read.apply_preview_result(&result(serde_json::json!({"status":"ok","kind":"file","text":format!("{}final\n", "x\n".repeat(300))})));
+        assert_eq!(read.output_content().last(), Some(&"final"));
+    }
+
+    #[test]
+    fn generic_result_previews_keep_the_actual_json_tail() {
+        let value = serde_json::json!({"rows": (0..5000).collect::<Vec<_>>()});
+        let mut call = card();
+        call.name = "agent".into();
+        call.apply_preview_result(&result(&value));
+        let shown = call.output.join("\n");
+        assert!(shown.contains("4999"));
+        assert!(shown.ends_with('}'));
+        assert!(call.truncated);
+        let unicode = serde_json::json!({"text": format!("{}last", "日本語".repeat(5000))});
+        for value in [&value, &unicode] {
+            let (tail, truncated) = json_tail(value);
+            let full = serde_json::to_string_pretty(value).unwrap();
+            assert!(truncated);
+            assert_eq!(
+                tail,
+                super::super::agent_card::tail(&full, super::super::agent_card::PREVIEW_BYTES)
+            );
+        }
     }
 
     #[test]

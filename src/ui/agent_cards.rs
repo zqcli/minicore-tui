@@ -398,10 +398,155 @@ fn push_group(
     let take = body.len().min(remaining.saturating_sub(1));
     let skipped = body.len() - take;
     let mut group = vec![Line::from(chrome_span(Span::styled(
-        wrap::sanitize(&format!("[{label}]")),
+        wrap::sanitize(&format!("[{label}]")).into_owned(),
         styles.meta(),
     )))];
     group.extend(body.into_iter().skip(skipped));
     *used += group.len();
     groups.push(group);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::transcript::RequestKey;
+    use crate::ui::rails::content_cells;
+    use crate::ui::theme::Palette;
+    use minicore_host_protocol::{
+        DelegationAssociation, DelegationTerminalData, DelegationTurnOutcome, SessionRef,
+        ToolCallRef, TurnRef,
+    };
+
+    fn styles() -> Styles {
+        Styles::of(Palette::dark())
+    }
+
+    fn call() -> ToolCall {
+        let origin = ToolCallRef {
+            turn_id: "00000000000000000001".parse().unwrap(),
+            tool_call_id: "start".to_owned().into(),
+        };
+        let parent = SessionRef {
+            agent_id: "00000000000000000002".parse().unwrap(),
+            session_id: "00000000000000000003".parse().unwrap(),
+        };
+        let child = SessionRef {
+            agent_id: parent.agent_id.clone(),
+            session_id: "00000000000000000004".parse().unwrap(),
+        };
+        let task_message_id: minicore_host_protocol::MessageId =
+            "00000000000000000005".parse().unwrap();
+        let association = DelegationAssociation {
+            parent,
+            origin: origin.clone(),
+            child,
+            accepted_message_ids: vec![task_message_id.clone()],
+            task_message_id,
+            inputs: Vec::new(),
+            completion: None,
+        };
+        let mut card = AgentCard::new("00000000000000000006".parse().unwrap(), association);
+        card.agent_name = Some("Reader 日本語".into());
+        card.task = "Read the files".into();
+        let mut call = ToolCall::new(origin, "agent");
+        call.set_state(ToolState::Succeeded);
+        call.agent_card = Some(Box::new(card));
+        call
+    }
+
+    fn response(card: &mut AgentCard, text: String) {
+        card.transcript.push(Block::Assistant {
+            key: RequestKey::response("00000000000000000007".parse().unwrap(), 0),
+            text,
+            reasoning: String::new(),
+            streaming: false,
+            partial: false,
+            expanded: None,
+        });
+    }
+
+    #[test]
+    fn a_successful_startup_receipt_is_not_child_completion() {
+        let mut call = call();
+        assert_eq!(
+            status(call.agent_card.as_ref().unwrap()),
+            "accepted · observing child"
+        );
+        let card = call.agent_card.as_mut().unwrap();
+        card.history_unavailable = true;
+        assert_eq!(status(card), "history unavailable");
+        let rows = render(&call, styles(), 80, false, true);
+        assert!(
+            rows.last()
+                .unwrap()
+                .to_string()
+                .contains("history unavailable")
+        );
+    }
+
+    #[test]
+    fn preview_rows_stay_bounded_after_wrapping_and_resize() {
+        let mut call = call();
+        let card = call.agent_card.as_mut().unwrap();
+        response(card, (0..40).map(|i| format!("line {i}\n")).collect());
+        card.association.completion = Some(DelegationTerminalData {
+            turns: vec![DelegationTurnOutcome {
+                turn: TurnRef {
+                    session_id: card.key.child.session_id.clone(),
+                    turn_id: "00000000000000000007".parse().unwrap(),
+                },
+                outcome: TurnOutcome::Completed,
+                fault: None,
+            }],
+            discarded_inputs: Vec::new(),
+        });
+        for width in [8, 20, 80] {
+            for expanded in [false, true] {
+                let rows = render(&call, styles(), width, expanded, true);
+                assert_eq!(rows.len(), footer_offset(expanded) + 1);
+                assert!(
+                    rows.iter()
+                        .all(|row| wrap::width(&row.to_string()) == width)
+                );
+                if width == 80 {
+                    let text = rows
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    assert!(text.contains("Final answer"));
+                    assert!(text.contains("line 39"));
+                    assert!(!text.contains("line 0"));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn tool_preview_preserves_blank_lines_and_excludes_chrome_from_copying() {
+        let mut call = call();
+        let card = call.agent_card.as_mut().unwrap();
+        let mut tool = ToolCall::new(
+            ToolCallRef {
+                turn_id: "00000000000000000007".parse().unwrap(),
+                tool_call_id: "read".to_owned().into(),
+            },
+            "bash\u{1b}[31m",
+        );
+        tool.set_state(ToolState::Succeeded);
+        tool.push_output("first\n\nlast");
+        card.transcript.push(Block::Tool(Box::new(tool)));
+        let rows = render(&call, styles(), 80, true, true);
+        let label = rows
+            .iter()
+            .position(|row| row.to_string().contains("[bash · completed]"))
+            .unwrap();
+        assert!(content_cells(&rows[label]).is_empty());
+        assert_eq!(rows[label + 1].to_string().trim(), "▎ first");
+        assert_eq!(rows[label + 2].to_string().trim(), "▎");
+        assert_eq!(rows[label + 3].to_string().trim(), "▎ last");
+        assert!(!content_cells(&rows[label + 1]).is_empty());
+        assert_eq!(content_cells(rows.last().unwrap()), 0..0);
+        assert!(rows.iter().all(|row| !row.to_string().contains('\u{1b}')));
+    }
 }

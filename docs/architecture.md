@@ -1,7 +1,7 @@
 # Architecture
 
 The executable owns one persistent MiniCore Host and one terminal application.
-It links Host 0.12.5 at the immutable revision in `Cargo.toml`; all native
+It links Host 0.12.6 at the immutable revision in `Cargo.toml`; all native
 components come from that revision. The frontend calls `HostClient::in_process`
 and the typed `SessionClient` APIs. There is no frontend protocol model, child
 Agent, transport adapter, Webpage service or remote view layer.
@@ -17,6 +17,7 @@ Agent, transport adapter, Webpage service or remote view layer.
 | `app/tasks.rs` | Typed Host reads/mutations, bounded UI delivery, subscription pumps and fixed-window catch-up |
 | `app/resident.rs`, `app/live.rs` | Full Session addresses, local epochs, per-Session drafts and foreground navigation |
 | `app/session/`, `app/control.rs` | Native snapshot projection, independent revisions, interactions, canonical history and output ranges |
+| `app/agent_cards.rs`, `transcript/agent_card.rs`, `ui/agent_cards.rs` | Native delegation observation, bounded child previews and original-startup card rendering |
 | `app/actions.rs`, `app/ops.rs` | Captured user intents and results installed into the original target |
 | `app/unconfirmed.rs` | Bounded local ownership of sends with pending or unknown acceptance |
 | `app/composer.rs`, `app/keys/`, `app/mouse.rs` | Editing, paste, key dispatch, selection and scrolling |
@@ -199,6 +200,16 @@ The main loop has no idle animation timer. Input, Host messages, an active
 animation or a known UI expiry schedules frames; a frame cap coalesces bursts.
 Rendering does no Host or filesystem I/O. Clipboard selection omits chrome,
 status hints, timestamps and layout rails.
+
+Delegated Agent cards stay on the original startup ToolCall. Host supplies the
+parent/child identities, first task Message ID, actual accepted inputs and Turn
+membership, and settled completion. The Host-wide subscription starts before
+dispatch so fast children can be observed without opening them. Native output
+ranges and history supply recent child previews; no child body store or second
+execution lifecycle is introduced. A later send links to the original card,
+while a later delegation into the same Session has a new task identity. Missing
+retained history is shown explicitly. Child activity preserves the parent's
+draft, focus and reading position. See [the card contract](design-host.md#streaming-delegated-agent-cards).
 
 ## Native meaning in the UI
 

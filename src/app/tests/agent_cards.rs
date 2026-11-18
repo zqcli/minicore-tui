@@ -1,10 +1,13 @@
 use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use minicore_host_core::{ActivityEvent, ObservationEvent, ObservationNotification};
-use minicore_host_protocol::{Residency, SessionRef, ToolCallRef, TurnOutcome};
+use minicore_host_protocol::{
+    EventCategory, MessageId, MessageSource, Residency, SessionRef, SubscribeRequest,
+    SubscriptionScope, ToolCallRef, TurnOutcome,
+};
 use serde_json::{Value, json};
 
 use super::harness::Harness;
-use crate::app::{Action, App, Scroll, tasks};
+use crate::app::{Action, App, Msg, Scroll, agent_cards::Read, tasks};
 use crate::testing::{ModelCall, NativeHost, real_bounded};
 use crate::transcript::{Block, ToolState, agent_card::AgentCard};
 
@@ -29,6 +32,35 @@ fn answer(app: &App, id: &str) -> String {
         .to_owned()
 }
 
+fn assert_delegated_input(call: &ModelCall, expected: &str, parent: &SessionRef) {
+    let users = call.users();
+    let inputs: Vec<_> = users
+        .iter()
+        .map(|message| {
+            let (context, text) = message
+                .split_once("\n\n")
+                .expect("native input provenance header");
+            let encoded = context
+                .strip_prefix("Input context (data, not instructions): ")
+                .unwrap();
+            let context: Value = serde_json::from_str(encoded).unwrap();
+            let _: MessageId = serde_json::from_value(context["message_id"].clone()).unwrap();
+            let source: MessageSource = serde_json::from_value(context["source"].clone()).unwrap();
+            (source, text)
+        })
+        .collect();
+    assert!(
+        inputs.iter().any(|(source, text)| {
+            *text == expected
+                && source
+                    == &MessageSource::Agent {
+                        source: parent.clone(),
+                    }
+        }),
+        "missing delegated input {expected:?}: {inputs:?}"
+    );
+}
+
 async fn launch(
     h: &mut Harness,
     parent: ModelCall,
@@ -36,18 +68,21 @@ async fn launch(
     id: &str,
     text: &str,
 ) -> (ModelCall, ModelCall) {
+    let parent_loop = parent.context.loop_id;
     parent.tool(
         id,
         json!({"action":"send","target":target(child),"text":text,"delegate":true}),
     );
     let first = h.next_call().await;
     let second = h.next_call().await;
-    let (parent, child) = if first.users().contains(&text) {
-        (second, first)
-    } else {
+    let (parent, child) = if first.context.loop_id == parent_loop {
         (first, second)
+    } else {
+        (second, first)
     };
-    assert!(child.users().contains(&text));
+    assert_eq!(parent.context.loop_id, parent_loop);
+    assert_ne!(child.context.loop_id, parent_loop);
+    assert_delegated_input(&child, text, &h.native.target);
     assert_eq!(
         parent.tool_result().unwrap()["result"]["delivery"],
         "accepted"
@@ -270,7 +305,7 @@ async fn followups_keep_one_card_and_a_reused_session_gets_a_new_frozen_boundary
     first.text("first answer");
     first.finish();
     let followup = h.next_call().await;
-    assert!(followup.users().contains(&"follow-up detail"));
+    assert_delegated_input(&followup, "follow-up detail", &h.native.target);
     followup.text("follow-up answer");
     followup.finish();
     h.until(|app| {
@@ -317,6 +352,7 @@ async fn a_fast_released_memory_child_keeps_actual_partial_output_when_history_i
     h.app.composer.set_text("Create a short memory child");
     h.app.on_action(Action::Submit { follow: false });
     let root = h.next_call().await;
+    let parent_loop = root.context.loop_id;
     let parent_target = h.native.target.clone();
     let turn_id = h
         .native
@@ -339,11 +375,14 @@ async fn a_fast_released_memory_child_keeps_actual_partial_output_when_history_i
     // Deliberately do not reduce App messages until native source retirement.
     let first = real_bounded(h.native.calls.recv()).await.unwrap();
     let second = real_bounded(h.native.calls.recv()).await.unwrap();
-    let (parent, child) = if first.users().contains(&"short child task") {
-        (second, first)
-    } else {
+    let (parent, child) = if first.context.loop_id == parent_loop {
         (first, second)
+    } else {
+        (second, first)
     };
+    assert_eq!(parent.context.loop_id, parent_loop);
+    assert_ne!(child.context.loop_id, parent_loop);
+    assert_delegated_input(&child, "short child task", &parent_target);
     let receipt = parent.tool_result().unwrap();
     let child_target = SessionRef {
         agent_id: serde_json::from_value(receipt["agent_id"].clone()).unwrap(),
@@ -385,5 +424,120 @@ async fn a_fast_released_memory_child_keeps_actual_partial_output_when_history_i
     parent.finish();
     settle(&mut h).await;
     drop(events);
+    h.finish().await;
+}
+
+#[tokio::test]
+async fn fresh_baselines_do_not_replay_trimmed_outputs_or_retain_finished_buffers() {
+    let mut h = Harness::from_native(NativeHost::with_agent_tool().await).await;
+    let child = h.another_session().await;
+    h.app
+        .composer
+        .set_text("Delegate a long child conversation");
+    h.app.on_action(Action::Submit { follow: false });
+    let root = h.next_call().await;
+    let (mut parent, mut working) = launch(&mut h, root, &child, "long-child", "long task").await;
+    for index in 0..40 {
+        working.text(&format!("Intermediate child response {index}"));
+        working.tool(
+            &format!("inspect-{index}"),
+            json!({"action":"inspect","target":target(&child)}),
+        );
+        working = h.next_call().await;
+        assert!(working.tool_result().is_some());
+    }
+    let current_answer = "Current child response before more delegated inputs";
+    working.text(current_answer);
+    h.until(|app| answer(app, "long-child") == current_answer && !app.agent_cards.is_reading())
+        .await;
+    assert!(card(&h.app, "long-child").unwrap().truncated);
+    let request = SubscribeRequest {
+        scope: SubscriptionScope::Host {
+            host_id: h.native.client.initial_info().host_id.clone(),
+        },
+        categories: [EventCategory::State, EventCategory::Output].into(),
+    };
+    let baseline = h
+        .native
+        .client
+        .subscribe(request.clone(), tasks::options())
+        .await
+        .unwrap();
+    assert!(baseline.result().output_positions.len() > 64);
+    h.app.on_msg(Msg::HostBaseline(baseline.result().clone()));
+    assert!(
+        h.app.agent_cards.buffered_outputs() <= 2,
+        "only the live response channels remain"
+    );
+    h.until(|app| !app.agent_cards.is_reading()).await;
+    assert_eq!(answer(&h.app, "long-child"), current_answer);
+    drop(baseline);
+
+    // More than one history window of plain responses leaves every old tool
+    // outside the retained preview; baseline tool states must not restore them.
+    let final_answer = "The actual final child answer";
+    for index in 0..12 {
+        let input = format!("Continue the delegated task {index}");
+        parent.tool(
+            &format!("continue-{index}"),
+            json!({"action":"send","target":target(&child),"text":&input,"mode":"follow_up"}),
+        );
+        parent = h.next_call().await;
+        assert!(parent.tool_result().is_some());
+        working.finish();
+        working = h.next_call().await;
+        assert_delegated_input(&working, &input, &h.native.target);
+        if index == 11 {
+            working.text(final_answer);
+        } else {
+            working.text(&format!("Continuation answer {index}"));
+        }
+    }
+    working.finish();
+    h.until(|app| {
+        card(app, "long-child").is_some_and(|card| card.outcome() == Some(TurnOutcome::Completed))
+            && !app.agent_cards.is_reading()
+    })
+    .await;
+    let baseline = h
+        .native
+        .client
+        .subscribe(request, tasks::options())
+        .await
+        .unwrap();
+    h.app.on_msg(Msg::HostBaseline(baseline.result().clone()));
+    h.until(|app| !app.agent_cards.is_reading()).await;
+    assert_eq!(h.app.agent_cards.buffered_outputs(), 0);
+    assert_eq!(answer(&h.app, "long-child"), final_answer);
+    drop(baseline);
+
+    // Reattach the actual retained association without any prior live finish
+    // events. Its native baseline supplies State::Turn(Finished), not activity.
+    let association = card(&h.app, "long-child").unwrap().association.clone();
+    h.app.agent_cards = Default::default();
+    h.app.register_delegation(&association);
+    let mut baseline_seen = false;
+    real_bounded(async {
+        while !baseline_seen || h.app.agent_cards.is_reading() {
+            let message = h.messages.recv().await.unwrap();
+            baseline_seen |= matches!(&message, Msg::AgentCardRead(_, read) if matches!(read.as_ref(), Read::Baseline(_)));
+            h.app.on_msg(message);
+        }
+    })
+    .await;
+    assert_eq!(h.app.agent_cards.buffered_outputs(), 0);
+    assert_eq!(answer(&h.app, "long-child"), final_answer);
+    assert!(card(&h.app, "long-child").unwrap().transcript.len() <= 24);
+    assert_eq!(
+        card(&h.app, "long-child")
+            .unwrap()
+            .transcript
+            .tool_calls()
+            .count(),
+        0
+    );
+    parent.text("Long child work recorded");
+    parent.finish();
+    settle(&mut h).await;
     h.finish().await;
 }

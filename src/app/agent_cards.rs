@@ -31,6 +31,8 @@ struct Observer {
     history_reading: bool,
     history_loaded: bool,
     history_due: bool,
+    // One native response watermark per Turn survives preview body clipping.
+    model_floor: HashMap<TurnId, u64>,
     turn_revisions: HashMap<TurnId, (Option<LoadId>, u64)>,
     tool_revisions: HashMap<ToolCallRef, (Option<LoadId>, u64)>,
     finished_turns: Vec<TurnId>,
@@ -50,8 +52,24 @@ pub enum Read {
     Output {
         source: OutputSource,
         channel: String,
-        result: Result<OutputRead, String>,
+        result: Box<Result<OutputRead, String>>,
     },
+}
+
+#[cfg(test)]
+impl Cards {
+    pub(super) fn is_reading(&self) -> bool {
+        self.observers.values().any(|observer| {
+            observer.history_reading || observer.outputs.iter().any(|output| output.reading)
+        })
+    }
+
+    pub(super) fn buffered_outputs(&self) -> usize {
+        self.observers
+            .values()
+            .map(|observer| observer.outputs.len())
+            .sum()
+    }
 }
 
 impl App {
@@ -146,10 +164,11 @@ impl App {
     }
 
     pub(super) fn host_baseline(&mut self, baseline: SubscribeResult<StateEvent>) {
+        let positions = live_positions(&baseline);
         for state in baseline.initial_states {
             self.host_observed(ObservationEvent::State(state));
         }
-        for position in baseline.output_positions {
+        for position in positions {
             let source = output_turn(&position.source);
             let Some(key) = self.agent_key(source) else {
                 continue;
@@ -157,13 +176,33 @@ impl App {
             let Some((mut observer, mut card)) = self.take_agent_card(&key) else {
                 continue;
             };
-            if !canonical(&card, &position.source) {
+            if !closed(&observer, &position.source, &position.channel)
+                && !canonical(&card, &position.source)
+            {
                 output(&mut observer, &position.source, &position.channel)
                     .buffer
                     .position(&position);
             }
             self.advance_agent_outputs(&key, &mut observer, &mut card);
             self.put_agent_card(key, observer, card);
+        }
+        let recovery: Vec<_> = self
+            .agent_cards
+            .observers
+            .iter()
+            .filter_map(|(key, observer)| {
+                let card = self.agent_card(observer)?;
+                (card.observation_error.is_some()
+                    && !card.history_unavailable
+                    && !card.association.inputs.is_empty())
+                .then(|| key.clone())
+            })
+            .collect();
+        for key in recovery {
+            if let Some((mut observer, card)) = self.take_agent_card(&key) {
+                self.read_agent_history(&key, &mut observer, &card);
+                self.put_agent_card(key, observer, card);
+            }
         }
         self.ready = true;
     }
@@ -206,6 +245,7 @@ impl App {
                     history_reading: false,
                     history_loaded: false,
                     history_due: false,
+                    model_floor: HashMap::new(),
                     turn_revisions: HashMap::new(),
                     tool_revisions: HashMap::new(),
                     finished_turns: Vec::new(),
@@ -394,10 +434,8 @@ impl App {
         match event {
             ObservationEvent::State(StateEvent::Turn { source, data })
             | ObservationEvent::Activity(ActivityEvent::TurnFinished { source, data }) => {
-                if matches!(
-                    event,
-                    ObservationEvent::Activity(ActivityEvent::TurnFinished { .. })
-                ) && !observer.finished_turns.contains(&source.turn_id)
+                if data.state == TurnState::Finished
+                    && !observer.finished_turns.contains(&source.turn_id)
                 {
                     observer.finished_turns.push(source.turn_id.clone());
                 }
@@ -407,6 +445,9 @@ impl App {
                     &source.load_id,
                     data.runner_revision,
                 ) {
+                    if let Some(last) = data.requests.checked_sub(1) {
+                        advance_model_floor(&mut observer, &source.turn_id, last);
+                    }
                     card.turn = Some((source.clone(), data.clone()));
                     if data.state == TurnState::Finished {
                         if data.outcome != Some(TurnOutcome::Completed) {
@@ -432,7 +473,9 @@ impl App {
                     tool.clone(),
                     &source.turn.load_id,
                     data.runner_revision,
-                ) {
+                ) && (data.state != ToolCallState::Finished
+                    || card.transcript.find_tool(&tool).is_some())
+                {
                     ensure_tool(&mut card, &tool, &data.name).apply_state(data);
                 }
             }
@@ -449,6 +492,11 @@ impl App {
                 call.set_state(crate::transcript::ToolState::Running);
             }
             ObservationEvent::Activity(ActivityEvent::ModelFinished { source, data }) => {
+                advance_model_floor(
+                    &mut observer,
+                    &source.turn.turn_id,
+                    source.response_index.saturating_add(1),
+                );
                 card.transcript.install_preview_response(source, data);
             }
             ObservationEvent::Activity(ActivityEvent::ToolFinished { source, data }) => {
@@ -490,7 +538,11 @@ impl App {
     ) {
         for output in &mut observer.outputs {
             let source = output.buffer.source();
-            if canonical(card, source) {
+            if retired_model(
+                observer.model_floor.get(&output_turn(source).turn_id),
+                source,
+            ) || canonical(card, source)
+            {
                 continue;
             }
             let start = output.buffer.end() - output.buffer.text().len() as u64;
@@ -542,7 +594,7 @@ impl App {
                         Box::new(Read::Output {
                             source,
                             channel,
-                            result,
+                            result: Box::new(result),
                         }),
                     )
                 });
@@ -550,6 +602,12 @@ impl App {
         }
         observer.outputs.retain(|output| {
             let finished = canonical(card, output.buffer.source())
+                || retired_model(
+                    observer
+                        .model_floor
+                        .get(&output_turn(output.buffer.source()).turn_id),
+                    output.buffer.source(),
+                )
                 || output.buffer.is_complete()
                 || (output.failed && card.association.completion.is_some())
                 || (observer
@@ -617,6 +675,21 @@ impl App {
                             card.history_unavailable = false;
                         }
                         for record in &window.items {
+                            if let (Some(turn), Some(response)) =
+                                (&record.turn_id, record.response_index)
+                                && matches!(
+                                    record.item,
+                                    HistoryItemData::Assistant { .. }
+                                        | HistoryItemData::Partial { .. }
+                                        | HistoryItemData::ToolResult { .. }
+                                )
+                            {
+                                advance_model_floor(
+                                    &mut observer,
+                                    turn,
+                                    response.saturating_add(1),
+                                );
+                            }
                             if let HistoryItemData::User {
                                 message_id: Some(message_id),
                                 text,
@@ -651,7 +724,7 @@ impl App {
                     .find(|output| output.buffer.source() == &source && output.channel == channel)
                 {
                     output.reading = false;
-                    let result = result.and_then(|read| {
+                    let result = (*result).and_then(|read| {
                         match read {
                             OutputRead::Model(read) => output.buffer.model_read(&read),
                             OutputRead::Tool(read) => output.buffer.tool_read(&read),
@@ -688,6 +761,7 @@ impl App {
             }
         };
         card.historical = !baseline.initial_states.iter().any(|event| matches!(event, StateEvent::Session { data, .. } if data.delegation.as_ref().is_some_and(|current| current.task_message_id == key.task_message_id && current.parent == card.association.parent)));
+        let positions = live_positions(&baseline);
         self.put_agent_card(key.clone(), observer, card);
         for state in baseline.initial_states {
             self.host_observed(ObservationEvent::State(state));
@@ -695,8 +769,9 @@ impl App {
         let Some((mut observer, mut card)) = self.take_agent_card(&key) else {
             return;
         };
-        for position in baseline.output_positions {
+        for position in positions {
             if card.contains_turn(output_turn(&position.source))
+                && !closed(&observer, &position.source, &position.channel)
                 && !canonical(&card, &position.source)
             {
                 output(&mut observer, &position.source, &position.channel)
@@ -725,6 +800,65 @@ impl App {
             .pending
             .retain(|key| self.agent_cards.observers.contains_key(key));
     }
+}
+
+// Completed sources are recovered from positioned history, never replayed as
+// fresh streaming blocks after their bounded preview has been discarded.
+fn live_positions(baseline: &SubscribeResult<StateEvent>) -> Vec<OutputPosition> {
+    let sources: Vec<_> = baseline
+        .initial_states
+        .iter()
+        .filter_map(|state| match state {
+            StateEvent::Turn { source, data }
+                if data.state != TurnState::Finished && data.phase == Some(TurnPhase::Model) =>
+            {
+                data.requests
+                    .checked_sub(1)
+                    .map(|response_index| OutputSource::Model {
+                        source: ModelOutputIdentity {
+                            turn: source.clone(),
+                            response_index,
+                        },
+                    })
+            }
+            StateEvent::Toolcall { source, data } if data.state != ToolCallState::Finished => {
+                Some(OutputSource::Toolcall {
+                    source: source.clone(),
+                })
+            }
+            _ => None,
+        })
+        .collect();
+    baseline
+        .output_positions
+        .iter()
+        .filter(|position| sources.contains(&position.source))
+        .cloned()
+        .collect()
+}
+
+fn advance_model_floor(observer: &mut Observer, turn: &TurnId, floor: u64) {
+    let current = observer.model_floor.entry(turn.clone()).or_default();
+    *current = (*current).max(floor);
+}
+
+fn retired_model(floor: Option<&u64>, source: &OutputSource) -> bool {
+    matches!(source, OutputSource::Model { source }
+        if floor.is_some_and(|floor| source.response_index < *floor))
+}
+
+fn closed(observer: &Observer, source: &OutputSource, channel: &str) -> bool {
+    observer
+        .finished_turns
+        .contains(&output_turn(source).turn_id)
+        || retired_model(
+            observer.model_floor.get(&output_turn(source).turn_id),
+            source,
+        )
+        || observer
+            .closed
+            .iter()
+            .any(|(known, name)| known == source && name == channel)
 }
 
 fn newer<K: Eq + std::hash::Hash>(
@@ -783,12 +917,7 @@ fn observe_output(
     channel: &str,
     event: &ObservationEvent,
 ) {
-    if canonical(card, &source)
-        || observer
-            .closed
-            .iter()
-            .any(|(known, name)| known == &source && name == channel)
-    {
+    if canonical(card, &source) || closed(observer, &source, channel) {
         return;
     }
     let output = output(observer, &source, channel);

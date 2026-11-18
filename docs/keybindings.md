@@ -164,6 +164,8 @@ templates appear alongside commands and expand before submission.
 | `q`, `Esc` on the fatal screen | Quit. |
 | Wheel | Scroll one row, or five with Alt. Over a picker, move its selection; over a view, scroll that view. |
 | Click a tool card | Toggle its folded state. Dragging selects instead. |
+| Click an Agent card footer | Open its child Session, or explain that its history is unavailable. |
+| Click a later send's locate footer | Jump to its original Agent card. |
 | Click a failed Turn's message or end line | Read its complete error, including its original Session and Turn identities. |
 | Click a Turn-end line with changes and no error | Open the live workspace Git diff. |
 | Click or drag in the editor | Place the caret or select draft text, respecting grapheme and paste-chip boundaries. |
@@ -179,6 +181,14 @@ Separate Responses thinking parts retain their line breaks while streaming and
 after reopening a Session. Adjacent visible blocks use one separator row;
 tool-only responses do not add empty rows between cards. Expanding a card keeps
 blank lines inside its output.
+
+Delegated Agent cards continue updating after the startup tool returns. Their
+collapsed and expanded previews show six and eighteen recent visual rows.
+Only Host's settled delegation marks completion; a receipt means input was
+accepted. Click the footer to read the child Session and answer its approvals
+there. Child events do not redirect the parent's input or change its draft.
+If a temporary child has been released, the card keeps its observed preview
+and identifies the unavailable full history.
 
 Only content is copied from the transcript. Rails, padding, timestamps,
 durations, expansion hints, partial-response labels and Turn-end summaries are
