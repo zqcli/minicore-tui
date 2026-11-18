@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.12.8 — 2026-11-18
+
+- Align the TUI and embedded Host package versions to 0.12.8 without changing
+  runtime behavior, native formats or the external dependency graph.
+- Pin Host 0.12.8 to immutable revision
+  `2a88d4771bf7a12c14f6290dbe0b6ce265092886`; update current version documentation
+  and the four version-bearing terminal snapshots.
+
 ## 0.12.7 — 2026-11-18
 
 - Keep delegated child conversations in the original startup Agent card after
