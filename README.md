@@ -1,7 +1,7 @@
 # minicore-tui
 
 `minicore-tui` is a fullscreen terminal frontend for
-[minicore-host](https://github.com/zqcli/minicore-host). Version 0.12.9 embeds
+[minicore-host](https://github.com/zqcli/minicore-host). Version 0.12.10 embeds
 Host 0.12.9 in the same executable and uses its typed Rust client through
 `HostClient::in_process`. Host owns Agents, Sessions, execution, tools,
 credentials, history and persistence; the TUI owns terminal interaction and
