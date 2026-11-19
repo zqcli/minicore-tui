@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.12.9 — 2026-11-19
+
+- Embed Host 0.12.9 at immutable revision
+  `e05bb4b890f79ccf51ed1f5f76dc6f2e46e74ecc`. The Responses adapter accepts
+  advisory `response.metadata` for the active response without bypassing final
+  completion validation. Session pause and resume behavior is unchanged.
+
 ## 0.12.8 — 2026-11-18
 
 - Align the TUI and embedded Host package versions to 0.12.8 without changing
