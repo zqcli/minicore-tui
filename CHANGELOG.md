@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Keep untitled Sessions under their short ID in `/sessions`, even after
+  opening their history. Only a saved title replaces the ID.
+
 ## 0.12.9 — 2026-11-19
 
 - Embed Host 0.12.9 at immutable revision

@@ -2,7 +2,9 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::app::overlay::{matching_agents, matching_models, session_target};
+use crate::app::overlay::{
+    matching_agents, matching_models, matching_sessions, session_label, session_target,
+};
 use crate::app::picker;
 use crate::app::{Action, App, NoticeLevel, Overlay, find};
 
@@ -119,7 +121,7 @@ impl App {
             return;
         };
         let target = session_target(info);
-        let label = self.session_title(info);
+        let label = session_label(info).to_owned();
         let again = matches!(&self.overlay, Overlay::Sessions { armed: Some(armed), .. } if *armed == target);
         if let Overlay::Sessions { armed, .. } = &mut self.overlay {
             *armed = (!again).then(|| target.clone());
@@ -150,7 +152,7 @@ impl App {
     pub fn overlay_move(&mut self, delta: isize) {
         let len = match &self.overlay {
             Overlay::Palette { .. } | Overlay::Files { .. } => self.completion_len(),
-            Overlay::Sessions { rows, filter, .. } => self.filtered_sessions(rows, filter).len(),
+            Overlay::Sessions { rows, filter, .. } => matching_sessions(rows, filter).len(),
             Overlay::Models { filter, .. } => matching_models(&self.models, filter).len(),
             Overlay::Agents { filter, .. } => matching_agents(&self.agents, filter).len(),
             Overlay::Reasoning { .. } => self.reasoning_levels().len(),
@@ -257,8 +259,7 @@ impl App {
                 filter,
                 rows,
                 ..
-            } => self
-                .filtered_sessions(&rows, &filter)
+            } => matching_sessions(&rows, &filter)
                 .get(selected)
                 .map(|info| Action::OpenSession(session_target(info))),
             find @ Overlay::Find { .. } => {

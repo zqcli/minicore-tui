@@ -62,8 +62,9 @@ Session's workspace. The shared starter records the initialization workspace
 for its default Agent. Startup model/reasoning overrides are consumed once.
 Later navigation reads the selected Session's saved settings.
 
-The Session picker always places the existing six-character native Session ID
-first in its detail column. The layout reserves that identity before clipping
+The Session picker uses the catalog's nonblank title or the six-character native
+Session ID, never the loaded transcript. It also places the ID first in the
+detail column. The layout reserves that identity before clipping
 the title and optional details, so different long titles remain distinguishable
 by ID. Filtering and actions still use full native addresses; this display
 rule creates no title cache, collision registry or Host metadata.

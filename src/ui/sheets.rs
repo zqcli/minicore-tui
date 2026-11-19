@@ -4,7 +4,7 @@
 
 use ratatui::text::{Line, Span};
 
-use crate::app::overlay::{self, matching_models, short_session_id, workspace_name};
+use crate::app::overlay::{self, matching_models, session_label, short_session_id, workspace_name};
 use crate::app::picker;
 use crate::app::{App, LiveStatus, Overlay, Session};
 use crate::transcript::Block;
@@ -226,17 +226,17 @@ fn sessions_sheet(
     } = *state;
     let foreground = app.resident.current().map(Session::address);
     let now = jiff::Timestamp::now().as_second();
-    let shown = app.filtered_sessions(rows, filter);
     if let Some((target, title)) = renaming {
         let name = rows
             .iter()
             .find(|info| overlay::session_target(info) == *target)
-            .map(|info| app.session_title(info))
-            .unwrap_or_else(|| target.session_id.to_string());
+            .map(session_label)
+            .unwrap_or_else(|| short_session_id(target.session_id.as_str()));
         return Sheet::new("Rename Session", "enter save · esc cancel")
             .status(name)
             .search(title);
     }
+    let shown = overlay::matching_sessions(rows, filter);
     let workspace = app.workspace.to_string_lossy();
     let status = if shown.len() == rows.len() {
         plural(rows.len() as u64, "session")
@@ -258,7 +258,7 @@ fn sessions_sheet(
                     .is_some_and(|value| value.path != workspace),
                 agent: Some(agent_label(app, &info.agent_id)),
             };
-            let row = session_row(info, app.session_title(info), &context, now);
+            let row = session_row(info, &context, now);
             if armed == Some(&target) || live.is_some_and(failed_unseen) {
                 row.tone(Tone::Failure)
             } else {
@@ -713,15 +713,8 @@ struct RowContext {
     other_workspace: bool,
 }
 
-/// One sessions-picker row: `label` (the title, or the first prompt), with
-/// its short ID first in the right-hand detail so clipped titles and long
-/// metadata do not hide the identity.
-fn session_row(
-    info: &SessionSummary,
-    label: String,
-    context: &RowContext,
-    now_seconds: i64,
-) -> Row {
+/// Keep the short ID first in the detail column so clipped titles cannot hide it.
+fn session_row(info: &SessionSummary, context: &RowContext, now_seconds: i64) -> Row {
     let mut parts = vec![short_session_id(info.id.as_str()).to_owned()];
     parts.extend(context.agent.iter().chain(&context.state).cloned());
     if context.current {
@@ -736,7 +729,7 @@ fn session_row(
     if !age.is_empty() {
         parts.push(age);
     }
-    Row::new(label, parts.join(" · ")).mark(context.current)
+    Row::new(session_label(info), parts.join(" · ")).mark(context.current)
 }
 
 fn context_sheet(app: &App, styles: Styles) -> Sheet {
@@ -1047,16 +1040,11 @@ mod tests {
 
     #[test]
     fn a_session_row_says_if_it_is_current_and_shows_its_age_not_the_model() {
-        let row = session_row(
-            &info(),
-            "Fix the parser".into(),
-            &context(true, false),
-            now(),
-        );
+        let row = session_row(&info(), &context(true, false), now());
         assert_eq!(row.label, "Fix the parser");
         assert_eq!(row.mark, Some(true));
         assert_eq!(row.detail, "1acdef · current · 3h");
-        let row = session_row(&info(), "x".into(), &context(false, false), now());
+        let row = session_row(&info(), &context(false, false), now());
         assert_eq!(row.mark, Some(false));
         assert_eq!(row.detail, "1acdef · 3h");
     }
@@ -1068,7 +1056,7 @@ mod tests {
         let mut context = context(false, true);
         context.agent = Some("Coder".into());
         context.state = Some("running 0m".into());
-        let row = session_row(&other, "Same".into(), &context, now());
+        let row = session_row(&other, &context, now());
         assert_eq!(row.detail, "1acdef · Coder · running 0m · stockroom · 3h");
     }
 

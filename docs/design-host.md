@@ -164,7 +164,8 @@ remains the execution ownership chain.
   Selected deletion remains one step. A forward delete with nothing to remove
   creates no edit and preserves valid redo; empty Ctrl+D keeps its quit meaning.
 - Every Sessions picker row displays the existing six-character native
-  Session-ID prefix, including unique, duplicate, automatic and fallback names.
+  Session-ID prefix, whether a title is unique, duplicated or absent. Untitled
+  rows use the ID as their name before and after opening their history.
   Reserve room for this stable short ID before clipping the title and optional
   details. Filtering, running state, ordering, renaming and reopening the picker
   do not change it. Full `(agent_id, session_id)` identities continue to target

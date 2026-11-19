@@ -327,6 +327,63 @@ fn submit(h: &mut Harness, text: &str, follow: bool) {
 }
 
 #[tokio::test(start_paused = true)]
+async fn session_picker_names_stay_stable_after_opening_history() {
+    const PROMPT: &str = "First prompt in the saved conversation";
+    const TITLE: &str = "Project Mercury";
+    let (native, target) = {
+        let mut h = Harness::opened().await;
+        let target = h.another_session().await;
+        h.open(&target).await;
+        submit(&mut h, PROMPT, false);
+        let call = h.next_call().await;
+        call.text("Noted");
+        call.finish();
+        h.until(|app| terminal_count(app, &target) == 1).await;
+        (h.native, target)
+    };
+
+    // A fresh frontend sees the catalog before it has opened the target's history.
+    let mut h = Harness::from_native(native).await;
+    let sheet = |app: &App| crate::ui::sheets::sheet(app, app.styles).unwrap();
+    let id = target.session_id.as_str();
+    let short = &id[..6];
+    assert!(h.app.live(&target).is_none());
+    h.app.composer.set_text("/sessions");
+    h.press(KeyCode::Enter);
+    h.app.on_paste(id);
+    assert_eq!(sheet(&h.app).rows[0].label, short);
+    h.press(KeyCode::Enter);
+    h.until(|app| app.live(&target).is_some()).await;
+    let opened = h.app.resident.current().unwrap();
+    assert_eq!(opened.address(), target);
+    assert_eq!(opened.info.title, None);
+    assert_eq!(opened.auto_title().as_deref(), Some(PROMPT));
+
+    h.ctrl(KeyCode::Char('r'));
+    assert_eq!(sheet(&h.app).rows[0].label, short);
+    h.app.on_paste(PROMPT);
+    assert!(sheet(&h.app).rows.is_empty());
+    h.press(KeyCode::Esc);
+    h.ctrl(KeyCode::Char('r'));
+    h.ctrl(KeyCode::Char('d'));
+    let notice = format!("Press Ctrl+D again to delete \"{short}\" permanently");
+    assert_eq!(h.notices().last().copied(), Some(notice.as_str()));
+    h.ctrl(KeyCode::Char('n'));
+    assert_eq!(sheet(&h.app).status.as_deref(), Some(short));
+    h.type_text(TITLE);
+    h.press(KeyCode::Enter);
+    h.until(|app| {
+        app.sessions
+            .iter()
+            .any(|s| s.id == target.session_id && s.title.as_deref() == Some(TITLE))
+    })
+    .await;
+    h.app.on_paste("prj mrc");
+    assert_eq!(sheet(&h.app).rows[0].label, TITLE);
+    h.finish().await;
+}
+
+#[tokio::test(start_paused = true)]
 async fn first_input_stays_with_its_created_session_after_navigation() {
     let mut h = Harness::opened().await;
     let existing = h.native.target.clone();

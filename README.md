@@ -121,7 +121,8 @@ edits; Ctrl+Z and Ctrl+Y restore or replay them.
 - **Agents and Sessions:** `/agents` selects a Host Agent, `/agent-new` copies
   its native configuration into a new dynamic Agent, and the Session picker shows
   actual owning Agents, lifecycle states and a stable short Session ID on every
-  row. The ID remains visible when long titles are clipped.
+  row. Untitled Sessions keep that ID as their name even after you open them.
+  The ID remains visible when long titles are clipped.
   Background Sessions keep running when terminal selection changes. Rename,
   close, delete, load, unload, pause and resume use native Host operations.
   Renaming refreshes the original Session's list and detail metadata even after

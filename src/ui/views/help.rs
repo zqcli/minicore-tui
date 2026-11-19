@@ -86,7 +86,7 @@ const KEYS: &[KeyRow] = &[
     },
     KeyRow {
         keys: "ctrl+r",
-        action: "sessions; each row shows its stable short ID",
+        action: "sessions; untitled rows use their short ID",
     },
     KeyRow {
         keys: "ctrl+l",

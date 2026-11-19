@@ -7,7 +7,7 @@ use std::path::Path;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::diff::DiffState;
-use super::{Action, App, NoticeLevel, Session, commands, find};
+use super::{Action, App, NoticeLevel, commands, find};
 use crate::app::picker::fuzzy_match;
 use crate::ui::sheets;
 use minicore_host_core::{AgentSummary, ModelDescription, SessionSummary};
@@ -143,17 +143,12 @@ pub fn matching_models<'a>(
         .collect()
 }
 
-/// A session's name in the picker: its title, else (for a live session `live`)
-/// its first prompt, else its short id.
-pub fn session_label(info: &SessionSummary, live: Option<&Session>) -> String {
-    let title = info
-        .title
+/// The picker names a Session from catalog metadata, not its loaded history.
+pub fn session_label(info: &SessionSummary) -> &str {
+    info.title
         .as_deref()
-        .filter(|title| !title.trim().is_empty());
-    title
-        .map(str::to_owned)
-        .or_else(|| live?.auto_title())
-        .unwrap_or_else(|| short_session_id(info.id.as_str()).to_owned())
+        .filter(|title| !title.trim().is_empty())
+        .unwrap_or_else(|| short_session_id(info.id.as_str()))
 }
 
 /// The folder a session's workspace ends in.
@@ -187,30 +182,20 @@ pub fn matching_agents<'a>(agents: &'a [AgentSummary], filter: &str) -> Vec<&'a 
         .collect()
 }
 
+pub fn matching_sessions<'a>(rows: &'a [SessionSummary], filter: &str) -> Vec<&'a SessionSummary> {
+    let filter = filter.trim();
+    rows.iter()
+        .filter(|info| {
+            filter.is_empty()
+                || fuzzy_match(session_label(info), filter)
+                || fuzzy_match(info.id.as_str(), filter)
+                || fuzzy_match(info.agent_id.as_str(), filter)
+                || workspace_name(info).is_some_and(|name| fuzzy_match(&name, filter))
+        })
+        .collect()
+}
+
 impl App {
-    /// The name the picker shows for `info`.
-    pub fn session_title(&self, info: &SessionSummary) -> String {
-        session_label(info, self.resident.find(&session_target(info)))
-    }
-
-    /// The picker rows whose name or workspace folder fuzzy-matches `filter`, in order.
-    pub fn filtered_sessions<'a>(
-        &self,
-        rows: &'a [SessionSummary],
-        filter: &str,
-    ) -> Vec<&'a SessionSummary> {
-        let filter = filter.trim();
-        rows.iter()
-            .filter(|info| {
-                filter.is_empty()
-                    || fuzzy_match(&self.session_title(info), filter)
-                    || fuzzy_match(info.id.as_str(), filter)
-                    || fuzzy_match(info.agent_id.as_str(), filter)
-                    || workspace_name(info).is_some_and(|name| fuzzy_match(&name, filter))
-            })
-            .collect()
-    }
-
     /// The row the open sessions picker has selected.
     pub(super) fn selected_session(&self) -> Option<&SessionSummary> {
         let Overlay::Sessions {
@@ -222,7 +207,7 @@ impl App {
         else {
             return None;
         };
-        self.filtered_sessions(rows, filter).get(*selected).copied()
+        matching_sessions(rows, filter).get(*selected).copied()
     }
 
     /// Opens a picker or view, seeding it from the current state.

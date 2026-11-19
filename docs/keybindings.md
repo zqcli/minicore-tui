@@ -223,7 +223,7 @@ Session filter clears its pending delete confirmation.
 |---|---|
 | Commands | Type to fuzzy-filter. Enter runs the selected command; Tab completes its name. Argument completion is available for model, reasoning, theme and approval. |
 | Agents | Filter by name or ID. Enter selects the Agent. Ctrl+D opens a confirmation with its name, ID and captured child Session list; only `y` deletes that set. Enter does not confirm. Sessions added after confirmation opens are not included. |
-| Sessions | Filter by title, first loaded prompt, Session ID, Agent ID or workspace folder. Enter opens the selected Session. Ctrl+N captures that Session for renaming; Enter saves and Esc cancels. Ctrl+D twice confirms deletion of the same Agent/Session identity. |
+| Sessions | Rows show the saved title or, if untitled, the short Session ID. Filter by title, Session ID, Agent ID or workspace folder, not message text. Enter opens the selected Session. Ctrl+N renames it; Enter saves and Esc cancels. Ctrl+D twice confirms deletion of the same Agent/Session identity. |
 | Session (`/session`) | Show Agent and Session IDs, title, workspace, storage, lifecycle, residency, scheduling, approval mode, model, reasoning, raw history count and latest response usage. Enter or `c` copies the Session ID. |
 | Context (`/context`) | Show configured and active model facts, native history/projection counts, queue counts, compaction and save state. `r` refreshes; `c` copies. |
 | Models | Filter model references; Enter selects one. The declared context window is model metadata. |
