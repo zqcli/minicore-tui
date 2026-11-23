@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.12.11 — 2026-11-23
+
+- Embed Host 0.12.11 at immutable revision
+  `6badd94e91a8e1ebf6aa04d67dd6e34898ad79cb` (SPEC 4.11.6): transient model
+  failures retry while nothing was shown, mid-turn compaction keeps the active
+  request, tool failures state their reason and local failures are `failed`,
+  bash output reaching the model is bounded with an omission count, and the
+  agent tool defaults its targets and inherits the caller's settings.
+- Keep `--workspace`/the startup directory for new Sessions; do not open a
+  default Session from another workspace at startup.
+- Show user messages with their own line breaks and fold long ones; break CJK
+  text between characters without stranding punctuation.
+- Render delegated results as cards with outcome and final answer; title Agent
+  cards by their task with progress and one line per tool; add `/child` and
+  Esc-to-parent navigation, and `/cancel`.
+- Show Turn duration and file changes on the end line; show saving only when it
+  has not happened. Keep one title row for folded and expanded tool cards, count
+  real edit replacements, read failures and directory listings as text and mark
+  stderr.
+- Unify pickers (pointer, current mark, Esc wording, empty states), group the
+  command palette with current values, give enumerated commands their choices,
+  check arguments before sending while keeping the draft, confirm `/close` and
+  Session deletion with `y`, and say plainly why `/compact` waits.
+- Make an Esc-cleared draft restorable with Ctrl+Z; render headings, code blocks
+  and task lists without Markdown syntax; draw the jump-to-latest row as a bar;
+  follow the terminal background (`COLORFGBG`) when no theme is configured.
+
 ## 0.12.10 — 2026-11-19
 
 - Keep untitled Sessions under their short ID in `/sessions`, even after
