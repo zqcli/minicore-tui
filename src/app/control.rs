@@ -196,7 +196,6 @@ impl App {
             if let Overlay::Sessions {
                 rows,
                 selected,
-                armed,
                 renaming,
                 ..
             } = &mut self.overlay
@@ -207,9 +206,6 @@ impl App {
                     agent_id: snapshot.agent_id.clone(),
                     session_id: snapshot.session_id.clone(),
                 };
-                if armed.as_ref() == Some(&target) {
-                    *armed = None;
-                }
                 if renaming.as_ref().is_some_and(|(known, _)| known == &target) {
                     *renaming = None;
                 }
@@ -714,7 +710,13 @@ impl App {
     fn set_terminal_facts(&mut self, epoch: u64, turn_id: &TurnId, data: &TurnStateData) {
         let Some(outcome) = data.outcome else { return };
         let session = self.session_mut(epoch);
-        let duration = None;
+        // The Turn as this terminal watched it run.
+        let duration = session
+            .live
+            .as_ref()
+            .filter(|live| &live.turn_id == turn_id)
+            .map(|live| live.started.elapsed());
+        let changes = crate::transcript::turn_changes(session.transcript.blocks(), turn_id);
         let transcript = &mut session.transcript;
         let at = transcript.blocks().iter().position(
             |block| matches!(block, Block::TurnEnd { turn_id: known, .. } if known == turn_id),
@@ -723,11 +725,13 @@ impl App {
             if let Some(Block::TurnEnd {
                 saving,
                 duration: known_duration,
+                changes: known_changes,
                 ..
             }) = transcript.block_mut(at)
             {
                 *saving = Some(data.persistence);
                 *known_duration = known_duration.or(duration);
+                *known_changes = known_changes.or(changes);
             }
         } else {
             transcript.push(Block::TurnEnd {
@@ -738,7 +742,7 @@ impl App {
                 requests: data.requests,
                 tool_rounds: data.tool_rounds,
                 usage: Usage::default(),
-                changes: None,
+                changes,
                 saving: Some(data.persistence),
             });
         }

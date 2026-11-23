@@ -5,6 +5,7 @@
 
 pub mod blocks;
 pub mod composer;
+pub mod delegated;
 pub mod markdown;
 pub mod panel;
 #[cfg(test)]

@@ -273,6 +273,16 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, styles: Styles) {
         super::put_line(buffer, area, row);
     }
     if top + height < total && area.height > 0 {
+        // A whole bar, so the label never sits on top of half a content row.
+        let bar = Rect {
+            y: area.bottom() - 1,
+            height: 1,
+            ..area
+        };
+        buffer.set_style(bar, styles.composer());
+        for x in bar.left()..bar.right() {
+            buffer[(x, bar.y)].set_symbol(" ");
+        }
         let cells = jump_label(area.width);
         buffer.set_stringn(
             area.x + cells.start,

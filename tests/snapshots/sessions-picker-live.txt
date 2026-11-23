@@ -1,5 +1,5 @@
 
-  minicore-tui v0.12.10
+  minicore-tui v0.12.11
 
   esc interrupt · ctrl+c clear · / commands · @ files · ctrl+o expand · ctrl+r sessions
 
@@ -11,7 +11,7 @@
 
  >
 
- › Cache the parser                                                   000000 · Coder · current · now
+ → Cache the parser                                                             000000 · Coder · now
    Port the lexer                                                  000000 · Coder · running 0m · now
    Clean the build                                             000000 · Coder · needs approval · now
    Write the docs                                                         000000 · Coder · new · now

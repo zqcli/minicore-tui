@@ -147,3 +147,35 @@ fn missing_saved_default_is_visible_and_never_replaced_with_another_session() {
         sessions[0].id
     );
 }
+
+#[test]
+fn starting_in_another_workspace_never_opens_the_default_sessions_project() {
+    let selected = AgentId::new().unwrap();
+    let default_dir = Path::new("project-a");
+    let here = Path::new("project-b");
+    let default = session(&selected, default_dir, 50);
+    let agents = vec![agent(&selected, Some(default.id.clone()))];
+    let open = |sessions: &[SessionSummary], workspace: &Path| {
+        startup_session(
+            sessions,
+            &agents,
+            Some(&selected),
+            None,
+            None,
+            false,
+            workspace,
+        )
+        .unwrap()
+        .map(|target| target.session_id)
+    };
+    // Same directory: the default opens as before.
+    assert_eq!(
+        open(std::slice::from_ref(&default), default_dir),
+        Some(default.id.clone())
+    );
+    // Another directory: nothing opens, so the first input creates a Session there.
+    assert_eq!(open(std::slice::from_ref(&default), here), None);
+    // Unless that directory already has recent work, which resumes instead.
+    let local = session(&selected, here, 20);
+    assert_eq!(open(&[default, local.clone()], here), Some(local.id));
+}

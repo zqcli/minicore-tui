@@ -16,6 +16,12 @@ use minicore_host_protocol::{AgentId, SessionId, SessionRef};
 #[derive(Debug)]
 pub enum Overlay {
     None,
+    /// An irreversible action, stated with what it affects; only `y` runs it.
+    Confirm {
+        title: String,
+        lines: Vec<String>,
+        action: super::Action,
+    },
     Unconfirmed {
         selected: usize,
         mode: super::unconfirmed::ReviewMode,
@@ -29,8 +35,6 @@ pub enum Overlay {
         selected: usize,
         /// Display order, fixed when the picker opens.
         rows: Vec<SessionSummary>,
-        /// The session a first Ctrl+D asked to delete.
-        armed: Option<SessionRef>,
         /// The new title being typed for the selected session.
         renaming: Option<(SessionRef, String)>,
     },
@@ -246,7 +250,6 @@ impl App {
                 filter: String::new(),
                 selected: 0,
                 rows: self.session_rows(),
-                armed: None,
                 renaming: None,
             },
             Panel::Agents => Overlay::Agents {
@@ -360,24 +363,49 @@ impl App {
         commands::filter(query, &self.templates)
             .into_iter()
             .map(|command| {
-                let detail = if command.args.is_empty() {
+                let mut detail = if command.args.is_empty() {
                     command.description.to_owned()
                 } else {
                     format!("{} — {}", command.args, command.description)
                 };
+                if let Some(current) = self.current_value(command.name) {
+                    detail = format!("now {current} · {detail}");
+                }
                 (command.name.to_owned(), detail)
             })
             .collect()
     }
 
+    /// The value a setting command would change, shown before it runs.
+    fn current_value(&self, name: &str) -> Option<String> {
+        match name {
+            "model" => self.model_id().map(str::to_owned),
+            "reasoning" => self
+                .reasoning()
+                .map(|level| sheets::reasoning_label(level).to_owned()),
+            "approval" => self
+                .resident
+                .current()
+                .map(|session| approval_label(session.info.config.execution.approval).to_owned()),
+            "theme" => Some(
+                match self.theme {
+                    crate::config::ThemeKind::Dark => "dark",
+                    crate::config::ThemeKind::Light => "light",
+                }
+                .to_owned(),
+            ),
+            _ => None,
+        }
+    }
+
     fn arg_rows(&self, name: &str, filter: &str) -> Vec<(String, String)> {
-        let plain = |values: &[&str]| -> Vec<(String, String)> {
+        let described = |values: &[(&str, &str)]| -> Vec<(String, String)> {
             values
                 .iter()
-                .map(|value| ((*value).to_owned(), String::new()))
+                .map(|(value, detail)| ((*value).to_owned(), (*detail).to_owned()))
                 .collect()
         };
-        let mut rows = match name {
+        let mut rows: Vec<(String, String)> = match name {
             "model" => self
                 .models
                 .iter()
@@ -386,12 +414,36 @@ impl App {
             "reasoning" => self
                 .reasoning_levels()
                 .iter()
-                .map(|level| (sheets::reasoning_label(*level).to_owned(), String::new()))
+                .map(|level| {
+                    (
+                        sheets::reasoning_label(*level).to_owned(),
+                        sheets::reasoning_description(*level).to_owned(),
+                    )
+                })
                 .collect(),
-            "theme" => plain(&["dark", "light"]),
-            "approval" => plain(&["ask", "auto", "read_only"]),
+            "theme" => described(&[
+                ("dark", "Light text on a dark terminal"),
+                ("light", "Dark text on a light terminal"),
+            ]),
+            "approval" => described(&[
+                ("ask", "Ask before each tool call that needs approval"),
+                ("auto", "Run tool calls without asking"),
+                ("read_only", "Allow only tools that change nothing"),
+            ]),
             _ => unreachable!(),
         };
+        // The same current mark as the pickers.
+        if let Some(current) = self.current_value(name) {
+            for (value, detail) in &mut rows {
+                if *value == current {
+                    *detail = if detail.is_empty() {
+                        "✓ current".to_owned()
+                    } else {
+                        format!("✓ current · {detail}")
+                    };
+                }
+            }
+        }
         rows.retain(|(value, _)| fuzzy_match(value, filter));
         rows.sort_by_key(|(value, _)| (value != filter, !value.starts_with(filter)));
         rows
@@ -503,5 +555,13 @@ impl App {
         let mut rows = self.sessions.clone();
         rows.sort_by_cached_key(|info| (live(info), std::cmp::Reverse(rank(info))));
         rows
+    }
+}
+
+fn approval_label(mode: minicore_host_protocol::ApprovalMode) -> &'static str {
+    match mode {
+        minicore_host_protocol::ApprovalMode::Ask => "ask",
+        minicore_host_protocol::ApprovalMode::Auto => "auto",
+        minicore_host_protocol::ApprovalMode::ReadOnly => "read_only",
     }
 }

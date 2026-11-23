@@ -67,6 +67,8 @@ pub struct ToolCall {
     result_seen: bool,
     arguments_display: Option<(String, bool)>,
     edit_input: Option<String>,
+    /// How many places an edit actually replaced, from its result.
+    replacements: Option<usize>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -126,6 +128,7 @@ impl ToolCall {
             result_seen: false,
             arguments_display: None,
             edit_input: None,
+            replacements: None,
         }
     }
 
@@ -140,16 +143,20 @@ impl ToolCall {
         self.arguments = Some(arguments.clone());
         self.arguments_display = Some(json_display(arguments));
         let string = |key: &str| arguments.get(key).and_then(Value::as_str);
-        self.detail = string("path")
-            .or_else(|| string("command"))
-            .or_else(|| string("query"))
-            .or_else(|| string("pattern"))
-            .or_else(|| string("description"))
-            .unwrap_or("")
-            .lines()
-            .next()
-            .unwrap_or("")
-            .to_owned();
+        self.detail = if self.name == "agent" {
+            agent_subject(arguments)
+        } else {
+            string("path")
+                .or_else(|| string("command"))
+                .or_else(|| string("query"))
+                .or_else(|| string("pattern"))
+                .or_else(|| string("description"))
+                .unwrap_or("")
+                .lines()
+                .next()
+                .unwrap_or("")
+                .to_owned()
+        };
         self.edit_input = if self.name == "edit" {
             string("old_text")
                 .zip(string("new_text"))
@@ -162,6 +169,17 @@ impl ToolCall {
         } else {
             None
         };
+    }
+
+    /// What an `agent` wait returned, in words; other results keep their body.
+    fn agent_wait_text(&self, content: &str) -> Option<&'static str> {
+        let value: Value = serde_json::from_str(content).ok()?;
+        (self.name == "agent" && self.detail.starts_with("wait")).then_some(())?;
+        match value["status"].as_str()? {
+            "input_available" => Some("A delegated result or new input arrived\n"),
+            "timed_out" => Some("Nothing arrived before the wait timed out\n"),
+            _ => None,
+        }
     }
 
     pub fn expanded_input(&self) -> Option<&str> {
@@ -238,6 +256,7 @@ impl ToolCall {
             .duration
             .or_else(|| self.started_at.map(|start| start.elapsed()));
         let content = result.output.content().as_str();
+        let content = self.agent_wait_text(content).unwrap_or(content);
         let command = (self.name == "bash")
             .then(|| serde_json::from_str::<CommandResult>(content).ok())
             .flatten();
@@ -248,9 +267,15 @@ impl ToolCall {
             .is_none()
             .then(|| serde_json::from_str::<Value>(content).ok())
             .flatten();
+        if self.name == "edit" {
+            self.replacements = parsed
+                .as_ref()
+                .and_then(|value| value["replacements"].as_u64())
+                .and_then(|count| usize::try_from(count).ok());
+        }
         if matches!(
             self.name.as_str(),
-            "read" | "write" | "edit" | "apply_patch"
+            "read" | "write" | "edit" | "apply_patch" | "bash"
         ) {
             self.result_error = parsed
                 .as_ref()
@@ -281,6 +306,14 @@ impl ToolCall {
                     let stdout =
                         super::agent_card::tail(stdout, limit.saturating_sub(stderr.len()));
                     self.push_output(stdout);
+                    if !stdout.trim().is_empty() && !stderr.trim().is_empty() {
+                        // Both streams interleave in one card; mark where stderr starts.
+                        self.push_output(if stdout.ends_with('\n') {
+                            "── stderr ──\n"
+                        } else {
+                            "\n── stderr ──\n"
+                        });
+                    }
                     self.push_output(stderr);
                 }
                 _ => {
@@ -292,6 +325,36 @@ impl ToolCall {
                                 && value["kind"] == "file"
                         })
                         .and_then(|value| value["text"].as_str());
+                    // Failures and directory listings read as text, not JSON.
+                    let readable = parsed.as_ref().and_then(|value| {
+                        if value["status"] == "failed" {
+                            let error = &value["error"];
+                            return Some(format!(
+                                "{}{}\n",
+                                error["message"].as_str().unwrap_or("failed"),
+                                error["code"]
+                                    .as_str()
+                                    .map(|code| format!(" ({code})"))
+                                    .unwrap_or_default()
+                            ));
+                        }
+                        let entries = value["entries"]
+                            .as_array()
+                            .filter(|_| self.name == "read" && value["kind"] == "directory")?;
+                        let mut listing = String::new();
+                        for entry in entries {
+                            listing.push_str(entry["name"].as_str().unwrap_or("?"));
+                            if entry["kind"] == "directory" {
+                                listing.push('/');
+                            }
+                            listing.push('\n');
+                        }
+                        if let Some(next) = value["next_offset"].as_u64() {
+                            listing.push_str(&format!("… more from offset {next}\n"));
+                        }
+                        Some(listing)
+                    });
+                    let read_text = read_text.or(readable.as_deref());
                     let formatted = parsed.as_ref().filter(|_| read_text.is_none());
                     let display =
                         formatted
@@ -423,7 +486,13 @@ impl ToolCall {
                         _ => {}
                     }
                 }
-                Some(counts)
+                // An edit's text is one replacement; replace_all repeats it.
+                let times = if self.name == "edit" {
+                    self.replacements.unwrap_or(1).max(1)
+                } else {
+                    1
+                };
+                Some((counts.0 * times, counts.1 * times))
             }
             _ => None,
         }
@@ -626,6 +695,34 @@ fn append_capped_to(line: &mut String, text: &str, limit: usize) -> bool {
     true
 }
 
+/// `create session · task`, `send · task`, `wait for delegated results`: the
+/// action an `agent` call takes, in place of its JSON.
+fn agent_subject(arguments: &Value) -> String {
+    let field = |key: &str| arguments.get(key).and_then(Value::as_str).unwrap_or("");
+    let first_line = |text: &str| {
+        text.lines()
+            .find(|line| !line.trim().is_empty())
+            .unwrap_or("")
+            .trim()
+            .to_owned()
+    };
+    match field("action") {
+        "wait" => "wait for delegated results".into(),
+        "create" => {
+            let task = first_line(field("text"));
+            let what = format!("create {}", field("resource"));
+            if task.is_empty() {
+                what
+            } else {
+                format!("{what} · {task}")
+            }
+        }
+        "send" => format!("send · {}", first_line(field("text"))),
+        "" => String::new(),
+        action => action.to_owned(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -762,10 +859,12 @@ mod tests {
             stdout: CommandStream {
                 output: OutputData::Utf8("actual\n".into()),
                 complete: true,
+                omitted_bytes: 0,
             },
             stderr: CommandStream {
                 output: OutputData::Utf8("diagnostic\n".into()),
                 complete: true,
+                omitted_bytes: 0,
             },
             file_changes: CommandFileChanges::Unknown,
             cleanup_errors: Vec::new(),
@@ -773,7 +872,10 @@ mod tests {
         call.apply_result(&result(&command));
         assert_eq!(call.header_detail(), "$ printf actual");
         assert_eq!(call.exit_code, Some(3));
-        assert_eq!(call.output_content(), ["actual", "diagnostic"]);
+        assert_eq!(
+            call.output_content(),
+            ["actual", "── stderr ──", "diagnostic"]
+        );
         assert_eq!(call.state, ToolState::Succeeded);
         let mut bytes = command;
         bytes.stdout.output = OutputData::Bytes(vec![255, 0]);
@@ -802,10 +904,12 @@ mod tests {
             stdout: CommandStream {
                 output: OutputData::Utf8(text.clone()),
                 complete: true,
+                omitted_bytes: 0,
             },
             stderr: CommandStream {
                 output: OutputData::Utf8("diagnostic\n".into()),
                 complete: true,
+                omitted_bytes: 0,
             },
             file_changes: CommandFileChanges::Unknown,
             cleanup_errors: Vec::new(),
@@ -814,10 +918,13 @@ mod tests {
         bash.push_output("older observed output");
         bash.apply_preview_result(&result(command));
         assert_eq!(bash.exit_code, Some(3));
-        assert!(
-            bash.output_content()
-                .ends_with(&["last first", "", "last second", "diagnostic"])
-        );
+        assert!(bash.output_content().ends_with(&[
+            "last first",
+            "",
+            "last second",
+            "── stderr ──",
+            "diagnostic"
+        ]));
         assert!(bash.truncated);
         assert!(
             bash.output.iter().map(|line| line.len() + 1).sum::<usize>()

@@ -51,7 +51,13 @@ pub fn render(block: &Block, styles: Styles, width: u16, fold: Fold) -> Vec<Line
     }
     let width = width as usize;
     match block {
-        Block::User { text, kind, at } => user(text, *kind, *at, styles, width),
+        Block::User {
+            text,
+            kind: UserKind::Delegated,
+            at,
+        } => super::delegated::render(text, *at, styles, width, fold.expanded)
+            .unwrap_or_else(|| user(text, UserKind::Prompt, *at, styles, width, fold.expanded)),
+        Block::User { text, kind, at } => user(text, *kind, *at, styles, width, fold.expanded),
         Block::Assistant {
             reasoning,
             text,
@@ -180,19 +186,36 @@ pub fn plain_text(block: &Block) -> String {
 pub const MIN_WIDTH: usize = 8;
 
 /// A user card: the composer surface with a pad row above and below.
+/// Rows of a folded user message; pasted logs and code stay readable as text.
+const USER_ROWS: usize = 12;
+
 fn user(
     text: &str,
     kind: UserKind,
     at: Option<Timestamp>,
     styles: Styles,
     width: usize,
+    expanded: bool,
 ) -> Vec<Line<'static>> {
     let row = |spans: Vec<Span<'static>>| {
         surface_row(styles.user_rail(), styles.composer(), spans, width)
     };
     let mut lines = vec![chrome(row(Vec::new()))];
-    for line in markdown::render(text, text_width(width), &styles, styles.text()) {
+    // What the user typed is shown as typed: line breaks and indentation are
+    // content, not Markdown soft breaks.
+    let mut body = wrap::wrapped(&wrap::sanitize(text), text_width(width), styles.text());
+    let hidden = body.len().saturating_sub(USER_ROWS);
+    if !expanded && hidden > 0 {
+        body.truncate(USER_ROWS - 1);
+    }
+    for line in body {
         lines.push(row(padded(line.spans)));
+    }
+    if !expanded && hidden > 0 {
+        lines.push(chrome(row(padded(vec![Span::styled(
+            format!("... ({} more lines, ctrl+o to expand)", hidden + 1),
+            styles.dim(),
+        )]))));
     }
     let mut meta = Vec::new();
     meta.extend(at.map(|at| stamp_label(at, local_zone())));
@@ -210,7 +233,7 @@ fn user(
 }
 
 /// `HH:MM · MM/DD/YYYY` for an owner timestamp in `zone`.
-fn stamp_label(at: Timestamp, zone: &TimeZone) -> String {
+pub(super) fn stamp_label(at: Timestamp, zone: &TimeZone) -> String {
     timestamp(at)
         .to_zoned(zone.clone())
         .strftime("%H:%M · %m/%d/%Y")
@@ -226,7 +249,7 @@ pub(crate) fn timestamp(at: Timestamp) -> WallTime {
         .expect("Host timestamp is valid")
 }
 
-fn local_zone() -> &'static TimeZone {
+pub(super) fn local_zone() -> &'static TimeZone {
     // Windows reports an IANA name but supplies no zoneinfo database. Keep
     // jiff's tzdb-bundle-platform feature enabled: without it system() can
     // silently fall back to UTC, rendering 06:54 instead of local 14:54.
@@ -239,7 +262,7 @@ fn local_zone() -> &'static TimeZone {
 }
 
 /// `spans` behind the one-cell inner pad.
-fn padded(spans: Vec<Span<'static>>) -> Vec<Span<'static>> {
+pub(super) fn padded(spans: Vec<Span<'static>>) -> Vec<Span<'static>> {
     let mut row = vec![Span::raw(" ")];
     row.extend(spans);
     row
@@ -419,21 +442,25 @@ pub(super) fn tool(
 
     let bash = call.name == "bash";
     let spacer = || chrome(row(Vec::new()));
-    let mut lines = vec![spacer()];
-    let title_style = styles.tool_title().add_modifier(Modifier::BOLD);
-    let mut right = meta(call, styles, !bash);
-    let title = expanded_title(call);
-    let title_rows = title
+    // The same first rows as the folded card; expanding only adds below them.
+    let mut lines = vec![row(title_spans(
+        vec![Span::styled(
+            wrap::truncate(&card_title(call), inner),
+            styles.tool_title(),
+        )],
+        meta(call, styles, !bash),
+        inner,
+    ))];
+    let subject = expanded_title(call);
+    let subject_rows = subject
         .lines()
         .take(EXPANDED_ROWS)
         .flat_map(|line| wrap::wrap_line(&wrap::sanitize(line), inner));
-    for (index, line) in title_rows.enumerate() {
-        let left = vec![Span::styled(line, title_style)];
-        lines.push(row(if index == 0 {
-            title_spans(left, std::mem::take(&mut right), inner)
-        } else {
-            padded(left)
-        }));
+    for line in subject_rows {
+        lines.push(row(padded(vec![Span::styled(
+            line,
+            styles.tool_output().add_modifier(Modifier::BOLD),
+        )])));
     }
 
     if let Some(progress) = &call.progress {
@@ -442,7 +469,12 @@ pub(super) fn tool(
             styles.meta(),
         )]))));
     }
-    if let Some((value, truncated)) = call.argument_display() {
+    // These cards already show their main input as the subject or the body.
+    let shown_inline = matches!(
+        call.name.as_str(),
+        "bash" | "write" | "edit" | "apply_patch"
+    );
+    if let Some((value, truncated)) = call.argument_display().filter(|_| !shown_inline) {
         lines.push(spacer());
         lines.push(chrome(row(padded(vec![Span::styled(
             "Arguments",
@@ -560,11 +592,9 @@ pub(super) fn tool(
     lines
 }
 
+/// The tool's own name, as the model and the docs spell it.
 fn display_name(call: &ToolCall) -> &str {
-    match call.name.as_str() {
-        "apply_patch" => "apply-patch",
-        name => name,
-    }
+    call.name.as_str()
 }
 
 /// The collapsed title: the tool, and for a patch how many lines it has.
@@ -572,7 +602,7 @@ fn card_title(call: &ToolCall) -> String {
     match (call.name.as_str(), call.expanded_input()) {
         ("apply_patch", Some(input)) => {
             let lines = input.lines().count();
-            format!("apply-patch ({})", plural(lines as u64, "line"))
+            format!("apply_patch ({})", plural(lines as u64, "line"))
         }
         _ => display_name(call).to_owned(),
     }
@@ -594,18 +624,15 @@ fn error_line(call: &ToolCall) -> Option<&str> {
 
 /// The bold first rows of an expanded card: the whole command for `bash`,
 /// else the tool name and its subject.
+/// The subject under an expanded card's title: the whole `bash` command, or
+/// the same detail the folded card shows.
 fn expanded_title(call: &ToolCall) -> String {
-    let detail = call.header_detail();
     if call.name == "bash"
         && let Some(command) = call.expanded_input()
     {
         return format!("$ {}", command.trim());
     }
-    match (call.name == "bash", detail.is_empty()) {
-        (_, true) => display_name(call).to_owned(),
-        (true, false) => detail,
-        (false, false) => format!("{} {detail}", display_name(call)),
-    }
+    call.header_detail()
 }
 
 /// What a card adds right of its title: completed duration, an unusual end, a
@@ -841,12 +868,12 @@ pub fn turn_end_line(
             None => files,
         });
     }
+    // Saving is expected; only a save that has not happened is news, and a
+    // reopened history must read the same as the live one did.
     match saving {
         Some(PersistenceState::Pending) => parts.push("save pending".into()),
         Some(PersistenceState::Failed) => parts.push("save failed".into()),
-        Some(PersistenceState::NotApplicable) => parts.push("save not applicable".into()),
-        Some(PersistenceState::Persisted) => parts.push("saved".into()),
-        None => {}
+        Some(PersistenceState::Persisted | PersistenceState::NotApplicable) | None => {}
     }
     wrap::sanitize(&parts.join(" · ")).into_owned()
 }
@@ -959,6 +986,38 @@ mod tests {
             assert_eq!(line.spans[0].style.bg, None, "the rail cell has no surface");
             assert_eq!(line.spans[1].style.bg, Some(Palette::dark().composer_bg));
         }
+    }
+
+    #[test]
+    fn user_text_keeps_its_lines_and_long_pastes_fold() {
+        let block = Block::User {
+            text: "Error: boom\n    at foo (a.js:1:1)\n    at bar (b.js:2:2)".into(),
+            kind: UserKind::Prompt,
+            at: None,
+        };
+        assert_eq!(
+            text(&render(&block, styles(), 40, fold())),
+            [
+                "▎",
+                "▎ Error: boom",
+                "▎     at foo (a.js:1:1)",
+                "▎     at bar (b.js:2:2)",
+                "▎"
+            ]
+        );
+        let long = Block::User {
+            text: (0..40).map(|i| format!("log line {i}\n")).collect(),
+            kind: UserKind::Prompt,
+            at: None,
+        };
+        let folded = text(&render(&long, styles(), 40, fold()));
+        assert!(
+            folded.contains(&"▎ ... (30 more lines, ctrl+o to expand)".to_owned()),
+            "{folded:?}"
+        );
+        assert!(!folded.iter().any(|row| row.contains("log line 39")));
+        let open = text(&render(&long, styles(), 40, expanded()));
+        assert!(open.iter().any(|row| row.contains("log line 39")));
     }
 
     #[test]
@@ -1201,7 +1260,7 @@ mod tests {
         let body = card(started(), expanded());
         assert_eq!(
             body,
-            ["▎", "▎ $ python3 -m unittest", "▎", "▎ running…", "▎",]
+            ["▎ bash", "▎ $ python3 -m unittest", "▎", "▎ running…", "▎",]
         );
     }
 
@@ -1292,7 +1351,7 @@ mod tests {
         assert_eq!(
             card(long, expanded()),
             [
-                "▎",
+                "▎ bash",
                 "▎ $ cd app",
                 "▎ python3 -m unittest",
                 "▎",
@@ -1340,7 +1399,9 @@ mod tests {
         read.detail = "src/app.py:1-40".into();
         read.exit_code = None;
         let lines = render(&Block::Tool(Box::new(read)), styles(), 60, expanded());
-        assert!(lines[1].to_string().starts_with("▎ read src/app.py:1-40"));
+        // The folded title row stays; the subject follows it in bold.
+        assert!(lines[0].to_string().starts_with("▎ read"));
+        assert!(lines[1].to_string().starts_with("▎ src/app.py:1-40"));
         assert!(
             lines[1].spans[2]
                 .style
@@ -1366,7 +1427,7 @@ mod tests {
         let folded = card(patch_card(), fold());
         assert_eq!(folded[1], "▎ app.py");
         assert!(
-            folded[0].starts_with("▎ apply-patch (8 lines)"),
+            folded[0].starts_with("▎ apply_patch (8 lines)"),
             "{folded:?}"
         );
         assert!(folded[0].ends_with("0.4s · +1 −0"), "{folded:?}");
@@ -1379,18 +1440,19 @@ mod tests {
             expanded(),
         );
         let body = text(&lines);
-        assert_eq!(
-            body[1],
-            format!("▎ apply-patch app.py{}0.4s · +1 −0", " ".repeat(27))
-        );
+        // Expanding keeps the folded title row and adds the subject below it.
+        assert!(body[0].starts_with("▎ apply_patch (8 lines)"), "{body:?}");
+        assert!(body[0].ends_with("0.4s · +1 −0"), "{body:?}");
+        assert_eq!(body[1], "▎ app.py");
         assert!(body.iter().any(|row| row == "▎ @@ -1,2 +1,3 @@"));
         let added = body
             .iter()
             .position(|row| row == "▎ +    \"\"\"Greet.\"\"\"")
             .unwrap();
         assert_eq!(lines[added].spans[2].style.fg, Some(Palette::dark().added));
+        // The patch is the body; its argument JSON is not repeated.
         assert!(
-            body.iter().any(|row| row.contains("\"patch\":")),
+            !body.iter().any(|row| row.contains("\"patch\":")),
             "{body:?}"
         );
     }
@@ -1635,7 +1697,7 @@ mod tests {
         let body = card(failed, fold());
         assert_eq!(
             body[0],
-            format!("▎ apply-patch (8 lines){}failed", " ".repeat(30))
+            format!("▎ apply_patch (8 lines){}failed", " ".repeat(30))
         );
         assert_eq!(body[1], "▎ app.py");
         assert_eq!(body[2], "▎ tool invocation is invalid");
@@ -1762,14 +1824,15 @@ mod tests {
             ),
             "completed · 8 requests · 7 tool rounds · save failed"
         );
+        // Only a save that has not happened is shown.
         for (persistence, label) in [
-            (PersistenceState::Pending, "save pending"),
-            (PersistenceState::Persisted, "saved"),
-            (PersistenceState::NotApplicable, "save not applicable"),
+            (PersistenceState::Pending, "completed · save pending"),
+            (PersistenceState::Persisted, "completed"),
+            (PersistenceState::NotApplicable, "completed"),
         ] {
             assert_eq!(
                 turn_end_line(&TurnOutcome::Completed, None, 0, 0, None, Some(persistence)),
-                format!("completed · {label}")
+                label
             );
         }
         assert_eq!(format_duration(Duration::from_secs(187)), "3m07s");
@@ -1800,6 +1863,8 @@ mod tests {
     #[test]
     fn expanded_tools_show_complete_arguments_and_delegated_session_identity() {
         let mut call = call();
+        // A tool whose input is not already its subject or body shows its JSON.
+        call.name = "fetch".into();
         call.set_arguments(&serde_json::json!({"command":"cargo test", "timeout_ms":30000}));
         call.delegations.push(
             serde_json::from_value(serde_json::json!({

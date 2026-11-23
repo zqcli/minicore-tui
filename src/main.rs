@@ -200,7 +200,10 @@ async fn run() -> i32 {
             return 2;
         }
     };
-    let theme = args.theme.unwrap_or(launch.ui.theme);
+    let theme = args
+        .theme
+        .or(launch.ui.theme)
+        .unwrap_or_else(minicore_tui::config::ThemeKind::detect);
     let workspace = match args
         .workspace
         .clone()
@@ -532,7 +535,7 @@ fn startup_session(
     } else if let Some(agent) =
         selected_agent.and_then(|id| agents.iter().find(|agent| &agent.id == id))
     {
-        match &agent.default_session_id {
+        let default = match &agent.default_session_id {
             Some(id) => Some(
                 sessions
                     .iter()
@@ -542,7 +545,18 @@ fn startup_session(
                     })?,
             ),
             None => None,
-        }
+        };
+        // Starting in another project must not resume work in the default
+        // Session's directory. Without a match, the first input creates a
+        // Session in the startup workspace.
+        default
+            .filter(|session| {
+                session
+                    .workspace
+                    .as_ref()
+                    .is_none_or(|bound| Path::new(&bound.path) == workspace)
+            })
+            .or_else(|| pick_recent(sessions, Some(&agent.id), workspace))
     } else {
         None
     };

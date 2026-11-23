@@ -12,6 +12,8 @@ pub enum UserKind {
     Prompt,
     Steering,
     FollowUp,
+    /// A child Session's settled result, delivered to its delegating parent.
+    Delegated,
 }
 
 #[derive(Clone, Debug)]

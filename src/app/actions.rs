@@ -47,6 +47,8 @@ pub enum Action {
     Load,
     Unload,
     CloseSession,
+    /// `/close`: states what closing means before `CloseSession` runs.
+    ConfirmClose,
     StartAgent,
     StopAgent,
     DeleteAgent {
@@ -55,6 +57,9 @@ pub enum Action {
     },
     SetDefaultSession,
     SetApproval(ApprovalMode),
+    /// `/child [n]`: the nth latest delegated child of this conversation.
+    OpenChild(usize),
+    Interrupt,
     Quit,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -213,6 +218,31 @@ impl App {
                         NoticeLevel::Info,
                         "Select a Session to change its approval policy",
                     );
+                }
+            }
+            Action::OpenChild(nth) => self.open_nth_child(nth),
+            Action::ConfirmClose => {
+                if let Some(session) = self.resident.current() {
+                    let label = match &session.info.title {
+                        Some(title) => format!("{title} · {}", session.info.id),
+                        None => session.info.id.to_string(),
+                    };
+                    self.overlay = super::Overlay::Confirm {
+                        title: "Close Session".into(),
+                        lines: vec![
+                            label,
+                            "A closed session cannot run again; its history stays readable.".into(),
+                            "/new starts a new session.".into(),
+                        ],
+                        action: Action::CloseSession,
+                    };
+                }
+            }
+            Action::Interrupt => {
+                if self.is_busy() {
+                    self.interrupt();
+                } else {
+                    self.notice(NoticeLevel::Info, "Nothing is running");
                 }
             }
             Action::Quit => self.request_quit(),
@@ -610,6 +640,14 @@ impl App {
         });
     }
     pub fn escape(&mut self) {
+        // From a child opened through its card, Esc goes back rather than
+        // interrupting the child's delegated work; /cancel interrupts it.
+        if self.composer.is_empty()
+            && let Some(parent) = self.return_target().cloned()
+        {
+            self.open_session(parent);
+            return;
+        }
         if self.is_busy() {
             self.interrupt();
             return;
@@ -645,12 +683,21 @@ impl App {
                     .map(drop)
                     .map_err(|e| e.to_string())
             });
-        } else {
+        } else if !self.composer.is_empty() {
             self.composer.clear();
+            self.notice(NoticeLevel::Info, "Draft cleared · ctrl+z restores it");
         }
     }
     pub(super) fn compact(&mut self) {
         if !self.require_control() {
+            return;
+        }
+        if self.is_busy() {
+            // Host rejects it as SESSION_BUSY; say what to do instead.
+            self.notice(
+                NoticeLevel::Usage,
+                "A turn is running; /compact after it finishes, or /cancel it first",
+            );
             return;
         }
         let Some(session) = self.resident.current() else {
@@ -929,7 +976,7 @@ impl App {
         self.spawn_msg(async move {
             match crate::clipboard::copy(&text).await {
                 Ok(crate::clipboard::Copied::Native) => Msg::Flash("Copied!".into()),
-                Ok(crate::clipboard::Copied::Osc52) => Msg::Flash("Copied via OSC 52".into()),
+                Ok(crate::clipboard::Copied::Osc52) => Msg::Flash("Copied to the clipboard".into()),
                 Err(error) => Msg::Notice(NoticeLevel::Error, error),
             }
         });

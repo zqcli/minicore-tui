@@ -14,6 +14,48 @@ pub use block::{Block, ChangeSummary, RequestKey, UserKind};
 pub use history::{to_markdown, write_markdown};
 pub use tool_call::{EXPANDED_ROWS, ToolCall, ToolKey, ToolState};
 
+/// Wall time between two Host timestamps; none if the clock went backwards.
+pub fn elapsed(start: Timestamp, end: Timestamp) -> Option<std::time::Duration> {
+    let start = crate::ui::blocks::timestamp(start);
+    let end = crate::ui::blocks::timestamp(end);
+    std::time::Duration::try_from(end.duration_since(start)).ok()
+}
+
+/// The files a Turn's successful file tools changed, with line counts when
+/// every change is countable. Arbitrary shell edits are not attributed.
+pub fn turn_changes(blocks: &[Block], turn: &TurnId) -> Option<ChangeSummary> {
+    let mut files = std::collections::HashSet::new();
+    let mut lines = (0, 0);
+    let mut counted = true;
+    for block in blocks {
+        let Block::Tool(call) = block else { continue };
+        if call.key.turn_id() != Some(turn)
+            || call.state != ToolState::Succeeded
+            || !matches!(call.name.as_str(), "write" | "edit" | "apply_patch")
+        {
+            continue;
+        }
+        if let Some(path) = call
+            .arguments
+            .as_ref()
+            .and_then(|arguments| arguments["path"].as_str())
+        {
+            files.insert(path.to_owned());
+        }
+        match call.line_changes() {
+            Some((added, removed)) => {
+                lines.0 += added;
+                lines.1 += removed;
+            }
+            None => counted = false,
+        }
+    }
+    (!files.is_empty()).then(|| ChangeSummary {
+        files: files.len(),
+        lines: counted.then_some(lines),
+    })
+}
+
 fn next_revision() -> u64 {
     static NEXT: AtomicU64 = AtomicU64::new(1);
     NEXT.fetch_add(1, Ordering::Relaxed)
@@ -245,6 +287,58 @@ impl Transcript {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_turns_changes_count_its_successful_file_tools_only() {
+        let turn: TurnId = "00000000000000000001".parse().unwrap();
+        let tool = |id: &str, name: &str, arguments: serde_json::Value, state| {
+            let mut call = ToolCall::new(
+                ToolCallRef {
+                    turn_id: turn.clone(),
+                    tool_call_id: id.to_owned().into(),
+                },
+                name,
+            );
+            call.set_arguments(&arguments);
+            call.set_state(state);
+            Block::Tool(Box::new(call))
+        };
+        let blocks = [
+            tool(
+                "w",
+                "write",
+                serde_json::json!({"path":"a.rs","content":"1\n2\n"}),
+                ToolState::Succeeded,
+            ),
+            tool(
+                "e",
+                "edit",
+                serde_json::json!({"path":"a.rs","old_text":"1","new_text":"one"}),
+                ToolState::Succeeded,
+            ),
+            tool(
+                "f",
+                "edit",
+                serde_json::json!({"path":"b.rs","old_text":"x","new_text":"y"}),
+                ToolState::Failed,
+            ),
+            tool(
+                "r",
+                "read",
+                serde_json::json!({"path":"c.rs"}),
+                ToolState::Succeeded,
+            ),
+        ];
+        assert_eq!(
+            turn_changes(&blocks, &turn),
+            Some(ChangeSummary {
+                files: 1,
+                lines: Some((3, 1))
+            })
+        );
+        let other: TurnId = "00000000000000000002".parse().unwrap();
+        assert_eq!(turn_changes(&blocks, &other), None);
+    }
 
     #[test]
     fn independent_transcripts_never_share_cache_revisions() {

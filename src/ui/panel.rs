@@ -219,15 +219,18 @@ impl Sheet {
         let session = self.kind == Kind::Session;
         let current = row.mark == Some(true);
 
-        let pointer = match (selected, session) {
-            (true, true) => "› ",
-            (true, false) => "→ ",
-            (false, _) => "  ",
+        // The same pointer and current mark as every picker. Session rows share
+        // one column for both, so a narrow row still has room for its ID.
+        let pointer = match (selected, session && current) {
+            (true, _) => "→ ",
+            (false, true) => "✓ ",
+            (false, false) => "  ",
         };
         let mark = match row.mark {
-            Some(true) if !session => "✓ ",
-            Some(_) if !session => "  ",
-            _ => "",
+            _ if session => "",
+            Some(true) => "✓ ",
+            Some(false) => "  ",
+            None => "",
         };
         let label_style = match row.tone {
             Tone::Plain if session => {
@@ -459,7 +462,7 @@ mod tests {
         let lines = sheet.lines(styles, 30, sheet.height());
         assert_eq!(
             text(&lines[2]),
-            format!("› Fix the parser{}3 2h", " ".repeat(10))
+            format!("→ Fix the parser{}3 2h", " ".repeat(10))
         );
         assert_eq!(lines[2].style.bg, Some(palette.selection_bg));
         assert_eq!(lines[3].style.bg, None);

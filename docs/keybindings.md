@@ -109,7 +109,7 @@ confirmation in `F8` does not remove an accepted input from the Host queue.
 | `Enter` | Send a steer; with an empty draft, resume a paused Session. A recognized slash command runs instead of sending text. |
 | `Alt+Enter`, `Ctrl+Enter` | Send the draft as a follow-up; an empty draft does nothing. |
 | `Shift+Enter`, `Ctrl+J` | Insert a newline. |
-| `Esc` | Close a picker or view first. In the composer, clear a selection, otherwise interrupt the active Turn while preserving queued inputs, cancel manual compaction, or clear an idle draft. |
+| `Esc` | Close a picker or view first. In the composer, clear a selection; with an empty draft in a child Session opened from its card or `/child`, return to the parent; otherwise interrupt the active Turn while preserving queued inputs, cancel manual compaction, or clear an idle draft (Ctrl+Z restores it). |
 | `Ctrl+C` | Copy an editor selection; otherwise clear the draft. A second press within 500 ms quits. |
 | `Ctrl+D` | Quit with an empty draft; otherwise delete after the cursor. |
 | `↑`, `↓` | Move within a multiline draft, then browse prompt history at its first or last line. |
@@ -139,7 +139,7 @@ clears an abandoned redo branch. Deleting at the end with nothing to remove
 preserves valid redo. Undo and redo restore the complete text, cursor,
 selection and paste chips together.
 
-A bare unknown `/word` produces a suggestion before it is sent. Press `Enter`
+Command arguments are checked against the actual catalog before anything is sent: an unknown model or a reasoning level the model does not support shows the valid choices as a usage note and keeps the draft. The palette lists commands by use (session, context, model, session control, Agents, terminal) and shows the current model, reasoning, approval and theme. A bare unknown `/word` produces a suggestion before it is sent. Press `Enter`
 again to send it as text, or start with `//` to escape the initial slash.
 Paths such as `/usr/bin` and ordinary sentences remain prompts. Prompt
 templates appear alongside commands and expand before submission.
@@ -182,17 +182,23 @@ after reopening a Session. Adjacent visible blocks use one separator row;
 tool-only responses do not add empty rows between cards. Expanding a card keeps
 blank lines inside its output.
 
-Delegated Agent cards continue updating after the startup tool returns. Their
-collapsed and expanded previews show six and eighteen recent visual rows.
-Only Host's settled delegation marks completion; a receipt means input was
-accepted. Click the footer to read the child Session and answer its approvals
-there. Child events do not redirect the parent's input or change its draft.
+Delegated Agent cards continue updating after the startup tool returns. The
+title is the task's first line; the next row names the Agent, the short Session
+ID, tool rounds and the tool now running. Previews show up to six (expanded
+eighteen) rows of responses and one line per tool call, not tool output, and
+take only the rows they need. Only Host's settled delegation marks completion;
+a receipt means input was accepted. The child's result arrives in the parent as
+a "Delegated result" card with its outcome and final answer. Click the footer
+or use `/child` to read the child Session and answer its approvals there; Esc
+returns to the parent. Child events do not redirect the parent's input or change its draft.
 If a temporary child has been released, the card keeps its observed preview
 and identifies the unavailable full history.
 
 Only content is copied from the transcript. Rails, padding, timestamps,
 durations, expansion hints, partial-response labels and Turn-end summaries are
-excluded. Expanded tool cards include complete invocation arguments, retained
+excluded. A tool card keeps the same title row folded and expanded. Expanded
+cards include the invocation arguments of tools whose input is not already
+their subject or body (bash commands, written content and diffs are), retained
 output and any native child Agent/Session association. Long cards retain a
 bounded visible preview; `/export` reads the complete native history. Partial
 model responses are marked explicitly, and compaction markers report actual
@@ -223,7 +229,7 @@ Session filter clears its pending delete confirmation.
 |---|---|
 | Commands | Type to fuzzy-filter. Enter runs the selected command; Tab completes its name. Argument completion is available for model, reasoning, theme and approval. |
 | Agents | Filter by name or ID. Enter selects the Agent. Ctrl+D opens a confirmation with its name, ID and captured child Session list; only `y` deletes that set. Enter does not confirm. Sessions added after confirmation opens are not included. |
-| Sessions | Rows show the saved title or, if untitled, the short Session ID. Filter by title, Session ID, Agent ID or workspace folder, not message text. Enter opens the selected Session. Ctrl+N renames it; Enter saves and Esc cancels. Ctrl+D twice confirms deletion of the same Agent/Session identity. |
+| Sessions | Rows show the saved title or, if untitled, the short Session ID. Filter by title, Session ID, Agent ID or workspace folder, not message text. Enter opens the selected Session. Ctrl+N renames it; Enter saves and Esc cancels. Ctrl+D opens a confirmation naming that exact Session; only `y` deletes it. |
 | Session (`/session`) | Show Agent and Session IDs, title, workspace, storage, lifecycle, residency, scheduling, approval mode, model, reasoning, raw history count and latest response usage. Enter or `c` copies the Session ID. |
 | Context (`/context`) | Show configured and active model facts, native history/projection counts, queue counts, compaction and save state. `r` refreshes; `c` copies. |
 | Models | Filter model references; Enter selects one. The declared context window is model metadata. |
@@ -289,21 +295,23 @@ composer says `view open · esc to return`; unbound view keys do not edit it.
 | `/sessions` | Open the Sessions picker. |
 | `/session` | Show the current Session and its owning Agent. |
 | `/default-session` | Make the current Session its Agent's default. |
-| `/rename <title>` | Rename the current Session and refresh its list and detail metadata, even after switching Sessions. |
+| `/rename [title]` | Rename the current Session and refresh its list and detail metadata, even after switching Sessions. Without a title, the draft becomes `/rename <current title>` to edit. |
+| `/child [n]` | Open the latest delegated child Session of this conversation, or the nth latest. Esc with an empty draft returns to the parent. |
+| `/cancel` | Interrupt the running Turn and keep queued input; in a child opened from its card this is how to stop it. |
 | `/pause` | Pause input consumption in the current Session. |
 | `/resume` | Resume the current Session. |
 | `/load` | Load the current Session without resuming paused input. |
 | `/unload` | Request native unload of the current Session. |
-| `/close` | Close the current Session. |
+| `/close` | Review and confirm closing the current Session; only `y` closes it. A closed Session keeps its readable history and its composer says so. |
 | `/model [reference]` | Select an exact model reference or unique fuzzy match; with no argument, open the picker. |
 | `/reasoning [level]` | Apply a native reasoning preference; omit the argument to open the picker. Invalid values show the supported levels without changing the current value. |
-| `/approval <ask\|auto\|read_only>` | Update the current Session's approval policy for subsequent Turns. |
+| `/approval [ask\|auto\|read_only]` | Update the current Session's approval policy for subsequent Turns; without an argument, list the choices with the current one marked. |
 | `/compact` | Request manual context compaction; acceptance is not completion. A terminal failure shows its native fault once in a conversation notice; `/context` retains the details. |
 | `/context` | Read native context facts and past response usage. |
 | `/diff` | Read live Git changes, including untracked files, from the Session's Host workspace. |
 | `/copy` | Copy the last assistant answer as Markdown. |
 | `/export [path]` | Export native history to Markdown; the default is `./minicore-<session>-<date>.md`. |
-| `/theme [dark\|light]` | Choose and save a palette; no argument toggles it. |
+| `/theme [dark\|light]` | Choose and save a palette; without an argument, list the choices. F4 toggles. |
 | `/reload` | Ask Host to reload its bound JSON directory; refresh actual catalogs and local templates after full or partial application. |
 | `/recover` | Refresh current Session state, history and observations without resending inputs. |
 | `/unconfirmed` | Review local inputs whose acceptance is uncertain or was rejected. |

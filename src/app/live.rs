@@ -7,6 +7,13 @@ use std::collections::HashSet;
 impl App {
     pub fn open_session(&mut self, target: SessionRef) {
         if self
+            .return_to
+            .as_ref()
+            .is_some_and(|(child, _)| child != &target)
+        {
+            self.return_to = None;
+        }
+        if self
             .resident
             .current()
             .is_some_and(|s| s.info.agent_id == target.agent_id && s.info.id == target.session_id)
@@ -150,5 +157,63 @@ impl App {
             NoticeLevel::Info,
             format!("\"{}\" needs input · ctrl+r", self.session_label(epoch)),
         );
+    }
+}
+
+impl App {
+    fn current_ref(&self) -> Option<SessionRef> {
+        self.resident.current().map(|session| SessionRef {
+            agent_id: session.info.agent_id.clone(),
+            session_id: session.info.id.clone(),
+        })
+    }
+
+    /// Opens a delegated child so that Esc comes back to this Session.
+    pub(super) fn open_child(&mut self, child: SessionRef) {
+        let parent = self.current_ref();
+        self.open_session(child.clone());
+        self.return_to = parent.map(|parent| (child, parent));
+    }
+
+    /// `/child [n]`: the nth latest delegation card's child in this transcript.
+    pub(super) fn open_nth_child(&mut self, nth: usize) {
+        let mut children: Vec<(SessionRef, bool)> = Vec::new();
+        if let Some(session) = self.resident.current() {
+            for block in session.transcript.blocks().iter().rev() {
+                if let crate::transcript::Block::Tool(call) = block
+                    && let Some(card) = &call.agent_card
+                    && !children
+                        .iter()
+                        .any(|(child, _)| child == &card.association.child)
+                {
+                    children.push((card.association.child.clone(), card.history_unavailable));
+                }
+            }
+        }
+        match children.get(nth.saturating_sub(1)) {
+            // The same answer a click on the card's footer gives.
+            Some((_, true)) => self.notice(
+                NoticeLevel::Info,
+                "Child history is unavailable; this card retains the observed preview",
+            ),
+            Some((child, false)) => self.open_child(child.clone()),
+            None if children.is_empty() => self.notice(
+                super::NoticeLevel::Usage,
+                "No delegated child Session in this conversation",
+            ),
+            None => self.notice(
+                super::NoticeLevel::Usage,
+                format!(
+                    "This conversation has {} delegated child Sessions",
+                    children.len()
+                ),
+            ),
+        }
+    }
+
+    /// The parent Esc returns to, while the child opened from it is current.
+    pub fn return_target(&self) -> Option<&SessionRef> {
+        let (child, parent) = self.return_to.as_ref()?;
+        (self.current_ref().as_ref() == Some(child)).then_some(parent)
     }
 }

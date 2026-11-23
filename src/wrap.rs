@@ -105,6 +105,37 @@ fn units(line: &str, limit: usize) -> impl Iterator<Item = (Range<usize>, Range<
         Some(word)
     })
     .flat_map(move |(gap, word)| {
+        // CJK text has no spaces: every wide character is its own unit, so a
+        // Chinese run after Latin text or inline code fills the line instead
+        // of moving whole to the next row.
+        let mut parts = Vec::new();
+        let mut start = word.start;
+        let mut previous: Option<&str> = None;
+        let graphemes = (!line[word.clone()].is_ascii())
+            .then(|| line[word.clone()].grapheme_indices(true))
+            .into_iter()
+            .flatten();
+        for (offset, grapheme) in graphemes {
+            let at = word.start + offset;
+            if let Some(before) = previous
+                && cjk_break(before, grapheme)
+            {
+                parts.push(start..at);
+                start = at;
+            }
+            previous = Some(grapheme);
+        }
+        parts.push(start..word.end);
+        parts.into_iter().enumerate().map(move |(index, part)| {
+            let gap = if index == 0 {
+                gap.clone()
+            } else {
+                part.start..part.start
+            };
+            (gap, part)
+        })
+    })
+    .flat_map(move |(gap, word)| {
         let text = &line[word.clone()];
         // Preserve whole-string width rules before splitting an oversized word.
         let whole = width(text) <= limit;
@@ -122,6 +153,23 @@ fn units(line: &str, limit: usize) -> impl Iterator<Item = (Range<usize>, Range<
                 (gap, word.start + chunk.start..word.start + chunk.end)
             })
     })
+}
+
+/// A break between two adjacent graphemes of one word: around wide (CJK, full
+/// width, emoji) graphemes, except before closing or after opening punctuation.
+fn cjk_break(before: &str, after: &str) -> bool {
+    const NO_BREAK_BEFORE: &str = "，。、；：！？）」』】〉》”’…·%,.;:!?)]}'\"";
+    const NO_BREAK_AFTER: &str = "（「『【〈《“‘([{";
+    let wide = |grapheme: &str| width(grapheme) > 1;
+    (wide(before) || wide(after))
+        && !after
+            .chars()
+            .next()
+            .is_some_and(|ch| NO_BREAK_BEFORE.contains(ch))
+        && !before
+            .chars()
+            .last()
+            .is_some_and(|ch| NO_BREAK_AFTER.contains(ch))
 }
 
 /// Wraps one logical line, trimming the whitespace each break lands on.
@@ -381,6 +429,19 @@ mod tests {
             wrap("a /very/long/path/file.rs b", 10),
             ["a", "/very/long", "/path/file", ".rs b"]
         );
+    }
+
+    #[test]
+    fn cjk_after_latin_fills_the_line_and_keeps_punctuation_attached() {
+        let rows = wrap(
+            "限制说明：当前compact()仍将结果写入单个段，压缩结果超过上限时会报错。",
+            24,
+        );
+        assert_eq!(rows[0], "限制说明：当前compact()");
+        assert_eq!(rows[1], "仍将结果写入单个段，压缩");
+        assert!(rows.iter().all(|row| !row.starts_with(['，', '。', '：'])));
+        assert_eq!(wrap("值为（中文）", 5), ["值为", "（中", "文）"]);
+        assert_eq!(wrap("Store实例", 7), ["Store实", "例"]);
     }
 
     #[test]

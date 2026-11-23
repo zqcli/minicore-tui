@@ -387,6 +387,9 @@ impl Composer {
         if self.text.is_empty() {
             return;
         }
+        // Close an open typing gesture first: its snapshot predates the text,
+        // so the clear would otherwise compare equal and leave no undo step.
+        self.commit();
         self.snapshot();
         self.text.clear();
         self.version += 1;
@@ -1025,6 +1028,18 @@ fn next_grapheme(text: &str, cursor: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clearing_while_still_typing_can_be_undone() {
+        let mut editor = Composer::new();
+        for ch in "长草稿".chars() {
+            editor.type_char(ch);
+        }
+        editor.clear();
+        assert!(editor.is_empty());
+        assert!(editor.undo());
+        assert_eq!(editor.text(), "长草稿");
+    }
 
     #[test]
     fn bounded_pastes_validate_normalized_bytes_without_losing_the_existing_selection() {

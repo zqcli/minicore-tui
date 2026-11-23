@@ -126,28 +126,20 @@ impl App {
                 (choice, typed.to_owned())
             }
         };
-        match commands::execute(&name, &arg) {
-            Some(Executed::Action(action)) => {
-                self.overlay = Overlay::None;
-                self.composer.clear();
-                Some(action)
-            }
-            Some(Executed::Panel(panel)) => {
-                self.composer.clear();
-                self.open_panel(panel);
-                None
-            }
+        // A picked command runs exactly as if it had been typed.
+        if matches!(commands::execute(&name, &arg), Some(Executed::Noop)) && arg.is_empty() {
             // The completed name stays in the draft for the argument it needs.
-            _ => {
-                if let Some(text) = self.expand_template(&name, &arg) {
-                    self.overlay = Overlay::None;
-                    self.composer.set_text(&text);
-                    return Some(Action::Submit { follow: false });
-                }
-                self.apply_completion();
-                self.notice(NoticeLevel::Error, commands::needs_argument(&name));
-                None
-            }
+            self.apply_completion();
+            self.notice(NoticeLevel::Usage, commands::needs_argument(&name));
+            return None;
         }
+        self.overlay = Overlay::None;
+        let line = if arg.is_empty() {
+            format!("/{name}")
+        } else {
+            format!("/{name} {arg}")
+        };
+        self.composer.set_text(&line);
+        self.submit_or_command()
     }
 }

@@ -364,7 +364,7 @@ async fn query_paste_normalizes_single_line_text_on_all_four_surfaces() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn session_query_paste_targets_native_identity_and_resets_delete_confirmation() {
+async fn session_query_paste_targets_native_identity_and_delete_confirms_that_target() {
     let mut h = Harness::opened().await;
     h.another_session().await;
     h.app.refresh_catalogs();
@@ -375,21 +375,18 @@ async fn session_query_paste_targets_native_identity_and_resets_delete_confirmat
     let target = crate::app::overlay::session_target(h.app.selected_session().unwrap());
     h.ctrl(KeyCode::Char('d'));
     assert!(
-        matches!(&h.app.overlay, Overlay::Sessions { selected: 1, armed: Some(armed), .. } if *armed == target)
+        matches!(&h.app.overlay, Overlay::Confirm { action: Action::DeleteSession(confirmed), .. } if *confirmed == target)
     );
+    // Only y deletes; n leaves the session in place.
+    h.press(KeyCode::Char('n'));
+    assert!(matches!(h.app.overlay, Overlay::None));
+    h.ctrl(KeyCode::Char('r'));
     h.app.on_paste("\u{1b}[2J\u{feff}");
-    assert_eq!(query_state(&h.app.overlay), ("", 1));
-    assert!(
-        matches!(&h.app.overlay, Overlay::Sessions { armed: Some(armed), .. } if *armed == target)
-    );
+    assert_eq!(query_state(&h.app.overlay).0, "");
 
     let id = target.session_id.as_str();
     h.app.on_paste(&id[..6]);
     assert_eq!(query_state(&h.app.overlay), (&id[..6], 0));
-    assert!(matches!(
-        h.app.overlay,
-        Overlay::Sessions { armed: None, .. }
-    ));
     h.app.on_paste(&id[6..]);
     assert_eq!(query_state(&h.app.overlay), (id, 0));
     assert_eq!(
@@ -398,18 +395,6 @@ async fn session_query_paste_targets_native_identity_and_resets_delete_confirmat
     );
     assert_eq!(h.app.resident.current().unwrap().address(), h.native.target);
 
-    h.ctrl(KeyCode::Char('d'));
-    h.press(KeyCode::Backspace);
-    assert!(matches!(
-        h.app.overlay,
-        Overlay::Sessions { armed: None, .. }
-    ));
-    h.ctrl(KeyCode::Char('d'));
-    h.type_text(&id[id.len() - 1..]);
-    assert!(matches!(
-        h.app.overlay,
-        Overlay::Sessions { armed: None, .. }
-    ));
     h.press(KeyCode::Esc);
     assert_eq!(h.app.composer.text(), "keep this draft");
     h.ctrl(KeyCode::Char('r'));

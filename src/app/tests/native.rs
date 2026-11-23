@@ -366,8 +366,12 @@ async fn session_picker_names_stay_stable_after_opening_history() {
     h.press(KeyCode::Esc);
     h.ctrl(KeyCode::Char('r'));
     h.ctrl(KeyCode::Char('d'));
-    let notice = format!("Press Ctrl+D again to delete \"{short}\" permanently");
-    assert_eq!(h.notices().last().copied(), Some(notice.as_str()));
+    assert!(matches!(
+        &h.app.overlay,
+        crate::app::Overlay::Confirm { lines, .. } if lines[0].starts_with(short)
+    ));
+    h.press(KeyCode::Char('n'));
+    h.ctrl(KeyCode::Char('r'));
     h.ctrl(KeyCode::Char('n'));
     assert_eq!(sheet(&h.app).status.as_deref(), Some(short));
     h.type_text(TITLE);

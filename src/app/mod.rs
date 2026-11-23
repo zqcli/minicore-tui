@@ -96,6 +96,8 @@ pub struct LaunchSettings {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NoticeLevel {
     Info,
+    /// How to use a command; not an operation error, so not kept for /error.
+    Usage,
     Error,
 }
 #[derive(Clone, Debug)]
@@ -133,6 +135,12 @@ pub struct App {
     pub(super) tasks: tasks::Tasks,
     pub local_files: local_files::LocalFiles,
     pub workspace: PathBuf,
+    /// `--workspace` or the startup directory. New Sessions use it; opening
+    /// another Session only changes `workspace`.
+    pub launch_workspace: PathBuf,
+    /// A child Session opened from its delegation card, and the parent that
+    /// Esc returns to while that child is current.
+    pub return_to: Option<(SessionRef, SessionRef)>,
     pub resident: resident::Sessions,
     pub draft_text: String,
     pub ring: bool,
@@ -199,6 +207,8 @@ impl App {
             tx,
             tasks: tasks::Tasks::default(),
             local_files: local_files::LocalFiles::default(),
+            launch_workspace: workspace.clone(),
+            return_to: None,
             workspace,
             resident: resident::Sessions::default(),
             draft_text: String::new(),

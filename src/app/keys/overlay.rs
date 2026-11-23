@@ -6,7 +6,7 @@ use crate::app::overlay::{
     matching_agents, matching_models, matching_sessions, session_label, session_target,
 };
 use crate::app::picker;
-use crate::app::{Action, App, NoticeLevel, Overlay, find};
+use crate::app::{Action, App, Overlay, find};
 
 impl App {
     pub(super) fn on_overlay_paste(&mut self, text: &str) -> bool {
@@ -31,6 +31,20 @@ impl App {
     }
 
     pub(super) fn on_overlay_key(&mut self, key: KeyEvent) -> Option<Action> {
+        if matches!(self.overlay, Overlay::Confirm { .. }) {
+            match key.code {
+                KeyCode::Char('y') if key.modifiers.is_empty() => {
+                    if let Overlay::Confirm { action, .. } =
+                        std::mem::replace(&mut self.overlay, Overlay::None)
+                    {
+                        return Some(action);
+                    }
+                }
+                KeyCode::Esc | KeyCode::Enter | KeyCode::Char('n') => self.overlay = Overlay::None,
+                _ => {}
+            }
+            return None;
+        }
         if matches!(self.overlay, Overlay::AgentDelete { .. }) {
             match key.code {
                 KeyCode::Char('y') if key.modifiers.is_empty() => {
@@ -122,18 +136,14 @@ impl App {
         };
         let target = session_target(info);
         let label = session_label(info).to_owned();
-        let again = matches!(&self.overlay, Overlay::Sessions { armed: Some(armed), .. } if *armed == target);
-        if let Overlay::Sessions { armed, .. } = &mut self.overlay {
-            *armed = (!again).then(|| target.clone());
-        }
-        if again {
-            self.on_action(Action::DeleteSession(target));
-        } else {
-            self.notice(
-                NoticeLevel::Info,
-                format!("Press Ctrl+D again to delete \"{label}\" permanently"),
-            );
-        }
+        self.overlay = Overlay::Confirm {
+            title: "Delete Session".into(),
+            lines: vec![
+                format!("{label} · {}", target.session_id),
+                "Its stored history is deleted permanently.".into(),
+            ],
+            action: Action::DeleteSession(target),
+        };
     }
 
     /// Enter / Shift+Enter in the find bar: jump to the next or previous match.
@@ -181,7 +191,7 @@ impl App {
             }
             Overlay::Find { .. } => self.find_step(delta > 0),
             Overlay::Unconfirmed { .. } => self.move_local_input(delta),
-            Overlay::Context | Overlay::SessionInfo | Overlay::None => {}
+            Overlay::Context | Overlay::SessionInfo | Overlay::Confirm { .. } | Overlay::None => {}
         }
     }
 
@@ -215,16 +225,12 @@ impl App {
             .map_or(&[][..], |session| session.transcript.blocks());
         match &mut self.overlay {
             Overlay::Sessions {
-                filter,
-                selected,
-                armed,
-                ..
+                filter, selected, ..
             } => {
                 if !edit(filter) {
                     return;
                 }
                 *selected = 0;
-                *armed = None;
             }
             Overlay::Models { filter, selected } | Overlay::Agents { filter, selected } => {
                 if !edit(filter) {
@@ -250,7 +256,9 @@ impl App {
 
     fn on_overlay_accept(&mut self) -> Option<Action> {
         match std::mem::replace(&mut self.overlay, Overlay::None) {
-            review @ (Overlay::Unconfirmed { .. } | Overlay::AgentDelete { .. }) => {
+            review @ (Overlay::Unconfirmed { .. }
+            | Overlay::AgentDelete { .. }
+            | Overlay::Confirm { .. }) => {
                 self.overlay = review;
                 None
             }

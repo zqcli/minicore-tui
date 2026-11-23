@@ -21,15 +21,30 @@ use super::theme::Styles;
 use crate::wrap::width;
 
 /// Rows of the completion list that show at once.
-const COMPLETION_ROWS: usize = 5;
+const COMPLETION_ROWS: usize = 8;
 
 /// The sheet for the current overlay; a pending interaction is one too, as it owns the keyboard.
 pub fn sheet(app: &App, styles: Styles) -> Option<Sheet> {
     Some(match &app.overlay {
+        Overlay::Confirm { title, lines, .. } => Sheet::new(title, "y confirm · n/esc cancel")
+            .notes(
+                lines
+                    .iter()
+                    .map(|line| Line::styled(format!("  {line}"), styles.text()))
+                    .collect(),
+            ),
         Overlay::Unconfirmed { mode, .. } => {
             use crate::app::unconfirmed::ReviewMode;
             if matches!(mode, ReviewMode::Edit(_)) {
                 return None;
+            }
+            if app.local_inputs.is_empty() {
+                return Some(
+                    Sheet::new("Local input confirmations", "esc close").notes(vec![Line::styled(
+                        "  No unconfirmed input: every send was accepted",
+                        styles.dim(),
+                    )]),
+                );
             }
             let mut sheet = Sheet::new(
                 "Local input confirmations",
@@ -81,13 +96,11 @@ pub fn sheet(app: &App, styles: Styles) -> Option<Sheet> {
             filter,
             selected,
             rows,
-            armed,
             renaming,
         } => {
             let state = SessionsState {
                 filter,
                 selected: *selected,
-                armed: armed.as_ref(),
                 renaming: renaming.as_ref(),
             };
             sessions_sheet(app, rows, &state, styles)
@@ -206,8 +219,6 @@ fn completion_lines(
 struct SessionsState<'a> {
     filter: &'a str,
     selected: usize,
-    /// The session a first Ctrl+D asked to delete.
-    armed: Option<&'a minicore_host_protocol::SessionRef>,
     /// The title being typed, when a rename is under way.
     renaming: Option<&'a (minicore_host_protocol::SessionRef, String)>,
 }
@@ -221,7 +232,6 @@ fn sessions_sheet(
     let SessionsState {
         filter,
         selected,
-        armed,
         renaming,
     } = *state;
     let foreground = app.resident.current().map(Session::address);
@@ -259,18 +269,14 @@ fn sessions_sheet(
                 agent: Some(agent_label(app, &info.agent_id)),
             };
             let row = session_row(info, &context, now);
-            if armed == Some(&target) || live.is_some_and(failed_unseen) {
+            if live.is_some_and(failed_unseen) {
                 row.tone(Tone::Failure)
             } else {
                 row
             }
         })
         .collect::<Vec<_>>();
-    let hint = if armed.is_some() {
-        "ctrl+d delete again · esc cancel"
-    } else {
-        "enter open · ctrl+n rename · ctrl+d delete · esc close"
-    };
+    let hint = "enter open · ctrl+n rename · ctrl+d delete · esc close";
     let notes = if list.is_empty() {
         vec![Line::styled("  No sessions found", styles.dim())]
     } else {
@@ -300,13 +306,16 @@ fn models_sheet(app: &App, filter: &str, selected: usize, styles: Styles) -> She
         Some(model) => vec![
             Line::default(),
             Line::styled(
-                format!("  Model Name: {}", model_details(model)),
+                format!(
+                    "  {} context window",
+                    super::format_tokens(model.context_window)
+                ),
                 styles.dim(),
             ),
         ],
         None => vec![Line::styled("  No matching models", styles.dim())],
     };
-    Sheet::new("Select Model", "enter select · esc cancel")
+    Sheet::new("Select Model", "enter select · esc close")
         .status(plural(app.models.len() as u64, "model"))
         .search(filter)
         .rows(rows)
@@ -453,14 +462,14 @@ fn reasoning_sheet(app: &App, selected: usize) -> Sheet {
         .collect();
     Sheet::new(
         "Reasoning Level",
-        "enter select · shift+tab cycles · esc cancel",
+        "enter select · shift+tab cycles · esc close",
     )
     .kind(Kind::Column)
     .rows(rows)
     .selected(Some(selected))
 }
 
-fn reasoning_description(level: ReasoningPreference) -> &'static str {
+pub fn reasoning_description(level: ReasoningPreference) -> &'static str {
     match level {
         ReasoningPreference::Auto => "Model default",
         ReasoningPreference::Disabled => "No reasoning",
@@ -715,11 +724,13 @@ struct RowContext {
 
 /// Keep the short ID first in the detail column so clipped titles cannot hide it.
 fn session_row(info: &SessionSummary, context: &RowContext, now_seconds: i64) -> Row {
-    let mut parts = vec![short_session_id(info.id.as_str()).to_owned()];
+    // An untitled row's label already is its short ID.
+    let titled = session_label(info) != short_session_id(info.id.as_str());
+    let mut parts: Vec<String> = titled
+        .then(|| short_session_id(info.id.as_str()).to_owned())
+        .into_iter()
+        .collect();
     parts.extend(context.agent.iter().chain(&context.state).cloned());
-    if context.current {
-        parts.push("current".to_owned());
-    }
     if context.other_workspace
         && let Some(name) = workspace_name(info)
     {
@@ -739,7 +750,7 @@ fn context_sheet(app: &App, styles: Styles) -> Sheet {
 
 /// `/session`: the facts about the foreground session; Enter or `c` copies its id.
 fn session_info_sheet(app: &App, styles: Styles) -> Sheet {
-    let sheet = Sheet::new("Session", "enter copy id · c copy id · esc close");
+    let sheet = Sheet::new("Session", "c copy id · esc close");
     let Some(session) = app.resident.current() else {
         return sheet.body(vec![Line::styled("  No session is open", styles.dim())]);
     };
@@ -886,17 +897,16 @@ mod tests {
     }
 
     #[test]
-    fn five_rows_show_around_the_selection_with_a_counter() {
+    fn a_window_of_rows_shows_around_the_selection_with_a_counter() {
         let lines = completion_lines(&items(30), 10, styles(), 80);
         let rows: Vec<String> = lines.iter().map(text).collect();
-        assert_eq!(rows.len(), 6);
-        assert!(rows[0].starts_with("  cmd08"), "{:?}", rows[0]);
-        assert!(rows[2].starts_with("→ cmd10"), "{:?}", rows[2]);
-        assert!(rows[4].starts_with("  cmd12"), "{:?}", rows[4]);
-        assert_eq!(rows[5], "  (11/30)");
+        let window = picker::window(10, 30, COMPLETION_ROWS);
+        assert_eq!(rows.len(), COMPLETION_ROWS + 1);
+        assert!(rows[10 - window.start].starts_with("→ cmd10"), "{rows:?}");
+        assert_eq!(rows[COMPLETION_ROWS], "  (11/30)");
         let last = completion_lines(&items(30), 29, styles(), 80);
-        assert!(text(&last[4]).starts_with("→ cmd29"));
-        assert_eq!(text(&last[5]), "  (30/30)");
+        assert!(text(&last[COMPLETION_ROWS - 1]).starts_with("→ cmd29"));
+        assert_eq!(text(&last[COMPLETION_ROWS]), "  (30/30)");
     }
 
     #[test]
@@ -1039,11 +1049,12 @@ mod tests {
     }
 
     #[test]
-    fn a_session_row_says_if_it_is_current_and_shows_its_age_not_the_model() {
+    fn a_session_row_marks_the_current_one_and_shows_its_age_not_the_model() {
         let row = session_row(&info(), &context(true, false), now());
         assert_eq!(row.label, "Fix the parser");
+        // The same check mark as every picker, not a word.
         assert_eq!(row.mark, Some(true));
-        assert_eq!(row.detail, "1acdef · current · 3h");
+        assert_eq!(row.detail, "1acdef · 3h");
         let row = session_row(&info(), &context(false, false), now());
         assert_eq!(row.mark, Some(false));
         assert_eq!(row.detail, "1acdef · 3h");

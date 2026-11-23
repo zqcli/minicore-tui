@@ -14,7 +14,64 @@ pub struct Command<'a> {
     pub description: &'a str,
 }
 
+// Grouped by use: session, context and workspace, model, session control,
+// Agents, then the terminal itself.
 pub const COMMANDS: &[Command<'static>] = &[
+    Command {
+        name: "new",
+        args: "",
+        description: "Start a new session in the selected Agent",
+    },
+    Command {
+        name: "sessions",
+        args: "",
+        description: "Open, filter, rename or delete sessions",
+    },
+    Command {
+        name: "session",
+        args: "",
+        description: "Show this session and its owning Agent",
+    },
+    Command {
+        name: "rename",
+        args: "[title]",
+        description: "Rename this session; omit the title to edit the current one",
+    },
+    Command {
+        name: "child",
+        args: "[n]",
+        description: "Open the latest delegated child session, or the nth latest",
+    },
+    Command {
+        name: "cancel",
+        args: "",
+        description: "Interrupt the running turn and keep queued input",
+    },
+    Command {
+        name: "compact",
+        args: "",
+        description: "Compact the session context now",
+    },
+    Command {
+        name: "context",
+        args: "",
+        description: "Show native context facts and past response usage",
+    },
+    Command {
+        name: "diff",
+        args: "",
+        description: "Show Git working-tree changes, including untracked files",
+    },
+    Command {
+        name: "copy",
+        args: "",
+        description: "Copy the last answer to the clipboard",
+    },
+    Command {
+        name: "export",
+        args: "[path]",
+        description: "Export the conversation as Markdown",
+    },
     Command {
         name: "model",
         args: "[id]",
@@ -26,59 +83,9 @@ pub const COMMANDS: &[Command<'static>] = &[
         description: "Set a valid reasoning level; omit it to pick one",
     },
     Command {
-        name: "agents",
-        args: "",
-        description: "Select an Agent",
-    },
-    Command {
-        name: "agent-new",
-        args: "<name>",
-        description: "Copy the selected Agent's configuration into a new dynamic Agent",
-    },
-    Command {
-        name: "agent-start",
-        args: "",
-        description: "Start the selected Agent",
-    },
-    Command {
-        name: "agent-stop",
-        args: "",
-        description: "Stop the selected Agent",
-    },
-    Command {
-        name: "agent-delete",
-        args: "",
-        description: "Review and delete the selected Agent and its captured sessions",
-    },
-    Command {
-        name: "default-session",
-        args: "",
-        description: "Set this session as its Agent's default",
-    },
-    Command {
         name: "approval",
-        args: "<ask|auto|read_only>",
-        description: "Set ask, auto or read_only approval for the next turn",
-    },
-    Command {
-        name: "new",
-        args: "",
-        description: "Start a new session in the selected Agent",
-    },
-    Command {
-        name: "session",
-        args: "",
-        description: "Show this session and its owning Agent",
-    },
-    Command {
-        name: "sessions",
-        args: "",
-        description: "Open, filter, rename or delete sessions",
-    },
-    Command {
-        name: "rename",
-        args: "<title>",
-        description: "Rename this session",
+        args: "[ask|auto|read_only]",
+        description: "Set approval for the next turn; omit it to pick one",
     },
     Command {
         name: "pause",
@@ -106,34 +113,39 @@ pub const COMMANDS: &[Command<'static>] = &[
         description: "Close this session",
     },
     Command {
-        name: "diff",
+        name: "default-session",
         args: "",
-        description: "Show Git working-tree changes, including untracked files",
+        description: "Set this session as its Agent's default",
     },
     Command {
-        name: "context",
+        name: "agents",
         args: "",
-        description: "Show native context facts and past response usage",
+        description: "Select an Agent",
     },
     Command {
-        name: "compact",
-        args: "",
-        description: "Compact the session context now",
+        name: "agent-new",
+        args: "<name>",
+        description: "Copy the selected Agent's configuration into a new dynamic Agent",
     },
     Command {
-        name: "export",
-        args: "[path]",
-        description: "Export the conversation as Markdown",
+        name: "agent-start",
+        args: "",
+        description: "Start the selected Agent",
     },
     Command {
-        name: "copy",
+        name: "agent-stop",
         args: "",
-        description: "Copy the last answer to the clipboard",
+        description: "Stop the selected Agent",
+    },
+    Command {
+        name: "agent-delete",
+        args: "",
+        description: "Review and delete the selected Agent and its captured sessions",
     },
     Command {
         name: "theme",
         args: "[dark|light]",
-        description: "Switch the colour theme",
+        description: "Set the colour theme; omit it to pick one",
     },
     Command {
         name: "reload",
@@ -175,6 +187,8 @@ pub enum Executed {
     Panel(super::Panel),
     /// Accepted, but there is nothing to do yet.
     Noop,
+    /// Put this draft back so its choices or current value can be edited.
+    Prefill(String),
 }
 
 impl super::App {
@@ -224,6 +238,7 @@ pub fn execute(name: &str, arg: &str) -> Option<Executed> {
         "agent-delete" => Executed::Panel(super::Panel::AgentDelete),
         "default-session" => Executed::Action(Action::SetDefaultSession),
         "approval" => match arg {
+            "" => Executed::Prefill("/approval ".into()),
             "ask" => Executed::Action(Action::SetApproval(ApprovalMode::Ask)),
             "auto" => Executed::Action(Action::SetApproval(ApprovalMode::Auto)),
             "read_only" => Executed::Action(Action::SetApproval(ApprovalMode::ReadOnly)),
@@ -237,9 +252,17 @@ pub fn execute(name: &str, arg: &str) -> Option<Executed> {
         "resume" => Executed::Action(Action::Resume),
         "load" => Executed::Action(Action::Load),
         "unload" => Executed::Action(Action::Unload),
-        "close" => Executed::Action(Action::CloseSession),
+        "close" => Executed::Action(Action::ConfirmClose),
         "rename" if !arg.is_empty() => Executed::Action(Action::Rename(arg.to_owned())),
-        "rename" => Executed::Noop,
+        "rename" => Executed::Prefill("/rename ".into()),
+        "child" => match arg {
+            "" => Executed::Action(Action::OpenChild(1)),
+            arg => match arg.parse() {
+                Ok(nth) if nth > 0 => Executed::Action(Action::OpenChild(nth)),
+                _ => Executed::Noop,
+            },
+        },
+        "cancel" => Executed::Action(Action::Interrupt),
         "model" if arg.is_empty() => Executed::Panel(super::Panel::Models),
         "model" => Executed::Action(Action::SwitchModel(arg.to_owned())),
         "reasoning" if arg.is_empty() => Executed::Panel(super::Panel::Reasoning),
@@ -252,10 +275,10 @@ pub fn execute(name: &str, arg: &str) -> Option<Executed> {
         "context" => Executed::Panel(super::Panel::Context),
         "copy" => Executed::Action(Action::CopyLastAnswer),
         "export" => Executed::Action(Action::Export((!arg.is_empty()).then(|| arg.to_owned()))),
-        // No argument toggles between the two palettes; an explicit argument
-        // wins. Parsing catches typos as `Noop` so the caller can say so.
+        // Like every enumerated command, no argument offers the choices; F4
+        // toggles. Parsing catches typos as `Noop` so the caller can say so.
         "theme" => match arg {
-            "" => Executed::Action(Action::ToggleTheme),
+            "" => Executed::Prefill("/theme ".into()),
             "dark" => Executed::Action(Action::SetTheme(crate::config::ThemeKind::Dark)),
             "light" => Executed::Action(Action::SetTheme(crate::config::ThemeKind::Light)),
             _ => Executed::Noop,
@@ -418,23 +441,31 @@ mod tests {
         let names = |input| -> Vec<&str> { filter(input, &[]).iter().map(|c| c.name).collect() };
         assert_eq!(names("mo")[0], "model");
         assert_eq!(names("res")[0], "resume");
-        assert_eq!(names("re")[..3], ["reasoning", "rename", "resume"]);
-        assert_eq!(names("sess"), ["session", "sessions", "default-session"]);
+        assert_eq!(names("re")[..3], ["rename", "reasoning", "resume"]);
+        assert_eq!(names("sess"), ["sessions", "session", "default-session"]);
         assert_eq!(names("new")[0], "new");
     }
 
     #[test]
     fn a_missing_argument_names_the_hint() {
-        assert_eq!(needs_argument("rename"), "/rename needs <title>");
+        assert_eq!(needs_argument("agent-new"), "/agent-new needs <name>");
         assert_eq!(needs_argument("theme"), "/theme needs [dark|light]");
     }
 
     #[test]
-    fn theme_without_an_argument_toggles_and_an_explicit_one_wins() {
-        assert!(matches!(
+    fn theme_without_an_argument_offers_its_choices_and_an_explicit_one_wins() {
+        assert_eq!(
             execute("theme", ""),
-            Some(Executed::Action(crate::app::Action::ToggleTheme))
-        ));
+            Some(Executed::Prefill("/theme ".into()))
+        );
+        assert_eq!(
+            execute("approval", ""),
+            Some(Executed::Prefill("/approval ".into()))
+        );
+        assert_eq!(
+            execute("rename", ""),
+            Some(Executed::Prefill("/rename ".into()))
+        );
         assert!(matches!(
             execute("theme", "light"),
             Some(Executed::Action(crate::app::Action::SetTheme(
@@ -550,7 +581,9 @@ mod tests {
             ("resume", Action::Resume),
             ("load", Action::Load),
             ("unload", Action::Unload),
-            ("close", Action::CloseSession),
+            ("close", Action::ConfirmClose),
+            ("cancel", Action::Interrupt),
+            ("child", Action::OpenChild(1)),
         ] {
             assert_eq!(execute(name, ""), Some(Executed::Action(action)));
         }

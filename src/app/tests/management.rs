@@ -152,8 +152,10 @@ async fn reasoning_arguments_distinguish_picker_valid_and_invalid_values() {
             .app
             .notices
             .back()
-            .expect("invalid argument needs an error");
-        assert_eq!(notice.level, crate::app::NoticeLevel::Error);
+            .expect("invalid argument needs a usage notice");
+        // A usage mistake keeps the draft and is not an operation error.
+        assert_eq!(notice.level, crate::app::NoticeLevel::Usage);
+        assert_eq!(h.app.composer.text(), command);
         assert!(notice.text.contains(expected), "{}", notice.text);
         assert_eq!(h.app.theme, theme);
         assert_info_eq(&h.app.resident.current().unwrap().info, &before);

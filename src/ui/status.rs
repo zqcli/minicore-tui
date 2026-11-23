@@ -125,6 +125,10 @@ pub fn dock(app: &App, styles: Styles, width: u16, height: u16) -> Dock {
         composer::max_rows(height),
         if app.overlay.is_view() {
             Editor::View
+        } else if app.resident.current().is_some_and(|session| {
+            session.state.data.lifecycle != minicore_host_protocol::SessionLifecycle::Open
+        }) {
+            Editor::Closed
         } else {
             Editor::Live
         },
@@ -352,6 +356,7 @@ fn working_line(app: &App, styles: Styles, width: u16) -> Option<Line<'static>> 
 fn notice_line(notice: &Notice, styles: Styles, width: u16) -> Line<'static> {
     let style = match notice.level {
         NoticeLevel::Error => styles.failure(),
+        NoticeLevel::Usage => styles.warning(),
         NoticeLevel::Info => styles.faint(),
     };
     let text = wrap::sanitize(&notice.text.replace('\n', " ")).into_owned();
@@ -483,7 +488,17 @@ fn footer(app: &App, styles: Styles, width: u16) -> Line<'static> {
 pub fn others(app: &App, styles: Styles) -> Vec<Span<'static>> {
     let (working, input) = app.background_counts();
     let mut spans = Vec::new();
+    if let Some(parent) = app.return_target() {
+        let short: String = parent.session_id.as_str().chars().take(6).collect();
+        spans.push(Span::styled(
+            format!("↰ child of {short} · esc returns"),
+            styles.accent(),
+        ));
+    }
     if working > 0 {
+        if !spans.is_empty() {
+            spans.push(Span::styled(" · ", styles.meta()));
+        }
         spans.push(Span::styled(format!("{working} running"), styles.text()));
     }
     if input > 0 {

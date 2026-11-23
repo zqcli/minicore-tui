@@ -81,9 +81,10 @@ impl ListState {
         } else {
             "- ".to_owned()
         };
+        // A task item's box is its bullet.
         match self.task {
-            Some(true) => bullet + "[x] ",
-            Some(false) => bullet + "[ ] ",
+            Some(true) => "☑ ".to_owned(),
+            Some(false) => "☐ ".to_owned(),
             None => bullet,
         }
     }
@@ -162,11 +163,9 @@ impl Builder<'_> {
             Tag::Heading { level, .. } => {
                 self.flush();
                 self.blank();
+                // Like every other block, a heading shows no Markdown syntax;
+                // its level is in the style.
                 self.heading = Some(level);
-                if level >= HeadingLevel::H3 {
-                    let hashes = format!("{} ", "#".repeat(level as usize));
-                    self.spans.push(Span::styled(hashes, self.inline_style()));
-                }
             }
             Tag::CodeBlock(kind) => {
                 self.flush();
@@ -324,7 +323,8 @@ impl Builder<'_> {
     fn inline_style(&self) -> Style {
         let mut style = match self.heading {
             Some(HeadingLevel::H1) => self.styles.heading().add_modifier(Modifier::UNDERLINED),
-            Some(_) => self.styles.heading(),
+            Some(HeadingLevel::H2) => self.styles.heading(),
+            Some(_) => self.styles.bold(),
             None if self.quote > 0 => self.styles.dim().add_modifier(Modifier::ITALIC),
             None => self.base,
         };
@@ -436,10 +436,11 @@ impl Builder<'_> {
         let width = self.inner_width();
         let fence = self.styles.faint();
         let body = self.styles.code_block();
-        let mut lines = vec![Line::from(Span::styled(
-            wrap::truncate(&format!("```{}", code.lang), width),
-            fence,
-        ))];
+        // The language names the block; the fences themselves are syntax.
+        let mut lines: Vec<Line<'static>> = (!code.lang.is_empty())
+            .then(|| Line::from(Span::styled(wrap::truncate(&code.lang, width), fence)))
+            .into_iter()
+            .collect();
         let text = code.text.strip_suffix('\n').unwrap_or(&code.text);
         for line in text.split('\n') {
             if line.is_empty() {
@@ -453,7 +454,6 @@ impl Builder<'_> {
                 ]));
             }
         }
-        lines.push(Line::from(Span::styled("```", fence)));
         self.emit(lines);
     }
 
@@ -619,7 +619,7 @@ mod tests {
         let source = "# One\n\n## Two\n\n### Three\n\n#### Four";
         assert_eq!(
             plain(source, 40),
-            ["One", "", "Two", "", "### Three", "", "#### Four"]
+            ["One", "", "Two", "", "Three", "", "Four"]
         );
         let lines = styled(source, 40);
         let heading = styles().heading();
@@ -628,8 +628,8 @@ mod tests {
             heading.add_modifier(Modifier::UNDERLINED)
         );
         assert_eq!(style_of(&lines, "Two"), heading);
-        assert_eq!(style_of(&lines, "### "), heading);
-        assert_eq!(style_of(&lines, "Three"), heading);
+        // Deeper levels are bold body text: no hashes, one step quieter.
+        assert_eq!(style_of(&lines, "Three"), styles().bold());
         assert!(heading.add_modifier.contains(Modifier::BOLD));
         assert_eq!(heading.fg, Some(Palette::dark().heading));
     }
@@ -725,18 +725,15 @@ mod tests {
         );
         assert_eq!(
             plain("- [ ] alpha beta gamma", 16),
-            ["- [ ] alpha beta", "      gamma"]
+            ["☐ alpha beta", "  gamma"]
         );
     }
 
     #[test]
-    fn task_markers_stay_inside_the_bullet() {
+    fn task_boxes_replace_the_bullet() {
         let lines = styled("- [x] done\n- [ ] todo", 40);
-        assert_eq!(
-            plain("- [x] done\n- [ ] todo", 40),
-            ["- [x] done", "- [ ] todo"]
-        );
-        assert_eq!(style_of(&lines, "- [x] "), styles().success());
+        assert_eq!(plain("- [x] done\n- [ ] todo", 40), ["☑ done", "☐ todo"]);
+        assert_eq!(style_of(&lines, "☑ "), styles().success());
         assert_eq!(style_of(&lines, "done"), Style::default());
     }
 
@@ -779,14 +776,11 @@ mod tests {
     }
 
     #[test]
-    fn code_blocks_keep_fences_and_indent_the_body() {
+    fn code_blocks_name_their_language_and_indent_the_body_without_fences() {
         let lines = plain("```rust\nfn main() {\n    body();\n}\n```", 40);
-        assert_eq!(
-            lines,
-            ["```rust", "  fn main() {", "      body();", "  }", "```"]
-        );
+        assert_eq!(lines, ["rust", "  fn main() {", "      body();", "  }"]);
         let rendered = styled("```py\nx = 1\n```", 40);
-        assert_eq!(style_of(&rendered, "```py"), styles().faint());
+        assert_eq!(style_of(&rendered, "py"), styles().faint());
         assert_eq!(style_of(&rendered, "x = 1"), styles().code_block());
         assert!(
             rendered
@@ -794,13 +788,10 @@ mod tests {
                 .flat_map(|line| line.spans.iter())
                 .all(|span| span.style.bg.is_none())
         );
-        assert_eq!(
-            plain("```\na\n\nb\n```", 40),
-            ["```", "  a", "", "  b", "```"]
-        );
+        assert_eq!(plain("```\na\n\nb\n```", 40), ["  a", "", "  b"]);
         assert_eq!(
             plain("```\nabcdefghij\n```", 8),
-            ["```", "  abcdef", "  ghij", "```"],
+            ["  abcdef", "  ghij"],
             "long code lines break by cells and keep the indent"
         );
     }
@@ -809,7 +800,7 @@ mod tests {
     fn code_blocks_in_list_items_follow_the_item_text() {
         assert_eq!(
             plain("- run:\n\n  ```sh\n  ls\n  ```", 40),
-            ["- run:", "  ```sh", "    ls", "  ```"]
+            ["- run:", "  sh", "    ls"]
         );
     }
 
@@ -902,9 +893,7 @@ mod tests {
                 "",
                 "─".repeat(20).as_str(),
                 "",
-                "```",
                 "  code",
-                "```",
                 "",
                 "┌───┐",
                 "│ a │",

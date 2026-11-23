@@ -31,7 +31,7 @@ fn first_run_uses_the_shared_host_skeleton_without_creating_runtime_records() {
             .unwrap()
             .to_string_lossy()
     );
-    assert_eq!(load_ui(&directory).unwrap().theme, ThemeKind::Dark);
+    assert_eq!(load_ui(&directory).unwrap().theme, None);
     assert!(directory.commands_dir().is_dir());
     assert!(!directory.data_root().exists());
 }
@@ -97,7 +97,7 @@ fn missing_ui_uses_defaults_and_obsolete_toml_is_not_read() {
         "[ui]\ntheme = 'light'\n",
     )
     .unwrap();
-    assert_eq!(load_ui(&directory).unwrap().theme, ThemeKind::Dark);
+    assert_eq!(load_ui(&directory).unwrap().theme, None);
 }
 
 #[test]
@@ -112,7 +112,7 @@ fn saving_theme_preserves_editor_and_bell_and_does_not_touch_host_config() {
     .unwrap();
     save_theme(&directory.ui_file(), ThemeKind::Light).unwrap();
     let ui = load_ui(&directory).unwrap();
-    assert_eq!(ui.theme, ThemeKind::Light);
+    assert_eq!(ui.theme, Some(ThemeKind::Light));
     assert!(!ui.bell);
     assert_eq!(ui.editor, ["code", "--wait"]);
     assert_eq!(
@@ -142,7 +142,7 @@ fn saving_theme_can_create_only_terminal_preferences() {
     )
     .unwrap();
     save_theme(&directory.ui_file(), ThemeKind::Light).unwrap();
-    assert_eq!(load_ui(&directory).unwrap().theme, ThemeKind::Light);
+    assert_eq!(load_ui(&directory).unwrap().theme, Some(ThemeKind::Light));
     assert!(!directory.dir().join("host.json").exists());
     assert!(!directory.data_root().exists());
 }

@@ -27,6 +27,8 @@ pub enum Editor {
     Live,
     /// A full-screen view owns the keys.
     View,
+    /// The current session is closed and takes no input.
+    Closed,
 }
 
 impl Editor {
@@ -34,7 +36,8 @@ impl Editor {
     fn placeholder(self) -> Option<&'static str> {
         match self {
             Self::Live => None,
-            Self::View => Some("view open · esc to return"),
+            Self::View => Some("view open · esc back"),
+            Self::Closed => Some("session closed · /new starts a new one"),
         }
     }
 }

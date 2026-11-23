@@ -574,7 +574,7 @@ fn a_view_dims_the_composer_and_keys_typed_in_it_do_not_edit_the_draft() {
     let mut app = app();
     app.overlay = Overlay::Help { scroll: 0 };
     let rendered = render(&mut app, 60, 12);
-    assert!(rendered.contains("view open · esc to return"), "{rendered}");
+    assert!(rendered.contains("view open · esc back"), "{rendered}");
     assert!(!rendered.contains("Ask anything"), "{rendered}");
     app.on_key(crossterm::event::KeyEvent::from(
         crossterm::event::KeyCode::Char('x'),
@@ -1431,8 +1431,9 @@ fn session_picker_keeps_ids_when_distinct_long_titles_clip_alike() {
     let current = render(&mut app, 134, 20);
     let first_row = session_picker_row(&current, "111111");
     let second_row = session_picker_row(&current, "122222");
-    assert!(first_row.contains("running 0m · current"), "{current}");
-    assert!(second_row.contains("running 0m") && !second_row.contains("current"));
+    assert!(first_row.contains("running 0m"), "{current}");
+    assert!(first_row.trim_start().starts_with(['✓', '→']), "{current}");
+    assert!(second_row.contains("running 0m") && !second_row.contains('✓'));
     assert!(
         first_row.contains('…') && second_row.contains('…'),
         "{current}"
@@ -1572,22 +1573,25 @@ fn session_picker_identity_and_confirmation_include_the_owning_agent() {
             .count(),
         1
     );
+    let confirmed = |app: &App| match &app.overlay {
+        Overlay::Confirm {
+            action: crate::app::Action::DeleteSession(target),
+            ..
+        } => target.clone(),
+        _ => panic!("deletion needs explicit confirmation"),
+    };
     app.on_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
-    if let Overlay::Sessions {
-        selected, armed, ..
-    } = &mut app.overlay
-    {
-        assert_eq!(armed.as_ref(), Some(&original));
+    assert_eq!(confirmed(&app), original);
+    app.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    app.open_panel(crate::app::Panel::Sessions);
+    if let Overlay::Sessions { selected, .. } = &mut app.overlay {
         *selected = 1;
     }
     app.on_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
-    match &app.overlay {
-        Overlay::Sessions { armed, .. } => assert_eq!(
-            armed.as_ref(),
-            Some(&crate::app::overlay::session_target(&same_id))
-        ),
-        _ => panic!("session picker closed before explicit confirmation"),
-    }
+    assert_eq!(
+        confirmed(&app),
+        crate::app::overlay::session_target(&same_id)
+    );
 }
 
 #[test]

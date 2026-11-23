@@ -269,11 +269,37 @@ impl App {
 
     /// A draft is a command only when its first word names one; anything else
     /// starting with `/` (a path, say) is a prompt.
-    fn submit_or_command(&mut self) -> Option<Action> {
+    pub(super) fn submit_or_command(&mut self) -> Option<Action> {
         let text = self.composer.text().to_owned();
         let executed =
             commands::parse(&text).and_then(|(name, argument)| commands::execute(name, argument));
+        if let Some(problem) = executed
+            .as_ref()
+            .and_then(|executed| self.invalid_argument(executed))
+        {
+            // The draft stays so the argument can be corrected in place.
+            self.notice(NoticeLevel::Usage, problem);
+            return None;
+        }
         match executed {
+            Some(Executed::Prefill(prefix)) => {
+                let text = match prefix.as_str() {
+                    "/rename " => format!(
+                        "/rename {}",
+                        self.resident
+                            .current()
+                            .and_then(|session| session.info.title.clone())
+                            .unwrap_or_default()
+                    ),
+                    _ => prefix,
+                };
+                self.composer.set_text(&text);
+                // Offer the choices at once, as typing the space would.
+                if self.palette_arg().is_some() {
+                    self.overlay = crate::app::Overlay::Palette { selected: 0 };
+                }
+                None
+            }
             Some(Executed::Action(action)) => {
                 self.composer.clear();
                 Some(action)
@@ -285,10 +311,36 @@ impl App {
             }
             Some(Executed::Noop) => {
                 let name = commands::parse(self.composer.text()).map_or("", |(name, _)| name);
-                self.notice(NoticeLevel::Error, commands::needs_argument(name));
+                self.notice(NoticeLevel::Usage, commands::needs_argument(name));
                 None
             }
             None => self.submit_line(&text),
+        }
+    }
+
+    /// An argument the catalog already rules out, checked before anything is
+    /// sent so every command reports it the same way and keeps the draft.
+    fn invalid_argument(&self, executed: &Executed) -> Option<String> {
+        match executed {
+            Executed::Action(Action::SwitchModel(arg)) => {
+                commands::resolve_model(&self.models, arg).err()
+            }
+            Executed::Action(Action::SetReasoning(level)) => {
+                let levels = self.reasoning_levels();
+                (!levels.is_empty() && !levels.contains(level)).then(|| {
+                    let names: Vec<String> = levels
+                        .iter()
+                        .map(|level| {
+                            serde_json::to_value(level)
+                                .ok()
+                                .and_then(|v| v.as_str().map(str::to_owned))
+                                .unwrap_or_default()
+                        })
+                        .collect();
+                    format!("This model supports reasoning {}", names.join("|"))
+                })
+            }
+            _ => None,
         }
     }
 
@@ -305,7 +357,7 @@ impl App {
                     .chain(self.templates.iter().map(|template| template.name.as_str()));
                 let notice = commands::unknown_notice(name, commands::closest(name, known));
                 self.armed_unknown = Some(text.trim().to_owned());
-                self.notice(NoticeLevel::Error, notice);
+                self.notice(NoticeLevel::Usage, notice);
                 return None;
             }
             Err(_) => {}

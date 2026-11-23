@@ -48,7 +48,7 @@ impl App {
             model: self.launch.model.clone(),
             reasoning: self.launch.reasoning,
             workspace: NullablePatch::Set(WorkspaceRef {
-                path: self.workspace.to_string_lossy().into_owned(),
+                path: self.launch_workspace.to_string_lossy().into_owned(),
             }),
             ..Default::default()
         })

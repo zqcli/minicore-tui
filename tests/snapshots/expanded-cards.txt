@@ -1,12 +1,12 @@
 
-  minicore-tui v0.12.10
+  minicore-tui v0.12.11
 
   esc interrupt · ctrl+c clear · / commands · @ files · ctrl+o expand
   ctrl+r sessions
 
   /work/minicore-tui
 
- ▎
+ ▎ bash
  ▎ $ cargo test --lib
  ▎
  ▎ … 14 earlier lines
@@ -16,8 +16,8 @@
  ▎ Took 4.2s
  ▎
 
- ▎
- ▎ read src/main.rs:1-40
+ ▎ read
+ ▎ src/main.rs:1-40
  ▎
  ▎ 1: fn main() {
  ▎ 2:     run();

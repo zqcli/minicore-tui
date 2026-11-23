@@ -34,7 +34,7 @@ const KEYS: &[KeyRow] = &[
     },
     KeyRow {
         keys: "esc",
-        action: "close view · clear selection · interrupt turn, keep queue · clear draft",
+        action: "close view · clear selection · back to the parent from a child · interrupt turn, keep queue · clear draft (ctrl+z restores)",
     },
     KeyRow {
         keys: "ctrl+c",
@@ -149,6 +149,10 @@ const KEYS: &[KeyRow] = &[
         action: "review retained local confirmations; edit separately, warn before resend, no automatic retry",
     },
     KeyRow {
+        keys: "agent card: /child [n]",
+        action: "open the latest (or nth) delegated child; esc comes back",
+    },
+    KeyRow {
         keys: "f1",
         action: "this help",
     },
@@ -166,7 +170,7 @@ const KEYS: &[KeyRow] = &[
     },
     KeyRow {
         keys: "sessions: ctrl+n / ctrl+d",
-        action: "rename / press twice to delete the selected session",
+        action: "rename / review deleting the selected session; y confirms",
     },
     KeyRow {
         keys: "agents: ctrl+d / y",

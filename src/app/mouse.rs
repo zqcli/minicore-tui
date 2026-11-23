@@ -289,9 +289,8 @@ impl App {
                 return None;
             };
             if let Some(card) = &call.agent_card {
-                (line - header
-                    == crate::ui::agent_cards::footer_offset(call.is_expanded(all_expanded)))
-                .then(|| (card.association.clone(), true, card.history_unavailable))
+                (line + 1 == self.layout.content_height(index))
+                    .then(|| (card.association.clone(), true, card.history_unavailable))
             } else {
                 (call.is_delegation_receipt() && line + 1 == self.layout.content_height(index))
                     .then(|| call.delegations.first().cloned())
@@ -306,7 +305,7 @@ impl App {
                     "Child history is unavailable; this card retains the observed preview",
                 );
             } else if child {
-                self.open_session(association.child);
+                self.open_child(association.child);
             } else {
                 self.locate_agent_card(association.parent, association.origin);
             }

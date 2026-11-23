@@ -1,6 +1,6 @@
 # Configuration
 
-Version 0.12.10 uses one JSON configuration directory for the embedded Host and
+Version 0.12.11 uses one JSON configuration directory for the embedded Host and
 terminal frontend. Host owns `host.json`, Agent declarations and reusable Roles.
 The TUI reads and writes only `tui.json`; it passes the resolved directory to
 Host's Rust startup API.
@@ -43,15 +43,16 @@ configuration. Files are not watched automatically.
 ```json
 {
   "ui": {
-    "theme": "dark",
     "editor": ["code", "--wait"],
     "bell": true
   }
 }
 ```
 
-The theme is `dark` or `light`. An omitted file or field uses the terminal's
-defaults. Unknown fields and invalid values are errors. JSON comments are not
+The theme is `dark` or `light`. When it is omitted, as in the generated file,
+the palette follows the terminal background reported in `COLORFGBG` (light
+for background index 7 or 9–15, otherwise dark); set it when your terminal does
+not report one. Other omitted fields use their defaults. Unknown fields and invalid values are errors. JSON comments are not
 supported. `/theme` and F4 save the theme while preserving editor and bell.
 Host does not read this file; a UI error does not invalidate Host configuration.
 

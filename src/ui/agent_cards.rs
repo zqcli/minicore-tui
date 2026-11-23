@@ -53,72 +53,62 @@ pub fn render(
         state
     };
     let state = wrap::truncate(&state, inner);
-    let identity = format!(
-        "Agent {label} · Session {}",
-        short(card.key.child.session_id.as_str())
-    );
-    let identity = wrap::truncate(&identity, inner.saturating_sub(wrap::width(&state) + 1));
-    let padding = inner.saturating_sub(wrap::width(&identity) + wrap::width(&state));
-    let header = format!("{identity}{}{state}", " ".repeat(padding));
-    let task = format!(
-        "Task {} · {}",
-        short(card.key.task_message_id.as_str()),
-        if card.task.is_empty() {
-            "input accepted"
-        } else {
-            card.task.lines().next().unwrap_or("")
-        }
-    );
-    let mut lines = vec![
-        chrome(row(Line::styled(
-            wrap::truncate(&wrap::sanitize(&header), inner),
-            styles.tool_title(),
-        ))),
-        row(Line::from(vec![
-            chrome_span(Span::styled(
-                format!("Task {} · ", short(card.key.task_message_id.as_str())),
-                styles.meta(),
-            )),
-            Span::styled(
-                wrap::truncate(
-                    &wrap::sanitize(if card.task.is_empty() {
-                        "input accepted"
-                    } else {
-                        card.task.lines().next().unwrap_or("")
-                    }),
-                    inner.saturating_sub(14),
-                ),
-                styles.tool_output(),
-            ),
-        ])),
+    // The task is what people recognise; identifiers are secondary facts.
+    let task = if card.task.is_empty() {
+        "input accepted".to_owned()
+    } else {
+        wrap::sanitize(card.task.lines().next().unwrap_or("")).into_owned()
+    };
+    let title = wrap::truncate(&task, inner.saturating_sub(wrap::width(&state) + 1));
+    let padding = inner.saturating_sub(wrap::width(&title) + wrap::width(&state));
+    let mut facts = vec![
+        format!("Agent {label}"),
+        format!("Session {}", short(card.key.child.session_id.as_str())),
     ];
-    // At very narrow widths clip the complete identity row as a unit.
-    if wrap::width(&lines[1].to_string()) > width {
-        lines[1] = chrome(row(Line::styled(
-            wrap::truncate(&wrap::sanitize(&task), inner),
-            styles.meta(),
-        )));
+    if let Some((_, turn)) = &card.turn
+        && turn.tool_rounds > 0
+    {
+        facts.push(format!(
+            "{} tool round{}",
+            turn.tool_rounds,
+            if turn.tool_rounds == 1 { "" } else { "s" }
+        ));
     }
+    if let Some(Block::Tool(current)) = card.transcript.blocks().last()
+        && matches!(current.state, ToolState::Pending | ToolState::Running)
+    {
+        facts.push(format!("now {}", activity(current)));
+    }
+    let mut lines = vec![
+        chrome(row(Line::from(vec![
+            Span::styled(title, styles.tool_title()),
+            Span::raw(" ".repeat(padding)),
+            Span::styled(state, styles.meta()),
+        ]))),
+        chrome(row(Line::styled(
+            wrap::truncate(&wrap::sanitize(&facts.join(" · ")), inner),
+            styles.meta(),
+        ))),
+    ];
     let budget = if expanded {
         EXPANDED_ROWS
     } else {
         COLLAPSED_ROWS
     };
+    // Rows follow the content up to the budget; empty padding only pushed
+    // the next block away.
     let mut body = preview(card, inner, budget, reasoning, styles);
     for line in body.drain(..) {
         lines.push(row(line));
-    }
-    while lines.len() < budget + 2 {
-        lines.push(chrome(row(Line::default())));
     }
     let footer = if card.history_unavailable {
         "Child history unavailable · retained preview"
     } else if card.observation_error.is_some() {
         "Observation incomplete · Open child Session"
     } else if expanded {
-        "Open child Session · click header to collapse"
+        "Open child Session (click or /child) · click header to collapse"
     } else {
-        "Open child Session · click header to expand"
+        "Open child Session (click or /child) · click header to expand"
     };
     lines.push(chrome(row(Line::styled(
         wrap::truncate(footer, inner),
@@ -167,11 +157,13 @@ pub fn receipt(
     lines
 }
 
-pub fn footer_offset(expanded: bool) -> usize {
-    2 + if expanded {
-        EXPANDED_ROWS
+/// `bash node --test`, `read src/store.js`: the tool and its main argument.
+fn activity(call: &ToolCall) -> String {
+    let detail = call.detail.lines().next().unwrap_or("").trim();
+    if detail.is_empty() {
+        call.name.clone()
     } else {
-        COLLAPSED_ROWS
+        format!("{} {detail}", call.name)
     }
 }
 
@@ -351,11 +343,7 @@ fn preview(
                         ToolState::Denied => "denied",
                         ToolState::Cancelled => "cancelled",
                     };
-                    let mut label = format!("{} · {outcome}", call.name);
-                    if !call.detail.is_empty() {
-                        label.push_str(" · ");
-                        label.push_str(&call.detail);
-                    }
+                    let label = format!("{} · {outcome}", activity(call));
                     let body = if let Some(nested) = call.delegations.first() {
                         vec![Line::styled(
                             wrap::truncate(
@@ -367,12 +355,22 @@ fn preview(
                             ),
                             styles.meta(),
                         )]
-                    } else {
+                    } else if call.state == ToolState::Failed {
+                        // A failure's first line explains it; successful output
+                        // stays in the child Session.
                         call.output_content()
                             .into_iter()
-                            .flat_map(|line| wrap::wrap_line(&wrap::sanitize(line), width))
-                            .map(|line| Line::styled(line, styles.tool_output()))
+                            .find(|line| !line.trim().is_empty())
+                            .map(|line| {
+                                Line::styled(
+                                    wrap::truncate(&wrap::sanitize(line), width),
+                                    styles.failure(),
+                                )
+                            })
+                            .into_iter()
                             .collect()
+                    } else {
+                        Vec::new()
                     };
                     push_group(&mut groups, &mut used, budget, &label, body, styles);
                 }
@@ -503,7 +501,12 @@ mod tests {
         for width in [8, 20, 80] {
             for expanded in [false, true] {
                 let rows = render(&call, styles(), width, expanded, true);
-                assert_eq!(rows.len(), footer_offset(expanded) + 1);
+                let budget = if expanded {
+                    EXPANDED_ROWS
+                } else {
+                    COLLAPSED_ROWS
+                };
+                assert!(rows.len() <= budget + 3);
                 assert!(
                     rows.iter()
                         .all(|row| wrap::width(&row.to_string()) == width)
@@ -523,7 +526,7 @@ mod tests {
     }
 
     #[test]
-    fn tool_preview_preserves_blank_lines_and_excludes_chrome_from_copying() {
+    fn tool_preview_summarizes_activity_without_output_or_escapes() {
         let mut call = call();
         let card = call.agent_card.as_mut().unwrap();
         let mut tool = ToolCall::new(
@@ -542,10 +545,9 @@ mod tests {
             .position(|row| row.to_string().contains("[bash · completed]"))
             .unwrap();
         assert!(content_cells(&rows[label]).is_empty());
-        assert_eq!(rows[label + 1].to_string().trim(), "▎ first");
-        assert_eq!(rows[label + 2].to_string().trim(), "▎");
-        assert_eq!(rows[label + 3].to_string().trim(), "▎ last");
-        assert!(!content_cells(&rows[label + 1]).is_empty());
+        // Successful output stays in the child Session; the card lists activity.
+        assert!(rows.iter().all(|row| !row.to_string().contains("first")));
+        assert_eq!(label + 2, rows.len());
         assert_eq!(content_cells(rows.last().unwrap()), 0..0);
         assert!(rows.iter().all(|row| !row.to_string().contains('\u{1b}')));
     }

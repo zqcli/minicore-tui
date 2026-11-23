@@ -1,8 +1,8 @@
 # minicore-tui
 
 `minicore-tui` is a fullscreen terminal frontend for
-[minicore-host](https://github.com/zqcli/minicore-host). Version 0.12.10 embeds
-Host 0.12.9 in the same executable and uses its typed Rust client through
+[minicore-host](https://github.com/zqcli/minicore-host). Version 0.12.11 embeds
+Host 0.12.11 in the same executable and uses its typed Rust client through
 `HostClient::in_process`. Host owns Agents, Sessions, execution, tools,
 credentials, history and persistence; the TUI owns terminal interaction and
 presentation.
@@ -46,8 +46,10 @@ is needed to run the automated tests.
 Host creates declared Agents and their default Sessions. Startup rereads the
 configuration directory while preserving existing Host/Agent identities,
 Sessions and history. An Agent's default Session opens unless `--session` or
-`--continue` selects another. `/new` creates a Session from the selected Agent's
-current defaults with explicit overrides. Existing Sessions keep their saved
+`--continue` selects another, or it belongs to another workspace: then the
+latest Session in the startup workspace opens, or the first input creates one
+there. `/new` creates a Session in the startup workspace from the selected
+Agent's current defaults with explicit overrides. Existing Sessions keep their saved
 configuration. See [configuration](docs/configuration.md) for declaration
 ownership, JSON examples and removed configuration paths.
 

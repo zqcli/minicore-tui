@@ -6,7 +6,9 @@ use std::io::{self, Write};
 use minicore_host_core::{
     HistoryItemData, HistoryRecordData, ModelFinishedData, ModelResponseData,
 };
-use minicore_host_protocol::{MessageMode, ModelOutputIdentity, ToolCallId, ToolCallRef, TurnId};
+use minicore_host_protocol::{
+    MessageMode, MessageSource, ModelOutputIdentity, ToolCallId, ToolCallRef, TurnId,
+};
 use minicore_host_runtime::model::{AssistantPart, Usage};
 
 use super::{Block, HistorySource, RequestKey, ToolCall, ToolKey, Transcript, UserKind};
@@ -136,6 +138,8 @@ struct HistoryIndex {
     tools: HashMap<ToolKey, usize>,
     seed_tools: HashMap<ToolCallId, usize>,
     turns: HashMap<TurnId, usize>,
+    /// The first record seen for each Turn, to time it at its end.
+    started: HashMap<TurnId, minicore_host_protocol::Timestamp>,
 }
 
 impl HistoryIndex {
@@ -217,12 +221,22 @@ fn append_record(
     record: &HistoryRecordData,
     preview: bool,
 ) {
+    // A Turn's end is not its start: a lone end record gives no duration.
+    if let Some(turn) = &record.turn_id
+        && !matches!(record.item, HistoryItemData::TurnFinished { .. })
+    {
+        index
+            .started
+            .entry(turn.clone())
+            .or_insert(record.recorded_at);
+    }
     match &record.item {
         HistoryItemData::User {
             received_at,
             text,
             mode,
             message_id,
+            source: sender,
             ..
         } => {
             let at = transcript.push(Block::User {
@@ -232,6 +246,11 @@ fn append_record(
                     text.clone()
                 },
                 kind: match mode {
+                    _ if matches!(sender, Some(MessageSource::Agent { .. }))
+                        && crate::ui::delegated::is_result(text) =>
+                    {
+                        UserKind::Delegated
+                    }
                     Some(MessageMode::Steer) => UserKind::Steering,
                     Some(MessageMode::FollowUp) => UserKind::FollowUp,
                     None => UserKind::Prompt,
@@ -299,11 +318,14 @@ fn append_record(
                 turn_id: turn_id.clone(),
                 outcome: terminal.outcome,
                 reason: terminal.reason.clone(),
-                duration: None,
+                duration: index
+                    .started
+                    .get(turn_id)
+                    .and_then(|start| super::elapsed(*start, terminal.finished_at)),
                 requests: terminal.requests,
                 tool_rounds: terminal.tool_rounds,
                 usage: Usage::default(),
-                changes: None,
+                changes: super::turn_changes(&transcript.blocks, turn_id),
                 saving: None,
             };
             let at = match index.turns.get(turn_id).copied() {
@@ -324,8 +346,8 @@ fn append_record(
                         },
                     ) = (&mut block, &transcript.blocks[at])
                     {
-                        *duration = *old_duration;
-                        *changes = *old_changes;
+                        *duration = old_duration.or(*duration);
+                        *changes = old_changes.or(*changes);
                         *saving = *old_saving;
                     }
                     transcript.blocks[at] = block;

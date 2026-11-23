@@ -56,8 +56,9 @@ impl Palette {
     pub fn dark() -> Self {
         Self {
             text: Color::Rgb(0xd4, 0xd4, 0xd4),
-            dim: Color::Rgb(0x80, 0x80, 0x80),
-            faint: Color::Rgb(0x66, 0x66, 0x66),
+            // One blue-grey family for every secondary text role.
+            dim: Color::Rgb(147, 153, 178),
+            faint: Color::Rgb(108, 112, 134),
             meta: Color::Rgb(127, 132, 156),
             accent: Color::Rgb(0x8a, 0xbe, 0xb7),
             user_rail: Color::Rgb(137, 180, 250),
@@ -79,7 +80,7 @@ impl Palette {
             code_block: Color::Rgb(0xb5, 0xbd, 0x68),
             added: Color::Rgb(0xb5, 0xbd, 0x68),
             removed: Color::Rgb(0xcc, 0x66, 0x66),
-            hunk: Color::Rgb(0x80, 0x80, 0x80),
+            hunk: Color::Rgb(147, 153, 178),
             tool_title: Color::Rgb(205, 214, 244),
             tool_output: Color::Rgb(166, 173, 200),
             card_bg: Color::Rgb(40, 43, 61),
