@@ -43,6 +43,11 @@ pub const COMMANDS: &[Command<'static>] = &[
         description: "Open the latest delegated child session, or the nth latest",
     },
     Command {
+        name: "children",
+        args: "",
+        description: "Show every delegated child of this conversation and its state",
+    },
+    Command {
         name: "cancel",
         args: "",
         description: "Interrupt the running turn and keep queued input",
@@ -263,6 +268,7 @@ pub fn execute(name: &str, arg: &str) -> Option<Executed> {
             },
         },
         "cancel" => Executed::Action(Action::Interrupt),
+        "children" => Executed::Panel(super::Panel::Delegations),
         "model" if arg.is_empty() => Executed::Panel(super::Panel::Models),
         "model" => Executed::Action(Action::SwitchModel(arg.to_owned())),
         "reasoning" if arg.is_empty() => Executed::Panel(super::Panel::Reasoning),

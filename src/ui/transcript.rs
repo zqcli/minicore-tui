@@ -1,6 +1,6 @@
 //! The transcript pane: block rendering through the layout cache, scroll
 //! resolution, the welcome header and the overlays drawn over the rows: drag
-//! highlight, jump label, scrollbar and copy flash. A frame touches only the
+//! highlight, jump label and scrollbar. A frame touches only the
 //! visible rows.
 
 use std::borrow::Cow;
@@ -14,24 +14,14 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use unicode_segmentation::UnicodeSegmentation;
 
+use super::blocks;
 use super::markdown::StreamRenderer;
 use super::theme::Styles;
-use super::{blocks, views};
 use crate::app::scrollbar::{JUMP_LABEL, jump_label, thumb};
 use crate::app::selection;
 use crate::app::{App, Overlay, Scroll, find};
 use crate::transcript::layout::{Fold, Layout, Rows, Viewport};
-use crate::transcript::{Block, RequestKey};
-
-/// The bindings the welcome header advertises, as `(key, action)`.
-const HEADER_HINTS: &[(&str, &str)] = &[
-    ("esc", "interrupt"),
-    ("ctrl+c", "clear"),
-    ("/", "commands"),
-    ("@", "files"),
-    ("ctrl+o", "expand"),
-    ("ctrl+r", "sessions"),
-];
+use crate::transcript::{Block, Grouping, RequestKey};
 
 /// Streaming markdown renderers of live assistant blocks, by request. Each
 /// caches its stable prefix, so a delta re-parses only the tail.
@@ -164,7 +154,6 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, styles: Styles) {
             lines.push(Line::styled(format!(" {status}"), styles.dim()));
         }
         frame.render_widget(Paragraph::new(lines), area);
-        draw_flash(frame, area, app, styles);
         return;
     };
     // Block renderers subtract their inset from the width.
@@ -179,8 +168,13 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, styles: Styles) {
     layout.state.prepare((width, styles), blocks);
     // The header rides in front of block 0, so it scrolls and anchors with the
     // transcript without being a block.
+    let transcript = &session.transcript;
     let mut render = |state: &mut RenderState, index: usize, block: &Block| {
-        let mut rows = state.render(block, key);
+        let mut rows = match transcript.grouping(index) {
+            Grouping::None => state.render(block, key),
+            // Steps are finished blocks; they need no streaming state.
+            grouping => blocks::render_with(block, grouping, styles, width, fold).into(),
+        };
         if index == 0 {
             let header = welcome();
             state.header_rows = header.len();
@@ -307,70 +301,54 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, styles: Styles) {
             };
         }
     }
-    draw_flash(frame, area, app, styles);
 }
 
 /// The welcome rows, each group set off by a blank row: name and version, the
 /// main bindings, the workspace.
+/// The welcome card: name, version and the workspace this view works in.
+/// Keys live in F1 and in the activity line, not here.
 fn header(styles: Styles, width: u16, workspace: Option<&Path>) -> Vec<Line<'static>> {
-    let mut lines = vec![
-        Line::default(),
-        Line::from(vec![
-            Span::raw(" "),
-            Span::styled("minicore-tui", styles.title()),
-            Span::styled(concat!(" v", env!("CARGO_PKG_VERSION")), styles.faint()),
-        ]),
-        Line::default(),
-    ];
-    // Hints wrap whole, so a narrow terminal never splits a key from its action.
-    let room = (width as usize).saturating_sub(1);
-    let mut row: Vec<(&str, &str)> = Vec::new();
-    let mut used = 0;
-    for &(key, action) in HEADER_HINTS {
-        let cells = key.len() + 1 + action.len();
-        if !row.is_empty() && used + 3 + cells > room {
-            lines.push(hint_line(&row, styles));
-            row.clear();
-        }
-        used = match row.is_empty() {
-            true => cells,
-            false => used + 3 + cells,
-        };
-        row.push((key, action));
+    let card = (width as usize).saturating_sub(2).min(76);
+    if card < 20 {
+        return vec![Line::styled(" minicore-tui", styles.title())]
+            .into_iter()
+            .map(super::rails::chrome)
+            .collect();
     }
-    lines.push(hint_line(&row, styles));
-    lines.push(Line::default());
-    lines.push(Line::styled(
-        workspace.map_or_else(
-            || " No workspace".to_owned(),
-            |path| format!(" {}", home_relative(path).display()),
-        ),
-        styles.faint(),
-    ));
-    lines.push(Line::default());
-    lines.into_iter().map(super::rails::chrome).collect()
-}
-
-fn hint_line(hints: &[(&str, &str)], styles: Styles) -> Line<'static> {
-    let mut spans = vec![Span::raw(" ")];
-    spans.extend(views::key_hints(hints, styles));
-    Line::from(spans)
-}
-
-/// ` Copied! ` in reverse video at the top-right corner while it is fresh.
-pub fn draw_flash(frame: &mut Frame, area: Rect, app: &App, styles: Styles) {
-    let Some((text, _)) = app.flash.as_ref().filter(|_| area.height > 0) else {
-        return;
-    };
-    let text = format!(" {text} ");
-    let len = (crate::wrap::width(&text) as u16).min(area.width);
-    frame.buffer_mut().set_stringn(
-        area.right() - len,
-        area.y,
-        &text,
-        len as usize,
-        styles.text().add_modifier(Modifier::REVERSED),
+    let border = styles.faint();
+    let inside = card - 4;
+    let title = format!(" minicore-tui {} ", env!("CARGO_PKG_VERSION"));
+    let top = format!(
+        "╭─{title}{}╮",
+        "─".repeat(card.saturating_sub(3 + crate::wrap::width(&title)))
     );
+    let body = |text: String, style: Style| {
+        let text = crate::wrap::truncate(&text, inside);
+        let pad = inside - crate::wrap::width(&text);
+        Line::from(vec![
+            Span::styled(" │ ", border),
+            Span::styled(text, style),
+            Span::styled(format!("{} │", " ".repeat(pad)), border),
+        ])
+    };
+    let place = workspace.map_or_else(
+        || "No workspace".to_owned(),
+        |path| home_relative(path).display().to_string(),
+    );
+    vec![
+        Line::default(),
+        Line::styled(format!(" {top}"), border),
+        body(place, styles.text()),
+        body(
+            "f1 keys and commands · / commands · @ files".to_owned(),
+            styles.meta(),
+        ),
+        Line::styled(format!(" ╰{}╯", "─".repeat(card.saturating_sub(2))), border),
+        Line::default(),
+    ]
+    .into_iter()
+    .map(super::rails::chrome)
+    .collect()
 }
 
 /// Reverses cells `[from, to)` of one row, splitting spans at the boundaries;
@@ -502,8 +480,11 @@ mod tests {
         let styles = Styles::of(Palette::dark());
         let blocks = transcript.blocks();
         layout.state.prepare((width, styles), blocks);
-        let mut render = |state: &mut RenderState, _: usize, block: &Block| {
-            state.render(block, (width, fold, styles))
+        let mut render = |state: &mut RenderState, index: usize, block: &Block| match transcript
+            .grouping(index)
+        {
+            Grouping::None => state.render(block, (width, fold, styles)),
+            grouping => blocks::render_with(block, grouping, styles, width, fold).into(),
         };
         layout.prepare(blocks, transcript.revisions(), width, fold, &mut render);
         while layout.settle(blocks, 0, 1000, &mut render) {}
@@ -583,12 +564,16 @@ mod tests {
                 assert_eq!(live.len(), 6, "empty canonical identities remain installed");
 
                 let mut next = 0;
+                let mut after_row = false;
                 for (index, block) in live.blocks().iter().enumerate() {
                     let body = blocks::render(block, Styles::of(Palette::dark()), width, fold);
                     if body.is_empty() {
                         continue;
                     }
-                    if next > 0 {
+                    let row = crate::transcript::is_row(block, fold.expanded);
+                    let joined = after_row && row;
+                    after_row = row;
+                    if next > 0 && !joined {
                         assert_eq!(
                             finalized[next].to_string(),
                             "",
@@ -624,7 +609,11 @@ mod tests {
                         && !copied.contains("Thinking...")
                         && !copied.contains("to expand")
                 );
-                assert_eq!(copied.contains("Last step"), show_reasoning);
+                assert_eq!(
+                    copied.contains("Last step"),
+                    show_reasoning,
+                    "{fold:?} {width}: {copied:?}"
+                );
 
                 let rendered = reload_layout.stats.blocks_rendered;
                 reloaded.install_history_records(&records);

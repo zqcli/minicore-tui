@@ -1,20 +1,20 @@
 
-  minicore-tui v0.12.11
+  ╭─ minicore-tui 0.12.11 ───────────────────────────────────────────────────╮
+  │ /work/minicore-tui                                                       │
+  │ f1 keys and commands · / commands · @ files                              │
+  ╰──────────────────────────────────────────────────────────────────────────╯
 
-  esc interrupt · ctrl+c clear · / commands · @ files · ctrl+o expand · ctrl+r sessions
 
-  /work/minicore-tui
 
- ───────────────────────────────────────────────────────────────────────────────────────────────────
- Resume Session                                                                           5 sessions
- enter open · ctrl+n rename · ctrl+d delete · esc close
 
- >
-
+ ─ Resume Session ───────────────────────────────────────────────────────────────────── 5 sessions ─
+  >
  → Cache the parser                                                             000000 · Coder · now
    Port the lexer                                                  000000 · Coder · running 0m · now
    Clean the build                                             000000 · Coder · needs approval · now
    Write the docs                                                         000000 · Coder · new · now
    Review the parser                                              000000 · Reviewer · unloaded · now
- ───────────────────────────────────────────────────────────────────────────────────────────────────
- ▸ minicore-tui · gpt 6 luna · max · agent Coder · 1 running · 1 needs input
+
+   /work/minicore-tui · gpt-6-luna · max
+ ─ enter open · ctrl+n rename · ctrl+d delete · esc close ──────────────────────────────────────────
+ ▸ minicore-tui · Cache the parser · 1 running · 1 needs input       gpt 6 luna · max · approval ask

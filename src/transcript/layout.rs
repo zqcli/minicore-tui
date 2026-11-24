@@ -113,6 +113,8 @@ struct Cached {
     uses: Uses,
     rows: Rows,
     separated: bool,
+    /// A one-line step row; adjacent step rows stack without a separator.
+    row: bool,
 }
 
 impl Cached {
@@ -295,6 +297,7 @@ impl<S> Layout<S> {
             uses: Uses::of(block),
             rows,
             separated: false,
+            row: super::is_row(block, self.fold.expanded),
         }
     }
 
@@ -306,9 +309,17 @@ impl<S> Layout<S> {
             self.prefix.truncate(from + 1);
         }
         let mut row = *self.prefix.last().unwrap_or(&0);
+        let mut after_row = self.cached[..from]
+            .iter()
+            .rev()
+            .find(|cached| cached.rows.len() > usize::from(cached.separated))
+            .is_some_and(|cached| cached.row);
         for cached in &mut self.cached[from..] {
             let body_height = cached.rows.len() - usize::from(cached.separated);
-            let separated = row > 0 && body_height > 0;
+            let separated = row > 0 && body_height > 0 && !(after_row && cached.row);
+            if body_height > 0 {
+                after_row = cached.row;
+            }
             if separated != cached.separated {
                 if separated {
                     cached.rows.chunks.insert(0, self.separator.clone());
@@ -579,7 +590,8 @@ mod tests {
             fold(),
             &mut |_, _, _| lines(1),
         );
-        assert_eq!(layout.total_rows(), 30 + 29);
+        // Folded tool rows stack without separators.
+        assert_eq!(layout.total_rows(), 30);
         let expanded = Fold {
             expanded: true,
             ..fold()
@@ -596,7 +608,7 @@ mod tests {
             expanded,
             &mut render,
         );
-        assert_eq!(layout.total_rows(), 30 + 29, "nothing rendered yet");
+        assert_eq!(layout.total_rows(), 30, "nothing rendered yet");
         // Following the tail: each pass resolves the top again, as a frame does.
         while layout.settle(&blocks, layout.total_rows() - 10, 10, &mut render) {}
         assert!(
@@ -895,7 +907,33 @@ mod tests {
         let mut render = |_: &mut (), _: usize, _: &Block| lines(2);
         empty.prepare(&blocks, [1, 2, 3], 50, fold(), &mut render);
         while empty.settle(&blocks, 0, 10, &mut render) {}
-        assert_eq!(empty.total_rows(), 8);
+        // The two folded tool rows join; the user block is separated.
+        assert_eq!(empty.total_rows(), 7);
+    }
+
+    #[test]
+    fn adjacent_step_rows_stack_and_other_blocks_keep_their_gap() {
+        let mut layout = Layout::<()>::default();
+        let blocks = [
+            user("a"),
+            card(None),
+            card(None),
+            card(Some(true)),
+            user("b"),
+        ];
+        layout.prepare(&blocks, [1, 2, 3, 4, 5], 40, fold(), &mut |_, _, _| {
+            lines(1)
+        });
+        let window: Vec<String> = layout
+            .visible(0, layout.total_rows())
+            .iter()
+            .map(|line| line.to_string())
+            .collect();
+        // user, gap, row, row, gap, expanded card, gap, user
+        assert_eq!(
+            window,
+            ["row 0", "", "row 0", "row 0", "", "row 0", "", "row 0"]
+        );
     }
 
     #[test]

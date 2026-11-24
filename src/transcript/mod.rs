@@ -72,6 +72,7 @@ struct BlockMeta {
     revision: u64,
     history: Vec<HistorySource>,
     user: Option<UserIdentity>,
+    grouping: Grouping,
 }
 
 impl Default for BlockMeta {
@@ -80,7 +81,81 @@ impl Default for BlockMeta {
             revision: next_revision(),
             history: Vec::new(),
             user: None,
+            grouping: Grouping::None,
         }
+    }
+}
+
+/// How a finished Turn's process blocks fold into one summary row. The answer
+/// text and failed tools never join a group, so a fold hides only the steps.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum Grouping {
+    #[default]
+    None,
+    /// The Turn's first step row: draws the summary row, then itself when
+    /// open or when it does not fold (a failure leading the Turn).
+    Head {
+        turn: TurnId,
+        summary: GroupSummary,
+        open: bool,
+        folds: bool,
+    },
+    /// A later step: draws nothing while the group is closed.
+    Member { turn: TurnId, open: bool },
+}
+
+impl Grouping {
+    pub fn is_open(&self) -> bool {
+        match self {
+            Self::None => true,
+            Self::Head { open, .. } | Self::Member { open, .. } => *open,
+        }
+    }
+}
+
+/// `Worked 2m 14s · 18 tools · 3 files changed (+142 −37) · 1 failed`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GroupSummary {
+    pub duration: Option<std::time::Duration>,
+    pub tools: usize,
+    pub failed: usize,
+    pub changes: Option<ChangeSummary>,
+}
+
+/// Whether a block draws as one-line rows that stack without a blank row:
+/// a folded tool row or a thinking-only response.
+pub(crate) fn is_row(block: &Block, expanded: bool) -> bool {
+    match block {
+        Block::Tool(call) => {
+            call.agent_card.is_none()
+                && !call.is_delegation_receipt()
+                && !call.is_expanded(expanded)
+        }
+        Block::Assistant {
+            text, reasoning, ..
+        } => !expanded && text.trim().is_empty() && !reasoning.trim().is_empty(),
+        _ => false,
+    }
+}
+
+/// A step of a Turn's work, as opposed to its answer or a problem to see.
+fn is_step(block: &Block) -> bool {
+    match block {
+        Block::Tool(call) => {
+            call.agent_card.is_none()
+                && call.delegations.is_empty()
+                && matches!(call.state, ToolState::Succeeded)
+                && call.result_error.is_none()
+                && call.exit_code.is_none_or(|code| code == 0)
+        }
+        Block::Assistant {
+            text,
+            reasoning,
+            streaming: false,
+            partial: false,
+            ..
+        } => text.trim().is_empty() && !reasoning.trim().is_empty(),
+        _ => false,
     }
 }
 
@@ -110,6 +185,123 @@ impl Transcript {
 
     pub fn len(&self) -> usize {
         self.blocks.len()
+    }
+
+    pub fn grouping(&self, index: usize) -> &Grouping {
+        self.metadata
+            .get(index)
+            .map_or(&Grouping::None, |meta| &meta.grouping)
+    }
+
+    /// Folds a finished Turn's steps under one summary row. A Turn with fewer
+    /// than two successful tools keeps its rows: a summary would not be shorter.
+    pub fn regroup(&mut self, turn: &TurnId) {
+        // History blocks carry their Turn on the record source, not the key.
+        let turn_of = |index: usize| {
+            self.blocks[index].turn_id().or_else(|| {
+                self.metadata[index]
+                    .history
+                    .iter()
+                    .find_map(|source| source.turn_id.as_ref())
+            })
+        };
+        let members: Vec<usize> = (0..self.blocks.len())
+            .filter(|&index| turn_of(index) == Some(turn))
+            .collect();
+        let steps: Vec<usize> = members
+            .iter()
+            .copied()
+            .filter(|&index| is_step(&self.blocks[index]))
+            .collect();
+        // The summary leads the first step row, folded or not, so failures
+        // before the first success stay under it rather than above it.
+        let head = members
+            .iter()
+            .copied()
+            .find(|&index| is_row(&self.blocks[index], false));
+        let tools = steps
+            .iter()
+            .filter(|&&index| matches!(self.blocks[index], Block::Tool(_)))
+            .count();
+        let failed = members
+            .iter()
+            .filter(|&&index| {
+                matches!(&self.blocks[index], Block::Tool(call)
+                        if matches!(call.state, ToolState::Failed)
+                            || call.result_error.is_some()
+                            || call.exit_code.is_some_and(|code| code != 0))
+            })
+            .count();
+        let (duration, changes) = self
+            .blocks
+            .iter()
+            .rev()
+            .find_map(|block| match block {
+                Block::TurnEnd {
+                    turn_id,
+                    duration,
+                    changes,
+                    ..
+                } if turn_id == turn => Some((*duration, *changes)),
+                _ => None,
+            })
+            .unwrap_or_default();
+        let open = head.is_some_and(|index| {
+            self.metadata[index].grouping.is_open()
+                && self.metadata[index].grouping != Grouping::None
+        });
+        for index in members {
+            let step = steps.contains(&index);
+            let wanted = if tools < 2 {
+                Grouping::None
+            } else if Some(index) == head {
+                Grouping::Head {
+                    turn: turn.clone(),
+                    summary: GroupSummary {
+                        duration,
+                        tools,
+                        failed,
+                        changes,
+                    },
+                    open,
+                    folds: step,
+                }
+            } else if step {
+                Grouping::Member {
+                    turn: turn.clone(),
+                    open,
+                }
+            } else {
+                Grouping::None
+            };
+            if self.metadata[index].grouping != wanted {
+                self.metadata[index].grouping = wanted;
+                self.bump(index);
+            }
+        }
+    }
+
+    /// Opens or closes the group the step at `index` belongs to.
+    pub fn toggle_group(&mut self, index: usize) -> bool {
+        let turn = match self.grouping(index) {
+            Grouping::Head { turn, .. } | Grouping::Member { turn, .. } => turn.clone(),
+            Grouping::None => return false,
+        };
+        for at in 0..self.metadata.len() {
+            match &mut self.metadata[at].grouping {
+                Grouping::Head {
+                    turn: known, open, ..
+                }
+                | Grouping::Member { turn: known, open }
+                    if *known == turn =>
+                {
+                    *open = !*open;
+                    self.metadata[at].revision = next_revision();
+                }
+                _ => {}
+            }
+        }
+        true
     }
 
     pub fn is_empty(&self) -> bool {
@@ -338,6 +530,77 @@ mod tests {
         );
         let other: TurnId = "00000000000000000002".parse().unwrap();
         assert_eq!(turn_changes(&blocks, &other), None);
+    }
+
+    #[test]
+    fn a_finished_turn_folds_its_successful_steps_and_keeps_failures_out() {
+        let turn: TurnId = "00000000000000000001".parse().unwrap();
+        let mut transcript = Transcript::default();
+        let tool = |id: &str, state| {
+            let mut call = ToolCall::new(
+                ToolCallRef {
+                    turn_id: turn.clone(),
+                    tool_call_id: id.to_owned().into(),
+                },
+                "read",
+            );
+            call.set_state(state);
+            Block::Tool(Box::new(call))
+        };
+        transcript.push(tool("a", ToolState::Succeeded));
+        transcript.push(tool("b", ToolState::Failed));
+        transcript.push(tool("c", ToolState::Succeeded));
+        transcript.push(Block::TurnEnd {
+            turn_id: turn.clone(),
+            outcome: minicore_host_protocol::TurnOutcome::Completed,
+            reason: None,
+            duration: None,
+            requests: 2,
+            tool_rounds: 3,
+            usage: Default::default(),
+            changes: None,
+            saving: None,
+        });
+        transcript.regroup(&turn);
+        assert!(matches!(
+            transcript.grouping(0),
+            Grouping::Head {
+                summary: GroupSummary {
+                    tools: 2,
+                    failed: 1,
+                    ..
+                },
+                open: false,
+                folds: true,
+                ..
+            }
+        ));
+        assert_eq!(transcript.grouping(1), &Grouping::None);
+        assert!(matches!(
+            transcript.grouping(2),
+            Grouping::Member { open: false, .. }
+        ));
+        assert!(transcript.toggle_group(2));
+        assert!(transcript.grouping(0).is_open());
+
+        // A Turn that starts with a failure: the summary leads that row, which
+        // stays visible while the steps after it fold.
+        let mut failing = Transcript::default();
+        failing.push(tool("d", ToolState::Failed));
+        failing.push(tool("e", ToolState::Succeeded));
+        failing.push(tool("f", ToolState::Succeeded));
+        failing.push(transcript.blocks()[3].clone());
+        failing.regroup(&turn);
+        assert!(matches!(
+            failing.grouping(0),
+            Grouping::Head {
+                folds: false,
+                open: false,
+                ..
+            }
+        ));
+        assert!(matches!(failing.grouping(1), Grouping::Member { .. }));
+        assert!(matches!(failing.grouping(2), Grouping::Member { .. }));
     }
 
     #[test]

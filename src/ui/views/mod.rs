@@ -1,4 +1,4 @@
-//! Full-screen views: diff, help and error details. Each
+//! Full-screen views: diff, help, error details, context and session facts. Each
 //! replaces the transcript area right of its gutter and keeps the footer; the
 //! app owns scrolling and selection.
 
@@ -63,15 +63,33 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, styles: Styles) -> boo
     let area = super::transcript::inner(area);
     match &mut app.overlay {
         Overlay::Diff(diff) => diff::render(frame, area, styles, diff),
-        Overlay::Help { scroll } => help::render(frame, area, styles, COMMANDS, *scroll),
+        Overlay::Help { scroll, filter } => {
+            help::render(frame, area, styles, COMMANDS, *scroll, filter)
+        }
         Overlay::Error {
             text,
             scroll,
             visible_rows,
         } => error::render(frame, area, styles, text, scroll, visible_rows),
+        // Read-only facts share one container: the view, not a bottom sheet.
+        Overlay::Context | Overlay::SessionInfo => {
+            let Some(sheet) = super::sheets::sheet(app, styles) else {
+                return false;
+            };
+            let hints: Vec<(&str, &str)> = sheet
+                .hint
+                .split(" · ")
+                .filter_map(|pair| pair.split_once(' '))
+                .collect();
+            chrome(frame, area, styles, &sheet.title, &hints);
+            let buffer = frame.buffer_mut();
+            let rows = area.height.saturating_sub(3);
+            for (offset, line) in sheet.body.iter().take(rows.into()).enumerate() {
+                buffer.set_line(area.x, area.y + 2 + offset as u16, line, area.width);
+            }
+        }
         _ => return false,
     }
-    super::transcript::draw_flash(frame, area, app, styles);
     true
 }
 

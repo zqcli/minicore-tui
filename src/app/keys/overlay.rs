@@ -31,6 +31,22 @@ impl App {
     }
 
     pub(super) fn on_overlay_key(&mut self, key: KeyEvent) -> Option<Action> {
+        // Typing in help narrows it, like every other list that can be searched.
+        if let Overlay::Help { scroll, filter } = &mut self.overlay {
+            match key.code {
+                KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    filter.push(ch);
+                    *scroll = 0;
+                    return None;
+                }
+                KeyCode::Backspace if !filter.is_empty() => {
+                    filter.pop();
+                    *scroll = 0;
+                    return None;
+                }
+                _ => {}
+            }
+        }
         if matches!(self.overlay, Overlay::Confirm { .. }) {
             match key.code {
                 KeyCode::Char('y') if key.modifiers.is_empty() => {
@@ -167,6 +183,7 @@ impl App {
             Overlay::Agents { filter, .. } => matching_agents(&self.agents, filter).len(),
             Overlay::Reasoning { .. } => self.reasoning_levels().len(),
             Overlay::AgentDelete { sessions, .. } => sessions.len(),
+            Overlay::Delegations { .. } => crate::app::overlay::delegations(self).len(),
             Overlay::Diff(diff) => diff.files.len(),
             _ => 0,
         };
@@ -177,6 +194,7 @@ impl App {
             | Overlay::Agents { selected, .. }
             | Overlay::AgentDelete { selected, .. }
             | Overlay::Reasoning { selected }
+            | Overlay::Delegations { selected }
             | Overlay::Files { selected, .. } => *selected = picker::step(*selected, delta, len),
             Overlay::Diff(diff) => {
                 let next = (diff.selected as isize + delta).clamp(0, len.saturating_sub(1) as isize)
@@ -186,7 +204,7 @@ impl App {
                     self.load_selected_diff();
                 }
             }
-            Overlay::Help { scroll } | Overlay::Error { scroll, .. } => {
+            Overlay::Help { scroll, .. } | Overlay::Error { scroll, .. } => {
                 *scroll = scroll.saturating_add_signed(delta * 3)
             }
             Overlay::Find { .. } => self.find_step(delta > 0),
@@ -256,6 +274,20 @@ impl App {
 
     fn on_overlay_accept(&mut self) -> Option<Action> {
         match std::mem::replace(&mut self.overlay, Overlay::None) {
+            Overlay::Delegations { selected } => {
+                let picked = crate::app::overlay::delegations(self)
+                    .get(selected)
+                    .map(|card| (card.association.child.clone(), card.history_unavailable));
+                match picked {
+                    Some((_, true)) => self.notice(
+                        crate::app::NoticeLevel::Info,
+                        "Child history is unavailable; its card retains the observed preview",
+                    ),
+                    Some((child, false)) => self.open_child(child),
+                    None => {}
+                }
+                None
+            }
             review @ (Overlay::Unconfirmed { .. }
             | Overlay::AgentDelete { .. }
             | Overlay::Confirm { .. }) => {

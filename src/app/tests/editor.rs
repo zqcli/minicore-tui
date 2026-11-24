@@ -17,8 +17,8 @@ async fn editor_click_drag_shift_replace_and_undo_work_through_real_layout() {
     h.app.composer.set_text("ab中文cd\nsecond line");
     h.screen(60, 24);
     let area = h.app.composer_area;
-    assert_eq!(area.height, 4);
-    let y = area.y + 1;
+    assert_eq!(area.height, 2, "one row per line, no padding");
+    let y = area.y;
     let x = area.x + 1; // skip the rail
     mouse(&mut h, MouseEventKind::Down(MouseButton::Left), x + 2, y);
     mouse(&mut h, MouseEventKind::Up(MouseButton::Left), x + 2, y);
@@ -77,13 +77,13 @@ async fn completion_rows_and_fullscreen_sheets_are_not_editing_hit_targets() {
         &mut h,
         MouseEventKind::Down(MouseButton::Left),
         body.x + 1,
-        body.y + 1,
+        body.y,
     );
     mouse(
         &mut h,
         MouseEventKind::Up(MouseButton::Left),
         body.x + 1,
-        body.y + 1,
+        body.y,
     );
     assert_eq!(h.app.composer.cursor(), 0);
     let cursor = h.app.composer.cursor();
@@ -778,7 +778,7 @@ async fn a_drag_in_the_editor_copies_on_release_and_stays_selected() {
     h.app.composer.set_text("copy me");
     h.screen(60, 24);
     let area = h.app.composer_area;
-    let (x, y) = (area.x + 1, area.y + 1);
+    let (x, y) = (area.x + 1, area.y);
     mouse(&mut h, MouseEventKind::Down(MouseButton::Left), x, y);
     mouse(&mut h, MouseEventKind::Drag(MouseButton::Left), x + 3, y);
     assert!(h.app.flash.is_none(), "nothing is copied mid-drag");

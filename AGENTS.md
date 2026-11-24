@@ -41,7 +41,7 @@ Historical design notes are not the current interface specification.
 | `src/ui/snapshots.rs`, `tests/snapshots/` | TestBackend frame assertions |
 | `src/ui/perf_tests.rs` | Optional frame-cost checks |
 | `tests/built_in_host.rs` | Production provider/resource/persistence/shutdown integration |
-| `docs/` | Current architecture, configuration, keys and migration design |
+| `docs/` | Current architecture, configuration, keys, UI spec and migration design |
 
 UI rendering performs no Host calls or filesystem I/O. `ui::draw` updates only
 presentation caches, selection resets and editor hit geometry.
@@ -143,7 +143,8 @@ coverage. Avoid subtracting durations from `Instant::now()` in tests; fresh
 Windows runners can underflow. Fixtures use portable paths/names and LF endings.
 Snapshot updates are reviewed as diffs. No test requires live provider access.
 
-A visible change updates the relevant guide, F1 help, README and changelog;
+A visible change follows [docs/ui-spec.md](docs/ui-spec.md) and updates the
+relevant guide, F1 help, README and changelog;
 module/contract changes also update architecture. Preserve released changelog
 entries. Remove obsolete active documentation instead of presenting it as a
 supported configuration path.

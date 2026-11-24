@@ -126,6 +126,20 @@ impl Transcript {
         }
         if added {
             self.sort_history();
+            // An older page can add steps to a Turn whose end is already here.
+            let mut turns: Vec<&TurnId> = records
+                .iter()
+                .filter_map(|record| record.turn_id.as_ref())
+                .collect();
+            turns.dedup();
+            for turn in turns {
+                let ended = self.blocks.iter().any(
+                    |block| matches!(block, Block::TurnEnd { turn_id, .. } if turn_id == turn),
+                );
+                if ended {
+                    self.regroup(turn);
+                }
+            }
         }
     }
 }
@@ -359,6 +373,7 @@ fn append_record(
                     at
                 }
             };
+            transcript.regroup(turn_id);
             index.source(transcript, at, source(record, 0));
         }
     }
@@ -1029,5 +1044,64 @@ mod tests {
                 "native history {count}: build {build:?}, replay {replay:?}, tail 60 {tail:?}, 100k active checks {active_checks:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_loaded_finished_turn_folds_its_steps() {
+        let call = |position, response: u64, id: &str| {
+            record(
+                position,
+                json!({"response_index":response,"kind":"assistant","response":{"content":[
+                    {"type":"tool_call","data":{"tool_call_id":id,"name":"read","arguments":{"path":"a"},"call_index":0}}
+                ],"finish_reason":"tool_calls","usage":{}}}),
+            )
+        };
+        let done = |position, id: &str| {
+            record(
+                position,
+                json!({"kind":"tool_result","tool_call_id":id,"name":"read",
+                    "result":{"outcome":"success","output":{"content":"text"}}}),
+            )
+        };
+        let records = [
+            record(0, json!({"kind":"user","text":"go"})),
+            call(1, 0, "one"),
+            done(2, "one"),
+            call(3, 1, "two"),
+            done(4, "two"),
+            record(
+                5,
+                json!({"response_index":2,"kind":"assistant","response":{"content":[
+                    {"type":"text","data":"done"}],"finish_reason":"stop","usage":{}}}),
+            ),
+            record(
+                6,
+                json!({"kind":"turn_finished","finished_at":"2026-11-13T10:00:05Z",
+                    "requests":3,"tool_rounds":2,"model_attempts":[1,1,1],
+                    "turn_id":"00000000000000000001","outcome":"completed","reason":null}),
+            ),
+            // A later Turn with one tool must not unfold the first.
+            record(
+                7,
+                json!({"turn_id":"00000000000000000002","kind":"user","text":"again"}),
+            ),
+            record(
+                8,
+                json!({"turn_id":"00000000000000000002","kind":"turn_finished",
+                    "finished_at":"2026-11-13T10:00:09Z","requests":1,"tool_rounds":0,
+                    "model_attempts":[1],"turn_id":"00000000000000000002",
+                    "outcome":"completed","reason":null}),
+            ),
+        ];
+        let transcript = Transcript::from_history(&records);
+        let groupings: Vec<_> = (0..transcript.blocks.len())
+            .map(|index| match transcript.grouping(index) {
+                super::super::Grouping::None => "none",
+                super::super::Grouping::Head { .. } => "head",
+                super::super::Grouping::Member { .. } => "member",
+            })
+            .collect();
+        assert!(groupings.contains(&"head"), "{groupings:?}");
+        assert!(groupings.contains(&"member"), "{groupings:?}");
     }
 }

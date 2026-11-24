@@ -144,6 +144,7 @@ impl App {
                 ));
             }
             KeyCode::Char('r') if ctrl => self.open_panel(Panel::Sessions),
+            KeyCode::Char('b') if ctrl => self.open_panel(Panel::Delegations),
             KeyCode::Char('l') if ctrl => self.open_panel(Panel::Models),
             KeyCode::Char('p' | 'P') if ctrl => {
                 let backward = shift || key.code == KeyCode::Char('P');

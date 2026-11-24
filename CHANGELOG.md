@@ -1,5 +1,33 @@
 # Changelog
 
+## Unreleased
+
+- Redesign the conversation layout without changing the data model; the rules
+  are written down in `docs/ui-spec.md`.
+- Show each folded tool as one row: state glyph (`●` `✓` `✗` `⊘`), real tool
+  name, subject and right-aligned facts. A running tool shows its last three
+  output lines; a failure states its reason on a `└` row. Step rows stack
+  without blank rows.
+- Fold a finished Turn's successful steps under
+  `▸ Worked 42s · 14 tools · 2 files changed · 1 failed`; failures, Agent
+  cards and answers stay visible. Click to open; Ctrl+O opens all. Grouping
+  also applies to reopened history.
+- Fold thinking to one `∴` row with its newest heading; put user message
+  timestamps and the steering label on the first row, without padding rows.
+- Replace the header with a welcome card, and the dock with one activity line:
+  status and whole minutes on the left, only the keys that work now on the
+  right (`N queued · alt+↑ edit`, `N delegated · ctrl+b`). The footer shows
+  workspace, branch and Session title on the left and model, reasoning and
+  approval on the right; response usage moved to `/context` and `/session`.
+- Start the editor at one row with an `Ask anything` placeholder.
+- Add Ctrl+B and `/children`: the conversation's delegations, newest first;
+  Enter opens the child Session.
+- Give sheets one frame (title and count in the top rule, keys in the bottom
+  rule, `→` pointer, `✓` current), show Context and Session as full-screen
+  views, preview the selected Session, and let F1 help filter as you type.
+- Quiet the palette to two colour signals (user accent and failure) with one
+  neutral rail grey in both themes.
+
 ## 0.12.11 — 2026-11-23
 
 - Embed Host 0.12.11 at immutable revision

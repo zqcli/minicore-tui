@@ -67,9 +67,19 @@ Agent even if the terminal switches to another Agent while the save runs.
 Switching Sessions does not interrupt their work. A resident Session keeps its
 draft and transcript scroll position. The Session catalog also shows Sessions
 that are not open in this terminal, including their native lifecycle,
-residency, scheduling and pending-input status. The footer identifies the
-selected Agent when there is room and reports background work as `N running`
-and `N needs input`. Open a Session to answer its interaction.
+residency, scheduling and pending-input status. The footer shows where you
+are on the left (workspace, branch, Session title, and background work as
+`N running` and `N needs input`) and what runs on the right (model,
+reasoning and approval mode). Open a Session to answer its interaction.
+
+The row above the editor is the activity line. Its left side says what is
+happening now: the working spinner with whole minutes, the phase or running
+tool, retries and request counts; otherwise a fresh flash or the latest
+notice. Its right side lists only the keys that apply: `↰ esc back` in a
+child, `paused · enter resumes`, `enter steer · alt+enter follow-up` while
+drafting during a Turn, `esc interrupt`, `N queued · alt+↑ edit` and
+`N delegated · ctrl+b`. On a narrow terminal the key hints give way before
+the status text, the mode hint first.
 
 `Enter` sends `Steer`; `Alt+Enter` or `Ctrl+Enter` sends `FollowUp`. These are
 requests to Host scheduling, with different intended queues:
@@ -80,10 +90,9 @@ requests to Host scheduling, with different intended queues:
 | Follow-up | next-turn | Wait for a new Turn. |
 
 The Host decides the actual queue. For example, a steer accepted while a Turn
-is cancelling or finalizing can go to next-turn. The dock displays the actual
-unbound records as `↗ next step` and `↳ next turn`, with at most three preview
-rows and a count of the remaining records. It does not predict delivery from
-the key that was pressed.
+is cancelling or finalizing can go to next-turn. The activity line counts the
+actual unbound records as `N queued`; it does not predict delivery from the
+key that was pressed. `Alt+↑` brings their text back for editing.
 
 `/pause` pauses input consumption; `/resume` asks the Host to resume. An empty
 `Enter` also resumes a paused Session. Sending a nonempty draft submits input;
@@ -159,11 +168,13 @@ templates appear alongside commands and expand before submission.
 | `Ctrl+L` | Open the model picker. |
 | `Ctrl+P`, `Shift+Ctrl+P` | Select the next or previous model when those modifiers are reported. |
 | `Shift+Tab` | Cycle the selected model's supported reasoning preferences, including auto. |
-| `F1` | Open help. |
+| `F1` | Open help; type to filter its rows. |
+| `Ctrl+B` | Open the delegations of this conversation; Enter opens the selected child Session. Same as `/children`. |
 | `F8` | Review local input confirmations. |
 | `q`, `Esc` on the fatal screen | Quit. |
 | Wheel | Scroll one row, or five with Alt. Over a picker, move its selection; over a view, scroll that view. |
-| Click a tool card | Toggle its folded state. Dragging selects instead. |
+| Click a tool row or card | Toggle its folded state. Dragging selects instead. |
+| Click a `▸ Worked …` row | Open or fold the finished Turn's steps. |
 | Click an Agent card footer | Open its child Session, or explain that its history is unavailable. |
 | Click a later send's locate footer | Jump to its original Agent card. |
 | Click a failed Turn's message or end line | Read its complete error, including its original Session and Turn identities. |
@@ -178,9 +189,18 @@ or press End to follow again. Folding opens and closes downward from the
 anchored view.
 
 Separate Responses thinking parts retain their line breaks while streaming and
-after reopening a Session. Adjacent visible blocks use one separator row;
-tool-only responses do not add empty rows between cards. Expanding a card keeps
-blank lines inside its output.
+after reopening a Session. Folded tools are one row each: a state glyph
+(`●` running, `✓` done, `✗` failed, `⊘` denied or cancelled), the tool
+name, its subject and facts such as duration, line count or `+N −M` at the
+right. A running tool shows its last three output lines under the row; a
+failure states its reason on a `└` row. Folded thinking is one `∴` row with
+its newest heading. Adjacent step rows stack without blank rows; other blocks
+keep one separator row. Expanding a card keeps blank lines inside its output.
+
+When a Turn finishes with at least two successful tools, its steps fold under
+one summary row: `▸ Worked 42s · 14 tools · 2 files changed · 1 failed`.
+Failed, denied and Agent tools never fold into the group, and the answer text
+stays visible. Click the row to open the steps; `Ctrl+O` opens every group.
 
 Delegated Agent cards continue updating after the startup tool returns. The
 title is the task's first line; the next row names the Agent, the short Session
@@ -196,8 +216,7 @@ and identifies the unavailable full history.
 
 Only content is copied from the transcript. Rails, padding, timestamps,
 durations, expansion hints, partial-response labels and Turn-end summaries are
-excluded. A tool card keeps the same title row folded and expanded. Expanded
-cards include the invocation arguments of tools whose input is not already
+excluded. Expanded cards keep a title row and include the invocation arguments of tools whose input is not already
 their subject or body (bash commands, written content and diffs are), retained
 output and any native child Agent/Session association. Long cards retain a
 bounded visible preview; `/export` reads the complete native history. Partial
@@ -212,7 +231,8 @@ line counts describe the complete result, not just the retained preview.
 
 ## Pickers and reports
 
-Most pickers and reports use a bottom sheet. `Esc` closes it. In selectable
+Pickers use a bottom sheet framed by two rules: the title and count sit in the
+top rule and the keys in the bottom rule. `Esc` closes it. In selectable
 lists, arrows and Tab move one row and wrap; PageUp/PageDown move ten rows.
 The inline command and file lists stay below the editor and show five rows at
 a time.
@@ -230,8 +250,9 @@ Session filter clears its pending delete confirmation.
 | Commands | Type to fuzzy-filter. Enter runs the selected command; Tab completes its name. Argument completion is available for model, reasoning, theme and approval. |
 | Agents | Filter by name or ID. Enter selects the Agent. Ctrl+D opens a confirmation with its name, ID and captured child Session list; only `y` deletes that set. Enter does not confirm. Sessions added after confirmation opens are not included. |
 | Sessions | Rows show the saved title or, if untitled, the short Session ID. Filter by title, Session ID, Agent ID or workspace folder, not message text. Enter opens the selected Session. Ctrl+N renames it; Enter saves and Esc cancels. Ctrl+D opens a confirmation naming that exact Session; only `y` deletes it. |
-| Session (`/session`) | Show Agent and Session IDs, title, workspace, storage, lifecycle, residency, scheduling, approval mode, model, reasoning, raw history count and latest response usage. Enter or `c` copies the Session ID. |
-| Context (`/context`) | Show configured and active model facts, native history/projection counts, queue counts, compaction and save state. `r` refreshes; `c` copies. |
+| Delegations (Ctrl+B, `/children`) | Rows show a state glyph, the task's first line, the short child Session ID, status and tool rounds; the count reads `N running · M total`. Enter opens the child Session; Esc there returns. |
+| Session (`/session`) | A full-screen view. Show Agent and Session IDs, title, workspace, storage, lifecycle, residency, scheduling, approval mode, model, reasoning, raw history count and latest response usage. Enter or `c` copies the Session ID. |
+| Context (`/context`) | A full-screen view. Show configured and active model facts, native history/projection counts, queue counts, compaction and save state. `r` refreshes; `c` copies. |
 | Models | Filter model references; Enter selects one. The declared context window is model metadata. |
 | Reasoning | Enter applies the selected native preference. |
 | Files (`@`) | Filter the returned workspace paths. Enter or Tab inserts `@path `. Enter with no match does nothing. This inserts text, not an attachment. |
@@ -241,7 +262,8 @@ The Context report does not display an invented current token total or
 percentage. Provider input/output/cache/reasoning counts belong to the latest
 complete response, and absent fields stay unknown. A compaction request-token
 estimate is labeled as an estimate; it is not a measurement of current context
-occupancy. The footer's `last ↑… ↓… R…` also refers to a past complete response.
+occupancy. Response usage appears only in `/context` and `/session`, never
+in the footer.
 
 ## Approvals and tool questions
 
@@ -276,11 +298,12 @@ expose the hidden conversation draft for mouse editing.
 | View | Keys |
 |---|---|
 | Git diff | Up/Down selects a file. PageUp/PageDown, Home/End and wheel scroll; `c` copies the diff. Native workspace failures and stale-version notices are shown. |
-| Help | Up/Down scrolls three rows; PageUp/PageDown scrolls thirty. |
+| Help | Type to filter rows by key or action; Backspace edits the filter. Up/Down scrolls three rows; PageUp/PageDown scrolls thirty. |
+| Context, Session | Full-screen reports; `c` copies, `r` refreshes Context. |
 | Error details | Up/Down scrolls three rows; PageUp/PageDown, Home/End and wheel scroll. `c` copies the complete message, including content outside the viewport. |
 
 Esc returns to the transcript with its scroll position intact. The dimmed
-composer says `view open · esc to return`; unbound view keys do not edit it.
+composer says `view open · esc back`; unbound view keys do not edit it.
 
 ## Commands
 
@@ -296,6 +319,7 @@ composer says `view open · esc to return`; unbound view keys do not edit it.
 | `/session` | Show the current Session and its owning Agent. |
 | `/default-session` | Make the current Session its Agent's default. |
 | `/rename [title]` | Rename the current Session and refresh its list and detail metadata, even after switching Sessions. Without a title, the draft becomes `/rename <current title>` to edit. |
+| `/children` | List this conversation's delegations, newest first; Enter opens the child. Ctrl+B does the same. |
 | `/child [n]` | Open the latest delegated child Session of this conversation, or the nth latest. Esc with an empty draft returns to the parent. |
 | `/cancel` | Interrupt the running Turn and keep queued input; in a child opened from its card this is how to stop it. |
 | `/pause` | Pause input consumption in the current Session. |

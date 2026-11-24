@@ -11,14 +11,10 @@ use super::composer::Editor;
 use super::theme::Styles;
 use super::{composer, sheets};
 use crate::app::{App, Notice, NoticeLevel, Session};
-use crate::transcript::Block;
 use crate::wrap;
 use minicore_host_core::InteractionRequestData;
-use minicore_host_protocol::{CompactionState, InputQueue, ModelRetryPhase, TurnPhase, TurnState};
+use minicore_host_protocol::{CompactionState, ModelRetryPhase, TurnPhase, TurnState};
 use minicore_host_runtime::tools::ToolInputAnswerKind;
-
-/// Queued messages listed before the rest are summarized.
-const QUEUE_ROWS: usize = 3;
 
 pub struct Dock {
     /// Rows above the editor slot; the last is always the blank spacer.
@@ -33,7 +29,8 @@ pub struct Dock {
 
 /// The dock for a band `width` cells wide on a terminal `height` rows tall.
 pub fn dock(app: &App, styles: Styles, width: u16, height: u16) -> Dock {
-    let mut above = Vec::new();
+    // One blank row parts the transcript from the dock.
+    let mut above = vec![Line::default()];
     let unresolved = app
         .local_inputs
         .iter()
@@ -42,22 +39,6 @@ pub fn dock(app: &App, styles: Styles, width: u16, height: u16) -> Dock {
     if unresolved > 0 {
         above.push(padded(&format!("{unresolved} retained local inputs · F8 review · unconfirmed may already be accepted"),width,styles.failure()));
     }
-    if let Some(session) = app.resident.current().filter(|s| queued_count(s) > 0) {
-        above.push(Line::default());
-        above.extend(queued_rows(session, styles, width));
-    }
-    if let Some(line) = working_line(app, styles, width) {
-        above.push(Line::default());
-        above.push(line);
-    }
-    if let Some(hint) = key_hint(app, styles, width) {
-        above.push(hint);
-    }
-    if let Some(notice) = app.notices.back() {
-        above.push(Line::default());
-        above.push(notice_line(notice, styles, width));
-    }
-    above.push(Line::default());
 
     let text_input = app.resident.current().filter(|session| {
             !matches!(app.overlay, crate::app::Overlay::Unconfirmed { .. })
@@ -118,6 +99,9 @@ pub fn dock(app: &App, styles: Styles, width: u16, height: u16) -> Dock {
             above.push(padded(error, width, styles.failure()));
         }
     }
+    // The activity row is always there, so the editor never moves when work
+    // starts, a notice comes or a flash goes.
+    above.push(activity_line(app, styles, width));
     let (mut editor, cursor) = composer::render(
         app.active_editor(),
         styles,
@@ -187,78 +171,103 @@ fn queued_count(session: &Session) -> usize {
         .map_or(0, |queue| queue.next_step.len() + queue.next_turn.len())
 }
 
-/// Unbound messages in the Host's actual next-step and next-turn queues.
-fn queued_rows(session: &Session, styles: Styles, width: u16) -> Vec<Line<'static>> {
-    let Some(queue) = &session.queue else {
-        return Vec::new();
-    };
-    let mut rows: Vec<Line<'static>> = queue
-        .next_step
-        .iter()
-        .chain(&queue.next_turn)
-        .take(QUEUE_ROWS)
-        .map(|queued| {
-            let label = match queued.queue {
-                InputQueue::NextStep => "↗ next step",
-                InputQueue::NextTurn => "↳ next turn",
-            };
-            let room = usize::from(width).saturating_sub(wrap::width(label) + 4);
-            let text: String = queued.input.text.chars().take(room + 1).collect();
-            let text = wrap::sanitize(&text.replace('\n', " ")).into_owned();
-            Line::from(vec![
-                Span::raw(" "),
-                Span::styled(label, styles.meta()),
-                Span::raw("  "),
-                Span::styled(wrap::truncate(&text, room), styles.faint()),
-            ])
-        })
-        .collect();
-    let count = queued_count(session);
-    if count > QUEUE_ROWS {
-        rows.push(padded(
-            &format!("+{} more queued", count - QUEUE_ROWS),
-            width,
-            styles.faint(),
-        ));
+/// The facts and keys that matter now, right of the activity: what Esc or
+/// Enter would do, the queue, a pause, the way back from a child.
+fn right_keys(app: &App) -> Vec<String> {
+    let mut keys = Vec::new();
+    if app.return_target().is_some() && app.composer.is_empty() {
+        keys.push("↰ esc back".to_owned());
     }
-    rows
+    let Some(session) = app.resident.current() else {
+        return keys;
+    };
+    if app.has_interaction() {
+        return keys;
+    }
+    let drafting = !app.composer.is_empty();
+    let queued = queued_count(session);
+    if session.paused() {
+        keys.push(
+            if drafting {
+                "paused · enter sends"
+            } else {
+                "paused · enter resumes"
+            }
+            .to_owned(),
+        );
+    } else if drafting && (session.is_busy() || session.compacting()) {
+        keys.push("enter steer · alt+enter follow-up".to_owned());
+    } else if session.is_busy() && app.return_target().is_none() {
+        keys.push("esc interrupt".to_owned());
+    }
+    if queued > 0 {
+        keys.push(format!("{queued} queued · alt+↑ edit"));
+    }
+    let running = crate::app::overlay::delegations(app)
+        .iter()
+        .filter(|card| card.outcome().is_none())
+        .count();
+    if running > 0 {
+        keys.push(format!("{running} delegated · ctrl+b"));
+    }
+    keys
 }
 
-/// The keys that act on the queue now: Enter steers and Alt+Enter queues while a
-/// draft waits, `alt+↑` takes the queued messages back. A paused queue says how to go on.
-fn key_hint(app: &App, styles: Styles, width: u16) -> Option<Line<'static>> {
-    let session = app.resident.current().filter(|_| !app.has_interaction())?;
-    let drafting = !app.composer.is_empty();
-    let mut keys = Vec::new();
-    if session.paused() {
-        keys.push(match drafting {
-            true => "paused · enter sends",
-            false => "paused · enter resumes",
-        });
-        keys.push("alt+↑ edit");
-    } else {
-        if drafting && session.is_busy() {
-            keys.push("enter steer");
-        }
-        if drafting && (session.is_busy() || session.compacting()) {
-            keys.push("alt+enter follow-up");
-        }
-        if queued_count(session) > 0 {
-            keys.push("alt+↑ edit queued");
-        }
+/// Columns the activity text keeps before key hints are dropped.
+const LEFT_ROOM: usize = 28;
+
+/// The one row above the editor: what is running, else a fresh flash or the
+/// latest notice, with [`right_keys`] at the right edge.
+fn activity_line(app: &App, styles: Styles, width: u16) -> Line<'static> {
+    let flash = app
+        .flash
+        .as_ref()
+        .map(|(text, _)| vec![Span::raw(" "), Span::styled(text.clone(), styles.text())]);
+    let left = working_line(app, styles)
+        .or(flash)
+        .or_else(|| {
+            app.notices
+                .back()
+                .map(|notice| notice_spans(notice, styles))
+        })
+        .unwrap_or_default();
+    let width = usize::from(width);
+    // The status on the left keeps room to be read; key hints give way first,
+    // the earliest (the mode hint) before the counts.
+    let wanted = spans_width(&left).min(LEFT_ROOM);
+    let mut keys = right_keys(app);
+    let keys_width =
+        |keys: &[String]| keys.iter().map(|key| wrap::width(key) + 2).sum::<usize>() + 1;
+    while !keys.is_empty() && keys_width(&keys) + wanted > width {
+        keys.remove(0);
     }
-    (!keys.is_empty()).then(|| {
-        let spans = vec![
-            Span::raw(" "),
-            Span::styled(keys.join(" · "), styles.faint()),
-        ];
-        Line::from(fit(spans, usize::from(width)))
-    })
+    let right: Vec<Span<'static>> = keys
+        .into_iter()
+        .enumerate()
+        .flat_map(|(index, key)| {
+            let separator = (index > 0).then(|| Span::styled("  ", styles.faint()));
+            separator
+                .into_iter()
+                .chain([Span::styled(key, styles.faint())])
+        })
+        .collect();
+    let right_width = spans_width(&right);
+    let left = fit(
+        left,
+        width.saturating_sub(if right_width > 0 { right_width + 2 } else { 0 }),
+    );
+    let used = spans_width(&left);
+    let mut spans = left;
+    if right_width > 0 && used + right_width < width {
+        spans.push(Span::raw(" ".repeat(width - used - right_width - 1)));
+        spans.extend(right);
+    }
+    Line::from(spans)
 }
 
 /// `⠋ Working (esc to interrupt) · Running bash … · request 3` while
 /// something is in flight.
-fn working_line(app: &App, styles: Styles, width: u16) -> Option<Line<'static>> {
+fn working_line(app: &App, styles: Styles) -> Option<Vec<Span<'static>>> {
     let session = app.resident.current();
     let live = session.and_then(|session| session.live.as_ref());
     let interrupting =
@@ -285,15 +294,14 @@ fn working_line(app: &App, styles: Styles, width: u16) -> Option<Line<'static>> 
                 matches!(pending.request(), InteractionRequestData::ToolInput { .. })
             })
         {
-            "Waiting for input (esc to cancel turn)"
+            "Waiting for input"
         } else {
-            // Esc answers the prompt with a denial; it does not cancel the turn.
-            "Waiting for approval (esc to deny)"
+            "Waiting for approval"
         }
     } else if interrupting {
         "Interrupting…"
     } else if session.is_some_and(Session::is_busy) {
-        "Working (esc to interrupt)"
+        "Working"
     } else {
         return None;
     };
@@ -301,7 +309,7 @@ fn working_line(app: &App, styles: Styles, width: u16) -> Option<Line<'static>> 
     if let Some(live) = live {
         let quiet = interrupting || app.has_interaction() || app.compacting();
         match live.running_tool.as_ref().filter(|_| !quiet) {
-            Some(tool) => extras.push(format!("Running {tool}")),
+            Some(tool) => extras.push(format!("running {tool}")),
             None if !quiet => {
                 if let Some(phase) = live.state.phase {
                     extras.push(
@@ -341,6 +349,13 @@ fn working_line(app: &App, styles: Styles, width: u16) -> Option<Line<'static>> 
         Span::raw(" "),
         Span::styled(text.to_owned(), styles.dim()),
     ];
+    // Whole minutes: the line redraws with the spinner, not per second.
+    if let Some(live) = live.filter(|_| compaction.is_none()) {
+        spans.push(Span::styled(
+            format!(" {}", minutes(live.started.elapsed())),
+            styles.meta(),
+        ));
+    }
     for extra in extras {
         spans.push(Span::styled(" · ", styles.meta()));
         spans.push(Span::styled(
@@ -348,40 +363,28 @@ fn working_line(app: &App, styles: Styles, width: u16) -> Option<Line<'static>> 
             styles.meta(),
         ));
     }
-    Some(Line::from(fit(spans, usize::from(width))))
+    Some(spans)
 }
 
-/// The latest notice as a status line: a rail, then dim text, or the failure
-/// colour for an error.
-fn notice_line(notice: &Notice, styles: Styles, width: u16) -> Line<'static> {
+/// The latest notice: dim for information, warning colour for usage, failure
+/// colour for an error, which also says where its full text is.
+fn notice_spans(notice: &Notice, styles: Styles) -> Vec<Span<'static>> {
     let style = match notice.level {
         NoticeLevel::Error => styles.failure(),
         NoticeLevel::Usage => styles.warning(),
-        NoticeLevel::Info => styles.faint(),
+        NoticeLevel::Info => styles.dim(),
     };
     let text = wrap::sanitize(&notice.text.replace('\n', " ")).into_owned();
-    let hint = if notice.level == NoticeLevel::Error && width >= 30 {
-        " · /error details"
-    } else {
-        ""
-    };
-    Line::from(vec![
-        Span::styled("▎", styles.status_rail()),
-        Span::styled(
-            wrap::truncate(
-                &text,
-                usize::from(width).saturating_sub(1 + wrap::width(hint)),
-            ),
-            style,
-        ),
-        Span::styled(hint, styles.dim()),
-    ])
+    let mut spans = vec![Span::raw(" "), Span::styled(text, style)];
+    if notice.level == NoticeLevel::Error {
+        spans.push(Span::styled(" · /error", styles.faint()));
+    }
+    spans
 }
 
-/// `▸ dir@branch · model · reasoning · 3m · queued` and,
-/// right-aligned, `last ↑in ↓out Rcache`. Short of room, the directory and
-/// branch give way first, then the elapsed time and queue mark, then the model;
-/// the reasoning level stays.
+/// Where you are on the left — `▸ dir@branch · session · 1 running` — and
+/// what runs it on the right — `model · reasoning · approval`. Short of
+/// room, the session title goes first, then the directory; the right stays.
 fn footer(app: &App, styles: Styles, width: u16) -> Line<'static> {
     let width = usize::from(width);
     let session = app.resident.current();
@@ -407,79 +410,70 @@ fn footer(app: &App, styles: Styles, width: u16) -> Line<'static> {
         .filter(|session| session.info.config.workspace.is_some())
         .and_then(|session| session.branch.as_deref());
 
-    let model = app.model_id().map_or_else(Vec::new, |id| {
-        let model = wrap::truncate(&model_label(id), 24);
-        vec![Span::styled(model, styles.user_rail())]
-    });
-
-    let mut priority = Vec::new();
+    let mut right_groups = Vec::new();
+    if let Some(id) = app.model_id() {
+        right_groups.push(vec![Span::styled(
+            wrap::truncate(&model_label(id), 24),
+            styles.text(),
+        )]);
+    }
     if let Some(level) = app.reasoning() {
-        priority.push(Span::styled(sheets::reasoning_label(level), styles.amber()));
+        right_groups.push(vec![Span::styled(
+            sheets::reasoning_label(level),
+            styles.meta(),
+        )]);
     }
-    let mut suffix = Vec::new();
-    if let Some(elapsed) = session.and_then(|session| turn_elapsed(app, session)) {
-        suffix.push(Span::styled(minutes(elapsed), styles.amber()));
+    if let Some(session) = session {
+        right_groups.push(vec![Span::styled(
+            format!(
+                "approval {}",
+                crate::app::overlay::approval_label(session.info.config.execution.approval)
+            ),
+            styles.meta(),
+        )]);
     }
-    if session.is_some_and(|session| queued_count(session) > 0) {
-        if !suffix.is_empty() {
-            suffix.push(Span::styled(" · ", styles.meta()));
-        }
-        suffix.push(Span::styled("queued", styles.amber()));
-    }
-
-    let others = others(app, styles);
-    let agent = app
-        .current_agent_id()
-        .map(|id| {
-            vec![Span::styled(
-                format!("agent {}", sheets::agent_label(app, id)),
-                styles.meta(),
-            )]
-        })
-        .unwrap_or_default();
-
-    let right = session.map_or_else(Vec::new, |session| totals(session, styles));
+    let right = join(&right_groups, styles);
     let right_width = spans_width(&right);
-    if right_width >= width {
+    if right_width + 2 >= width {
         return Line::from(fit(right, width));
     }
-    let room = if right.is_empty() {
-        width
-    } else {
-        width - right_width - 1
-    };
-    let mut groups = [Vec::new(), model, priority, suffix, Vec::new(), Vec::new()];
-    // The identity takes whatever the rest leaves.
-    let rest = spans_width(&join(&groups, styles));
-    let separator = if rest > 0 { 3 } else { 0 };
+    let room = width - right_width - 2;
+
+    let title = session.map(|session| {
+        let label = session
+            .info
+            .title
+            .clone()
+            .unwrap_or_else(|| session.info.id.as_str().chars().take(6).collect());
+        vec![Span::styled(
+            wrap::sanitize(&label).into_owned(),
+            styles.meta(),
+        )]
+    });
+    let mut groups = vec![Vec::new(), title.unwrap_or_default(), others(app, styles)];
+    let rest = spans_width(&join(&groups[1..], styles));
     groups[0] = identity(
         &workspace,
         branch,
-        room.saturating_sub(rest + separator),
+        room.saturating_sub(rest + 3).max(8),
         styles,
     );
-    // Background sessions take only what the rest leaves.
-    groups[4] = agent;
-    groups[5] = others;
-    for index in [5, 3, 4, 1, 2] {
+    for index in [1, 0] {
         let over = spans_width(&join(&groups, styles)).saturating_sub(room);
         if over == 0 {
             break;
         }
         let own = spans_width(&groups[index]);
-        // A group cut to a lone `…` says nothing; it goes with its separator.
         groups[index] = if own < over + 2 {
             Vec::new()
         } else {
             fit(std::mem::take(&mut groups[index]), own - over)
         };
     }
-    let mut spans = join(&groups, styles);
-    if !right.is_empty() {
-        let gap = width - right_width - spans_width(&spans);
-        spans.push(Span::raw(" ".repeat(gap)));
-        spans.extend(right);
-    }
+    let mut spans = fit(join(&groups, styles), room);
+    let gap = width - right_width - spans_width(&spans);
+    spans.push(Span::raw(" ".repeat(gap)));
+    spans.extend(right);
     Line::from(spans)
 }
 
@@ -488,13 +482,6 @@ fn footer(app: &App, styles: Styles, width: u16) -> Line<'static> {
 pub fn others(app: &App, styles: Styles) -> Vec<Span<'static>> {
     let (working, input) = app.background_counts();
     let mut spans = Vec::new();
-    if let Some(parent) = app.return_target() {
-        let short: String = parent.session_id.as_str().chars().take(6).collect();
-        spans.push(Span::styled(
-            format!("↰ child of {short} · esc returns"),
-            styles.accent(),
-        ));
-    }
     if working > 0 {
         if !spans.is_empty() {
             spans.push(Span::styled(" · ", styles.meta()));
@@ -539,51 +526,6 @@ fn identity(
     ];
     spans.extend(branch.map(|branch| Span::styled(branch, styles.mint())));
     spans
-}
-
-/// Last complete response usage keeps absent provider fields unknown.
-fn totals(session: &Session, styles: Styles) -> Vec<Span<'static>> {
-    let Some(usage) = session
-        .context
-        .as_ref()
-        .and_then(|context| context.data.history.as_ref())
-        .and_then(|history| history.latest_response.as_ref())
-        .map(|response| &response.usage)
-    else {
-        return Vec::new();
-    };
-    let count = |value: Option<u64>| value.map_or_else(|| "?".to_owned(), super::format_tokens);
-    let mut spans = vec![Span::styled(
-        format!(
-            "last ↑{} ↓{}",
-            count(usage.input_tokens()),
-            count(usage.output_tokens())
-        ),
-        styles.user_rail(),
-    )];
-    if let Some(cached) = usage.cache_read_tokens() {
-        spans.push(Span::styled(
-            format!(" R{}", super::format_tokens(cached)),
-            styles.reasoning_rail(),
-        ));
-    }
-    spans
-}
-
-/// The running turn's time, else the last finished turn's.
-fn turn_elapsed(app: &App, session: &Session) -> Option<Duration> {
-    app.busy_elapsed().or_else(|| {
-        session
-            .transcript
-            .blocks()
-            .iter()
-            .rev()
-            .find_map(|block| match block {
-                Block::TurnEnd { duration, .. } => Some(*duration),
-                _ => None,
-            })
-            .flatten()
-    })
 }
 
 /// Whole minutes: `0m`, `42m`, `1h5m`.

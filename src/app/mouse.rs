@@ -314,6 +314,17 @@ impl App {
         let Some(session) = self.resident.current_mut() else {
             return;
         };
+        // A group's summary row is its first row: a click opens or closes it.
+        if line == header
+            && matches!(
+                session.transcript.grouping(index),
+                crate::transcript::Grouping::Head { .. }
+            )
+        {
+            session.transcript.toggle_group(index);
+            self.pin_view();
+            return;
+        }
         match session.transcript.blocks().get(index) {
             Some(Block::Tool(call)) => {
                 let expanded = call.is_expanded(all_expanded);

@@ -46,7 +46,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Option<Position> {
     // The transcript keeps a row and the footer its own; the rows above the
     // slot give way first.
     let room = area.height.saturating_sub(2);
-    let sheet = sheets::sheet(app, styles);
+    let sheet = sheets::sheet(app, styles).filter(|_| !app.overlay.is_view());
     let dock = status::dock(app, styles, area.width.saturating_sub(1), area.height);
     let slot = sheet
         .as_ref()

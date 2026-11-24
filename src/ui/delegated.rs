@@ -93,11 +93,21 @@ pub fn render(
     };
     let row = |spans: Vec<Span<'static>>| surface_row(rail, surface, spans, width);
     let short: String = notification.source.session_id.chars().take(6).collect();
-    let mut lines = vec![row(padded(vec![
+    let mut header = vec![
         Span::styled("↳ Delegated result", styles.bold()),
         Span::styled(format!(" · Session {short} · "), styles.meta()),
         Span::styled(outcome, tone),
-    ]))];
+    ];
+    if let Some(at) = at {
+        let stamp = stamp_label(at, local_zone());
+        let used: usize = header.iter().map(|span| wrap::width(&span.content)).sum();
+        let room = super::blocks::text_width(width);
+        if used + wrap::width(&stamp) + 2 <= room {
+            header.push(Span::raw(" ".repeat(room - used - wrap::width(&stamp))));
+            header.push(Span::styled(stamp, styles.meta()));
+        }
+    }
+    let mut lines = vec![row(padded(header))];
     let answer = last
         .and_then(|result| result.output.as_ref())
         .map(|parts| parts.join("\n\n"))
@@ -136,14 +146,8 @@ pub fn render(
     lines.extend(body.into_iter().map(|line| row(padded(line.spans))));
     if !expanded && hidden > 0 {
         lines.push(chrome(row(padded(vec![Span::styled(
-            format!("... ({} more lines, ctrl+o to expand)", hidden + 1),
+            format!("… {} more lines", hidden + 1),
             styles.dim(),
-        )]))));
-    }
-    if let Some(at) = at {
-        lines.push(chrome(row(padded(vec![Span::styled(
-            stamp_label(at, local_zone()),
-            styles.meta(),
         )]))));
     }
     Some(lines)

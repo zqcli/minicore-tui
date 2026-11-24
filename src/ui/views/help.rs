@@ -149,12 +149,20 @@ const KEYS: &[KeyRow] = &[
         action: "review retained local confirmations; edit separately, warn before resend, no automatic retry",
     },
     KeyRow {
+        keys: "ctrl+b, /children",
+        action: "delegations of this conversation; enter opens the child, esc comes back",
+    },
+    KeyRow {
+        keys: "turn summary: click",
+        action: "open or fold a finished turn's steps; failed tools always stay visible",
+    },
+    KeyRow {
         keys: "agent card: /child [n]",
         action: "open the latest (or nth) delegated child; esc comes back",
     },
     KeyRow {
         keys: "f1",
-        action: "this help",
+        action: "this help; type to filter",
     },
     KeyRow {
         keys: "text answer: enter / esc",
@@ -213,14 +221,28 @@ fn entry(key: String, action: &str, styles: Styles, width: usize) -> Vec<Line<'s
 }
 
 /// The key table, then the commands, wrapped to `width`.
-pub fn lines(commands: &[Command<'static>], styles: Styles, width: usize) -> Vec<Line<'static>> {
+pub fn lines(
+    commands: &[Command<'static>],
+    styles: Styles,
+    width: usize,
+    filter: &str,
+) -> Vec<Line<'static>> {
+    let filter = filter.to_lowercase();
+    let wanted = |a: &str, b: &str| {
+        filter.is_empty()
+            || a.to_lowercase().contains(&filter)
+            || b.to_lowercase().contains(&filter)
+    };
     let mut lines = vec![styled("Keys", styles.dim())];
-    for row in KEYS {
+    for row in KEYS.iter().filter(|row| wanted(row.keys, row.action)) {
         lines.extend(entry(row.keys.to_owned(), row.action, styles, width));
     }
     lines.push(Line::from(""));
     lines.push(styled("Commands", styles.dim()));
-    for command in commands {
+    for command in commands
+        .iter()
+        .filter(|command| wanted(command.name, command.description))
+    {
         let name = format!("/{}", command.name);
         lines.extend(entry(name, command.description, styles, width));
     }
@@ -233,8 +255,9 @@ pub fn render(
     styles: Styles,
     commands: &[Command<'static>],
     scroll: usize,
+    filter: &str,
 ) {
-    let lines = lines(commands, styles, area.width as usize);
+    let lines = lines(commands, styles, area.width as usize, filter);
     let bottom = area.bottom().saturating_sub(1);
     let rows = bottom.saturating_sub(area.y + 1) as usize;
     let start = scroll.min(lines.len().saturating_sub(rows));
@@ -245,11 +268,20 @@ pub fn render(
         lines.len()
     );
     let hints = if lines.len() > rows {
-        vec![("pgup/pgdn", position.as_str()), ("esc", "back")]
+        vec![
+            ("type", "to filter"),
+            ("pgup/pgdn", position.as_str()),
+            ("esc", "back"),
+        ]
     } else {
-        vec![("esc", "back")]
+        vec![("type", "to filter"), ("esc", "back")]
     };
-    chrome(frame, area, styles, "Help", &hints);
+    let title = if filter.is_empty() {
+        "Help".to_owned()
+    } else {
+        format!("Help · {filter}")
+    };
+    chrome(frame, area, styles, &title, &hints);
     for (row, line) in lines.iter().skip(start).take(rows).enumerate() {
         frame
             .buffer_mut()
@@ -275,7 +307,7 @@ mod tests {
 
     #[test]
     fn help_lists_every_key_row_and_command() {
-        let text = text(&lines(COMMANDS, styles(), 80)).join("\n");
+        let text = text(&lines(COMMANDS, styles(), 80, "")).join("\n");
         assert!(text.contains("ctrl+f"), "{text}");
         assert!(text.contains("copy selection"), "{text}");
         assert!(text.contains("editor: click / drag"), "{text}");
@@ -286,10 +318,10 @@ mod tests {
 
     #[test]
     fn help_scrolling_shows_a_later_window_and_where_it_is() {
-        let total = lines(COMMANDS, styles(), 80).len();
+        let total = lines(COMMANDS, styles(), 80, "").len();
         let shot = |scroll| {
             capture(
-                |frame| render(frame, frame.area(), styles(), COMMANDS, scroll),
+                |frame| render(frame, frame.area(), styles(), COMMANDS, scroll, ""),
                 80,
                 10,
             )
@@ -330,7 +362,7 @@ mod tests {
             ]));
         }
         for width in [30, 50, 60, 80] {
-            let rows = text(&lines(COMMANDS, styles(), width));
+            let rows = text(&lines(COMMANDS, styles(), width, ""));
             assert_eq!(words(&rows), expected, "width {width}");
             for row in &rows {
                 assert!(cells(row) <= width, "{row:?} at width {width}");

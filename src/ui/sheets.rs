@@ -106,6 +106,7 @@ pub fn sheet(app: &App, styles: Styles) -> Option<Sheet> {
             sessions_sheet(app, rows, &state, styles)
         }
         Overlay::SessionInfo => session_info_sheet(app, styles),
+        Overlay::Delegations { selected } => delegations_sheet(app, *selected, styles),
         Overlay::Context => context_sheet(app, styles),
         Overlay::Models { filter, selected } => models_sheet(app, filter, *selected, styles),
         Overlay::Agents { filter, selected } => agents_sheet(app, filter, *selected, styles),
@@ -277,10 +278,9 @@ fn sessions_sheet(
         })
         .collect::<Vec<_>>();
     let hint = "enter open · ctrl+n rename · ctrl+d delete · esc close";
-    let notes = if list.is_empty() {
-        vec![Line::styled("  No sessions found", styles.dim())]
-    } else {
-        Vec::new()
+    let notes = match shown.get(selected) {
+        None => vec![Line::styled("  No sessions found", styles.dim())],
+        Some(info) => session_preview(app, info, styles),
     };
     Sheet::new("Resume Session", hint)
         .status(status)
@@ -743,14 +743,102 @@ fn session_row(info: &SessionSummary, context: &RowContext, now_seconds: i64) ->
     Row::new(session_label(info), parts.join(" · ")).mark(context.current)
 }
 
+/// `● D RESP client   running · 4 tool rounds`: every delegated child here.
+fn delegations_sheet(app: &App, selected: usize, styles: Styles) -> Sheet {
+    let cards = overlay::delegations(app);
+    let running = cards.iter().filter(|card| card.outcome().is_none()).count();
+    let rows: Vec<Row> = cards
+        .iter()
+        .map(|card| {
+            let glyph = match card.outcome() {
+                Some(minicore_host_protocol::TurnOutcome::Completed) => "✓",
+                Some(_) => "✗",
+                None => "●",
+            };
+            let task = card.task.lines().next().unwrap_or("input accepted");
+            let mut detail = super::agent_cards::status(card);
+            if let Some((_, turn)) = &card.turn
+                && turn.tool_rounds > 0
+            {
+                detail.push_str(&format!(" · {}", plural(turn.tool_rounds, "tool round")));
+            }
+            Row::new(
+                format!("{glyph} {}", crate::wrap::sanitize(task)),
+                format!(
+                    "{} · {detail}",
+                    short_session_id(card.key.child.session_id.as_str())
+                ),
+            )
+        })
+        .collect();
+    let notes = if rows.is_empty() {
+        vec![Line::styled(
+            "  No delegated child in this conversation",
+            styles.dim(),
+        )]
+    } else {
+        Vec::new()
+    };
+    // Session rows cut a long task before its id and status.
+    Sheet::new("Delegations", "enter open · esc close")
+        .kind(Kind::Session)
+        .status(format!("{running} running · {} total", rows.len()))
+        .rows(rows)
+        .selected(Some(selected))
+        .notes(notes)
+}
+
+/// The selected session's details under the list: where it works, what runs
+/// it and, when its history is loaded, the request it started with.
+fn session_preview(app: &App, info: &SessionSummary, styles: Styles) -> Vec<Line<'static>> {
+    let mut facts = Vec::new();
+    if let Some(workspace) = &info.workspace {
+        facts.push(
+            super::transcript::home_relative(std::path::Path::new(&workspace.path))
+                .display()
+                .to_string(),
+        );
+    }
+    facts.push(format!(
+        "{} · {}",
+        info.model,
+        reasoning_label(info.reasoning)
+    ));
+    let mut lines = vec![
+        Line::default(),
+        Line::styled(format!("  {}", facts.join(" · ")), styles.meta()),
+    ];
+    let first = app
+        .resident
+        .find(&overlay::session_target(info))
+        .and_then(|session| {
+            session
+                .transcript
+                .blocks()
+                .iter()
+                .find_map(|block| match block {
+                    Block::User { text, .. } => Some(text.clone()),
+                    _ => None,
+                })
+        });
+    if let Some(first) = first {
+        let text = crate::wrap::sanitize(&first.replace('\n', " ")).into_owned();
+        lines.push(Line::styled(
+            format!("  › {}", truncate(&text, 110)),
+            styles.dim(),
+        ));
+    }
+    lines
+}
+
 fn context_sheet(app: &App, styles: Styles) -> Sheet {
     let lines = crate::ui::views::context::lines(app.resident.current(), styles);
-    Sheet::new("Context", "r refresh · c copy · esc close").body(lines)
+    Sheet::new("Context", "r refresh · c copy · esc back").body(lines)
 }
 
 /// `/session`: the facts about the foreground session; Enter or `c` copies its id.
 fn session_info_sheet(app: &App, styles: Styles) -> Sheet {
-    let sheet = Sheet::new("Session", "c copy id · esc close");
+    let sheet = Sheet::new("Session", "c copy id · esc back");
     let Some(session) = app.resident.current() else {
         return sheet.body(vec![Line::styled("  No session is open", styles.dim())]);
     };

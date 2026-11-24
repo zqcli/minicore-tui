@@ -55,6 +55,10 @@ pub enum Overlay {
     Reasoning {
         selected: usize,
     },
+    /// Every delegated child of this conversation, newest first.
+    Delegations {
+        selected: usize,
+    },
     /// The inline `@` file list; its filter is the composer's `@token`.
     Files {
         selected: usize,
@@ -65,6 +69,8 @@ pub enum Overlay {
     SessionInfo,
     Help {
         scroll: usize,
+        /// Typed words narrowing the keys and commands shown.
+        filter: String,
     },
     Error {
         text: String,
@@ -87,7 +93,14 @@ impl Overlay {
 
     /// A full-screen view, which hides the transcript and the keys of the composer.
     pub fn is_view(&self) -> bool {
-        matches!(self, Self::Diff(_) | Self::Help { .. } | Self::Error { .. })
+        matches!(
+            self,
+            Self::Diff(_)
+                | Self::Help { .. }
+                | Self::Error { .. }
+                | Self::Context
+                | Self::SessionInfo
+        )
     }
 }
 
@@ -100,6 +113,7 @@ pub enum Panel {
     AgentDelete,
     Models,
     Reasoning,
+    Delegations,
     Files,
     Context,
     SessionInfo,
@@ -107,6 +121,23 @@ pub enum Panel {
     Error,
     Diff,
     Find,
+}
+
+/// One delegated child for the overview: its card, newest first.
+pub fn delegations(app: &super::App) -> Vec<&crate::transcript::agent_card::AgentCard> {
+    let Some(session) = app.resident.current() else {
+        return Vec::new();
+    };
+    session
+        .transcript
+        .blocks()
+        .iter()
+        .rev()
+        .filter_map(|block| match block {
+            crate::transcript::Block::Tool(call) => call.agent_card.as_deref(),
+            _ => None,
+        })
+        .collect()
 }
 
 impl Panel {
@@ -246,6 +277,7 @@ impl App {
             Panel::Unconfirmed | Panel::AgentDelete => {
                 unreachable!("confirmation panels open before session panels")
             }
+            Panel::Delegations => Overlay::Delegations { selected: 0 },
             Panel::Sessions => Overlay::Sessions {
                 filter: String::new(),
                 selected: 0,
@@ -289,7 +321,10 @@ impl App {
                 self.refresh_context();
                 Overlay::SessionInfo
             }
-            Panel::Help => Overlay::Help { scroll: 0 },
+            Panel::Help => Overlay::Help {
+                scroll: 0,
+                filter: String::new(),
+            },
             Panel::Error => Overlay::Error {
                 text: self
                     .last_error
@@ -558,7 +593,7 @@ impl App {
     }
 }
 
-fn approval_label(mode: minicore_host_protocol::ApprovalMode) -> &'static str {
+pub(crate) fn approval_label(mode: minicore_host_protocol::ApprovalMode) -> &'static str {
     match mode {
         minicore_host_protocol::ApprovalMode::Ask => "ask",
         minicore_host_protocol::ApprovalMode::Auto => "auto",

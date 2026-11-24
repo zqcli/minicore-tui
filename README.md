@@ -101,14 +101,18 @@ edits; Ctrl+Z and Ctrl+Y restore or replay them.
 - **Tools:** display complete arguments, progress, output, result, failures and
   native delegation references. Argument generation is not a separate progress
   phase. Expanded cards and `/diff` expose details without changing execution.
-  Adjacent visible cards have one separator row; tool-only responses add no
-  empty row. Blank lines inside tool output remain intact.
+  Folded tools are one row each (state glyph, name, subject, facts) and stack
+  without blank rows; a finished Turn folds its successful steps under
+  `▸ Worked … · N tools`, keeping failures visible. Blank lines inside tool
+  output remain intact. See [docs/ui-spec.md](docs/ui-spec.md) for the visual
+  rules.
 - **Delegated Agent cards:** the original startup card keeps streaming the
   child's recent conversation after the tool returns. Later sends link back to
   that card; a new delegation into the same Session gets a new card. Click the
   card to expand its preview or its footer to open the child Session. Completion
   comes from Host's settled delegation, not tool acceptance. Released child
   history is explicitly unavailable; retained previews are not full histories.
+  Ctrl+B or `/children` lists the conversation's delegations and opens one.
 - **Input:** Enter sends steering input; Alt+Enter or Ctrl+Enter queues a
   follow-up. Accepted `next_step` and `next_turn` entries come from Host. Esc
   cancels the captured Turn and preserves queued input; `/pause` prevents later

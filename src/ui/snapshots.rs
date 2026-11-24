@@ -284,7 +284,7 @@ fn the_draft_is_the_welcome_header_over_the_editor_and_the_footer() {
 
     app.ready = false;
     let screen = render(&mut app, 70, 16);
-    assert!(screen.contains("minicore-tui v"), "{screen}");
+    assert!(screen.contains("╭─ minicore-tui "), "{screen}");
     assert!(screen.contains("Starting MiniCore Host…"), "{screen}");
 }
 
@@ -376,9 +376,10 @@ fn the_footer_reports_model_and_reasoning_without_duplicate_status() {
     app.composer.set_text("hello");
     let rendered = render(&mut app, 80, 12);
     let footer = rendered.lines().last().unwrap_or_default();
+    assert!(footer.starts_with(" ▸ minicore-tui"), "{footer}");
     assert!(
-        footer.starts_with(" ▸ minicore-tui · gpt 6 luna · max"),
-        "{footer}"
+        footer.ends_with("gpt 6 luna · max · approval ask"),
+        "where on the left, what runs on the right: {footer}"
     );
     assert!(
         !footer.contains('@'),
@@ -395,7 +396,7 @@ fn the_footer_reports_model_and_reasoning_without_duplicate_status() {
 }
 
 #[test]
-fn the_footer_reports_past_response_usage_without_inventing_context_percent() {
+fn the_footer_leaves_response_usage_to_the_context_view() {
     let mut app = app();
     let session = app.resident.current_mut().unwrap();
     session.branch = Some("main".into());
@@ -406,7 +407,7 @@ fn the_footer_reports_past_response_usage_without_inventing_context_percent() {
     let rendered = render(&mut app, 110, 12);
     let footer = rendered.lines().last().unwrap();
     assert!(footer.contains("minicore-tui@main"), "{footer}");
-    assert!(footer.ends_with("last ↑50.5k ↓1.8k R33.8k"), "{footer}");
+    assert!(!footer.contains('↑'), "usage lives in /context: {footer}");
     assert!(!footer.contains("ctx") && !footer.contains('%'), "{footer}");
     assert_eq!(crate::wrap::width(footer), 110);
     for columns in [60, 50, 30] {
@@ -462,13 +463,17 @@ fn a_blank_row_separates_the_transcript_and_the_composer_band_is_full_width() {
             .to_owned()
     };
     let composer = terminal.backend().cursor_position().y;
-    assert_eq!(row(composer), " ▎", "the empty editor has no hint");
-    assert_eq!(row(composer - 2), "", "the gap row above the editor");
-    assert_eq!(row(composer - 3).trim(), "▎", "the card's bottom pad row");
+    assert_eq!(
+        row(composer),
+        " ▎Ask anything · / commands · @ files",
+        "the empty editor shows its placeholder"
+    );
+    assert_eq!(row(composer - 1), "", "the idle activity line");
+    assert_eq!(row(composer - 2), "", "the gap row above the dock");
     assert!(
-        row(composer - 4).contains("prompt 39"),
+        row(composer - 3).contains("prompt 39"),
         "{}",
-        row(composer - 4)
+        row(composer - 3)
     );
     assert_eq!(
         buffer[(0u16, composer)].bg,
@@ -551,7 +556,10 @@ fn typing_keeps_the_draft_visible_and_marked_with_the_rail() {
 fn an_open_overlay_is_not_drawn_over_the_composer() {
     let mut app = app();
     app.composer.set_text("draft");
-    app.overlay = Overlay::Help { scroll: 0 };
+    app.overlay = Overlay::Help {
+        scroll: 0,
+        filter: String::new(),
+    };
     let rendered = render(&mut app, 40, 10);
     assert!(
         rendered.contains(" ▎draft"),
@@ -572,7 +580,10 @@ fn the_session_view_identifies_its_agent_and_native_storage_mode() {
 #[test]
 fn a_view_dims_the_composer_and_keys_typed_in_it_do_not_edit_the_draft() {
     let mut app = app();
-    app.overlay = Overlay::Help { scroll: 0 };
+    app.overlay = Overlay::Help {
+        scroll: 0,
+        filter: String::new(),
+    };
     let rendered = render(&mut app, 60, 12);
     assert!(rendered.contains("view open · esc back"), "{rendered}");
     assert!(!rendered.contains("Ask anything"), "{rendered}");
@@ -583,7 +594,7 @@ fn a_view_dims_the_composer_and_keys_typed_in_it_do_not_edit_the_draft() {
 
     app.overlay = Overlay::None;
     let rendered = render(&mut app, 60, 12);
-    assert!(!rendered.contains("Ask anything"), "{rendered}");
+    assert!(rendered.contains("Ask anything"), "{rendered}");
     assert!(!rendered.contains("view open"), "{rendered}");
 }
 
@@ -600,12 +611,14 @@ fn queue(app: &mut App, messages: &[(&str, MessageMode)]) {
     })).unwrap());
 }
 
-/// The dock's key hint row, trimmed.
+/// The activity line when it carries key hints, trimmed.
 fn hint_row(rendered: &str) -> Option<&str> {
     rendered
         .lines()
         .find(|line| {
-            line.contains("steer ·") || line.contains("edit queued") || line.contains("paused ·")
+            ["steer ·", "queued ·", "paused ·", "esc interrupt"]
+                .iter()
+                .any(|hint| line.contains(hint))
         })
         .map(str::trim)
 }
@@ -643,12 +656,12 @@ fn a_paused_queue_says_how_to_go_on() {
     app.resident.current_mut().unwrap().state.data.scheduling = Scheduling::Paused;
     assert_eq!(
         hint_row(&render(&mut app, 70, 12)),
-        Some("paused · enter resumes · alt+↑ edit")
+        Some("paused · enter resumes  1 queued · alt+↑ edit")
     );
     app.composer.set_text("draft");
     assert_eq!(
         hint_row(&render(&mut app, 70, 12)),
-        Some("paused · enter sends · alt+↑ edit")
+        Some("paused · enter sends  1 queued · alt+↑ edit")
     );
 }
 
@@ -658,57 +671,73 @@ fn the_dock_hint_follows_what_the_keys_can_do() {
     assert_eq!(hint_row(&render(&mut app, 70, 12)), None, "idle");
 
     running_bash(&mut app);
-    assert_eq!(
-        hint_row(&render(&mut app, 70, 12)),
-        None,
-        "no draft, no queue"
+    let hints = |app: &mut App| hint_row(&render(app, 90, 12)).map(str::to_owned);
+    let running = hints(&mut app).unwrap();
+    assert!(
+        running.starts_with("⠋ Working 0m · running bash"),
+        "{running}"
     );
+    assert!(running.ends_with("  esc interrupt"), "{running}");
 
     app.composer.set_text("draft");
-    assert_eq!(
-        hint_row(&render(&mut app, 70, 12)),
-        Some("enter steer · alt+enter follow-up")
+    let drafting = hints(&mut app).unwrap();
+    assert!(
+        drafting.ends_with("  enter steer · alt+enter follow-up"),
+        "{drafting}"
     );
 
     queue(&mut app, &[("later", FollowUp)]);
-    assert_eq!(
-        hint_row(&render(&mut app, 70, 12)),
-        Some("enter steer · alt+enter follow-up · alt+↑ edit queued")
+    let queued = hints(&mut app).unwrap();
+    assert!(
+        queued.ends_with("  enter steer · alt+enter follow-up  1 queued · alt+↑ edit"),
+        "{queued}"
     );
 
     app.composer.clear();
-    assert_eq!(
-        hint_row(&render(&mut app, 70, 12)),
-        Some("alt+↑ edit queued")
+    let waiting = hints(&mut app).unwrap();
+    assert!(
+        waiting.ends_with("  esc interrupt  1 queued · alt+↑ edit"),
+        "{waiting}"
     );
+
+    // A narrow dock drops the mode hint before the counts and keeps the status.
+    app.composer.set_text("draft");
+    let narrow = hint_row(&render(&mut app, 60, 12)).unwrap().to_owned();
+    assert!(
+        narrow.starts_with("⠋ Working 0m · running bash"),
+        "{narrow}"
+    );
+    assert!(narrow.ends_with("  1 queued · alt+↑ edit"), "{narrow}");
+    assert!(!narrow.contains("enter steer"), "{narrow}");
 }
 
 #[test]
-fn a_long_queued_message_is_cut_to_the_dock_width() {
+fn a_queue_is_one_count_in_the_dock_within_its_width() {
     let mut app = app();
     queue(
         &mut app,
         &[("a very long follow-up message that cannot fit", FollowUp)],
     );
     let rendered = render(&mut app, 30, 12);
+    assert!(rendered.contains("1 queued · alt+↑ edit"), "{rendered}");
     assert!(
-        rendered.contains("↳ next turn  a very long f…"),
-        "{rendered}"
+        !rendered.contains("a very long"),
+        "the text waits for alt+↑"
     );
+    assert!(rendered.lines().all(|row| crate::wrap::width(row) <= 30));
 }
 
 #[test]
-fn a_running_turn_keeps_elapsed_time_only_in_the_footer() {
+fn a_running_turn_shows_its_whole_minutes_in_the_activity_line_only() {
     let mut app = app();
     running_bash(&mut app);
     let rendered = render(&mut app, 110, 14);
     let working = rendered
         .lines()
-        .find(|line| line.contains("Working (esc to interrupt)"))
+        .find(|line| line.contains("Working"))
         .unwrap();
-    assert!(working.contains("Running bash"), "{working}");
-    assert!(!working.contains("0m"), "{working}");
-    assert!(rendered.lines().last().unwrap().contains("0m"));
+    assert!(working.contains("Working 0m · running bash"), "{working}");
+    assert!(!rendered.lines().last().unwrap().contains("0m"));
 }
 
 /// A left press and release on one cell: a click, not a drag.
@@ -741,7 +770,7 @@ fn clicking_a_hidden_lines_row_collapses_the_expanded_card_without_opening_an_ov
     let app = &mut fixture.app;
     conversation(app);
     let folded = render(app, 70, 30);
-    let header = row_of(&folded, " ▎ bash");
+    let header = row_of(&folded, "  ✓ bash");
     click(app, 10, header);
     let expanded = render(app, 70, 30);
     assert!(expanded.contains("… 14 earlier lines"), "{expanded}");
@@ -750,7 +779,7 @@ fn clicking_a_hidden_lines_row_collapses_the_expanded_card_without_opening_an_ov
     click(app, 10, row_of(&expanded, " ▎ … 14 earlier lines"));
     assert!(matches!(app.overlay, Overlay::None), "{:?}", app.overlay);
     let refolded = render(app, 70, 30);
-    assert!(refolded.contains("ctrl+o to expand"), "{refolded}");
+    assert!(!refolded.contains("… 14 earlier lines"), "{refolded}");
 }
 
 #[test]
@@ -761,13 +790,13 @@ fn clicking_the_body_or_the_footer_of_an_expanded_card_collapses_it() {
         let app = &mut fixture.app;
         conversation(app);
         let folded = render(app, 70, 34);
-        click(app, 10, row_of(&folded, " ▎ bash"));
+        click(app, 10, row_of(&folded, "  ✓ bash"));
         let open = render(app, 70, 34);
         assert!(open.contains(" ▎ $ cargo test --lib"), "{open}");
         click(app, 10, row_of(&open, prefix));
         let collapsed = render(app, 70, 34);
         assert!(
-            collapsed.contains("ctrl+o to expand"),
+            !collapsed.contains(" ▎ $ cargo test --lib"),
             "a click on {prefix:?} left the card open:\n{collapsed}"
         );
         assert!(matches!(app.overlay, Overlay::None), "{:?}", app.overlay);
@@ -783,7 +812,7 @@ fn a_drag_across_an_expanded_card_body_selects_and_leaves_it_open() {
     let app = &mut fixture.app;
     conversation(app);
     let folded = render(app, 70, 30);
-    click(app, 10, row_of(&folded, " ▎ bash"));
+    click(app, 10, row_of(&folded, "  ✓ bash"));
     let open = render(app, 70, 30);
     let body = row_of(&open, " ▎ running 131 tests");
     left(app, Down, 4, body);
@@ -812,7 +841,7 @@ fn a_card_opens_downward_from_its_header_by_click_or_ctrl_o() {
         let folded = render(app, 70, 20);
         let header = |screen: &str| {
             let rows: Vec<&str> = screen.lines().collect();
-            rows.iter().rposition(|row| row.starts_with(" ▎ bash"))
+            rows.iter().rposition(|row| row.starts_with("  ● bash"))
         };
         let before = header(&folded).expect("running card");
         if by_click {
@@ -824,12 +853,14 @@ fn a_card_opens_downward_from_its_header_by_click_or_ctrl_o() {
             ));
         }
         let expanded = render(app, 70, 20);
-        // The first row carries the Ctrl+O flash.
+        // Ctrl+O also opens the thinking row, so only the prompt above it
+        // must stay put.
+        let rows = if by_click { 3 } else { 1 };
         let top = |screen: &str| {
             screen
                 .lines()
                 .skip(1)
-                .take(3)
+                .take(rows)
                 .collect::<Vec<_>>()
                 .join("\n")
         };
@@ -848,7 +879,7 @@ fn collapsing_a_card_while_following_leaves_no_blank_rows_under_the_content() {
     let app = &mut fixture.app;
     conversation(app);
     let folded = render(app, 70, 16);
-    click(app, 10, row_of(&folded, " ▎ bash"));
+    click(app, 10, row_of(&folded, "  ✓ bash"));
     let open = render(app, 70, 16);
     assert!(open.contains(" ▎ $ cargo test --lib"), "{open}");
     // Following the longer transcript, the collapsing click pins a top that
@@ -973,7 +1004,7 @@ fn a_drag_over_a_card_header_selects_instead_of_toggling() {
     let app = &mut fixture.app;
     conversation(app);
     let screen = render(app, 70, 20);
-    let header = row_of(&screen, " ▎ bash");
+    let header = row_of(&screen, "  ✓ bash");
     for (kind, column) in [
         (MouseEventKind::Down(MouseButton::Left), 2),
         (MouseEventKind::Drag(MouseButton::Left), 8),
@@ -987,7 +1018,10 @@ fn a_drag_over_a_card_header_selects_instead_of_toggling() {
         });
     }
     let after = render(app, 70, 20);
-    assert!(after.contains("ctrl+o to expand"), "still folded:\n{after}");
+    assert!(
+        !after.contains(" ▎ $ cargo test --lib"),
+        "still folded:\n{after}"
+    );
 }
 
 #[test]
@@ -996,14 +1030,14 @@ fn a_drag_across_a_card_takes_its_text_without_rails_or_hints() {
     let app = &mut fixture.app;
     conversation(app);
     let screen = render(app, 70, 20);
-    let header = row_of(&screen, " ▎ bash");
+    let header = row_of(&screen, "  ✓ bash");
     let drag = crate::app::selection::Drag {
         from: (1, header),
-        to: (69, header + 2),
+        to: (69, header),
     };
     assert_eq!(
         app.selected_text(drag).as_deref(),
-        Some("bash\n$ cargo test --lib")
+        Some("bash   cargo test --lib")
     );
 }
 
@@ -1025,19 +1059,19 @@ fn the_gutter_column_stays_blank_and_ignores_clicks() {
     };
     let top = render(app, 70, 20);
     assert!(
-        top.contains(concat!("minicore-tui v", env!("CARGO_PKG_VERSION"))),
+        top.contains(concat!("minicore-tui ", env!("CARGO_PKG_VERSION"))),
         "{top}"
     );
     assert!(
-        top.contains("esc interrupt · ctrl+c clear · / commands"),
+        top.contains("f1 keys and commands · / commands · @ files"),
         "{top}"
     );
     assert!(top.contains("/work/minicore-tui"), "{top}");
     app.scroll = Scroll::Follow;
-    let header = row_of(&screen, " ▎ bash");
+    let header = row_of(&screen, "  ✓ bash");
     click(app, 0, header);
     assert!(
-        render(app, 70, 20).contains("ctrl+o to expand"),
+        !render(app, 70, 20).contains(" ▎ $ cargo test --lib"),
         "still folded"
     );
 }
@@ -1055,14 +1089,14 @@ fn a_click_on_a_card_in_block_0_maps_below_the_welcome_header() {
     let app = &mut fixture.app;
     card_first(app);
     let folded = render(app, 70, 30);
-    click(app, 10, row_of(&folded, " ▎ bash"));
+    click(app, 10, row_of(&folded, "  ✓ bash"));
     let expanded = render(app, 70, 30);
     assert!(expanded.contains(" ▎ $ cargo test --lib"), "{expanded}");
 
     click(app, 10, row_of(&expanded, " ▎ … 14 earlier lines"));
     assert!(matches!(app.overlay, Overlay::None), "{:?}", app.overlay);
     let refolded = render(app, 70, 30);
-    assert!(refolded.contains("ctrl+o to expand"), "{refolded}");
+    assert!(!refolded.contains("… 14 earlier lines"), "{refolded}");
 }
 
 #[test]
@@ -1235,7 +1269,7 @@ fn an_approval_shows_the_tool_its_target_and_its_input() {
         "{rendered}"
     );
     assert!(
-        rendered.contains("Waiting for approval") && rendered.contains("esc to deny"),
+        rendered.contains("Waiting for approval") && rendered.contains("esc deny"),
         "{rendered}"
     );
     assert!(!rendered.contains("allow for session"));

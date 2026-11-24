@@ -746,6 +746,7 @@ impl App {
                 saving: Some(data.persistence),
             });
         }
+        transcript.regroup(turn_id);
     }
 
     pub(super) fn install_records(&mut self, epoch: u64, records: &[HistoryRecordData]) {

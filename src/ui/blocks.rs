@@ -15,15 +15,12 @@ use super::rails::{chrome, chrome_span, fill, indent, rail_row, surface_row};
 use super::theme::Styles;
 use crate::transcript::UserKind;
 use crate::transcript::layout::Fold;
-use crate::transcript::{Block, ToolCall};
+use crate::transcript::{Block, GroupSummary, Grouping, ToolCall};
 use crate::transcript::{EXPANDED_ROWS, ToolState};
 use crate::wrap;
 
 /// Columns before block text: the rail and one pad cell.
 pub const INSET: usize = 2;
-
-/// Thinking rows a long block shows before its expand hint.
-const THINKING_ROWS: usize = 3;
 
 /// The column text wraps at in a block `width` wide, keeping one pad cell on
 /// the right.
@@ -38,6 +35,78 @@ pub fn thinking_style(styles: Styles) -> Style {
 
 /// Renders one block at `width`. An assistant without visible content has no rows.
 pub fn render(block: &Block, styles: Styles, width: u16, fold: Fold) -> Vec<Line<'static>> {
+    render_with(block, &Grouping::None, styles, width, fold)
+}
+
+/// [`render`] for a block that may be a step of a folded Turn: a closed
+/// group's steps take no rows, and its first step draws the summary row.
+pub fn render_with(
+    block: &Block,
+    grouping: &Grouping,
+    styles: Styles,
+    width: u16,
+    fold: Fold,
+) -> Vec<Line<'static>> {
+    match grouping {
+        Grouping::None => render_block(block, styles, width, fold),
+        Grouping::Member { open, .. } if !open && !fold.expanded => Vec::new(),
+        Grouping::Member { .. } => render_block(block, styles, width, fold),
+        Grouping::Head {
+            summary,
+            open,
+            folds,
+            ..
+        } => {
+            let mut rows = vec![group_row(
+                summary,
+                *open || fold.expanded,
+                styles,
+                width.into(),
+            )];
+            if *open || fold.expanded || !folds {
+                rows.extend(render_block(block, styles, width, fold));
+            }
+            rows
+        }
+    }
+}
+
+/// `▸ Worked 2m 14s · 18 tools · 3 files changed (+142 −37) · 1 failed`.
+fn group_row(summary: &GroupSummary, open: bool, styles: Styles, width: usize) -> Line<'static> {
+    let mut parts = vec![match summary.duration {
+        Some(duration) => format!("Worked {}", format_duration(duration)),
+        None => "Worked".to_owned(),
+    }];
+    parts.push(plural(summary.tools as u64, "tool"));
+    if let Some(changes) = summary.changes.filter(|changes| !changes.is_empty()) {
+        let files = format!("{} changed", plural(changes.files as u64, "file"));
+        parts.push(match changes.lines {
+            Some((added, removed)) => format!("{files} (+{added} −{removed})"),
+            None => files,
+        });
+    }
+    let mut spans = vec![
+        Span::raw(" "),
+        chrome_span(Span::styled(
+            if open { "▾ " } else { "▸ " },
+            styles.accent(),
+        )),
+        Span::styled(
+            wrap::truncate(&parts.join(" · "), width.saturating_sub(16)),
+            styles.meta(),
+        ),
+    ];
+    if summary.failed > 0 {
+        spans.push(Span::styled(" · ", styles.meta()));
+        spans.push(Span::styled(
+            format!("{} failed", summary.failed),
+            styles.failure(),
+        ));
+    }
+    Line::from(spans)
+}
+
+fn render_block(block: &Block, styles: Styles, width: u16, fold: Fold) -> Vec<Line<'static>> {
     if matches!(block, Block::Assistant { reasoning, text, partial: false, .. }
         if reasoning.trim().is_empty() && text.trim().is_empty())
     {
@@ -200,35 +269,45 @@ fn user(
     let row = |spans: Vec<Span<'static>>| {
         surface_row(styles.user_rail(), styles.composer(), spans, width)
     };
-    let mut lines = vec![chrome(row(Vec::new()))];
     // What the user typed is shown as typed: line breaks and indentation are
     // content, not Markdown soft breaks.
-    let mut body = wrap::wrapped(&wrap::sanitize(text), text_width(width), styles.text());
-    let hidden = body.len().saturating_sub(USER_ROWS);
-    if !expanded && hidden > 0 {
-        body.truncate(USER_ROWS - 1);
-    }
-    for line in body {
-        lines.push(row(padded(line.spans)));
-    }
-    if !expanded && hidden > 0 {
-        lines.push(chrome(row(padded(vec![Span::styled(
-            format!("... ({} more lines, ctrl+o to expand)", hidden + 1),
-            styles.dim(),
-        )]))));
-    }
     let mut meta = Vec::new();
     meta.extend(at.map(|at| stamp_label(at, local_zone())));
     if kind == UserKind::Steering {
         meta.push("↗ steering".to_owned());
     }
-    if !meta.is_empty() {
+    let meta = meta.join(" · ");
+    // The time sits on the first row's right edge, so the text gets the room.
+    let room = text_width(width)
+        .saturating_sub(wrap::width(&meta) + 2)
+        .max(8);
+    let mut body = wrap::wrapped(&wrap::sanitize(text), room, styles.text());
+    if body.is_empty() {
+        body.push(Line::default());
+    }
+    let hidden = body.len().saturating_sub(USER_ROWS);
+    if !expanded && hidden > 0 {
+        body.truncate(USER_ROWS - 1);
+    }
+    let mut lines = Vec::new();
+    for (index, line) in body.into_iter().enumerate() {
+        let spans = if index == 0 && !meta.is_empty() {
+            title_spans(
+                line.spans,
+                vec![chrome_span(Span::styled(meta.clone(), styles.meta()))],
+                text_width(width),
+            )
+        } else {
+            padded(line.spans)
+        };
+        lines.push(row(spans));
+    }
+    if !expanded && hidden > 0 {
         lines.push(chrome(row(padded(vec![Span::styled(
-            meta.join(" · "),
-            styles.meta(),
+            format!("… {} more lines", hidden + 1),
+            styles.dim(),
         )]))));
     }
-    lines.push(chrome(row(Vec::new())));
     lines
 }
 
@@ -307,17 +386,37 @@ pub fn thinking_rows(
             padded(vec![Span::styled("Thinking...", thinking_style(styles))]),
             width,
         )));
+    } else if !thinking.is_empty() && !expanded {
+        // Folded thinking is one row: its newest heading, which also tracks a
+        // live stream, and how much more there is.
+        let latest: String = thinking
+            .iter()
+            .rev()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .find(|text| !text.trim().is_empty())
+            .unwrap_or_default();
+        let more = thinking.len().saturating_sub(1);
+        let count = (more > 0).then(|| format!("  +{more}"));
+        // The lead, the glyph and the count; the last column is the scrollbar's.
+        let room = width.saturating_sub(4 + count.as_deref().map_or(0, wrap::width) + 1);
+        // A step row, aligned with tool rows: no rail.
+        let mut spans = vec![
+            Span::raw(" "),
+            chrome_span(Span::styled("∴ ", styles.meta())),
+            Span::styled(wrap::truncate(latest.trim(), room), thinking_style(styles)),
+        ];
+        if let Some(count) = count {
+            spans.push(chrome_span(Span::styled(count, styles.faint())));
+        }
+        lines.push(Line::from(spans));
     } else if !thinking.is_empty() {
-        let total = thinking.len();
-        let shown = if !expanded && total > THINKING_ROWS {
-            let hint = expand_hint(total - THINKING_ROWS, "earlier", true, width - 2, styles);
-            lines.push(chrome(rail_row(rail, hint, width)));
-            &thinking[total - THINKING_ROWS..]
-        } else {
-            thinking
-        };
         lines.extend(
-            shown
+            thinking
                 .iter()
                 .map(|line| rail_row(rail, padded(line.spans.clone()), width)),
         );
@@ -329,33 +428,6 @@ pub fn thinking_rows(
 /// fold those lines into one paragraph, so every newline is a hard break.
 pub fn reasoning_source(reasoning: &str) -> String {
     reasoning.trim().replace('\n', "  \n")
-}
-
-/// `... (N more lines, click or ctrl+o to expand)`; the click is left out when
-/// the hint would not fit in `room` cells.
-fn expand_hint(
-    hidden: usize,
-    noun: &str,
-    clickable: bool,
-    room: usize,
-    styles: Styles,
-) -> Vec<Span<'static>> {
-    let count = plural(hidden as u64, &format!("{noun} line"));
-    let long = format!("... ({count}, click or ctrl+o to expand)");
-    let click = clickable && wrap::width(&long) <= room;
-    let mut spans = vec![
-        Span::styled(format!("... ({count},"), styles.meta()),
-        Span::raw(" "),
-    ];
-    if click {
-        spans.push(Span::styled("click or ", styles.meta()));
-    }
-    spans.extend([
-        Span::styled("ctrl+o", styles.faint()),
-        Span::styled(" to expand", styles.meta()),
-        Span::styled(")", styles.text()),
-    ]);
-    spans
 }
 
 pub(super) fn tool(
@@ -379,65 +451,7 @@ pub(super) fn tool(
     let waiting = call.is_running() && body.lines.is_empty() && body.hidden == 0;
     let running_row = || chrome(row(padded(vec![Span::styled("running…", styles.meta())])));
     if !expanded {
-        let name = Span::styled(
-            wrap::truncate(&card_title(call), inner),
-            styles.tool_title(),
-        );
-        let mut lines = vec![row(title_spans(
-            vec![name],
-            meta(call, styles, true),
-            inner,
-        ))];
-        let detail = one_line(&call.header_detail());
-        if !detail.is_empty() {
-            lines.push(row(padded(vec![Span::styled(
-                detail,
-                styles.tool_output(),
-            )])));
-        }
-        if let Some(progress) = &call.progress {
-            lines.push(chrome(row(padded(vec![Span::styled(
-                wrap::truncate(progress, inner),
-                styles.meta(),
-            )]))));
-        }
-        if let Some(error) = error_line(call) {
-            lines.push(row(padded(vec![Span::styled(
-                one_line(error),
-                styles.failure(),
-            )])));
-        }
-        for delegation in call.delegations.iter().take(3) {
-            lines.push(row(padded(vec![Span::styled(
-                wrap::truncate(
-                    &format!(
-                        "child {} · agent {}",
-                        delegation.child.session_id, delegation.child.agent_id
-                    ),
-                    inner,
-                ),
-                styles.meta(),
-            )])));
-        }
-        if call.delegations.len() > 3 {
-            lines.push(chrome(row(padded(vec![Span::styled(
-                format!("{} more child sessions", call.delegations.len() - 3),
-                styles.meta(),
-            )]))));
-        }
-        let hidden = body.lines.len() + body.hidden;
-        if hidden > 0 {
-            lines.push(chrome(row(padded(expand_hint(
-                hidden,
-                "more",
-                true,
-                inner.saturating_sub(1),
-                styles,
-            )))));
-        } else if waiting {
-            lines.push(running_row());
-        }
-        return lines;
+        return tool_row(call, styles, width);
     }
 
     let bash = call.name == "bash";
@@ -608,6 +622,104 @@ fn card_title(call: &ToolCall) -> String {
     }
 }
 
+/// Rows of live output under a running tool's row.
+const LIVE_ROWS: usize = 3;
+
+/// A folded tool: one row of status glyph, name, subject and its most useful
+/// fact; a running call adds its newest output and a failure its reason.
+fn tool_row(call: &ToolCall, styles: Styles, width: usize) -> Vec<Line<'static>> {
+    let (glyph, glyph_style) = match call.state {
+        ToolState::Pending | ToolState::Running => ("●", styles.accent()),
+        ToolState::Succeeded
+            if call.result_error.is_none() && call.exit_code.is_none_or(|code| code == 0) =>
+        {
+            ("✓", styles.success())
+        }
+        ToolState::Denied | ToolState::Cancelled => ("⊘", styles.meta()),
+        _ => ("✗", styles.failure()),
+    };
+    let subject = one_line(call.header_detail().trim_start_matches("$ "));
+    let mut right = meta(call, styles, true);
+    if call.state == ToolState::Succeeded
+        && call.line_changes().is_none()
+        && let Some(lines) = call.output_lines.filter(|lines| *lines > 0)
+    {
+        if !right.is_empty() {
+            right.push(Span::styled(" · ", styles.meta()));
+        }
+        right.push(Span::styled(plural(lines as u64, "line"), styles.meta()));
+    }
+    if call.is_running() && right.is_empty() {
+        right.push(Span::styled("running", styles.meta()));
+    }
+    let name = format!("{:<6}", display_name(call));
+    let left = vec![
+        chrome_span(Span::styled(format!("{glyph} "), glyph_style)),
+        Span::styled(name, styles.tool_title()),
+        Span::raw(" "),
+        Span::styled(subject, styles.tool_output()),
+    ];
+    let mut lines = vec![Line::from(row_spans(left, right, width))];
+    if let Some(error) = error_line(call) {
+        lines.push(Line::from(vec![
+            chrome_span(Span::raw("   └ ")),
+            Span::styled(
+                wrap::truncate(&one_line(error), width.saturating_sub(6)),
+                styles.failure(),
+            ),
+        ]));
+    } else if call.is_running() {
+        let output = call.output_content();
+        let start = output.len().saturating_sub(LIVE_ROWS);
+        for text in &output[start..] {
+            let text = one_line(text);
+            lines.push(Line::from(vec![
+                chrome_span(Span::styled("   │ ", styles.meta())),
+                Span::styled(
+                    wrap::truncate(&text, width.saturating_sub(6)),
+                    styles.tool_output(),
+                ),
+            ]));
+        }
+    }
+    lines
+}
+
+/// `left` from the second cell and `right` flush with the edge; the subject
+/// is cut first when both do not fit.
+fn row_spans(
+    mut left: Vec<Span<'static>>,
+    right: Vec<Span<'static>>,
+    width: usize,
+) -> Vec<Span<'static>> {
+    // The last column belongs to the scrollbar.
+    let room = width.saturating_sub(2);
+    let right_width = super::status::spans_width(&right);
+    let left_room = if right_width > 0 {
+        room.saturating_sub(right_width + 2)
+    } else {
+        room
+    };
+    let mut used = 0;
+    for span in &mut left {
+        let own = wrap::width(&span.content);
+        if used + own > left_room {
+            let keep = left_room.saturating_sub(used);
+            *span = Span::styled(wrap::truncate(&span.content, keep), span.style);
+        }
+        used += wrap::width(&span.content);
+    }
+    let mut spans = vec![Span::raw(" ")];
+    spans.extend(left);
+    if right_width > 0 && used + right_width + 2 <= room {
+        spans.push(chrome_span(Span::raw(
+            " ".repeat(room - used - right_width),
+        )));
+        spans.extend(right);
+    }
+    spans
+}
+
 /// Why a call failed without running to an exit code, for its collapsed card.
 fn error_line(call: &ToolCall) -> Option<&str> {
     if let Some(error) = call.result_error.as_deref() {
@@ -622,8 +734,6 @@ fn error_line(call: &ToolCall) -> Option<&str> {
         .find(|line| !line.is_empty())
 }
 
-/// The bold first rows of an expanded card: the whole command for `bash`,
-/// else the tool name and its subject.
 /// The subject under an expanded card's title: the whole `bash` command, or
 /// the same detail the folded card shows.
 fn expanded_title(call: &ToolCall) -> String {
@@ -973,14 +1083,14 @@ mod tests {
     }
 
     #[test]
-    fn a_user_card_is_a_padded_surface_behind_the_rail() {
+    fn a_user_card_is_a_surface_behind_the_rail_without_padding_rows() {
         let block = Block::User {
             text: "hello world".into(),
             kind: UserKind::Prompt,
             at: None,
         };
         let lines = render(&block, styles(), 40, fold());
-        assert_eq!(text(&lines), ["▎", "▎ hello world", "▎"]);
+        assert_eq!(text(&lines), ["▎ hello world"]);
         for line in &lines {
             assert_eq!(wrap::width(&line.to_string()), 40, "full width: {line:?}");
             assert_eq!(line.spans[0].style.bg, None, "the rail cell has no surface");
@@ -998,11 +1108,9 @@ mod tests {
         assert_eq!(
             text(&render(&block, styles(), 40, fold())),
             [
-                "▎",
                 "▎ Error: boom",
                 "▎     at foo (a.js:1:1)",
                 "▎     at bar (b.js:2:2)",
-                "▎"
             ]
         );
         let long = Block::User {
@@ -1012,7 +1120,7 @@ mod tests {
         };
         let folded = text(&render(&long, styles(), 40, fold()));
         assert!(
-            folded.contains(&"▎ ... (30 more lines, ctrl+o to expand)".to_owned()),
+            folded.contains(&"▎ … 30 more lines".to_owned()),
             "{folded:?}"
         );
         assert!(!folded.iter().any(|row| row.contains("log line 39")));
@@ -1028,7 +1136,10 @@ mod tests {
             at: None,
         };
         let body = text(&render(&block, styles(), 40, fold()));
-        assert_eq!(body[2], "▎ ↗ steering");
+        assert_eq!(
+            body,
+            [format!("▎ focus on tests{}↗ steering", " ".repeat(13))]
+        );
     }
 
     fn turn_id() -> TurnId {
@@ -1051,7 +1162,7 @@ mod tests {
     }
 
     #[test]
-    fn a_stamped_card_shows_the_time_below_the_text_and_beside_the_steering_label() {
+    fn a_stamped_card_shows_the_time_at_the_right_of_its_first_row() {
         let card = |kind, at| Block::User {
             text: "hello".into(),
             kind,
@@ -1059,16 +1170,24 @@ mod tests {
         };
         let at = sent("2026-10-20T21:38:00Z");
         let prompt = render(&card(UserKind::Prompt, at), styles(), 40, fold());
-        assert_eq!(text(&prompt), ["▎", "▎ hello", "▎ 21:38 · 10/20/2026", "▎"]);
-        let meta = &prompt[2];
-        assert_eq!(wrap::width(&meta.to_string()), 40);
-        assert_eq!(meta.spans[2].style.fg, Some(Palette::dark().meta));
-        assert_eq!(meta.spans[2].style.bg, Some(Palette::dark().composer_bg));
+        assert_eq!(
+            text(&prompt),
+            [format!("▎ hello{}21:38 · 10/20/2026", " ".repeat(14))]
+        );
+        let row = &prompt[0];
+        assert_eq!(wrap::width(&row.to_string()), 40);
+        let stamp = row
+            .spans
+            .iter()
+            .find(|span| span.content.contains("21:38"))
+            .unwrap();
+        assert_eq!(stamp.style.fg, Some(Palette::dark().meta));
+        assert_eq!(stamp.style.bg, Some(Palette::dark().composer_bg));
 
         let steer = render(&card(UserKind::Steering, at), styles(), 40, fold());
         assert_eq!(
-            steer[2].to_string().trim_end(),
-            "▎ 21:38 · 10/20/2026 · ↗ steering"
+            steer[0].to_string().trim_end(),
+            "▎ hello 21:38 · 10/20/2026 · ↗ steering"
         );
     }
 
@@ -1076,7 +1195,7 @@ mod tests {
     fn assistant_prose_is_markdown_at_the_thinking_column() {
         let block = assistant("## Title\n\nsome **bold** prose", "plan", false);
         let body = text(&render(&block, styles(), 60, fold()));
-        assert_eq!(body[0], "▎ plan");
+        assert_eq!(body[0], " ∴ plan");
         assert_eq!(body[1], "");
         assert_eq!(
             body[2], "  Title",
@@ -1098,16 +1217,7 @@ mod tests {
                 60,
                 fold(),
             ));
-            assert_eq!(
-                folded[..4],
-                [
-                    "▎... (2 earlier lines, click or ctrl+o to expand)",
-                    "▎ three",
-                    "▎ four",
-                    "▎ five"
-                ],
-                "{folded:?}"
-            );
+            assert_eq!(folded[0], " ∴ five  +4", "the newest line and a count");
         }
         let open = text(&render(
             &assistant("the answer", reasoning, false),
@@ -1122,7 +1232,7 @@ mod tests {
     #[test]
     fn thinking_is_dim_italic_with_bold_headings() {
         let block = assistant("", "**Reading the tests**\nthen run them", false);
-        let lines = render(&block, styles(), 60, fold());
+        let lines = render(&block, styles(), 60, expanded());
         assert_eq!(text(&lines), ["▎ Reading the tests", "▎ then run them"]);
         let heading = &lines[0].spans[2].style;
         assert!(
@@ -1179,14 +1289,13 @@ mod tests {
     }
 
     #[test]
-    fn a_folded_card_is_title_detail_and_hint() {
+    fn a_folded_tool_is_one_row_of_glyph_name_subject_and_facts() {
         assert_eq!(
             card(call(), fold()),
-            [
-                format!("▎ bash{}0.4s", " ".repeat(49)),
-                "▎ $ python3 -m unittest".into(),
-                "▎ ... (14 more lines, click or ctrl+o to expand)".into(),
-            ]
+            [format!(
+                " ✓ bash   python3 -m unittest{}0.4s",
+                " ".repeat(26)
+            )]
         );
     }
 
@@ -1208,20 +1317,22 @@ mod tests {
     }
 
     #[test]
-    fn a_started_card_without_output_says_running_where_the_hint_goes() {
+    fn a_started_tool_without_output_says_running_at_the_right() {
         assert_eq!(
             card(started(), fold()),
-            ["▎ bash", "▎ $ python3 -m unittest", "▎ running…"]
+            [format!(
+                " ● bash   python3 -m unittest{}running",
+                " ".repeat(23)
+            )]
         );
     }
 
     #[test]
-    fn running_gives_way_to_the_hint_once_output_arrives() {
+    fn a_running_tool_shows_its_latest_output_under_the_row() {
         let mut running = started();
-        running.push_output("Ran 30 tests\n");
+        running.push_output("one\ntwo\nthree\nfour\n");
         let body = card(running, fold());
-        assert_eq!(body[2], "▎ ... (1 more line, click or ctrl+o to expand)");
-        assert!(!body.join("\n").contains("running…"));
+        assert_eq!(body[1..], ["   │ two", "   │ three", "   │ four"]);
     }
 
     #[test]
@@ -1230,11 +1341,11 @@ mod tests {
             let body = card(quiet(ToolState::Pending), mode).join("\n");
             assert!(!body.contains("running…"), "{body}");
         }
-        assert_eq!(card(quiet(ToolState::Pending), fold()).len(), 2);
+        assert_eq!(card(quiet(ToolState::Pending), fold()).len(), 1);
         assert!(
             card(quiet(ToolState::Running), fold())
                 .join("\n")
-                .contains("running…")
+                .contains("running")
         );
     }
 
@@ -1266,15 +1377,13 @@ mod tests {
 
     #[test]
     fn the_running_row_is_chrome_that_a_selection_skips() {
-        for mode in [fold(), expanded()] {
-            let block = Block::Tool(Box::new(started()));
-            let lines = render(&block, styles(), 60, mode);
-            let row = lines
-                .iter()
-                .find(|line| line.to_string().contains("running…"))
-                .unwrap();
-            assert_eq!(content_cells(row), 0..0);
-        }
+        let block = Block::Tool(Box::new(started()));
+        let lines = render(&block, styles(), 60, expanded());
+        let row = lines
+            .iter()
+            .find(|line| line.to_string().contains("running…"))
+            .unwrap();
+        assert_eq!(content_cells(row), 0..0);
     }
 
     #[test]
@@ -1302,7 +1411,13 @@ mod tests {
         let mut long = call();
         long.detail = format!("$ cd app &&\n  {}", "x".repeat(80));
         let body = card(long, fold());
-        assert_eq!(body[1], format!("▎ $ cd app && {}", "x".repeat(46)));
+        assert_eq!(body.len(), 1, "{body:?}");
+        assert!(body[0].starts_with(" ✓ bash   cd app && xxx"), "{body:?}");
+        assert!(body[0].ends_with("…  0.4s"), "{body:?}");
+        assert!(
+            wrap::width(&body[0]) < 60,
+            "the scrollbar column stays free"
+        );
     }
 
     #[test]
@@ -1323,7 +1438,7 @@ mod tests {
         ] {
             let mut card = call();
             card.state = state;
-            let lines = render(&Block::Tool(Box::new(card)), styles(), 60, fold());
+            let lines = render(&Block::Tool(Box::new(card)), styles(), 60, expanded());
             assert_eq!(lines[0].spans[0].style.fg, Some(rail));
             assert_eq!(lines[0].spans[1].style.bg, Some(surface));
         }
@@ -1425,13 +1540,9 @@ mod tests {
     #[test]
     fn a_patch_card_counts_its_change_and_expands_to_a_colored_diff() {
         let folded = card(patch_card(), fold());
-        assert_eq!(folded[1], "▎ app.py");
-        assert!(
-            folded[0].starts_with("▎ apply_patch (8 lines)"),
-            "{folded:?}"
-        );
+        assert!(folded[0].starts_with(" ✓ apply_patch app.py"), "{folded:?}");
         assert!(folded[0].ends_with("0.4s · +1 −0"), "{folded:?}");
-        assert_eq!(folded[2], "▎ ... (8 more lines, click or ctrl+o to expand)");
+        assert_eq!(folded.len(), 1);
 
         let lines = render(
             &Block::Tool(Box::new(patch_card())),
@@ -1484,10 +1595,7 @@ mod tests {
         // Structured metadata identifies a preview cut inside line 5.
         read.truncated = true;
         read.push_output("1: alpha\n2: beta\n3: gamma\n4: delta\n1");
-        assert_eq!(
-            card(read.clone(), fold())[2],
-            "▎ ... (2000 more lines, click or ctrl+o to expand)"
-        );
+        assert!(card(read.clone(), fold())[0].ends_with("2000 lines"));
         let open = card(read, expanded());
         assert_eq!(
             open[2..9],
@@ -1511,10 +1619,7 @@ mod tests {
             card.output = Vec::new();
             card.output_lines = Some(42);
             let folded = self::card(card.clone(), fold());
-            assert_eq!(
-                folded[2],
-                "▎ ... (42 more lines, click or ctrl+o to expand)"
-            );
+            assert!(folded[0].ends_with("42 lines"), "{folded:?}");
             let open = self::card(card, expanded());
             assert!(open.contains(&"▎ … 42 lines".to_owned()), "{open:?}");
         }
@@ -1682,7 +1787,11 @@ mod tests {
         let mut waiting = call();
         waiting.state = ToolState::Pending;
         waiting.duration = None;
-        assert_eq!(card(waiting, fold())[0], "▎ bash", "not started: no timer");
+        assert_eq!(
+            card(waiting, fold())[0],
+            " ● bash   python3 -m unittest",
+            "not started: no timer"
+        );
     }
 
     #[test]
@@ -1695,13 +1804,9 @@ mod tests {
             "no hunk matched".into(),
         ];
         let body = card(failed, fold());
-        assert_eq!(
-            body[0],
-            format!("▎ apply_patch (8 lines){}failed", " ".repeat(30))
-        );
-        assert_eq!(body[1], "▎ app.py");
-        assert_eq!(body[2], "▎ tool invocation is invalid");
-        assert_eq!(body[3], "▎ ... (2 more lines, click or ctrl+o to expand)");
+        assert!(body[0].starts_with(" ✗ apply_patch app.py"), "{body:?}");
+        assert!(!body[0].contains("+1"), "{body:?}");
+        assert_eq!(body[1], "   └ tool invocation is invalid");
     }
 
     #[test]
@@ -1717,7 +1822,8 @@ mod tests {
             "{rows:?}"
         );
         assert!(!rows[0].contains("+1"), "failed changes are not applied");
-        assert_eq!(collapsed[0].spans[0].style, styles().card_failure_rail());
+        assert!(rows[0].starts_with(" ✗"), "{rows:?}");
+        assert_eq!(rows[1], "   └ No matching file");
         let expanded = text(&render(&block, styles(), 70, expanded())).join("\n");
         assert!(expanded.contains("No matching file"), "{expanded}");
         assert!(
@@ -1735,22 +1841,11 @@ mod tests {
             "command":"\ngit diff -- README.md && git diff --check\necho done"
         }));
         bash.detail = "git diff --check && git diff --".into();
-        assert_eq!(
-            card(bash, fold())[1],
-            "▎ $ git diff -- README.md && git diff --check"
+        assert!(
+            card(bash, fold())[0]
+                .starts_with(" ✓ bash   git diff -- README.md && git diff --check"),
+            "the first command line, not the summary"
         );
-    }
-
-    #[test]
-    fn the_click_hint_is_left_out_when_it_does_not_fit() {
-        let hint = |room| -> String {
-            expand_hint(14, "more", true, room, styles())
-                .iter()
-                .map(|span| span.content.as_ref())
-                .collect()
-        };
-        assert_eq!(hint(46), "... (14 more lines, click or ctrl+o to expand)");
-        assert_eq!(hint(45), "... (14 more lines, ctrl+o to expand)");
     }
 
     #[test]

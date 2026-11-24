@@ -183,9 +183,15 @@ Responses reasoning boundaries are emitted by Host's provider and retained in
 native canonical text. Markdown rendering preserves those newlines as hard
 breaks. The frontend does not infer boundaries from fragments or headings.
 
-Rendering uses per-block revisions and visible-row layout caches. Exactly one
-separator row belongs between visible blocks. Zero-row entries consume no height
-or separator, but retain canonical identities for late-output suppression. The
+Rendering uses per-block revisions and visible-row layout caches. One
+separator row belongs between visible blocks, except between two adjacent step
+rows (folded tools and thinking-only responses), which stack. Zero-row entries
+consume no height or separator, but retain canonical identities for late-output
+suppression. A finished Turn's grouping (head summary row, hidden members, open
+state) is presentation metadata on the transcript; changing it bumps the
+affected blocks' revisions, so the cache needs no separate group key. History
+blocks carry their Turn on the record source, so grouping also applies after
+reopening and after an older page fills in a Turn. The
 cache stores body rows independently of separators so changes in neighboring
 visibility preserve unchanged bodies. Internal tool/code whitespace remains
 content; anchors, hits and selection use the resulting visible geometry.

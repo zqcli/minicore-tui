@@ -1,10 +1,8 @@
 
-  minicore-tui v0.12.11
-
-  esc interrupt · ctrl+c clear · / commands · @ files · ctrl+o expand
-  ctrl+r sessions
-
-  /work/minicore-tui
+  ╭─ minicore-tui 0.12.11 ──────────────────────────────────────────╮
+  │ /work/minicore-tui                                              │
+  │ f1 keys and commands · / commands · @ files                     │
+  ╰─────────────────────────────────────────────────────────────────╯
 
  ▎ bash
  ▎ $ cargo test --lib
@@ -25,8 +23,10 @@
  ▎
 
 
- ▎
- ▎
- ▎
- ▎
- ▸ minicore-tui · gpt 6 luna · max · agent Coder
+
+
+
+
+
+ ▎Ask anything · / commands · @ files
+ ▸ minicore-tui · Cache the parser     gpt 6 luna · max · approval ask

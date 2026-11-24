@@ -171,7 +171,7 @@ fn short(id: &str) -> String {
     id.chars().take(6).collect()
 }
 
-fn status(card: &AgentCard) -> String {
+pub(crate) fn status(card: &AgentCard) -> String {
     if let Some(outcome) = card.outcome() {
         return match outcome {
             TurnOutcome::Completed => "completed",

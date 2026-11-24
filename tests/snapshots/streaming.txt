@@ -1,20 +1,20 @@
- ▎ ... (16 more lines, click or ctrl+o to expand)
+
+   It does not any more. The streaming renderer keeps the stable
+   prefix and re-renders only the tail, so a delta costs one small
+   parse.
+
+  ✓ bash   cargo test --lib                                      4.2s
 
    completed in 12s · 2 requests · 1 tool round · 2 files changed (+4…
 
- ▎
- ▎ Now stream a longer answer.
- ▎ 21:41 · 10/20/2026
- ▎
+ ▎ Now stream a longer answer.                     21:41 · 10/20/2026
 
- ▎ I should explain the anchor rule first, then show it.
+  ∴ I should explain the anchor rule first, then show it.
 
    An anchored view keeps its block and row, so new output below
    never moves the text you are reading. Only scrolling to the end
    returns to following.
 
- ▎
- ▎
- ▎
- ▎
- ▸ minicore-tui · gpt 6 luna · max · 0m · agent Coder
+
+ ▎Ask anything · / commands · @ files
+ ▸ minicore-tui · Cache the parser     gpt 6 luna · max · approval ask

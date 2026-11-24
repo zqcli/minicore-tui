@@ -144,9 +144,9 @@ impl Sheet {
 
     /// Rows other than the list and its counter.
     fn chrome(&self) -> usize {
-        let hint = usize::from(!self.hint.is_empty());
-        let search = if self.search.is_some() { 3 } else { 0 };
-        2 + 1 + hint + search + self.body.len() + self.notes.len()
+        // Title and count live in the top border, keys in the bottom one.
+        let search = usize::from(self.search.is_some());
+        2 + search + self.body.len() + self.notes.len()
     }
 
     /// Rows the sheet occupies at full size.
@@ -162,19 +162,12 @@ impl Sheet {
         let list = self
             .visible_rows()
             .min(height.saturating_sub(self.chrome()));
-        let border = || Line::styled("─".repeat(cells), styles.border());
-
-        let mut lines = vec![border(), self.title_line(styles, cells)];
-        if !self.hint.is_empty() {
-            lines.push(hint_line(&self.hint, styles, cells));
-        }
+        let mut lines = vec![self.title_line(styles, cells)];
         if let Some(search) = &self.search {
-            lines.push(Line::default());
             lines.push(Line::from(vec![
-                Span::styled("> ", styles.accent()),
-                Span::styled(truncate(search, cells.saturating_sub(2)), styles.text()),
+                Span::styled(" > ", styles.accent()),
+                Span::styled(truncate(search, cells.saturating_sub(3)), styles.text()),
             ]));
-            lines.push(Line::default());
         }
         lines.extend(self.body.iter().cloned());
 
@@ -190,21 +183,47 @@ impl Sheet {
         }
         lines.extend(self.notes.iter().cloned());
         lines.truncate(height.saturating_sub(1));
-        lines.push(border());
+        lines.push(self.hint_border(styles, cells));
         lines
     }
 
+    /// `─ Title ──────────── 5 of 12 ─`: the top border carries the name and count.
     fn title_line(&self, styles: Styles, cells: usize) -> Line<'static> {
-        let title = truncate(&self.title, cells);
-        let mut spans = vec![Span::styled(title.clone(), styles.bold())];
-        if let Some(status) = &self.status {
-            let room = cells.saturating_sub(width(&title) + 2);
-            let status = truncate(status, room);
-            let gap = cells.saturating_sub(width(&title) + width(&status));
-            spans.push(Span::raw(" ".repeat(gap)));
+        let border = styles.border();
+        let title = truncate(&self.title, cells.saturating_sub(4));
+        let status = self
+            .status
+            .as_deref()
+            .map(|status| truncate(status, cells.saturating_sub(width(&title) + 8)))
+            .filter(|status| !status.is_empty());
+        let used = 3 + width(&title) + status.as_ref().map_or(0, |s| width(s) + 3);
+        let mut spans = vec![
+            Span::styled("─ ", border),
+            Span::styled(title, styles.bold()),
+            Span::styled(" ", border),
+            Span::styled("─".repeat(cells.saturating_sub(used)), border),
+        ];
+        if let Some(status) = status {
+            spans.push(Span::styled(" ", border));
             spans.push(Span::styled(status, styles.dim()));
+            spans.push(Span::styled(" ─", border));
         }
         Line::from(spans)
+    }
+
+    /// `─ enter open · esc close ─────`: the keys this sheet takes, at its foot.
+    fn hint_border(&self, styles: Styles, cells: usize) -> Line<'static> {
+        let border = styles.border();
+        if self.hint.is_empty() {
+            return Line::styled("─".repeat(cells), border);
+        }
+        let hint = truncate(&self.hint, cells.saturating_sub(4));
+        let rest = cells.saturating_sub(width(&hint) + 3);
+        Line::from(vec![
+            Span::styled("─ ", border),
+            Span::styled(hint, styles.faint()),
+            Span::styled(format!(" {}", "─".repeat(rest)), border),
+        ])
     }
 
     /// Where the details start in a [`Kind::Column`] sheet.
@@ -313,23 +332,6 @@ impl Sheet {
     }
 }
 
-/// `key desc` pairs: the key is the first word of each ` · ` part.
-fn hint_line(hint: &str, styles: Styles, cells: usize) -> Line<'static> {
-    let hint = truncate(hint, cells);
-    let mut spans = Vec::new();
-    for (index, part) in hint.split(" · ").enumerate() {
-        if index > 0 {
-            spans.push(Span::styled(" · ", styles.dim()));
-        }
-        let (key, text) = part.split_once(' ').unwrap_or((part, ""));
-        spans.push(Span::styled(key.to_owned(), styles.faint()));
-        if !text.is_empty() {
-            spans.push(Span::styled(format!(" {text}"), styles.dim()));
-        }
-    }
-    Line::from(spans)
-}
-
 /// Draws `sheet` into `area`.
 pub fn render(frame: &mut Frame, area: Rect, styles: Styles, sheet: &Sheet) {
     let lines = sheet.lines(styles, area.width, area.height);
@@ -389,30 +391,30 @@ mod tests {
     }
 
     #[test]
-    fn the_frame_is_a_border_title_hint_and_a_closing_border() {
+    fn the_frame_carries_the_title_above_and_the_hint_below() {
         let sheet = Sheet::new("Title", "enter open · esc close")
             .status("3 sessions")
             .rows(rows(2))
             .selected(Some(0));
-        assert_eq!(sheet.height(), 6);
+        assert_eq!(sheet.height(), 4);
         let lines = capture(&sheet, 40);
-        assert_eq!(lines[0], "─".repeat(40));
-        assert_eq!(lines[1], format!("Title{}3 sessions", " ".repeat(25)));
-        assert_eq!(lines[2], "enter open · esc close");
-        assert_eq!(lines[3], "→ row 00 00");
-        assert_eq!(lines[4], "  row 01 01");
-        assert_eq!(lines[5], "─".repeat(40));
+        assert_eq!(lines[0], format!("─ Title {} 3 sessions ─", "─".repeat(19)));
+        assert_eq!(lines[1], "→ row 00 00");
+        assert_eq!(lines[2], "  row 01 01");
+        assert_eq!(
+            lines[3],
+            format!("─ enter open · esc close {}", "─".repeat(15))
+        );
     }
 
     #[test]
-    fn a_search_sheet_has_blank_rows_around_the_prompt() {
+    fn a_search_sheet_puts_the_prompt_under_the_title() {
         let sheet = Sheet::new("Model", "esc cancel")
             .search("gpt")
             .rows(rows(1));
         let lines = capture(&sheet, 30);
-        assert_eq!(lines[3], "");
-        assert_eq!(lines[4], "> gpt");
-        assert_eq!(lines[5], "");
+        assert_eq!(lines[1], " > gpt");
+        assert!(lines[2].contains("row 00"), "{lines:?}");
     }
 
     #[test]
@@ -420,12 +422,12 @@ mod tests {
         let sheet = Sheet::new("Models", "hint")
             .rows(rows(25))
             .selected(Some(12));
-        assert_eq!(sheet.height(), 3 + 1 + MAX_ROWS as u16 + 1);
+        assert_eq!(sheet.height(), 1 + MAX_ROWS as u16 + 1 + 1);
         let lines = capture(&sheet, 30);
-        assert!(lines[3].starts_with("  row 07"), "{:?}", lines[3]);
-        assert!(lines[8].starts_with("→ row 12"), "{:?}", lines[8]);
-        assert_eq!(lines[13], "  (13/25)");
-        assert_eq!(lines[14], "─".repeat(30));
+        assert!(lines[1].starts_with("  row 07"), "{:?}", lines[1]);
+        assert!(lines[6].starts_with("→ row 12"), "{:?}", lines[6]);
+        assert_eq!(lines[11], "  (13/25)");
+        assert!(lines[12].starts_with("─ hint ─"), "{:?}", lines[12]);
     }
 
     #[test]
@@ -445,7 +447,7 @@ mod tests {
         let lines: Vec<String> = sheet.lines(styles, 30, 8).iter().map(text).collect();
         assert_eq!(lines.len(), 8);
         assert!(lines.iter().any(|line| line.starts_with("→ row 20")));
-        assert_eq!(lines[7], "─".repeat(30));
+        assert!(lines[7].starts_with("─ hint ─"), "{:?}", lines[7]);
     }
 
     #[test]
@@ -461,12 +463,12 @@ mod tests {
             .selected(Some(0));
         let lines = sheet.lines(styles, 30, sheet.height());
         assert_eq!(
-            text(&lines[2]),
+            text(&lines[1]),
             format!("→ Fix the parser{}3 2h", " ".repeat(10))
         );
-        assert_eq!(lines[2].style.bg, Some(palette.selection_bg));
-        assert_eq!(lines[3].style.bg, None);
-        assert_eq!(text(&lines[3]), format!("  Other{}1 now", " ".repeat(18)));
+        assert_eq!(lines[1].style.bg, Some(palette.selection_bg));
+        assert_eq!(lines[2].style.bg, None);
+        assert_eq!(text(&lines[2]), format!("  Other{}1 now", " ".repeat(18)));
     }
 
     #[test]
@@ -476,8 +478,8 @@ mod tests {
             Row::new("glm-5", "[zai]").mark(false),
         ]);
         let lines = capture(&sheet, 40);
-        assert_eq!(lines[2], "  ✓ gpt-6 [openai]");
-        assert_eq!(lines[3], "    glm-5 [zai]");
+        assert_eq!(lines[1], "  ✓ gpt-6 [openai]");
+        assert_eq!(lines[2], "    glm-5 [zai]");
     }
 
     #[test]
@@ -490,8 +492,8 @@ mod tests {
             ])
             .selected(Some(1));
         let lines = capture(&sheet, 40);
-        assert_eq!(lines[2], "  low     Light");
-        assert_eq!(lines[3], "→ medium  Moderate");
+        assert_eq!(lines[1], "  low     Light");
+        assert_eq!(lines[2], "→ medium  Moderate");
     }
 
     #[test]
@@ -503,18 +505,8 @@ mod tests {
             Row::new("Deny", "n").tone(Tone::Failure),
         ]);
         let lines = sheet.lines(styles, 30, sheet.height());
-        assert_eq!(lines[2].spans[2].style.fg, Some(palette.success));
-        assert_eq!(lines[3].spans[2].style.fg, Some(palette.failure));
-    }
-
-    #[test]
-    fn the_hint_dims_keys_and_text_differently() {
-        let palette = Palette::dark();
-        let styles = Styles::of(palette);
-        let line = hint_line("enter open · esc close", styles, 40);
-        assert_eq!(text(&line), "enter open · esc close");
-        assert_eq!(line.spans[0].style.fg, Some(palette.faint));
-        assert_eq!(line.spans[1].style.fg, Some(palette.dim));
+        assert_eq!(lines[1].spans[2].style.fg, Some(palette.success));
+        assert_eq!(lines[2].spans[2].style.fg, Some(palette.failure));
     }
 
     #[test]
@@ -527,10 +519,13 @@ mod tests {
             .draw(|frame| render(frame, frame.area(), styles, &sheet))
             .unwrap();
         let buffer = terminal.backend().buffer();
-        for x in 0..20u16 {
-            assert_eq!(buffer[(x, 0u16)].fg, palette.border);
-            assert_eq!(buffer[(x, 3u16)].symbol(), "─");
+        let last = sheet.height() - 1;
+        // The rule runs the full width; only the title and hint text differ.
+        for (x, y) in [(0u16, 0u16), (19, 0), (0, last), (19, last)] {
+            assert_eq!(buffer[(x, y)].symbol(), "─");
+            assert_eq!(buffer[(x, y)].fg, palette.border);
         }
+        assert_eq!(buffer[(19u16, last)].symbol(), "─");
     }
 
     #[test]
@@ -539,8 +534,8 @@ mod tests {
             .kind(Kind::Session)
             .rows(vec![Row::new("a very long session title indeed", "3 2h")]);
         let lines = capture(&sheet, 24);
-        assert_eq!(lines[2], "  a very long ses…  3 2h");
-        assert_eq!(width(&lines[2]), 24);
+        assert_eq!(lines[1], "  a very long ses…  3 2h");
+        assert_eq!(width(&lines[1]), 24);
     }
 
     #[test]
@@ -554,7 +549,7 @@ mod tests {
                 )]);
             for cells in [8, 9, 10, 24, 40, 80] {
                 let lines = capture(&sheet, cells);
-                let row = &lines[2];
+                let row = &lines[1];
                 assert!(row.trim_start().starts_with("1acdef"), "{row:?}");
                 assert_eq!(row.ends_with('…'), cells >= 10, "{row:?}");
                 assert!(width(row) <= usize::from(cells), "{row:?}");
