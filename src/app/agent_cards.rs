@@ -227,6 +227,19 @@ impl App {
                 .iter()
                 .find(|agent| agent.id == key.child.agent_id)
                 .map(|agent| agent.name.clone());
+            // The child may be gone (a released temporary Session); the
+            // delegating call still names its task.
+            card.task =
+                self.resident
+                    .find(&association.parent)
+                    .and_then(|session| {
+                        session.transcript.tool_calls().find(|call| {
+                            call.key.tool_call_id() == &association.origin.tool_call_id
+                        })
+                    })
+                    .and_then(|call| call.arguments.as_ref()?.get("text")?.as_str())
+                    .map(|text| agent_card::head(text, 512).to_owned())
+                    .unwrap_or_default();
             if let Some(snapshot) = self.pending_states.get(&key.child)
                 && let Some(current) = &snapshot.data.delegation
                 && current.task_message_id == key.task_message_id
