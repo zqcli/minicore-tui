@@ -140,6 +140,7 @@ pub struct GroupSummary {
     pub live: bool,
     pub duration: Option<std::time::Duration>,
     pub tools: usize,
+    pub agents: usize,
     pub failed: usize,
     pub changes: Option<ChangeSummary>,
     pub latest: Option<(StepKind, String)>,
@@ -157,14 +158,15 @@ pub enum StepKind {
 }
 
 /// Whether a block draws as one-line rows that stack without a blank row:
-/// a folded tool row or a thinking-only response.
+/// a folded tool row. Folded thinking and Agent rows are steps too, but keep
+/// a blank row around them so each stays easy to find and to click.
 pub(crate) fn is_row(block: &Block, expanded: bool) -> bool {
     match block {
-        // A folded Agent card is one row too, and stacks with the steps.
-        Block::Tool(call) => !call.is_delegation_receipt() && !call.is_expanded(expanded),
-        Block::Assistant {
-            text, reasoning, ..
-        } => !expanded && text.trim().is_empty() && !reasoning.trim().is_empty(),
+        Block::Tool(call) => {
+            call.agent_card.is_none()
+                && !call.is_delegation_receipt()
+                && !call.is_expanded(expanded)
+        }
         _ => false,
     }
 }
@@ -187,16 +189,37 @@ fn failed(call: &ToolCall) -> bool {
         || call.exit_code.is_some_and(|code| code != 0)
 }
 
+/// A line worth showing alone: markup stripped, with at least one word.
+fn readable(line: &str) -> Option<String> {
+    let line = line
+        .trim()
+        .trim_start_matches(['#', '-', '*', '>', '|', '`'])
+        .trim_end_matches(['|', '`'])
+        .replace("**", "")
+        .replace('`', "")
+        .trim()
+        .to_owned();
+    line.chars().any(char::is_alphanumeric).then_some(line)
+}
+
 /// The newest step as one line: its kind and `name subject`, a heading or the
-/// first line of a note.
+/// newest readable line of a note.
 fn latest(block: &Block) -> Option<(StepKind, String)> {
-    let first = |text: &str| {
-        text.lines()
-            .map(|line| line.trim().trim_start_matches('#').trim().replace("**", ""))
-            .find(|line| !line.is_empty())
-            .unwrap_or_default()
-    };
+    let first = |text: &str| text.lines().find_map(readable).unwrap_or_default();
     match block {
+        Block::Tool(call) if call.agent_card.is_some() => {
+            let card = call.agent_card.as_deref().expect("checked");
+            let kind = match card.outcome() {
+                None => StepKind::Running,
+                Some(minicore_host_protocol::TurnOutcome::Completed) => StepKind::Done,
+                Some(minicore_host_protocol::TurnOutcome::Failed) => StepKind::Failed,
+                Some(minicore_host_protocol::TurnOutcome::Cancelled) => StepKind::Stopped,
+            };
+            Some((
+                kind,
+                format!("agent {}", first(&card.task)).trim_end().to_owned(),
+            ))
+        }
         Block::Tool(call) => {
             let kind = match call.state {
                 ToolState::Pending | ToolState::Running => StepKind::Running,
@@ -214,15 +237,19 @@ fn latest(block: &Block) -> Option<(StepKind, String)> {
         Block::Assistant {
             text, reasoning, ..
         } if text.trim().is_empty() => {
+            // Thinking that has not written a heading yet still says so.
             let heading = reasoning
                 .lines()
                 .rev()
-                .map(|line| line.trim().replace("**", ""))
-                .find(|line| !line.is_empty())
-                .unwrap_or_default();
+                .find_map(readable)
+                .unwrap_or_else(|| "thinking…".to_owned());
             Some((StepKind::Thinking, heading))
         }
-        Block::Assistant { text, .. } => Some((StepKind::Note, first(text))),
+        // The newest line, so streaming text moves the row along.
+        Block::Assistant { text, .. } => Some((
+            StepKind::Note,
+            text.lines().rev().find_map(readable).unwrap_or_default(),
+        )),
         _ => None,
     }
 }
@@ -432,57 +459,78 @@ impl Transcript {
                 _ => None,
             });
         // A user message inside the Turn (a consumed steer) starts a new run.
+        // A child's delivered result is not one: it lives in its Agent card.
+        let starts_run = |index: usize| {
+            matches!(&self.blocks[index], Block::User { kind, .. } if *kind != UserKind::Delegated)
+                && !self.metadata[index].absorbed
+        };
         let mut segments: Vec<Vec<usize>> = vec![Vec::new()];
-        for index in first..=last {
-            if matches!(self.blocks[index], Block::User { .. }) {
+        for (index, meta) in self.metadata.iter().enumerate().take(last + 1).skip(first) {
+            if starts_run(index) {
                 if !segments.last().is_some_and(Vec::is_empty) {
                     segments.push(Vec::new());
                 }
-            } else if members.binary_search(&index).is_ok() && !self.metadata[index].absorbed {
+            } else if members.binary_search(&index).is_ok() && !meta.absorbed {
                 segments.last_mut().expect("one segment").push(index);
             }
         }
         let count = segments.len();
         let mut wanted: Vec<(usize, Grouping)> = Vec::new();
         for (segment, blocks) in segments.into_iter().enumerate() {
-            // Text followed by more work in its run is a note; the last text is
-            // the run's answer and stays visible.
-            let last_step = blocks
+            let final_run = segment + 1 == count;
+            let live = end.is_none() && final_run;
+            // While a run goes on everything in it folds, Agent cards and text
+            // included. Once it is done, text after its last tool call is its
+            // answer and stays visible; earlier text was a note.
+            let last_call = blocks
                 .iter()
-                .rposition(|&index| is_step(&self.blocks[index]));
+                .rposition(|&index| matches!(self.blocks[index], Block::Tool(_)));
             let steps: Vec<usize> = blocks
                 .iter()
                 .enumerate()
-                .filter(|&(position, &index)| {
-                    is_step(&self.blocks[index])
-                        || (last_step.is_some_and(|last| position < last)
-                            && matches!(&self.blocks[index], Block::Assistant { text, .. }
-                                if !text.trim().is_empty()))
+                .filter(|&(position, &index)| match &self.blocks[index] {
+                    Block::Tool(_) => true,
+                    // An empty response draws nothing and is no step.
+                    Block::Assistant {
+                        text, reasoning, ..
+                    } if text.trim().is_empty() && reasoning.trim().is_empty() => false,
+                    block @ Block::Assistant { .. } => {
+                        live || is_step(block) || last_call.is_some_and(|last| position < last)
+                    }
+                    _ => false,
                 })
                 .map(|(_, &index)| index)
                 .collect();
+            let agents = steps
+                .iter()
+                .filter(|&&index| matches!(&self.blocks[index], Block::Tool(call) if call.agent_card.is_some()))
+                .count();
             let tools = steps
                 .iter()
                 .filter(|&&index| matches!(self.blocks[index], Block::Tool(_)))
-                .count();
-            let grouped = tools >= 1 && steps.len() >= 2;
+                .count()
+                - agents;
+            // Live, the run folds from its first call: a plain answer streams
+            // in view. Done, a single step or a run without a call keeps its rows.
+            let grouped = if live {
+                tools + agents >= 1
+            } else {
+                steps.len() >= 2 && tools + agents >= 1
+            };
             let open = steps.first().is_some_and(|&index| {
                 let current = &self.metadata[index].grouping;
                 current.key() == Some((turn, segment)) && current.is_open()
             });
-            let final_run = segment + 1 == count;
-            let live = end.is_none() && final_run;
             // One run is the whole Turn; a run a steer cut is timed from the
             // message that opened it to the message or end that closed it.
             let duration = match (blocks.first(), blocks.last()) {
                 _ if live => None,
                 _ if count == 1 => end.and_then(|(duration, _)| duration),
                 (Some(&from), Some(&to)) => {
-                    let opened = (0..from)
-                        .rev()
-                        .find(|&at| matches!(self.blocks[at], Block::User { .. }));
-                    let closed = (to + 1..self.blocks.len()).find(|&at| {
-                        matches!(self.blocks[at], Block::User { .. } | Block::TurnEnd { .. })
+                    let opened = (0..from).rev().find(|&at| starts_run(at));
+                    // The run's own blocks include the Turn's end.
+                    let closed = (to..self.blocks.len()).find(|&at| {
+                        starts_run(at) || matches!(self.blocks[at], Block::TurnEnd { .. })
                     });
                     opened
                         .zip(closed)
@@ -494,6 +542,7 @@ impl Transcript {
                 live,
                 duration,
                 tools,
+                agents,
                 failed: steps
                     .iter()
                     .filter(
@@ -827,7 +876,7 @@ mod tests {
         transcript.push(tool("d", ToolState::Pending)); // 6
         transcript.push(text(3, "the answer so far")); // 7
 
-        // Live: both runs fold; the last text of each run stays out.
+        // Live: both runs fold, and the running one folds its text too.
         transcript.regroup(&turn);
         let Grouping::Head {
             summary,
@@ -857,8 +906,14 @@ mod tests {
             panic!("{:?}", transcript.grouping(5))
         };
         assert!(summary.live, "the run still going is Working");
-        assert_eq!(summary.latest, Some((StepKind::Running, "read".into())));
-        assert_eq!(transcript.grouping(7), &Grouping::None, "the answer");
+        assert_eq!(
+            summary.latest,
+            Some((StepKind::Note, "the answer so far".into()))
+        );
+        assert!(
+            matches!(transcript.grouping(7), Grouping::Member { .. }),
+            "live text folds"
+        );
 
         // Opening one run leaves the other closed, and survives a regroup.
         assert!(transcript.toggle_group(3));
@@ -883,14 +938,66 @@ mod tests {
                 ..
             }
         ));
+        assert_eq!(
+            transcript.grouping(7),
+            &Grouping::None,
+            "done, the answer is out"
+        );
 
         // A run with a single step keeps its row.
         let mut short = Transcript::default();
         short.push(user("one"));
         short.push(tool("e", ToolState::Succeeded));
         short.push(text(0, "done"));
+        short.push(transcript.blocks().last().unwrap().clone());
         short.regroup(&turn);
         assert_eq!(short.grouping(1), &Grouping::None);
+    }
+
+    #[test]
+    fn a_childs_delivered_result_does_not_start_a_new_run() {
+        let turn: TurnId = "00000000000000000001".parse().unwrap();
+        let tool = |id: &str| {
+            let mut call = ToolCall::new(
+                ToolCallRef {
+                    turn_id: turn.clone(),
+                    tool_call_id: id.to_owned().into(),
+                },
+                "read",
+            );
+            call.set_state(ToolState::Succeeded);
+            Block::Tool(Box::new(call))
+        };
+        let mut transcript = Transcript::default();
+        transcript.push(Block::User {
+            text: "go".into(),
+            kind: UserKind::Prompt,
+            at: None,
+        });
+        transcript.push(tool("a"));
+        transcript.push(Block::User {
+            text: "{}".into(),
+            kind: UserKind::Delegated,
+            at: None,
+        });
+        transcript.push(tool("b"));
+        transcript.regroup(&turn);
+        assert!(matches!(
+            transcript.grouping(1),
+            Grouping::Head {
+                segment: 0,
+                summary: GroupSummary {
+                    tools: 2,
+                    live: true,
+                    ..
+                },
+                ..
+            }
+        ));
+        assert!(matches!(
+            transcript.grouping(3),
+            Grouping::Member { segment: 0, .. }
+        ));
     }
 
     #[test]

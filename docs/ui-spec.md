@@ -41,10 +41,10 @@ keeps both columns: the rail takes the glyph's place and the title the name's.
 ## Vertical rhythm
 
 1. Exactly one blank row between two visible blocks.
-2. No blank row between step rows: folded tools, folded thinking, folded Agent
-   cards and a group's summary row stack as one list. An opened card is not a
-   row: it gets a blank row above and below, also right under its group's
-   summary row.
+2. Folded tool rows stack with no blank row between them, and each whole row
+   is a click target. Folded thinking and Agent rows, and every opened card,
+   keep one blank row above and below, also right under a group's summary row,
+   so they stand apart and are easy to hit.
 3. Surfaces carry their own padding. The user card and the editor have a pad
    row above and below their text; an expanded card has a pad row after its
    facts and separates its sections (activity, result, footer) with one blank
@@ -171,7 +171,8 @@ spinner; there is no per-second timer and no timer when idle.
 
 A Turn's work folds while it runs and after it ends. Each run of work between
 two user messages is one group, so a Turn steered twice has three groups, each
-followed by what the model said to close that run:
+followed by what the model said to close that run. A child's delivered result
+is not a user message and never splits a run:
 
 ```
 ▎ go
@@ -184,14 +185,20 @@ followed by what the model said to close that run:
 
 - Closed, a group is two rows: the summary and the newest step. The step row
   changes as the work moves on, so it reads like a list scrolling up.
-- Steps are every tool call without a delegation (failed ones too, counted as
-  `N failed` in the failure colour), thinking without text, and notes: text the
-  model wrote before more tool calls in the same run. The last text of a run
-  is its answer and stays outside, and so do Agent cards.
-- A run needs a tool and two steps to fold; a single step keeps its own row.
-- Open (`▾`), the summary is followed by the step rows, each of which opens
-  into its card. Click the summary or the newest-step row to toggle; Ctrl+O
-  opens every group along with everything else.
+- While a run goes on, everything in it folds: tool calls (failed ones too,
+  counted as `N failed` in the failure colour), Agent cards (counted as
+  `N agents`), thinking and text. The newest-step row shows the newest of
+  them, a line of streaming text included.
+- Once the run is done, text after its last call is its answer and comes out
+  of the group; earlier text stays folded as notes.
+- A run folds once it makes a call: a plain answer streams in view. Done, a
+  run with a single step, or without a call, keeps its own rows.
+- Open (`▾`), the steps follow one level in (two columns) under the summary,
+  and each opens into its card at that level, so an Agent card or tool card
+  reads as part of its group. Click the summary or the newest-step row to
+  toggle; Ctrl+O opens every group along with everything else.
+- Thinking that is still going shows the spinner in place of `∴`, in the
+  newest-step row and in an open group; it settles back to `∴`.
 - The summary says `Working` while the run goes on and `Worked` with its
   duration after: the Turn's time for a single run, otherwise from the message
   that opened the run to the one that closed it.
@@ -230,6 +237,8 @@ Opened, it is a card:
 
 - Glyph: `●` working (accent; warning when the child waits for approval or
   input), `✓` completed, `✗` failed, `⊘` cancelled, `○` no longer observable.
+- Inside a work group the card is a step: it folds with the run and opens one
+  level in under the group's summary.
 - The title is the task's first line; further task lines follow dimmed.
 - Activity is a window of the child's three newest entries (tool calls, notes
   `›`, thinking `∴`) under `… N earlier steps`; it moves up as the child works
@@ -278,7 +287,7 @@ Defined in `ui/theme.rs` for dark and light; both palettes define every token.
 | `▎` | Rail | User messages, editor, expanded cards, open thinking and summaries |
 | `●` `✓` `✗` `⊘` | Running · done · failed · denied or cancelled | Step rows, Agent cards, delegations sheet |
 | `○` | No longer observable | Agent cards |
-| `∴` | Thinking | Folded thinking row, a group's newest step |
+| `∴` | Thinking | Folded thinking row, a group's newest step; the spinner while it goes on |
 | `›` | Note | A group's or an Agent card's newest step when it is text |
 | `▸` `▾` | Folded · open group; footer identity | Turn groups, footer start |
 | `│` | Live output or quote | Under a running step, failure message |
@@ -366,7 +375,8 @@ confirms; Enter, `n` and Esc cancel.
 ## Checklist for a visible change
 
 1. Does it fit one of the block shapes, the sheet template or a view?
-2. Does it sit on the grid: glyphs and rails in column 0, text in column 2?
+2. Does it sit on the grid: glyphs and rails in column 0, text in column 2,
+   and a group's steps one level in?
 3. Does it keep the vertical rhythm: one blank row between blocks, none between
    steps, never two blank rows anywhere?
 4. Does it add colour? Use a glyph instead, unless it marks the user or a

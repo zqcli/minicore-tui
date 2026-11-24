@@ -127,7 +127,10 @@ impl Transcript {
         if added {
             self.sort_history();
             self.link_delegations();
-            // A page can add steps to any Turn, including one already folded.
+        }
+        // A page can add steps to any Turn, including one already folded, and a
+        // record replacing a live block brings the time a run is measured by.
+        {
             let mut turns: Vec<&TurnId> = records
                 .iter()
                 .filter_map(|record| record.turn_id.as_ref())

@@ -15,11 +15,13 @@
   child. The parent's sends, inspections, controls and waits for that child,
   and its result, no longer add their own rows or cards.
 - Fold a Turn's work as it runs, one group per run between user messages (a
-  steer starts a new run): `▸ Working · 6 tools`, later
-  `▸ Worked 42s · 14 tools · 2 files changed · 1 failed`, with the newest step
-  under it changing as work goes on. Tools including failures, thinking and
-  the notes between tool calls fold; the text that ends each run and Agent
-  cards stay visible. Groups open into step rows, steps into cards; every fold
+  steer starts a new run, a child's result does not): `▸ Working · 6 tools · 2
+  agents`, later `▸ Worked 42s · 14 tools · 2 files changed · 1 failed`, with
+  the newest step under it changing as work goes on and a spinner while it
+  thinks. While a run goes on, tools, Agent cards, thinking and text all fold;
+  once done, the text that ends the run comes out as its answer. Open groups
+  show their steps one level in. Folded thinking and Agent rows keep a blank
+  row around them. Groups open into step rows, steps into cards; every fold
   opens and closes in place. Grouping also applies to reopened history.
 - Fold thinking to one `∴` row with its newest heading; click it to open.
 - List queued steers and follow-ups under the activity line, and keep a blank

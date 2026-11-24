@@ -249,6 +249,37 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, styles: Styles) {
             .map(Cow::Borrowed)
             .collect()
     };
+    // Thinking that is still going turns its `∴` into the spinner. The rows are
+    // cached; this swaps one cell per frame, and an idle screen has no frames.
+    if !blocks.is_empty() {
+        let frame = super::status::spinner(app.started.elapsed());
+        for (index, row) in rows.iter_mut().enumerate() {
+            let (block, _) = layout.anchor(top + index);
+            let thinking = match (transcript.grouping(block), blocks.get(block)) {
+                (Grouping::Head { summary, .. }, _) => {
+                    summary.live
+                        && matches!(
+                            summary.latest,
+                            Some((crate::transcript::StepKind::Thinking, _))
+                        )
+                }
+                (
+                    _,
+                    Some(Block::Assistant {
+                        text,
+                        streaming: true,
+                        ..
+                    }),
+                ) => text.trim().is_empty(),
+                _ => false,
+            };
+            if thinking && let Some(at) = row.spans.iter().position(|span| span.content == "∴ ") {
+                let mut line = row.clone().into_owned();
+                line.spans[at].content = format!("{frame} ").into();
+                *row = Cow::Owned(line);
+            }
+        }
+    }
     if let Some(drag) = app.selection {
         for (index, row) in rows.iter_mut().enumerate() {
             let content = super::rails::content_cells(row);

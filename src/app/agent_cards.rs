@@ -391,6 +391,8 @@ impl App {
                 };
                 call.agent_card = Some(card);
                 session.transcript.link_delegations();
+                // The card may be its run's newest step.
+                session.transcript.regroup(&origin.turn_id);
             }
             None => observer.card = Some(card),
         }

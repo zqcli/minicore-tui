@@ -51,16 +51,17 @@ pub fn render_with(
     match grouping {
         Grouping::None => render_block(block, styles, width, fold),
         Grouping::Member { open, .. } if !open && !fold.expanded => Vec::new(),
-        Grouping::Member { .. } => render_block(block, styles, width, fold),
+        Grouping::Member { .. } => member(block, styles, width, fold),
         Grouping::Head { summary, open, .. } => {
             let open = *open || fold.expanded;
             let mut rows = vec![group_row(summary, open, styles, width.into())];
             if open {
                 // An opened card keeps the gap any card has from a row above.
-                if !crate::transcript::is_row(block, fold.expanded) {
+                let own = member(block, styles, width, fold);
+                if !own.is_empty() && !crate::transcript::is_row(block, fold.expanded) {
                     rows.push(chrome(Line::default()));
                 }
-                rows.extend(render_block(block, styles, width, fold));
+                rows.extend(own);
             } else if let Some((kind, text)) = &summary.latest {
                 rows.push(latest_row(*kind, text, styles, width.into()));
             }
@@ -68,6 +69,18 @@ pub fn render_with(
         }
     }
 }
+
+/// A step of an open group, one level in under its summary row.
+fn member(block: &Block, styles: Styles, width: u16, fold: Fold) -> Vec<Line<'static>> {
+    let inner = width.saturating_sub(GROUP_INDENT as u16);
+    render_block(block, styles, inner, fold)
+        .into_iter()
+        .map(|line| indent(line, GROUP_INDENT))
+        .collect()
+}
+
+/// How far an open group's steps sit in from its summary row.
+const GROUP_INDENT: usize = 2;
 
 /// `▸ Worked 2m 14s · 18 tools · 3 files changed (+142 −37) · 1 failed`, or
 /// `▸ Working · 6 tools` while the run goes on.
@@ -77,7 +90,12 @@ fn group_row(summary: &GroupSummary, open: bool, styles: Styles, width: usize) -
         Some(duration) => format!("Worked {}", format_duration(duration)),
         None => "Worked".to_owned(),
     }];
-    parts.push(plural(summary.tools as u64, "tool"));
+    if summary.tools > 0 {
+        parts.push(plural(summary.tools as u64, "tool"));
+    }
+    if summary.agents > 0 {
+        parts.push(plural(summary.agents as u64, "agent"));
+    }
     if let Some(changes) = summary.changes.filter(|changes| !changes.is_empty()) {
         let files = format!("{} changed", plural(changes.files as u64, "file"));
         parts.push(match changes.lines {

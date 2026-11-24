@@ -201,12 +201,13 @@ rows; other blocks keep one separator row. Opening a row keeps its left edge,
 and an opened card keeps blank lines inside its output.
 
 A Turn's work folds as it runs. Each run of work between two user messages (a
-steer starts a new run) is one group of two rows: `▸ Working · 6 tools`, or
-`▸ Worked 42s · 14 tools · 2 files changed · 1 failed` once done, and its
-newest step, which changes as the work goes on. Tools (failed ones too),
-thinking and the notes the model writes between tool calls fold into it; the
-text that ends the run and Agent cards stay visible. Click the group to list its
-steps and a step to open its card; `Ctrl+O` opens everything. Every fold opens
+steer starts a new run) is one group of two rows: `▸ Working · 6 tools · 2 agents`,
+or `▸ Worked 42s · 14 tools · 2 files changed · 1 failed` once done, and its
+newest step, which changes as the work goes on; thinking in progress shows a
+spinner there. While the run goes on everything in it folds: tools, Agent
+cards, thinking and text. Once it is done, the text that ends the run comes out
+as its answer. A run without tool calls streams in view. Click the group to list its
+steps, one level in, and a step to open its card; `Ctrl+O` opens everything. Every fold opens
 and closes in place under the row clicked.
 
 A delegation is one Agent card on the call that started it, and it keeps

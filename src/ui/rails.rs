@@ -86,6 +86,15 @@ pub fn content_cells(line: &Line) -> Range<u16> {
     }
     let mut spans = line.spans.as_slice();
     let mut start = 0;
+    // An open group's step sits indented, rail and all.
+    if let [first, second, ..] = spans
+        && !first.content.is_empty()
+        && first.content.trim().is_empty()
+        && second.content == RAIL
+    {
+        start += wrap::width(&first.content);
+        spans = &spans[1..];
+    }
     if let [first, rest @ ..] = spans
         && first.content == RAIL
     {

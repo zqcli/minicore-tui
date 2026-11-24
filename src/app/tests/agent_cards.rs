@@ -180,9 +180,26 @@ async fn child_output_continues_in_original_cards_after_startup_and_parent_turn_
         block: index,
         offset: 0,
     };
+    // A running Agent folds into its run's Working group: open it, then click
+    // the Agent's own row rather than the group's summary row.
+    h.app
+        .resident
+        .current_mut()
+        .unwrap()
+        .transcript
+        .toggle_group(index);
     h.screen(80, 22);
     let row = (0..22)
-        .find(|row| h.app.layout.hit(3, *row) == Some((index, 0)))
+        .find(|row| {
+            h.app
+                .layout
+                .hit(3, *row)
+                .is_some_and(|(block, _)| block == index)
+                && h.app
+                    .layout
+                    .row_text(*row)
+                    .is_some_and(|text| text.trim_start().starts_with("● agent"))
+        })
         .unwrap();
     for kind in [
         MouseEventKind::Down(MouseButton::Left),
