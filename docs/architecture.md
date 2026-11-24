@@ -191,7 +191,11 @@ suppression. A finished Turn's grouping (head summary row, hidden members, open
 state) is presentation metadata on the transcript; changing it bumps the
 affected blocks' revisions, so the cache needs no separate group key. History
 blocks carry their Turn on the record source, so grouping also applies after
-reopening and after an older page fills in a Turn. The
+reopening and after an older page fills in a Turn. Likewise, `link_delegations` marks later
+sends into a child and the result it delivers as drawn inside the Agent card
+that started the delegation (matched by child Session and task message), and
+copies the result and send count onto that card; it runs after history
+installation and whenever a card is updated. The
 cache stores body rows independently of separators so changes in neighboring
 visibility preserve unchanged bodies. Internal tool/code whitespace remains
 content; anchors, hits and selection use the resulting visible geometry.

@@ -288,8 +288,10 @@ impl App {
             let Block::Tool(call) = session.transcript.blocks().get(index)? else {
                 return None;
             };
+            // The open card's footer leads into the child; a folded card's
+            // row only opens the card.
             if let Some(card) = &call.agent_card {
-                (line + 1 == self.layout.content_height(index))
+                (call.is_expanded(all_expanded) && line + 1 == self.layout.content_height(index))
                     .then(|| (card.association.clone(), true, card.history_unavailable))
             } else {
                 (call.is_delegation_receipt() && line + 1 == self.layout.content_height(index))
@@ -335,7 +337,10 @@ impl App {
                     self.pin_view();
                 }
             }
-            Some(Block::Assistant { .. }) if text.starts_with(crate::ui::rails::RAIL) => {
+            // The open thinking rail or its folded `∴` row, not the answer.
+            Some(Block::Assistant { .. })
+                if text.starts_with(crate::ui::rails::RAIL) || text.starts_with('∴') =>
+            {
                 if let Some(Block::Assistant { expanded, .. }) = session.transcript.block_mut(index)
                 {
                     let open = !expanded.unwrap_or(all_expanded);

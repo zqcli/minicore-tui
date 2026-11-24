@@ -4,22 +4,29 @@
 
 - Redesign the conversation layout without changing the data model; the rules
   are written down in `docs/ui-spec.md`.
-- Show each folded tool as one row: state glyph (`●` `✓` `✗` `⊘`), real tool
-  name, subject and right-aligned facts. A running tool shows its last three
-  output lines; a failure states its reason on a `└` row. Step rows stack
-  without blank rows.
+- Show each folded tool as one row: state glyph (`●` `✓` `✗` `⊘`) in the
+  rail column, real tool name in the content column, subject and right-aligned
+  facts, so an opened card keeps the same left edge. A running tool shows its
+  last three output lines; a failure says `failed` and keeps its reason in the
+  opened card. Step rows stack without blank rows.
+- Keep a delegation's whole life in one Agent card: one row folded (with the
+  child's newest steps while it runs), and opened, the task, facts, activity,
+  the delivered result and the way into the child. Later sends into the child
+  and its result no longer add their own cards.
 - Fold a finished Turn's successful steps under
   `▸ Worked 42s · 14 tools · 2 files changed · 1 failed`; failures, Agent
   cards and answers stay visible. Click to open; Ctrl+O opens all. Grouping
   also applies to reopened history.
-- Fold thinking to one `∴` row with its newest heading; put user message
-  timestamps and the steering label on the first row, without padding rows.
-- Replace the header with a welcome card, and the dock with one activity line:
-  status and whole minutes on the left, only the keys that work now on the
-  right (`N queued · alt+↑ edit`, `N delegated · ctrl+b`). The footer shows
+- Fold thinking to one `∴` row with its newest heading; click it to open.
+- Replace the header with a welcome card, and the dock with one activity line
+  that appears only with content: status and whole minutes on the left, only
+  the keys that work now on the right (`N queued · alt+↑ edit`, `N delegated · ctrl+b`). The footer shows
   workspace, branch and Session title on the left and model, reasoning and
   approval on the right; response usage moved to `/context` and `/session`.
-- Start the editor at one row with an `Ask anything` placeholder.
+- Settle spacing on one grid and rhythm: one blank row between blocks, none
+  between steps, one gap row above the editor; compaction and summary markers
+  are one divider row; Markdown tables rule only under the header unless a row
+  wraps.
 - Add Ctrl+B and `/children`: the conversation's delegations, newest first;
   Enter opens the child Session.
 - Give sheets one frame (title and count in the top rule, keys in the bottom

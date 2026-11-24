@@ -11,7 +11,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use super::markdown;
-use super::rails::{chrome, chrome_span, fill, indent, rail_row, surface_row};
+use super::rails::{chrome, chrome_span, indent, rail_row, surface_row};
 use super::theme::Styles;
 use crate::transcript::UserKind;
 use crate::transcript::layout::Fold;
@@ -86,7 +86,6 @@ fn group_row(summary: &GroupSummary, open: bool, styles: Styles, width: usize) -
         });
     }
     let mut spans = vec![
-        Span::raw(" "),
         chrome_span(Span::styled(
             if open { "▾ " } else { "▸ " },
             styles.accent(),
@@ -209,20 +208,12 @@ fn render_block(block: &Block, styles: Styles, width: u16, fold: Fold) -> Vec<Li
             }
             lines
         }
-        Block::Summary { text } => summary(
-            "summary",
-            "History summary",
-            text,
-            styles,
-            width,
-            fold.expanded,
-        ),
+        Block::Summary { text } => summary("History summary", text, styles, width, fold.expanded),
         Block::Compaction {
             source_position,
             covered_items,
             summary: body,
         } => summary(
-            "compaction",
             &compaction_label(*source_position, *covered_items),
             body,
             styles,
@@ -269,38 +260,16 @@ fn user(
     let row = |spans: Vec<Span<'static>>| {
         surface_row(styles.user_rail(), styles.composer(), spans, width)
     };
+    let mut lines = vec![chrome(row(Vec::new()))];
     // What the user typed is shown as typed: line breaks and indentation are
     // content, not Markdown soft breaks.
-    let mut meta = Vec::new();
-    meta.extend(at.map(|at| stamp_label(at, local_zone())));
-    if kind == UserKind::Steering {
-        meta.push("↗ steering".to_owned());
-    }
-    let meta = meta.join(" · ");
-    // The time sits on the first row's right edge, so the text gets the room.
-    let room = text_width(width)
-        .saturating_sub(wrap::width(&meta) + 2)
-        .max(8);
-    let mut body = wrap::wrapped(&wrap::sanitize(text), room, styles.text());
-    if body.is_empty() {
-        body.push(Line::default());
-    }
+    let mut body = wrap::wrapped(&wrap::sanitize(text), text_width(width), styles.text());
     let hidden = body.len().saturating_sub(USER_ROWS);
     if !expanded && hidden > 0 {
         body.truncate(USER_ROWS - 1);
     }
-    let mut lines = Vec::new();
-    for (index, line) in body.into_iter().enumerate() {
-        let spans = if index == 0 && !meta.is_empty() {
-            title_spans(
-                line.spans,
-                vec![chrome_span(Span::styled(meta.clone(), styles.meta()))],
-                text_width(width),
-            )
-        } else {
-            padded(line.spans)
-        };
-        lines.push(row(spans));
+    for line in body {
+        lines.push(row(padded(line.spans)));
     }
     if !expanded && hidden > 0 {
         lines.push(chrome(row(padded(vec![Span::styled(
@@ -308,6 +277,18 @@ fn user(
             styles.dim(),
         )]))));
     }
+    let mut meta = Vec::new();
+    meta.extend(at.map(|at| stamp_label(at, local_zone())));
+    if kind == UserKind::Steering {
+        meta.push("↗ steering".to_owned());
+    }
+    if !meta.is_empty() {
+        lines.push(chrome(row(padded(vec![Span::styled(
+            meta.join(" · "),
+            styles.meta(),
+        )]))));
+    }
+    lines.push(chrome(row(Vec::new())));
     lines
 }
 
@@ -402,11 +383,10 @@ pub fn thinking_rows(
             .unwrap_or_default();
         let more = thinking.len().saturating_sub(1);
         let count = (more > 0).then(|| format!("  +{more}"));
-        // The lead, the glyph and the count; the last column is the scrollbar's.
-        let room = width.saturating_sub(4 + count.as_deref().map_or(0, wrap::width) + 1);
-        // A step row, aligned with tool rows: no rail.
+        // The glyph and the count; the last column is the scrollbar's.
+        let room = width.saturating_sub(2 + count.as_deref().map_or(0, wrap::width) + 1);
+        // A step row: the glyph in the rail column, like tool rows.
         let mut spans = vec![
-            Span::raw(" "),
             chrome_span(Span::styled("∴ ", styles.meta())),
             Span::styled(wrap::truncate(latest.trim(), room), thinking_style(styles)),
         ];
@@ -550,6 +530,18 @@ pub(super) fn tool(
             row(padded(vec![Span::styled(text, style)]))
         })
         .collect();
+    // A file result can fail without saying so in its output.
+    if let Some(error) = call.result_error.as_deref()
+        && !body.lines.iter().any(|line| line.contains(error))
+    {
+        body_rows.insert(
+            0,
+            row(padded(vec![Span::styled(
+                wrap::truncate(&wrap::sanitize(&one_line(error)), inner),
+                styles.failure(),
+            )])),
+        );
+    }
     if body.hidden > 0 {
         let noun = match (body.lines.is_empty(), body.tail) {
             (true, _) => "line",
@@ -628,16 +620,7 @@ const LIVE_ROWS: usize = 3;
 /// A folded tool: one row of status glyph, name, subject and its most useful
 /// fact; a running call adds its newest output and a failure its reason.
 fn tool_row(call: &ToolCall, styles: Styles, width: usize) -> Vec<Line<'static>> {
-    let (glyph, glyph_style) = match call.state {
-        ToolState::Pending | ToolState::Running => ("●", styles.accent()),
-        ToolState::Succeeded
-            if call.result_error.is_none() && call.exit_code.is_none_or(|code| code == 0) =>
-        {
-            ("✓", styles.success())
-        }
-        ToolState::Denied | ToolState::Cancelled => ("⊘", styles.meta()),
-        _ => ("✗", styles.failure()),
-    };
+    let (glyph, glyph_style) = tool_glyph(call, styles);
     let subject = one_line(call.header_detail().trim_start_matches("$ "));
     let mut right = meta(call, styles, true);
     if call.state == ToolState::Succeeded
@@ -652,6 +635,9 @@ fn tool_row(call: &ToolCall, styles: Styles, width: usize) -> Vec<Line<'static>>
     if call.is_running() && right.is_empty() {
         right.push(Span::styled("running", styles.meta()));
     }
+    if right.is_empty() && glyph == "✗" {
+        right.push(Span::styled("failed", styles.failure()));
+    }
     let name = format!("{:<6}", display_name(call));
     let left = vec![
         chrome_span(Span::styled(format!("{glyph} "), glyph_style)),
@@ -659,41 +645,53 @@ fn tool_row(call: &ToolCall, styles: Styles, width: usize) -> Vec<Line<'static>>
         Span::raw(" "),
         Span::styled(subject, styles.tool_output()),
     ];
+    // A failure's reason is part of the card; folded, the row says only that
+    // it failed, so a long Turn does not fill with error text.
     let mut lines = vec![Line::from(row_spans(left, right, width))];
-    if let Some(error) = error_line(call) {
-        lines.push(Line::from(vec![
-            chrome_span(Span::raw("   └ ")),
-            Span::styled(
-                wrap::truncate(&one_line(error), width.saturating_sub(6)),
-                styles.failure(),
-            ),
-        ]));
-    } else if call.is_running() {
+    if call.is_running() {
         let output = call.output_content();
         let start = output.len().saturating_sub(LIVE_ROWS);
         for text in &output[start..] {
-            let text = one_line(text);
-            lines.push(Line::from(vec![
-                chrome_span(Span::styled("   │ ", styles.meta())),
-                Span::styled(
-                    wrap::truncate(&text, width.saturating_sub(6)),
-                    styles.tool_output(),
-                ),
-            ]));
+            lines.push(live_row(&one_line(text), styles, width));
         }
     }
     lines
 }
 
-/// `left` from the second cell and `right` flush with the edge; the subject
+/// `●` running, `✓` done, `✗` failed, `⊘` denied or cancelled.
+pub(super) fn tool_glyph(call: &ToolCall, styles: Styles) -> (&'static str, Style) {
+    match call.state {
+        ToolState::Pending | ToolState::Running => ("●", styles.accent()),
+        ToolState::Succeeded
+            if call.result_error.is_none() && call.exit_code.is_none_or(|code| code == 0) =>
+        {
+            ("✓", styles.success())
+        }
+        ToolState::Denied | ToolState::Cancelled => ("⊘", styles.meta()),
+        _ => ("✗", styles.failure()),
+    }
+}
+
+/// One line of a running step's newest output, under its name.
+pub(super) fn live_row(text: &str, styles: Styles, width: usize) -> Line<'static> {
+    Line::from(vec![
+        chrome_span(Span::styled("  │ ", styles.meta())),
+        Span::styled(
+            wrap::truncate(text, width.saturating_sub(5)),
+            styles.tool_output(),
+        ),
+    ])
+}
+
+/// `left` from the rail column and `right` flush with the edge; the subject
 /// is cut first when both do not fit.
-fn row_spans(
+pub(super) fn row_spans(
     mut left: Vec<Span<'static>>,
     right: Vec<Span<'static>>,
     width: usize,
 ) -> Vec<Span<'static>> {
     // The last column belongs to the scrollbar.
-    let room = width.saturating_sub(2);
+    let room = width.saturating_sub(1);
     let right_width = super::status::spans_width(&right);
     let left_room = if right_width > 0 {
         room.saturating_sub(right_width + 2)
@@ -709,8 +707,7 @@ fn row_spans(
         }
         used += wrap::width(&span.content);
     }
-    let mut spans = vec![Span::raw(" ")];
-    spans.extend(left);
+    let mut spans = left;
     if right_width > 0 && used + right_width + 2 <= room {
         spans.push(chrome_span(Span::raw(
             " ".repeat(room - used - right_width),
@@ -718,20 +715,6 @@ fn row_spans(
         spans.extend(right);
     }
     spans
-}
-
-/// Why a call failed without running to an exit code, for its collapsed card.
-fn error_line(call: &ToolCall) -> Option<&str> {
-    if let Some(error) = call.result_error.as_deref() {
-        return Some(error);
-    }
-    if call.state != ToolState::Failed || call.exit_code.is_some() {
-        return None;
-    }
-    call.output_content()
-        .into_iter()
-        .map(str::trim)
-        .find(|line| !line.is_empty())
 }
 
 /// The subject under an expanded card's title: the whole `bash` command, or
@@ -811,7 +794,7 @@ fn title_spans(
 }
 
 /// One row of `text`: control characters gone and whitespace runs collapsed.
-fn one_line(text: &str) -> String {
+pub(super) fn one_line(text: &str) -> String {
     wrap::sanitize(text)
         .split_whitespace()
         .collect::<Vec<_>>()
@@ -991,48 +974,38 @@ pub fn turn_end_line(
 /// The committed marker's covered item count and source position.
 pub fn compaction_label(source_position: u64, covered_items: u64) -> String {
     format!(
-        "Compacted {} · through position {source_position}",
+        "Context compacted · {} · through position {source_position}",
         plural(covered_items, "item")
     )
 }
 
+/// A divider row naming what happened to the history; the summary text opens
+/// under it behind a neutral rail.
 fn summary(
-    kind: &str,
     heading: &str,
     summary: &str,
     styles: Styles,
     width: usize,
     expanded: bool,
 ) -> Vec<Line<'static>> {
-    let surface = styles.custom_message();
-    let row = |spans: Vec<Span<'static>>| Line::from(fill(surface, spans, width));
-    let label = |spans: Vec<Span<'static>>| chrome(row(spans));
-    let text = wrap::truncate(heading, width - INSET);
-    let mut lines = vec![
-        label(Vec::new()),
-        label(padded(vec![Span::styled(
-            format!("[{kind}]"),
-            styles.reasoning_rail().add_modifier(Modifier::BOLD),
-        )])),
-        label(Vec::new()),
-    ];
-    match (!summary.trim().is_empty()).then_some(summary) {
-        Some(summary) if expanded => {
-            lines.push(label(padded(vec![Span::styled(text, styles.bold())])));
-            lines.push(label(Vec::new()));
-            for line in markdown::render(summary, text_width(width), &styles, styles.text()) {
-                lines.push(row(padded(line.spans)));
-            }
-        }
-        Some(_) => lines.push(label(padded(vec![
-            Span::styled(text, styles.text()),
-            Span::styled(" (", styles.meta()),
-            Span::styled("ctrl+o", styles.faint()),
-            Span::styled(" to expand)", styles.meta()),
-        ]))),
-        None => lines.push(label(padded(vec![Span::styled(text, styles.text())]))),
+    let has_summary = !summary.trim().is_empty();
+    let mut label = heading.to_owned();
+    if has_summary && !expanded {
+        label.push_str(" · ctrl+o");
     }
-    lines.push(label(Vec::new()));
+    // The lead, the label and a rule to the scrollbar column.
+    let text = wrap::truncate(&label, width.saturating_sub(5));
+    let rule = width.saturating_sub(wrap::width(&text) + 4);
+    let mut lines = vec![chrome(Line::from(vec![
+        Span::styled("─ ", styles.faint()),
+        Span::styled(text, styles.meta()),
+        Span::styled(format!(" {}", "─".repeat(rule)), styles.faint()),
+    ]))];
+    if has_summary && expanded {
+        for line in markdown::render(summary, text_width(width), &styles, styles.dim()) {
+            lines.push(rail_row(styles.reasoning_rail(), padded(line.spans), width));
+        }
+    }
     lines
 }
 
@@ -1083,14 +1056,14 @@ mod tests {
     }
 
     #[test]
-    fn a_user_card_is_a_surface_behind_the_rail_without_padding_rows() {
+    fn a_user_card_is_a_padded_surface_behind_the_rail() {
         let block = Block::User {
             text: "hello world".into(),
             kind: UserKind::Prompt,
             at: None,
         };
         let lines = render(&block, styles(), 40, fold());
-        assert_eq!(text(&lines), ["▎ hello world"]);
+        assert_eq!(text(&lines), ["▎", "▎ hello world", "▎"]);
         for line in &lines {
             assert_eq!(wrap::width(&line.to_string()), 40, "full width: {line:?}");
             assert_eq!(line.spans[0].style.bg, None, "the rail cell has no surface");
@@ -1108,9 +1081,11 @@ mod tests {
         assert_eq!(
             text(&render(&block, styles(), 40, fold())),
             [
+                "▎",
                 "▎ Error: boom",
                 "▎     at foo (a.js:1:1)",
                 "▎     at bar (b.js:2:2)",
+                "▎"
             ]
         );
         let long = Block::User {
@@ -1136,10 +1111,7 @@ mod tests {
             at: None,
         };
         let body = text(&render(&block, styles(), 40, fold()));
-        assert_eq!(
-            body,
-            [format!("▎ focus on tests{}↗ steering", " ".repeat(13))]
-        );
+        assert_eq!(body[2], "▎ ↗ steering");
     }
 
     fn turn_id() -> TurnId {
@@ -1162,7 +1134,7 @@ mod tests {
     }
 
     #[test]
-    fn a_stamped_card_shows_the_time_at_the_right_of_its_first_row() {
+    fn a_stamped_card_shows_the_time_below_the_text_and_beside_the_steering_label() {
         let card = |kind, at| Block::User {
             text: "hello".into(),
             kind,
@@ -1170,24 +1142,16 @@ mod tests {
         };
         let at = sent("2026-10-20T21:38:00Z");
         let prompt = render(&card(UserKind::Prompt, at), styles(), 40, fold());
-        assert_eq!(
-            text(&prompt),
-            [format!("▎ hello{}21:38 · 10/20/2026", " ".repeat(14))]
-        );
-        let row = &prompt[0];
-        assert_eq!(wrap::width(&row.to_string()), 40);
-        let stamp = row
-            .spans
-            .iter()
-            .find(|span| span.content.contains("21:38"))
-            .unwrap();
-        assert_eq!(stamp.style.fg, Some(Palette::dark().meta));
-        assert_eq!(stamp.style.bg, Some(Palette::dark().composer_bg));
+        assert_eq!(text(&prompt), ["▎", "▎ hello", "▎ 21:38 · 10/20/2026", "▎"]);
+        let meta = &prompt[2];
+        assert_eq!(wrap::width(&meta.to_string()), 40);
+        assert_eq!(meta.spans[2].style.fg, Some(Palette::dark().meta));
+        assert_eq!(meta.spans[2].style.bg, Some(Palette::dark().composer_bg));
 
         let steer = render(&card(UserKind::Steering, at), styles(), 40, fold());
         assert_eq!(
-            steer[0].to_string().trim_end(),
-            "▎ hello 21:38 · 10/20/2026 · ↗ steering"
+            steer[2].to_string().trim_end(),
+            "▎ 21:38 · 10/20/2026 · ↗ steering"
         );
     }
 
@@ -1195,7 +1159,7 @@ mod tests {
     fn assistant_prose_is_markdown_at_the_thinking_column() {
         let block = assistant("## Title\n\nsome **bold** prose", "plan", false);
         let body = text(&render(&block, styles(), 60, fold()));
-        assert_eq!(body[0], " ∴ plan");
+        assert_eq!(body[0], "∴ plan");
         assert_eq!(body[1], "");
         assert_eq!(
             body[2], "  Title",
@@ -1217,7 +1181,7 @@ mod tests {
                 60,
                 fold(),
             ));
-            assert_eq!(folded[0], " ∴ five  +4", "the newest line and a count");
+            assert_eq!(folded[0], "∴ five  +4", "the newest line and a count");
         }
         let open = text(&render(
             &assistant("the answer", reasoning, false),
@@ -1293,8 +1257,8 @@ mod tests {
         assert_eq!(
             card(call(), fold()),
             [format!(
-                " ✓ bash   python3 -m unittest{}0.4s",
-                " ".repeat(26)
+                "✓ bash   python3 -m unittest{}0.4s",
+                " ".repeat(27)
             )]
         );
     }
@@ -1321,8 +1285,8 @@ mod tests {
         assert_eq!(
             card(started(), fold()),
             [format!(
-                " ● bash   python3 -m unittest{}running",
-                " ".repeat(23)
+                "● bash   python3 -m unittest{}running",
+                " ".repeat(24)
             )]
         );
     }
@@ -1332,7 +1296,7 @@ mod tests {
         let mut running = started();
         running.push_output("one\ntwo\nthree\nfour\n");
         let body = card(running, fold());
-        assert_eq!(body[1..], ["   │ two", "   │ three", "   │ four"]);
+        assert_eq!(body[1..], ["  │ two", "  │ three", "  │ four"]);
     }
 
     #[test]
@@ -1412,7 +1376,7 @@ mod tests {
         long.detail = format!("$ cd app &&\n  {}", "x".repeat(80));
         let body = card(long, fold());
         assert_eq!(body.len(), 1, "{body:?}");
-        assert!(body[0].starts_with(" ✓ bash   cd app && xxx"), "{body:?}");
+        assert!(body[0].starts_with("✓ bash   cd app && xxx"), "{body:?}");
         assert!(body[0].ends_with("…  0.4s"), "{body:?}");
         assert!(
             wrap::width(&body[0]) < 60,
@@ -1540,7 +1504,7 @@ mod tests {
     #[test]
     fn a_patch_card_counts_its_change_and_expands_to_a_colored_diff() {
         let folded = card(patch_card(), fold());
-        assert!(folded[0].starts_with(" ✓ apply_patch app.py"), "{folded:?}");
+        assert!(folded[0].starts_with("✓ apply_patch app.py"), "{folded:?}");
         assert!(folded[0].ends_with("0.4s · +1 −0"), "{folded:?}");
         assert_eq!(folded.len(), 1);
 
@@ -1726,27 +1690,30 @@ mod tests {
     }
 
     #[test]
-    fn a_compaction_marker_shows_native_coverage_and_opens_its_summary() {
-        let folded = text(&render(
+    fn a_compaction_marker_is_one_divider_row_that_opens_its_summary() {
+        let folded = render(
             &compaction_block(Some("kept the plan")),
             styles(),
             90,
             fold(),
-        ));
-        assert_eq!(folded[1], " [compaction]");
-        assert_eq!(
-            folded[3],
-            " Compacted 177 items · through position 190 (ctrl+o to expand)"
         );
+        assert_eq!(folded.len(), 1);
+        let row = folded[0].to_string();
+        assert!(
+            row.starts_with("─ Context compacted · 177 items · through position 190 · ctrl+o ─"),
+            "{row}"
+        );
+        assert_eq!(wrap::width(&row), 89, "the rule stops at the scrollbar");
+        assert_eq!(content_cells(&folded[0]), 0..0, "a divider is chrome");
         let open = text(&render(
             &compaction_block(Some("kept the plan")),
             styles(),
             90,
             expanded(),
         ));
-        assert_eq!(open[5], " kept the plan", "{open:?}");
+        assert_eq!(open[1], "▎ kept the plan", "{open:?}");
         let bare = text(&render(&compaction_block(None), styles(), 90, fold()));
-        assert_eq!(bare[3], " Compacted 177 items · through position 190");
+        assert!(bare[0].starts_with("─ Context compacted · 177 items · through position 190 ─"));
     }
 
     #[test]
@@ -1755,9 +1722,9 @@ mod tests {
             text: "Retained summary".into(),
         };
         let body = text(&render(&block, styles(), 80, expanded())).join("\n");
-        assert!(body.contains("[summary]"));
+        assert!(body.starts_with("─ History summary ─"), "{body}");
         assert!(body.contains("Retained summary"));
-        assert!(!body.contains("Compacted"));
+        assert!(!body.contains("compacted"));
     }
 
     #[test]
@@ -1789,7 +1756,7 @@ mod tests {
         waiting.duration = None;
         assert_eq!(
             card(waiting, fold())[0],
-            " ● bash   python3 -m unittest",
+            "● bash   python3 -m unittest",
             "not started: no timer"
         );
     }
@@ -1803,10 +1770,13 @@ mod tests {
             "tool invocation is invalid".into(),
             "no hunk matched".into(),
         ];
-        let body = card(failed, fold());
-        assert!(body[0].starts_with(" ✗ apply_patch app.py"), "{body:?}");
+        let body = card(failed.clone(), fold());
+        assert_eq!(body.len(), 1, "folded, a failure is one row: {body:?}");
+        assert!(body[0].starts_with("✗ apply_patch app.py"), "{body:?}");
+        assert!(body[0].ends_with("failed"), "{body:?}");
         assert!(!body[0].contains("+1"), "{body:?}");
-        assert_eq!(body[1], "   └ tool invocation is invalid");
+        let open = card(failed, expanded()).join("\n");
+        assert!(open.contains("tool invocation is invalid"), "{open}");
     }
 
     #[test]
@@ -1817,13 +1787,9 @@ mod tests {
         let block = Block::Tool(Box::new(call));
         let collapsed = render(&block, styles(), 70, fold());
         let rows = text(&collapsed);
-        assert!(
-            rows.iter().any(|row| row.contains("No matching file")),
-            "{rows:?}"
-        );
+        assert_eq!(rows.len(), 1, "the reason waits in the card: {rows:?}");
         assert!(!rows[0].contains("+1"), "failed changes are not applied");
-        assert!(rows[0].starts_with(" ✗"), "{rows:?}");
-        assert_eq!(rows[1], "   └ No matching file");
+        assert!(rows[0].starts_with("✗"), "{rows:?}");
         let expanded = text(&render(&block, styles(), 70, expanded())).join("\n");
         assert!(expanded.contains("No matching file"), "{expanded}");
         assert!(
@@ -1842,8 +1808,7 @@ mod tests {
         }));
         bash.detail = "git diff --check && git diff --".into();
         assert!(
-            card(bash, fold())[0]
-                .starts_with(" ✓ bash   git diff -- README.md && git diff --check"),
+            card(bash, fold())[0].starts_with("✓ bash   git diff -- README.md && git diff --check"),
             "the first command line, not the summary"
         );
     }

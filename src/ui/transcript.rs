@@ -171,6 +171,8 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, styles: Styles) {
     let transcript = &session.transcript;
     let mut render = |state: &mut RenderState, index: usize, block: &Block| {
         let mut rows = match transcript.grouping(index) {
+            // Drawn inside the Agent card it belongs to.
+            _ if transcript.absorbed(index) => Vec::new().into(),
             Grouping::None => state.render(block, key),
             // Steps are finished blocks; they need no streaming state.
             grouping => blocks::render_with(block, grouping, styles, width, fold).into(),

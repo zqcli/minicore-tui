@@ -11,7 +11,7 @@ use crate::app::composer::Composer;
 use crate::wrap;
 
 /// The editor body is never shorter than this many rows.
-pub const MIN_ROWS: usize = 1;
+pub const MIN_ROWS: usize = 4;
 
 /// The editor body is never taller than this many rows; completions come on top.
 const MAX_ROWS: usize = 12;
@@ -35,7 +35,7 @@ impl Editor {
     /// Shown dim in place of an empty draft.
     fn placeholder(self) -> Option<&'static str> {
         match self {
-            Self::Live => Some("Ask anything · / commands · @ files"),
+            Self::Live => None,
             Self::View => Some("view open · esc back"),
             Self::Closed => Some("session closed · /new starts a new one"),
         }
@@ -436,19 +436,19 @@ mod tests {
     #[test]
     fn the_cursor_keeps_its_cell_after_sanitizing() {
         let (_, plain) = drawn(&typed("ab"), 40);
-        assert_eq!(plain, (0, 3), "the rail plus two cells");
+        assert_eq!(plain, (1, 3), "second row; the rail plus two cells");
 
         // A tab shows as four cells, so the caret after it moves by four.
         let mut tabbed = typed("ab\tc");
         tabbed.move_left();
         let (_, caret) = drawn(&tabbed, 40);
-        assert_eq!(caret, (0, 7), "the rail, ab and the tab's four cells");
+        assert_eq!(caret, (1, 7), "the rail, ab and the tab's four cells");
 
         // An escape sequence collapses to one picture glyph; the caret after it
         // counts the visible cell, not the eight source bytes.
         let (rows, escaped) = drawn(&typed("a\u{1b}[31mb"), 40);
-        assert_eq!(escaped, (0, 3), "the escape takes no cell");
-        assert_eq!(rows[0], "▎ab", "the escape is dropped, not painted");
+        assert_eq!(escaped, (1, 3), "the escape takes no cell");
+        assert_eq!(rows[1], "▎ab", "the escape is dropped, not painted");
     }
 
     #[test]
@@ -463,10 +463,10 @@ mod tests {
         let mut c = composer("see ");
         c.insert(&big_paste(12));
         let (rows, cursor) = drawn(&c, 60);
-        assert_eq!(rows[0], "▎see [paste #1 +12 lines]", "{rows:?}");
-        assert_eq!(cursor, (0, 1 + "see [paste #1 +12 lines]".len() as u16));
+        assert_eq!(rows[1], "▎see [paste #1 +12 lines]", "{rows:?}");
+        assert_eq!(cursor, (1, 1 + "see [paste #1 +12 lines]".len() as u16));
         let (lines, _) = render(&c, styles(), 60, 12, Editor::Live);
-        let chip = lines[0]
+        let chip = lines[1]
             .spans
             .iter()
             .find(|span| span.content.starts_with("[paste"))
@@ -484,26 +484,21 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_editor_is_one_row_with_a_placeholder_after_the_rail() {
+    fn the_editor_pads_short_drafts_and_starts_text_after_the_rail() {
         let (rows, cursor) = drawn(&Composer::new(), 50);
         assert_eq!(rows.len(), MIN_ROWS);
-        assert_eq!(rows, ["▎Ask anything · / commands · @ files"]);
-        assert_eq!(cursor, (0, 1), "the cursor sits after the rail");
+        assert!(rows.iter().all(|row| row == "▎"), "no empty-draft hint");
+        assert_eq!(cursor, (1, 1), "the cursor sits on the second row");
         let (lines, _) = render(&Composer::new(), styles(), 50, 12, Editor::Live);
         assert!(lines.iter().all(|line| line.width() == 50), "full rows");
     }
 
     #[test]
-    fn an_empty_editor_cuts_its_placeholder_at_any_width() {
+    fn an_empty_editor_has_no_hint_at_any_width() {
         for width in [3, 8, 30, 80] {
             let (rows, cursor) = drawn(&Composer::new(), width);
-            assert_eq!(rows.len(), 1, "{width}: {rows:?}");
-            assert!(rows[0].starts_with('▎'), "{width}: {rows:?}");
-            assert!(
-                wrap::width(&rows[0]) <= usize::from(width),
-                "{width}: {rows:?}"
-            );
-            assert_eq!(cursor, (0, 1), "{width}: empty-draft caret");
+            assert!(rows.iter().all(|row| row == "▎"), "{width}: {rows:?}");
+            assert_eq!(cursor, (1, 1), "{width}: empty-draft caret");
         }
     }
 
@@ -511,24 +506,20 @@ mod tests {
     fn clearing_a_draft_leaves_the_editor_blank() {
         let mut c = composer("hello 中文");
         let (rows, _) = drawn(&c, 50);
-        assert_eq!(rows[0], "▎hello 中文");
+        assert_eq!(rows[1], "▎hello 中文");
 
         c.set_text("");
         let (rows, cursor) = drawn(&c, 50);
-        assert_eq!(
-            rows,
-            drawn(&Composer::new(), 50).0,
-            "the empty editor again"
-        );
-        assert_eq!(cursor, (0, 1));
+        assert!(rows.iter().all(|row| row == "▎"), "{rows:?}");
+        assert_eq!(cursor, (1, 1));
     }
 
     #[test]
     fn a_draft_wraps_by_word_and_the_cursor_follows_the_wrapped_word() {
         // The cursor never sits on the row a word left when it wrapped.
         let (rows, cursor) = drawn(&composer("hello wonderful"), 14);
-        assert_eq!(rows[..2], ["▎hello", "▎wonderful"]);
-        assert_eq!(cursor, (1, 10));
+        assert_eq!(rows[1..3], ["▎hello", "▎wonderful"]);
+        assert_eq!(cursor, (2, 10));
     }
 
     #[test]
@@ -557,8 +548,7 @@ mod tests {
 
     #[test]
     fn the_body_height_follows_the_terminal() {
-        assert_eq!(max_rows(2), MIN_ROWS);
-        assert_eq!(max_rows(10), 3);
+        assert_eq!(max_rows(10), MIN_ROWS);
         assert_eq!(max_rows(30), 9);
         assert_eq!(max_rows(100), 12);
     }

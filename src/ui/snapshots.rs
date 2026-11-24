@@ -463,17 +463,18 @@ fn a_blank_row_separates_the_transcript_and_the_composer_band_is_full_width() {
             .to_owned()
     };
     let composer = terminal.backend().cursor_position().y;
+    assert_eq!(row(composer), " ▎", "the empty editor has no hint");
+    assert_eq!(row(composer - 1), " ▎", "the editor's top pad row");
     assert_eq!(
-        row(composer),
-        " ▎Ask anything · / commands · @ files",
-        "the empty editor shows its placeholder"
+        row(composer - 2),
+        "",
+        "one gap row; an idle activity line takes no row"
     );
-    assert_eq!(row(composer - 1), "", "the idle activity line");
-    assert_eq!(row(composer - 2), "", "the gap row above the dock");
+    assert_eq!(row(composer - 3).trim(), "▎", "the card's bottom pad row");
     assert!(
-        row(composer - 3).contains("prompt 39"),
+        row(composer - 4).contains("prompt 39"),
         "{}",
-        row(composer - 3)
+        row(composer - 4)
     );
     assert_eq!(
         buffer[(0u16, composer)].bg,
@@ -594,7 +595,6 @@ fn a_view_dims_the_composer_and_keys_typed_in_it_do_not_edit_the_draft() {
 
     app.overlay = Overlay::None;
     let rendered = render(&mut app, 60, 12);
-    assert!(rendered.contains("Ask anything"), "{rendered}");
     assert!(!rendered.contains("view open"), "{rendered}");
 }
 
@@ -770,7 +770,7 @@ fn clicking_a_hidden_lines_row_collapses_the_expanded_card_without_opening_an_ov
     let app = &mut fixture.app;
     conversation(app);
     let folded = render(app, 70, 30);
-    let header = row_of(&folded, "  ✓ bash");
+    let header = row_of(&folded, " ✓ bash");
     click(app, 10, header);
     let expanded = render(app, 70, 30);
     assert!(expanded.contains("… 14 earlier lines"), "{expanded}");
@@ -790,7 +790,7 @@ fn clicking_the_body_or_the_footer_of_an_expanded_card_collapses_it() {
         let app = &mut fixture.app;
         conversation(app);
         let folded = render(app, 70, 34);
-        click(app, 10, row_of(&folded, "  ✓ bash"));
+        click(app, 10, row_of(&folded, " ✓ bash"));
         let open = render(app, 70, 34);
         assert!(open.contains(" ▎ $ cargo test --lib"), "{open}");
         click(app, 10, row_of(&open, prefix));
@@ -812,7 +812,7 @@ fn a_drag_across_an_expanded_card_body_selects_and_leaves_it_open() {
     let app = &mut fixture.app;
     conversation(app);
     let folded = render(app, 70, 30);
-    click(app, 10, row_of(&folded, "  ✓ bash"));
+    click(app, 10, row_of(&folded, " ✓ bash"));
     let open = render(app, 70, 30);
     let body = row_of(&open, " ▎ running 131 tests");
     left(app, Down, 4, body);
@@ -841,7 +841,7 @@ fn a_card_opens_downward_from_its_header_by_click_or_ctrl_o() {
         let folded = render(app, 70, 20);
         let header = |screen: &str| {
             let rows: Vec<&str> = screen.lines().collect();
-            rows.iter().rposition(|row| row.starts_with("  ● bash"))
+            rows.iter().rposition(|row| row.starts_with(" ● bash"))
         };
         let before = header(&folded).expect("running card");
         if by_click {
@@ -853,9 +853,9 @@ fn a_card_opens_downward_from_its_header_by_click_or_ctrl_o() {
             ));
         }
         let expanded = render(app, 70, 20);
-        // Ctrl+O also opens the thinking row, so only the prompt above it
-        // must stay put.
-        let rows = if by_click { 3 } else { 1 };
+        // Ctrl+O also opens the thinking row and its flash takes the activity
+        // row, so only a click must leave the rows above the card in place.
+        let rows = if by_click { 3 } else { 0 };
         let top = |screen: &str| {
             screen
                 .lines()
@@ -879,7 +879,7 @@ fn collapsing_a_card_while_following_leaves_no_blank_rows_under_the_content() {
     let app = &mut fixture.app;
     conversation(app);
     let folded = render(app, 70, 16);
-    click(app, 10, row_of(&folded, "  ✓ bash"));
+    click(app, 10, row_of(&folded, " ✓ bash"));
     let open = render(app, 70, 16);
     assert!(open.contains(" ▎ $ cargo test --lib"), "{open}");
     // Following the longer transcript, the collapsing click pins a top that
@@ -1004,7 +1004,7 @@ fn a_drag_over_a_card_header_selects_instead_of_toggling() {
     let app = &mut fixture.app;
     conversation(app);
     let screen = render(app, 70, 20);
-    let header = row_of(&screen, "  ✓ bash");
+    let header = row_of(&screen, " ✓ bash");
     for (kind, column) in [
         (MouseEventKind::Down(MouseButton::Left), 2),
         (MouseEventKind::Drag(MouseButton::Left), 8),
@@ -1030,7 +1030,7 @@ fn a_drag_across_a_card_takes_its_text_without_rails_or_hints() {
     let app = &mut fixture.app;
     conversation(app);
     let screen = render(app, 70, 20);
-    let header = row_of(&screen, "  ✓ bash");
+    let header = row_of(&screen, " ✓ bash");
     let drag = crate::app::selection::Drag {
         from: (1, header),
         to: (69, header),
@@ -1068,7 +1068,7 @@ fn the_gutter_column_stays_blank_and_ignores_clicks() {
     );
     assert!(top.contains("/work/minicore-tui"), "{top}");
     app.scroll = Scroll::Follow;
-    let header = row_of(&screen, "  ✓ bash");
+    let header = row_of(&screen, " ✓ bash");
     click(app, 0, header);
     assert!(
         !render(app, 70, 20).contains(" ▎ $ cargo test --lib"),
@@ -1089,7 +1089,7 @@ fn a_click_on_a_card_in_block_0_maps_below_the_welcome_header() {
     let app = &mut fixture.app;
     card_first(app);
     let folded = render(app, 70, 30);
-    click(app, 10, row_of(&folded, "  ✓ bash"));
+    click(app, 10, row_of(&folded, " ✓ bash"));
     let expanded = render(app, 70, 30);
     assert!(expanded.contains(" ▎ $ cargo test --lib"), "{expanded}");
 

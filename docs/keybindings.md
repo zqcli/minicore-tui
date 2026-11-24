@@ -173,9 +173,10 @@ templates appear alongside commands and expand before submission.
 | `F8` | Review local input confirmations. |
 | `q`, `Esc` on the fatal screen | Quit. |
 | Wheel | Scroll one row, or five with Alt. Over a picker, move its selection; over a view, scroll that view. |
-| Click a tool row or card | Toggle its folded state. Dragging selects instead. |
+| Click a tool or Agent row, or a card | Toggle its folded state. Dragging selects instead. |
+| Click a `∴` thinking row | Open or fold that thinking. |
 | Click a `▸ Worked …` row | Open or fold the finished Turn's steps. |
-| Click an Agent card footer | Open its child Session, or explain that its history is unavailable. |
+| Click an opened Agent card's footer | Open its child Session, or explain that its history is unavailable. |
 | Click a later send's locate footer | Jump to its original Agent card. |
 | Click a failed Turn's message or end line | Read its complete error, including its original Session and Turn identities. |
 | Click a Turn-end line with changes and no error | Open the live workspace Git diff. |
@@ -193,23 +194,26 @@ after reopening a Session. Folded tools are one row each: a state glyph
 (`●` running, `✓` done, `✗` failed, `⊘` denied or cancelled), the tool
 name, its subject and facts such as duration, line count or `+N −M` at the
 right. A running tool shows its last three output lines under the row; a
-failure states its reason on a `└` row. Folded thinking is one `∴` row with
-its newest heading. Adjacent step rows stack without blank rows; other blocks
-keep one separator row. Expanding a card keeps blank lines inside its output.
+failure says `failed`, and its reason is in the opened card. Folded thinking
+is one `∴` row with its newest heading. Adjacent step rows stack without blank
+rows; other blocks keep one separator row. Opening a row keeps its left edge,
+and an opened card keeps blank lines inside its output.
 
 When a Turn finishes with at least two successful tools, its steps fold under
 one summary row: `▸ Worked 42s · 14 tools · 2 files changed · 1 failed`.
 Failed, denied and Agent tools never fold into the group, and the answer text
 stays visible. Click the row to open the steps; `Ctrl+O` opens every group.
 
-Delegated Agent cards continue updating after the startup tool returns. The
-title is the task's first line; the next row names the Agent, the short Session
-ID, tool rounds and the tool now running. Previews show up to six (expanded
-eighteen) rows of responses and one line per tool call, not tool output, and
-take only the rows they need. Only Host's settled delegation marks completion;
-a receipt means input was accepted. The child's result arrives in the parent as
-a "Delegated result" card with its outcome and final answer. Click the footer
-or use `/child` to read the child Session and answer its approvals there; Esc
+A delegation is one Agent card on the call that started it, and it keeps
+updating after that call returns. Folded, it is one row: the task's first line,
+the Agent, tool rounds and state, with the child's three newest steps under it
+while it runs. Opened, it shows the task, the short Session ID and later sends,
+the child's tool calls, and its result: the delivered final answer, or while it
+runs the latest response. Later sends into the same child and the result it
+delivers are drawn inside the card rather than as their own blocks; they keep
+their own blocks only when the starting call is not loaded. Only Host's
+settled delegation marks completion. Click the opened card's footer or use
+`/child` to read the child Session and answer its approvals there; Esc
 returns to the parent. Child events do not redirect the parent's input or change its draft.
 If a temporary child has been released, the card keeps its observed preview
 and identifies the unavailable full history.

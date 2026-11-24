@@ -12,8 +12,9 @@ this document says how things look and behave, and why.
 2. **Two colour signals.** Colour marks where the user spoke (accent) and where
    something went wrong (failure). Everything else is told apart by layout,
    glyphs and weight. Success is a glyph, not a coloured band.
-3. **One row per fact until asked.** A step of work is one row. Detail opens in
-   place (click or Ctrl+O) and closes the same way.
+3. **One row per fact until asked.** A step of work is one row, and so is a
+   whole delegation. Detail opens in place (click or Ctrl+O) and closes the
+   same way; errors wait inside the opened card.
 4. **Show what is true now.** Status, counts and hints come from native Host
    state. A hint appears only when its key does something at that moment.
 5. **One vocabulary.** The same thing has the same name, glyph and key
@@ -21,28 +22,50 @@ this document says how things look and behave, and why.
 6. **Stable reading position.** Rendering, folding and history loading never
    move what the user is reading. Folding opens downward.
 
-## Screen layers
+## Grid
 
-From top to bottom:
+Two columns carry the whole screen, in the transcript and the dock alike:
+
+| Column (from the block edge) | Holds |
+|---|---|
+| 0, the rail column | Rails `▎`, step glyphs `✓ ✗ ● ⊘ ∴ ▸`, the spinner, divider starts |
+| 2, the content column | Text: answers, tool names, card titles and bodies, activity and notice text |
+
+The terminal's column 0 is a blank gutter that ignores clicks, so block column
+0 is screen column 1. The transcript's last column belongs to the scrollbar;
+right-aligned facts end one column before it. Opening a step row into its card
+keeps both columns: the rail takes the glyph's place and the title the name's.
+
+## Vertical rhythm
+
+1. Exactly one blank row between two visible blocks.
+2. No blank row between step rows: folded tools, folded thinking, folded Agent
+   cards and a group's summary row stack as one list.
+3. Surfaces carry their own padding. The user card and the editor have a pad
+   row above and below their text; an expanded card has a pad row after its
+   facts and separates its sections (activity, result, footer) with one blank
+   surface row. Nothing adds a second blank row around a surface.
+4. The bottom of the screen is: transcript, one gap row, the activity line
+   only when it has something to say, the editor, the footer. An idle screen
+   therefore has one blank row above the editor, never two. The editor is
+   pinned to the bottom; the transcript gives up the row.
+5. History markers (compaction, imported summary) are one divider row.
+6. Markdown keeps one blank row between paragraphs, headings and lists.
+   Tables have one rule under the header, and rules between body rows only
+   when a row wraps.
+
+## Screen layers
 
 | Layer | Rows | Content |
 |---|---|---|
-| Transcript | rest | Welcome card in front of block 0, then blocks; scrollbar in the last column; the jump bar when scrolled up |
-| Dock | 1 + special rows + 1 | A blank gap row; approval, question or compaction rows when present; the activity line |
-| Editor | 1–12 | Rail `▎` plus the draft on the composer surface; grows with content, capped at about a third of the height |
+| Transcript | rest | Welcome card in front of block 0, then blocks; scrollbar; the jump bar when scrolled up |
+| Dock | 1 + special rows + 0–1 | The gap row; approval, question or warning rows when present; the activity line when it has content |
+| Editor | 4–12 | Rail `▎` on the composer surface, a pad row, the draft from the second row; grows with content up to about a third of the height |
 | Footer | 1 | Where you are (left) and what runs (right) |
 
 Pickers replace the dock and editor as a bottom sheet. Full-screen views
 (Help, Diff, Error details, Context, Session) replace the transcript and dim
-the editor, whose placeholder says `view open · esc back`.
-
-### Gutter and columns
-
-- Column 0 is a blank gutter and ignores clicks.
-- The transcript's last column belongs to the scrollbar. Right-aligned facts end
-  one column before it.
-- Body text starts at the inset (2 cells); step rows start with one space and a
-  glyph, so the glyph sits in the column of a rail.
+the editor, whose text row says `view open · esc back`.
 
 ### Welcome card
 
@@ -60,12 +83,13 @@ recent Sessions (Ctrl+R does).
 
 ### Activity line
 
-One fixed row directly above the editor. It never grows.
+One row directly above the editor, present only with content.
 
-- **Left, what is happening:** `⠋ Working 3m · running bash · request 4 ·
-  2 tool rounds`, or `Waiting for approval`, `Interrupting…`, a compaction
-  phase. Otherwise the newest flash, otherwise the latest notice (errors add
-  ` · /error`). Idle: empty.
+- **Left, what is happening:** the spinner in the rail column, then
+  `Working 3m · running bash · request 4 · 2 tool rounds`, or
+  `Waiting for approval`, `Interrupting…`, a compaction phase. Otherwise the
+  newest flash, otherwise the latest notice (errors add ` · /error`), in the
+  content column.
 - **Right, keys that work now**, separated by two spaces, in this order:
   `↰ esc back`; one of `paused · enter resumes`,
   `enter steer · alt+enter follow-up` or `esc interrupt`;
@@ -91,57 +115,49 @@ spinner; there is no per-second timer and no timer when idle.
 
 ### Editor
 
-- Empty: one row, rail plus the dim placeholder
-  `Ask anything · / commands · @ files`.
-- A closed Session says `session closed · /new starts a new one`.
-- No padding rows; the caret starts right after the rail.
+- At least four rows: a pad row, the draft starting on the second row, and pad
+  rows below. It grows with the draft up to its cap and scrolls beyond it.
+- An empty Live editor shows no hint; the welcome card and F1 carry them.
+- A view says `view open · esc back`; a closed Session says
+  `session closed · /new starts a new one`.
 - Large pastes become `[paste #N +K lines]` chips on the paste surface.
 
 ## Transcript blocks
 
-Every block has one of a few shapes. Keep new content in these shapes.
-
 | Block | Shape |
 |---|---|
-| User message | Accent rail `▎` on the composer surface; its own line breaks; timestamp and `↗ steering` right-aligned on the first row; more than 12 lines fold to `… N more lines` |
-| Assistant answer | Markdown at the inset, no rail |
-| Thinking (folded) | ` ∴ newest heading  +N` in dim italic, no rail, aligned with tool rows |
-| Thinking (open) | Neutral rail, dim italic, bold headings, original line breaks |
+| User message | Accent rail on the composer surface: pad row, the text with its own line breaks, a meta row with the time and `↗ steering`, pad row. More than 12 lines fold to `… N more lines` |
+| Assistant answer | Markdown in the content column, no rail |
+| Thinking (folded) | `∴ newest heading  +N` in dim italic; click or Ctrl+O opens it |
+| Thinking (open) | Neutral rail, dim italic, bold headings, original line breaks; click folds it |
 | Tool (folded) | One step row; see below |
-| Tool (expanded) | Card: neutral rail on the card surface (failure rail and surface when failed), title row, subject, body, footer facts |
-| Agent card | Card titled by the task; Agent, short Session ID, rounds and current tool; preview rows; footer opens the child |
-| Delegated result | Card with outcome and final answer |
-| Turn end | `   completed in 31s · 5 requests · 4 tool rounds · 1 file changed (+39 −0) · /diff` in meta colour |
-| Failed Turn | `   failed · 47s · 2 tool rounds` and the message behind a quote rail `│`, three rows until expanded |
-| Compaction | Notice rail with its native source position and covered items |
+| Tool (expanded) | Card: neutral rail on the card surface (failure rail and surface when failed), title row, subject, body with the failure reason, footer facts |
+| Agent | One card for the whole delegation; see below |
+| Turn end | `completed in 31s · 5 requests · 4 tool rounds · 1 file changed (+39 −0) · /diff` in meta colour |
+| Failed Turn | `failed · 47s · 2 tool rounds` and the message behind a quote rail `│`, three rows until expanded |
+| Compaction, summary | One divider row: `─ Context compacted · 79 items · through position 105 · ctrl+o ───`; opened, the summary follows behind a neutral rail |
 
 ### Step rows
 
-A folded tool is exactly one row:
-
 ```
- ✓ read   test/server.test.js                                   45 lines
- ● bash   node --test                                            running
-   │ ok 18 - parses empty arrays
-   │ ok 19 - rejects negative length
- ✗ edit   src/server.js
-   └ edit requires exactly one match, or replace_all for multiple matches
- ⊘ write  notes.txt
+✓ read   test/server.test.js                                    45 lines
+● bash   node --test                                             running
+  │ ok 18 - parses empty arrays
+  │ ok 19 - rejects negative length
+✗ edit   src/server.js                                            failed
+⊘ write  notes.txt
 ```
 
-- Glyph: `●` pending or running (accent), `✓` succeeded with exit code 0
-  (success), `✗` failed, result error or non-zero exit (failure), `⊘` denied or
-  cancelled (meta). The glyph is chrome and is not copied.
-- Name: the real tool name, padded to 6 cells, in the tool-title colour.
+- Glyph in the rail column: `●` pending or running (accent), `✓` succeeded
+  with exit code 0 (success), `✗` failed, result error or non-zero exit
+  (failure), `⊘` denied or cancelled (meta). The glyph is chrome.
+- Name in the content column: the real tool name, padded to 6 cells.
 - Subject: the path, the first command line (without `$ `) or the pattern; one
   line, cut with `…`.
-- Facts, right-aligned in meta: duration, `N lines`, `+A −R`, `exit N`; a
-  running tool with nothing else says `running`.
-- A running tool shows its last 3 output lines under `   │ `.
-- A failure shows its reason once under `   └ `.
-
-Adjacent step rows (tools and folded thinking) stack with no blank row. Every
-other pair of visible blocks has exactly one blank separator row.
+- Facts, right-aligned in meta: duration, `N lines`, `+A −R`, `exit N`;
+  `running` or `failed` when there is nothing else to say.
+- A running tool shows its last 3 output lines under `  │ `.
+- A failure's reason is not shown folded; opening the row shows it in the card.
 
 ### Turn groups
 
@@ -149,34 +165,72 @@ When a Turn ends with at least two successful tools, its steps fold under one
 row placed before the Turn's first step row, even when that row is a failure:
 
 ```
- ▸ Worked 42s · 14 tools · 2 files changed (+3 −1) · 6 failed
- ✗ apply_patch src/server.js
-   └ patch contents or positions do not match the existing file
+▸ Worked 42s · 14 tools · 2 files changed (+3 −1) · 6 failed
+✗ apply_patch src/server.js                                       failed
 ```
 
-- Steps are successful tools without an Agent card or delegation, and
-  thinking-only responses. Failed, denied and Agent tools never fold; answers
-  never fold.
+- Steps are successful tools without a delegation, and thinking-only
+  responses. Failed, denied and Agent rows never fold; answers never fold.
 - `▾` when open. Click toggles; Ctrl+O opens every group along with everything
   else.
 - Live Turns are never grouped. Grouping is applied when the Turn ends and
   again when it is reopened from history.
 
+### Agent card
+
+A delegation's whole life is one card on the call that started it. Later
+sends into the same child and the result the child delivers are drawn inside
+it, not as their own blocks. Only when the starting call is not loaded do they
+fall back to their own receipt or result card.
+
+Folded, it is a step row; while it runs, the child's three newest steps follow:
+
+```
+● agent  Read every file under src and test and count functions   Reader · 4 tool rounds · working
+  │ ✓ read test/http.test.js
+  │ ✓ read test/server.test.js
+✓ agent  Summarize src/store.js                                    Reader · 1 tool round · completed
+```
+
+Opened, it is a card:
+
+```
+▎ Read every file under src and test and count functions      ✓ completed
+▎ Reader · Session nxbv1q · 4 tool rounds · 1 later send
+▎
+▎ Activity
+▎ ✓ read src/store.js
+▎ … 
+▎
+▎ Result
+▎ <the child's final answer as Markdown, 16 rows, then … N more lines>
+▎
+▎ Open the child Session · click or /child
+```
+
+- Glyph: `●` working (accent; warning when the child waits for approval or
+  input), `✓` completed, `✗` failed, `⊘` cancelled, `○` no longer observable.
+- The title is the task's first line; further task lines follow dimmed.
+- Activity lists the child's tool calls, oldest first, eight at most.
+- Result is the delivered answer, or while running the latest response (or
+  thinking, with Ctrl+T on); a failure leads with its reason.
+- Only the opened card's footer leads into the child Session. Ctrl+B lists all
+  delegations of the conversation.
+
 ## Colour tokens
 
 Defined in `ui/theme.rs` for dark and light; both palettes define every token.
-Only the listed roles may use a token.
 
 | Token | Role |
 |---|---|
 | `text` | Body text |
-| `dim` | Secondary text, thinking, info notices |
-| `meta` | Facts, timestamps, Turn ends, `⊘` |
-| `faint` | Key hints, counts like `+N` |
+| `dim` | Secondary text, thinking, info notices, card section labels |
+| `meta` | Facts, timestamps, Turn ends, `⊘`, divider labels |
+| `faint` | Key hints, counts like `+N`, divider rules |
 | `accent` | User rail, `●`, spinner, pointer and selected item |
 | `success` | `✓`, added lines |
-| `failure` | `✗`, failure reasons, error notices, removed lines, failure rail |
-| `warning` | Usage notices, risk labels |
+| `failure` | `✗`, failure facts and reasons, error notices, removed lines, failure rail |
+| `warning` | Usage notices, risk labels, an Agent waiting for input |
 | `border` | Sheet rules, the welcome card |
 | `composer_bg` | Editor and user-message surface |
 | `card_bg` | Expanded card surface (success uses the same surface) |
@@ -186,8 +240,6 @@ Only the listed roles may use a token.
 | `code_block` | Code block text (muted) |
 | `selection_bg`, `selection_fg` | Mouse selection and the selected sheet row |
 
-Rules:
-
 - No new rail colours. A new state is a glyph.
 - `NO_COLOR` must leave every state readable through glyphs and words.
 - The theme follows `COLORFGBG` when `tui.json` does not set one.
@@ -196,15 +248,16 @@ Rules:
 
 | Glyph | Meaning | Where |
 |---|---|---|
-| `▎` | Rail | User messages, editor, expanded cards, open thinking |
-| `●` `✓` `✗` `⊘` | Running · done · failed · denied or cancelled | Step rows, delegations sheet |
+| `▎` | Rail | User messages, editor, expanded cards, open thinking and summaries |
+| `●` `✓` `✗` `⊘` | Running · done · failed · denied or cancelled | Step rows, Agent cards, delegations sheet |
+| `○` | No longer observable | Agent cards |
 | `∴` | Thinking | Folded thinking row |
 | `▸` `▾` | Folded · open group; footer identity | Turn groups, footer start |
-| `│` | Output or quote | Live tool output, failure message |
-| `└` | Reason | Under a failed step |
+| `│` | Live output or quote | Under a running step, failure message |
+| `─` | Divider | Compaction and summary rows, sheet rules |
 | `→` | Pointer | Selected sheet row |
 | `✓` (pointer column) | Current item | Model, reasoning and Session lists |
-| `↗` | Steering | User message meta |
+| `↗` | Steering | User message meta row |
 | `↰` | Back to parent | Activity line in a child |
 | `…` | Cut text or more lines | Anywhere text is truncated |
 | `⠋` … | Spinner | Activity line only |
@@ -226,20 +279,20 @@ Rules:
 - Title in the top rule, its count or state at the right of the rule.
 - The filter prompt ` > ` directly under the title when the sheet filters.
 - Rows: pointer column (`→` selected, `✓` current, otherwise blank), label,
-  detail right-aligned or in an aligned column. The selected row uses the
-  selection surface.
+  detail right-aligned or in an aligned column; a long label is cut before its
+  detail. The selected row uses the selection surface.
 - Notes (a preview of the selected row) under the list, after one blank row.
-- Keys in the bottom rule, verb after key: `enter open`, `ctrl+n rename`,
+- Keys in the bottom rule, key then verb: `enter open`, `ctrl+n rename`,
   `ctrl+d delete`, `esc close` (or `esc cancel`, `esc back`).
 - Long lists window around the selection with a `(k/n)` counter.
 - Empty lists say what is missing and how to get it, in one row.
 
 ### Full-screen views
 
-Help, Diff, Error details, Context and Session. They follow the same rules,
-scroll with arrows, PageUp/PageDown and the wheel, and `Esc` returns with the
-transcript position intact. `c` copies the view's content when it has one.
-Help filters as you type.
+Help, Diff, Error details, Context and Session start with `← Title`: the arrow
+says Esc goes back. They scroll with arrows, PageUp/PageDown and the wheel, and
+Esc returns with the transcript position intact. `c` copies the view's content
+when it has one. Help filters as you type.
 
 ### Confirmations
 
@@ -254,8 +307,8 @@ confirms; Enter, `n` and Esc cancel.
   an idle draft (Ctrl+Z restores).
 - **Enter** in the editor steers (or resumes a paused Session when empty);
   **Alt+Enter** sends a follow-up. A slash command runs instead of being sent.
-- **Click** toggles what it hits: a step row, card, group row or failure.
-  Dragging always selects instead of toggling.
+- **Click** toggles what it hits: a step row or card, a thinking row, a group
+  row, a failure. Dragging always selects instead of toggling.
 - **Ctrl+O** is the one global expand/fold; Ctrl+T hides or shows thinking.
 - Commands with fixed choices open their choices when run without an argument;
   invalid arguments keep the draft and say what is valid.
@@ -271,7 +324,7 @@ confirms; Enter, `n` and Esc cancel.
 | steer, follow-up | next-step message, queue message |
 | queued | pending, waiting (for queue entries) |
 | Session, Agent, Turn | chat, bot, run |
-| delegation, child Session | subtask, sub-agent session |
+| delegation, child Session, later send | subtask, sub-agent session, receipt |
 | `esc close`, `esc cancel`, `esc back` | `esc to return`, `press esc` |
 | `1 tool`, `2 tools`, `N lines`, `N files changed` | `N tool(s)` |
 | completed, failed, cancelled | done, error, aborted |
@@ -284,12 +337,15 @@ confirms; Enter, `n` and Esc cancel.
 ## Checklist for a visible change
 
 1. Does it fit one of the block shapes, the sheet template or a view?
-2. Does it add colour? Use a glyph instead, unless it marks the user or a
+2. Does it sit on the grid: glyphs and rails in column 0, text in column 2?
+3. Does it keep the vertical rhythm: one blank row between blocks, none between
+   steps, never two blank rows anywhere?
+4. Does it add colour? Use a glyph instead, unless it marks the user or a
    failure.
-3. Is every hint actionable now, and is it in the activity line or a sheet rule?
-4. Does it read correctly at 60 columns, with CJK text and with `NO_COLOR`?
-5. Is the reading position preserved when it appears, changes or folds?
-6. Are selection and copy limited to content (glyphs, rails and hints are
+5. Is every hint actionable now, and is it in the activity line or a sheet rule?
+6. Does it read correctly at 60 columns, with CJK text and with `NO_COLOR`?
+7. Is the reading position preserved when it appears, changes or folds?
+8. Are selection and copy limited to content (glyphs, rails and hints are
    chrome)?
-7. Update snapshots, F1 help, [keybindings.md](keybindings.md), README and the
+9. Update snapshots, F1 help, [keybindings.md](keybindings.md), README and the
    changelog; update this document if a rule changed.

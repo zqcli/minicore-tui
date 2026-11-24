@@ -73,6 +73,8 @@ struct BlockMeta {
     history: Vec<HistorySource>,
     user: Option<UserIdentity>,
     grouping: Grouping,
+    /// Drawn inside an Agent card: a later send into its child or its result.
+    absorbed: bool,
 }
 
 impl Default for BlockMeta {
@@ -82,6 +84,7 @@ impl Default for BlockMeta {
             history: Vec::new(),
             user: None,
             grouping: Grouping::None,
+            absorbed: false,
         }
     }
 }
@@ -126,11 +129,8 @@ pub struct GroupSummary {
 /// a folded tool row or a thinking-only response.
 pub(crate) fn is_row(block: &Block, expanded: bool) -> bool {
     match block {
-        Block::Tool(call) => {
-            call.agent_card.is_none()
-                && !call.is_delegation_receipt()
-                && !call.is_expanded(expanded)
-        }
+        // A folded Agent card is one row too, and stacks with the steps.
+        Block::Tool(call) => !call.is_delegation_receipt() && !call.is_expanded(expanded),
         Block::Assistant {
             text, reasoning, ..
         } => !expanded && text.trim().is_empty() && !reasoning.trim().is_empty(),
@@ -185,6 +185,94 @@ impl Transcript {
 
     pub fn len(&self) -> usize {
         self.blocks.len()
+    }
+
+    /// Whether the block is shown inside an Agent card rather than on its own.
+    pub fn absorbed(&self, index: usize) -> bool {
+        self.metadata.get(index).is_some_and(|meta| meta.absorbed)
+    }
+
+    /// One card per delegation: later sends into a child and the result it
+    /// delivers belong to the card of the call that started it, when that card
+    /// is loaded. Otherwise they keep their own blocks.
+    pub fn link_delegations(&mut self) {
+        use std::collections::HashMap;
+        let mut by_session: HashMap<String, usize> = HashMap::new();
+        // A task message names its card only within the same child Session.
+        let mut by_task: HashMap<(String, String), usize> = HashMap::new();
+        let mut sends: HashMap<usize, usize> = HashMap::new();
+        let mut results: HashMap<usize, String> = HashMap::new();
+        let mut absorbed = vec![false; self.blocks.len()];
+        for (index, block) in self.blocks.iter().enumerate() {
+            match block {
+                Block::Tool(call) if call.agent_card.is_some() => {
+                    let card = call.agent_card.as_deref().expect("checked");
+                    let session = card.key.child.session_id.to_string();
+                    by_task.insert(
+                        (session.clone(), card.key.task_message_id.to_string()),
+                        index,
+                    );
+                    by_session.insert(session, index);
+                }
+                Block::Tool(call) if call.is_delegation_receipt() => {
+                    let Some(card) = call
+                        .delegations
+                        .first()
+                        .and_then(|first| by_session.get(&first.child.session_id.to_string()))
+                        .copied()
+                    else {
+                        continue;
+                    };
+                    absorbed[index] = true;
+                    *sends.entry(card).or_default() += 1;
+                    for association in &call.delegations {
+                        by_task.insert(
+                            (
+                                association.child.session_id.to_string(),
+                                association.task_message_id.to_string(),
+                            ),
+                            card,
+                        );
+                    }
+                }
+                Block::User {
+                    kind: UserKind::Delegated,
+                    text,
+                    ..
+                } => {
+                    let Some(summary) = crate::ui::delegated::summary(text) else {
+                        continue;
+                    };
+                    let card = summary
+                        .task_message_id
+                        .and_then(|task| by_task.get(&(summary.session_id.clone(), task)))
+                        .or_else(|| by_session.get(&summary.session_id));
+                    if let Some(&card) = card {
+                        absorbed[index] = true;
+                        results.insert(card, text.clone());
+                    }
+                }
+                _ => {}
+            }
+        }
+        for (index, absorbed) in absorbed.into_iter().enumerate() {
+            let mut changed = self.metadata[index].absorbed != absorbed;
+            self.metadata[index].absorbed = absorbed;
+            if let Block::Tool(call) = &mut self.blocks[index]
+                && let Some(card) = call.agent_card.as_deref_mut()
+            {
+                let sent = sends.get(&index).copied().unwrap_or(0);
+                let result = results.remove(&index);
+                if card.sends != sent || card.result != result {
+                    card.sends = sent;
+                    card.result = result;
+                    changed = true;
+                }
+            }
+            if changed {
+                self.bump(index);
+            }
+        }
     }
 
     pub fn grouping(&self, index: usize) -> &Grouping {

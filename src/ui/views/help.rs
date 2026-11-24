@@ -142,7 +142,7 @@ const KEYS: &[KeyRow] = &[
     },
     KeyRow {
         keys: "agent card: click / footer",
-        action: "fold preview / open child; later sends link to the original card",
+        action: "open the card / its footer opens the child; later sends and the result live in it",
     },
     KeyRow {
         keys: "f8",
@@ -151,6 +151,10 @@ const KEYS: &[KeyRow] = &[
     KeyRow {
         keys: "ctrl+b, /children",
         action: "delegations of this conversation; enter opens the child, esc comes back",
+    },
+    KeyRow {
+        keys: "∴ thinking: click",
+        action: "open or fold that thinking",
     },
     KeyRow {
         keys: "turn summary: click",

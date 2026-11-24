@@ -30,6 +30,11 @@ pub struct AgentCard {
     pub observation_error: Option<String>,
     pub truncated: bool,
     pub historical: bool,
+    /// The settled result notification delivered to the parent, once it is
+    /// in the parent's transcript; the card shows it instead of a second card.
+    pub result: Option<String>,
+    /// Later inputs sent into this child from the parent.
+    pub sends: usize,
 }
 
 impl AgentCard {
@@ -50,6 +55,8 @@ impl AgentCard {
             observation_error: None,
             truncated: false,
             historical: false,
+            result: None,
+            sends: 0,
         }
     }
 

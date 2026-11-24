@@ -390,6 +390,7 @@ impl App {
                     return;
                 };
                 call.agent_card = Some(card);
+                session.transcript.link_delegations();
             }
             None => observer.card = Some(card),
         }

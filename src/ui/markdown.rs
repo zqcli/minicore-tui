@@ -488,16 +488,27 @@ impl Builder<'_> {
                 border,
             ))
         };
+        let rows: Vec<Vec<Vec<Line<'static>>>> = table
+            .rows
+            .iter()
+            .map(|row| {
+                (0..columns)
+                    .map(|column| {
+                        let spans = row.get(column).map(Vec::as_slice).unwrap_or_default();
+                        wrap::wrap_spans(spans, widths[column])
+                    })
+                    .collect()
+            })
+            .collect();
+        let height = |cells: &[Vec<Line<'static>>]| cells.iter().map(Vec::len).max().unwrap_or(1);
+        // A rule under the header; between body rows only when a row wraps,
+        // where it shows where one row ends.
+        let body_start = usize::from(table.header);
+        let ruled = rows.iter().skip(body_start).any(|cells| height(cells) > 1);
         let mut lines = vec![rule("┌", "┬", "┐")];
-        for (index, row) in table.rows.iter().enumerate() {
+        for (index, cells) in rows.iter().enumerate() {
             let bold = index == 0 && table.header;
-            let cells: Vec<Vec<Line<'static>>> = (0..columns)
-                .map(|column| {
-                    let spans = row.get(column).map(Vec::as_slice).unwrap_or_default();
-                    wrap::wrap_spans(spans, widths[column])
-                })
-                .collect();
-            let height = cells.iter().map(Vec::len).max().unwrap_or(1);
+            let height = height(cells);
             for line_index in 0..height {
                 let mut spans = vec![Span::styled("│ ", border)];
                 for (column, cell) in cells.iter().enumerate() {
@@ -520,7 +531,7 @@ impl Builder<'_> {
                 spans.push(Span::styled(" │", border));
                 lines.push(Line::from(spans));
             }
-            if index + 1 < table.rows.len() {
+            if index + 1 < rows.len() && (ruled || index + 1 == body_start) {
                 lines.push(rule("├", "┼", "┤"));
             }
         }
@@ -805,7 +816,7 @@ mod tests {
     }
 
     #[test]
-    fn tables_draw_a_full_box_with_bold_headers() {
+    fn tables_draw_a_box_with_bold_headers_and_one_header_rule() {
         let lines = plain("| name | value |\n|---|---|\n| a | 1 |\n| bb | 22 |\n", 60);
         assert_eq!(
             lines,
@@ -814,7 +825,6 @@ mod tests {
                 "│ name │ value │",
                 "├──────┼───────┤",
                 "│ a    │ 1     │",
-                "├──────┼───────┤",
                 "│ bb   │ 22    │",
                 "└──────┴───────┘",
             ]

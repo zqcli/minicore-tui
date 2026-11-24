@@ -18,6 +18,8 @@ const RESULT_ROWS: usize = 12;
 #[derive(Deserialize)]
 struct Notification {
     source: Child,
+    #[serde(default)]
+    task_message_id: Option<String>,
     status: String,
     #[serde(default)]
     results: Vec<Outcome>,
@@ -60,14 +62,17 @@ pub fn is_result(text: &str) -> bool {
     text.starts_with('{') && parse(text).is_some()
 }
 
-/// The result card, or `None` when the text is not a notification.
-pub fn render(
-    text: &str,
-    at: Option<Timestamp>,
-    styles: Styles,
-    width: usize,
-    expanded: bool,
-) -> Option<Vec<Line<'static>>> {
+/// What a result notification says, for the Agent card it belongs to.
+pub struct Summary {
+    pub session_id: String,
+    pub task_message_id: Option<String>,
+    pub outcome: String,
+    pub fault: Option<String>,
+    /// The final answer, or a partial response marked as such.
+    pub answer: Option<String>,
+}
+
+pub fn summary(text: &str) -> Option<Summary> {
     let notification = parse(text)?;
     let last = notification.results.last();
     let outcome = last
@@ -78,6 +83,45 @@ pub fn render(
             "ended"
         })
         .to_owned();
+    let answer = last
+        .and_then(|result| result.output.as_ref())
+        .map(|parts| parts.join("\n\n"))
+        .filter(|answer| !answer.trim().is_empty())
+        .or_else(|| {
+            let partial = last?
+                .partials
+                .iter()
+                .flat_map(|partial| partial.text.iter().cloned())
+                .collect::<Vec<_>>()
+                .join("");
+            (!partial.trim().is_empty()).then(|| format!("{partial}\n\n(partial response)"))
+        });
+    Some(Summary {
+        session_id: notification.source.session_id,
+        task_message_id: notification.task_message_id,
+        outcome,
+        fault: last
+            .and_then(|result| result.fault.as_ref())
+            .map(|fault| fault.message.clone()),
+        answer,
+    })
+}
+
+/// The result card, or `None` when the text is not a notification.
+pub fn render(
+    text: &str,
+    at: Option<Timestamp>,
+    styles: Styles,
+    width: usize,
+    expanded: bool,
+) -> Option<Vec<Line<'static>>> {
+    let Summary {
+        session_id,
+        outcome,
+        fault,
+        answer,
+        ..
+    } = summary(text)?;
     let (rail, surface, tone) = match outcome.as_str() {
         "completed" => (
             styles.card_success_rail(),
@@ -92,7 +136,7 @@ pub fn render(
         _ => (styles.card_rail(), styles.card(), styles.meta()),
     };
     let row = |spans: Vec<Span<'static>>| surface_row(rail, surface, spans, width);
-    let short: String = notification.source.session_id.chars().take(6).collect();
+    let short: String = session_id.chars().take(6).collect();
     let mut header = vec![
         Span::styled("↳ Delegated result", styles.bold()),
         Span::styled(format!(" · Session {short} · "), styles.meta()),
@@ -108,23 +152,10 @@ pub fn render(
         }
     }
     let mut lines = vec![row(padded(header))];
-    let answer = last
-        .and_then(|result| result.output.as_ref())
-        .map(|parts| parts.join("\n\n"))
-        .filter(|answer| !answer.trim().is_empty())
-        .or_else(|| {
-            let partial = last?
-                .partials
-                .iter()
-                .flat_map(|partial| partial.text.iter().cloned())
-                .collect::<Vec<_>>()
-                .join("");
-            (!partial.trim().is_empty()).then(|| format!("{partial}\n\n(partial response)"))
-        });
     let mut body = Vec::new();
-    if let Some(fault) = last.and_then(|result| result.fault.as_ref()) {
+    if let Some(fault) = &fault {
         body.extend(wrap::wrapped(
-            &wrap::sanitize(&fault.message),
+            &wrap::sanitize(fault),
             text_width(width),
             styles.failure(),
         ));

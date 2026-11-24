@@ -126,6 +126,7 @@ impl Transcript {
         }
         if added {
             self.sort_history();
+            self.link_delegations();
             // An older page can add steps to a Turn whose end is already here.
             let mut turns: Vec<&TurnId> = records
                 .iter()

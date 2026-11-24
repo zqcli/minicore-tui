@@ -99,9 +99,13 @@ pub fn dock(app: &App, styles: Styles, width: u16, height: u16) -> Dock {
             above.push(padded(error, width, styles.failure()));
         }
     }
-    // The activity row is always there, so the editor never moves when work
-    // starts, a notice comes or a flash goes.
-    above.push(activity_line(app, styles, width));
+    // The activity row appears only with something to say, so an idle screen
+    // has one blank row above the editor like every other gap. The editor is
+    // pinned to the bottom; only the transcript gives up the row.
+    let activity = activity_line(app, styles, width);
+    if spans_width(&activity.spans) > 0 {
+        above.push(activity);
+    }
     let (mut editor, cursor) = composer::render(
         app.active_editor(),
         styles,
@@ -155,10 +159,11 @@ pub fn spinner(elapsed: Duration) -> &'static str {
 /// A dim row with one cell of padding on each side, cut to one line.
 fn padded(text: &str, width: u16, style: Style) -> Line<'static> {
     let text = wrap::sanitize(&text.replace('\n', " ")).into_owned();
+    // Text in the content column, like the activity line's.
     Line::from(vec![
-        Span::raw(" "),
+        Span::raw("  "),
         Span::styled(
-            wrap::truncate(&text, usize::from(width).saturating_sub(2)),
+            wrap::truncate(&text, usize::from(width).saturating_sub(3)),
             style,
         ),
     ])
@@ -222,7 +227,7 @@ fn activity_line(app: &App, styles: Styles, width: u16) -> Line<'static> {
     let flash = app
         .flash
         .as_ref()
-        .map(|(text, _)| vec![Span::raw(" "), Span::styled(text.clone(), styles.text())]);
+        .map(|(text, _)| vec![Span::raw("  "), Span::styled(text.clone(), styles.text())]);
     let left = working_line(app, styles)
         .or(flash)
         .or_else(|| {
@@ -343,8 +348,8 @@ fn working_line(app: &App, styles: Styles) -> Option<Vec<Span<'static>>> {
             extras.push(super::blocks::plural(live.state.tool_rounds, "tool round"));
         }
     }
+    // The spinner in the glyph column, its text in the content column.
     let mut spans = vec![
-        Span::raw(" "),
         Span::styled(spinner(app.started.elapsed()), styles.accent()),
         Span::raw(" "),
         Span::styled(text.to_owned(), styles.dim()),
@@ -375,7 +380,7 @@ fn notice_spans(notice: &Notice, styles: Styles) -> Vec<Span<'static>> {
         NoticeLevel::Info => styles.dim(),
     };
     let text = wrap::sanitize(&notice.text.replace('\n', " ")).into_owned();
-    let mut spans = vec![Span::raw(" "), Span::styled(text, style)];
+    let mut spans = vec![Span::raw("  "), Span::styled(text, style)];
     if notice.level == NoticeLevel::Error {
         spans.push(Span::styled(" · /error", styles.faint()));
     }

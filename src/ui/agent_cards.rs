@@ -13,9 +13,6 @@ use crate::transcript::agent_card::AgentCard;
 use crate::transcript::{Block, ToolCall, ToolState};
 use crate::wrap;
 
-pub const COLLAPSED_ROWS: usize = 6;
-pub const EXPANDED_ROWS: usize = 18;
-
 pub fn render(
     call: &ToolCall,
     styles: Styles,
@@ -26,95 +23,308 @@ pub fn render(
     let Some(card) = call.agent_card.as_deref() else {
         return receipt(call, styles, width, expanded);
     };
+    if expanded {
+        card_rows(card, styles, width, reasoning)
+    } else {
+        folded(card, styles, width)
+    }
+}
+
+/// The whole delegation as one step row: task on the left, who and how far on
+/// the right; while it runs, its newest activity underneath.
+fn folded(card: &AgentCard, styles: Styles, width: usize) -> Vec<Line<'static>> {
+    let (glyph, glyph_style) = glyph(card, styles);
+    let mut right = vec![Span::styled(facts(card, false), styles.meta())];
+    let state = status(card);
+    right.push(Span::styled(" · ", styles.meta()));
+    right.push(Span::styled(state, state_style(card, styles)));
+    let left = vec![
+        chrome_span(Span::styled(format!("{glyph} "), glyph_style)),
+        Span::styled("agent  ", styles.tool_title()),
+        Span::styled(task(card), styles.tool_output()),
+    ];
+    let mut lines = vec![Line::from(blocks::row_spans(left, right, width))];
+    if card.outcome().is_none() && !card.history_unavailable {
+        let activity = activity_rows(card, styles);
+        let start = activity.len().saturating_sub(LIVE_ROWS);
+        for (glyph, glyph_style, text) in &activity[start..] {
+            lines.push(Line::from(vec![
+                chrome_span(Span::styled("  │ ", styles.meta())),
+                chrome_span(Span::styled(format!("{glyph} "), *glyph_style)),
+                Span::styled(
+                    wrap::truncate(text, width.saturating_sub(7)),
+                    styles.tool_output(),
+                ),
+            ]));
+        }
+    }
+    lines
+}
+
+/// The opened card: the same task and state, then what the child did, its
+/// answer and the way into its Session.
+fn card_rows(
+    card: &AgentCard,
+    styles: Styles,
+    width: usize,
+    reasoning: bool,
+) -> Vec<Line<'static>> {
     let (rail, surface) = match card.outcome() {
-        Some(TurnOutcome::Completed) => (styles.card_success_rail(), styles.card_success()),
+        Some(TurnOutcome::Completed) | None => (styles.card_rail(), styles.card()),
         Some(_) => (styles.card_failure_rail(), styles.card_failure()),
-        None => (styles.card_rail(), styles.card()),
-    };
-    let row = |line: Line<'static>| {
-        surface_row(
-            rail,
-            surface,
-            std::iter::once(Span::raw(" ")).chain(line.spans).collect(),
-            width,
-        )
     };
     let inner = blocks::text_width(width);
+    let row = |spans: Vec<Span<'static>>| surface_row(rail, surface, blocks::padded(spans), width);
+    let blank = || chrome(surface_row(rail, surface, Vec::new(), width));
+    let label = |text: &str| chrome(row(vec![Span::styled(text.to_owned(), styles.dim())]));
+
+    let (glyph, glyph_style) = glyph(card, styles);
+    let state = status(card);
+    let title = wrap::truncate(&task(card), inner.saturating_sub(wrap::width(&state) + 4));
+    let pad = inner.saturating_sub(wrap::width(&title) + wrap::width(&state) + 2);
+    let mut lines = vec![
+        chrome(row(vec![
+            Span::styled(title, styles.tool_title()),
+            Span::raw(" ".repeat(pad)),
+            Span::styled(format!("{glyph} "), glyph_style),
+            Span::styled(state, state_style(card, styles)),
+        ])),
+        chrome(row(vec![Span::styled(
+            wrap::truncate(&facts(card, true), inner),
+            styles.meta(),
+        )])),
+    ];
+
+    // The rest of a multi-line task, which the title cuts.
+    let rest: Vec<&str> = card
+        .task
+        .lines()
+        .skip(1)
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+    if !rest.is_empty() {
+        lines.push(blank());
+        for text in rest.iter().take(TASK_ROWS) {
+            lines.push(row(vec![Span::styled(
+                wrap::truncate(&wrap::sanitize(text), inner),
+                styles.dim(),
+            )]));
+        }
+        if rest.len() > TASK_ROWS {
+            lines.push(chrome(row(vec![Span::styled(
+                format!("… {} more lines", rest.len() - TASK_ROWS),
+                styles.faint(),
+            )])));
+        }
+    }
+
+    let activity = activity_rows(card, styles);
+    if !activity.is_empty() || card.truncated {
+        lines.push(blank());
+        lines.push(label("Activity"));
+        let start = activity.len().saturating_sub(ACTIVITY_ROWS);
+        let earlier = start + usize::from(card.truncated);
+        if earlier > 0 {
+            lines.push(chrome(row(vec![Span::styled(
+                if card.truncated {
+                    "… earlier steps".to_owned()
+                } else {
+                    format!("… {start} earlier steps")
+                },
+                styles.faint(),
+            )])));
+        }
+        for (glyph, glyph_style, text) in &activity[start..] {
+            lines.push(row(vec![
+                chrome_span(Span::styled(format!("{glyph} "), *glyph_style)),
+                Span::styled(
+                    wrap::truncate(text, inner.saturating_sub(2)),
+                    styles.tool_output(),
+                ),
+            ]));
+        }
+    }
+
+    let (heading, body) = answer(card, inner, reasoning, styles);
+    if !body.is_empty() {
+        lines.push(blank());
+        lines.push(label(heading));
+        let hidden = body.len().saturating_sub(ANSWER_ROWS);
+        for line in body.into_iter().take(ANSWER_ROWS) {
+            lines.push(row(line.spans));
+        }
+        if hidden > 0 {
+            lines.push(chrome(row(vec![Span::styled(
+                format!("… {hidden} more lines · open the child Session"),
+                styles.faint(),
+            )])));
+        }
+    }
+
+    let footer = if card.history_unavailable {
+        "Child history unavailable · this card keeps what was observed"
+    } else if card.observation_error.is_some() {
+        "Observation incomplete · open the child Session (click or /child)"
+    } else {
+        "Open the child Session · click or /child"
+    };
+    lines.push(blank());
+    lines.push(chrome(row(vec![Span::styled(
+        wrap::truncate(footer, inner),
+        styles.meta(),
+    )])));
+    lines
+}
+
+const LIVE_ROWS: usize = 3;
+const TASK_ROWS: usize = 4;
+const ACTIVITY_ROWS: usize = 8;
+const ANSWER_ROWS: usize = 16;
+
+/// The card's one-line name: the task's first line.
+fn task(card: &AgentCard) -> String {
+    let first = card
+        .task
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or("");
+    if first.is_empty() {
+        "delegated task".to_owned()
+    } else {
+        wrap::sanitize(first.trim()).into_owned()
+    }
+}
+
+/// `Assistant · 2 tool rounds`, and in the open card also the Session and
+/// later sends.
+fn facts(card: &AgentCard, full: bool) -> String {
     let label = card
         .agent_name
         .as_deref()
         .map(str::to_owned)
         .unwrap_or_else(|| short(card.key.child.agent_id.as_str()));
-    let label = wrap::truncate(&wrap::sanitize(&label), 20);
-    let state = status(card);
-    let state = if inner < 18 && state == "approval required" {
-        "approval".into()
-    } else {
-        state
-    };
-    let state = wrap::truncate(&state, inner);
-    // The task is what people recognise; identifiers are secondary facts.
-    let task = if card.task.is_empty() {
-        "input accepted".to_owned()
-    } else {
-        wrap::sanitize(card.task.lines().next().unwrap_or("")).into_owned()
-    };
-    let title = wrap::truncate(&task, inner.saturating_sub(wrap::width(&state) + 1));
-    let padding = inner.saturating_sub(wrap::width(&title) + wrap::width(&state));
-    let mut facts = vec![
-        format!("Agent {label}"),
-        format!("Session {}", short(card.key.child.session_id.as_str())),
-    ];
+    let mut facts = vec![wrap::truncate(&wrap::sanitize(&label), 20)];
+    if full {
+        facts.push(format!(
+            "Session {}",
+            short(card.key.child.session_id.as_str())
+        ));
+    }
     if let Some((_, turn)) = &card.turn
         && turn.tool_rounds > 0
     {
+        facts.push(blocks::plural(turn.tool_rounds, "tool round"));
+    }
+    if full && card.sends > 0 {
         facts.push(format!(
-            "{} tool round{}",
-            turn.tool_rounds,
-            if turn.tool_rounds == 1 { "" } else { "s" }
+            "{} later send{}",
+            card.sends,
+            if card.sends == 1 { "" } else { "s" }
         ));
     }
-    if let Some(Block::Tool(current)) = card.transcript.blocks().last()
-        && matches!(current.state, ToolState::Pending | ToolState::Running)
+    facts.join(" · ")
+}
+
+fn glyph(card: &AgentCard, styles: Styles) -> (&'static str, ratatui::style::Style) {
+    match card.outcome() {
+        Some(TurnOutcome::Completed) => ("✓", styles.success()),
+        Some(TurnOutcome::Failed) => ("✗", styles.failure()),
+        Some(TurnOutcome::Cancelled) => ("⊘", styles.meta()),
+        None if needs_input(card) => ("●", styles.warning()),
+        None if card.history_unavailable || card.historical => ("○", styles.meta()),
+        None => ("●", styles.accent()),
+    }
+}
+
+fn state_style(card: &AgentCard, styles: Styles) -> ratatui::style::Style {
+    match card.outcome() {
+        Some(TurnOutcome::Failed) => styles.failure(),
+        None if needs_input(card) => styles.warning(),
+        _ => styles.meta(),
+    }
+}
+
+fn needs_input(card: &AgentCard) -> bool {
+    card.state
+        .as_ref()
+        .is_some_and(|state| !state.data.pending_interactions.is_empty())
+}
+
+/// One entry per child tool call, oldest first: its glyph and `name subject`.
+fn activity_rows(
+    card: &AgentCard,
+    styles: Styles,
+) -> Vec<(&'static str, ratatui::style::Style, String)> {
+    card.transcript
+        .blocks()
+        .iter()
+        .filter_map(|block| match block {
+            Block::Tool(call) => {
+                let (glyph, style) = blocks::tool_glyph(call, styles);
+                Some((glyph, style, blocks::one_line(&activity(call))))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// The child's answer: the delivered result when the parent has it, else the
+/// latest response it observed; a failure leads with its reason.
+fn answer(
+    card: &AgentCard,
+    width: usize,
+    reasoning: bool,
+    styles: Styles,
+) -> (&'static str, Vec<Line<'static>>) {
+    let mut body = Vec::new();
+    let delivered = card.result.as_deref().and_then(super::delegated::summary);
+    let fault = delivered
+        .as_ref()
+        .and_then(|summary| summary.fault.clone())
+        .or_else(|| card.fault().map(str::to_owned));
+    if let Some(fault) = fault {
+        body.extend(wrap::wrapped(
+            &wrap::sanitize(&fault),
+            width,
+            styles.failure(),
+        ));
+    }
+    let settled = card.outcome().is_some() || delivered.is_some();
+    let text = delivered
+        .and_then(|summary| summary.answer)
+        .or_else(|| card.transcript.last_answer().map(str::to_owned));
+    // Not being able to watch the child matters only while nothing else is known.
+    if text.is_none()
+        && body.is_empty()
+        && let Some(error) = &card.observation_error
     {
-        facts.push(format!("now {}", activity(current)));
+        body.extend(wrap::wrapped(
+            &wrap::sanitize(error),
+            width,
+            styles.warning(),
+        ));
     }
-    let mut lines = vec![
-        chrome(row(Line::from(vec![
-            Span::styled(title, styles.tool_title()),
-            Span::raw(" ".repeat(padding)),
-            Span::styled(state, styles.meta()),
-        ]))),
-        chrome(row(Line::styled(
-            wrap::truncate(&wrap::sanitize(&facts.join(" · ")), inner),
-            styles.meta(),
-        ))),
-    ];
-    let budget = if expanded {
-        EXPANDED_ROWS
-    } else {
-        COLLAPSED_ROWS
-    };
-    // Rows follow the content up to the budget; empty padding only pushed
-    // the next block away.
-    let mut body = preview(card, inner, budget, reasoning, styles);
-    for line in body.drain(..) {
-        lines.push(row(line));
+    if let Some(text) = text {
+        body.extend(markdown::render(
+            &blocks::reasoning_source(&text),
+            width,
+            &styles,
+            styles.text(),
+        ));
+    } else if reasoning
+        && !settled
+        && let Some(Block::Assistant { reasoning, .. }) = card.transcript.blocks().last()
+        && !reasoning.trim().is_empty()
+    {
+        body.extend(markdown::render(
+            &blocks::reasoning_source(reasoning),
+            width,
+            &styles,
+            blocks::thinking_style(styles),
+        ));
+        return ("Thinking", body);
     }
-    let footer = if card.history_unavailable {
-        "Child history unavailable · retained preview"
-    } else if card.observation_error.is_some() {
-        "Observation incomplete · Open child Session"
-    } else if expanded {
-        "Open child Session (click or /child) · click header to collapse"
-    } else {
-        "Open child Session (click or /child) · click header to expand"
-    };
-    lines.push(chrome(row(Line::styled(
-        wrap::truncate(footer, inner),
-        styles.meta(),
-    ))));
-    lines
+    (if settled { "Result" } else { "Latest response" }, body)
 }
 
 pub fn receipt(
@@ -241,169 +451,6 @@ pub(crate) fn status(card: &AgentCard) -> String {
     .into()
 }
 
-fn preview(
-    card: &AgentCard,
-    width: usize,
-    budget: usize,
-    reasoning: bool,
-    styles: Styles,
-) -> Vec<Line<'static>> {
-    let mut groups = Vec::new();
-    let mut used = 0;
-    if let Some(fault) = card.fault() {
-        let body = markdown::render(
-            &blocks::reasoning_source(crate::transcript::agent_card::tail(
-                fault,
-                crate::transcript::agent_card::PREVIEW_BYTES,
-            )),
-            width,
-            &styles,
-            styles.failure(),
-        );
-        let error_budget = if card.transcript.last_answer().is_some() {
-            (budget / 2).max(2)
-        } else {
-            budget
-        };
-        push_group(&mut groups, &mut used, error_budget, "Error", body, styles);
-    } else if card.transcript.is_empty()
-        && let Some(error) = &card.observation_error
-    {
-        let body = wrap::wrap_line(&wrap::sanitize(error), width)
-            .into_iter()
-            .map(|text| Line::styled(text, styles.warning()))
-            .collect();
-        push_group(
-            &mut groups,
-            &mut used,
-            budget,
-            "Observation unavailable",
-            body,
-            styles,
-        );
-    }
-    if card.outcome() == Some(TurnOutcome::Completed)
-        && let Some(answer) = card.transcript.last_answer()
-    {
-        let body = markdown::render(
-            &blocks::reasoning_source(answer),
-            width,
-            &styles,
-            styles.text(),
-        );
-        push_group(&mut groups, &mut used, budget, "Final answer", body, styles);
-    } else {
-        for block in card.transcript.blocks().iter().rev() {
-            if used >= budget {
-                break;
-            }
-            match block {
-                Block::Assistant {
-                    reasoning: thinking,
-                    text,
-                    partial,
-                    ..
-                } => {
-                    if !text.is_empty() {
-                        let body = markdown::render(
-                            &blocks::reasoning_source(text),
-                            width,
-                            &styles,
-                            styles.text(),
-                        );
-                        push_group(
-                            &mut groups,
-                            &mut used,
-                            budget,
-                            if *partial {
-                                "Partial response"
-                            } else {
-                                "Response"
-                            },
-                            body,
-                            styles,
-                        );
-                    }
-                    if reasoning && !thinking.is_empty() && used < budget {
-                        let body = markdown::render(
-                            &blocks::reasoning_source(thinking),
-                            width,
-                            &styles,
-                            blocks::thinking_style(styles),
-                        );
-                        push_group(&mut groups, &mut used, budget, "Thinking", body, styles);
-                    }
-                }
-                Block::Tool(call) => {
-                    let outcome = match call.state {
-                        ToolState::Pending => "pending",
-                        ToolState::Running => "running",
-                        ToolState::Succeeded => "completed",
-                        ToolState::Failed => "failed",
-                        ToolState::Denied => "denied",
-                        ToolState::Cancelled => "cancelled",
-                    };
-                    let label = format!("{} · {outcome}", activity(call));
-                    let body = if let Some(nested) = call.delegations.first() {
-                        vec![Line::styled(
-                            wrap::truncate(
-                                &format!(
-                                    "Child Session {} · open from this child",
-                                    nested.child.session_id
-                                ),
-                                width,
-                            ),
-                            styles.meta(),
-                        )]
-                    } else if call.state == ToolState::Failed {
-                        // A failure's first line explains it; successful output
-                        // stays in the child Session.
-                        call.output_content()
-                            .into_iter()
-                            .find(|line| !line.trim().is_empty())
-                            .map(|line| {
-                                Line::styled(
-                                    wrap::truncate(&wrap::sanitize(line), width),
-                                    styles.failure(),
-                                )
-                            })
-                            .into_iter()
-                            .collect()
-                    } else {
-                        Vec::new()
-                    };
-                    push_group(&mut groups, &mut used, budget, &label, body, styles);
-                }
-                _ => {}
-            }
-        }
-    }
-    groups.into_iter().rev().flatten().collect()
-}
-
-fn push_group(
-    groups: &mut Vec<Vec<Line<'static>>>,
-    used: &mut usize,
-    budget: usize,
-    label: &str,
-    body: Vec<Line<'static>>,
-    styles: Styles,
-) {
-    let remaining = budget.saturating_sub(*used);
-    if remaining == 0 {
-        return;
-    }
-    let take = body.len().min(remaining.saturating_sub(1));
-    let skipped = body.len() - take;
-    let mut group = vec![Line::from(chrome_span(Span::styled(
-        wrap::sanitize(&format!("[{label}]")).into_owned(),
-        styles.meta(),
-    )))];
-    group.extend(body.into_iter().skip(skipped));
-    *used += group.len();
-    groups.push(group);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -463,30 +510,7 @@ mod tests {
         });
     }
 
-    #[test]
-    fn a_successful_startup_receipt_is_not_child_completion() {
-        let mut call = call();
-        assert_eq!(
-            status(call.agent_card.as_ref().unwrap()),
-            "accepted · observing child"
-        );
-        let card = call.agent_card.as_mut().unwrap();
-        card.history_unavailable = true;
-        assert_eq!(status(card), "history unavailable");
-        let rows = render(&call, styles(), 80, false, true);
-        assert!(
-            rows.last()
-                .unwrap()
-                .to_string()
-                .contains("history unavailable")
-        );
-    }
-
-    #[test]
-    fn preview_rows_stay_bounded_after_wrapping_and_resize() {
-        let mut call = call();
-        let card = call.agent_card.as_mut().unwrap();
-        response(card, (0..40).map(|i| format!("line {i}\n")).collect());
+    fn completed(card: &mut AgentCard) {
         card.association.completion = Some(DelegationTerminalData {
             turns: vec![DelegationTurnOutcome {
                 turn: TurnRef {
@@ -498,35 +522,109 @@ mod tests {
             }],
             discarded_inputs: Vec::new(),
         });
+    }
+
+    fn text(rows: &[Line<'static>]) -> Vec<String> {
+        rows.iter()
+            .map(|row| row.to_string().trim_end().to_owned())
+            .collect()
+    }
+
+    #[test]
+    fn a_successful_startup_receipt_is_not_child_completion() {
+        let mut call = call();
+        assert_eq!(
+            status(call.agent_card.as_ref().unwrap()),
+            "accepted · observing child"
+        );
+        let card = call.agent_card.as_mut().unwrap();
+        card.history_unavailable = true;
+        assert_eq!(status(card), "history unavailable");
+        let rows = render(&call, styles(), 80, true, true);
+        assert!(
+            rows.last()
+                .unwrap()
+                .to_string()
+                .contains("Child history unavailable")
+        );
+    }
+
+    #[test]
+    fn a_folded_card_is_one_row_and_running_adds_its_newest_steps() {
+        let mut call = call();
+        let card = call.agent_card.as_mut().unwrap();
+        for name in ["read", "bash", "edit", "bash"] {
+            let mut tool = ToolCall::new(
+                ToolCallRef {
+                    turn_id: "00000000000000000007".parse().unwrap(),
+                    tool_call_id: format!("{name}{}", card.transcript.len()).into(),
+                },
+                name,
+            );
+            tool.set_state(ToolState::Succeeded);
+            card.transcript.push(Block::Tool(Box::new(tool)));
+        }
+        let running = text(&render(&call, styles(), 80, false, true));
+        assert!(
+            running[0].starts_with("● agent  Read the files"),
+            "{running:?}"
+        );
+        assert!(
+            running[0].ends_with("Reader 日本語 · accepted · observing child"),
+            "{running:?}"
+        );
+        assert_eq!(running[1..], ["  │ ✓ bash", "  │ ✓ edit", "  │ ✓ bash"]);
+
+        completed(call.agent_card.as_mut().unwrap());
+        let done = text(&render(&call, styles(), 80, false, true));
+        assert_eq!(done.len(), 1, "a settled card folds to one row: {done:?}");
+        assert!(done[0].starts_with("✓ agent  Read the files"), "{done:?}");
+        assert!(done[0].ends_with("· completed"), "{done:?}");
+    }
+
+    #[test]
+    fn an_open_card_holds_activity_and_the_delivered_result_within_its_bounds() {
+        let mut call = call();
+        let card = call.agent_card.as_mut().unwrap();
+        response(card, "seen while running".into());
+        completed(card);
+        card.sends = 1;
+        card.result = Some(format!(
+            r#"{{"source":{{"agent_id":"a","session_id":"00000000000000000004"}},"status":"ended","results":[{{"outcome":"completed","output":["{}"]}}]}}"#,
+            (0..40)
+                .map(|i| format!("answer {i}"))
+                .collect::<Vec<_>>()
+                .join("\\n\\n")
+        ));
         for width in [8, 20, 80] {
-            for expanded in [false, true] {
-                let rows = render(&call, styles(), width, expanded, true);
-                let budget = if expanded {
-                    EXPANDED_ROWS
-                } else {
-                    COLLAPSED_ROWS
-                };
-                assert!(rows.len() <= budget + 3);
+            let rows = render(&call, styles(), width, true, true);
+            assert!(
+                rows.iter()
+                    .all(|row| wrap::width(&row.to_string()) == width)
+            );
+            if width == 80 {
+                let rows = text(&rows);
+                assert!(rows[0].starts_with("▎ Read the files"), "{rows:?}");
+                assert!(rows[0].ends_with("✓ completed"), "{rows:?}");
+                assert!(
+                    rows[1].contains("Session 000000 · 1 later send"),
+                    "{rows:?}"
+                );
+                assert!(rows.iter().any(|row| row == "▎ Result"), "{rows:?}");
+                assert!(rows.iter().any(|row| row.contains("answer 0")));
+                assert!(!rows.iter().any(|row| row.contains("seen while running")));
                 assert!(
                     rows.iter()
-                        .all(|row| wrap::width(&row.to_string()) == width)
+                        .any(|row| row.contains("more lines · open the child"))
                 );
-                if width == 80 {
-                    let text = rows
-                        .iter()
-                        .map(ToString::to_string)
-                        .collect::<Vec<_>>()
-                        .join("\n");
-                    assert!(text.contains("Final answer"));
-                    assert!(text.contains("line 39"));
-                    assert!(!text.contains("line 0"));
-                }
+                assert!(rows.last().unwrap().contains("Open the child Session"));
+                assert!(rows.len() <= ANSWER_ROWS + 12, "{}", rows.len());
             }
         }
     }
 
     #[test]
-    fn tool_preview_summarizes_activity_without_output_or_escapes() {
+    fn activity_lists_steps_without_output_or_escapes() {
         let mut call = call();
         let card = call.agent_card.as_mut().unwrap();
         let mut tool = ToolCall::new(
@@ -542,13 +640,66 @@ mod tests {
         let rows = render(&call, styles(), 80, true, true);
         let label = rows
             .iter()
-            .position(|row| row.to_string().contains("[bash · completed]"))
+            .position(|row| row.to_string().trim_end() == "▎ Activity")
             .unwrap();
-        assert!(content_cells(&rows[label]).is_empty());
-        // Successful output stays in the child Session; the card lists activity.
+        assert!(content_cells(&rows[label]).is_empty(), "labels are chrome");
+        assert!(rows[label + 1].to_string().starts_with("▎ ✓ bash"));
+        // Output stays in the child Session; the card lists what was done.
         assert!(rows.iter().all(|row| !row.to_string().contains("first")));
-        assert_eq!(label + 2, rows.len());
         assert_eq!(content_cells(rows.last().unwrap()), 0..0);
         assert!(rows.iter().all(|row| !row.to_string().contains('\u{1b}')));
+    }
+
+    #[test]
+    fn later_sends_and_the_delivered_result_live_in_the_one_card() {
+        use crate::transcript::{Transcript, UserKind};
+        let start = call();
+        let association = start.agent_card.as_ref().unwrap().association.clone();
+        // A later send into the same child: a receipt from another call.
+        let mut send = ToolCall::new(
+            ToolCallRef {
+                turn_id: "00000000000000000001".parse().unwrap(),
+                tool_call_id: "send".to_owned().into(),
+            },
+            "agent",
+        );
+        send.set_state(ToolState::Succeeded);
+        send.delegations.push(DelegationAssociation {
+            task_message_id: "00000000000000000008".parse().unwrap(),
+            ..association
+        });
+        let result = |session: &str| Block::User {
+            text: format!(
+                r#"{{"source":{{"agent_id":"a","session_id":"{session}"}},"task_message_id":"00000000000000000008","status":"ended","results":[{{"outcome":"completed","output":["done"]}}]}}"#
+            ),
+            kind: UserKind::Delegated,
+            at: None,
+        };
+        let mut transcript = Transcript::default();
+        transcript.push(Block::Tool(Box::new(start)));
+        transcript.push(Block::Tool(Box::new(send)));
+        transcript.push(result("00000000000000000004"));
+        transcript.push(result("00000000000000000099"));
+        transcript.link_delegations();
+        assert!(!transcript.absorbed(0));
+        assert!(transcript.absorbed(1), "the later send is in the card");
+        assert!(transcript.absorbed(2), "the result is in the card");
+        assert!(
+            !transcript.absorbed(3),
+            "another child's result keeps its block"
+        );
+        let Block::Tool(card) = &transcript.blocks()[0] else {
+            unreachable!()
+        };
+        let card = card.agent_card.as_deref().unwrap();
+        assert_eq!(card.sends, 1);
+        assert!(card.result.as_deref().unwrap().contains("\"done\""));
+        let before: Vec<u64> = transcript.revisions().collect();
+        transcript.link_delegations();
+        assert_eq!(
+            transcript.revisions().collect::<Vec<_>>(),
+            before,
+            "linking again changes nothing"
+        );
     }
 }

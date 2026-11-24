@@ -106,10 +106,11 @@ edits; Ctrl+Z and Ctrl+Y restore or replay them.
   `▸ Worked … · N tools`, keeping failures visible. Blank lines inside tool
   output remain intact. See [docs/ui-spec.md](docs/ui-spec.md) for the visual
   rules.
-- **Delegated Agent cards:** the original startup card keeps streaming the
-  child's recent conversation after the tool returns. Later sends link back to
-  that card; a new delegation into the same Session gets a new card. Click the
-  card to expand its preview or its footer to open the child Session. Completion
+- **Delegated Agent cards:** one card per delegation, on the call that started
+  it. Folded it is one row with the child's newest steps while it runs; opened
+  it shows the task, activity and the delivered result. Later sends and the
+  result are drawn inside it; a new delegation into the same Session gets a new
+  card. Click the row to open the card and its footer to open the child Session. Completion
   comes from Host's settled delegation, not tool acceptance. Released child
   history is explicitly unavailable; retained previews are not full histories.
   Ctrl+B or `/children` lists the conversation's delegations and opens one.

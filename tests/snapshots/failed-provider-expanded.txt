@@ -1,9 +1,7 @@
-  ╭─ minicore-tui 0.12.11 ───────────────────────────────────────────────────╮
-  │ /work/minicore-tui                                                       │
-  │ f1 keys and commands · / commands · @ files                              │
-  ╰──────────────────────────────────────────────────────────────────────────╯
 
+ ▎
  ▎ Summarise the changes
+ ▎
 
    failed · 47s · 2 tool rounds
    │ Rate limit reached for gpt-6-luna in organization org-7Zq on tokens per
@@ -11,6 +9,8 @@
    │ Please try again in 8.524s. Visit
    │ https://platform.example/account/rate-limits to learn more.
 
-
- ▎Ask anything · / commands · @ files
+ ▎
+ ▎
+ ▎
+ ▎
  ▸ minicore-tui · Cache the parser               gpt 6 luna · max · approval ask

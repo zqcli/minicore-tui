@@ -1,20 +1,20 @@
-  ╭─ minicore-tui 0.12.11 ──────────────────────────────────────────╮
-  │ /work/minicore-tui                                              │
-  │ f1 keys and commands · / commands · @ files                     │
-  ╰─────────────────────────────────────────────────────────────────╯
 
+ ▎
  ▎ Why does the parser re-parse the whole message on every delta?
+ ▎
 
-  ∴ The layout cache only keyed on the block revision...
+ ∴ The layout cache only keyed on the block revision...
 
    It does not any more. The streaming renderer keeps the stable
    prefix and re-renders only the tail, so a delta costs one small
    parse.
 
-  ✓ bash   cargo test --lib                                      4.2s
+ ✓ bash   cargo test --lib                                       4.2s
 
    completed in 12s · 2 requests · 1 tool round · 2 files changed (+4…
 
-
- ▎Ask anything · / commands · @ files
+ ▎
+ ▎
+ ▎
+ ▎
  ▸ minicore-tui · Cache the parser     gpt 6 luna · max · approval ask
