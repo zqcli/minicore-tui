@@ -316,12 +316,10 @@ impl App {
         let Some(session) = self.resident.current_mut() else {
             return;
         };
-        // A group's summary row is its first row: a click opens or closes it.
-        if line == header
-            && matches!(
-                session.transcript.grouping(index),
-                crate::transcript::Grouping::Head { .. }
-            )
+        // A group's summary row is its first row: a click opens or closes it;
+        // closed, the newest-step row under it opens it too.
+        if let crate::transcript::Grouping::Head { open, .. } = session.transcript.grouping(index)
+            && (line == header || (!open && !all_expanded))
         {
             session.transcript.toggle_group(index);
             self.pin_view();

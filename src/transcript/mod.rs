@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use minicore_host_protocol::{MessageId, Timestamp, ToolCallRef, TurnId};
 
+pub use agent_card::ParentActions;
 pub use block::{Block, ChangeSummary, RequestKey, UserKind};
 pub use history::{to_markdown, write_markdown};
 pub use tool_call::{EXPANDED_ROWS, ToolCall, ToolKey, ToolState};
@@ -89,22 +90,28 @@ impl Default for BlockMeta {
     }
 }
 
-/// How a finished Turn's process blocks fold into one summary row. The answer
-/// text and failed tools never join a group, so a fold hides only the steps.
+/// How a Turn's work folds. Each run of work between two user messages (a
+/// steer splits a Turn) is one group: its tools, thinking and the notes the
+/// model wrote between tool calls. The text that ends the run is its answer
+/// and stays outside, as do Agent cards.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum Grouping {
     #[default]
     None,
-    /// The Turn's first step row: draws the summary row, then itself when
-    /// open or when it does not fold (a failure leading the Turn).
+    /// The group's first step: draws the summary row and, closed, the latest
+    /// step under it; open, itself.
     Head {
         turn: TurnId,
+        segment: usize,
         summary: GroupSummary,
         open: bool,
-        folds: bool,
     },
     /// A later step: draws nothing while the group is closed.
-    Member { turn: TurnId, open: bool },
+    Member {
+        turn: TurnId,
+        segment: usize,
+        open: bool,
+    },
 }
 
 impl Grouping {
@@ -114,15 +121,39 @@ impl Grouping {
             Self::Head { open, .. } | Self::Member { open, .. } => *open,
         }
     }
+
+    fn key(&self) -> Option<(&TurnId, usize)> {
+        match self {
+            Self::None => None,
+            Self::Head { turn, segment, .. } | Self::Member { turn, segment, .. } => {
+                Some((turn, *segment))
+            }
+        }
+    }
 }
 
-/// `Worked 2m 14s · 18 tools · 3 files changed (+142 −37) · 1 failed`.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// `Worked 2m 14s · 18 tools · 3 files changed (+142 −37) · 1 failed`, and the
+/// newest step for the row under it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct GroupSummary {
+    /// Still running: `Working` instead of `Worked`.
+    pub live: bool,
     pub duration: Option<std::time::Duration>,
     pub tools: usize,
     pub failed: usize,
     pub changes: Option<ChangeSummary>,
+    pub latest: Option<(StepKind, String)>,
+}
+
+/// What the newest step of a group is, for its glyph.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StepKind {
+    Running,
+    Done,
+    Failed,
+    Stopped,
+    Thinking,
+    Note,
 }
 
 /// Whether a block draws as one-line rows that stack without a blank row:
@@ -138,24 +169,61 @@ pub(crate) fn is_row(block: &Block, expanded: bool) -> bool {
     }
 }
 
-/// A step of a Turn's work, as opposed to its answer or a problem to see.
+/// A step of a Turn's work: any tool call without a delegation, or thinking
+/// without text. Notes are found by position, see [`Transcript::regroup`].
 fn is_step(block: &Block) -> bool {
     match block {
-        Block::Tool(call) => {
-            call.agent_card.is_none()
-                && call.delegations.is_empty()
-                && matches!(call.state, ToolState::Succeeded)
-                && call.result_error.is_none()
-                && call.exit_code.is_none_or(|code| code == 0)
-        }
+        Block::Tool(call) => call.agent_card.is_none() && call.delegations.is_empty(),
         Block::Assistant {
-            text,
-            reasoning,
-            streaming: false,
-            partial: false,
-            ..
+            text, reasoning, ..
         } => text.trim().is_empty() && !reasoning.trim().is_empty(),
         _ => false,
+    }
+}
+
+fn failed(call: &ToolCall) -> bool {
+    matches!(call.state, ToolState::Failed)
+        || call.result_error.is_some()
+        || call.exit_code.is_some_and(|code| code != 0)
+}
+
+/// The newest step as one line: its kind and `name subject`, a heading or the
+/// first line of a note.
+fn latest(block: &Block) -> Option<(StepKind, String)> {
+    let first = |text: &str| {
+        text.lines()
+            .map(|line| line.trim().trim_start_matches('#').trim().replace("**", ""))
+            .find(|line| !line.is_empty())
+            .unwrap_or_default()
+    };
+    match block {
+        Block::Tool(call) => {
+            let kind = match call.state {
+                ToolState::Pending | ToolState::Running => StepKind::Running,
+                ToolState::Denied | ToolState::Cancelled => StepKind::Stopped,
+                _ if failed(call) => StepKind::Failed,
+                _ => StepKind::Done,
+            };
+            let detail = call.header_detail();
+            let subject = first(detail.trim_start_matches("$ "));
+            Some((
+                kind,
+                format!("{} {subject}", call.name).trim_end().to_owned(),
+            ))
+        }
+        Block::Assistant {
+            text, reasoning, ..
+        } if text.trim().is_empty() => {
+            let heading = reasoning
+                .lines()
+                .rev()
+                .map(|line| line.trim().replace("**", ""))
+                .find(|line| !line.is_empty())
+                .unwrap_or_default();
+            Some((StepKind::Thinking, heading))
+        }
+        Block::Assistant { text, .. } => Some((StepKind::Note, first(text))),
+        _ => None,
     }
 }
 
@@ -200,7 +268,8 @@ impl Transcript {
         let mut by_session: HashMap<String, usize> = HashMap::new();
         // A task message names its card only within the same child Session.
         let mut by_task: HashMap<(String, String), usize> = HashMap::new();
-        let mut sends: HashMap<usize, usize> = HashMap::new();
+        let mut by_turn: HashMap<TurnId, Vec<usize>> = HashMap::new();
+        let mut parent: HashMap<usize, ParentActions> = HashMap::new();
         let mut results: HashMap<usize, String> = HashMap::new();
         let mut absorbed = vec![false; self.blocks.len()];
         for (index, block) in self.blocks.iter().enumerate() {
@@ -213,6 +282,9 @@ impl Transcript {
                         index,
                     );
                     by_session.insert(session, index);
+                    if let Some(turn) = call.key.turn_id() {
+                        by_turn.entry(turn.clone()).or_default().push(index);
+                    }
                 }
                 Block::Tool(call) if call.is_delegation_receipt() => {
                     let Some(card) = call
@@ -224,7 +296,7 @@ impl Transcript {
                         continue;
                     };
                     absorbed[index] = true;
-                    *sends.entry(card).or_default() += 1;
+                    parent.entry(card).or_default().sends += 1;
                     for association in &call.delegations {
                         by_task.insert(
                             (
@@ -233,6 +305,53 @@ impl Transcript {
                             ),
                             card,
                         );
+                    }
+                }
+                // The parent's other dealings with a child: shown in its card
+                // when they worked, as their own rows when they failed.
+                Block::Tool(call) if call.name == "agent" && call.delegations.is_empty() => {
+                    let Some(arguments) = call.arguments.as_ref() else {
+                        continue;
+                    };
+                    if matches!(
+                        call.state,
+                        ToolState::Failed | ToolState::Denied | ToolState::Cancelled
+                    ) || call.result_error.is_some()
+                    {
+                        continue;
+                    }
+                    let action = arguments.get("action").and_then(|value| value.as_str());
+                    let target = arguments
+                        .pointer("/target/session_id")
+                        .and_then(|value| value.as_str())
+                        .and_then(|session| by_session.get(session))
+                        .copied();
+                    match (action, target) {
+                        (Some("wait"), _) => {
+                            let Some(cards) = call.key.turn_id().and_then(|turn| by_turn.get(turn))
+                            else {
+                                continue;
+                            };
+                            absorbed[index] = true;
+                            for &card in cards {
+                                let actions = parent.entry(card).or_default();
+                                actions.waits += 1;
+                                actions.waited += call.duration.unwrap_or_default();
+                            }
+                        }
+                        (
+                            Some(action @ ("send" | "inspect" | "update" | "control")),
+                            Some(card),
+                        ) => {
+                            absorbed[index] = true;
+                            let actions = parent.entry(card).or_default();
+                            match action {
+                                "send" => actions.sends += 1,
+                                "inspect" => actions.inspections += 1,
+                                _ => actions.changes += 1,
+                            }
+                        }
+                        _ => {}
                     }
                 }
                 Block::User {
@@ -261,10 +380,10 @@ impl Transcript {
             if let Block::Tool(call) = &mut self.blocks[index]
                 && let Some(card) = call.agent_card.as_deref_mut()
             {
-                let sent = sends.get(&index).copied().unwrap_or(0);
+                let actions = parent.remove(&index).unwrap_or_default();
                 let result = results.remove(&index);
-                if card.sends != sent || card.result != result {
-                    card.sends = sent;
+                if card.parent != actions || card.result != result {
+                    card.parent = actions;
                     card.result = result;
                     changed = true;
                 }
@@ -281,8 +400,9 @@ impl Transcript {
             .map_or(&Grouping::None, |meta| &meta.grouping)
     }
 
-    /// Folds a finished Turn's steps under one summary row. A Turn with fewer
-    /// than two successful tools keeps its rows: a summary would not be shorter.
+    /// Folds each run of a Turn's work under one summary row, live or done. A
+    /// run without a tool, or with a single step, keeps its rows: a summary
+    /// would not be shorter.
     pub fn regroup(&mut self, turn: &TurnId) {
         // History blocks carry their Turn on the record source, not the key.
         let turn_of = |index: usize| {
@@ -296,32 +416,10 @@ impl Transcript {
         let members: Vec<usize> = (0..self.blocks.len())
             .filter(|&index| turn_of(index) == Some(turn))
             .collect();
-        let steps: Vec<usize> = members
-            .iter()
-            .copied()
-            .filter(|&index| is_step(&self.blocks[index]))
-            .collect();
-        // The summary leads the first step row, folded or not, so failures
-        // before the first success stay under it rather than above it.
-        let head = members
-            .iter()
-            .copied()
-            .find(|&index| is_row(&self.blocks[index], false));
-        let tools = steps
-            .iter()
-            .filter(|&&index| matches!(self.blocks[index], Block::Tool(_)))
-            .count();
-        let failed = members
-            .iter()
-            .filter(|&&index| {
-                matches!(&self.blocks[index], Block::Tool(call)
-                        if matches!(call.state, ToolState::Failed)
-                            || call.result_error.is_some()
-                            || call.exit_code.is_some_and(|code| code != 0))
-            })
-            .count();
-        let (duration, changes) = self
-            .blocks
+        let (Some(&first), Some(&last)) = (members.first(), members.last()) else {
+            return;
+        };
+        let end = self.blocks[first..=last]
             .iter()
             .rev()
             .find_map(|block| match block {
@@ -332,61 +430,133 @@ impl Transcript {
                     ..
                 } if turn_id == turn => Some((*duration, *changes)),
                 _ => None,
-            })
-            .unwrap_or_default();
-        let open = head.is_some_and(|index| {
-            self.metadata[index].grouping.is_open()
-                && self.metadata[index].grouping != Grouping::None
-        });
-        for index in members {
-            let step = steps.contains(&index);
-            let wanted = if tools < 2 {
-                Grouping::None
-            } else if Some(index) == head {
-                Grouping::Head {
-                    turn: turn.clone(),
-                    summary: GroupSummary {
-                        duration,
-                        tools,
-                        failed,
-                        changes,
-                    },
-                    open,
-                    folds: step,
+            });
+        // A user message inside the Turn (a consumed steer) starts a new run.
+        let mut segments: Vec<Vec<usize>> = vec![Vec::new()];
+        for index in first..=last {
+            if matches!(self.blocks[index], Block::User { .. }) {
+                if !segments.last().is_some_and(Vec::is_empty) {
+                    segments.push(Vec::new());
                 }
-            } else if step {
-                Grouping::Member {
-                    turn: turn.clone(),
-                    open,
+            } else if members.binary_search(&index).is_ok() && !self.metadata[index].absorbed {
+                segments.last_mut().expect("one segment").push(index);
+            }
+        }
+        let count = segments.len();
+        let mut wanted: Vec<(usize, Grouping)> = Vec::new();
+        for (segment, blocks) in segments.into_iter().enumerate() {
+            // Text followed by more work in its run is a note; the last text is
+            // the run's answer and stays visible.
+            let last_step = blocks
+                .iter()
+                .rposition(|&index| is_step(&self.blocks[index]));
+            let steps: Vec<usize> = blocks
+                .iter()
+                .enumerate()
+                .filter(|&(position, &index)| {
+                    is_step(&self.blocks[index])
+                        || (last_step.is_some_and(|last| position < last)
+                            && matches!(&self.blocks[index], Block::Assistant { text, .. }
+                                if !text.trim().is_empty()))
+                })
+                .map(|(_, &index)| index)
+                .collect();
+            let tools = steps
+                .iter()
+                .filter(|&&index| matches!(self.blocks[index], Block::Tool(_)))
+                .count();
+            let grouped = tools >= 1 && steps.len() >= 2;
+            let open = steps.first().is_some_and(|&index| {
+                let current = &self.metadata[index].grouping;
+                current.key() == Some((turn, segment)) && current.is_open()
+            });
+            let final_run = segment + 1 == count;
+            let live = end.is_none() && final_run;
+            // One run is the whole Turn; a run a steer cut is timed from the
+            // message that opened it to the message or end that closed it.
+            let duration = match (blocks.first(), blocks.last()) {
+                _ if live => None,
+                _ if count == 1 => end.and_then(|(duration, _)| duration),
+                (Some(&from), Some(&to)) => {
+                    let opened = (0..from)
+                        .rev()
+                        .find(|&at| matches!(self.blocks[at], Block::User { .. }));
+                    let closed = (to + 1..self.blocks.len()).find(|&at| {
+                        matches!(self.blocks[at], Block::User { .. } | Block::TurnEnd { .. })
+                    });
+                    opened
+                        .zip(closed)
+                        .and_then(|(opened, closed)| self.elapsed(opened, closed))
                 }
-            } else {
-                Grouping::None
+                _ => None,
             };
-            if self.metadata[index].grouping != wanted {
-                self.metadata[index].grouping = wanted;
+            let summary = GroupSummary {
+                live,
+                duration,
+                tools,
+                failed: steps
+                    .iter()
+                    .filter(
+                        |&&index| matches!(&self.blocks[index], Block::Tool(call) if failed(call)),
+                    )
+                    .count(),
+                changes: end.filter(|_| final_run).and_then(|(_, changes)| changes),
+                latest: steps.last().and_then(|&index| latest(&self.blocks[index])),
+            };
+            for &index in &blocks {
+                let grouping = match steps.iter().position(|&step| step == index) {
+                    Some(0) if grouped => Grouping::Head {
+                        turn: turn.clone(),
+                        segment,
+                        summary: summary.clone(),
+                        open,
+                    },
+                    Some(_) if grouped => Grouping::Member {
+                        turn: turn.clone(),
+                        segment,
+                        open,
+                    },
+                    _ => Grouping::None,
+                };
+                wanted.push((index, grouping));
+            }
+        }
+        for (index, grouping) in wanted {
+            if self.metadata[index].grouping != grouping {
+                self.metadata[index].grouping = grouping;
                 self.bump(index);
             }
         }
     }
 
+    /// Recorded time from block `from` to block `to`, when both are saved.
+    fn elapsed(&self, from: usize, to: usize) -> Option<std::time::Duration> {
+        let at = |index: usize| {
+            self.metadata[index]
+                .history
+                .first()
+                .map(|source| crate::ui::blocks::timestamp(source.recorded_at))
+        };
+        let span = at(to)?.duration_since(at(from)?);
+        std::time::Duration::try_from(span).ok()
+    }
+
     /// Opens or closes the group the step at `index` belongs to.
     pub fn toggle_group(&mut self, index: usize) -> bool {
-        let turn = match self.grouping(index) {
-            Grouping::Head { turn, .. } | Grouping::Member { turn, .. } => turn.clone(),
-            Grouping::None => return false,
+        let Some((turn, segment)) = self
+            .grouping(index)
+            .key()
+            .map(|(turn, segment)| (turn.clone(), segment))
+        else {
+            return false;
         };
         for at in 0..self.metadata.len() {
-            match &mut self.metadata[at].grouping {
-                Grouping::Head {
-                    turn: known, open, ..
+            if self.metadata[at].grouping.key() == Some((&turn, segment)) {
+                match &mut self.metadata[at].grouping {
+                    Grouping::Head { open, .. } | Grouping::Member { open, .. } => *open = !*open,
+                    Grouping::None => {}
                 }
-                | Grouping::Member { turn: known, open }
-                    if *known == turn =>
-                {
-                    *open = !*open;
-                    self.metadata[at].revision = next_revision();
-                }
-                _ => {}
+                self.metadata[at].revision = next_revision();
             }
         }
         true
@@ -621,7 +791,7 @@ mod tests {
     }
 
     #[test]
-    fn a_finished_turn_folds_its_successful_steps_and_keeps_failures_out() {
+    fn each_run_of_work_folds_with_its_notes_and_failures_and_keeps_its_answer() {
         let turn: TurnId = "00000000000000000001".parse().unwrap();
         let mut transcript = Transcript::default();
         let tool = |id: &str, state| {
@@ -635,9 +805,63 @@ mod tests {
             call.set_state(state);
             Block::Tool(Box::new(call))
         };
-        transcript.push(tool("a", ToolState::Succeeded));
-        transcript.push(tool("b", ToolState::Failed));
-        transcript.push(tool("c", ToolState::Succeeded));
+        let text = |index: u64, text: &str| Block::Assistant {
+            key: RequestKey::response(turn.clone(), index),
+            reasoning: String::new(),
+            text: text.into(),
+            streaming: false,
+            partial: false,
+            expanded: None,
+        };
+        let user = |text: &str| Block::User {
+            text: text.into(),
+            kind: UserKind::Steering,
+            at: None,
+        };
+        transcript.push(user("go"));
+        transcript.push(tool("a", ToolState::Succeeded)); // 1
+        transcript.push(text(1, "read a, now b")); // 2: a note
+        transcript.push(tool("b", ToolState::Failed)); // 3
+        transcript.push(user("also c")); // 4: a steer
+        transcript.push(tool("c", ToolState::Running)); // 5
+        transcript.push(tool("d", ToolState::Pending)); // 6
+        transcript.push(text(3, "the answer so far")); // 7
+
+        // Live: both runs fold; the last text of each run stays out.
+        transcript.regroup(&turn);
+        let Grouping::Head {
+            summary,
+            open: false,
+            segment: 0,
+            ..
+        } = transcript.grouping(1).clone()
+        else {
+            panic!("{:?}", transcript.grouping(1))
+        };
+        assert_eq!((summary.tools, summary.failed, summary.live), (2, 1, false));
+        assert_eq!(summary.latest, Some((StepKind::Failed, "read".into())));
+        assert!(
+            matches!(transcript.grouping(2), Grouping::Member { segment: 0, .. }),
+            "a note"
+        );
+        assert!(
+            matches!(transcript.grouping(3), Grouping::Member { .. }),
+            "a failure"
+        );
+        let Grouping::Head {
+            summary,
+            segment: 1,
+            ..
+        } = transcript.grouping(5).clone()
+        else {
+            panic!("{:?}", transcript.grouping(5))
+        };
+        assert!(summary.live, "the run still going is Working");
+        assert_eq!(summary.latest, Some((StepKind::Running, "read".into())));
+        assert_eq!(transcript.grouping(7), &Grouping::None, "the answer");
+
+        // Opening one run leaves the other closed, and survives a regroup.
+        assert!(transcript.toggle_group(3));
         transcript.push(Block::TurnEnd {
             turn_id: turn.clone(),
             outcome: minicore_host_protocol::TurnOutcome::Completed,
@@ -650,45 +874,23 @@ mod tests {
             saving: None,
         });
         transcript.regroup(&turn);
+        assert!(transcript.grouping(1).is_open());
         assert!(matches!(
-            transcript.grouping(0),
+            transcript.grouping(5),
             Grouping::Head {
-                summary: GroupSummary {
-                    tools: 2,
-                    failed: 1,
-                    ..
-                },
                 open: false,
-                folds: true,
+                summary: GroupSummary { live: false, .. },
                 ..
             }
         ));
-        assert_eq!(transcript.grouping(1), &Grouping::None);
-        assert!(matches!(
-            transcript.grouping(2),
-            Grouping::Member { open: false, .. }
-        ));
-        assert!(transcript.toggle_group(2));
-        assert!(transcript.grouping(0).is_open());
 
-        // A Turn that starts with a failure: the summary leads that row, which
-        // stays visible while the steps after it fold.
-        let mut failing = Transcript::default();
-        failing.push(tool("d", ToolState::Failed));
-        failing.push(tool("e", ToolState::Succeeded));
-        failing.push(tool("f", ToolState::Succeeded));
-        failing.push(transcript.blocks()[3].clone());
-        failing.regroup(&turn);
-        assert!(matches!(
-            failing.grouping(0),
-            Grouping::Head {
-                folds: false,
-                open: false,
-                ..
-            }
-        ));
-        assert!(matches!(failing.grouping(1), Grouping::Member { .. }));
-        assert!(matches!(failing.grouping(2), Grouping::Member { .. }));
+        // A run with a single step keeps its row.
+        let mut short = Transcript::default();
+        short.push(user("one"));
+        short.push(tool("e", ToolState::Succeeded));
+        short.push(text(0, "done"));
+        short.regroup(&turn);
+        assert_eq!(short.grouping(1), &Grouping::None);
     }
 
     #[test]

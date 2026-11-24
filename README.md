@@ -102,10 +102,10 @@ edits; Ctrl+Z and Ctrl+Y restore or replay them.
   native delegation references. Argument generation is not a separate progress
   phase. Expanded cards and `/diff` expose details without changing execution.
   Folded tools are one row each (state glyph, name, subject, facts) and stack
-  without blank rows; a finished Turn folds its successful steps under
-  `▸ Worked … · N tools`, keeping failures visible. Blank lines inside tool
-  output remain intact. See [docs/ui-spec.md](docs/ui-spec.md) for the visual
-  rules.
+  without blank rows; each run of a Turn's work folds as it goes into
+  `▸ Working · N tools` / `▸ Worked …` with its newest step underneath.
+  Blank lines inside tool output remain intact. See
+  [docs/ui-spec.md](docs/ui-spec.md) for the visual rules.
 - **Delegated Agent cards:** one card per delegation, on the call that started
   it. Folded it is one row with the child's newest steps while it runs; opened
   it shows the task, activity and the delivered result. Later sends and the

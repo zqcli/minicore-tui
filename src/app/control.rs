@@ -474,6 +474,15 @@ impl App {
             ) => self.refresh_control_for(epoch),
         }
         self.advance_outputs(epoch);
+        // The live run folds as it goes, and the parent's dealings with a
+        // child join its card first so they never count as steps. Unchanged
+        // results bump nothing.
+        if let Some(session) = self.resident.get_mut(epoch)
+            && let Some(turn) = session.live.as_ref().map(|live| live.turn_id.clone())
+        {
+            session.transcript.link_delegations();
+            session.transcript.regroup(&turn);
+        }
     }
 
     fn apply_turn_state(&mut self, epoch: u64, source: TurnIdentity, data: TurnStateData) {

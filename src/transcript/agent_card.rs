@@ -33,8 +33,18 @@ pub struct AgentCard {
     /// The settled result notification delivered to the parent, once it is
     /// in the parent's transcript; the card shows it instead of a second card.
     pub result: Option<String>,
-    /// Later inputs sent into this child from the parent.
+    /// What the parent did with this child after starting it.
+    pub parent: ParentActions,
+}
+
+/// The parent's later calls about one child, drawn in its card.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ParentActions {
     pub sends: usize,
+    pub inspections: usize,
+    pub changes: usize,
+    pub waits: usize,
+    pub waited: std::time::Duration,
 }
 
 impl AgentCard {
@@ -56,7 +66,7 @@ impl AgentCard {
             truncated: false,
             historical: false,
             result: None,
-            sends: 0,
+            parent: ParentActions::default(),
         }
     }
 

@@ -187,8 +187,9 @@ Rendering uses per-block revisions and visible-row layout caches. One
 separator row belongs between visible blocks, except between two adjacent step
 rows (folded tools and thinking-only responses), which stack. Zero-row entries
 consume no height or separator, but retain canonical identities for late-output
-suppression. A finished Turn's grouping (head summary row, hidden members, open
-state) is presentation metadata on the transcript; changing it bumps the
+suppression. A Turn's grouping (one group per run between user messages: head summary
+row with the newest step, hidden members, open state) is presentation metadata
+on the transcript, recomputed for the live Turn after each session event; changing it bumps the
 affected blocks' revisions, so the cache needs no separate group key. History
 blocks carry their Turn on the record source, so grouping also applies after
 reopening and after an older page fills in a Turn. Likewise, `link_delegations` marks later

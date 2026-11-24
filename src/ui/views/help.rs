@@ -157,8 +157,8 @@ const KEYS: &[KeyRow] = &[
         action: "open or fold that thinking",
     },
     KeyRow {
-        keys: "turn summary: click",
-        action: "open or fold a finished turn's steps; failed tools always stay visible",
+        keys: "work group: click",
+        action: "list a run's steps, then open a step's card; folds stay in place",
     },
     KeyRow {
         keys: "agent card: /child [n]",

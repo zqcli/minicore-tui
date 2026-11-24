@@ -194,6 +194,7 @@ impl App {
             _ => 1,
         };
         let row = match_row(&lines, &query, found.ordinal).map_or(0, |row| lead + row);
+        self.held = false;
         self.scroll = Scroll::Anchor {
             block: found.block,
             offset: row.saturating_sub(2).try_into().unwrap_or(u16::MAX),

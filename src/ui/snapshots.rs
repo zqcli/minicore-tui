@@ -712,7 +712,7 @@ fn the_dock_hint_follows_what_the_keys_can_do() {
 }
 
 #[test]
-fn a_queue_is_one_count_in_the_dock_within_its_width() {
+fn a_queue_shows_its_count_and_text_within_the_dock_width() {
     let mut app = app();
     queue(
         &mut app,
@@ -721,8 +721,8 @@ fn a_queue_is_one_count_in_the_dock_within_its_width() {
     let rendered = render(&mut app, 30, 12);
     assert!(rendered.contains("1 queued · alt+↑ edit"), "{rendered}");
     assert!(
-        !rendered.contains("a very long"),
-        "the text waits for alt+↑"
+        rendered.contains("   ↳ a very long follow-up"),
+        "{rendered}"
     );
     assert!(rendered.lines().all(|row| crate::wrap::width(row) <= 30));
 }
@@ -873,7 +873,7 @@ fn a_card_opens_downward_from_its_header_by_click_or_ctrl_o() {
 }
 
 #[test]
-fn collapsing_a_card_while_following_leaves_no_blank_rows_under_the_content() {
+fn collapsing_a_card_at_the_end_closes_in_place_until_the_view_scrolls() {
     let mut fixture = app();
     let _runtime = fixture._runtime.enter();
     let app = &mut fixture.app;
@@ -882,16 +882,23 @@ fn collapsing_a_card_while_following_leaves_no_blank_rows_under_the_content() {
     click(app, 10, row_of(&folded, " ✓ bash"));
     let open = render(app, 70, 16);
     assert!(open.contains(" ▎ $ cargo test --lib"), "{open}");
-    // Following the longer transcript, the collapsing click pins a top that
-    // the shorter one no longer reaches.
-    app.scroll_to(usize::MAX);
-    let open = render(app, 70, 16);
+    // The card folds back toward its header; nothing above it moves, even
+    // though the shorter transcript leaves rows free below.
+    let header = row_of(&open, " ▎ bash");
     click(app, 10, row_of(&open, " ▎ $ cargo test --lib"));
     let collapsed = render(app, 70, 16);
+    assert_eq!(
+        open.lines().take(header as usize).collect::<Vec<_>>(),
+        collapsed.lines().take(header as usize).collect::<Vec<_>>(),
+        "{collapsed}"
+    );
+    assert_eq!(row_of(&collapsed, " ✓ bash"), header, "{collapsed}");
+    // Scrolling to the end follows again with no blank rows.
+    app.scroll_to(usize::MAX);
+    let followed = render(app, 70, 16);
     let end = |screen: &str| row_of(screen, "   completed in 12s");
-    assert_eq!(end(&collapsed), end(&folded), "{collapsed}");
+    assert_eq!(end(&followed), end(&folded), "{followed}");
     assert_eq!(app.scroll, Scroll::Follow);
-    assert!(!collapsed.contains("Jump to latest"), "{collapsed}");
 }
 
 fn failed_turn(app: &mut App, reason: &str) {

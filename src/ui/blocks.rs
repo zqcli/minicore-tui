@@ -15,7 +15,7 @@ use super::rails::{chrome, chrome_span, indent, rail_row, surface_row};
 use super::theme::Styles;
 use crate::transcript::UserKind;
 use crate::transcript::layout::Fold;
-use crate::transcript::{Block, GroupSummary, Grouping, ToolCall};
+use crate::transcript::{Block, GroupSummary, Grouping, StepKind, ToolCall};
 use crate::transcript::{EXPANDED_ROWS, ToolState};
 use crate::wrap;
 
@@ -38,8 +38,9 @@ pub fn render(block: &Block, styles: Styles, width: u16, fold: Fold) -> Vec<Line
     render_with(block, &Grouping::None, styles, width, fold)
 }
 
-/// [`render`] for a block that may be a step of a folded Turn: a closed
-/// group's steps take no rows, and its first step draws the summary row.
+/// [`render`] for a block that may be a step of a folded run of work: a closed
+/// group's steps take no rows, and its first step draws the summary row with
+/// the newest step under it.
 pub fn render_with(
     block: &Block,
     grouping: &Grouping,
@@ -51,29 +52,28 @@ pub fn render_with(
         Grouping::None => render_block(block, styles, width, fold),
         Grouping::Member { open, .. } if !open && !fold.expanded => Vec::new(),
         Grouping::Member { .. } => render_block(block, styles, width, fold),
-        Grouping::Head {
-            summary,
-            open,
-            folds,
-            ..
-        } => {
-            let mut rows = vec![group_row(
-                summary,
-                *open || fold.expanded,
-                styles,
-                width.into(),
-            )];
-            if *open || fold.expanded || !folds {
+        Grouping::Head { summary, open, .. } => {
+            let open = *open || fold.expanded;
+            let mut rows = vec![group_row(summary, open, styles, width.into())];
+            if open {
+                // An opened card keeps the gap any card has from a row above.
+                if !crate::transcript::is_row(block, fold.expanded) {
+                    rows.push(chrome(Line::default()));
+                }
                 rows.extend(render_block(block, styles, width, fold));
+            } else if let Some((kind, text)) = &summary.latest {
+                rows.push(latest_row(*kind, text, styles, width.into()));
             }
             rows
         }
     }
 }
 
-/// `▸ Worked 2m 14s · 18 tools · 3 files changed (+142 −37) · 1 failed`.
+/// `▸ Worked 2m 14s · 18 tools · 3 files changed (+142 −37) · 1 failed`, or
+/// `▸ Working · 6 tools` while the run goes on.
 fn group_row(summary: &GroupSummary, open: bool, styles: Styles, width: usize) -> Line<'static> {
     let mut parts = vec![match summary.duration {
+        _ if summary.live => "Working".to_owned(),
         Some(duration) => format!("Worked {}", format_duration(duration)),
         None => "Worked".to_owned(),
     }];
@@ -103,6 +103,32 @@ fn group_row(summary: &GroupSummary, open: bool, styles: Styles, width: usize) -
         ));
     }
     Line::from(spans)
+}
+
+/// The newest step of a closed group, one line under its summary: it changes
+/// as the work moves on, so the row reads like a list scrolling up.
+fn latest_row(kind: StepKind, text: &str, styles: Styles, width: usize) -> Line<'static> {
+    let (glyph, glyph_style) = match kind {
+        StepKind::Running => ("●", styles.accent()),
+        StepKind::Done => ("✓", styles.success()),
+        StepKind::Failed => ("✗", styles.failure()),
+        StepKind::Stopped => ("⊘", styles.meta()),
+        StepKind::Thinking => ("∴", styles.meta()),
+        StepKind::Note => ("›", styles.meta()),
+    };
+    let style = match kind {
+        StepKind::Thinking => thinking_style(styles),
+        StepKind::Note => styles.dim(),
+        _ => styles.tool_output(),
+    };
+    Line::from(vec![
+        chrome_span(Span::styled("  │ ", styles.meta())),
+        chrome_span(Span::styled(format!("{glyph} "), glyph_style)),
+        Span::styled(
+            wrap::truncate(&wrap::sanitize(text), width.saturating_sub(7)),
+            style,
+        ),
+    ])
 }
 
 fn render_block(block: &Block, styles: Styles, width: u16, fold: Fold) -> Vec<Line<'static>> {

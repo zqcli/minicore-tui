@@ -10,14 +10,20 @@
   last three output lines; a failure says `failed` and keeps its reason in the
   opened card. Step rows stack without blank rows.
 - Keep a delegation's whole life in one Agent card: one row folded (with the
-  child's newest steps while it runs), and opened, the task, facts, activity,
-  the delivered result and the way into the child. Later sends into the child
-  and its result no longer add their own cards.
-- Fold a finished Turn's successful steps under
-  `▸ Worked 42s · 14 tools · 2 files changed · 1 failed`; failures, Agent
-  cards and answers stay visible. Click to open; Ctrl+O opens all. Grouping
-  also applies to reopened history.
+  child's newest steps while it runs), and opened, the task, facts, a
+  three-entry activity window, the delivered result and the way into the
+  child. The parent's sends, inspections, controls and waits for that child,
+  and its result, no longer add their own rows or cards.
+- Fold a Turn's work as it runs, one group per run between user messages (a
+  steer starts a new run): `▸ Working · 6 tools`, later
+  `▸ Worked 42s · 14 tools · 2 files changed · 1 failed`, with the newest step
+  under it changing as work goes on. Tools including failures, thinking and
+  the notes between tool calls fold; the text that ends each run and Agent
+  cards stay visible. Groups open into step rows, steps into cards; every fold
+  opens and closes in place. Grouping also applies to reopened history.
 - Fold thinking to one `∴` row with its newest heading; click it to open.
+- List queued steers and follow-ups under the activity line, and keep a blank
+  row between the status and the editor.
 - Replace the header with a welcome card, and the dock with one activity line
   that appears only with content: status and whole minutes on the left, only
   the keys that work now on the right (`N queued · alt+↑ edit`, `N delegated · ctrl+b`). The footer shows

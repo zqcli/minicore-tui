@@ -161,6 +161,10 @@ pub struct App {
     pub notices: VecDeque<Notice>,
     pub last_error: Option<String>,
     pub scroll: Scroll,
+    /// A fold pinned the view: its anchor holds even past the end, so a
+    /// collapse closes toward the row clicked instead of pulling the view down.
+    /// Scrolling releases it.
+    pub held: bool,
     pub tools_expanded: bool,
     pub show_reasoning: bool,
     pub quit: bool,
@@ -230,6 +234,7 @@ impl App {
             notices: VecDeque::new(),
             last_error: None,
             scroll: Scroll::Follow,
+            held: false,
             tools_expanded: false,
             show_reasoning: true,
             quit: false,
@@ -680,10 +685,12 @@ impl App {
             let (block, offset) = self.layout.anchor(self.layout.viewport.top);
             self.scroll = Scroll::Anchor { block, offset };
         }
+        self.held = true;
     }
 
     /// Puts transcript row `top` at the top of the view; the bottom follows.
     pub fn scroll_to(&mut self, top: usize) {
+        self.held = false;
         let layout = &self.layout;
         let max_top = layout.total_rows().saturating_sub(layout.viewport.height);
         self.scrolled_at = Some(tokio::time::Instant::now());

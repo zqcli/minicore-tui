@@ -178,7 +178,8 @@ fn card_rows(
 
 const LIVE_ROWS: usize = 3;
 const TASK_ROWS: usize = 4;
-const ACTIVITY_ROWS: usize = 8;
+/// The newest entries only: the window moves up as the child works.
+const ACTIVITY_ROWS: usize = 3;
 const ANSWER_ROWS: usize = 16;
 
 /// The card's one-line name: the task's first line.
@@ -215,12 +216,24 @@ fn facts(card: &AgentCard, full: bool) -> String {
     {
         facts.push(blocks::plural(turn.tool_rounds, "tool round"));
     }
-    if full && card.sends > 0 {
-        facts.push(format!(
-            "{} later send{}",
-            card.sends,
-            if card.sends == 1 { "" } else { "s" }
-        ));
+    if full {
+        let parent = &card.parent;
+        if parent.sends > 0 {
+            facts.push(blocks::plural(parent.sends as u64, "later send"));
+        }
+        if parent.inspections > 0 {
+            facts.push(blocks::plural(parent.inspections as u64, "inspection"));
+        }
+        if parent.changes > 0 {
+            facts.push(blocks::plural(parent.changes as u64, "control"));
+        }
+        if parent.waits > 0 {
+            facts.push(if parent.waited.is_zero() {
+                "parent waited".to_owned()
+            } else {
+                format!("parent waited {}", blocks::format_duration(parent.waited))
+            });
+        }
     }
     facts.join(" · ")
 }
@@ -255,13 +268,42 @@ fn activity_rows(
     card: &AgentCard,
     styles: Styles,
 ) -> Vec<(&'static str, ratatui::style::Style, String)> {
-    card.transcript
-        .blocks()
+    let blocks = card.transcript.blocks();
+    // Settled, the last response is the Result; it is not activity too.
+    let answer = (card.outcome().is_some() || card.result.is_some())
+        .then(|| {
+            blocks.iter().rposition(
+                |block| matches!(block, Block::Assistant { text, .. } if !text.trim().is_empty()),
+            )
+        })
+        .flatten();
+    let line = |text: &str| {
+        text.lines()
+            .map(|line| line.trim().trim_start_matches('#').trim().replace("**", ""))
+            .find(|line| !line.is_empty())
+            .unwrap_or_default()
+    };
+    blocks
         .iter()
-        .filter_map(|block| match block {
+        .enumerate()
+        .filter_map(|(index, block)| match block {
             Block::Tool(call) => {
                 let (glyph, style) = blocks::tool_glyph(call, styles);
                 Some((glyph, style, blocks::one_line(&activity(call))))
+            }
+            Block::Assistant { text, .. } if !text.trim().is_empty() && Some(index) != answer => {
+                Some(("›", styles.meta(), wrap::sanitize(&line(text)).into_owned()))
+            }
+            Block::Assistant {
+                reasoning, text, ..
+            } if text.trim().is_empty() && !reasoning.trim().is_empty() => {
+                let heading = reasoning
+                    .lines()
+                    .rev()
+                    .map(|line| line.trim().replace("**", ""))
+                    .find(|line| !line.is_empty())
+                    .unwrap_or_default();
+                Some(("∴", styles.meta(), wrap::sanitize(&heading).into_owned()))
             }
             _ => None,
         })
@@ -588,7 +630,7 @@ mod tests {
         let card = call.agent_card.as_mut().unwrap();
         response(card, "seen while running".into());
         completed(card);
-        card.sends = 1;
+        card.parent.sends = 1;
         card.result = Some(format!(
             r#"{{"source":{{"agent_id":"a","session_id":"00000000000000000004"}},"status":"ended","results":[{{"outcome":"completed","output":["{}"]}}]}}"#,
             (0..40)
@@ -692,7 +734,7 @@ mod tests {
             unreachable!()
         };
         let card = card.agent_card.as_deref().unwrap();
-        assert_eq!(card.sends, 1);
+        assert_eq!(card.parent.sends, 1);
         assert!(card.result.as_deref().unwrap().contains("\"done\""));
         let before: Vec<u64> = transcript.revisions().collect();
         transcript.link_delegations();
@@ -700,6 +742,57 @@ mod tests {
             transcript.revisions().collect::<Vec<_>>(),
             before,
             "linking again changes nothing"
+        );
+    }
+
+    #[test]
+    fn the_parents_inspections_and_waits_join_the_card_and_failures_stay_out() {
+        use crate::transcript::Transcript;
+        let start = call();
+        let agent = |id: &str, arguments: serde_json::Value, state| {
+            let mut call = ToolCall::new(
+                ToolCallRef {
+                    turn_id: "00000000000000000001".parse().unwrap(),
+                    tool_call_id: id.to_owned().into(),
+                },
+                "agent",
+            );
+            call.set_arguments(&arguments);
+            call.set_state(state);
+            call.duration = Some(std::time::Duration::from_secs(3));
+            Block::Tool(Box::new(call))
+        };
+        let target = serde_json::json!({"agent_id":"00000000000000000002","session_id":"00000000000000000004"});
+        let mut transcript = Transcript::default();
+        transcript.push(Block::Tool(Box::new(start)));
+        transcript.push(agent(
+            "inspect",
+            serde_json::json!({"action":"inspect","target":target}),
+            ToolState::Succeeded,
+        ));
+        transcript.push(agent(
+            "wait",
+            serde_json::json!({"action":"wait","timeout_ms":1000}),
+            ToolState::Succeeded,
+        ));
+        transcript.push(agent(
+            "broken",
+            serde_json::json!({"action":"inspect","target":target}),
+            ToolState::Failed,
+        ));
+        transcript.link_delegations();
+        assert!(transcript.absorbed(1) && transcript.absorbed(2));
+        assert!(!transcript.absorbed(3), "a failed call keeps its row");
+        let Block::Tool(card) = &transcript.blocks()[0] else {
+            unreachable!()
+        };
+        let parent = card.agent_card.as_ref().unwrap().parent;
+        assert_eq!((parent.inspections, parent.waits), (1, 1));
+        assert_eq!(parent.waited, std::time::Duration::from_secs(3));
+        let rows = text(&render(card, styles(), 100, true, true));
+        assert!(
+            rows[1].ends_with("1 inspection · parent waited 3.0s"),
+            "{rows:?}"
         );
     }
 }

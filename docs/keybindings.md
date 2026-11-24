@@ -91,8 +91,9 @@ requests to Host scheduling, with different intended queues:
 
 The Host decides the actual queue. For example, a steer accepted while a Turn
 is cancelling or finalizing can go to next-turn. The activity line counts the
-actual unbound records as `N queued`; it does not predict delivery from the
-key that was pressed. `Alt+↑` brings their text back for editing.
+actual unbound records as `N queued` and lists the first three under it, `↗`
+for next-step and `↳` for next-turn; it does not predict delivery from the key
+that was pressed. `Alt+↑` brings their text back for editing.
 
 `/pause` pauses input consumption; `/resume` asks the Host to resume. An empty
 `Enter` also resumes a paused Session. Sending a nonempty draft submits input;
@@ -199,19 +200,25 @@ is one `∴` row with its newest heading. Adjacent step rows stack without blank
 rows; other blocks keep one separator row. Opening a row keeps its left edge,
 and an opened card keeps blank lines inside its output.
 
-When a Turn finishes with at least two successful tools, its steps fold under
-one summary row: `▸ Worked 42s · 14 tools · 2 files changed · 1 failed`.
-Failed, denied and Agent tools never fold into the group, and the answer text
-stays visible. Click the row to open the steps; `Ctrl+O` opens every group.
+A Turn's work folds as it runs. Each run of work between two user messages (a
+steer starts a new run) is one group of two rows: `▸ Working · 6 tools`, or
+`▸ Worked 42s · 14 tools · 2 files changed · 1 failed` once done, and its
+newest step, which changes as the work goes on. Tools (failed ones too),
+thinking and the notes the model writes between tool calls fold into it; the
+text that ends the run and Agent cards stay visible. Click the group to list its
+steps and a step to open its card; `Ctrl+O` opens everything. Every fold opens
+and closes in place under the row clicked.
 
 A delegation is one Agent card on the call that started it, and it keeps
 updating after that call returns. Folded, it is one row: the task's first line,
 the Agent, tool rounds and state, with the child's three newest steps under it
-while it runs. Opened, it shows the task, the short Session ID and later sends,
-the child's tool calls, and its result: the delivered final answer, or while it
-runs the latest response. Later sends into the same child and the result it
-delivers are drawn inside the card rather than as their own blocks; they keep
-their own blocks only when the starting call is not loaded. Only Host's
+while it runs. Opened, it shows the task, the short Session ID, the parent's
+later sends, inspections and waits, the child's three newest steps, and its
+result: the delivered final answer, or while it runs the latest response. The
+parent's successful `agent` calls about that child (send, inspect, update,
+control, wait) and the result it delivers are drawn inside the card rather than
+as their own rows; failed calls keep their rows, and everything keeps its own
+block when the starting call is not loaded. Only Host's
 settled delegation marks completion. Click the opened card's footer or use
 `/child` to read the child Session and answer its approvals there; Esc
 returns to the parent. Child events do not redirect the parent's input or change its draft.

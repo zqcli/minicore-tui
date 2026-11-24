@@ -13,7 +13,7 @@ use super::{composer, sheets};
 use crate::app::{App, Notice, NoticeLevel, Session};
 use crate::wrap;
 use minicore_host_core::InteractionRequestData;
-use minicore_host_protocol::{CompactionState, ModelRetryPhase, TurnPhase, TurnState};
+use minicore_host_protocol::{CompactionState, InputQueue, ModelRetryPhase, TurnPhase, TurnState};
 use minicore_host_runtime::tools::ToolInputAnswerKind;
 
 pub struct Dock {
@@ -105,6 +105,11 @@ pub fn dock(app: &App, styles: Styles, width: u16, height: u16) -> Dock {
     let activity = activity_line(app, styles, width);
     if spans_width(&activity.spans) > 0 {
         above.push(activity);
+        if let Some(session) = app.resident.current() {
+            above.extend(queued_rows(session, styles, width));
+        }
+        // Status is not part of the draft: a blank row keeps it off the editor.
+        above.push(Line::default());
     }
     let (mut editor, cursor) = composer::render(
         app.active_editor(),
@@ -167,6 +172,46 @@ fn padded(text: &str, width: u16, style: Style) -> Line<'static> {
             style,
         ),
     ])
+}
+
+/// Rows of queued text shown under the activity line.
+const QUEUE_ROWS: usize = 3;
+
+/// What will be sent next, under the activity line: `↗` a steer for the next
+/// step, `↳` a follow-up for the next Turn, oldest first.
+fn queued_rows(session: &Session, styles: Styles, width: u16) -> Vec<Line<'static>> {
+    let Some(queue) = &session.queue else {
+        return Vec::new();
+    };
+    let room = usize::from(width).saturating_sub(6);
+    let mut rows: Vec<Line<'static>> = queue
+        .next_step
+        .iter()
+        .chain(&queue.next_turn)
+        .take(QUEUE_ROWS)
+        .map(|queued| {
+            let glyph = match queued.queue {
+                InputQueue::NextStep => "↗ ",
+                InputQueue::NextTurn => "↳ ",
+            };
+            let text: String = queued.input.text.chars().take(room + 1).collect();
+            let text = wrap::sanitize(&text.replace('\n', " ")).into_owned();
+            Line::from(vec![
+                Span::raw("  "),
+                Span::styled(glyph, styles.meta()),
+                Span::styled(wrap::truncate(&text, room), styles.dim()),
+            ])
+        })
+        .collect();
+    let count = queued_count(session);
+    if count > QUEUE_ROWS {
+        rows.push(padded(
+            &format!("… {} more queued", count - QUEUE_ROWS),
+            width,
+            styles.faint(),
+        ));
+    }
+    rows
 }
 
 fn queued_count(session: &Session) -> usize {

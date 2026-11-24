@@ -99,8 +99,8 @@ pub fn content_cells(line: &Line) -> Range<u16> {
         start += wrap::width(&first.content);
         spans = rest;
     }
-    // A quote rail leads the content it frames.
-    if let [first, rest @ ..] = spans
+    // A quote rail, or a live row's rail and glyph, leads the content.
+    while let [first, rest @ ..] = spans
         && is_chrome(first.style)
     {
         start += wrap::width(&first.content);

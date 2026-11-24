@@ -204,10 +204,16 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, styles: Styles) {
         app.scroll = Scroll::Anchor { block, offset };
     }
     let scroll = app.scroll;
+    let held = app.held;
     let resolve = |layout: &Layout<RenderState>| {
         let max_top = layout.total_rows().saturating_sub(height);
         match scroll {
             Scroll::Follow => max_top,
+            // A fold keeps the row it was clicked at, even if the shorter
+            // transcript then leaves blank rows below; scrolling ends that.
+            Scroll::Anchor { block, offset } if held => layout
+                .anchor_row(block, offset)
+                .min(layout.total_rows().saturating_sub(1)),
             // An anchor is resolved against the current layout, so content
             // growing below it does not move the view; shrinking cannot blank it.
             Scroll::Anchor { block, offset } => layout.anchor_row(block, offset).min(max_top),
@@ -219,7 +225,7 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, styles: Styles) {
     }
     let total = layout.total_rows();
     // An anchor a shrink pushed to the end follows again, as in `scroll_to`.
-    if matches!(app.scroll, Scroll::Anchor { .. }) && top == total.saturating_sub(height) {
+    if matches!(app.scroll, Scroll::Anchor { .. }) && !held && top == total.saturating_sub(height) {
         app.scroll = Scroll::Follow;
     }
     // A selection marks screen cells, so it means nothing once the rows move.
@@ -547,6 +553,8 @@ mod tests {
                     }
                     live.push(block);
                 }
+                // The app folds a live run as it goes.
+                live.regroup(&"00000000000000000001".parse().unwrap());
                 let mut layout = Layout::<RenderState>::default();
                 let streamed = prepare_layout(&mut layout, &live, width, fold);
                 live.install_history_records(&records);
@@ -568,7 +576,13 @@ mod tests {
                 let mut next = 0;
                 let mut after_row = false;
                 for (index, block) in live.blocks().iter().enumerate() {
-                    let body = blocks::render(block, Styles::of(Palette::dark()), width, fold);
+                    let body = blocks::render_with(
+                        block,
+                        live.grouping(index),
+                        Styles::of(Palette::dark()),
+                        width,
+                        fold,
+                    );
                     if body.is_empty() {
                         continue;
                     }
@@ -605,7 +619,13 @@ mod tests {
                         to: (width - 1, next as u16 - 1),
                     },
                 );
-                assert!(copied.contains("alpha") && copied.contains("beta"));
+                // A closed run shows only its newest step.
+                assert_eq!(
+                    copied.contains("alpha") && copied.contains("beta"),
+                    expanded,
+                    "{copied:?}"
+                );
+                assert!(copied.contains("gamma"), "{copied:?}");
                 assert!(
                     !copied.contains('▎')
                         && !copied.contains("Thinking...")
@@ -613,7 +633,7 @@ mod tests {
                 );
                 assert_eq!(
                     copied.contains("Last step"),
-                    show_reasoning,
+                    show_reasoning && expanded,
                     "{fold:?} {width}: {copied:?}"
                 );
 

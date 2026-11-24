@@ -198,6 +198,7 @@ impl App {
             // Home and End move in a draft; with no draft Home and always End
             // also scroll, so the jump label's `End` works mid-draft too.
             KeyCode::Home if ctrl || self.composer.is_empty() => {
+                self.held = false;
                 self.scroll = Scroll::Anchor {
                     block: 0,
                     offset: 0,

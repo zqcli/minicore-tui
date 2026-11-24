@@ -20,7 +20,9 @@ this document says how things look and behave, and why.
 5. **One vocabulary.** The same thing has the same name, glyph and key
    everywhere (see [Wording](#wording)).
 6. **Stable reading position.** Rendering, folding and history loading never
-   move what the user is reading. Folding opens downward.
+   move what the user is reading. Every fold opens and closes in place below
+   the row clicked; a collapse may leave blank rows at the end until the view
+   scrolls.
 
 ## Grid
 
@@ -40,15 +42,18 @@ keeps both columns: the rail takes the glyph's place and the title the name's.
 
 1. Exactly one blank row between two visible blocks.
 2. No blank row between step rows: folded tools, folded thinking, folded Agent
-   cards and a group's summary row stack as one list.
+   cards and a group's summary row stack as one list. An opened card is not a
+   row: it gets a blank row above and below, also right under its group's
+   summary row.
 3. Surfaces carry their own padding. The user card and the editor have a pad
    row above and below their text; an expanded card has a pad row after its
    facts and separates its sections (activity, result, footer) with one blank
    surface row. Nothing adds a second blank row around a surface.
-4. The bottom of the screen is: transcript, one gap row, the activity line
-   only when it has something to say, the editor, the footer. An idle screen
-   therefore has one blank row above the editor, never two. The editor is
-   pinned to the bottom; the transcript gives up the row.
+4. The bottom of the screen is: transcript, one gap row, then, only when there
+   is something to say, the activity line, the queued messages and one blank
+   row; then the editor and the footer. An idle screen therefore has one blank
+   row above the editor, a busy one has a blank row on each side of the status.
+   The editor is pinned to the bottom; the transcript gives up the rows.
 5. History markers (compaction, imported summary) are one divider row.
 6. Markdown keeps one blank row between paragraphs, headings and lists.
    Tables have one rule under the header, and rules between body rows only
@@ -59,7 +64,7 @@ keeps both columns: the rail takes the glyph's place and the title the name's.
 | Layer | Rows | Content |
 |---|---|---|
 | Transcript | rest | Welcome card in front of block 0, then blocks; scrollbar; the jump bar when scrolled up |
-| Dock | 1 + special rows + 0–1 | The gap row; approval, question or warning rows when present; the activity line when it has content |
+| Dock | 1 + special rows + 0 or 2+ | The gap row; approval, question or warning rows when present; the activity line, queued messages and a blank row when there is activity |
 | Editor | 4–12 | Rail `▎` on the composer surface, a pad row, the draft from the second row; grows with content up to about a third of the height |
 | Footer | 1 | Where you are (left) and what runs (right) |
 
@@ -96,6 +101,9 @@ One row directly above the editor, present only with content.
   `N queued · alt+↑ edit`; `N delegated · ctrl+b`.
 - **Narrow terminals:** the left keeps at least 28 columns (or its own width).
   Key hints are dropped from the front, so the mode hint goes before the counts.
+- **Queued messages** follow under it in the content column, oldest first:
+  `↗` a steer for the next step, `↳` a follow-up for the next Turn, three at
+  most and then `… N more queued`. `alt+↑` brings them back to edit.
 
 Elapsed time is whole minutes (`0m`, `42m`, `1h5m`). The line redraws with the
 spinner; there is no per-second timer and no timer when idle.
@@ -159,22 +167,34 @@ spinner; there is no per-second timer and no timer when idle.
 - A running tool shows its last 3 output lines under `  │ `.
 - A failure's reason is not shown folded; opening the row shows it in the card.
 
-### Turn groups
+### Work groups
 
-When a Turn ends with at least two successful tools, its steps fold under one
-row placed before the Turn's first step row, even when that row is a failure:
+A Turn's work folds while it runs and after it ends. Each run of work between
+two user messages is one group, so a Turn steered twice has three groups, each
+followed by what the model said to close that run:
 
 ```
-▸ Worked 42s · 14 tools · 2 files changed (+3 −1) · 6 failed
-✗ apply_patch src/server.js                                       failed
+▎ go
+▸ Worked 12s · 5 tools · 1 failed
+  │ ✓ read src/store.js
+▎ also check the tests          (a steer)
+▸ Working · 3 tools
+  │ ● bash node --test
 ```
 
-- Steps are successful tools without a delegation, and thinking-only
-  responses. Failed, denied and Agent rows never fold; answers never fold.
-- `▾` when open. Click toggles; Ctrl+O opens every group along with everything
-  else.
-- Live Turns are never grouped. Grouping is applied when the Turn ends and
-  again when it is reopened from history.
+- Closed, a group is two rows: the summary and the newest step. The step row
+  changes as the work moves on, so it reads like a list scrolling up.
+- Steps are every tool call without a delegation (failed ones too, counted as
+  `N failed` in the failure colour), thinking without text, and notes: text the
+  model wrote before more tool calls in the same run. The last text of a run
+  is its answer and stays outside, and so do Agent cards.
+- A run needs a tool and two steps to fold; a single step keeps its own row.
+- Open (`▾`), the summary is followed by the step rows, each of which opens
+  into its card. Click the summary or the newest-step row to toggle; Ctrl+O
+  opens every group along with everything else.
+- The summary says `Working` while the run goes on and `Worked` with its
+  duration after: the Turn's time for a single run, otherwise from the message
+  that opened the run to the one that closed it.
 
 ### Agent card
 
@@ -211,7 +231,14 @@ Opened, it is a card:
 - Glyph: `●` working (accent; warning when the child waits for approval or
   input), `✓` completed, `✗` failed, `⊘` cancelled, `○` no longer observable.
 - The title is the task's first line; further task lines follow dimmed.
-- Activity lists the child's tool calls, oldest first, eight at most.
+- Activity is a window of the child's three newest entries (tool calls, notes
+  `›`, thinking `∴`) under `… N earlier steps`; it moves up as the child works
+  and never grows. Settled, the final answer is the Result, not activity.
+- The parent's later dealings with the child are part of the card, not rows of
+  their own: sends, `inspect`, `update` and `control` calls aimed at it and
+  the parent's `wait` calls in the same Turn. The facts line counts them:
+  `2 later sends · 1 inspection · parent waited 27s`. A failed call keeps its
+  own row, so its error stays visible.
 - Result is the delivered answer, or while running the latest response (or
   thinking, with Ctrl+T on); a failure leads with its reason.
 - Only the opened card's footer leads into the child Session. Ctrl+B lists all
@@ -251,7 +278,8 @@ Defined in `ui/theme.rs` for dark and light; both palettes define every token.
 | `▎` | Rail | User messages, editor, expanded cards, open thinking and summaries |
 | `●` `✓` `✗` `⊘` | Running · done · failed · denied or cancelled | Step rows, Agent cards, delegations sheet |
 | `○` | No longer observable | Agent cards |
-| `∴` | Thinking | Folded thinking row |
+| `∴` | Thinking | Folded thinking row, a group's newest step |
+| `›` | Note | A group's or an Agent card's newest step when it is text |
 | `▸` `▾` | Folded · open group; footer identity | Turn groups, footer start |
 | `│` | Live output or quote | Under a running step, failure message |
 | `─` | Divider | Compaction and summary rows, sheet rules |
@@ -308,7 +336,8 @@ confirms; Enter, `n` and Esc cancel.
 - **Enter** in the editor steers (or resumes a paused Session when empty);
   **Alt+Enter** sends a follow-up. A slash command runs instead of being sent.
 - **Click** toggles what it hits: a step row or card, a thinking row, a group
-  row, a failure. Dragging always selects instead of toggling.
+  row, a failure. It folds in place: the row clicked stays where it is.
+  Dragging always selects instead of toggling.
 - **Ctrl+O** is the one global expand/fold; Ctrl+T hides or shows thinking.
 - Commands with fixed choices open their choices when run without an argument;
   invalid arguments keep the draft and say what is valid.

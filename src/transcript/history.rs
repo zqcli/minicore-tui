@@ -127,19 +127,14 @@ impl Transcript {
         if added {
             self.sort_history();
             self.link_delegations();
-            // An older page can add steps to a Turn whose end is already here.
+            // A page can add steps to any Turn, including one already folded.
             let mut turns: Vec<&TurnId> = records
                 .iter()
                 .filter_map(|record| record.turn_id.as_ref())
                 .collect();
             turns.dedup();
             for turn in turns {
-                let ended = self.blocks.iter().any(
-                    |block| matches!(block, Block::TurnEnd { turn_id, .. } if turn_id == turn),
-                );
-                if ended {
-                    self.regroup(turn);
-                }
+                self.regroup(turn);
             }
         }
     }
