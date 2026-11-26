@@ -45,6 +45,7 @@ pub struct ParentActions {
     pub changes: usize,
     pub waits: usize,
     pub waited: std::time::Duration,
+    pub waiting: bool,
 }
 
 impl AgentCard {

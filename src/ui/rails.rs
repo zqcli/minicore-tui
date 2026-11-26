@@ -49,8 +49,18 @@ pub fn fill(surface: Style, spans: Vec<Span<'static>>, width: usize) -> Vec<Span
 
 /// A rail-less line moved right by `columns`.
 pub fn indent(line: Line<'static>, columns: usize) -> Line<'static> {
-    let mut spans = vec![Span::raw(" ".repeat(columns))];
-    spans.extend(line.spans);
+    let mut spans = line.spans;
+    if let Some(first) = spans.first_mut()
+        && first.style == Style::default()
+        && !first.content.is_empty()
+        && first.content.trim().is_empty()
+    {
+        let mut padded = " ".repeat(columns);
+        padded.push_str(&first.content);
+        first.content = padded.into();
+    } else {
+        spans.insert(0, Span::raw(" ".repeat(columns)));
+    }
     Line {
         style: line.style,
         spans,

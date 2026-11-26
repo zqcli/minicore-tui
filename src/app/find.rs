@@ -6,8 +6,8 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
 use super::{App, Overlay, Scroll};
-use crate::transcript::Block;
 use crate::transcript::layout::Fold;
+use crate::transcript::{Block, Transcript, UserKind};
 use crate::ui::blocks;
 
 /// Which of a block's texts a match is in; some of them start folded.
@@ -31,6 +31,20 @@ pub struct FindMatch {
 /// The texts of a block that find reads, in the order the block shows them.
 fn searchable(block: &Block, show_reasoning: bool) -> Vec<(Field, Cow<'_, str>)> {
     match block {
+        Block::User {
+            text,
+            kind: UserKind::Delegated,
+            ..
+        } => match crate::ui::delegated::summary(text) {
+            Some(summary) => {
+                let short: String = summary.session_id.chars().take(6).collect();
+                vec![(
+                    Field::Text,
+                    format!("agent {} · Session {short}", summary.outcome).into(),
+                )]
+            }
+            None => vec![(Field::Text, text.as_str().into())],
+        },
         Block::User { text, .. } => vec![(Field::Text, text.as_str().into())],
         Block::Assistant {
             reasoning, text, ..
@@ -41,10 +55,69 @@ fn searchable(block: &Block, show_reasoning: bool) -> Vec<(Field, Cow<'_, str>)>
                 .chain([(Field::Text, text.as_str().into())])
                 .collect()
         }
-        Block::Tool(call) => vec![
-            (Field::Detail, call.detail.as_str().into()),
-            (Field::Output, call.output_content().join("\n").into()),
-        ],
+        Block::Tool(call) if call.agent_card.is_some() => {
+            let card = call.agent_card.as_deref().expect("checked");
+            let mut fields = vec![(Field::Detail, card.task.as_str().into())];
+            let mut body = Vec::new();
+            if let Some(name) = &card.agent_name {
+                body.push(name.clone());
+            }
+            body.push(card.key.child.session_id.to_string());
+            let delivered = card
+                .result
+                .as_deref()
+                .and_then(crate::ui::delegated::summary);
+            if let Some(summary) = delivered {
+                if let Some(fault) = summary.fault {
+                    body.push(fault);
+                }
+                if let Some(answer) = summary.answer {
+                    body.push(answer);
+                }
+            } else {
+                if let Some(fault) = card.fault() {
+                    body.push(fault.to_owned());
+                }
+                if let Some(answer) = card.transcript.last_answer() {
+                    body.push(answer.to_owned());
+                }
+            }
+            for step in card.transcript.blocks() {
+                match step {
+                    Block::Tool(child_call) => {
+                        if child_call.detail.is_empty() {
+                            body.push(child_call.name.clone());
+                        } else {
+                            body.push(format!("{} {}", child_call.name, child_call.detail));
+                        }
+                    }
+                    Block::Assistant {
+                        text, reasoning, ..
+                    } => {
+                        if !text.trim().is_empty() {
+                            body.push(text.clone());
+                        } else if show_reasoning && !reasoning.trim().is_empty() {
+                            body.push(reasoning.clone());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if !body.is_empty() {
+                fields.push((Field::Output, body.join("\n").into()));
+            }
+            fields
+        }
+        Block::Tool(call) => {
+            let mut fields = vec![
+                (Field::Detail, call.detail.as_str().into()),
+                (Field::Output, call.output_content().join("\n").into()),
+            ];
+            if let Some(error) = &call.result_error {
+                fields.push((Field::Output, error.as_str().into()));
+            }
+            fields
+        }
         Block::Summary { text } => vec![(Field::Text, text.as_str().into())],
         Block::Compaction {
             source_position,
@@ -64,15 +137,18 @@ fn searchable(block: &Block, show_reasoning: bool) -> Vec<(Field, Cow<'_, str>)>
     }
 }
 
-/// Every case-insensitive literal occurrence, in transcript order. Thinking is
-/// searched only while it is shown.
-pub fn find_matches(blocks: &[Block], query: &str, show_reasoning: bool) -> Vec<FindMatch> {
+/// Every case-insensitive literal occurrence in visible blocks, in transcript
+/// order. Thinking is searched only while it is shown.
+pub fn find_matches(transcript: &Transcript, query: &str, show_reasoning: bool) -> Vec<FindMatch> {
     let needle = query.trim().to_lowercase();
     if needle.is_empty() {
         return Vec::new();
     }
     let mut found = Vec::new();
-    for (block, content) in blocks.iter().enumerate() {
+    for (block, content) in transcript.blocks().iter().enumerate() {
+        if transcript.absorbed(block) {
+            continue;
+        }
         let mut ordinal = 0;
         for (field, text) in searchable(content, show_reasoning) {
             for _ in text.to_lowercase().matches(&needle) {
@@ -179,15 +255,19 @@ impl App {
         };
         let query = query.clone();
         self.reveal(found);
-        let Some(block) = self.transcript_blocks().get(found.block) else {
+        let Some(session) = self.resident.current() else {
             return;
         };
+        let Some(block) = session.transcript.blocks().get(found.block) else {
+            return;
+        };
+        let grouping = session.transcript.grouping(found.block);
         let width = self.layout.viewport.width.max(blocks::INSET as u16 + 1);
         let fold = Fold {
             expanded: self.tools_expanded,
             show_reasoning: self.show_reasoning,
         };
-        let lines = blocks::render(block, self.styles, width, fold);
+        let lines = blocks::render_with(block, grouping, self.styles, width, fold);
         // A block sits behind a separator row, or behind the welcome header.
         let lead = match found.block {
             0 => self.layout.state.header_rows,
@@ -201,22 +281,39 @@ impl App {
         };
     }
 
-    /// Opens the thinking or tool output a match sits in when it is folded.
+    /// Opens any closed work group and folded thinking or tool output a match sits in.
     fn reveal(&mut self, found: FindMatch) {
         let all = self.tools_expanded;
         let Some(session) = self.resident.current_mut() else {
             return;
         };
+        let needs_group = match session.transcript.grouping(found.block) {
+            crate::transcript::Grouping::Tail { .. } => found.field == Field::Thinking,
+            _ => true,
+        };
+        if needs_group {
+            session.transcript.open_group(found.block);
+        }
         let folded = match (found.field, session.transcript.blocks().get(found.block)) {
             (Field::Thinking, Some(Block::Assistant { expanded, .. })) => !expanded.unwrap_or(all),
             (Field::Output, Some(Block::Tool(call))) => !call.is_expanded(all),
+            (
+                Field::Text,
+                Some(Block::User {
+                    kind: UserKind::Delegated,
+                    expanded,
+                    ..
+                }),
+            ) => !expanded.unwrap_or(all),
             _ => false,
         };
         if folded {
             match session.transcript.block_mut(found.block) {
-                Some(Block::Assistant { expanded, .. }) => *expanded = Some(true),
+                Some(Block::Assistant { expanded, .. }) | Some(Block::User { expanded, .. }) => {
+                    *expanded = Some(true)
+                }
                 Some(Block::Tool(call)) => call.expanded = Some(true),
-                _ => unreachable!("a folded match has a thinking or tool block"),
+                _ => unreachable!("a folded match has a thinking, delegated or tool block"),
             }
         }
     }
@@ -245,7 +342,16 @@ mod tests {
             text: text.into(),
             kind: UserKind::Prompt,
             at: None,
+            expanded: None,
         }
+    }
+
+    fn transcript(blocks: impl IntoIterator<Item = Block>) -> Transcript {
+        let mut out = Transcript::default();
+        for block in blocks {
+            out.push(block);
+        }
+        out
     }
 
     fn assistant(reasoning: &str, text: &str) -> Block {
@@ -277,31 +383,34 @@ mod tests {
 
     #[test]
     fn every_occurrence_counts_not_just_every_block() {
-        let blocks = [
+        let transcript = transcript([
             user("Fix the parser"),
             assistant("", "The parser parser now works"),
             user("next"),
-        ];
-        let matches = find_matches(&blocks, "PARSER", true);
+        ]);
+        let matches = find_matches(&transcript, "PARSER", true);
         let places: Vec<(usize, usize)> = matches.iter().map(|m| (m.block, m.ordinal)).collect();
         assert_eq!(places, [(0, 0), (1, 0), (1, 1)]);
-        assert!(find_matches(&blocks, "   ", true).is_empty());
+        assert!(find_matches(&transcript, "   ", true).is_empty());
     }
 
     #[test]
     fn thinking_and_tool_output_are_searched() {
-        let blocks = [
+        let transcript = transcript([
             assistant("weighing the cache option", "done"),
             tool("$ cargo test", &["running 3 tests", "test cache ... ok"]),
-        ];
-        let found = find_matches(&blocks, "cache", true);
+        ]);
+        let found = find_matches(&transcript, "cache", true);
         assert_eq!(
             found.iter().map(|m| (m.block, m.field)).collect::<Vec<_>>(),
             [(0, Field::Thinking), (1, Field::Output)]
         );
-        assert_eq!(find_matches(&blocks, "cargo", true)[0].field, Field::Detail);
         assert_eq!(
-            find_matches(&blocks, "cache", false).len(),
+            find_matches(&transcript, "cargo", true)[0].field,
+            Field::Detail
+        );
+        assert_eq!(
+            find_matches(&transcript, "cache", false).len(),
             1,
             "hidden thinking is not searched"
         );
@@ -309,15 +418,77 @@ mod tests {
 
     #[test]
     fn a_compaction_marker_is_found_by_its_label_and_its_summary() {
-        let marker = |summary: &str| Block::Compaction {
-            source_position: 4,
-            covered_items: 3,
-            summary: summary.into(),
+        let marker = |summary: &str| {
+            transcript([Block::Compaction {
+                source_position: 4,
+                covered_items: 3,
+                summary: summary.into(),
+            }])
         };
-        assert_eq!(find_matches(&[marker("")], "compaction", true).len(), 1);
+        assert_eq!(find_matches(&marker(""), "compaction", true).len(), 1);
         assert_eq!(
-            find_matches(&[marker("kept the plan")], "the plan", true).len(),
+            find_matches(&marker("kept the plan"), "the plan", true).len(),
             1
+        );
+    }
+
+    #[test]
+    fn find_searches_agent_card_fields_and_skips_absorbed_blocks() {
+        use crate::transcript::agent_card::AgentCard;
+        use minicore_host_protocol::{DelegationAssociation, SessionRef, ToolCallRef};
+
+        let origin = ToolCallRef {
+            turn_id: "00000000000000000001".parse().unwrap(),
+            tool_call_id: "start".to_owned().into(),
+        };
+        let parent = SessionRef {
+            agent_id: "00000000000000000002".parse().unwrap(),
+            session_id: "00000000000000000003".parse().unwrap(),
+        };
+        let child = SessionRef {
+            agent_id: parent.agent_id.clone(),
+            session_id: "00000000000000000004".parse().unwrap(),
+        };
+        let task_message_id: minicore_host_protocol::MessageId =
+            "00000000000000000005".parse().unwrap();
+        let association = DelegationAssociation {
+            parent,
+            origin: origin.clone(),
+            child,
+            accepted_message_ids: vec![task_message_id.clone()],
+            task_message_id,
+            inputs: Vec::new(),
+            completion: None,
+        };
+        let mut card = AgentCard::new("00000000000000000006".parse().unwrap(), association);
+        card.agent_name = Some("tokyo-agent".into());
+        card.task = "Inspect weather".into();
+        let mut call = crate::transcript::ToolCall::new(origin, "agent");
+        call.agent_card = Some(Box::new(card));
+        let result = Block::User {
+            text: r#"{"source":{"agent_id":"00000000000000000002","session_id":"00000000000000000004"},"task_message_id":"00000000000000000005","status":"ended","results":[{"outcome":"completed","output":["Sunny 18C in Shibuya"]}]}"#.into(),
+            kind: UserKind::Delegated,
+            at: None,
+            expanded: None,
+        };
+        let mut transcript = transcript([Block::Tool(Box::new(call)), result]);
+        transcript.link_delegations();
+        assert!(
+            transcript.absorbed(1),
+            "delivered result stays hidden in main transcript and links to its task card"
+        );
+        let task_hits = find_matches(&transcript, "weather", true);
+        assert_eq!(task_hits.len(), 1);
+        assert_eq!((task_hits[0].block, task_hits[0].field), (0, Field::Detail));
+        let result_hits = find_matches(&transcript, "Shibuya", true);
+        assert_eq!(
+            result_hits.len(),
+            1,
+            "delivered result is not double-counted across banner and task record"
+        );
+        assert_eq!(
+            (result_hits[0].block, result_hits[0].field),
+            (0, Field::Output)
         );
     }
 

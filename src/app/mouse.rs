@@ -13,6 +13,15 @@ impl App {
     /// have changed; plain pointer motion elsewhere does not.
     pub fn on_mouse(&mut self, mouse: MouseEvent) -> bool {
         let cell = (mouse.column, mouse.row);
+        // Single-click selects and double-click confirms on any bottom sheet
+        // (Sessions, Models, Agents, Reasoning, Approval, Unconfirmed) and on
+        // the floating `/` command and `@` file semi-popups.
+        if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
+            && self.sheet_hit.contains(cell.0, cell.1)
+        {
+            self.composer_dragging = false;
+            return self.click_sheet(cell);
+        }
         let uncertain_edit = matches!(
             self.overlay,
             Overlay::Unconfirmed {
@@ -20,25 +29,28 @@ impl App {
                 ..
             }
         );
-        let editor = (!self.has_interaction()
-            || uncertain_edit
-            || self.resident.current().is_some_and(|session| {
-                session
-                    .interaction
-                    .as_ref()
-                    .is_some_and(|pending| pending.is_text())
-            }))
+        let inspector_editor =
+            matches!(self.overlay, Overlay::Delegations { .. }) && self.inspected_can_send();
+        let editor = (inspector_editor
+            || ((!self.has_interaction()
+                || uncertain_edit
+                || self.resident.current().is_some_and(|session| {
+                    session
+                        .interaction
+                        .as_ref()
+                        .is_some_and(|pending| pending.is_text())
+                }))
+                && matches!(
+                    self.overlay,
+                    Overlay::None
+                        | Overlay::Palette { .. }
+                        | Overlay::Files { .. }
+                        | Overlay::Unconfirmed {
+                            mode: super::unconfirmed::ReviewMode::Edit(_),
+                            ..
+                        }
+                )))
             && (self.fatal.is_none() || uncertain_edit)
-            && matches!(
-                self.overlay,
-                Overlay::None
-                    | Overlay::Palette { .. }
-                    | Overlay::Files { .. }
-                    | Overlay::Unconfirmed {
-                        mode: super::unconfirmed::ReviewMode::Edit(_),
-                        ..
-                    }
-            )
             && !self.composer_area.is_empty();
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left)
@@ -47,6 +59,13 @@ impl App {
                         .composer_area
                         .contains(ratatui::layout::Position::new(cell.0, cell.1)) =>
             {
+                if let Overlay::Delegations {
+                    focus, detail_open, ..
+                } = &mut self.overlay
+                {
+                    *focus = super::overlay::TaskFocus::Composer;
+                    *detail_open = true;
+                }
                 self.press = None;
                 self.selection = None;
                 self.scrollbar_grab = None;
@@ -92,10 +111,36 @@ impl App {
                 // The transcript scrolls only while it is the visible surface.
                 match self.overlay {
                     Overlay::None | Overlay::Find { .. } => self.scroll_by(delta),
-                    Overlay::Diff(_) | Overlay::Error { .. } => self.scroll_view(delta),
+                    Overlay::Delegations { .. } => {
+                        if self.task_inspector.hit.in_list(cell.0, cell.1) {
+                            self.overlay_move(delta.signum());
+                            self.ensure_inspector_session();
+                        } else {
+                            self.inspector_scroll_by(delta);
+                        }
+                    }
+                    Overlay::Diff(ref diff) => {
+                        if diff.hit.in_list(cell.0, cell.1) {
+                            self.overlay_move(delta.signum());
+                        } else {
+                            self.scroll_view(delta);
+                        }
+                    }
+                    Overlay::Error { .. }
+                    | Overlay::Context { .. }
+                    | Overlay::SessionInfo { .. }
+                    | Overlay::Remote { .. } => self.scroll_view(delta),
                     _ => self.overlay_move(delta.signum()),
                 }
                 true
+            }
+            MouseEventKind::Down(MouseButton::Left)
+                if matches!(self.overlay, Overlay::Delegations { .. }) =>
+            {
+                self.click_task_inspector(cell)
+            }
+            MouseEventKind::Down(MouseButton::Left) if matches!(self.overlay, Overlay::Diff(_)) => {
+                self.click_diff_view(cell)
             }
             _ if view => false,
             MouseEventKind::Moved => {
@@ -140,8 +185,11 @@ impl App {
                     .press
                     .as_ref()
                     .is_some_and(|press| press.clicks == 1 && press.cell == cell)
+                    && self.click_transcript(cell)
                 {
-                    self.click_transcript(cell);
+                    // A click that toggled or followed a transcript control does
+                    // not start a double-click word selection.
+                    self.press = None;
                 }
                 true
             }
@@ -257,16 +305,17 @@ impl App {
     }
 
     /// Toggles cards and thinking, follows the tail, or opens the Git diff.
-    fn click_transcript(&mut self, (column, row): (u16, u16)) {
+    /// Returns whether the click was handled by an interactive target.
+    fn click_transcript(&mut self, (column, row): (u16, u16)) -> bool {
         if !self.overlay.is_none() {
-            return;
+            return false;
         }
         if self.on_jump_label((column, row)) {
             self.scroll = Scroll::Follow;
-            return;
+            return true;
         }
         let Some((index, line)) = self.layout.hit(column, row) else {
-            return;
+            return false;
         };
         // Block 0's rows start with the welcome header.
         let header = if index == 0 {
@@ -275,7 +324,7 @@ impl App {
             0
         };
         if line < header {
-            return;
+            return false;
         }
         let all_expanded = self.tools_expanded;
         let text = self
@@ -284,46 +333,81 @@ impl App {
             .unwrap_or_default()
             .trim()
             .to_owned();
-        let link = self.resident.current().and_then(|session| {
-            let Block::Tool(call) = session.transcript.blocks().get(index)? else {
-                return None;
-            };
-            // The open card's footer leads into the child; a folded card's
-            // row only opens the card.
-            if let Some(card) = &call.agent_card {
-                (call.is_expanded(all_expanded) && line + 1 == self.layout.content_height(index))
-                    .then(|| (card.association.clone(), true, card.history_unavailable))
-            } else {
-                (call.is_delegation_receipt() && line + 1 == self.layout.content_height(index))
-                    .then(|| call.delegations.first().cloned())
-                    .flatten()
-                    .map(|association| (association, false, false))
+        let height = self.layout.content_height(index);
+        let async_target = self.resident.current().and_then(|session| {
+            match session.transcript.blocks().get(index)? {
+                Block::Tool(call) if call.agent_card.is_some() => {
+                    let card = call.agent_card.as_deref()?;
+                    Some(card.key.child.session_id.to_string())
+                }
+                Block::Tool(call) if call.is_delegation_receipt() => {
+                    let assoc = call.delegations.first()?;
+                    Some(assoc.child.session_id.to_string())
+                }
+                Block::User {
+                    kind: crate::transcript::UserKind::Delegated,
+                    text,
+                    ..
+                } => crate::ui::delegated::summary(text).map(|summary| summary.session_id),
+                _ => None,
             }
         });
-        if let Some((association, child, unavailable)) = link {
-            if unavailable {
-                self.notice(
-                    super::NoticeLevel::Info,
-                    "Child history is unavailable; this card retains the observed preview",
-                );
-            } else if child {
-                self.open_child(association.child);
-            } else {
-                self.locate_agent_card(association.parent, association.origin);
-            }
-            return;
+        // Clicking a delegated dispatch row (folded or on its footer) or a
+        // completion banner opens the Ctrl+B Async Tasks Inspector focused on
+        // that child Session.
+        let open_inspector = async_target.filter(|_| {
+            let is_group_head = self.resident.current().is_some_and(|session| {
+                matches!(
+                    session.transcript.grouping(index),
+                    crate::transcript::Grouping::Head { .. }
+                ) && line == header
+            });
+            !is_group_head
+                && self.resident.current().is_some_and(|session| {
+                    match session.transcript.blocks().get(index) {
+                        Some(Block::User {
+                            kind: crate::transcript::UserKind::Delegated,
+                            ..
+                        }) => true,
+                        Some(Block::Tool(call)) if call.agent_card.is_some() => {
+                            !call.is_expanded(all_expanded) || line + 2 == height
+                        }
+                        Some(Block::Tool(call)) if call.is_delegation_receipt() => {
+                            line + 1 == height
+                        }
+                        _ => false,
+                    }
+                })
+        });
+        if let Some(session_id) = open_inspector {
+            self.open_delegation_for(&session_id);
+            return true;
         }
+        let following = matches!(self.scroll, Scroll::Follow);
         let Some(session) = self.resident.current_mut() else {
-            return;
+            return false;
         };
         // A group's summary row is its first row: a click opens or closes it;
-        // closed, the newest-step row under it opens it too.
-        if let crate::transcript::Grouping::Head { open, .. } = session.transcript.grouping(index)
-            && (line == header || (!open && !all_expanded))
-        {
-            session.transcript.toggle_group(index);
-            self.pin_view();
-            return;
+        // while Working is closed, the newest-step row under it opens it too.
+        match session.transcript.grouping(index) {
+            crate::transcript::Grouping::Head { summary, open, .. }
+                if line == header || (!open && !all_expanded && summary.live) =>
+            {
+                let keep_follow = following && summary.live && !*open;
+                session.transcript.toggle_group(index);
+                if !keep_follow {
+                    self.pin_view();
+                }
+                return true;
+            }
+            crate::transcript::Grouping::Tail {
+                summary: Some(_), ..
+            } if line == header => {
+                session.transcript.toggle_group(index);
+                self.pin_view();
+                return true;
+            }
+            _ => {}
         }
         match session.transcript.blocks().get(index) {
             Some(Block::Tool(call)) => {
@@ -333,6 +417,18 @@ impl App {
                 {
                     call.toggle_expanded(all_expanded);
                     self.pin_view();
+                    return true;
+                }
+            }
+            Some(Block::User {
+                kind: crate::transcript::UserKind::Delegated,
+                ..
+            }) => {
+                if let Some(Block::User { expanded, .. }) = session.transcript.block_mut(index) {
+                    let open = !expanded.unwrap_or(all_expanded);
+                    *expanded = (open != all_expanded).then_some(open);
+                    self.pin_view();
+                    return true;
                 }
             }
             // The open thinking rail or its folded `∴` row, not the answer.
@@ -344,6 +440,7 @@ impl App {
                     let open = !expanded.unwrap_or(all_expanded);
                     *expanded = (open != all_expanded).then_some(open);
                     self.pin_view();
+                    return true;
                 }
             }
             Some(Block::TurnEnd {
@@ -359,15 +456,18 @@ impl App {
                     scroll: 0,
                     visible_rows: 0,
                 };
+                return true;
             }
             Some(Block::TurnEnd {
                 changes: Some(changes),
                 ..
             }) if !changes.is_empty() => {
                 self.open_panel(Panel::Diff);
+                return true;
             }
             _ => {}
         }
+        false
     }
 
     /// Copies the selection that just ended; it stays highlighted until the
@@ -379,5 +479,225 @@ impl App {
         {
             self.copy(text);
         }
+    }
+
+    /// Handles left clicks on any bottom sheet or floating `/` / `@` completion
+    /// popup: single-click highlights a row; double-clicking the same row
+    /// confirms/runs it (preventing accidental switches during long tasks).
+    fn click_sheet(&mut self, (column, row): (u16, u16)) -> bool {
+        let Some(index) = self.sheet_hit.row_at(column, row) else {
+            self.sheet_click = None;
+            return true;
+        };
+        let now = tokio::time::Instant::now();
+        let confirmed = self
+            .sheet_click
+            .is_some_and(|(prev, at)| prev == index && now - at <= DOUBLE_CLICK);
+        self.sheet_click = if confirmed { None } else { Some((index, now)) };
+
+        match &mut self.overlay {
+            Overlay::Palette { selected }
+            | Overlay::Files { selected, .. }
+            | Overlay::Sessions { selected, .. }
+            | Overlay::Models { selected, .. }
+            | Overlay::Agents { selected, .. }
+            | Overlay::AgentDelete { selected, .. }
+            | Overlay::Reasoning { selected } => *selected = index,
+            Overlay::Unconfirmed { selected, .. } => *selected = index,
+            Overlay::None => {
+                if let Some(session) = self.resident.current_mut()
+                    && let Some(interaction) = session.interaction.as_mut()
+                    && !interaction.submitted
+                {
+                    let last = interaction.options().len().saturating_sub(1);
+                    interaction.selected = index.min(last);
+                }
+            }
+            _ => return true,
+        }
+
+        if !confirmed {
+            return true;
+        }
+        match self.overlay {
+            Overlay::Palette { .. } | Overlay::Files { .. } => {
+                if let Some(action) = self.accept_completion() {
+                    self.on_action(action);
+                }
+            }
+            Overlay::Sessions { .. }
+            | Overlay::Models { .. }
+            | Overlay::Agents { .. }
+            | Overlay::Reasoning { .. } => {
+                if let Some(action) = self.on_overlay_accept() {
+                    self.on_action(action);
+                }
+            }
+            Overlay::None => {
+                let answer = self.resident.current().and_then(|session| {
+                    let interaction = session.interaction.as_ref()?;
+                    if interaction.submitted || now < session.armed_at {
+                        return None;
+                    }
+                    let approval = matches!(
+                        interaction.request(),
+                        minicore_host_core::InteractionRequestData::Approval { .. }
+                    );
+                    Some(if approval {
+                        if index == 0 {
+                            super::Answer::Allow
+                        } else {
+                            super::Answer::Deny
+                        }
+                    } else {
+                        super::Answer::Choice(index)
+                    })
+                });
+                if let Some(answer) = answer {
+                    self.on_action(super::Action::Answer(answer));
+                }
+            }
+            _ => {}
+        }
+        true
+    }
+
+    /// Handles left clicks inside the `/diff` split workspace using the shared
+    /// [`crate::ui::views::split::SplitHitAreas`] geometry.
+    fn click_diff_view(&mut self, (column, row): (u16, u16)) -> bool {
+        use crate::ui::views::split::PaneFocus;
+        let Overlay::Diff(diff) = &mut self.overlay else {
+            return false;
+        };
+        if diff.hit.in_list(column, row) {
+            diff.focus = PaneFocus::List;
+            let matched_len = diff.matching_indices().len();
+            if let Some(idx) = diff.hit.list_item_at(column, row, matched_len) {
+                let changed = idx != diff.selected;
+                diff.detail_open = true;
+                if changed {
+                    diff.select(idx);
+                    self.load_selected_diff();
+                }
+            }
+            return true;
+        }
+        if diff.hit.in_detail(column, row) {
+            diff.focus = PaneFocus::Detail;
+            diff.detail_open = true;
+            return true;
+        }
+        false
+    }
+
+    /// Handles left clicks inside the `Ctrl+B` Async Tasks Inspector:
+    /// selecting rows in the left list, focusing the right child conversation,
+    /// jumping to tail, or toggling `Working`/`Worked`/tool/thinking folds.
+    fn click_task_inspector(&mut self, (column, row): (u16, u16)) -> bool {
+        if self.task_inspector.hit.in_list(column, row) {
+            let matched_len = if let Overlay::Delegations { filter, .. } = &self.overlay {
+                let all = super::overlay::async_tasks(self);
+                super::overlay::matching_async_tasks(&all, filter).len()
+            } else {
+                0
+            };
+            let picked = self
+                .task_inspector
+                .hit
+                .list_item_at(column, row, matched_len);
+            if let Overlay::Delegations {
+                selected, focus, ..
+            } = &mut self.overlay
+            {
+                *focus = super::overlay::TaskFocus::List;
+                if let Some(idx) = picked {
+                    *selected = idx;
+                }
+            }
+            self.ensure_inspector_session();
+            return true;
+        }
+        if !self.task_inspector.hit.in_detail(column, row) {
+            return false;
+        }
+        if let Overlay::Delegations {
+            focus, detail_open, ..
+        } = &mut self.overlay
+        {
+            *focus = super::overlay::TaskFocus::Detail;
+            *detail_open = true;
+        }
+        if self.on_inspector_jump_label((column, row)) {
+            self.task_inspector.scroll = Scroll::Follow;
+            return true;
+        }
+        let Some((index, line)) = self.task_inspector.layout.hit(column, row) else {
+            return true;
+        };
+        let all_expanded = self.tools_expanded;
+        let text = self
+            .task_inspector
+            .layout
+            .row_text(row)
+            .unwrap_or_default()
+            .trim()
+            .to_owned();
+        let following = matches!(self.task_inspector.scroll, Scroll::Follow);
+        let Some(session) = self.inspected_session_mut() else {
+            return true;
+        };
+        match session.transcript.grouping(index) {
+            crate::transcript::Grouping::Head { summary, open, .. }
+                if line == 0 || (!open && !all_expanded && summary.live) =>
+            {
+                let keep_follow = following && summary.live && !*open;
+                session.transcript.toggle_group(index);
+                if !keep_follow {
+                    self.inspector_pin_view();
+                }
+                return true;
+            }
+            crate::transcript::Grouping::Tail {
+                summary: Some(_), ..
+            } if line == 0 => {
+                session.transcript.toggle_group(index);
+                self.inspector_pin_view();
+                return true;
+            }
+            _ => {}
+        }
+        match session.transcript.blocks().get(index) {
+            Some(Block::Tool(call)) => {
+                let expanded = call.is_expanded(all_expanded);
+                if (expanded || !text.is_empty())
+                    && let Some(Block::Tool(call)) = session.transcript.block_mut(index)
+                {
+                    call.toggle_expanded(all_expanded);
+                    self.inspector_pin_view();
+                }
+            }
+            Some(Block::Assistant { .. })
+                if text.starts_with(crate::ui::rails::RAIL) || text.starts_with('∴') =>
+            {
+                if let Some(Block::Assistant { expanded, .. }) = session.transcript.block_mut(index)
+                {
+                    let open = !expanded.unwrap_or(all_expanded);
+                    *expanded = (open != all_expanded).then_some(open);
+                    self.inspector_pin_view();
+                }
+            }
+            _ => {}
+        }
+        true
+    }
+
+    fn on_inspector_jump_label(&self, (column, row): (u16, u16)) -> bool {
+        let viewport = self.task_inspector.layout.viewport;
+        let area = viewport.area();
+        viewport.top + viewport.height < self.task_inspector.layout.total_rows()
+            && row + 1 == area.bottom()
+            && column
+                .checked_sub(area.x)
+                .is_some_and(|col| scrollbar::jump_label(area.width).contains(&col))
     }
 }

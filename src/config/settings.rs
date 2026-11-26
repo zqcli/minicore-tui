@@ -62,10 +62,33 @@ impl Default for Ui {
     }
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Remote {
+    /// TCP bind address for `/remote` (IPv4 or IPv6, e.g. `127.0.0.1:8443`, `[::1]:8443`, `[::]:8443`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub listen: Option<String>,
+    /// Public URL displayed in the `/remote` overlay (e.g. a Cloudflare-proxied `wss://...`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub public_url: Option<String>,
+    /// PEM certificate chain path for direct WSS; omit with `tls_key` for plain local WS.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tls_cert: Option<String>,
+    /// PEM private key path for direct WSS; omit with `tls_cert` for plain local WS.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tls_key: Option<String>,
+}
+
 #[derive(Default, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
     pub ui: Ui,
+    #[serde(skip_serializing_if = "is_default_remote")]
+    pub remote: Remote,
+}
+
+fn is_default_remote(remote: &Remote) -> bool {
+    *remote == Remote::default()
 }
 
 pub fn editor_command(configured: &[String]) -> Option<Vec<String>> {

@@ -185,12 +185,19 @@ pub struct DiffFile {
 }
 
 /// The open diff view: the file list from `changes.list` and, for the selected
-/// file, its rows from `changes.diff`.
+/// file, its rows from `changes.diff`, sharing the `Ctrl+B` split-pane model.
 #[derive(Debug, Default)]
 pub struct DiffState {
     pub files: Vec<DiffFile>,
+    pub filter: String,
+    /// Index into `matching_files()`.
     pub selected: usize,
+    pub focus: crate::ui::views::split::PaneFocus,
+    /// On narrow terminals (`< 96` cols), toggles between file list and hunks.
+    pub detail_open: bool,
     pub scroll: usize,
+    pub visible_rows: usize,
+    pub hit: crate::ui::views::split::SplitHitAreas,
     /// The selected file's diff; empty while it loads.
     pub rows: Vec<DiffRow>,
     /// Why there is nothing to show, or what failed.
@@ -204,20 +211,46 @@ pub struct DiffState {
 impl DiffState {
     pub fn set_files(&mut self, files: Vec<DiffFile>) {
         self.files = files;
-        self.selected = self.selected.min(self.files.len().saturating_sub(1));
+        let len = self.matching_indices().len();
+        self.selected = self.selected.min(len.saturating_sub(1));
     }
 
-    /// Selects a row and drops the previous row's diff at once: the pane never
-    /// shows one file's diff under another file's name.
+    /// Indices into `self.files` that match the current `filter`.
+    pub fn matching_indices(&self) -> Vec<usize> {
+        let query = self.filter.trim();
+        if query.is_empty() {
+            return (0..self.files.len()).collect();
+        }
+        self.files
+            .iter()
+            .enumerate()
+            .filter(|(_, file)| super::picker::fuzzy_match(&file.path, query))
+            .map(|(idx, _)| idx)
+            .collect()
+    }
+
+    /// Aggregate `(added, removed)` across all measured files.
+    pub fn total_counts(&self) -> (usize, usize) {
+        self.files
+            .iter()
+            .filter_map(|file| file.lines)
+            .fold((0, 0), |(a, r), (da, dr)| (a + da, r + dr))
+    }
+
+    /// Selects a filtered row and drops the previous row's diff at once: the
+    /// pane never shows one file's diff under another file's name.
     pub fn select(&mut self, index: usize) {
-        self.selected = index;
+        let len = self.matching_indices().len();
+        self.selected = index.min(len.saturating_sub(1));
         self.scroll = 0;
         self.rows.clear();
         self.status.clear();
     }
 
     pub fn current(&self) -> Option<&DiffFile> {
-        self.files.get(self.selected)
+        let matched = self.matching_indices();
+        let idx = self.selected.min(matched.len().saturating_sub(1));
+        matched.get(idx).and_then(|&real| self.files.get(real))
     }
 
     pub fn scroll_by(&mut self, delta: isize, rows: usize) {
@@ -246,6 +279,24 @@ impl App {
             status: "Loading working-tree changes…".into(),
             ..Default::default()
         }
+    }
+
+    /// Re-reads workspace changes while `/diff` stays open (helpful during long turns).
+    pub(super) fn refresh_diff(&mut self) {
+        let Some(session) = self.resident.current() else {
+            return;
+        };
+        let epoch = session.epoch;
+        let client = session.client.clone();
+        let source = session_source(session);
+        if let Overlay::Diff(diff) = &mut self.overlay {
+            diff.in_flight = None;
+            diff.pending.clear();
+            diff.status = "Refreshing working-tree changes…".into();
+        }
+        self.spawn_for(epoch, async move {
+            SessionOp::ChangeFiles(read_changes(&client, &source).await)
+        });
     }
 
     /// Fills the file column, then reads every path once for its counts.

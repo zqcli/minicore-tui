@@ -3,9 +3,12 @@
 use minicore_host_core::{SessionContextData, SessionContextSnapshot};
 use minicore_host_protocol::{CompactionOutcome, CompactionState, PersistenceState};
 use minicore_host_runtime::model::Usage;
+use ratatui::Frame;
+use ratatui::layout::Rect;
 use ratatui::text::Line;
 
 use crate::app::Session;
+use crate::ui::chrome;
 use crate::ui::format_tokens;
 use crate::ui::theme::Styles;
 
@@ -13,6 +16,28 @@ use super::styled;
 
 pub fn lines(session: Option<&Session>, styles: Styles) -> Vec<Line<'static>> {
     report(session.and_then(|session| session.context.as_ref()), styles)
+}
+
+pub fn render(
+    frame: &mut Frame,
+    area: Rect,
+    styles: Styles,
+    session: Option<&Session>,
+    scroll: &mut usize,
+) {
+    let width = usize::from(area.width.saturating_sub(2)).max(1);
+    let lines = report_width(session.and_then(|s| s.context.as_ref()), styles, width);
+    let (clamped, _) = super::page::render(
+        frame,
+        area,
+        styles,
+        "Context",
+        &[("r", "refresh"), ("c", "copy"), ("esc", "back")],
+        None,
+        &lines,
+        *scroll,
+    );
+    *scroll = clamped;
 }
 
 pub fn text(session: Option<&Session>, styles: Styles) -> String {
@@ -24,82 +49,97 @@ pub fn text(session: Option<&Session>, styles: Styles) -> String {
 }
 
 fn report(context: Option<&SessionContextSnapshot>, styles: Styles) -> Vec<Line<'static>> {
+    report_width(context, styles, 100)
+}
+
+fn report_width(
+    context: Option<&SessionContextSnapshot>,
+    styles: Styles,
+    width: usize,
+) -> Vec<Line<'static>> {
     let Some(context) = context else {
         return vec![styled("Context facts are not loaded yet.", styles.dim())];
     };
     let data = &context.data;
-    let mut lines = vec![styled(
-        "Exact context token usage and percentage are not reported.",
-        styles.dim(),
-    )];
-    lines.push(styled(
-        &format!("Configured model: {}", data.model),
-        styles.text(),
-    ));
+    let mut rows: Vec<(&str, String, Option<ratatui::style::Style>)> =
+        vec![("model", data.model.to_string(), None)];
     if let Some(active) = &data.active_turn {
-        lines.push(styled(
-            &format!(
-                "Active model: {} · {} declared window",
+        rows.push((
+            "active model",
+            format!(
+                "{} · {} declared window",
                 active.model.model,
                 format_tokens(active.model.context_window)
             ),
-            styles.text(),
+            None,
         ));
     }
     match &data.history {
         Some(history) => {
-            lines.push(styled(
-                &format!(
-                    "Native history: {} raw items · {} effective items · position {}",
+            rows.push((
+                "history",
+                format!(
+                    "{} raw items · {} effective items · position {}",
                     history.raw_items, history.effective_items, history.position
                 ),
-                styles.text(),
+                None,
             ));
             if let Some(projection) = &history.projection {
-                lines.push(styled(
-                    &format!(
-                        "Committed summary: {} covered items · source position {}",
+                rows.push((
+                    "summary",
+                    format!(
+                        "{} covered items · source position {}",
                         projection.covered_items, projection.source_position
                     ),
-                    styles.dim(),
+                    Some(styles.dim()),
                 ));
             }
             if let Some(response) = &history.latest_response {
-                lines.push(styled(
-                    &format!(
-                        "Latest response: {} · {}",
-                        response.model,
-                        usage_text(&response.usage)
-                    ),
-                    styles.text(),
+                rows.push((
+                    "latest response",
+                    format!("{} · {}", response.model, usage_text(&response.usage)),
+                    None,
                 ));
-                lines.push(styled(
+                rows.push((
+                    "usage note",
                     if response.covered_by_compaction {
-                        "This past response is covered by compaction; its usage is not the current context size."
+                        "Covered by compaction; past response usage is not the current context size."
                     } else {
                         "Past response usage is not the current context size."
-                    },
-                    styles.dim(),
+                    }
+                    .to_owned(),
+                    Some(styles.dim()),
                 ));
             } else {
-                lines.push(styled(
-                    "No complete response usage is available.",
-                    styles.dim(),
+                rows.push((
+                    "latest response",
+                    "No complete response usage is available.".to_owned(),
+                    Some(styles.dim()),
                 ));
             }
         }
-        None => lines.push(styled(
-            "Native history is not loaded; its size is unknown.",
-            styles.dim(),
+        None => rows.push((
+            "history",
+            "Native history is not loaded; its size is unknown.".to_owned(),
+            Some(styles.dim()),
         )),
     }
-    lines.push(styled(
-        &format!(
-            "Unbound inputs: {} next step · {} next turn",
+    rows.push((
+        "queued inputs",
+        format!(
+            "{} next step · {} next turn",
             data.queued_inputs.next_step, data.queued_inputs.next_turn
         ),
-        styles.dim(),
+        Some(styles.dim()),
     ));
+    let mut lines = vec![
+        styled(
+            "Exact context token usage and percentage are not reported.",
+            styles.dim(),
+        ),
+        Line::default(),
+    ];
+    lines.extend(chrome::kv_lines(&rows, styles, width));
     compaction_lines(data, styles, &mut lines);
     if data.history_save.pending {
         lines.push(styled(

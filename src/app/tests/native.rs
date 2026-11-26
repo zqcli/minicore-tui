@@ -179,6 +179,9 @@ async fn compaction_failure_after_navigation_names_its_original_session() {
         h.app.composer.set_text("unrelated draft");
         h.app.notices.clear();
         call.finish();
+        for _ in 1..4 {
+            h.next_call().await.finish();
+        }
         h.until(|app| {
             matches!(
                 compaction_result(app, &target),

@@ -852,6 +852,44 @@ impl App {
             ),
             _ => return,
         };
+        // A retry after partial streaming restarts the model output from byte 0;
+        // drop the stale buffer and unfinished block text before feeding the new attempt.
+        if let ObservationEvent::Activity(ActivityEvent::ModelOutput {
+            source: model,
+            data,
+        }) = event
+            && data.start == 0
+        {
+            let session = self.session_mut(epoch);
+            let restarted = session.outputs.iter().any(|output| {
+                output.buffer.source() == &source
+                    && output.channel == data.channel
+                    && (output.rendered > 0 || !output.buffer.text().is_empty())
+            });
+            if restarted {
+                session.outputs.retain(|output| {
+                    !(output.buffer.source() == &source && output.channel == data.channel)
+                });
+                session
+                    .closed_outputs
+                    .retain(|closed| !(closed.source == source && closed.channel == data.channel));
+                let key = RequestKey::response(model.turn.turn_id.clone(), model.response_index);
+                if !session.transcript.has_canonical_response(&key)
+                    && let Block::Assistant {
+                        reasoning,
+                        text,
+                        streaming: true,
+                        ..
+                    } = session.transcript.assistant_mut(&key)
+                {
+                    match data.channel.as_str() {
+                        "text" => text.clear(),
+                        "reasoning" => reasoning.clear(),
+                        _ => {}
+                    }
+                }
+            }
+        }
         for channel in channels {
             if self
                 .session_mut(epoch)

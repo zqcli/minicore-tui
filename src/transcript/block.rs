@@ -22,6 +22,7 @@ pub enum Block {
         text: String,
         kind: UserKind,
         at: Option<Timestamp>,
+        expanded: Option<bool>,
     },
     Assistant {
         key: RequestKey,

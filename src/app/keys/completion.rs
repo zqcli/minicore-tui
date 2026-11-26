@@ -43,8 +43,8 @@ impl App {
         }
     }
 
-    /// Keys while the completion list is open. It takes the arrows, Tab, Enter
-    /// and Esc while it has rows; every other key edits the draft that filters it.
+    /// Keys while the completion list is open. It takes the arrows, PageUp/PageDown,
+    /// Tab, Enter and Esc while it has rows; every other key edits the draft that filters it.
     pub(super) fn on_completion_key(&mut self, key: KeyEvent) -> Option<Action> {
         let rows = self.completion_len();
         let plain = key.modifiers.is_empty();
@@ -53,6 +53,8 @@ impl App {
             KeyCode::Esc => self.overlay = Overlay::None,
             KeyCode::Up if plain && rows > 0 => self.overlay_move(-1),
             KeyCode::Down if plain && rows > 0 => self.overlay_move(1),
+            KeyCode::PageUp if plain && rows > 0 => self.overlay_move(-8),
+            KeyCode::PageDown if plain && rows > 0 => self.overlay_move(8),
             KeyCode::Tab if plain && rows > 0 => self.apply_completion(),
             KeyCode::Enter if plain && rows > 0 => return self.accept_completion(),
             // An `@` with no match never sends the draft by accident.
@@ -112,7 +114,7 @@ impl App {
 
     /// Enter: a command runs with the argument typed after its name, which
     /// may belong to another fuzzy match than the typed name; a path is inserted.
-    fn accept_completion(&mut self) -> Option<Action> {
+    pub(crate) fn accept_completion(&mut self) -> Option<Action> {
         if !matches!(self.overlay, Overlay::Palette { .. }) {
             self.apply_completion();
             return None;

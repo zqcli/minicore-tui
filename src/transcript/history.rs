@@ -269,6 +269,7 @@ fn append_record(
                     None => UserKind::Prompt,
                 },
                 at: Some(received_at.unwrap_or(record.recorded_at)),
+                expanded: None,
             });
             transcript.identify_user(at, record.turn_id.clone(), message_id.clone());
             index.source(transcript, at, source(record, 0));
@@ -306,6 +307,7 @@ fn append_record(
                 }
             }
             index.source(transcript, at, source(record, 0));
+            backfill_tool_duration(transcript, at);
         }
         HistoryItemData::Summary { text } => {
             let at = transcript.push(Block::Summary { text: text.clone() });
@@ -477,6 +479,28 @@ fn append_response(
             }
         }
         index.source(transcript, at, source(record, part_index + 1));
+        backfill_tool_duration(transcript, at);
+    }
+}
+
+/// Restores a tool call's wall time on history reload from its saved
+/// invocation and result timestamps when no live duration was captured.
+fn backfill_tool_duration(transcript: &mut Transcript, at: usize) {
+    let Block::Tool(call) = &transcript.blocks[at] else {
+        return;
+    };
+    if call.duration.is_some() || !call.has_result() {
+        return;
+    }
+    let sources = transcript.history_sources(at);
+    let (Some(first), Some(last)) = (sources.first(), sources.last()) else {
+        return;
+    };
+    if first.position < last.position
+        && let Some(duration) = super::elapsed(first.recorded_at, last.recorded_at)
+        && let Block::Tool(call) = &mut transcript.blocks[at]
+    {
+        call.duration = Some(duration);
     }
 }
 
@@ -1098,9 +1122,88 @@ mod tests {
                 super::super::Grouping::None => "none",
                 super::super::Grouping::Head { .. } => "head",
                 super::super::Grouping::Member { .. } => "member",
+                super::super::Grouping::Tail { .. } => "tail",
             })
             .collect();
         assert!(groupings.contains(&"head"), "{groupings:?}");
         assert!(groupings.contains(&"member"), "{groupings:?}");
+    }
+
+    #[test]
+    fn reopened_tool_calls_restore_duration_and_backfill_agent_card_metadata() {
+        use crate::transcript::agent_card::AgentCard;
+        use minicore_host_protocol::{DelegationAssociation, SessionRef, ToolCallRef};
+
+        let result = serde_json::from_value::<HistoryRecordData>(json!({
+            "position": 5,
+            "recorded_at": "2026-11-13T10:00:12Z",
+            "turn_id": "00000000000000000001",
+            "response_index": 0,
+            "kind": "tool_result",
+            "tool_call_id": "call_agent",
+            "name": "agent",
+            "result": {"outcome": "success", "output": {"content": "accepted"}}
+        }))
+        .unwrap();
+        let mut transcript = Transcript::from_history(&[result]);
+        let origin = ToolCallRef {
+            turn_id: "00000000000000000001".parse().unwrap(),
+            tool_call_id: "call_agent".to_owned().into(),
+        };
+        let parent = SessionRef {
+            agent_id: "00000000000000000002".parse().unwrap(),
+            session_id: "00000000000000000003".parse().unwrap(),
+        };
+        let child = SessionRef {
+            agent_id: "00000000000000000099".parse().unwrap(),
+            session_id: "00000000000000000004".parse().unwrap(),
+        };
+        let task_message_id: minicore_host_protocol::MessageId =
+            "00000000000000000005".parse().unwrap();
+        let card = AgentCard::new(
+            "00000000000000000006".parse().unwrap(),
+            DelegationAssociation {
+                parent,
+                origin: origin.clone(),
+                child,
+                accepted_message_ids: vec![task_message_id.clone()],
+                task_message_id,
+                inputs: Vec::new(),
+                completion: None,
+            },
+        );
+        transcript.find_tool_mut(&origin).unwrap().agent_card = Some(Box::new(card));
+        let invocation = serde_json::from_value::<HistoryRecordData>(json!({
+            "position": 2,
+            "recorded_at": "2026-11-13T10:00:05Z",
+            "turn_id": "00000000000000000001",
+            "response_index": 0,
+            "kind": "assistant",
+            "response": {
+                "content": [{
+                    "type": "tool_call",
+                    "data": {
+                        "tool_call_id": "call_agent",
+                        "name": "agent",
+                        "arguments": {
+                            "action": "create",
+                            "resource": "agent",
+                            "name": "tokyo-agent",
+                            "text": "Check Tokyo weather"
+                        },
+                        "call_index": 0
+                    }
+                }],
+                "finish_reason": "tool_calls",
+                "usage": {}
+            }
+        }))
+        .unwrap();
+        transcript.install_history_records(&[invocation]);
+        let call = transcript.find_tool(&origin).unwrap();
+        assert_eq!(call.duration, Some(std::time::Duration::from_secs(7)));
+        let card = call.agent_card.as_deref().unwrap();
+        assert_eq!(card.task, "Check Tokyo weather");
+        assert_eq!(card.agent_name.as_deref(), Some("tokyo-agent"));
     }
 }

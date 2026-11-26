@@ -169,6 +169,18 @@ impl ToolCall {
         } else {
             None
         };
+        if let Some(card) = self.agent_card.as_deref_mut() {
+            if card.task.is_empty()
+                && let Some(text) = string("text")
+            {
+                card.task = super::agent_card::head(text, 512).to_owned();
+            }
+            if card.agent_name.is_none()
+                && let Some(name) = string("name").filter(|name| !name.trim().is_empty())
+            {
+                card.agent_name = Some(name.trim().to_owned());
+            }
+        }
     }
 
     /// What an `agent` wait returned, in words; other results keep their body.
@@ -860,11 +872,13 @@ mod tests {
                 output: OutputData::Utf8("actual\n".into()),
                 complete: true,
                 omitted_bytes: 0,
+                full_output_path: None,
             },
             stderr: CommandStream {
                 output: OutputData::Utf8("diagnostic\n".into()),
                 complete: true,
                 omitted_bytes: 0,
+                full_output_path: None,
             },
             file_changes: CommandFileChanges::Unknown,
             cleanup_errors: Vec::new(),
@@ -905,11 +919,13 @@ mod tests {
                 output: OutputData::Utf8(text.clone()),
                 complete: true,
                 omitted_bytes: 0,
+                full_output_path: None,
             },
             stderr: CommandStream {
                 output: OutputData::Utf8("diagnostic\n".into()),
                 complete: true,
                 omitted_bytes: 0,
+                full_output_path: None,
             },
             file_changes: CommandFileChanges::Unknown,
             cleanup_errors: Vec::new(),

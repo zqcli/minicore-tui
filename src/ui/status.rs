@@ -13,7 +13,10 @@ use super::{composer, sheets};
 use crate::app::{App, Notice, NoticeLevel, Session};
 use crate::wrap;
 use minicore_host_core::InteractionRequestData;
-use minicore_host_protocol::{CompactionState, InputQueue, ModelRetryPhase, TurnPhase, TurnState};
+use minicore_host_protocol::{
+    CompactionState, InputQueue, MessageSource, ModelRetryPhase, QueuedInputRecord, TurnPhase,
+    TurnState,
+};
 use minicore_host_runtime::tools::ToolInputAnswerKind;
 
 pub struct Dock {
@@ -111,35 +114,33 @@ pub fn dock(app: &App, styles: Styles, width: u16, height: u16) -> Dock {
         // Status is not part of the draft: a blank row keeps it off the editor.
         above.push(Line::default());
     }
-    let (mut editor, cursor) = composer::render(
+    let editor_mode = match &app.overlay {
+        crate::app::Overlay::Delegations { focus, .. } => {
+            if !app.inspected_can_send() {
+                Editor::Closed
+            } else if *focus == crate::app::TaskFocus::Composer {
+                Editor::Live
+            } else {
+                Editor::TaskInactive
+            }
+        }
+        overlay if overlay.is_view() => Editor::View,
+        _ if app.resident.current().is_some_and(|session| {
+            session.state.data.lifecycle != minicore_host_protocol::SessionLifecycle::Open
+        }) =>
+        {
+            Editor::Closed
+        }
+        _ => Editor::Live,
+    };
+    let (editor, cursor) = composer::render(
         app.active_editor(),
         styles,
         width,
         composer::max_rows(height),
-        if app.overlay.is_view() {
-            Editor::View
-        } else if app.resident.current().is_some_and(|session| {
-            session.state.data.lifecycle != minicore_host_protocol::SessionLifecycle::Open
-        }) {
-            Editor::Closed
-        } else {
-            Editor::Live
-        },
+        editor_mode,
     );
     let editor_rows = editor.len() as u16;
-    if let Some(rows) = sheets::completion(app, styles, width.saturating_sub(1)) {
-        editor.extend(rows.into_iter().map(|line| {
-            let spans = line
-                .spans
-                .into_iter()
-                .map(|span| {
-                    let style = line.style.patch(span.style);
-                    span.style(style)
-                })
-                .collect();
-            composer::row(spans, usize::from(width), styles)
-        }));
-    }
     Dock {
         above,
         editor,
@@ -177,17 +178,29 @@ fn padded(text: &str, width: u16, style: Style) -> Line<'static> {
 /// Rows of queued text shown under the activity line.
 const QUEUE_ROWS: usize = 3;
 
+/// Whether a queued entry is a child Agent's settled JSON result notification.
+/// Those are internal handoffs for the model, never user-editable prompts.
+fn is_delegated_result(queued: &QueuedInputRecord) -> bool {
+    matches!(queued.source, MessageSource::Agent { .. })
+        && super::delegated::is_result(&queued.input.text)
+}
+
 /// What will be sent next, under the activity line: `↗` a steer for the next
-/// step, `↳` a follow-up for the next Turn, oldest first.
+/// step, `↳` a follow-up for the next Turn, oldest first. Internal delegation
+/// result JSON notifications stay out of this preview.
 fn queued_rows(session: &Session, styles: Styles, width: u16) -> Vec<Line<'static>> {
     let Some(queue) = &session.queue else {
         return Vec::new();
     };
     let room = usize::from(width).saturating_sub(6);
-    let mut rows: Vec<Line<'static>> = queue
+    let visible: Vec<&QueuedInputRecord> = queue
         .next_step
         .iter()
         .chain(&queue.next_turn)
+        .filter(|queued| !is_delegated_result(queued))
+        .collect();
+    let mut rows: Vec<Line<'static>> = visible
+        .iter()
         .take(QUEUE_ROWS)
         .map(|queued| {
             let glyph = match queued.queue {
@@ -203,10 +216,9 @@ fn queued_rows(session: &Session, styles: Styles, width: u16) -> Vec<Line<'stati
             ])
         })
         .collect();
-    let count = queued_count(session);
-    if count > QUEUE_ROWS {
+    if visible.len() > QUEUE_ROWS {
         rows.push(padded(
-            &format!("… {} more queued", count - QUEUE_ROWS),
+            &format!("… {} more queued", visible.len() - QUEUE_ROWS),
             width,
             styles.faint(),
         ));
@@ -214,19 +226,63 @@ fn queued_rows(session: &Session, styles: Styles, width: u16) -> Vec<Line<'stati
     rows
 }
 
-fn queued_count(session: &Session) -> usize {
-    session
-        .queue
-        .as_ref()
-        .map_or(0, |queue| queue.next_step.len() + queue.next_turn.len())
+fn user_queued_count(session: &Session) -> usize {
+    session.queue.as_ref().map_or(0, |queue| {
+        queue
+            .next_step
+            .iter()
+            .chain(&queue.next_turn)
+            .filter(|queued| matches!(queued.source, MessageSource::User))
+            .count()
+    })
+}
+
+fn delegated_queued_count(session: &Session) -> usize {
+    session.queue.as_ref().map_or(0, |queue| {
+        queue
+            .next_step
+            .iter()
+            .chain(&queue.next_turn)
+            .filter(|queued| is_delegated_result(queued))
+            .count()
+    })
 }
 
 /// The facts and keys that matter now, right of the activity: what Esc or
-/// Enter would do, the queue, a pause, the way back from a child.
-fn right_keys(app: &App) -> Vec<String> {
-    let mut keys = Vec::new();
+/// Enter would do, the queue, a pause, the way back from a child, and the
+/// single-line async task status summary (`needs input`, `running`, `failed`,
+/// `completed` · `ctrl+b`).
+fn right_keys(app: &App, styles: Styles) -> Vec<Vec<Span<'static>>> {
+    let mut keys: Vec<Vec<Span<'static>>> = Vec::new();
+    let faint = styles.faint();
+    let plain = |text: String| vec![Span::styled(text, faint)];
+    if let crate::app::Overlay::Delegations { focus, .. } = &app.overlay {
+        match focus {
+            crate::app::TaskFocus::Composer if app.inspected_can_send() => {
+                keys.push(plain("enter steer · alt+enter follow-up".to_owned()));
+                keys.push(plain("esc list".to_owned()));
+            }
+            crate::app::TaskFocus::Detail => {
+                if app.inspected_can_send() {
+                    keys.push(plain("enter message".to_owned()));
+                }
+                keys.push(plain("↑↓/jk scroll".to_owned()));
+                keys.push(plain("ctrl+e full view".to_owned()));
+                keys.push(plain("←/esc list".to_owned()));
+            }
+            _ => {
+                if app.inspected_can_send() {
+                    keys.push(plain("enter message".to_owned()));
+                }
+                keys.push(plain("→/tab scroll".to_owned()));
+                keys.push(plain("ctrl+e full view".to_owned()));
+                keys.push(plain("esc back".to_owned()));
+            }
+        }
+        return keys;
+    }
     if app.return_target().is_some() && app.composer.is_empty() {
-        keys.push("↰ esc back".to_owned());
+        keys.push(plain("↰ esc back".to_owned()));
     }
     let Some(session) = app.resident.current() else {
         return keys;
@@ -235,30 +291,76 @@ fn right_keys(app: &App) -> Vec<String> {
         return keys;
     }
     let drafting = !app.composer.is_empty();
-    let queued = queued_count(session);
+    let user_queued = user_queued_count(session);
+    let delegated_queued = delegated_queued_count(session);
     if session.paused() {
-        keys.push(
+        keys.push(plain(
             if drafting {
                 "paused · enter sends"
             } else {
                 "paused · enter resumes"
             }
             .to_owned(),
-        );
+        ));
     } else if drafting && (session.is_busy() || session.compacting()) {
-        keys.push("enter steer · alt+enter follow-up".to_owned());
-    } else if session.is_busy() && app.return_target().is_none() {
-        keys.push("esc interrupt".to_owned());
+        keys.push(plain("enter steer · alt+enter follow-up".to_owned()));
+    } else if session.is_busy() {
+        if app.return_target().is_some() {
+            keys.push(plain("/cancel stop".to_owned()));
+        } else {
+            keys.push(plain("esc interrupt".to_owned()));
+        }
     }
-    if queued > 0 {
-        keys.push(format!("{queued} queued · alt+↑ edit"));
+    if user_queued > 0 {
+        keys.push(plain(format!("{user_queued} queued · alt+↑ edit")));
     }
-    let running = crate::app::overlay::delegations(app)
-        .iter()
-        .filter(|card| card.outcome().is_none())
-        .count();
-    if running > 0 {
-        keys.push(format!("{running} delegated · ctrl+b"));
+    if delegated_queued > 0 {
+        keys.push(plain(super::blocks::plural(
+            delegated_queued as u64,
+            "agent result",
+        )));
+    }
+    let tasks = crate::app::overlay::async_tasks(app);
+    if !tasks.is_empty() {
+        let needs_input = tasks.iter().filter(|item| item.needs_input()).count();
+        let running = tasks
+            .iter()
+            .filter(|item| item.is_running() && !item.needs_input())
+            .count();
+        let failed = tasks.iter().filter(|item| item.is_failed()).count();
+        let completed = tasks.iter().filter(|item| item.is_completed()).count();
+        let mut group = Vec::new();
+        let push_part = |group: &mut Vec<Span<'static>>, text: String, style: Style| {
+            if !group.is_empty() {
+                group.push(Span::styled(" · ", styles.meta()));
+            }
+            group.push(Span::styled(text, style));
+        };
+        if needs_input > 0 {
+            push_part(
+                &mut group,
+                format!("⚠ {needs_input} needs input"),
+                styles.warning(),
+            );
+        }
+        if running > 0 {
+            push_part(&mut group, format!("{running} running"), styles.accent());
+        }
+        if failed > 0 {
+            push_part(&mut group, format!("{failed} failed"), styles.failure());
+        }
+        if completed > 0 {
+            push_part(
+                &mut group,
+                format!("{completed} completed"),
+                styles.success(),
+            );
+        }
+        if group.is_empty() {
+            push_part(&mut group, format!("{} tasks", tasks.len()), styles.dim());
+        }
+        push_part(&mut group, "ctrl+b".to_owned(), faint);
+        keys.push(group);
     }
     keys
 }
@@ -273,32 +375,40 @@ fn activity_line(app: &App, styles: Styles, width: u16) -> Line<'static> {
         .flash
         .as_ref()
         .map(|(text, _)| vec![Span::raw("  "), Span::styled(text.clone(), styles.text())]);
-    let left = working_line(app, styles)
-        .or(flash)
-        .or_else(|| {
+    let left = if matches!(app.overlay, crate::app::Overlay::Delegations { .. }) {
+        inspector_activity_left(app, styles).or(flash).or_else(|| {
             app.notices
                 .back()
                 .map(|notice| notice_spans(notice, styles))
         })
-        .unwrap_or_default();
+    } else {
+        working_line(app, styles).or(flash).or_else(|| {
+            app.notices
+                .back()
+                .map(|notice| notice_spans(notice, styles))
+        })
+    }
+    .unwrap_or_default();
     let width = usize::from(width);
     // The status on the left keeps room to be read; key hints give way first,
     // the earliest (the mode hint) before the counts.
     let wanted = spans_width(&left).min(LEFT_ROOM);
-    let mut keys = right_keys(app);
-    let keys_width =
-        |keys: &[String]| keys.iter().map(|key| wrap::width(key) + 2).sum::<usize>() + 1;
+    let mut keys = right_keys(app, styles);
+    let keys_width = |keys: &[Vec<Span<'static>>]| {
+        keys.iter()
+            .map(|group| spans_width(group) + 2)
+            .sum::<usize>()
+            + 1
+    };
     while !keys.is_empty() && keys_width(&keys) + wanted > width {
         keys.remove(0);
     }
     let right: Vec<Span<'static>> = keys
         .into_iter()
         .enumerate()
-        .flat_map(|(index, key)| {
+        .flat_map(|(index, group)| {
             let separator = (index > 0).then(|| Span::styled("  ", styles.faint()));
-            separator
-                .into_iter()
-                .chain([Span::styled(key, styles.faint())])
+            separator.into_iter().chain(group)
         })
         .collect();
     let right_width = spans_width(&right);
@@ -313,6 +423,80 @@ fn activity_line(app: &App, styles: Styles, width: u16) -> Line<'static> {
         spans.extend(right);
     }
     Line::from(spans)
+}
+
+/// Status row left side while `Ctrl+B` Async Tasks Inspector is open:
+/// shows the selected child's own live Working state or a clear reply target.
+fn inspector_activity_left(app: &App, styles: Styles) -> Option<Vec<Span<'static>>> {
+    let crate::app::Overlay::Delegations {
+        filter,
+        selected,
+        focus,
+        ..
+    } = &app.overlay
+    else {
+        return None;
+    };
+    let all = crate::app::overlay::async_tasks(app);
+    let matched = crate::app::overlay::matching_async_tasks(&all, filter);
+    let item = matched
+        .get((*selected).min(matched.len().saturating_sub(1)))
+        .copied()?;
+    let short_id = item.short_id().to_owned();
+    if let Some(child) = app.inspected_session()
+        && child.is_busy()
+    {
+        let glyph = spinner(app.started.elapsed());
+        let mut text = format!("Child {short_id} · Working");
+        if let Some(live) = &child.live {
+            if let Some(tool) = &live.running_tool {
+                text.push_str(&format!(" · running {tool}"));
+            } else if let Some(phase) = live.state.phase {
+                let label = match phase {
+                    TurnPhase::Model => "Model request",
+                    TurnPhase::Tools => "Running tools",
+                    TurnPhase::WaitingForInput => "Waiting for input",
+                    TurnPhase::Finalizing => "Finalizing",
+                };
+                text.push_str(&format!(" · {label}"));
+            }
+        }
+        return Some(vec![
+            Span::styled(format!("{glyph} "), styles.accent()),
+            Span::styled(text, styles.dim()),
+        ]);
+    }
+    if item.needs_input() {
+        return Some(vec![
+            Span::raw("  "),
+            Span::styled(
+                format!("⚠ Child {short_id} needs input · ctrl+e to respond"),
+                styles.warning(),
+            ),
+        ]);
+    }
+    if !app.inspected_can_send() {
+        return Some(vec![
+            Span::raw("  "),
+            Span::styled(format!("Child {short_id} · read-only"), styles.meta()),
+        ]);
+    }
+    let prompt = if *focus == crate::app::TaskFocus::Composer {
+        format!("↳ Message to agent · Session {short_id}")
+    } else {
+        format!("↳ Session {short_id} · press enter or click editor to message")
+    };
+    Some(vec![
+        Span::raw("  "),
+        Span::styled(
+            prompt,
+            if *focus == crate::app::TaskFocus::Composer {
+                styles.accent()
+            } else {
+                styles.dim()
+            },
+        ),
+    ])
 }
 
 /// `⠋ Working (esc to interrupt) · Running bash … · request 3` while

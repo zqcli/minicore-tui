@@ -17,6 +17,7 @@ impl App {
         self.notices.clear();
         self.selection = None;
         self.composer_dragging = false;
+        self.sheet_click = None;
         if key.code == KeyCode::F(8) {
             self.open_unconfirmed();
             return None;

@@ -7,7 +7,7 @@ mod settings;
 use std::path::{Path, PathBuf};
 
 pub use directory::{ConfigDirectory, home_dir};
-pub use settings::{Settings, ThemeKind, Ui, editor_command, save_theme};
+pub use settings::{Remote, Settings, ThemeKind, Ui, editor_command, save_theme};
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct ConfigError {
@@ -59,6 +59,7 @@ pub fn load_ui(directory: &ConfigDirectory) -> Result<Ui, ConfigError> {
 
 pub struct Launch {
     pub ui: Ui,
+    pub remote: Remote,
     pub config_dir: PathBuf,
     pub data_root: PathBuf,
 }
@@ -70,7 +71,7 @@ pub enum Prepared {
 
 /// Reads only terminal preferences; Host owns loading business configuration.
 pub fn prepare(directory: &ConfigDirectory, workspace: Option<&Path>) -> Result<Prepared, String> {
-    let ui = load_ui(directory).map_err(|error| error.to_string())?;
+    let settings = load_settings(&directory.ui_file()).map_err(|error| error.to_string())?;
     if directory.is_fresh() {
         let created = scaffold::write(directory, workspace)?;
         return Ok(Prepared::FirstRun(scaffold::first_run_message(
@@ -78,7 +79,8 @@ pub fn prepare(directory: &ConfigDirectory, workspace: Option<&Path>) -> Result<
         )));
     }
     Ok(Prepared::Launch(Box::new(Launch {
-        ui,
+        ui: settings.ui,
+        remote: settings.remote,
         config_dir: directory.dir().to_owned(),
         data_root: directory.data_root().to_owned(),
     })))

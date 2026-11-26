@@ -1,6 +1,8 @@
 //! Markdown to pre-wrapped styled lines, over `pulldown-cmark`. A growing message
 //! renders through [`StreamRenderer`], which re-parses only the tail.
 
+use std::borrow::Cow;
+
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -23,10 +25,12 @@ pub fn render(text: &str, width: usize, styles: &Styles, base: Style) -> Vec<Lin
     if width < 4 {
         return wrap::wrapped(&source, width, base);
     }
+    let (prepared, strip_sentinel) = cjk_emphasis(&source);
     let mut builder = Builder {
         styles,
         base,
         width,
+        strip_sentinel,
         out: Vec::new(),
         separated: true,
         spans: Vec::new(),
@@ -38,7 +42,7 @@ pub fn render(text: &str, width: usize, styles: &Styles, base: Style) -> Vec<Lin
         table: None,
         cell: false,
     };
-    for event in Parser::new_ext(&source, options()) {
+    for event in Parser::new_ext(&prepared, options()) {
         builder.event(event);
     }
     builder.flush();
@@ -46,6 +50,159 @@ pub fn render(text: &str, width: usize, styles: &Styles, base: Style) -> Vec<Lin
         builder.out.pop();
     }
     builder.out
+}
+
+/// Private-use marker inserted beside `**` adjacent to CJK punctuation so
+/// CommonMark's flanking rules treat `**提示：**另有` as bold, then stripped
+/// from rendered text spans.
+const EMPHASIS_SENTINEL: char = '\u{E000}';
+
+fn is_cjk_punct(ch: char) -> bool {
+    matches!(
+        ch,
+        '，' | '。'
+            | '、'
+            | '；'
+            | '：'
+            | '？'
+            | '！'
+            | '（'
+            | '）'
+            | '【'
+            | '】'
+            | '《'
+            | '》'
+            | '〈'
+            | '〉'
+            | '「'
+            | '」'
+            | '『'
+            | '』'
+            | '〔'
+            | '〕'
+            | '［'
+            | '］'
+            | '｛'
+            | '｝'
+            | '“'
+            | '”'
+            | '‘'
+            | '’'
+            | '—'
+            | '…'
+            | '·'
+            | '～'
+            | '￥'
+    )
+}
+
+fn cjk_emphasis(source: &str) -> (Cow<'_, str>, bool) {
+    if !source.contains("**") || source.contains(EMPHASIS_SENTINEL) {
+        return (Cow::Borrowed(source), false);
+    }
+    let mut out = String::with_capacity(source.len());
+    let mut inserted = false;
+    let mut fence: Option<(u8, usize)> = None;
+    let mut inline_code: Option<usize> = None;
+    let bytes = source.as_bytes();
+    let mut line_start = true;
+    let mut index = 0;
+    while index < bytes.len() {
+        if line_start && inline_code.is_none() {
+            let line_end = source[index..]
+                .find('\n')
+                .map_or(bytes.len(), |offset| index + offset);
+            let line = &source[index..line_end];
+            let trimmed = line.trim_start_matches(' ');
+            let indent = line.len() - trimmed.len();
+            if let Some((marker, len)) = fence {
+                let closed = indent <= 3
+                    && trimmed.trim_end().bytes().all(|b| b == marker)
+                    && trimmed.trim_end().len() >= len;
+                if closed {
+                    fence = None;
+                }
+                let next = (line_end + 1).min(bytes.len());
+                out.push_str(&source[index..next]);
+                index = next;
+                line_start = true;
+                continue;
+            }
+            if indent <= 3
+                && let Some(&marker) = trimmed.as_bytes().first()
+                && (marker == b'`' || marker == b'~')
+            {
+                let len = trimmed.bytes().take_while(|&b| b == marker).count();
+                if len >= 3 {
+                    fence = Some((marker, len));
+                    let next = (line_end + 1).min(bytes.len());
+                    out.push_str(&source[index..next]);
+                    index = next;
+                    line_start = true;
+                    continue;
+                }
+            }
+        }
+        let ch = source[index..].chars().next().expect("valid utf-8");
+        line_start = ch == '\n';
+        if ch == '`' {
+            let ticks = bytes[index..].iter().take_while(|&&b| b == b'`').count();
+            out.push_str(&source[index..index + ticks]);
+            match inline_code {
+                Some(open) if open == ticks => inline_code = None,
+                None => inline_code = Some(ticks),
+                _ => {}
+            }
+            index += ticks;
+            continue;
+        }
+        if inline_code.is_some() {
+            out.push(ch);
+            index += ch.len_utf8();
+            continue;
+        }
+        if ch == '\\' && index + 1 < bytes.len() {
+            let next_ch = source[index + 1..].chars().next().expect("valid utf-8");
+            out.push(ch);
+            out.push(next_ch);
+            index += 1 + next_ch.len_utf8();
+            line_start = next_ch == '\n';
+            continue;
+        }
+        if ch == '*' {
+            let stars = bytes[index..].iter().take_while(|&&b| b == b'*').count();
+            if stars >= 2 {
+                let prev = source[..index].chars().next_back();
+                let next = source[index + stars..].chars().next();
+                let needs_before = prev.is_some_and(is_cjk_punct)
+                    && next.is_some_and(|c| {
+                        !c.is_whitespace() && !is_cjk_punct(c) && !c.is_ascii_punctuation()
+                    });
+                let needs_after = next.is_some_and(is_cjk_punct)
+                    && prev.is_some_and(|c| {
+                        !c.is_whitespace() && !is_cjk_punct(c) && !c.is_ascii_punctuation()
+                    });
+                if needs_before {
+                    out.push(EMPHASIS_SENTINEL);
+                    inserted = true;
+                }
+                out.push_str(&source[index..index + stars]);
+                if needs_after {
+                    out.push(EMPHASIS_SENTINEL);
+                    inserted = true;
+                }
+                index += stars;
+                continue;
+            }
+        }
+        out.push(ch);
+        index += ch.len_utf8();
+    }
+    if inserted {
+        (Cow::Owned(out), true)
+    } else {
+        (Cow::Borrowed(source), false)
+    }
 }
 
 enum Open {
@@ -100,6 +257,7 @@ struct Builder<'a> {
     styles: &'a Styles,
     base: Style,
     width: usize,
+    strip_sentinel: bool,
     out: Vec<Line<'static>>,
     /// Nothing or a separator was pushed last, so no further blank is due.
     separated: bool,
@@ -344,8 +502,13 @@ impl Builder<'_> {
             code.text.push_str(text);
             return;
         }
+        let cleaned: Cow<'_, str> = if self.strip_sentinel && text.contains(EMPHASIS_SENTINEL) {
+            Cow::Owned(text.replace(EMPHASIS_SENTINEL, ""))
+        } else {
+            Cow::Borrowed(text)
+        };
         let style = self.inline_style();
-        for (index, part) in text.split('\n').enumerate() {
+        for (index, part) in cleaned.split('\n').enumerate() {
             if index > 0 {
                 if self.cell {
                     self.spans.push(Span::styled(" ", style));
@@ -930,5 +1093,22 @@ mod tests {
     fn narrow_width_falls_back_to_plain_wrapping() {
         let lines = plain("some text here", 3);
         assert!(lines.iter().all(|line| wrap::width(line) <= 3));
+    }
+
+    #[test]
+    fn cjk_bold_adjacent_to_fullwidth_punctuation_renders_bold_outside_code() {
+        let lines = styled("**提示：**另有内容，以及这是**「重点」**说明。", 80);
+        assert_eq!(
+            plain("**提示：**另有内容，以及这是**「重点」**说明。", 80),
+            ["提示：另有内容，以及这是「重点」说明。"]
+        );
+        assert_eq!(style_of(&lines, "提示：").add_modifier, Modifier::BOLD);
+        assert_eq!(style_of(&lines, "「重点」").add_modifier, Modifier::BOLD);
+        assert_eq!(style_of(&lines, "另有").add_modifier, Modifier::empty());
+        assert_eq!(
+            plain("Keep `**提示：**另有` literal.", 80),
+            ["Keep **提示：**另有 literal."]
+        );
+        assert_eq!(plain("```\n**提示：**另有\n```", 80), ["  **提示：**另有"]);
     }
 }

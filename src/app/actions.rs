@@ -42,6 +42,9 @@ pub enum Action {
     SetTheme(ThemeKind),
     ToggleTheme,
     ReloadHost,
+    RemoteStart(Option<String>),
+    RemoteStop,
+    RemoteRotateKey,
     Pause,
     Resume,
     Load,
@@ -193,6 +196,9 @@ impl App {
                 ThemeKind::Light => ThemeKind::Dark,
             }),
             Action::ReloadHost => self.reload_host(),
+            Action::RemoteStart(listen_override) => self.start_remote(listen_override),
+            Action::RemoteStop => self.stop_remote(),
+            Action::RemoteRotateKey => self.rotate_remote_key(),
             Action::Pause => self.session_control("pause"),
             Action::Resume => self.session_control("resume"),
             Action::Load => self.session_control("load"),
@@ -942,7 +948,12 @@ impl App {
                     .inputs(tasks::options())
                     .await
                     .map_err(|e| e.to_string())?;
-                for input in inputs.next_step.into_iter().chain(inputs.next_turn) {
+                for input in inputs
+                    .next_step
+                    .into_iter()
+                    .chain(inputs.next_turn)
+                    .filter(|input| matches!(input.source, MessageSource::User))
+                {
                     client
                         .remove_input(
                             InputRemoveRequest {
@@ -973,13 +984,144 @@ impl App {
         }
     }
     pub fn copy(&mut self, text: String) {
+        self.copy_with_label(text, "Copied!");
+    }
+    pub fn copy_with_label(&mut self, text: String, label: &'static str) {
         self.spawn_msg(async move {
             match crate::clipboard::copy(&text).await {
-                Ok(crate::clipboard::Copied::Native) => Msg::Flash("Copied!".into()),
-                Ok(crate::clipboard::Copied::Osc52) => Msg::Flash("Copied to the clipboard".into()),
+                Ok(crate::clipboard::Copied::Native) => Msg::Flash(label.into()),
+                Ok(crate::clipboard::Copied::Osc52) => Msg::Flash(label.into()),
                 Err(error) => Msg::Notice(NoticeLevel::Error, error),
             }
         });
+    }
+    fn start_remote(&mut self, listen_override: Option<String>) {
+        if self.remote.is_some() {
+            if listen_override.is_some() {
+                self.notice(
+                    NoticeLevel::Info,
+                    "Remote access is already running; press Esc or run /remote off first",
+                );
+            }
+            self.overlay = super::Overlay::Remote {
+                show_key: true,
+                scroll: 0,
+            };
+            return;
+        }
+        if self.remote_starting {
+            return;
+        }
+        let Some(host) = self.client.host() else {
+            self.notice(
+                NoticeLevel::Error,
+                "Remote mode requires an embedded in-process Host",
+            );
+            return;
+        };
+        if !self.require_control() {
+            return;
+        }
+        self.remote_starting = true;
+        let config = self.remote_config.clone();
+        let client = self.client.clone();
+        let tx = self.tx.clone();
+        self.spawn_msg(async move {
+            let workspace_roots_empty = client
+                .workspace_roots(tasks::options())
+                .await
+                .map(|roots| roots.roots.is_empty())
+                .unwrap_or(false);
+            let result = crate::host::RemoteServer::start(
+                host,
+                &config,
+                listen_override,
+                tx,
+                workspace_roots_empty,
+            )
+            .await
+            .map(Box::new);
+            Msg::RemoteStarted(result)
+        });
+    }
+    pub(super) fn on_remote_started(
+        &mut self,
+        result: Result<Box<crate::host::RemoteServer>, String>,
+    ) {
+        self.remote_starting = false;
+        match result {
+            Ok(server) => {
+                if let Err(error) = self.client.release_operator() {
+                    server.stop();
+                    self.notice(NoticeLevel::Error, error.to_string());
+                    return;
+                }
+                self.remote = Some(*server);
+                self.overlay = super::Overlay::Remote {
+                    show_key: true,
+                    scroll: 0,
+                };
+            }
+            Err(error) => self.notice(NoticeLevel::Error, error),
+        }
+    }
+    pub(super) fn on_remote_failed(&mut self, error: String) {
+        if let Some(remote) = self.remote.take() {
+            remote.stop();
+        }
+        let _ = self.client.reclaim_operator();
+        if matches!(self.overlay, super::Overlay::Remote { .. }) {
+            self.overlay = super::Overlay::None;
+        }
+        self.refresh_after_remote();
+        self.notice(
+            NoticeLevel::Error,
+            format!("Remote server stopped: {error}"),
+        );
+    }
+    fn stop_remote(&mut self) {
+        let Some(remote) = self.remote.take() else {
+            self.notice(NoticeLevel::Info, "Remote access is not running");
+            return;
+        };
+        remote.stop();
+        if let Err(error) = self.client.reclaim_operator() {
+            self.notice(
+                NoticeLevel::Error,
+                format!("Cannot reclaim terminal control: {error}"),
+            );
+        }
+        if matches!(self.overlay, super::Overlay::Remote { .. }) {
+            self.overlay = super::Overlay::None;
+        }
+        self.refresh_after_remote();
+        self.notice(
+            NoticeLevel::Info,
+            "Remote access stopped · terminal control restored",
+        );
+    }
+    fn rotate_remote_key(&mut self) {
+        let Some(remote) = &mut self.remote else {
+            self.notice(NoticeLevel::Info, "Remote access is not running");
+            return;
+        };
+        match remote.rotate_key() {
+            Ok(()) => {
+                self.flash = Some((
+                    "New access key generated".into(),
+                    tokio::time::Instant::now(),
+                ));
+            }
+            Err(error) => self.notice(NoticeLevel::Error, error),
+        }
+    }
+    fn refresh_after_remote(&mut self) {
+        self.refresh_catalogs();
+        if let Some(epoch) = self.resident.current().map(|session| session.epoch) {
+            self.refresh_control_for(epoch);
+            self.refresh_history(epoch);
+            self.refresh_session_info_for(epoch);
+        }
     }
     fn reload_host(&mut self) {
         if !self.require_control() || self.reloading {

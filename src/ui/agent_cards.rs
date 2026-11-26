@@ -6,7 +6,7 @@ use ratatui::text::{Line, Span};
 
 use super::{
     blocks, markdown,
-    rails::{chrome, chrome_span, surface_row},
+    rails::{chrome, chrome_span, indent, surface_row},
     theme::Styles,
 };
 use crate::transcript::agent_card::AgentCard;
@@ -18,172 +18,276 @@ pub fn render(
     styles: Styles,
     width: usize,
     expanded: bool,
-    reasoning: bool,
+    _reasoning: bool,
 ) -> Vec<Line<'static>> {
     let Some(card) = call.agent_card.as_deref() else {
         return receipt(call, styles, width, expanded);
     };
     if expanded {
-        card_rows(card, styles, width, reasoning)
+        dispatch_card_rows(call, card, styles, width)
     } else {
-        folded(card, styles, width)
+        vec![dispatch_row(call, card, styles, width)]
     }
 }
 
-/// The whole delegation as one step row: task on the left, who and how far on
-/// the right; while it runs, its newest activity underneath.
-fn folded(card: &AgentCard, styles: Styles, width: usize) -> Vec<Line<'static>> {
-    let (glyph, glyph_style) = glyph(card, styles);
-    let mut right = vec![Span::styled(facts(card, false), styles.meta())];
-    let state = status(card);
-    right.push(Span::styled(" · ", styles.meta()));
-    right.push(Span::styled(state, state_style(card, styles)));
+/// How far an expanded dispatch card sits in under its kept header row, aligning
+/// its left rail with `agent`.
+const CARD_INDENT: usize = blocks::INSET;
+
+/// One immutable sync dispatch row in the transcript: reflects the dispatch RPC
+/// itself rather than mutating in place across later `Working` groups.
+fn dispatch_row(call: &ToolCall, card: &AgentCard, styles: Styles, width: usize) -> Line<'static> {
+    let (glyph, glyph_style) = blocks::tool_glyph(call, styles);
+    let label = card
+        .agent_name
+        .as_deref()
+        .map(str::to_owned)
+        .unwrap_or_else(|| short(card.key.child.agent_id.as_str()));
+    let mut parts = vec![
+        wrap::truncate(&wrap::sanitize(&label), 18),
+        short(card.key.child.session_id.as_str()),
+    ];
+    if let Some(duration) = call.duration {
+        parts.push(blocks::format_duration(duration));
+    } else if matches!(call.state, ToolState::Pending | ToolState::Running) {
+        parts.push("dispatching".to_owned());
+    }
+    let right = vec![
+        Span::styled(parts.join(" · "), styles.meta()),
+        Span::styled(" · ", styles.meta()),
+        Span::styled("ctrl+b", styles.accent()),
+    ];
     let left = vec![
         chrome_span(Span::styled(format!("{glyph} "), glyph_style)),
         Span::styled("agent  ", styles.tool_title()),
         Span::styled(task(card), styles.tool_output()),
     ];
-    let mut lines = vec![Line::from(blocks::row_spans(left, right, width))];
-    if card.outcome().is_none() && !card.history_unavailable {
-        let activity = activity_rows(card, styles);
-        let start = activity.len().saturating_sub(LIVE_ROWS);
-        for (glyph, glyph_style, text) in &activity[start..] {
-            lines.push(Line::from(vec![
-                chrome_span(Span::styled("  │ ", styles.meta())),
-                chrome_span(Span::styled(format!("{glyph} "), *glyph_style)),
-                Span::styled(
-                    wrap::truncate(text, width.saturating_sub(7)),
-                    styles.tool_output(),
-                ),
-            ]));
+    Line::from(blocks::row_spans(left, right, width))
+}
+
+/// Expanded dispatch card (via `Ctrl+O`): shows the sync dispatch details and
+/// points to `Ctrl+B` for live child monitoring and full Markdown results.
+fn dispatch_card_rows(
+    call: &ToolCall,
+    card: &AgentCard,
+    styles: Styles,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let mut lines = vec![dispatch_row(call, card, styles, width)];
+    let card_width = width.saturating_sub(CARD_INDENT);
+    if card_width < blocks::MIN_WIDTH {
+        return lines;
+    }
+    let failed = matches!(call.state, ToolState::Failed) || call.result_error.is_some();
+    let (rail, surface) = if failed {
+        (styles.card_failure_rail(), styles.card_failure())
+    } else {
+        (styles.card_rail(), styles.card())
+    };
+    let inner = blocks::text_width(card_width);
+    let row = |spans: Vec<Span<'static>>| {
+        indent(
+            surface_row(rail, surface, blocks::padded(spans), card_width),
+            CARD_INDENT,
+        )
+    };
+    let blank = || {
+        chrome(indent(
+            surface_row(rail, surface, Vec::new(), card_width),
+            CARD_INDENT,
+        ))
+    };
+    let label = |text: &str| chrome(row(vec![Span::styled(text.to_owned(), styles.dim())]));
+
+    lines.push(blank());
+    lines.push(chrome(row(vec![Span::styled(
+        wrap::truncate(&facts(card, true), inner),
+        styles.meta(),
+    )])));
+    let raw_task = card.task.trim();
+    if !raw_task.is_empty() {
+        let wrapped = wrap::wrapped(&wrap::sanitize(raw_task), inner, styles.dim());
+        if !wrapped.is_empty() {
+            lines.push(blank());
+            lines.push(label("Task"));
+            for line in wrapped.iter().take(TASK_ROWS) {
+                lines.push(row(line.spans.clone()));
+            }
+            if wrapped.len() > TASK_ROWS {
+                lines.push(chrome(row(vec![Span::styled(
+                    format!(
+                        "… {}",
+                        blocks::plural((wrapped.len() - TASK_ROWS) as u64, "more line")
+                    ),
+                    styles.faint(),
+                )])));
+            }
         }
     }
+    if let Some(error) = &call.result_error {
+        lines.push(blank());
+        for line in wrap::wrapped(&wrap::sanitize(error), inner, styles.failure()) {
+            lines.push(row(line.spans));
+        }
+    }
+    lines.push(blank());
+    lines.push(chrome(row(vec![Span::styled(
+        wrap::truncate("Inspect live progress & result · click or ctrl+b", inner),
+        styles.accent(),
+    )])));
+    lines.push(blank());
     lines
 }
 
-/// The opened card: the same task and state, then what the child did, its
-/// answer and the way into its Session.
-fn card_rows(
+/// Full scrollable detail lines for the `Ctrl+B` Async Tasks Inspector right pane.
+pub(crate) fn detail_lines(
     card: &AgentCard,
     styles: Styles,
     width: usize,
     reasoning: bool,
 ) -> Vec<Line<'static>> {
-    let (rail, surface) = match card.outcome() {
-        Some(TurnOutcome::Completed) | None => (styles.card_rail(), styles.card()),
-        Some(_) => (styles.card_failure_rail(), styles.card_failure()),
-    };
-    let inner = blocks::text_width(width);
-    let row = |spans: Vec<Span<'static>>| surface_row(rail, surface, blocks::padded(spans), width);
-    let blank = || chrome(surface_row(rail, surface, Vec::new(), width));
-    let label = |text: &str| chrome(row(vec![Span::styled(text.to_owned(), styles.dim())]));
+    let width = width.max(12);
+    let mut lines = Vec::new();
+    let (glyph_str, glyph_style) = glyph(card, styles);
+    let state_label = status(card);
+    lines.push(Line::from(vec![
+        Span::styled(format!("{glyph_str} "), glyph_style),
+        Span::styled("agent", styles.tool_title()),
+        Span::styled(" · ", styles.meta()),
+        Span::styled(
+            wrap::truncate(&task(card), width.saturating_sub(24)),
+            styles.bold(),
+        ),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled(facts(card, true), styles.meta()),
+        Span::styled(" · ", styles.meta()),
+        Span::styled(state_label, state_style(card, styles)),
+    ]));
 
-    let (glyph, glyph_style) = glyph(card, styles);
-    let state = status(card);
-    let title = wrap::truncate(&task(card), inner.saturating_sub(wrap::width(&state) + 4));
-    let pad = inner.saturating_sub(wrap::width(&title) + wrap::width(&state) + 2);
-    let mut lines = vec![
-        chrome(row(vec![
-            Span::styled(title, styles.tool_title()),
-            Span::raw(" ".repeat(pad)),
-            Span::styled(format!("{glyph} "), glyph_style),
-            Span::styled(state, state_style(card, styles)),
-        ])),
-        chrome(row(vec![Span::styled(
-            wrap::truncate(&facts(card, true), inner),
-            styles.meta(),
-        )])),
-    ];
+    if needs_input(card)
+        && let Some(state) = &card.state
+    {
+        lines.push(Line::raw(""));
+        let bar = |spans: Vec<Span<'static>>| {
+            let mut out = vec![Span::styled("▎ ", styles.warning())];
+            out.extend(spans);
+            Line::from(out)
+        };
+        lines.push(bar(vec![Span::styled(
+            "Input required · press enter to open child Session and respond",
+            styles.warning(),
+        )]));
+        for pending in &state.data.pending_interactions {
+            let summary = format!(
+                "{} · {}",
+                pending.name,
+                match &pending.request {
+                    InteractionRequestData::Approval { .. } => "approval",
+                    InteractionRequestData::ToolInput { .. } => "input",
+                }
+            );
+            for wrapped in wrap::wrapped(
+                &wrap::sanitize(&summary),
+                width.saturating_sub(2),
+                styles.text(),
+            ) {
+                lines.push(bar(wrapped.spans));
+            }
+        }
+    }
 
-    // The rest of a multi-line task, which the title cuts.
-    let rest: Vec<&str> = card
-        .task
-        .lines()
-        .skip(1)
-        .filter(|line| !line.trim().is_empty())
-        .collect();
-    if !rest.is_empty() {
-        lines.push(blank());
-        for text in rest.iter().take(TASK_ROWS) {
-            lines.push(row(vec![Span::styled(
-                wrap::truncate(&wrap::sanitize(text), inner),
-                styles.dim(),
-            )]));
-        }
-        if rest.len() > TASK_ROWS {
-            lines.push(chrome(row(vec![Span::styled(
-                format!("… {} more lines", rest.len() - TASK_ROWS),
-                styles.faint(),
-            )])));
-        }
+    let raw_task = card.task.trim();
+    if !raw_task.is_empty() {
+        lines.push(Line::raw(""));
+        lines.push(Line::styled("Task", styles.heading()));
+        lines.extend(wrap::wrapped(
+            &wrap::sanitize(raw_task),
+            width,
+            styles.text(),
+        ));
     }
 
     let activity = activity_rows(card, styles);
     if !activity.is_empty() || card.truncated {
-        lines.push(blank());
-        lines.push(label("Activity"));
-        let start = activity.len().saturating_sub(ACTIVITY_ROWS);
-        let earlier = start + usize::from(card.truncated);
-        if earlier > 0 {
-            lines.push(chrome(row(vec![Span::styled(
-                if card.truncated {
-                    "… earlier steps".to_owned()
-                } else {
-                    format!("… {start} earlier steps")
-                },
-                styles.faint(),
-            )])));
+        lines.push(Line::raw(""));
+        lines.push(Line::styled(
+            format!("Activity ({})", activity.len()),
+            styles.heading(),
+        ));
+        if card.truncated {
+            lines.push(Line::styled("… earlier steps truncated", styles.faint()));
         }
-        for (glyph, glyph_style, text) in &activity[start..] {
-            lines.push(row(vec![
-                chrome_span(Span::styled(format!("{glyph} "), *glyph_style)),
+        for (glyph_str, glyph_style, text) in &activity {
+            lines.push(Line::from(vec![
+                Span::styled(format!("{glyph_str} "), *glyph_style),
                 Span::styled(
-                    wrap::truncate(text, inner.saturating_sub(2)),
+                    wrap::truncate(text, width.saturating_sub(2)),
                     styles.tool_output(),
                 ),
             ]));
         }
     }
 
-    let (heading, body) = answer(card, inner, reasoning, styles);
+    let (heading, body) = answer(card, width, reasoning, styles);
     if !body.is_empty() {
-        lines.push(blank());
-        lines.push(label(heading));
-        let hidden = body.len().saturating_sub(ANSWER_ROWS);
-        for line in body.into_iter().take(ANSWER_ROWS) {
-            lines.push(row(line.spans));
-        }
-        if hidden > 0 {
-            lines.push(chrome(row(vec![Span::styled(
-                format!("… {hidden} more lines · open the child Session"),
-                styles.faint(),
-            )])));
-        }
+        lines.push(Line::raw(""));
+        lines.push(Line::styled(heading, styles.heading()));
+        lines.extend(body);
+    } else if card.outcome().is_none() {
+        lines.push(Line::raw(""));
+        lines.push(Line::styled("Result", styles.heading()));
+        lines.push(Line::styled(
+            "(running — final answer will appear here upon completion)",
+            styles.faint(),
+        ));
     }
 
-    let footer = if card.history_unavailable {
-        "Child history unavailable · this card keeps what was observed"
-    } else if card.observation_error.is_some() {
-        "Observation incomplete · open the child Session (click or /child)"
-    } else {
-        "Open the child Session · click or /child"
-    };
-    lines.push(blank());
-    lines.push(chrome(row(vec![Span::styled(
-        wrap::truncate(footer, inner),
-        styles.meta(),
-    )])));
+    if card.history_unavailable {
+        lines.push(Line::raw(""));
+        lines.push(Line::styled(
+            "Child history unavailable · showing retained observed preview",
+            styles.meta(),
+        ));
+    } else if let Some(error) = &card.observation_error {
+        lines.push(Line::raw(""));
+        lines.extend(wrap::wrapped(
+            &wrap::sanitize(error),
+            width,
+            styles.warning(),
+        ));
+    }
     lines
 }
 
-const LIVE_ROWS: usize = 3;
+/// Plain text copied by `Ctrl+Y` in the `Ctrl+B` Async Tasks Inspector.
+pub(crate) fn copy_text(card: &AgentCard) -> String {
+    let delivered = card.result.as_deref().and_then(super::delegated::summary);
+    if let Some(summary) = delivered {
+        let mut parts = Vec::new();
+        if let Some(fault) = summary.fault {
+            parts.push(fault);
+        }
+        if let Some(answer) = summary.answer {
+            parts.push(answer);
+        }
+        if !parts.is_empty() {
+            return parts.join("\n\n");
+        }
+    }
+    if let Some(answer) = card.transcript.last_answer() {
+        return answer.to_owned();
+    }
+    if let Some(fault) = card.fault() {
+        return fault.to_owned();
+    }
+    card.task.clone()
+}
+
 const TASK_ROWS: usize = 4;
-/// The newest entries only: the window moves up as the child works.
-const ACTIVITY_ROWS: usize = 3;
-const ANSWER_ROWS: usize = 16;
 
 /// The card's one-line name: the task's first line.
-fn task(card: &AgentCard) -> String {
+pub(crate) fn task(card: &AgentCard) -> String {
     let first = card
         .task
         .lines()
@@ -227,7 +331,9 @@ fn facts(card: &AgentCard, full: bool) -> String {
         if parent.changes > 0 {
             facts.push(blocks::plural(parent.changes as u64, "control"));
         }
-        if parent.waits > 0 {
+        if parent.waiting {
+            facts.push("parent waiting".to_owned());
+        } else if parent.waits > 0 {
             facts.push(if parent.waited.is_zero() {
                 "parent waited".to_owned()
             } else {
@@ -238,7 +344,7 @@ fn facts(card: &AgentCard, full: bool) -> String {
     facts.join(" · ")
 }
 
-fn glyph(card: &AgentCard, styles: Styles) -> (&'static str, ratatui::style::Style) {
+pub(crate) fn glyph(card: &AgentCard, styles: Styles) -> (&'static str, ratatui::style::Style) {
     match card.outcome() {
         Some(TurnOutcome::Completed) => ("✓", styles.success()),
         Some(TurnOutcome::Failed) => ("✗", styles.failure()),
@@ -257,7 +363,7 @@ fn state_style(card: &AgentCard, styles: Styles) -> ratatui::style::Style {
     }
 }
 
-fn needs_input(card: &AgentCard) -> bool {
+pub(crate) fn needs_input(card: &AgentCard) -> bool {
     card.state
         .as_ref()
         .is_some_and(|state| !state.data.pending_interactions.is_empty())
@@ -347,12 +453,7 @@ fn answer(
         ));
     }
     if let Some(text) = text {
-        body.extend(markdown::render(
-            &blocks::reasoning_source(&text),
-            width,
-            &styles,
-            styles.text(),
-        ));
+        body.extend(markdown::render(&text, width, &styles, styles.text()));
     } else if reasoning
         && !settled
         && let Some(Block::Assistant { reasoning, .. }) = card.transcript.blocks().last()
@@ -497,7 +598,6 @@ pub(crate) fn status(card: &AgentCard) -> String {
 mod tests {
     use super::*;
     use crate::transcript::RequestKey;
-    use crate::ui::rails::content_cells;
     use crate::ui::theme::Palette;
     use minicore_host_protocol::{
         DelegationAssociation, DelegationTerminalData, DelegationTurnOutcome, SessionRef,
@@ -582,17 +682,15 @@ mod tests {
         let card = call.agent_card.as_mut().unwrap();
         card.history_unavailable = true;
         assert_eq!(status(card), "history unavailable");
-        let rows = render(&call, styles(), 80, true, true);
+        let rows = detail_lines(card, styles(), 80, true);
         assert!(
-            rows.last()
-                .unwrap()
-                .to_string()
-                .contains("Child history unavailable")
+            rows.iter()
+                .any(|row| row.to_string().contains("Child history unavailable"))
         );
     }
 
     #[test]
-    fn a_folded_card_is_one_row_and_running_adds_its_newest_steps() {
+    fn a_folded_dispatch_stays_one_immutable_sync_row() {
         let mut call = call();
         let card = call.agent_card.as_mut().unwrap();
         for name in ["read", "bash", "edit", "bash"] {
@@ -607,25 +705,27 @@ mod tests {
             card.transcript.push(Block::Tool(Box::new(tool)));
         }
         let running = text(&render(&call, styles(), 80, false, true));
-        assert!(
-            running[0].starts_with("● agent  Read the files"),
-            "{running:?}"
+        assert_eq!(
+            running.len(),
+            1,
+            "dispatch row stays one line while child runs: {running:?}"
         );
         assert!(
-            running[0].ends_with("Reader 日本語 · accepted · observing child"),
+            running[0].starts_with("✓ agent  Read the files"),
             "{running:?}"
         );
-        assert_eq!(running[1..], ["  │ ✓ bash", "  │ ✓ edit", "  │ ✓ bash"]);
+        assert!(running[0].ends_with("000000 · ctrl+b"), "{running:?}");
 
         completed(call.agent_card.as_mut().unwrap());
         let done = text(&render(&call, styles(), 80, false, true));
-        assert_eq!(done.len(), 1, "a settled card folds to one row: {done:?}");
-        assert!(done[0].starts_with("✓ agent  Read the files"), "{done:?}");
-        assert!(done[0].ends_with("· completed"), "{done:?}");
+        assert_eq!(
+            done, running,
+            "dispatch row never mutates in place across later runs"
+        );
     }
 
     #[test]
-    fn an_open_card_holds_activity_and_the_delivered_result_within_its_bounds() {
+    fn detail_lines_hold_full_activity_and_delivered_result_for_ctrl_b_inspector() {
         let mut call = call();
         let card = call.agent_card.as_mut().unwrap();
         response(card, "seen while running".into());
@@ -641,28 +741,38 @@ mod tests {
         for width in [8, 20, 80] {
             let rows = render(&call, styles(), width, true, true);
             assert!(
-                rows.iter()
-                    .all(|row| wrap::width(&row.to_string()) == width)
+                wrap::width(&rows[0].to_string()) <= width,
+                "header fits width {width}: {:?}",
+                rows[0]
+            );
+            assert!(
+                rows[1..]
+                    .iter()
+                    .all(|row| wrap::width(&row.to_string()) == width),
+                "surface rows fill width {width}: {rows:?}"
             );
             if width == 80 {
                 let rows = text(&rows);
-                assert!(rows[0].starts_with("▎ Read the files"), "{rows:?}");
-                assert!(rows[0].ends_with("✓ completed"), "{rows:?}");
-                assert!(
-                    rows[1].contains("Session 000000 · 1 later send"),
-                    "{rows:?}"
-                );
-                assert!(rows.iter().any(|row| row == "▎ Result"), "{rows:?}");
-                assert!(rows.iter().any(|row| row.contains("answer 0")));
-                assert!(!rows.iter().any(|row| row.contains("seen while running")));
-                assert!(
-                    rows.iter()
-                        .any(|row| row.contains("more lines · open the child"))
-                );
-                assert!(rows.last().unwrap().contains("Open the child Session"));
-                assert!(rows.len() <= ANSWER_ROWS + 12, "{}", rows.len());
+                assert!(rows[0].starts_with("✓ agent  Read the files"), "{rows:?}");
+                assert!(rows.iter().any(|row| row.contains("ctrl+b")), "{rows:?}");
             }
         }
+        let detail = text(&detail_lines(
+            call.agent_card.as_ref().unwrap(),
+            styles(),
+            80,
+            true,
+        ));
+        assert!(
+            detail
+                .iter()
+                .any(|row| row.contains("Session 000000 · 1 later send")),
+            "{detail:?}"
+        );
+        assert!(detail.iter().any(|row| row == "Result"), "{detail:?}");
+        assert!(detail.iter().any(|row| row.contains("answer 0")));
+        assert!(detail.iter().any(|row| row.contains("answer 39")));
+        assert!(!detail.iter().any(|row| row.contains("seen while running")));
     }
 
     #[test]
@@ -679,25 +789,18 @@ mod tests {
         tool.set_state(ToolState::Succeeded);
         tool.push_output("first\n\nlast");
         card.transcript.push(Block::Tool(Box::new(tool)));
-        let rows = render(&call, styles(), 80, true, true);
-        let label = rows
-            .iter()
-            .position(|row| row.to_string().trim_end() == "▎ Activity")
-            .unwrap();
-        assert!(content_cells(&rows[label]).is_empty(), "labels are chrome");
-        assert!(rows[label + 1].to_string().starts_with("▎ ✓ bash"));
-        // Output stays in the child Session; the card lists what was done.
-        assert!(rows.iter().all(|row| !row.to_string().contains("first")));
-        assert_eq!(content_cells(rows.last().unwrap()), 0..0);
-        assert!(rows.iter().all(|row| !row.to_string().contains('\u{1b}')));
+        let detail = text(&detail_lines(card, styles(), 80, true));
+        assert!(detail.iter().any(|row| row == "Activity (1)"), "{detail:?}");
+        assert!(detail.iter().any(|row| row.starts_with("✓ bash")));
+        assert!(detail.iter().all(|row| !row.contains("first")));
+        assert!(detail.iter().all(|row| !row.contains('\u{1b}')));
     }
 
     #[test]
-    fn later_sends_and_the_delivered_result_live_in_the_one_card() {
+    fn later_sends_and_the_delivered_result_link_while_keeping_arrival_banner() {
         use crate::transcript::{Transcript, UserKind};
         let start = call();
         let association = start.agent_card.as_ref().unwrap().association.clone();
-        // A later send into the same child: a receipt from another call.
         let mut send = ToolCall::new(
             ToolCallRef {
                 turn_id: "00000000000000000001".parse().unwrap(),
@@ -716,6 +819,7 @@ mod tests {
             ),
             kind: UserKind::Delegated,
             at: None,
+            expanded: None,
         };
         let mut transcript = Transcript::default();
         transcript.push(Block::Tool(Box::new(start)));
@@ -724,11 +828,14 @@ mod tests {
         transcript.push(result("00000000000000000099"));
         transcript.link_delegations();
         assert!(!transcript.absorbed(0));
-        assert!(transcript.absorbed(1), "the later send is in the card");
-        assert!(transcript.absorbed(2), "the result is in the card");
+        assert!(transcript.absorbed(1), "the later send links to its task");
         assert!(
-            !transcript.absorbed(3),
-            "another child's result keeps its block"
+            transcript.absorbed(2),
+            "delivered result stays hidden in main transcript while linking to its task for Ctrl+B"
+        );
+        assert!(
+            transcript.absorbed(3),
+            "another child's delegated result also stays hidden in main transcript"
         );
         let Block::Tool(card) = &transcript.blocks()[0] else {
             unreachable!()
@@ -789,10 +896,68 @@ mod tests {
         let parent = card.agent_card.as_ref().unwrap().parent;
         assert_eq!((parent.inspections, parent.waits), (1, 1));
         assert_eq!(parent.waited, std::time::Duration::from_secs(3));
-        let rows = text(&render(card, styles(), 100, true, true));
+        let detail = text(&detail_lines(
+            card.agent_card.as_ref().unwrap(),
+            styles(),
+            100,
+            true,
+        ));
         assert!(
-            rows[1].ends_with("1 inspection · parent waited 3.0s"),
-            "{rows:?}"
+            detail
+                .iter()
+                .any(|row| row.contains("1 inspection · parent waited 3.0s")),
+            "{detail:?}"
+        );
+    }
+
+    #[test]
+    fn cancelled_task_uses_neutral_surface_and_live_waiting_label() {
+        let mut call = call();
+        let card = call.agent_card.as_mut().unwrap();
+        card.association.completion = Some(DelegationTerminalData {
+            turns: vec![DelegationTurnOutcome {
+                turn: TurnRef {
+                    session_id: card.key.child.session_id.clone(),
+                    turn_id: "00000000000000000007".parse().unwrap(),
+                },
+                outcome: TurnOutcome::Cancelled,
+                fault: None,
+            }],
+            discarded_inputs: Vec::new(),
+        });
+        card.parent.waiting = true;
+        let rendered = render(&call, styles(), 80, true, true);
+        assert_eq!(rendered[1].spans[2].style.bg, styles().card().bg);
+        assert_ne!(rendered[1].spans[2].style.bg, styles().card_failure().bg);
+        let detail = text(&detail_lines(
+            call.agent_card.as_ref().unwrap(),
+            styles(),
+            80,
+            true,
+        ));
+        assert!(detail.iter().any(|row| row.contains("parent waiting")));
+        assert!(detail.iter().any(|row| row.contains("cancelled")));
+    }
+
+    #[test]
+    fn expanded_dispatch_card_keeps_task_and_points_to_ctrl_b() {
+        let mut multiline = call();
+        multiline.agent_card.as_mut().unwrap().task =
+            "Check Tokyo weather\nInclude UTC timestamp and wind speed".into();
+        let multi_rows = text(&render(&multiline, styles(), 90, true, true));
+        assert!(
+            multi_rows.iter().any(|row| row == "  ▎ Task"),
+            "task should expand inside dispatch card: {multi_rows:?}"
+        );
+        assert!(
+            multi_rows
+                .iter()
+                .any(|row| row.contains("Include UTC timestamp and wind speed")),
+            "{multi_rows:?}"
+        );
+        assert!(
+            multi_rows.iter().any(|row| row.contains("ctrl+b")),
+            "{multi_rows:?}"
         );
     }
 }

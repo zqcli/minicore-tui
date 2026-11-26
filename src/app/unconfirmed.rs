@@ -122,12 +122,16 @@ impl App {
             .get(epoch)
             .expect("local input has a resident session");
         let target = session.target();
+        let from_inspector = matches!(self.overlay, Overlay::Delegations { .. })
+            && self.task_inspector.target.as_ref() == Some(&target.session);
         let id = self.next_operation();
         let message_id = match MessageId::new() {
             Ok(message_id) => message_id,
             Err(error) => {
                 if retry_of.is_some() {
                     self.unconfirmed_editor.restore_submission(entry);
+                } else if from_inspector {
+                    self.task_inspector.composer.restore_submission(entry);
                 } else {
                     self.composer.restore_submission(entry);
                 }
@@ -142,6 +146,11 @@ impl App {
             in_reply_to: None,
         };
         let client = self.client.session(target.session.clone());
+        let draft_version = if from_inspector {
+            self.task_inspector.composer.version()
+        } else {
+            self.composer.version()
+        };
         self.local_inputs.push_back(LocalInput {
             id,
             target,
@@ -150,7 +159,7 @@ impl App {
             status: Status::Sending,
             retry_of,
             entry,
-            draft_version: self.composer.version(),
+            draft_version,
         });
         self.spawn_msg(async move {
             Msg::LocalPushed(id, client.send(message, super::tasks::options()).await)
@@ -212,14 +221,22 @@ impl App {
             Err(CallError::Business(error)) => {
                 let input = &mut self.local_inputs[index];
                 input.status = Status::Rejected;
-                let restore = input.retry_of.is_none()
+                let restore_inspector = input.retry_of.is_none()
+                    && matches!(self.overlay, Overlay::Delegations { .. })
+                    && self.task_inspector.target.as_ref() == Some(&target.session)
+                    && self.task_inspector.composer.is_empty()
+                    && self.task_inspector.composer.version() == input.draft_version;
+                let restore_main = input.retry_of.is_none()
                     && self.composer.is_empty()
                     && self.composer.version() == input.draft_version
                     && self
                         .resident
                         .current()
                         .is_some_and(|session| session.target() == target);
-                if restore {
+                if restore_inspector {
+                    let input = self.local_inputs.remove(index).unwrap();
+                    self.task_inspector.composer.restore_submission(input.entry);
+                } else if restore_main {
                     let input = self.local_inputs.remove(index).unwrap();
                     self.composer.restore_submission(input.entry);
                 }

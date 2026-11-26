@@ -9,13 +9,13 @@ use crate::config::ThemeKind;
 pub const USAGE: &str = "\
 minicore-tui — a terminal frontend for the embedded MiniCore Host
 
-Usage: minicore-tui [OPTIONS]
+Usage: minicore-tui [OPTIONS] [WORKSPACE]
 
 Options:
   --config-dir <DIR>     shared JSON configuration [default: ~/.minicore/config]
   --data-root <DIR>      persistent data [default: ~/.minicore/data]
   --agent-id <ID>        select this Host Agent
-  --workspace <DIR>      workspace for a new session [default: cwd]
+  --workspace <DIR>      workspace for a new session [default: cwd; same as WORKSPACE]
   --session <ID>         open this session
   --continue            open the most recent session in this workspace
   --model <REF>          full model override for the selected/new session
@@ -52,6 +52,8 @@ pub enum ArgsError {
     Theme(String),
     #[error("--session and --continue cannot be combined")]
     Conflict,
+    #[error("--workspace and positional workspace cannot be combined")]
+    WorkspaceConflict,
     #[error("unexpected argument {0}")]
     Unexpected(String),
 }
@@ -64,17 +66,38 @@ impl Args {
     {
         let mut args = Self::default();
         let mut arguments = arguments.into_iter().map(Into::into);
+        let mut workspace_flag = false;
+        let mut positional_workspace = false;
+        let mut positional_only = false;
         while let Some(argument) = arguments.next() {
+            if positional_only {
+                if workspace_flag {
+                    return Err(ArgsError::WorkspaceConflict);
+                }
+                if positional_workspace {
+                    return Err(ArgsError::Unexpected(argument));
+                }
+                args.workspace = Some(PathBuf::from(argument));
+                positional_workspace = true;
+                continue;
+            }
             let mut value = |name: &str| {
                 arguments
                     .next()
                     .ok_or_else(|| ArgsError::MissingValue(name.to_owned()))
             };
             match argument.as_str() {
+                "--" => positional_only = true,
                 "--config-dir" => args.config_dir = Some(PathBuf::from(value("--config-dir")?)),
                 "--data-root" => args.data_root = Some(PathBuf::from(value("--data-root")?)),
                 "--agent-id" => args.agent_id = Some(value("--agent-id")?),
-                "--workspace" => args.workspace = Some(PathBuf::from(value("--workspace")?)),
+                "--workspace" => {
+                    if positional_workspace {
+                        return Err(ArgsError::WorkspaceConflict);
+                    }
+                    args.workspace = Some(PathBuf::from(value("--workspace")?));
+                    workspace_flag = true;
+                }
                 "--session" => args.session = Some(value("--session")?),
                 "--continue" => args.continue_recent = true,
                 "--model" => args.model = Some(value("--model")?),
@@ -91,7 +114,17 @@ impl Args {
                 other if other.starts_with('-') => {
                     return Err(ArgsError::Unknown(other.to_owned()));
                 }
-                other => return Err(ArgsError::Unexpected(other.to_owned())),
+                "agent" => return Err(ArgsError::Unexpected("agent".to_owned())),
+                other => {
+                    if workspace_flag {
+                        return Err(ArgsError::WorkspaceConflict);
+                    }
+                    if positional_workspace {
+                        return Err(ArgsError::Unexpected(other.to_owned()));
+                    }
+                    args.workspace = Some(PathBuf::from(other));
+                    positional_workspace = true;
+                }
             }
         }
         if args.session.is_some() && args.continue_recent {
@@ -189,5 +222,35 @@ mod tests {
             Args::parse(["--theme", "blue"]),
             Err(ArgsError::Theme(_))
         ));
+    }
+
+    #[test]
+    fn accepts_positional_workspace_and_rejects_conflicts_or_extras() {
+        let dot = Args::parse(["."]).unwrap();
+        assert_eq!(dot.workspace, Some(PathBuf::from(".")));
+
+        let with_flags = Args::parse(["--continue", "./project", "--theme", "dark"]).unwrap();
+        assert_eq!(with_flags.workspace, Some(PathBuf::from("./project")));
+        assert!(with_flags.continue_recent);
+        assert_eq!(with_flags.theme, Some(ThemeKind::Dark));
+
+        let escaped = Args::parse(["--", "-weird"]).unwrap();
+        assert_eq!(escaped.workspace, Some(PathBuf::from("-weird")));
+
+        let escaped_agent = Args::parse(["--", "agent"]).unwrap();
+        assert_eq!(escaped_agent.workspace, Some(PathBuf::from("agent")));
+
+        assert_eq!(
+            Args::parse(["--workspace", "a", "."]).unwrap_err(),
+            ArgsError::WorkspaceConflict
+        );
+        assert_eq!(
+            Args::parse([".", "--workspace", "a"]).unwrap_err(),
+            ArgsError::WorkspaceConflict
+        );
+        assert_eq!(
+            Args::parse([".", "extra"]).unwrap_err(),
+            ArgsError::Unexpected("extra".into())
+        );
     }
 }

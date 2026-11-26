@@ -4,8 +4,8 @@
 
 use ratatui::text::{Line, Span};
 
+use crate::app::commands::COMMANDS;
 use crate::app::overlay::{self, matching_models, session_label, short_session_id, workspace_name};
-use crate::app::picker;
 use crate::app::{App, LiveStatus, Overlay, Session};
 use crate::transcript::Block;
 use minicore_host_core::{InteractionRequestData, ModelDescription, SessionSummary};
@@ -18,7 +18,6 @@ use minicore_host_runtime::tools::ToolInputAnswerKind;
 use super::blocks::plural;
 use super::panel::{Kind, Row, Sheet, Tone, body_lines, truncate};
 use super::theme::Styles;
-use crate::wrap::width;
 
 /// Rows of the completion list that show at once.
 const COMPLETION_ROWS: usize = 8;
@@ -105,9 +104,6 @@ pub fn sheet(app: &App, styles: Styles) -> Option<Sheet> {
             };
             sessions_sheet(app, rows, &state, styles)
         }
-        Overlay::SessionInfo => session_info_sheet(app, styles),
-        Overlay::Delegations { selected } => delegations_sheet(app, *selected, styles),
-        Overlay::Context => context_sheet(app, styles),
         Overlay::Models { filter, selected } => models_sheet(app, filter, *selected, styles),
         Overlay::Agents { filter, selected } => agents_sheet(app, filter, *selected, styles),
         Overlay::AgentDelete {
@@ -151,69 +147,141 @@ pub fn sheet(app: &App, styles: Styles) -> Option<Sheet> {
             matches,
             current,
         } => find_sheet(query, matches.len(), *current),
-        // The completion lists live in the editor band and views own the transcript area.
+        // Inline completion popups float above the composer; full-screen views own main area.
         Overlay::Palette { .. }
         | Overlay::Files { .. }
+        | Overlay::Delegations { .. }
+        | Overlay::Context { .. }
+        | Overlay::SessionInfo { .. }
         | Overlay::Help { .. }
         | Overlay::Error { .. }
+        | Overlay::Remote { .. }
         | Overlay::Diff(_) => return None,
     })
 }
 
-/// Rows of the inline completion list (commands, `@` files) shown inside the
-/// composer band, as content only: the band adds the gutter, rail and tint.
-pub fn completion(app: &App, styles: Styles, width: u16) -> Option<Vec<Line<'static>>> {
-    let (items, selected) = match &app.overlay {
-        Overlay::Palette { selected } => (app.palette_rows(), *selected),
-        Overlay::Files { selected, paths } => {
-            let items = overlay::matching_paths(paths, app.mention_query()?)
-                .into_iter()
-                .map(|path| (overlay::file_name(path).to_owned(), path.clone()))
-                .collect::<Vec<_>>();
-            (items, *selected)
-        }
-        _ => return None,
-    };
-    (!items.is_empty()).then(|| completion_lines(&items, selected, styles, usize::from(width)))
+/// Hotkey badges shown at the right edge of high-frequency slash commands.
+fn command_hotkey(name: &str) -> Option<&'static str> {
+    match name {
+        "tasks" => Some("ctrl+b"),
+        "sessions" => Some("ctrl+r"),
+        "model" => Some("ctrl+l"),
+        "reasoning" => Some("shift+tab"),
+        "help" => Some("f1"),
+        "unconfirmed" => Some("f8"),
+        _ => None,
+    }
 }
 
-/// The list of `(name, description)` items around `selected`, then a counter
-/// row when some are out of view.
-fn completion_lines(
-    items: &[(String, String)],
-    selected: usize,
-    styles: Styles,
-    cells: usize,
-) -> Vec<Line<'static>> {
-    let widest = items.iter().map(|(name, _)| width(name)).max().unwrap_or(0);
-    let column = (widest + 2).clamp(12, 32);
-    let window = picker::window(selected, items.len(), COMPLETION_ROWS);
-    let mut lines: Vec<Line<'static>> = window
-        .map(|index| {
-            let (name, detail) = &items[index];
-            let chosen = index == selected;
-            let pointer = if chosen { "→ " } else { "  " };
-            let name = truncate(name, column - 2);
-            let gap = column.saturating_sub(width(&name));
-            let room = cells.saturating_sub(2 + column);
-            let (name_style, detail_style) = if chosen {
-                (styles.user_rail(), styles.user_rail())
-            } else {
-                (styles.text(), styles.dim())
-            };
-            let mut spans = vec![Span::styled(format!("{pointer}{name}"), name_style)];
-            if cells > 40 && room > 10 {
-                spans.push(Span::styled(" ".repeat(gap), name_style));
-                spans.push(Span::styled(truncate(detail, room), detail_style));
+/// Builds the lightweight semi-popup [`Sheet`] for `/` commands and `@` file
+/// mentions, rendered directly above the pinned composer.
+pub fn completion_sheet(app: &App, styles: Styles) -> Option<Sheet> {
+    match &app.overlay {
+        Overlay::Palette { selected } => {
+            if let Some((cmd, _)) = app.palette_arg() {
+                let current = app.current_value(cmd);
+                let items = app.palette_rows();
+                let rows: Vec<Row> = items
+                    .into_iter()
+                    .map(|(value, detail)| {
+                        let is_current = current.as_deref() == Some(value.as_str());
+                        let clean_detail = detail
+                            .strip_prefix("✓ current · ")
+                            .or_else(|| detail.strip_prefix("✓ current"))
+                            .unwrap_or(&detail)
+                            .to_owned();
+                        Row::new(value, clean_detail).mark(is_current)
+                    })
+                    .collect();
+                let mut sheet = Sheet::new(
+                    format!("/{cmd}"),
+                    "↑↓ select · tab fill · enter run · pgup/pgdn · esc close",
+                )
+                .kind(Kind::Column)
+                .max_rows(COMPLETION_ROWS)
+                .status(plural(rows.len() as u64, "choice"));
+                if rows.is_empty() {
+                    sheet = sheet.notes(vec![Line::styled("  No matching value", styles.dim())]);
+                } else {
+                    sheet = sheet.rows(rows).selected(Some(*selected));
+                }
+                return Some(sheet);
             }
-            Line::from(spans)
-        })
-        .collect();
-    if items.len() > COMPLETION_ROWS {
-        let counter = format!("  ({}/{})", selected + 1, items.len());
-        lines.push(Line::styled(truncate(&counter, cells), styles.dim()));
+            let query = app.palette_query()?;
+            let matched = crate::app::commands::filter(query, &app.templates);
+            let total = COMMANDS.len() + app.templates.len();
+            let rows: Vec<Row> = matched
+                .into_iter()
+                .map(|command| {
+                    let badge = match (
+                        app.current_value(command.name),
+                        command_hotkey(command.name),
+                    ) {
+                        (Some(val), Some(key)) => format!("● {val} · {key}"),
+                        (Some(val), None) => format!("● {val}"),
+                        (None, Some(key)) => key.to_owned(),
+                        (None, None) => String::new(),
+                    };
+                    Row::new(format!("/{}", command.name), command.description)
+                        .args(command.args)
+                        .badge(badge)
+                })
+                .collect();
+            let status = if rows.len() == total {
+                plural(total as u64, "command")
+            } else {
+                format!("{} of {total}", rows.len())
+            };
+            let mut sheet = Sheet::new(
+                "Commands",
+                "↑↓ select · tab complete · enter run · pgup/pgdn · esc close",
+            )
+            .kind(Kind::Column)
+            .max_rows(COMPLETION_ROWS)
+            .status(status);
+            if rows.is_empty() {
+                sheet = sheet.notes(vec![Line::styled(
+                    "  No matching command · enter sends as prompt",
+                    styles.dim(),
+                )]);
+            } else {
+                sheet = sheet.rows(rows).selected(Some(*selected));
+            }
+            Some(sheet)
+        }
+        Overlay::Files { selected, paths } => {
+            let query = app.mention_query()?;
+            let shown = overlay::matching_paths(paths, query);
+            let rows: Vec<Row> = shown
+                .iter()
+                .map(|path| Row::new(overlay::file_name(path).to_owned(), (*path).clone()))
+                .collect();
+            let title = if query.is_empty() {
+                "Files".to_owned()
+            } else {
+                format!("Files · @{query}")
+            };
+            let status = if rows.len() == paths.len() {
+                plural(paths.len() as u64, "file")
+            } else {
+                format!("{} of {}", rows.len(), paths.len())
+            };
+            let mut sheet = Sheet::new(
+                title,
+                "↑↓ select · tab/enter insert · pgup/pgdn · esc close",
+            )
+            .kind(Kind::Column)
+            .max_rows(COMPLETION_ROWS)
+            .status(status);
+            if rows.is_empty() {
+                sheet = sheet.notes(vec![Line::styled("  No matching files", styles.dim())]);
+            } else {
+                sheet = sheet.rows(rows).selected(Some(*selected));
+            }
+            Some(sheet)
+        }
+        _ => None,
     }
-    lines
 }
 
 /// The sessions picker's own state, as the sheet shows it.
@@ -277,7 +345,11 @@ fn sessions_sheet(
             }
         })
         .collect::<Vec<_>>();
-    let hint = "enter open · ctrl+n rename · ctrl+d delete · esc close";
+    let hint = if filter.is_empty() {
+        "enter open · ctrl+n rename · ctrl+d delete · esc close"
+    } else {
+        "enter open · ctrl+n rename · ctrl+d delete · ctrl+u clear · esc close"
+    };
     let notes = match shown.get(selected) {
         None => vec![Line::styled("  No sessions found", styles.dim())],
         Some(info) => session_preview(app, info, styles),
@@ -315,7 +387,12 @@ fn models_sheet(app: &App, filter: &str, selected: usize, styles: Styles) -> She
         ],
         None => vec![Line::styled("  No matching models", styles.dim())],
     };
-    Sheet::new("Select Model", "enter select · esc close")
+    let hint = if filter.is_empty() {
+        "enter select · esc close"
+    } else {
+        "enter select · ctrl+u clear · esc close"
+    };
+    Sheet::new("Select Model", hint)
         .status(plural(app.models.len() as u64, "model"))
         .search(filter)
         .rows(rows)
@@ -435,7 +512,12 @@ fn agents_sheet(app: &App, filter: &str, selected: usize, styles: Styles) -> She
             notes
         })
         .unwrap_or_else(|| vec![Line::styled("  No matching agents", styles.dim())]);
-    Sheet::new("Select Agent", "enter select · ctrl+d delete · esc close")
+    let hint = if filter.is_empty() {
+        "enter select · ctrl+d delete · esc close"
+    } else {
+        "enter select · ctrl+d delete · ctrl+u clear · esc close"
+    };
+    Sheet::new("Select Agent", hint)
         .search(filter)
         .rows(rows)
         .selected(Some(selected))
@@ -443,7 +525,7 @@ fn agents_sheet(app: &App, filter: &str, selected: usize, styles: Styles) -> She
         .status(plural(agents.len() as u64, "agent"))
 }
 
-fn storage_label(mode: StorageMode) -> &'static str {
+pub(crate) fn storage_label(mode: StorageMode) -> &'static str {
     match mode {
         StorageMode::Memory => "memory",
         StorageMode::Persistent => "persistent",
@@ -743,51 +825,6 @@ fn session_row(info: &SessionSummary, context: &RowContext, now_seconds: i64) ->
     Row::new(session_label(info), parts.join(" · ")).mark(context.current)
 }
 
-/// `● D RESP client   running · 4 tool rounds`: every delegated child here.
-fn delegations_sheet(app: &App, selected: usize, styles: Styles) -> Sheet {
-    let cards = overlay::delegations(app);
-    let running = cards.iter().filter(|card| card.outcome().is_none()).count();
-    let rows: Vec<Row> = cards
-        .iter()
-        .map(|card| {
-            let glyph = match card.outcome() {
-                Some(minicore_host_protocol::TurnOutcome::Completed) => "✓",
-                Some(_) => "✗",
-                None => "●",
-            };
-            let task = card.task.lines().next().unwrap_or("input accepted");
-            let mut detail = super::agent_cards::status(card);
-            if let Some((_, turn)) = &card.turn
-                && turn.tool_rounds > 0
-            {
-                detail.push_str(&format!(" · {}", plural(turn.tool_rounds, "tool round")));
-            }
-            Row::new(
-                format!("{glyph} {}", crate::wrap::sanitize(task)),
-                format!(
-                    "{} · {detail}",
-                    short_session_id(card.key.child.session_id.as_str())
-                ),
-            )
-        })
-        .collect();
-    let notes = if rows.is_empty() {
-        vec![Line::styled(
-            "  No delegated child in this conversation",
-            styles.dim(),
-        )]
-    } else {
-        Vec::new()
-    };
-    // Session rows cut a long task before its id and status.
-    Sheet::new("Delegations", "enter open · esc close")
-        .kind(Kind::Session)
-        .status(format!("{running} running · {} total", rows.len()))
-        .rows(rows)
-        .selected(Some(selected))
-        .notes(notes)
-}
-
 /// The selected session's details under the list: where it works, what runs
 /// it and, when its history is loaded, the request it started with.
 fn session_preview(app: &App, info: &SessionSummary, styles: Styles) -> Vec<Line<'static>> {
@@ -831,99 +868,6 @@ fn session_preview(app: &App, info: &SessionSummary, styles: Styles) -> Vec<Line
     lines
 }
 
-fn context_sheet(app: &App, styles: Styles) -> Sheet {
-    let lines = crate::ui::views::context::lines(app.resident.current(), styles);
-    Sheet::new("Context", "r refresh · c copy · esc back").body(lines)
-}
-
-/// `/session`: the facts about the foreground session; Enter or `c` copies its id.
-fn session_info_sheet(app: &App, styles: Styles) -> Sheet {
-    let sheet = Sheet::new("Session", "c copy id · esc back");
-    let Some(session) = app.resident.current() else {
-        return sheet.body(vec![Line::styled("  No session is open", styles.dim())]);
-    };
-    let info = &session.info;
-    let tokens = session
-        .context
-        .as_ref()
-        .and_then(|context| context.data.history.as_ref())
-        .and_then(|history| history.latest_response.as_ref())
-        .map_or_else(
-            || "not reported".to_owned(),
-            |response| super::views::context::usage_text(&response.usage),
-        );
-    let facts = vec![
-        ("id", info.id.to_string()),
-        (
-            "agent",
-            format!("{} · {}", agent_label(app, &info.agent_id), info.agent_id),
-        ),
-        (
-            "title",
-            info.title
-                .clone()
-                .unwrap_or_else(|| "Untitled session".into()),
-        ),
-        (
-            "workspace",
-            info.config
-                .workspace
-                .as_ref()
-                .map_or_else(|| "none".into(), |workspace| workspace.path.clone()),
-        ),
-        ("storage", storage_label(info.mode).to_owned()),
-        (
-            "lifecycle",
-            format!("{:?}", session.state.data.lifecycle).to_lowercase(),
-        ),
-        (
-            "residency",
-            format!("{:?}", session.state.data.residency).to_lowercase(),
-        ),
-        (
-            "scheduling",
-            format!("{:?}", session.state.data.scheduling).to_lowercase(),
-        ),
-        (
-            "approval",
-            match info.config.execution.approval {
-                minicore_host_protocol::ApprovalMode::Ask => "ask",
-                minicore_host_protocol::ApprovalMode::Auto => "auto",
-                minicore_host_protocol::ApprovalMode::ReadOnly => "read_only",
-            }
-            .to_owned(),
-        ),
-        (
-            "model",
-            format!(
-                "{} · {}",
-                info.config.model,
-                reasoning_label(info.config.reasoning)
-            ),
-        ),
-        (
-            "items",
-            session
-                .context
-                .as_ref()
-                .and_then(|context| context.data.history.as_ref())
-                .map(|history| history.raw_items.to_string())
-                .unwrap_or_else(|| "unknown".to_owned()),
-        ),
-        ("last usage", tokens),
-    ];
-    let body = facts
-        .into_iter()
-        .map(|(name, value)| {
-            Line::from(vec![
-                Span::styled(format!("{name:<10}"), styles.dim()),
-                Span::styled(truncate(&value, 120), styles.text()),
-            ])
-        })
-        .collect();
-    sheet.body(body)
-}
-
 /// `now`, `5m`, `3h`, `2d`, `1w`, `4mo` or `2y` from the Host timestamp.
 fn age_label(updated_at: Timestamp, now: i64) -> String {
     let seconds = now.saturating_sub(super::blocks::timestamp(updated_at).as_second());
@@ -955,62 +899,31 @@ mod tests {
             .collect()
     }
 
-    fn items(count: usize) -> Vec<(String, String)> {
-        (0..count)
-            .map(|index| (format!("cmd{index:02}"), format!("Does thing {index}")))
-            .collect()
-    }
-
     #[test]
-    fn the_completion_list_marks_the_selection_and_aligns_descriptions() {
-        let lines = completion_lines(&items(3), 1, styles(), 80);
-        let rows: Vec<String> = lines.iter().map(text).collect();
-        assert_eq!(rows[0], format!("  cmd00{}Does thing 0", " ".repeat(7)));
-        assert_eq!(rows[1], format!("→ cmd01{}Does thing 1", " ".repeat(7)));
-        assert_eq!(rows.len(), 3, "no counter for a short list");
-    }
-
-    #[test]
-    fn the_selected_completion_row_is_one_colour_and_the_others_are_not() {
-        let palette = Palette::dark();
-        let lines = completion_lines(&items(2), 0, styles(), 80);
+    fn the_slash_palette_builds_a_compact_sheet_with_hotkeys_and_empty_note() {
+        let mut app = crate::ui::snapshots::app();
+        app.composer.set_text("/tas");
+        app.overlay = Overlay::Palette { selected: 0 };
+        let sheet = completion_sheet(&app, styles()).expect("palette sheet");
+        assert_eq!(sheet.title, "Commands");
+        assert_eq!(sheet.max_rows, COMPLETION_ROWS);
         assert!(
-            lines[0]
-                .spans
+            sheet
+                .rows
                 .iter()
-                .all(|span| span.style.fg == Some(palette.user_rail))
+                .any(|row| row.label == "/tasks" && row.badge == "ctrl+b")
         );
-        assert_eq!(lines[1].spans[0].style.fg, Some(palette.text));
-        assert_eq!(lines[1].spans[2].style.fg, Some(palette.dim));
-    }
 
-    #[test]
-    fn a_window_of_rows_shows_around_the_selection_with_a_counter() {
-        let lines = completion_lines(&items(30), 10, styles(), 80);
-        let rows: Vec<String> = lines.iter().map(text).collect();
-        let window = picker::window(10, 30, COMPLETION_ROWS);
-        assert_eq!(rows.len(), COMPLETION_ROWS + 1);
-        assert!(rows[10 - window.start].starts_with("→ cmd10"), "{rows:?}");
-        assert_eq!(rows[COMPLETION_ROWS], "  (11/30)");
-        let last = completion_lines(&items(30), 29, styles(), 80);
-        assert!(text(&last[COMPLETION_ROWS - 1]).starts_with("→ cmd29"));
-        assert_eq!(text(&last[COMPLETION_ROWS]), "  (30/30)");
-    }
-
-    #[test]
-    fn a_narrow_list_drops_descriptions_but_keeps_names() {
-        let lines = completion_lines(&items(2), 0, styles(), 30);
-        assert_eq!(text(&lines[0]), "→ cmd00");
-    }
-
-    #[test]
-    fn the_name_column_follows_the_widest_name_within_bounds() {
-        let long = vec![(
-            "a-rather-long-command-name-that-exceeds-the-cap".into(),
-            "d".into(),
-        )];
-        let rows = completion_lines(&long, 0, styles(), 100);
-        assert_eq!(width(&text(&rows[0])), 2 + 32 + 1);
+        app.composer.set_text("/zzzz-no-such-cmd");
+        let empty = completion_sheet(&app, styles()).expect("empty palette sheet");
+        assert!(empty.rows.is_empty());
+        assert!(
+            empty
+                .notes
+                .iter()
+                .map(text)
+                .any(|row| row.contains("No matching command"))
+        );
     }
 
     fn info() -> SessionSummary {

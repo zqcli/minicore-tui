@@ -6,14 +6,11 @@ use minicore_host_protocol::Timestamp;
 use ratatui::text::{Line, Span};
 use serde::Deserialize;
 
-use super::blocks::{local_zone, padded, stamp_label, text_width};
+use super::blocks::{local_zone, stamp_label};
 use super::markdown;
-use super::rails::{chrome, surface_row};
+use super::rails::chrome;
 use super::theme::Styles;
 use crate::wrap;
-
-/// Rows of a folded result body, matching other long blocks.
-const RESULT_ROWS: usize = 12;
 
 #[derive(Deserialize)]
 struct Notification {
@@ -107,81 +104,117 @@ pub fn summary(text: &str) -> Option<Summary> {
     })
 }
 
-/// The result card, or `None` when the text is not a notification.
+/// One-line chronological arrival banner in the main transcript; clicking it
+/// opens the `Ctrl+B` Async Tasks Inspector focused on this child Session.
 pub fn render(
     text: &str,
     at: Option<Timestamp>,
     styles: Styles,
     width: usize,
-    expanded: bool,
+    _expanded: bool,
 ) -> Option<Vec<Line<'static>>> {
     let Summary {
         session_id,
         outcome,
-        fault,
-        answer,
         ..
     } = summary(text)?;
-    let (rail, surface, tone) = match outcome.as_str() {
-        "completed" => (
-            styles.card_success_rail(),
-            styles.card_success(),
-            styles.success(),
-        ),
-        "failed" | "cancelled" | "not executed" => (
-            styles.card_failure_rail(),
-            styles.card_failure(),
-            styles.failure(),
-        ),
-        _ => (styles.card_rail(), styles.card(), styles.meta()),
+    let tone = match outcome.as_str() {
+        "completed" => styles.success(),
+        "failed" => styles.failure(),
+        _ => styles.meta(),
     };
-    let row = |spans: Vec<Span<'static>>| surface_row(rail, surface, spans, width);
     let short: String = session_id.chars().take(6).collect();
-    let mut header = vec![
-        Span::styled("↳ Delegated result", styles.bold()),
-        Span::styled(format!(" · Session {short} · "), styles.meta()),
-        Span::styled(outcome, tone),
+    let mut middle = vec![
+        Span::styled("↳ ", styles.meta()),
+        Span::styled(format!("agent {outcome}"), tone),
+        Span::styled(format!(" · Session {short}"), styles.dim()),
     ];
     if let Some(at) = at {
         let stamp = stamp_label(at, local_zone());
-        let used: usize = header.iter().map(|span| wrap::width(&span.content)).sum();
-        let room = super::blocks::text_width(width);
-        if used + wrap::width(&stamp) + 2 <= room {
-            header.push(Span::raw(" ".repeat(room - used - wrap::width(&stamp))));
-            header.push(Span::styled(stamp, styles.meta()));
+        middle.push(Span::styled(format!(" · {stamp}"), styles.meta()));
+    }
+    middle.push(Span::styled(" · ", styles.meta()));
+    middle.push(Span::styled("click or ctrl+b", styles.accent()));
+
+    let prefix = "─ ";
+    let mid_width: usize = middle.iter().map(|span| wrap::width(&span.content)).sum();
+    let prefix_width = wrap::width(prefix);
+    let mut spans = vec![Span::styled(prefix.to_owned(), styles.card_rail())];
+    if prefix_width + mid_width >= width {
+        let plain: String = middle.iter().map(|span| span.content.as_ref()).collect();
+        spans.push(Span::styled(
+            wrap::truncate(&plain, width.saturating_sub(prefix_width)),
+            tone,
+        ));
+    } else {
+        spans.extend(middle);
+        let used = prefix_width + mid_width;
+        let tail = width.saturating_sub(used + 1);
+        if tail > 0 {
+            spans.push(Span::raw(" "));
+            spans.push(Span::styled("─".repeat(tail), styles.card_rail()));
         }
     }
-    let mut lines = vec![row(padded(header))];
-    let mut body = Vec::new();
-    if let Some(fault) = &fault {
-        body.extend(wrap::wrapped(
+    Some(vec![chrome(Line::from(spans))])
+}
+
+/// Full scrollable detail lines for a standalone delegated result shown inside
+/// the `Ctrl+B` Async Tasks Inspector when its origin dispatch call is unloaded.
+pub fn detail_lines(summary: &Summary, styles: Styles, width: usize) -> Vec<Line<'static>> {
+    let width = width.max(12);
+    let tone = match summary.outcome.as_str() {
+        "completed" => styles.success(),
+        "failed" => styles.failure(),
+        _ => styles.meta(),
+    };
+    let glyph = match summary.outcome.as_str() {
+        "completed" => "✓",
+        "failed" => "✗",
+        "cancelled" => "⊘",
+        _ => "○",
+    };
+    let short: String = summary.session_id.chars().take(6).collect();
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled(format!("{glyph} "), tone),
+            Span::styled("agent", styles.tool_title()),
+            Span::styled(format!(" · Session {short} · "), styles.meta()),
+            Span::styled(summary.outcome.clone(), tone),
+        ]),
+        Line::styled(
+            "Origin dispatch is in earlier unloaded history · showing delivered result",
+            styles.meta(),
+        ),
+        Line::raw(""),
+        Line::styled("Result", styles.heading()),
+    ];
+    if let Some(fault) = &summary.fault {
+        lines.extend(wrap::wrapped(
             &wrap::sanitize(fault),
-            text_width(width),
+            width,
             styles.failure(),
         ));
     }
-    match answer {
-        Some(answer) => body.extend(markdown::render(
-            &answer,
-            text_width(width),
-            &styles,
-            styles.text(),
-        )),
-        None if body.is_empty() => body.push(Line::styled("No final answer", styles.dim())),
+    match &summary.answer {
+        Some(answer) => lines.extend(markdown::render(answer, width, &styles, styles.text())),
+        None if summary.fault.is_none() => {
+            lines.push(Line::styled("No final answer", styles.dim()));
+        }
         None => {}
     }
-    let hidden = body.len().saturating_sub(RESULT_ROWS);
-    if !expanded && hidden > 0 {
-        body.truncate(RESULT_ROWS - 1);
+    lines
+}
+
+/// Plain text copied by `Ctrl+Y` for a standalone delegated result.
+pub fn copy_text(summary: &Summary) -> String {
+    let mut parts = Vec::new();
+    if let Some(fault) = &summary.fault {
+        parts.push(fault.clone());
     }
-    lines.extend(body.into_iter().map(|line| row(padded(line.spans))));
-    if !expanded && hidden > 0 {
-        lines.push(chrome(row(padded(vec![Span::styled(
-            format!("… {} more lines", hidden + 1),
-            styles.dim(),
-        )]))));
+    if let Some(answer) = &summary.answer {
+        parts.push(answer.clone());
     }
-    Some(lines)
+    parts.join("\n\n")
 }
 
 #[cfg(test)]
@@ -203,26 +236,46 @@ mod tests {
     }
 
     #[test]
-    fn a_result_shows_outcome_and_answer_without_identifiers() {
-        let rows = text(
-            &render(
-                NOTICE,
-                None,
-                Styles::of(super::super::theme::Palette::dark()),
-                60,
-                false,
-            )
-            .unwrap(),
-        );
-        assert!(rows[0].contains("Delegated result · Session js4v6g · completed"));
-        assert!(rows.iter().any(|row| row.contains("已新增 docs/API.md。")));
-        assert!(rows.iter().any(|row| row.contains("检查结果：23 项通过。")));
+    fn a_result_shows_a_one_line_banner_and_detail_lines_keep_answer_without_identifiers() {
+        let styles = Styles::of(super::super::theme::Palette::dark());
+        let rows = text(&render(NOTICE, None, styles, 72, false).unwrap());
+        assert_eq!(rows.len(), 1, "arrival banner is one compact row: {rows:?}");
+        assert!(rows[0].contains("agent completed · Session js4v6g"));
+        assert!(rows[0].contains("click or ctrl+b"));
+        assert!(!rows[0].contains("task_message_id"));
+
+        let parsed = summary(NOTICE).unwrap();
+        let detail = text(&detail_lines(&parsed, styles, 60));
         assert!(
-            !rows
+            detail
+                .iter()
+                .any(|row| row.contains("已新增 docs/API.md。"))
+        );
+        assert!(
+            detail
+                .iter()
+                .any(|row| row.contains("检查结果：23 项通过。"))
+        );
+        assert!(
+            !detail
                 .iter()
                 .any(|row| row.contains("task_message_id") || row.contains("\\n"))
         );
         assert!(is_result(NOTICE));
         assert!(!is_result("please review src/http.js"));
+    }
+
+    #[test]
+    fn cancelled_result_uses_meta_tone_not_failure_red() {
+        let cancelled = r#"{"source":{"agent_id":"a","session_id":"js4v6g27e0es9cmaksxk"},"status":"ended","results":[{"outcome":"cancelled","output":[]}]}"#;
+        let styles = Styles::of(super::super::theme::Palette::dark());
+        let rows = render(cancelled, None, styles, 72, false).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert!(
+            rows[0]
+                .spans
+                .iter()
+                .all(|span| span.style.fg != styles.failure().fg)
+        );
     }
 }

@@ -217,6 +217,10 @@ async fn run() -> i32 {
             return 2;
         }
     };
+    if !workspace.is_dir() {
+        eprintln!("workspace is not a directory: {}", workspace.display());
+        return 2;
+    }
     if workspace.to_str().is_none() {
         eprintln!("workspace must be representable as UTF-8 for native Host configuration");
         return 2;
@@ -259,6 +263,7 @@ async fn run() -> i32 {
     app.theme = theme;
     app.notifier.bell = launch.ui.bell;
     app.editor = launch.ui.editor;
+    app.remote_config = launch.remote;
     app.composer = minicore_tui::app::composer::Composer::with_history(
         minicore_tui::prompt_history::load(&directory.history_file()),
     );

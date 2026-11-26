@@ -6,38 +6,31 @@ pub mod context;
 pub mod diff;
 mod error;
 pub mod help;
+pub mod page;
+pub mod remote;
+pub mod split;
+pub mod tasks;
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
 use crate::app::commands::COMMANDS;
 use crate::app::{App, Overlay};
 
+use super::chrome as ui_chrome;
 use super::theme::Styles;
 
-/// One row in one style. The style sits on the span, which is what `set_line` paints.
-fn styled(text: &str, style: Style) -> Line<'static> {
-    Line::from(Span::styled(text.to_owned(), style))
-}
-
-/// Key hints as the welcome header draws them: the key faint, what it does
-/// dim, `·` between pairs.
-pub fn key_hints(hints: &[(&str, &str)], styles: Styles) -> Vec<Span<'static>> {
-    let mut spans = Vec::with_capacity(hints.len() * 3);
-    for (index, (key, action)) in hints.iter().enumerate() {
-        if index > 0 {
-            spans.push(Span::styled(" · ", styles.dim()));
-        }
-        spans.push(Span::styled((*key).to_owned(), styles.faint()));
-        spans.push(Span::styled(format!(" {action}"), styles.dim()));
-    }
-    spans
-}
+pub use ui_chrome::{key_hints, styled};
 
 /// The title row with its context in meta colour, and the bottom key hints.
-fn chrome(frame: &mut Frame, area: Rect, styles: Styles, title: &str, hints: &[(&str, &str)]) {
+pub(super) fn chrome(
+    frame: &mut Frame,
+    area: Rect,
+    styles: Styles,
+    title: &str,
+    hints: &[(&str, &str)],
+) {
     let (name, context) = title.split_once(" · ").unwrap_or((title, ""));
     let mut spans = vec![
         Span::styled("← ", styles.meta()),
@@ -61,36 +54,146 @@ fn chrome(frame: &mut Frame, area: Rect, styles: Styles, title: &str, hints: &[(
 /// Draws whichever view owns the transcript area; false when none is open.
 pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, styles: Styles) -> bool {
     let area = super::transcript::inner(area);
+    if let Overlay::SessionInfo { scroll } = app.overlay {
+        let lines = session_info_lines(
+            app,
+            styles,
+            usize::from(area.width.saturating_sub(2)).max(1),
+        );
+        let (clamped, _) = page::render(
+            frame,
+            area,
+            styles,
+            "Session",
+            &[("c", "copy id"), ("esc", "back")],
+            None,
+            &lines,
+            scroll,
+        );
+        if let Overlay::SessionInfo { scroll } = &mut app.overlay {
+            *scroll = clamped;
+        }
+        return true;
+    }
+    if let Overlay::Remote { show_key, scroll } = app.overlay {
+        let clamped = remote::render(frame, area, styles, app, show_key, scroll);
+        if let Overlay::Remote { scroll, .. } = &mut app.overlay {
+            *scroll = clamped;
+        }
+        return true;
+    }
     match &mut app.overlay {
         Overlay::Diff(diff) => diff::render(frame, area, styles, diff),
         Overlay::Help { scroll, filter } => {
-            help::render(frame, area, styles, COMMANDS, *scroll, filter)
+            help::render(frame, area, styles, COMMANDS, scroll, filter)
+        }
+        Overlay::Delegations { .. } => {
+            tasks::render(frame, area, styles, app);
         }
         Overlay::Error {
             text,
             scroll,
             visible_rows,
         } => error::render(frame, area, styles, text, scroll, visible_rows),
-        // Read-only facts share one container: the view, not a bottom sheet.
-        Overlay::Context | Overlay::SessionInfo => {
-            let Some(sheet) = super::sheets::sheet(app, styles) else {
-                return false;
-            };
-            let hints: Vec<(&str, &str)> = sheet
-                .hint
-                .split(" · ")
-                .filter_map(|pair| pair.split_once(' '))
-                .collect();
-            chrome(frame, area, styles, &sheet.title, &hints);
-            let buffer = frame.buffer_mut();
-            let rows = area.height.saturating_sub(3);
-            for (offset, line) in sheet.body.iter().take(rows.into()).enumerate() {
-                buffer.set_line(area.x, area.y + 2 + offset as u16, line, area.width);
-            }
+        Overlay::Context { scroll } => {
+            context::render(frame, area, styles, app.resident.current(), scroll);
         }
         _ => return false,
     }
     true
+}
+
+fn session_info_lines(app: &App, styles: Styles, width: usize) -> Vec<Line<'static>> {
+    let Some(session) = app.resident.current() else {
+        return vec![styled("No session is open", styles.dim())];
+    };
+    let info = &session.info;
+    let tokens = session
+        .context
+        .as_ref()
+        .and_then(|context| context.data.history.as_ref())
+        .and_then(|history| history.latest_response.as_ref())
+        .map_or_else(
+            || "not reported".to_owned(),
+            |response| context::usage_text(&response.usage),
+        );
+    let facts = vec![
+        ("id", info.id.to_string(), None),
+        (
+            "agent",
+            format!(
+                "{} · {}",
+                super::sheets::agent_label(app, &info.agent_id),
+                info.agent_id
+            ),
+            None,
+        ),
+        (
+            "title",
+            info.title
+                .clone()
+                .unwrap_or_else(|| "Untitled session".into()),
+            None,
+        ),
+        (
+            "workspace",
+            info.config
+                .workspace
+                .as_ref()
+                .map_or_else(|| "none".into(), |workspace| workspace.path.clone()),
+            None,
+        ),
+        (
+            "storage",
+            super::sheets::storage_label(info.mode).to_owned(),
+            None,
+        ),
+        (
+            "lifecycle",
+            format!("{:?}", session.state.data.lifecycle).to_lowercase(),
+            None,
+        ),
+        (
+            "residency",
+            format!("{:?}", session.state.data.residency).to_lowercase(),
+            None,
+        ),
+        (
+            "scheduling",
+            format!("{:?}", session.state.data.scheduling).to_lowercase(),
+            None,
+        ),
+        (
+            "approval",
+            match info.config.execution.approval {
+                minicore_host_protocol::ApprovalMode::Ask => "ask",
+                minicore_host_protocol::ApprovalMode::Auto => "auto",
+            }
+            .to_owned(),
+            None,
+        ),
+        (
+            "model",
+            format!(
+                "{} · {}",
+                info.config.model,
+                super::sheets::reasoning_label(info.config.reasoning)
+            ),
+            None,
+        ),
+        (
+            "items",
+            session
+                .context
+                .as_ref()
+                .and_then(|context| context.data.history.as_ref())
+                .map(|history| history.raw_items.to_string())
+                .unwrap_or_else(|| "unknown".to_owned()),
+            None,
+        ),
+        ("last usage", tokens, None),
+    ];
+    ui_chrome::kv_lines(&facts, styles, width)
 }
 
 #[cfg(test)]

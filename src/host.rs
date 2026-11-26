@@ -1,6 +1,9 @@
 //! The executable owns one persistent Host and its process diagnostics.
 
 mod diagnostics;
+pub mod remote;
+
+pub use remote::RemoteServer;
 
 use std::sync::Arc;
 

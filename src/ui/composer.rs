@@ -27,6 +27,8 @@ pub enum Editor {
     Live,
     /// A full-screen view owns the keys.
     View,
+    /// The `Ctrl+B` child message composer when the task list or detail has focus.
+    TaskInactive,
     /// The current session is closed and takes no input.
     Closed,
 }
@@ -37,6 +39,7 @@ impl Editor {
         match self {
             Self::Live => None,
             Self::View => Some("view open · esc back"),
+            Self::TaskInactive => Some("enter or click here to message this agent…"),
             Self::Closed => Some("session closed · /new starts a new one"),
         }
     }
@@ -290,7 +293,7 @@ pub fn render(
         .collect();
     lines.extend(body.into_iter().map(|spans| row(spans, width, styles)));
     lines.resize_with(g.target, || row(Vec::new(), width, styles));
-    if editor == Editor::View {
+    if matches!(editor, Editor::View | Editor::TaskInactive) {
         for span in lines.iter_mut().flat_map(|line| &mut line.spans) {
             span.style = span.style.patch(styles.faint());
         }

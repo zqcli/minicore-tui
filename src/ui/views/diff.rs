@@ -1,29 +1,32 @@
-//! The diff view: a file list beside the hunks of the selected file.
+//! The `/diff` Git diff workspace: a compact 1-line searchable file list beside
+//! the scrollable hunks of the selected file, built on the shared [`super::split`]
+//! two-pane engine so its layout, focus model and mouse behavior match `Ctrl+B`.
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
 use crate::app::diff::{DiffFile, DiffRow, DiffState, sign};
 use minicore_host_workspace::{ChangeKind, DiffLineKind as LineKind};
 
-use super::{chrome, styled};
+use super::chrome as draw_chrome;
+use super::split::{self, PaneFocus};
+use crate::ui::blocks::plural;
+use crate::ui::chrome;
 use crate::ui::panel::truncate;
 use crate::ui::theme::Styles;
 use crate::wrap::{width, wrap};
 
-/// Width in cells of the file list beside the hunks.
-const FILE_COLUMN: u16 = 30;
-/// Smaller terminals drop the file list.
-const MIN_SPLIT_WIDTH: u16 = 80;
-const MIN_SPLIT_HEIGHT: u16 = 12;
+/// Width in cells of the searchable file list beside the hunks.
+const FILE_COLUMN: u16 = 36;
 
 impl DiffRow {
     fn line(&self, styles: Styles) -> Line<'static> {
         match self {
             Self::Blank => Line::from(""),
-            Self::Note(note) => styled(note, styles.dim()),
-            Self::Hunk(header) => styled(header, styles.hunk()),
+            Self::Note(note) => chrome::styled(note, styles.dim()),
+            Self::Hunk(header) => chrome::styled(header, styles.hunk()),
             Self::Line { kind, gutter, text } => {
                 let style = match kind {
                     LineKind::Added => styles.added(),
@@ -39,64 +42,106 @@ impl DiffRow {
     }
 }
 
-/// Where the file list and the hunk pane go.
-fn split(area: Rect) -> (Option<Rect>, Rect) {
+pub fn render(frame: &mut Frame, area: Rect, styles: Styles, diff: &mut DiffState) {
+    diff.hit.reset(1);
+    diff.visible_rows = 0;
+
+    let matched = diff.matching_indices();
+    let title = {
+        let mut parts = vec!["Git diff".to_owned()];
+        if !diff.filter.trim().is_empty() {
+            parts.push(format!("showing {}/{}", matched.len(), diff.files.len()));
+        } else if !diff.files.is_empty() {
+            parts.push(plural(diff.files.len() as u64, "file"));
+        }
+        let (added, removed) = diff.total_counts();
+        if added > 0 || removed > 0 {
+            parts.push(format!("+{added} −{removed}"));
+        }
+        parts.join(" · ")
+    };
+
+    let hints: Vec<(&str, &str)> = match diff.focus {
+        PaneFocus::Detail => vec![
+            ("↑↓/jk", "scroll"),
+            ("pgup/pgdn", "page"),
+            ("r", "refresh"),
+            ("c", "copy"),
+            ("←/esc", "files"),
+        ],
+        PaneFocus::List => {
+            let mut h = vec![
+                ("type", "filter"),
+                ("↑↓", "file"),
+                ("→/tab", "scroll"),
+                ("ctrl+r", "refresh"),
+                ("ctrl+y", "copy"),
+            ];
+            if !diff.filter.is_empty() {
+                h.push(("ctrl+u", "clear"));
+            }
+            h.push(("esc", "back"));
+            h
+        }
+    };
+    draw_chrome(frame, area, styles, &title, &hints);
+
     let body = Rect {
         y: area.y + 1,
         height: area.height.saturating_sub(2),
         ..area
     };
-    if area.width < MIN_SPLIT_WIDTH || body.height < MIN_SPLIT_HEIGHT {
-        return (None, body);
-    }
-    let list = Rect {
-        width: FILE_COLUMN,
-        ..body
-    };
-    let hunks = Rect {
-        x: body.x + FILE_COLUMN + 1,
-        width: body.width.saturating_sub(FILE_COLUMN + 1),
-        ..body
-    };
-    (Some(list), hunks)
-}
-
-pub fn render(frame: &mut Frame, area: Rect, styles: Styles, diff: &DiffState) {
-    let mut title = "Git diff".to_owned();
-    if let Some(file) = diff.current() {
-        title.push_str(" · ");
-        title.push_str(&file.path);
-    }
-    chrome(
+    let panes = split::layout_panes(
         frame,
-        area,
+        body,
+        FILE_COLUMN,
+        diff.detail_open || diff.focus == PaneFocus::Detail,
+        diff.focus == PaneFocus::Detail,
         styles,
-        &title,
-        &[
-            ("↑↓", "file"),
-            ("pgup/pgdn", "scroll"),
-            ("c", "copy"),
-            ("esc", "back"),
-        ],
     );
-    let (list, hunks) = split(area);
-    if let Some(list) = list {
-        render_file_list(frame, list, styles, diff);
+
+    if let Some(list_area) = panes.list {
+        diff.hit.list_area = list_area;
+        diff.hit.list_first = render_file_list(
+            frame,
+            list_area,
+            styles,
+            diff,
+            &matched,
+            diff.focus == PaneFocus::List,
+        );
     }
-    render_hunks(frame, hunks, styles, diff);
+
+    if let Some(detail_area) = panes.detail {
+        diff.hit.detail_area = detail_area;
+        render_hunks(frame, detail_area, styles, diff);
+    }
 }
 
-/// The file's line column: `+a −b` once measured, `?` when the read failed and
-/// `·` while unknown.
-fn count_spans(file: &DiffFile, styles: Styles) -> Vec<Span<'static>> {
+/// The file's line counts: `+a −b` once measured, `?` on failure, `·` while loading.
+fn count_spans(file: &DiffFile, styles: Styles, selected: bool) -> Vec<Span<'static>> {
     match file.lines {
         Some((added, removed)) => vec![
             Span::styled(format!("+{added}"), styles.added()),
             Span::raw(" "),
             Span::styled(format!("−{removed}"), styles.removed()),
         ],
-        None if file.failed => vec![Span::styled("?", styles.dim())],
-        None => vec![Span::styled("·", styles.dim())],
+        None if file.failed => vec![Span::styled(
+            "?",
+            if selected {
+                styles.text()
+            } else {
+                styles.dim()
+            },
+        )],
+        None => vec![Span::styled(
+            "·",
+            if selected {
+                styles.text()
+            } else {
+                styles.dim()
+            },
+        )],
     }
 }
 
@@ -112,111 +157,216 @@ fn marker(kind: ChangeKind) -> &'static str {
     }
 }
 
-fn render_file_list(frame: &mut Frame, area: Rect, styles: Styles, diff: &DiffState) {
-    let rows = area.height as usize;
-    let first = diff.selected.saturating_sub(rows.saturating_sub(1));
-    let counts: Vec<Vec<Span<'static>>> = diff
-        .files
-        .iter()
-        .map(|file| count_spans(file, styles))
-        .collect();
-    let span_width = |spans: &[Span<'static>]| spans.iter().map(|span| width(&span.content)).sum();
-    let column = counts
-        .iter()
-        .map(|spans| span_width(spans))
-        .max()
-        .unwrap_or(1);
-    for (row, (index, file)) in diff
-        .files
-        .iter()
-        .enumerate()
-        .skip(first)
-        .take(rows)
-        .enumerate()
-    {
-        let y = area.y + row as u16;
-        let style = if index == diff.selected {
-            let band = Rect {
-                y,
-                height: 1,
-                ..area
-            };
-            frame.buffer_mut().set_style(band, styles.highlight());
-            styles.bold()
-        } else {
-            styles.dim()
-        };
-        let count = &counts[index];
-        let mut spans = vec![Span::styled(format!("{} ", marker(file.kind)), style)];
-        spans.extend(count.iter().cloned());
-        let path_width = (area.width as usize).saturating_sub(column + 3);
-        spans.push(Span::raw(" ".repeat(column - span_width(count) + 1)));
-        spans.push(Span::styled(truncate(&file.path, path_width), style));
-        frame
-            .buffer_mut()
-            .set_line(area.x, y, &Line::from(spans), area.width);
-    }
-    if let Some(file) = diff.current()
-        && area.height > 1
-    {
-        let counts = match file.lines {
-            Some((added, removed)) => Line::from(vec![
-                Span::styled(format!("+{added} "), styles.added()),
-                Span::styled(format!("−{removed}"), styles.removed()),
-            ]),
-            None if file.failed => styled("line counts unavailable", styles.dim()),
-            None => styled("reading…", styles.dim()),
-        };
-        frame
-            .buffer_mut()
-            .set_line(area.x, area.bottom() - 1, &counts, area.width);
+fn marker_style(kind: ChangeKind, styles: Styles, selected: bool) -> Style {
+    match kind {
+        ChangeKind::Added => styles.added(),
+        ChangeKind::Deleted => styles.removed(),
+        ChangeKind::Conflict => styles.warning(),
+        ChangeKind::Renamed | ChangeKind::Modified => {
+            if selected {
+                styles.accent()
+            } else {
+                styles.text()
+            }
+        }
+        _ => {
+            if selected {
+                styles.text()
+            } else {
+                styles.dim()
+            }
+        }
     }
 }
 
-fn render_hunks(frame: &mut Frame, area: Rect, styles: Styles, diff: &DiffState) {
+fn render_file_list(
+    frame: &mut Frame,
+    area: Rect,
+    styles: Styles,
+    diff: &DiffState,
+    matched: &[usize],
+    focused: bool,
+) -> usize {
+    let placeholder = if focused {
+        "type to filter files…"
+    } else {
+        "esc to search files…"
+    };
+    let list_body =
+        chrome::draw_filter_header(frame, area, &diff.filter, placeholder, focused, styles);
+    if list_body.is_empty() {
+        return 0;
+    }
+    let buf = frame.buffer_mut();
+    if matched.is_empty() {
+        let message = if diff.files.is_empty() {
+            if diff.status.is_empty() {
+                "No changed files"
+            } else {
+                diff.status.as_str()
+            }
+        } else {
+            "No matching files · ctrl+u clears filter"
+        };
+        buf.set_line(
+            list_body.x,
+            list_body.y,
+            &chrome::styled(
+                &truncate(message, usize::from(list_body.width)),
+                styles.dim(),
+            ),
+            list_body.width,
+        );
+        return 0;
+    }
+
+    let (first, visible_slots) = split::list_window(
+        diff.selected,
+        matched.len(),
+        usize::from(list_body.height),
+        1,
+    );
+    let selected = diff.selected.min(matched.len().saturating_sub(1));
+    let total_w = usize::from(list_body.width);
+    let span_width =
+        |spans: &[Span<'static>]| spans.iter().map(|s| width(&s.content)).sum::<usize>();
+
+    for (slot, (filtered_idx, &real_idx)) in matched
+        .iter()
+        .enumerate()
+        .skip(first)
+        .take(visible_slots)
+        .enumerate()
+    {
+        let y = list_body.y + slot as u16;
+        if y >= list_body.bottom() {
+            break;
+        }
+        let file = &diff.files[real_idx];
+        let is_selected = filtered_idx == selected;
+        if is_selected {
+            chrome::paint_highlight_band(
+                buf,
+                Rect {
+                    x: list_body.x,
+                    y,
+                    width: list_body.width,
+                    height: 1,
+                },
+                styles,
+            );
+        }
+        let prefix = if is_selected { "▎" } else { " " };
+        let prefix_style = if is_selected {
+            styles.accent()
+        } else {
+            Style::default()
+        };
+        let path_style = if is_selected {
+            styles.bold()
+        } else {
+            styles.text()
+        };
+        let counts = count_spans(file, styles, is_selected);
+        let counts_w = span_width(&counts);
+        // Layout: `▎ M path          +a −r`
+        let fixed = 1 + 1 + 1 + 1 + 1 + counts_w;
+        let path_room = total_w.saturating_sub(fixed).max(4);
+        let path = truncate(&file.path, path_room);
+        let used = 4 + width(&path);
+        let gap = total_w.saturating_sub(used + counts_w).max(1);
+
+        let mut spans = vec![
+            Span::styled(prefix, prefix_style),
+            Span::raw(" "),
+            Span::styled(
+                marker(file.kind),
+                marker_style(file.kind, styles, is_selected),
+            ),
+            Span::raw(" "),
+            Span::styled(path, path_style),
+            Span::raw(" ".repeat(gap)),
+        ];
+        spans.extend(counts);
+        buf.set_line(list_body.x, y, &Line::from(spans), list_body.width);
+    }
+    first
+}
+
+fn render_hunks(frame: &mut Frame, area: Rect, styles: Styles, diff: &mut DiffState) {
+    if area.is_empty() {
+        return;
+    }
+    let header = match diff.current() {
+        Some(file) => {
+            let mut spans = vec![
+                Span::styled(
+                    format!("{} ", marker(file.kind)),
+                    marker_style(file.kind, styles, true),
+                ),
+                Span::styled(file.path.clone(), styles.bold()),
+            ];
+            if file.lines.is_some() || file.failed {
+                spans.push(Span::styled(" · ", styles.meta()));
+                spans.extend(count_spans(file, styles, false));
+            }
+            if diff.focus == PaneFocus::Detail {
+                spans.push(Span::styled(" · scrolling", styles.accent()));
+            }
+            Line::from(spans)
+        }
+        None => chrome::styled("No file selected", styles.dim()),
+    };
+    let content = split::draw_detail_header(
+        frame,
+        area,
+        &header,
+        diff.focus == PaneFocus::Detail,
+        styles,
+    );
+    if content.is_empty() {
+        return;
+    }
+    diff.visible_rows = usize::from(content.height);
+
     if diff.rows.is_empty() {
         let message = if diff.status.is_empty() {
             "No changes to show."
         } else {
             diff.status.as_str()
         };
-        frame
-            .buffer_mut()
-            .set_line(area.x, area.y, &styled(message, styles.dim()), area.width);
+        frame.buffer_mut().set_line(
+            content.x,
+            content.y,
+            &chrome::styled(message, styles.dim()),
+            content.width,
+        );
         return;
     }
-    // The last span is the content and wraps; earlier spans are the gutter,
-    // drawn on the first row and left blank on continuation rows.
-    let mut y = area.y;
-    for row in diff
-        .rows
-        .iter()
-        .skip(diff.scroll)
-        .take(area.height as usize)
-    {
+
+    // Wrap each diff row preserving its line-number gutter indent, reserving
+    // room for the right-edge scrollbar when lines exceed the viewport.
+    let wrap_w = usize::from(content.width.saturating_sub(2).max(1));
+    let mut wrapped: Vec<Line<'static>> = Vec::with_capacity(diff.rows.len());
+    for row in &diff.rows {
         let line = row.line(styles);
         let Some((body, gutter)) = line.spans.split_last() else {
-            y += 1;
+            wrapped.push(Line::default());
             continue;
         };
         let indent: usize = gutter.iter().map(|span| width(&span.content)).sum();
-        let room = (area.width as usize).saturating_sub(indent).max(1);
+        let room = wrap_w.saturating_sub(indent).max(1);
         for (index, chunk) in wrap(&body.content, room).into_iter().enumerate() {
-            if y >= area.bottom() {
-                return;
-            }
             let mut spans = if index == 0 {
                 gutter.to_vec()
             } else {
                 vec![Span::raw(" ".repeat(indent))]
             };
             spans.push(Span::styled(chunk, body.style));
-            frame
-                .buffer_mut()
-                .set_line(area.x, y, &Line::from(spans), area.width);
-            y += 1;
+            wrapped.push(Line::from(spans));
         }
     }
+    diff.scroll = chrome::render_scrollable_lines(frame, content, &wrapped, diff.scroll, styles);
 }
 
 #[cfg(test)]
@@ -309,7 +459,6 @@ mod tests {
         assert_eq!(lines[3].spans[1].style.fg, Some(palette.added));
     }
 
-    /// Host coordinates already use unified diff numbering.
     #[test]
     fn hunk_headers_use_unified_one_based_numbers() {
         let styles = Styles::of(Palette::dark());
@@ -431,18 +580,33 @@ mod tests {
     }
 
     #[test]
-    fn the_diff_view_shows_a_file_column_and_the_hunks() {
+    fn the_diff_view_shows_a_searchable_file_column_and_the_hunks() {
         let styles = Styles::of(Palette::dark());
         let mut view = view();
         view.rows = hunk_rows(&page());
-        let text = capture(|frame| render(frame, frame.area(), styles, &view), 100, 20);
-        assert!(text[0].contains("a.rs"), "{}", text[0]);
+        let text = capture(
+            |frame| render(frame, frame.area(), styles, &mut view),
+            110,
+            20,
+        );
         assert!(
-            text.iter().any(|row| row.starts_with("M +3 −1 a.rs")),
+            text[0].contains("Git diff · 2 files · +12 −1"),
+            "{}",
+            text[0]
+        );
+        assert!(
+            text.iter()
+                .any(|row| row.contains("/ type to filter files")),
             "{text:?}"
         );
         assert!(
-            text.iter().any(|row| row.starts_with("A +9 −0 b.rs")),
+            text.iter()
+                .any(|row| row.contains("▎ M a.rs") && row.contains("+3 −1")),
+            "{text:?}"
+        );
+        assert!(
+            text.iter()
+                .any(|row| row.contains("A b.rs") && row.contains("+9 −0")),
             "{text:?}"
         );
         assert!(
@@ -461,25 +625,47 @@ mod tests {
         let styles = Styles::of(Palette::dark());
         let mut view = view();
         view.files[1].lines = None;
-        let text = capture(|frame| render(frame, frame.area(), styles, &view), 100, 20);
+        let text = capture(
+            |frame| render(frame, frame.area(), styles, &mut view),
+            110,
+            20,
+        );
         assert!(
-            text.iter().any(|row| row.starts_with("A ·     b.rs")),
+            text.iter()
+                .any(|row| row.contains("A b.rs") && row.contains(" ·")),
             "{text:?}"
         );
     }
 
     #[test]
-    fn a_narrow_terminal_drops_the_file_column_instead_of_wrapping_it() {
+    fn a_narrow_terminal_toggles_between_file_list_and_hunks() {
         let styles = Styles::of(Palette::dark());
         let mut view = view();
         view.rows = hunk_rows(&page());
-        let text = capture(|frame| render(frame, frame.area(), styles, &view), 60, 16);
-        assert!(text[0].contains("Git diff · a.rs"), "{}", text[0]);
-        assert!(
-            !text.iter().any(|row| row.contains("+3 −1 a.rs")),
-            "{text:?}"
+        let list_only = capture(
+            |frame| render(frame, frame.area(), styles, &mut view),
+            60,
+            16,
         );
-        assert!(text.iter().any(|row| row.contains("+  new();")), "{text:?}");
+        assert!(
+            list_only.iter().any(|row| row.contains("▎ M a.rs")),
+            "{list_only:?}"
+        );
+        assert!(
+            !list_only.iter().any(|row| row.contains("+  new();")),
+            "{list_only:?}"
+        );
+
+        view.detail_open = true;
+        let hunks_only = capture(
+            |frame| render(frame, frame.area(), styles, &mut view),
+            60,
+            16,
+        );
+        assert!(
+            hunks_only.iter().any(|row| row.contains("+  new();")),
+            "{hunks_only:?}"
+        );
     }
 
     #[test]
@@ -495,12 +681,17 @@ mod tests {
     fn long_diff_lines_wrap_instead_of_overflowing() {
         let styles = Styles::of(Palette::dark());
         let mut view = view();
+        view.detail_open = true;
         view.rows = vec![DiffRow::Line {
             kind: LineKind::Added,
             gutter: String::new(),
             text: "x".repeat(120),
         }];
-        let text = capture(|frame| render(frame, frame.area(), styles, &view), 60, 12);
+        let text = capture(
+            |frame| render(frame, frame.area(), styles, &mut view),
+            60,
+            12,
+        );
         let x_rows = text.iter().filter(|row| row.contains('x')).count();
         assert!(x_rows >= 2, "{text:?}");
         for row in &text {

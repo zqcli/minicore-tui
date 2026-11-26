@@ -123,12 +123,27 @@ impl Harness {
             .collect()
     }
     pub fn screen(&mut self, width: u16, height: u16) {
+        let _ = self.render_text(width, height);
+    }
+    pub fn render_text(&mut self, width: u16, height: u16) -> String {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         terminal
             .draw(|frame| {
                 crate::ui::draw(frame, &mut self.app);
             })
             .unwrap();
+        let buf = terminal.backend().buffer();
+        buf.content()
+            .chunks(usize::from(width))
+            .map(|row| {
+                row.iter()
+                    .map(|cell| cell.symbol())
+                    .collect::<String>()
+                    .trim_end()
+                    .to_owned()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
     }
     pub async fn finish(mut self) {
         self.messages.close();

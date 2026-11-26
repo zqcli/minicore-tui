@@ -77,7 +77,10 @@ async fn rename_refreshes_metadata(navigate: bool) {
     h.open(&original).await;
     h.app.composer.set_text("/session");
     h.press(KeyCode::Enter);
-    assert!(matches!(h.app.overlay, crate::app::Overlay::SessionInfo));
+    assert!(matches!(
+        h.app.overlay,
+        crate::app::Overlay::SessionInfo { .. }
+    ));
     assert_eq!(
         h.app.resident.current().unwrap().info.title.as_deref(),
         Some("Updated title")
@@ -142,7 +145,7 @@ async fn reasoning_arguments_distinguish_picker_valid_and_invalid_values() {
             "auto|disabled|low|medium|high|xhigh|max|ultra",
         ),
         ("/theme invalid-not-a-theme", "dark|light"),
-        ("/approval invalid-not-a-mode", "ask|auto|read_only"),
+        ("/approval invalid-not-a-mode", "ask|auto"),
     ] {
         let theme = h.app.theme;
         h.app.composer.set_text(command);

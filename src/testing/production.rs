@@ -142,18 +142,20 @@ pub async fn with_provider_error(message: &str, streaming: bool) -> (NativeHost,
         ("400 Bad Request", "application/json", error.to_string())
     };
     let task = tokio::spawn(async move {
-        let (mut socket, _) = listener.accept().await.unwrap();
-        requests
-            .send(read_request(&mut socket).await)
-            .await
-            .unwrap();
-        let head = format!(
-            "HTTP/1.1 {status}\r\ncontent-type: {content_type}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
-            body.len()
-        );
-        socket.write_all(head.as_bytes()).await.unwrap();
-        socket.write_all(body.as_bytes()).await.unwrap();
-        socket.shutdown().await.unwrap();
+        for attempt in 0..4 {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let req = read_request(&mut socket).await;
+            if attempt == 0 {
+                let _ = requests.send(req).await;
+            }
+            let head = format!(
+                "HTTP/1.1 {status}\r\ncontent-type: {content_type}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                body.len()
+            );
+            socket.write_all(head.as_bytes()).await.unwrap();
+            socket.write_all(body.as_bytes()).await.unwrap();
+            socket.shutdown().await.unwrap();
+        }
     });
     let native = configured_host(endpoint, ToolRegistry::new(), Vec::new()).await;
     (

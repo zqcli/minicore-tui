@@ -43,9 +43,14 @@ pub const COMMANDS: &[Command<'static>] = &[
         description: "Open the latest delegated child session, or the nth latest",
     },
     Command {
+        name: "tasks",
+        args: "",
+        description: "Inspect and search async tasks and delegated children",
+    },
+    Command {
         name: "children",
         args: "",
-        description: "Show every delegated child of this conversation and its state",
+        description: "Alias for /tasks: show every delegated child of this conversation",
     },
     Command {
         name: "cancel",
@@ -89,7 +94,7 @@ pub const COMMANDS: &[Command<'static>] = &[
     },
     Command {
         name: "approval",
-        args: "[ask|auto|read_only]",
+        args: "[ask|auto]",
         description: "Set approval for the next turn; omit it to pick one",
     },
     Command {
@@ -163,6 +168,16 @@ pub const COMMANDS: &[Command<'static>] = &[
         description: "Refresh the session state, history and observations",
     },
     Command {
+        name: "remote",
+        args: "[on|off|key] [addr]",
+        description: "Expose this Host over WSS/WS for minicore-web and show connection info",
+    },
+    Command {
+        name: "wss",
+        args: "[on|off|key] [addr]",
+        description: "Alias for /remote: expose this Host over WSS/WS for minicore-web",
+    },
+    Command {
         name: "unconfirmed",
         args: "",
         description: "Review local inputs whose acceptance is unconfirmed",
@@ -207,7 +222,8 @@ impl super::App {
     }
 
     /// The rewrite of a line no built-in command claims: `//` escapes a leading
-    /// slash and a template expands; `Err` names a bare `/word` that is neither.
+    /// slash and a template expands; `Err` names a bare `/word` (or a single-line
+    /// `/word arg` whose name is a close typo of a known command) that is neither.
     pub fn prompt_text<'a>(&self, text: &'a str) -> Result<Option<String>, &'a str> {
         if let Some(escaped) = text.strip_prefix('/').filter(|rest| rest.starts_with('/')) {
             return Ok(Some(escaped.to_owned()));
@@ -217,7 +233,19 @@ impl super::App {
         {
             return Ok(Some(expanded));
         }
-        bare_word(text).map_or(Ok(None), Err)
+        if let Some(word) = bare_word(text) {
+            return Err(word);
+        }
+        if let Some(word) = command_word(text) {
+            let known = COMMANDS
+                .iter()
+                .map(|command| command.name)
+                .chain(self.templates.iter().map(|template| template.name.as_str()));
+            if closest(word, known).is_some() {
+                return Err(word);
+            }
+        }
+        Ok(None)
     }
 }
 
@@ -246,7 +274,6 @@ pub fn execute(name: &str, arg: &str) -> Option<Executed> {
             "" => Executed::Prefill("/approval ".into()),
             "ask" => Executed::Action(Action::SetApproval(ApprovalMode::Ask)),
             "auto" => Executed::Action(Action::SetApproval(ApprovalMode::Auto)),
-            "read_only" => Executed::Action(Action::SetApproval(ApprovalMode::ReadOnly)),
             _ => Executed::Noop,
         },
         "agent-new" if !arg.is_empty() => Executed::Action(Action::CreateAgent(arg.to_owned())),
@@ -268,7 +295,7 @@ pub fn execute(name: &str, arg: &str) -> Option<Executed> {
             },
         },
         "cancel" => Executed::Action(Action::Interrupt),
-        "children" => Executed::Panel(super::Panel::Delegations),
+        "tasks" | "children" => Executed::Panel(super::Panel::Delegations),
         "model" if arg.is_empty() => Executed::Panel(super::Panel::Models),
         "model" => Executed::Action(Action::SwitchModel(arg.to_owned())),
         "reasoning" if arg.is_empty() => Executed::Panel(super::Panel::Reasoning),
@@ -291,6 +318,25 @@ pub fn execute(name: &str, arg: &str) -> Option<Executed> {
         },
         "reload" => Executed::Action(Action::ReloadHost),
         "recover" => Executed::Action(Action::RetryRecovery),
+        "remote" | "wss" => match arg {
+            "" | "on" => Executed::Action(Action::RemoteStart(None)),
+            "off" => Executed::Action(Action::RemoteStop),
+            "key" => Executed::Action(Action::RemoteRotateKey),
+            other => {
+                if let Some(rest) = other.strip_prefix("on")
+                    && rest.starts_with(char::is_whitespace)
+                {
+                    let addr = rest.trim();
+                    Executed::Action(Action::RemoteStart(
+                        (!addr.is_empty()).then(|| addr.to_owned()),
+                    ))
+                } else if other.parse::<std::net::SocketAddr>().is_ok() {
+                    Executed::Action(Action::RemoteStart(Some(other.to_owned())))
+                } else {
+                    Executed::Noop
+                }
+            }
+        },
         "unconfirmed" => Executed::Panel(super::Panel::Unconfirmed),
         "help" => Executed::Panel(super::Panel::Help),
         "error" => Executed::Panel(super::Panel::Error),
@@ -330,12 +376,28 @@ pub fn filter<'a>(input: &str, templates: &'a [Template]) -> Vec<Command<'a>> {
 /// path (`/usr/bin`) or a sentence (`/etc is where…`), which are prompts.
 pub fn bare_word(text: &str) -> Option<&str> {
     let name = text.trim().strip_prefix('/')?;
+    is_command_identifier(name).then_some(name)
+}
+
+/// The leading `/name` of a single-line `/name arg…` draft when `name` looks
+/// like a command identifier (not a path like `/usr/bin/env foo`).
+fn command_word(text: &str) -> Option<&str> {
+    if text.contains('\n') {
+        return None;
+    }
+    let (name, rest) = text
+        .trim()
+        .strip_prefix('/')?
+        .split_once(char::is_whitespace)?;
+    (!rest.trim().is_empty() && is_command_identifier(name)).then_some(name)
+}
+
+fn is_command_identifier(name: &str) -> bool {
     let mut chars = name.chars();
-    let word = chars
+    chars
         .next()
         .is_some_and(|first| first.is_ascii_alphabetic())
-        && chars.all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_'));
-    word.then_some(name)
+        && chars.all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_'))
 }
 
 /// The known name nearest to `name`, when it is only a typo away: one edit
@@ -597,17 +659,43 @@ mod tests {
             execute("agent-delete", ""),
             Some(Executed::Panel(crate::app::Panel::AgentDelete))
         );
-        for (name, mode) in [
-            ("ask", ApprovalMode::Ask),
-            ("auto", ApprovalMode::Auto),
-            ("read_only", ApprovalMode::ReadOnly),
-        ] {
+        for (name, mode) in [("ask", ApprovalMode::Ask), ("auto", ApprovalMode::Auto)] {
             assert_eq!(
                 execute("approval", name),
                 Some(Executed::Action(Action::SetApproval(mode)))
             );
         }
+        assert_eq!(execute("approval", "read_only"), Some(Executed::Noop));
         assert_eq!(execute("approval", "always"), Some(Executed::Noop));
+        assert_eq!(
+            execute("remote", ""),
+            Some(Executed::Action(Action::RemoteStart(None)))
+        );
+        assert_eq!(
+            execute("wss", "on"),
+            Some(Executed::Action(Action::RemoteStart(None)))
+        );
+        assert_eq!(
+            execute("remote", "on [::1]:8443"),
+            Some(Executed::Action(Action::RemoteStart(Some(
+                "[::1]:8443".into()
+            ))))
+        );
+        assert_eq!(
+            execute("wss", "[::]:8443"),
+            Some(Executed::Action(Action::RemoteStart(Some(
+                "[::]:8443".into()
+            ))))
+        );
+        assert_eq!(
+            execute("remote", "off"),
+            Some(Executed::Action(Action::RemoteStop))
+        );
+        assert_eq!(
+            execute("remote", "key"),
+            Some(Executed::Action(Action::RemoteRotateKey))
+        );
+        assert_eq!(execute("remote", "bogus"), Some(Executed::Noop));
     }
 
     fn model(id: &str) -> ModelDescription {
@@ -651,5 +739,20 @@ mod tests {
         );
         let found = filter("review", &templates);
         assert_eq!(found[0].description, "Review staged changes");
+    }
+
+    #[test]
+    fn misspelled_command_with_arguments_is_caught_while_paths_and_sentences_pass() {
+        assert_eq!(command_word("/reanme minicore-web修改"), Some("reanme"));
+        assert_eq!(
+            closest("reanme", COMMANDS.iter().map(|command| command.name)),
+            Some("rename")
+        );
+        assert_eq!(command_word("/usr/bin/env foo"), None);
+        assert_eq!(
+            closest("etc", COMMANDS.iter().map(|command| command.name)),
+            None
+        );
+        assert_eq!(command_word("/reanme line1\nline2"), None);
     }
 }

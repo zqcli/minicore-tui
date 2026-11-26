@@ -55,6 +55,29 @@ impl Sessions {
             .iter()
             .filter(|session| !self.is_current(session.epoch))
     }
+    pub fn len(&self) -> usize {
+        self.items.len()
+    }
+    pub fn find_mut(&mut self, target: &SessionRef) -> Option<&mut Session> {
+        self.items.iter_mut().find(|session| {
+            session.info.agent_id == target.agent_id && session.info.id == target.session_id
+        })
+    }
+    /// Drops oldest idle non-current, non-kept resident sessions when above `limit`.
+    pub fn evict_idle_except(&mut self, keep: Option<&SessionRef>, limit: usize) {
+        while self.items.len() > limit {
+            let candidate = self.items.iter().rposition(|session| {
+                !self.is_current(session.epoch)
+                    && keep.is_none_or(|target| &session.address() != target)
+                    && !session.is_busy()
+                    && session.interaction.is_none()
+            });
+            let Some(index) = candidate else {
+                break;
+            };
+            self.items.remove(index);
+        }
+    }
     pub fn insert(&mut self, session: Session) {
         self.items.push(session);
     }

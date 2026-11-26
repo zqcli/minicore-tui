@@ -207,6 +207,24 @@ impl App {
         self.ready = true;
     }
 
+    fn origin_arguments<'a>(
+        &'a self,
+        parent: &SessionRef,
+        origin: &ToolCallRef,
+    ) -> Option<&'a serde_json::Value> {
+        let session = self.resident.find(parent)?;
+        session
+            .transcript
+            .find_tool(origin)
+            .or_else(|| {
+                session
+                    .transcript
+                    .tool_calls()
+                    .find(|call| call.key.tool_call_id() == &origin.tool_call_id)
+            })
+            .and_then(|call| call.arguments.as_ref())
+    }
+
     pub(super) fn register_delegation(&mut self, association: &DelegationAssociation) {
         let Some(epoch) = self
             .resident
@@ -222,24 +240,6 @@ impl App {
         };
         if !self.agent_cards.observers.contains_key(&key) {
             let mut card = AgentCard::new(key.incarnation.clone(), association.clone());
-            card.agent_name = self
-                .agents
-                .iter()
-                .find(|agent| agent.id == key.child.agent_id)
-                .map(|agent| agent.name.clone());
-            // The child may be gone (a released temporary Session); the
-            // delegating call still names its task.
-            card.task =
-                self.resident
-                    .find(&association.parent)
-                    .and_then(|session| {
-                        session.transcript.tool_calls().find(|call| {
-                            call.key.tool_call_id() == &association.origin.tool_call_id
-                        })
-                    })
-                    .and_then(|call| call.arguments.as_ref()?.get("text")?.as_str())
-                    .map(|text| agent_card::head(text, 512).to_owned())
-                    .unwrap_or_default();
             if let Some(snapshot) = self.pending_states.get(&key.child)
                 && let Some(current) = &snapshot.data.delegation
                 && current.task_message_id == key.task_message_id
@@ -275,9 +275,37 @@ impl App {
                 Msg::AgentCardRead(read_key, Box::new(Read::Baseline(result)))
             });
         }
+        // The child may be gone (a released temporary Agent/Session) or its
+        // invocation record may arrive on an earlier history page; backfill
+        // task and fallback agent name whenever the origin arguments appear.
+        let catalog_name = self
+            .agents
+            .iter()
+            .find(|agent| agent.id == key.child.agent_id)
+            .map(|agent| agent.name.clone());
+        let origin_args = self
+            .origin_arguments(&association.parent, &association.origin)
+            .cloned();
         let Some((mut observer, mut card)) = self.take_agent_card(&key) else {
             return;
         };
+        if let Some(name) = catalog_name {
+            card.agent_name = Some(name);
+        } else if card.agent_name.is_none()
+            && let Some(name) = origin_args
+                .as_ref()
+                .and_then(|args| args.get("name")?.as_str())
+                .filter(|name| !name.trim().is_empty())
+        {
+            card.agent_name = Some(name.trim().to_owned());
+        }
+        if card.task.is_empty()
+            && let Some(text) = origin_args
+                .as_ref()
+                .and_then(|args| args.get("text")?.as_str())
+        {
+            card.task = agent_card::head(text, 512).to_owned();
+        }
         let was_complete = card.association.completion.is_some();
         card.merge(association);
         if self
@@ -526,10 +554,47 @@ impl App {
                 );
             }
             ObservationEvent::Activity(ActivityEvent::ModelOutput { source, data }) => {
-                let source = OutputSource::Model {
+                let output_source = OutputSource::Model {
                     source: source.clone(),
                 };
-                observe_output(&mut observer, &mut card, source, &data.channel, event);
+                if data.start == 0
+                    && observer.outputs.iter().any(|output| {
+                        output.buffer.source() == &output_source
+                            && output.channel == data.channel
+                            && (output.rendered > 0 || !output.buffer.text().is_empty())
+                    })
+                {
+                    observer.outputs.retain(|output| {
+                        !(output.buffer.source() == &output_source
+                            && output.channel == data.channel)
+                    });
+                    observer.closed.retain(|(closed, channel)| {
+                        !(closed == &output_source && channel == &data.channel)
+                    });
+                    let response =
+                        RequestKey::response(source.turn.turn_id.clone(), source.response_index);
+                    if !card.transcript.has_canonical_response(&response)
+                        && let Block::Assistant {
+                            reasoning,
+                            text,
+                            streaming: true,
+                            ..
+                        } = card.transcript.assistant_mut(&response)
+                    {
+                        match data.channel.as_str() {
+                            "text" => text.clear(),
+                            "reasoning" => reasoning.clear(),
+                            _ => {}
+                        }
+                    }
+                }
+                observe_output(
+                    &mut observer,
+                    &mut card,
+                    output_source,
+                    &data.channel,
+                    event,
+                );
             }
             ObservationEvent::Activity(ActivityEvent::ToolOutput { source, data }) => {
                 let key = tool_ref(source);

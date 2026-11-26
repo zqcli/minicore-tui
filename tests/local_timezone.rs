@@ -24,6 +24,7 @@ fn system_zone_is_available_and_production_user_card_uses_it() {
             minicore_host_protocol::Timestamp::from_unix_milliseconds(stamp.as_millisecond())
                 .unwrap(),
         ),
+        expanded: None,
     };
     let rows = blocks::render(
         &block,

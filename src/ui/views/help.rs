@@ -6,7 +6,7 @@ use ratatui::text::{Line, Span};
 
 use crate::app::commands::Command;
 
-use super::{chrome, styled};
+use super::styled;
 use crate::ui::theme::Styles;
 use crate::wrap::wrap;
 
@@ -114,7 +114,7 @@ const KEYS: &[KeyRow] = &[
     },
     KeyRow {
         keys: "query: paste",
-        action: "append to Find, Sessions, Models or Agents filter; preserve the draft",
+        action: "append to Find, Sessions, Models, Agents or Async Tasks filter; preserve the draft",
     },
     KeyRow {
         keys: "pgup/pgdn, wheel",
@@ -141,16 +141,16 @@ const KEYS: &[KeyRow] = &[
         action: "select text, a word, a line; copies on release",
     },
     KeyRow {
-        keys: "agent card: click / footer",
-        action: "open the card / its footer opens the child; later sends and the result live in it",
+        keys: "async task: click",
+        action: "click a dispatched agent row to inspect and message that child in Ctrl+B",
     },
     KeyRow {
         keys: "f8",
         action: "review retained local confirmations; edit separately, warn before resend, no automatic retry",
     },
     KeyRow {
-        keys: "ctrl+b, /children",
-        action: "delegations of this conversation; enter opens the child, esc comes back",
+        keys: "ctrl+b, /tasks, /children",
+        action: "searchable async tasks workspace: type to filter, →/tab scroll real Working/Worked conversation, enter message child, ctrl+e full view, ctrl+g goto, ctrl+y copy",
     },
     KeyRow {
         keys: "∴ thinking: click",
@@ -187,6 +187,10 @@ const KEYS: &[KeyRow] = &[
     KeyRow {
         keys: "agents: ctrl+d / y",
         action: "review the selected Agent and its child sessions / delete that captured set",
+    },
+    KeyRow {
+        keys: "remote: /remote, /wss",
+        action: "expose this Host over WSS/WS for minicore-web; c copy key · u copy url · s hide · r rotate · esc/q stop",
     },
 ];
 
@@ -258,39 +262,43 @@ pub fn render(
     area: Rect,
     styles: Styles,
     commands: &[Command<'static>],
-    scroll: usize,
+    scroll: &mut usize,
     filter: &str,
 ) {
-    let lines = lines(commands, styles, area.width as usize, filter);
-    let bottom = area.bottom().saturating_sub(1);
-    let rows = bottom.saturating_sub(area.y + 1) as usize;
-    let start = scroll.min(lines.len().saturating_sub(rows));
+    let content_w = usize::from(area.width.saturating_sub(2)).max(1);
+    let lines = lines(commands, styles, content_w, filter);
+    let rows = usize::from(area.height.saturating_sub(4));
+    let start = (*scroll).min(lines.len().saturating_sub(rows));
     let position = format!(
-        "scroll · lines {}–{} of {}",
+        "lines {}–{} of {}",
         start + 1,
         (start + rows).min(lines.len()),
         lines.len()
     );
-    let hints = if lines.len() > rows {
-        vec![
-            ("type", "to filter"),
-            ("pgup/pgdn", position.as_str()),
-            ("esc", "back"),
-        ]
-    } else {
-        vec![("type", "to filter"), ("esc", "back")]
-    };
+    let mut hints = vec![("type", "filter")];
+    if !filter.is_empty() {
+        hints.push(("ctrl+u", "clear"));
+    }
+    if lines.len() > rows {
+        hints.push(("↑↓/pgup/pgdn", position.as_str()));
+    }
+    hints.push(("esc", "back"));
     let title = if filter.is_empty() {
         "Help".to_owned()
     } else {
         format!("Help · {filter}")
     };
-    chrome(frame, area, styles, &title, &hints);
-    for (row, line) in lines.iter().skip(start).take(rows).enumerate() {
-        frame
-            .buffer_mut()
-            .set_line(area.x, area.y + 1 + row as u16, line, area.width);
-    }
+    let (clamped, _) = super::page::render(
+        frame,
+        area,
+        styles,
+        &title,
+        &hints,
+        Some((filter, "type to filter keys & commands…")),
+        &lines,
+        *scroll,
+    );
+    *scroll = clamped;
 }
 
 #[cfg(test)]
@@ -322,28 +330,29 @@ mod tests {
 
     #[test]
     fn help_scrolling_shows_a_later_window_and_where_it_is() {
-        let total = lines(COMMANDS, styles(), 80, "").len();
-        let shot = |scroll| {
+        let total = lines(COMMANDS, styles(), 78, "").len();
+        let shot = |mut scroll| {
             capture(
-                |frame| render(frame, frame.area(), styles(), COMMANDS, scroll, ""),
+                |frame| render(frame, frame.area(), styles(), COMMANDS, &mut scroll, ""),
                 80,
-                10,
+                12,
             )
         };
         let text = shot(5);
         assert!(text[0].starts_with("← Help"), "{:?}", text[0]);
+        assert!(text[1].starts_with("/ type to filter"), "{:?}", text[1]);
         assert!(!text.join("\n").contains("send, or steer"), "{text:?}");
         assert!(
-            text[9].contains(&format!("lines 6–13 of {total}")),
+            text[11].contains(&format!("lines 6–13 of {total}")),
             "{:?}",
-            text[9]
+            text[11]
         );
         // Scrolling past the end stops at the last window.
         let last = shot(999);
         assert!(
-            last[9].contains(&format!("lines {}–{total} of {total}", total - 7)),
+            last[11].contains(&format!("lines {}–{total} of {total}", total - 7)),
             "{:?}",
-            last[9]
+            last[11]
         );
     }
 

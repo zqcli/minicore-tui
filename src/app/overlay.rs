@@ -13,6 +13,14 @@ use crate::ui::sheets;
 use minicore_host_core::{AgentSummary, ModelDescription, SessionSummary};
 use minicore_host_protocol::{AgentId, SessionId, SessionRef};
 
+/// Active keyboard focus inside the `Ctrl+B` Async Tasks Inspector.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TaskFocus {
+    List,
+    Detail,
+    Composer,
+}
+
 #[derive(Debug)]
 pub enum Overlay {
     None,
@@ -55,18 +63,27 @@ pub enum Overlay {
     Reasoning {
         selected: usize,
     },
-    /// Every delegated child of this conversation, newest first.
+    /// Every async task / delegated child of this conversation, searchable and
+    /// inspectable with a real child conversation pane and direct reply box.
     Delegations {
+        filter: String,
         selected: usize,
+        focus: TaskFocus,
+        /// On narrow terminals (`< 96` cols), toggles between list and child conversation.
+        detail_open: bool,
     },
     /// The inline `@` file list; its filter is the composer's `@token`.
     Files {
         selected: usize,
         paths: Vec<String>,
     },
-    Context,
+    Context {
+        scroll: usize,
+    },
     /// `/session`; facts come from its native info, state and context.
-    SessionInfo,
+    SessionInfo {
+        scroll: usize,
+    },
     Help {
         scroll: usize,
         /// Typed words narrowing the keys and commands shown.
@@ -76,6 +93,12 @@ pub enum Overlay {
         text: String,
         scroll: usize,
         visible_rows: usize,
+    },
+    /// `/remote` (`/wss`): exposes the embedded Host over WSS/WS and displays
+    /// live connection details while terminal control is handed off.
+    Remote {
+        show_key: bool,
+        scroll: usize,
     },
     Diff(DiffState),
     /// Find in the transcript.
@@ -96,10 +119,12 @@ impl Overlay {
         matches!(
             self,
             Self::Diff(_)
+                | Self::Delegations { .. }
                 | Self::Help { .. }
                 | Self::Error { .. }
-                | Self::Context
-                | Self::SessionInfo
+                | Self::Context { .. }
+                | Self::SessionInfo { .. }
+                | Self::Remote { .. }
         )
     }
 }
@@ -121,6 +146,257 @@ pub enum Panel {
     Error,
     Diff,
     Find,
+}
+
+/// Generalized async task view item projected from native Host state. Today
+/// populated by delegated Agent sessions; future async commands/tools join the
+/// same list without changing the inspector UI.
+pub enum AsyncTaskItem<'a> {
+    Agent(&'a crate::transcript::agent_card::AgentCard),
+    StandaloneDelegated {
+        session_id: String,
+        summary: crate::ui::delegated::Summary,
+    },
+}
+
+impl<'a> AsyncTaskItem<'a> {
+    pub fn kind_label(&self) -> &'static str {
+        match self {
+            Self::Agent(_) | Self::StandaloneDelegated { .. } => "agent",
+        }
+    }
+
+    pub fn session_id(&self) -> &str {
+        match self {
+            Self::Agent(card) => card.key.child.session_id.as_str(),
+            Self::StandaloneDelegated { session_id, .. } => session_id.as_str(),
+        }
+    }
+
+    pub fn short_id(&self) -> &str {
+        short_session_id(self.session_id())
+    }
+
+    pub fn title(&self) -> String {
+        match self {
+            Self::Agent(card) => crate::ui::agent_cards::task(card),
+            Self::StandaloneDelegated { summary, .. } => {
+                if let Some(answer) = summary
+                    .answer
+                    .as_deref()
+                    .and_then(|text| text.lines().find(|line| !line.trim().is_empty()))
+                {
+                    crate::wrap::sanitize(answer.trim()).into_owned()
+                } else {
+                    format!("Delegated Session {}", self.short_id())
+                }
+            }
+        }
+    }
+
+    pub fn status_label(&self) -> String {
+        match self {
+            Self::Agent(card) => crate::ui::agent_cards::status(card),
+            Self::StandaloneDelegated { summary, .. } => summary.outcome.clone(),
+        }
+    }
+
+    pub fn subtitle(&self) -> String {
+        match self {
+            Self::Agent(card) => {
+                let mut detail = crate::ui::agent_cards::status(card);
+                if let Some((_, turn)) = &card.turn
+                    && turn.tool_rounds > 0
+                {
+                    detail.push_str(&format!(
+                        " · {}",
+                        crate::ui::blocks::plural(turn.tool_rounds, "tool round")
+                    ));
+                }
+                if let Some(name) = &card.agent_name {
+                    detail.push_str(&format!(" · {name}"));
+                }
+                detail
+            }
+            Self::StandaloneDelegated { summary, .. } => {
+                format!("{} · unloaded origin", summary.outcome)
+            }
+        }
+    }
+
+    pub fn needs_input(&self) -> bool {
+        match self {
+            Self::Agent(card) => crate::ui::agent_cards::needs_input(card),
+            Self::StandaloneDelegated { .. } => false,
+        }
+    }
+
+    pub fn is_running(&self) -> bool {
+        match self {
+            Self::Agent(card) => {
+                card.outcome().is_none() && !card.historical && !card.history_unavailable
+            }
+            Self::StandaloneDelegated { .. } => false,
+        }
+    }
+
+    pub fn is_failed(&self) -> bool {
+        match self {
+            Self::Agent(card) => {
+                card.outcome() == Some(minicore_host_protocol::TurnOutcome::Failed)
+            }
+            Self::StandaloneDelegated { summary, .. } => summary.outcome == "failed",
+        }
+    }
+
+    pub fn is_completed(&self) -> bool {
+        match self {
+            Self::Agent(card) => {
+                card.outcome() == Some(minicore_host_protocol::TurnOutcome::Completed)
+            }
+            Self::StandaloneDelegated { summary, .. } => summary.outcome == "completed",
+        }
+    }
+
+    fn priority(&self) -> u8 {
+        if self.needs_input() {
+            0
+        } else if self.is_running() {
+            1
+        } else if self.is_failed() {
+            2
+        } else {
+            3
+        }
+    }
+
+    pub fn glyph(&self, styles: crate::ui::theme::Styles) -> (&'static str, ratatui::style::Style) {
+        match self {
+            Self::Agent(card) => crate::ui::agent_cards::glyph(card, styles),
+            Self::StandaloneDelegated { summary, .. } => match summary.outcome.as_str() {
+                "completed" => ("✓", styles.success()),
+                "failed" => ("✗", styles.failure()),
+                "cancelled" => ("⊘", styles.meta()),
+                _ => ("○", styles.meta()),
+            },
+        }
+    }
+
+    pub fn matches_filter(&self, filter: &str) -> bool {
+        let query = filter.trim();
+        if query.is_empty() {
+            return true;
+        }
+        let haystack = match self {
+            Self::Agent(card) => format!(
+                "{} {} {} {} {} {}",
+                self.kind_label(),
+                card.task,
+                card.agent_name.as_deref().unwrap_or(""),
+                card.key.child.session_id,
+                card.key.child.agent_id,
+                crate::ui::agent_cards::status(card),
+            ),
+            Self::StandaloneDelegated {
+                session_id,
+                summary,
+            } => format!(
+                "{} {} {} {}",
+                self.kind_label(),
+                session_id,
+                summary.outcome,
+                summary.answer.as_deref().unwrap_or(""),
+            ),
+        };
+        let lower_hay = haystack.to_lowercase();
+        let lower_q = query.to_lowercase();
+        lower_hay.contains(&lower_q) || fuzzy_match(&haystack, query)
+    }
+
+    pub fn detail_lines(
+        &self,
+        styles: crate::ui::theme::Styles,
+        width: usize,
+        reasoning: bool,
+    ) -> Vec<ratatui::text::Line<'static>> {
+        match self {
+            Self::Agent(card) => {
+                crate::ui::agent_cards::detail_lines(card, styles, width, reasoning)
+            }
+            Self::StandaloneDelegated { summary, .. } => {
+                crate::ui::delegated::detail_lines(summary, styles, width)
+            }
+        }
+    }
+
+    pub fn copy_text(&self) -> String {
+        match self {
+            Self::Agent(card) => crate::ui::agent_cards::copy_text(card),
+            Self::StandaloneDelegated { summary, .. } => crate::ui::delegated::copy_text(summary),
+        }
+    }
+
+    pub fn open_target(&self) -> Option<(SessionRef, bool)> {
+        match self {
+            Self::Agent(card) => Some((card.association.child.clone(), card.history_unavailable)),
+            Self::StandaloneDelegated { .. } => None,
+        }
+    }
+
+    pub fn origin_target(&self) -> Option<(SessionRef, minicore_host_protocol::ToolCallRef)> {
+        match self {
+            Self::Agent(card) => Some((
+                card.association.parent.clone(),
+                card.association.origin.clone(),
+            )),
+            Self::StandaloneDelegated { .. } => None,
+        }
+    }
+}
+
+/// All async tasks for the active conversation, sorted by urgency
+/// (`needs_input` → `running` → `failed` → settled) and newest-first within each group.
+pub fn async_tasks(app: &super::App) -> Vec<AsyncTaskItem<'_>> {
+    let Some(session) = app.resident.current() else {
+        return Vec::new();
+    };
+    let mut seen_sessions = std::collections::HashSet::new();
+    let mut items = Vec::new();
+    for block in session.transcript.blocks().iter().rev() {
+        if let crate::transcript::Block::Tool(call) = block
+            && let Some(card) = call.agent_card.as_deref()
+        {
+            seen_sessions.insert(card.key.child.session_id.to_string());
+            items.push(AsyncTaskItem::Agent(card));
+        }
+    }
+    for block in session.transcript.blocks().iter().rev() {
+        if let crate::transcript::Block::User {
+            kind: crate::transcript::UserKind::Delegated,
+            text,
+            ..
+        } = block
+            && let Some(summary) = crate::ui::delegated::summary(text)
+            && seen_sessions.insert(summary.session_id.clone())
+        {
+            items.push(AsyncTaskItem::StandaloneDelegated {
+                session_id: summary.session_id.clone(),
+                summary,
+            });
+        }
+    }
+    items.sort_by_key(AsyncTaskItem::priority);
+    items
+}
+
+pub fn matching_async_tasks<'a>(
+    items: &'a [AsyncTaskItem<'a>],
+    filter: &str,
+) -> Vec<&'a AsyncTaskItem<'a>> {
+    items
+        .iter()
+        .filter(|item| item.matches_filter(filter))
+        .collect()
 }
 
 /// One delegated child for the overview: its card, newest first.
@@ -277,7 +553,12 @@ impl App {
             Panel::Unconfirmed | Panel::AgentDelete => {
                 unreachable!("confirmation panels open before session panels")
             }
-            Panel::Delegations => Overlay::Delegations { selected: 0 },
+            Panel::Delegations => Overlay::Delegations {
+                filter: String::new(),
+                selected: 0,
+                focus: TaskFocus::List,
+                detail_open: false,
+            },
             Panel::Sessions => Overlay::Sessions {
                 filter: String::new(),
                 selected: 0,
@@ -315,11 +596,11 @@ impl App {
             }
             Panel::Context => {
                 self.refresh_context();
-                Overlay::Context
+                Overlay::Context { scroll: 0 }
             }
             Panel::SessionInfo => {
                 self.refresh_context();
-                Overlay::SessionInfo
+                Overlay::SessionInfo { scroll: 0 }
             }
             Panel::Help => Overlay::Help {
                 scroll: 0,
@@ -340,6 +621,25 @@ impl App {
                 current: 0,
             },
         };
+        if matches!(self.overlay, Overlay::Delegations { .. }) {
+            self.ensure_inspector_session();
+        }
+    }
+
+    /// Opens the `Ctrl+B` Async Tasks Inspector focused on the given child Session.
+    pub fn open_delegation_for(&mut self, child_session_id: &str) {
+        let items = async_tasks(self);
+        let selected = items
+            .iter()
+            .position(|item| item.session_id() == child_session_id)
+            .unwrap_or(0);
+        self.overlay = Overlay::Delegations {
+            filter: String::new(),
+            selected,
+            focus: TaskFocus::List,
+            detail_open: true,
+        };
+        self.ensure_inspector_session();
     }
 
     pub(super) fn confirm_agent_delete(&mut self, agent_id: AgentId) {
@@ -383,7 +683,11 @@ impl App {
             return None;
         }
         let (name, rest) = text.strip_prefix('/')?.split_once(char::is_whitespace)?;
-        matches!(name, "model" | "reasoning" | "theme" | "approval").then_some((name, rest.trim()))
+        matches!(
+            name,
+            "model" | "reasoning" | "theme" | "approval" | "remote" | "wss"
+        )
+        .then_some((name, rest.trim()))
     }
 
     /// The command list's rows as `(name, description)`: the commands for the
@@ -412,7 +716,7 @@ impl App {
     }
 
     /// The value a setting command would change, shown before it runs.
-    fn current_value(&self, name: &str) -> Option<String> {
+    pub(crate) fn current_value(&self, name: &str) -> Option<String> {
         match name {
             "model" => self.model_id().map(str::to_owned),
             "reasoning" => self
@@ -461,9 +765,19 @@ impl App {
                 ("light", "Dark text on a light terminal"),
             ]),
             "approval" => described(&[
-                ("ask", "Ask before each tool call that needs approval"),
-                ("auto", "Run tool calls without asking"),
-                ("read_only", "Allow only tools that change nothing"),
+                ("ask", "Ask before mutating or outside-workspace tool calls"),
+                (
+                    "auto",
+                    "Run inside- and outside-workspace tool calls without asking",
+                ),
+            ]),
+            "remote" | "wss" => described(&[
+                (
+                    "on",
+                    "Start remote WSS/WS server and show connection overlay",
+                ),
+                ("off", "Stop remote server and reclaim terminal control"),
+                ("key", "Generate a fresh one-time access key"),
             ]),
             _ => unreachable!(),
         };
@@ -597,6 +911,5 @@ pub(crate) fn approval_label(mode: minicore_host_protocol::ApprovalMode) -> &'st
     match mode {
         minicore_host_protocol::ApprovalMode::Ask => "ask",
         minicore_host_protocol::ApprovalMode::Auto => "auto",
-        minicore_host_protocol::ApprovalMode::ReadOnly => "read_only",
     }
 }

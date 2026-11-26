@@ -187,6 +187,7 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, styles: Styles) {
     layout.prepare(
         blocks,
         session.transcript.revisions(),
+        |index| !matches!(transcript.grouping(index), Grouping::None),
         width,
         fold,
         &mut render,
@@ -256,8 +257,9 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, styles: Styles) {
         for (index, row) in rows.iter_mut().enumerate() {
             let (block, _) = layout.anchor(top + index);
             let thinking = match (transcript.grouping(block), blocks.get(block)) {
-                (Grouping::Head { summary, .. }, _) => {
+                (Grouping::Head { summary, open, .. }, _) if !open && !fold.expanded => {
                     summary.live
+                        && summary.thinking
                         && matches!(
                             summary.latest,
                             Some((crate::transcript::StepKind::Thinking, _))
@@ -306,24 +308,41 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, styles: Styles) {
         super::put_line(buffer, area, row);
     }
     if top + height < total && area.height > 0 {
-        // A whole bar, so the label never sits on top of half a content row.
+        // Clear the bottom row so the centered pill never sits over half a content row.
         let bar = Rect {
             y: area.bottom() - 1,
             height: 1,
             ..area
         };
-        buffer.set_style(bar, styles.composer());
+        buffer.set_style(bar, Style::reset());
         for x in bar.left()..bar.right() {
             buffer[(x, bar.y)].set_symbol(" ");
         }
         let cells = jump_label(area.width);
-        buffer.set_stringn(
-            area.x + cells.start,
-            area.bottom() - 1,
-            JUMP_LABEL,
-            cells.len(),
-            styles.highlight().patch(styles.text()),
-        );
+        let pill = if styles.composer().bg.is_none() {
+            Style::new().add_modifier(Modifier::REVERSED)
+        } else {
+            styles.composer()
+        };
+        let label_rect = Rect {
+            x: area.x + cells.start,
+            y: area.bottom() - 1,
+            width: cells.len() as u16,
+            height: 1,
+        };
+        buffer.set_style(label_rect, pill);
+        let line = if let Some((lead, rest)) = JUMP_LABEL.split_once("Jump")
+            && let Some((body, tail)) = rest.split_once(" · ")
+        {
+            Line::from(vec![
+                Span::styled(lead, pill.patch(styles.accent())),
+                Span::styled(format!("Jump{body}"), pill.patch(styles.text())),
+                Span::styled(format!(" · {tail}"), pill.patch(styles.meta())),
+            ])
+        } else {
+            Line::styled(JUMP_LABEL, pill.patch(styles.text()))
+        };
+        super::put_line(buffer, label_rect, &line);
     }
     if app.scrollbar_shown()
         && let Some((start, len)) = thumb(height, total, top)
@@ -336,6 +355,175 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, styles: Styles) {
             let cell = &mut buffer[(area.right() - 1, area.y + row as u16)];
             match (start..start + len).contains(&row) {
                 true => cell.set_symbol(glyph).set_style(styles.text()),
+                false => cell.set_symbol("│").set_style(styles.faint()),
+            };
+        }
+    }
+}
+
+/// Draws any `Transcript` (such as a child Session inside `Ctrl+B`) using the
+/// exact same incremental layout cache, `Working`/`Worked` folding, live
+/// thinking spinner, scrollbar and jump pill as the main conversation.
+#[allow(clippy::too_many_arguments)]
+pub fn draw_embedded(
+    frame: &mut Frame,
+    area: Rect,
+    styles: Styles,
+    transcript: &crate::transcript::Transcript,
+    layout: &mut Layout<RenderState>,
+    scroll: &mut Scroll,
+    held: bool,
+    fold: Fold,
+    elapsed: std::time::Duration,
+    show_scrollbar: bool,
+) {
+    if area.is_empty() {
+        return;
+    }
+    let width = area.width.max(blocks::INSET as u16 + 1);
+    let key = (width, fold, styles);
+    let blocks = transcript.blocks();
+    layout.state.prepare((width, styles), blocks);
+    layout.state.header_rows = 0;
+    let mut render =
+        |state: &mut RenderState, index: usize, block: &Block| match transcript.grouping(index) {
+            _ if transcript.absorbed(index) => Vec::new().into(),
+            Grouping::None => state.render(block, key),
+            grouping => blocks::render_with(block, grouping, styles, width, fold).into(),
+        };
+    layout.prepare(
+        blocks,
+        transcript.revisions(),
+        |index| !matches!(transcript.grouping(index), Grouping::None),
+        width,
+        fold,
+        &mut render,
+    );
+    let height = area.height as usize;
+    let drawn = layout.viewport.height;
+    if let Scroll::Anchor { block, offset } = *scroll
+        && drawn > 0
+        && drawn != height
+    {
+        let bottom = (layout.anchor_row(block, offset) + drawn).min(layout.total_rows());
+        let (block, offset) = layout.anchor(bottom.saturating_sub(height));
+        *scroll = Scroll::Anchor { block, offset };
+    }
+    let current_scroll = *scroll;
+    let resolve = |layout: &Layout<RenderState>| {
+        let max_top = layout.total_rows().saturating_sub(height);
+        match current_scroll {
+            Scroll::Follow => max_top,
+            Scroll::Anchor { block, offset } if held => layout
+                .anchor_row(block, offset)
+                .min(layout.total_rows().saturating_sub(1)),
+            Scroll::Anchor { block, offset } => layout.anchor_row(block, offset).min(max_top),
+        }
+    };
+    let mut top = resolve(layout);
+    while layout.settle(blocks, top, height, &mut render) {
+        top = resolve(layout);
+    }
+    let total = layout.total_rows();
+    if matches!(*scroll, Scroll::Anchor { .. }) && !held && top == total.saturating_sub(height) {
+        *scroll = Scroll::Follow;
+    }
+    layout.viewport = Viewport {
+        top,
+        height,
+        width: area.width,
+        origin: (area.x, area.y),
+    };
+    let mut rows: Vec<Cow<Line>> = layout
+        .visible(top, height)
+        .into_iter()
+        .map(Cow::Borrowed)
+        .collect();
+    if !blocks.is_empty() {
+        let spinner_frame = super::status::spinner(elapsed);
+        for (index, row) in rows.iter_mut().enumerate() {
+            let (block, _) = layout.anchor(top + index);
+            let thinking = match (transcript.grouping(block), blocks.get(block)) {
+                (Grouping::Head { summary, open, .. }, _) if !open && !fold.expanded => {
+                    summary.live
+                        && summary.thinking
+                        && matches!(
+                            summary.latest,
+                            Some((crate::transcript::StepKind::Thinking, _))
+                        )
+                }
+                (
+                    _,
+                    Some(Block::Assistant {
+                        text,
+                        streaming: true,
+                        ..
+                    }),
+                ) => text.trim().is_empty(),
+                _ => false,
+            };
+            if thinking && let Some(at) = row.spans.iter().position(|span| span.content == "∴ ") {
+                let mut line = row.clone().into_owned();
+                line.spans[at].content = format!("{spinner_frame} ").into();
+                *row = Cow::Owned(line);
+            }
+        }
+    }
+    let buffer = frame.buffer_mut();
+    for (y, row) in (area.y..area.bottom()).zip(&rows) {
+        super::put_line(
+            buffer,
+            Rect {
+                y,
+                height: 1,
+                ..area
+            },
+            row,
+        );
+    }
+    if top + height < total && area.height > 0 {
+        let bar = Rect {
+            y: area.bottom() - 1,
+            height: 1,
+            ..area
+        };
+        buffer.set_style(bar, Style::reset());
+        for x in bar.left()..bar.right() {
+            buffer[(x, bar.y)].set_symbol(" ");
+        }
+        let cells = jump_label(area.width);
+        let pill = if styles.composer().bg.is_none() {
+            Style::new().add_modifier(Modifier::REVERSED)
+        } else {
+            styles.composer()
+        };
+        let label_rect = Rect {
+            x: area.x + cells.start,
+            y: area.bottom() - 1,
+            width: cells.len() as u16,
+            height: 1,
+        };
+        buffer.set_style(label_rect, pill);
+        let line = if let Some((lead, rest)) = JUMP_LABEL.split_once("Jump")
+            && let Some((body, tail)) = rest.split_once(" · ")
+        {
+            Line::from(vec![
+                Span::styled(lead, pill.patch(styles.accent())),
+                Span::styled(format!("Jump{body}"), pill.patch(styles.text())),
+                Span::styled(format!(" · {tail}"), pill.patch(styles.meta())),
+            ])
+        } else {
+            Line::styled(JUMP_LABEL, pill.patch(styles.text()))
+        };
+        super::put_line(buffer, label_rect, &line);
+    }
+    if (show_scrollbar || top + height < total || top > 0)
+        && let Some((start, len)) = thumb(height, total, top)
+    {
+        for row in 0..height {
+            let cell = &mut buffer[(area.right() - 1, area.y + row as u16)];
+            match (start..start + len).contains(&row) {
+                true => cell.set_symbol("┃").set_style(styles.text()),
                 false => cell.set_symbol("│").set_style(styles.faint()),
             };
         }
@@ -525,7 +713,14 @@ mod tests {
             Grouping::None => state.render(block, (width, fold, styles)),
             grouping => blocks::render_with(block, grouping, styles, width, fold).into(),
         };
-        layout.prepare(blocks, transcript.revisions(), width, fold, &mut render);
+        layout.prepare(
+            blocks,
+            transcript.revisions(),
+            |index| !matches!(transcript.grouping(index), Grouping::None),
+            width,
+            fold,
+            &mut render,
+        );
         while layout.settle(blocks, 0, 1000, &mut render) {}
         layout.viewport = Viewport {
             top: 0,
@@ -605,7 +800,6 @@ mod tests {
                 assert_eq!(live.len(), 6, "empty canonical identities remain installed");
 
                 let mut next = 0;
-                let mut after_row = false;
                 for (index, block) in live.blocks().iter().enumerate() {
                     let body = blocks::render_with(
                         block,
@@ -617,10 +811,7 @@ mod tests {
                     if body.is_empty() {
                         continue;
                     }
-                    let row = crate::transcript::is_row(block, fold.expanded);
-                    let joined = after_row && row;
-                    after_row = row;
-                    if next > 0 && !joined {
+                    if next > 0 {
                         assert_eq!(
                             finalized[next].to_string(),
                             "",

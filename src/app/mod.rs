@@ -45,9 +45,41 @@ use crate::ui::transcript::RenderState;
 use crate::ui::views;
 
 pub use actions::{Action, Answer};
-pub use overlay::{Overlay, Panel};
+pub use overlay::{Overlay, Panel, TaskFocus};
 pub use session::{LiveStatus, LiveTurn, PendingInteraction, Session};
 pub use tasks::{MESSAGE_CAPACITY, SessionOp, Tx, bootstrap};
+
+/// State for the `Ctrl+B` Async Tasks Inspector: its own transcript layout cache,
+/// scroll anchor, per-task isolated child drafts and shared split hit geometry.
+pub struct TaskInspector {
+    pub layout: Layout<RenderState>,
+    pub target: Option<SessionRef>,
+    pub loading: Option<SessionRef>,
+    pub scroll: Scroll,
+    pub held: bool,
+    /// Fallback line scroll used only for non-Session read-only items.
+    pub fallback_scroll: usize,
+    pub composer: composer::Composer,
+    /// Unsent drafts keyed by child SessionRef so switching tasks never leaks text.
+    pub drafts: HashMap<SessionRef, composer::Entry>,
+    pub hit: crate::ui::views::split::SplitHitAreas,
+}
+
+impl Default for TaskInspector {
+    fn default() -> Self {
+        Self {
+            layout: Layout::default(),
+            target: None,
+            loading: None,
+            scroll: Scroll::Follow,
+            held: false,
+            fallback_scroll: 0,
+            composer: composer::Composer::new(),
+            drafts: HashMap::new(),
+            hit: crate::ui::views::split::SplitHitAreas::default(),
+        }
+    }
+}
 
 pub enum Msg {
     Ready(Result<Ready, String>),
@@ -63,6 +95,7 @@ pub enum Msg {
         Box<agent_cards::Read>,
     ),
     Opened(u64, SessionRef, Result<Box<tasks::Opened>, String>),
+    InspectorOpened(SessionRef, Result<Box<tasks::Opened>, String>),
     Created(u64, Result<SessionRef, String>),
     CreationOpened(u64, SessionRef, Result<Box<tasks::Opened>, String>),
     AgentCreated(u64, Result<SessionRef, String>),
@@ -73,6 +106,9 @@ pub enum Msg {
     Notice(NoticeLevel, String),
     DraftEdited(String),
     Flash(String),
+    RemoteStarted(Result<Box<crate::host::RemoteServer>, String>),
+    RemoteStatus(minicore_host_core::NetworkStatus),
+    RemoteFailed(String),
 }
 
 pub struct Ready {
@@ -158,6 +194,9 @@ pub struct App {
     pub composer_area: ratatui::layout::Rect,
     pub composer_max_rows: usize,
     pub composer_dragging: bool,
+    pub sheet_hit: crate::ui::panel::SheetHitArea,
+    /// Last clicked row in a bottom sheet or completion popup, for double-click confirm.
+    pub sheet_click: Option<(usize, tokio::time::Instant)>,
     pub notices: VecDeque<Notice>,
     pub last_error: Option<String>,
     pub scroll: Scroll,
@@ -197,6 +236,10 @@ pub struct App {
     pub(super) pending_states: HashMap<SessionRef, SessionSnapshot>,
     agent_cards: agent_cards::Cards,
     pub(super) agent_location: Option<(SessionRef, ToolCallRef)>,
+    pub task_inspector: TaskInspector,
+    pub remote_config: crate::config::Remote,
+    pub remote: Option<crate::host::RemoteServer>,
+    pub(super) remote_starting: bool,
 }
 
 pub const NOTICE_TTL: Duration = Duration::from_secs(5);
@@ -231,6 +274,8 @@ impl App {
             composer_area: ratatui::layout::Rect::default(),
             composer_max_rows: crate::ui::composer::MIN_ROWS,
             composer_dragging: false,
+            sheet_hit: crate::ui::panel::SheetHitArea::default(),
+            sheet_click: None,
             notices: VecDeque::new(),
             last_error: None,
             scroll: Scroll::Follow,
@@ -267,6 +312,10 @@ impl App {
             pending_states: HashMap::new(),
             agent_cards: agent_cards::Cards::default(),
             agent_location: None,
+            task_inspector: TaskInspector::default(),
+            remote_config: crate::config::Remote::default(),
+            remote: None,
+            remote_starting: false,
         }
     }
     pub fn on_msg(&mut self, msg: Msg) {
@@ -318,6 +367,28 @@ impl App {
                     Ok(opened) => self.adopt(*opened),
                     Err(error) => {
                         self.with_notice_for(&target, |app| app.notice(NoticeLevel::Error, error))
+                    }
+                }
+            }
+            Msg::InspectorOpened(target, result) => {
+                if self.task_inspector.loading.as_ref() == Some(&target) {
+                    self.task_inspector.loading = None;
+                }
+                match result {
+                    Ok(opened) => {
+                        if self.resident.find(&target).is_none() {
+                            self.install_opened(*opened, false);
+                            self.resident
+                                .evict_idle_except(self.task_inspector.target.as_ref(), 8);
+                        }
+                        if self.task_inspector.target.as_ref() == Some(&target) {
+                            self.task_inspector.layout.clear();
+                        }
+                    }
+                    Err(error) => {
+                        if self.task_inspector.target.as_ref() == Some(&target) {
+                            self.notice(NoticeLevel::Error, error);
+                        }
                     }
                 }
             }
@@ -440,6 +511,13 @@ impl App {
             Msg::Notice(level, text) => self.notice(level, text),
             Msg::DraftEdited(draft) => self.composer.restore_text(&draft),
             Msg::Flash(text) => self.flash = Some((text, tokio::time::Instant::now())),
+            Msg::RemoteStarted(result) => self.on_remote_started(result),
+            Msg::RemoteStatus(status) => {
+                if let Some(remote) = &mut self.remote {
+                    remote.status = status;
+                }
+            }
+            Msg::RemoteFailed(error) => self.on_remote_failed(error),
         }
         self.retire_removed_sessions();
         self.retire_agent_observers();
@@ -482,6 +560,11 @@ impl App {
     }
     pub fn animating(&self) -> bool {
         self.status_label().is_some()
+            || (matches!(self.overlay, Overlay::Delegations { .. })
+                && self.inspected_session().is_some_and(Session::is_busy))
+            || overlay::async_tasks(self)
+                .iter()
+                .any(overlay::AsyncTaskItem::is_running)
     }
     pub fn next_expiry(&self) -> Option<tokio::time::Instant> {
         self.notices
@@ -543,7 +626,7 @@ impl App {
             .expect("matched resident Session")
     }
     pub fn can_operate(&self) -> bool {
-        self.client.initial_info().can_operate
+        self.client.initial_info().can_operate && self.remote.is_none()
     }
     pub(super) fn require_control(&mut self) -> bool {
         if self.can_operate() {
@@ -587,6 +670,9 @@ impl App {
         ) {
             return &self.unconfirmed_editor;
         }
+        if matches!(self.overlay, Overlay::Delegations { .. }) {
+            return &self.task_inspector.composer;
+        }
         if self.overlay.is_none()
             && let Some(session) = self.resident.current()
             && session
@@ -609,6 +695,9 @@ impl App {
         ) {
             return &mut self.unconfirmed_editor;
         }
+        if matches!(self.overlay, Overlay::Delegations { .. }) {
+            return &mut self.task_inspector.composer;
+        }
         if self.overlay.is_none()
             && let Some(session) = self.resident.current_mut()
             && session
@@ -619,6 +708,207 @@ impl App {
             return &mut session.interaction_editor;
         }
         &mut self.composer
+    }
+
+    /// The `SessionRef` of the task currently highlighted inside `Ctrl+B`.
+    pub fn inspected_target(&self) -> Option<(SessionRef, bool)> {
+        let Overlay::Delegations {
+            filter, selected, ..
+        } = &self.overlay
+        else {
+            return None;
+        };
+        let all = overlay::async_tasks(self);
+        let matched = overlay::matching_async_tasks(&all, filter);
+        let idx = (*selected).min(matched.len().saturating_sub(1));
+        matched.get(idx).and_then(|item| item.open_target())
+    }
+
+    /// Whether the currently selected `Ctrl+B` task can receive direct messages.
+    pub fn inspected_can_send(&self) -> bool {
+        let Some((target, unavailable)) = self.inspected_target() else {
+            return false;
+        };
+        if unavailable {
+            return false;
+        }
+        self.resident
+            .find(&target)
+            .is_none_or(|session| session.state.data.lifecycle == SessionLifecycle::Open)
+    }
+
+    /// The live resident `Session` for the task selected inside `Ctrl+B`, if loaded.
+    pub fn inspected_session(&self) -> Option<&Session> {
+        let (target, unavailable) = self.inspected_target()?;
+        (!unavailable)
+            .then(|| self.resident.find(&target))
+            .flatten()
+    }
+
+    /// Mutable access to the live resident `Session` selected inside `Ctrl+B`.
+    pub fn inspected_session_mut(&mut self) -> Option<&mut Session> {
+        let (target, unavailable) = self.inspected_target()?;
+        if unavailable {
+            return None;
+        }
+        self.resident.find_mut(&target)
+    }
+
+    /// Ensures the currently selected `Ctrl+B` child Session is loaded into
+    /// `self.resident` in the background without switching away from the parent.
+    pub fn ensure_inspector_session(&mut self) {
+        let next = self
+            .inspected_target()
+            .and_then(|(target, unavailable)| (!unavailable).then_some(target));
+        if self.task_inspector.target != next {
+            if let Some(prev) = self.task_inspector.target.take() {
+                if self.task_inspector.composer.is_empty() {
+                    self.task_inspector.drafts.remove(&prev);
+                } else {
+                    let saved = self.task_inspector.composer.take_submission();
+                    self.task_inspector.drafts.insert(prev, saved);
+                }
+            }
+            self.task_inspector.composer = composer::Composer::new();
+            if let Some(ref target) = next
+                && let Some(saved) = self.task_inspector.drafts.remove(target)
+            {
+                self.task_inspector.composer.restore_submission(saved);
+            }
+            self.task_inspector.target = next.clone();
+            self.task_inspector.layout.clear();
+            self.task_inspector.scroll = Scroll::Follow;
+            self.task_inspector.held = false;
+            self.task_inspector.fallback_scroll = 0;
+        }
+        let Some(target) = next else {
+            return;
+        };
+        if self.resident.find(&target).is_some()
+            || self.task_inspector.loading.as_ref() == Some(&target)
+        {
+            return;
+        }
+        self.task_inspector.loading = Some(target.clone());
+        let client = self.client.clone();
+        self.spawn_msg(async move {
+            let result = tasks::open(client, target.clone(), LaunchSettings::default()).await;
+            Msg::InspectorOpened(target, result)
+        });
+    }
+
+    /// Scrolls the `Ctrl+B` right-hand child conversation pane by `delta` rows.
+    pub fn inspector_scroll_by(&mut self, delta: isize) {
+        let layout = &self.task_inspector.layout;
+        let total = layout.total_rows();
+        let height = layout.viewport.height;
+        if total == 0 {
+            self.task_inspector.fallback_scroll = self
+                .task_inspector
+                .fallback_scroll
+                .saturating_add_signed(delta);
+            return;
+        }
+        if total <= height {
+            return;
+        }
+        let max_top = total - height;
+        let top = match self.task_inspector.scroll {
+            Scroll::Follow => max_top,
+            Scroll::Anchor { block, offset } => layout.anchor_row(block, offset).min(max_top),
+        };
+        self.inspector_scroll_to(top.saturating_add_signed(delta));
+    }
+
+    /// Jumps the `Ctrl+B` right-hand child conversation pane to row `top`.
+    pub fn inspector_scroll_to(&mut self, top: usize) {
+        self.task_inspector.held = false;
+        let layout = &self.task_inspector.layout;
+        let max_top = layout.total_rows().saturating_sub(layout.viewport.height);
+        self.scrolled_at = Some(tokio::time::Instant::now());
+        if top >= max_top {
+            self.task_inspector.scroll = Scroll::Follow;
+            return;
+        }
+        let (block, offset) = layout.anchor(top);
+        self.task_inspector.scroll = Scroll::Anchor { block, offset };
+    }
+
+    /// Pins the `Ctrl+B` right-hand pane while toggling a fold in place.
+    pub fn inspector_pin_view(&mut self) {
+        if self.task_inspector.scroll == Scroll::Follow {
+            let (block, offset) = self
+                .task_inspector
+                .layout
+                .anchor(self.task_inspector.layout.viewport.top);
+            self.task_inspector.scroll = Scroll::Anchor { block, offset };
+        }
+        self.task_inspector.held = true;
+    }
+
+    /// Sends the `Ctrl+B` bottom composer text directly to the selected child Session.
+    pub fn submit_inspector_composer(&mut self, follow: bool) {
+        if !self.ready || !self.require_control() {
+            return;
+        }
+        let Some((target, unavailable)) = self.inspected_target() else {
+            return;
+        };
+        if unavailable {
+            self.notice(
+                NoticeLevel::Error,
+                "Child Session history is unavailable; cannot send input",
+            );
+            return;
+        }
+        let Some((epoch, lifecycle, busy)) = self.resident.find(&target).map(|session| {
+            (
+                session.epoch,
+                session.state.data.lifecycle,
+                session.is_busy(),
+            )
+        }) else {
+            self.ensure_inspector_session();
+            self.notice(
+                NoticeLevel::Info,
+                "Loading child Session; try again in a moment",
+            );
+            return;
+        };
+        if lifecycle != SessionLifecycle::Open {
+            self.notice(
+                NoticeLevel::Error,
+                "Child Session is closed and cannot receive new messages",
+            );
+            return;
+        }
+        if self.task_inspector.composer.text().trim_end().is_empty() {
+            return;
+        }
+        if !self.local_input_room(
+            self.task_inspector.composer.text().len()
+                + std::mem::size_of_val(self.task_inspector.composer.pastes()),
+        ) {
+            self.notice(
+                NoticeLevel::Error,
+                "Local input confirmation budget is full; F8 to review retained inputs",
+            );
+            return;
+        }
+        let entry = self.task_inspector.composer.take_submission();
+        if !busy {
+            self.task_inspector.scroll = Scroll::Follow;
+        }
+        self.push_local_input(
+            epoch,
+            entry,
+            if follow {
+                MessageMode::FollowUp
+            } else {
+                MessageMode::Steer
+            },
+            None,
+        );
     }
 
     pub fn has_interaction(&self) -> bool {

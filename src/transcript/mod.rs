@@ -112,22 +112,32 @@ pub enum Grouping {
         segment: usize,
         open: bool,
     },
+    /// The final assistant message of a finished grouped run when it carries
+    /// thinking: its thinking folds inside the group while its answer stays out.
+    /// When the run had no earlier steps (thinking-only Turn), `summary` carries
+    /// the `Worked` row directly on this block.
+    Tail {
+        turn: TurnId,
+        segment: usize,
+        summary: Option<GroupSummary>,
+        open: bool,
+    },
 }
 
 impl Grouping {
     pub fn is_open(&self) -> bool {
         match self {
             Self::None => true,
-            Self::Head { open, .. } | Self::Member { open, .. } => *open,
+            Self::Head { open, .. } | Self::Member { open, .. } | Self::Tail { open, .. } => *open,
         }
     }
 
     fn key(&self) -> Option<(&TurnId, usize)> {
         match self {
             Self::None => None,
-            Self::Head { turn, segment, .. } | Self::Member { turn, segment, .. } => {
-                Some((turn, *segment))
-            }
+            Self::Head { turn, segment, .. }
+            | Self::Member { turn, segment, .. }
+            | Self::Tail { turn, segment, .. } => Some((turn, *segment)),
         }
     }
 }
@@ -138,6 +148,8 @@ impl Grouping {
 pub struct GroupSummary {
     /// Still running: `Working` instead of `Worked`.
     pub live: bool,
+    /// The newest step is still actively streaming thinking.
+    pub thinking: bool,
     pub duration: Option<std::time::Duration>,
     pub tools: usize,
     pub agents: usize,
@@ -155,20 +167,6 @@ pub enum StepKind {
     Stopped,
     Thinking,
     Note,
-}
-
-/// Whether a block draws as one-line rows that stack without a blank row:
-/// a folded tool row. Folded thinking and Agent rows are steps too, but keep
-/// a blank row around them so each stays easy to find and to click.
-pub(crate) fn is_row(block: &Block, expanded: bool) -> bool {
-    match block {
-        Block::Tool(call) => {
-            call.agent_card.is_none()
-                && !call.is_delegation_receipt()
-                && !call.is_expanded(expanded)
-        }
-        _ => false,
-    }
 }
 
 /// A step of a Turn's work: any tool call without a delegation, or thinking
@@ -246,10 +244,14 @@ fn latest(block: &Block) -> Option<(StepKind, String)> {
             Some((StepKind::Thinking, heading))
         }
         // The newest line, so streaming text moves the row along.
-        Block::Assistant { text, .. } => Some((
-            StepKind::Note,
-            text.lines().rev().find_map(readable).unwrap_or_default(),
-        )),
+        Block::Assistant { text, .. } => {
+            let line = text
+                .lines()
+                .rev()
+                .find_map(readable)
+                .unwrap_or_else(|| "responding…".to_owned());
+            Some((StepKind::Note, line))
+        }
         _ => None,
     }
 }
@@ -291,11 +293,12 @@ impl Transcript {
     /// delivers belong to the card of the call that started it, when that card
     /// is loaded. Otherwise they keep their own blocks.
     pub fn link_delegations(&mut self) {
-        use std::collections::HashMap;
+        use std::collections::{HashMap, HashSet};
         let mut by_session: HashMap<String, usize> = HashMap::new();
         // A task message names its card only within the same child Session.
         let mut by_task: HashMap<(String, String), usize> = HashMap::new();
         let mut by_turn: HashMap<TurnId, Vec<usize>> = HashMap::new();
+        let mut settled: HashSet<usize> = HashSet::new();
         let mut parent: HashMap<usize, ParentActions> = HashMap::new();
         let mut results: HashMap<usize, String> = HashMap::new();
         let mut absorbed = vec![false; self.blocks.len()];
@@ -323,6 +326,7 @@ impl Transcript {
                         continue;
                     };
                     absorbed[index] = true;
+                    settled.remove(&card);
                     parent.entry(card).or_default().sends += 1;
                     for association in &call.delegations {
                         by_task.insert(
@@ -360,10 +364,26 @@ impl Transcript {
                                 continue;
                             };
                             absorbed[index] = true;
-                            for &card in cards {
+                            let active: Vec<usize> = cards
+                                .iter()
+                                .copied()
+                                .filter(|card| !settled.contains(card))
+                                .collect();
+                            let targets = if active.is_empty() {
+                                cards.as_slice()
+                            } else {
+                                active.as_slice()
+                            };
+                            let waiting =
+                                matches!(call.state, ToolState::Pending | ToolState::Running);
+                            for &card in targets {
                                 let actions = parent.entry(card).or_default();
-                                actions.waits += 1;
-                                actions.waited += call.duration.unwrap_or_default();
+                                if waiting {
+                                    actions.waiting = true;
+                                } else {
+                                    actions.waits += 1;
+                                    actions.waited += call.duration.unwrap_or_default();
+                                }
                             }
                         }
                         (
@@ -373,7 +393,10 @@ impl Transcript {
                             absorbed[index] = true;
                             let actions = parent.entry(card).or_default();
                             match action {
-                                "send" => actions.sends += 1,
+                                "send" => {
+                                    settled.remove(&card);
+                                    actions.sends += 1;
+                                }
                                 "inspect" => actions.inspections += 1,
                                 _ => actions.changes += 1,
                             }
@@ -386,6 +409,10 @@ impl Transcript {
                     text,
                     ..
                 } => {
+                    // Delegated child completion notifications stay out of the main
+                    // conversation (status lives in the dock and full details live
+                    // in Ctrl+B); still attach the delivered result to its card.
+                    absorbed[index] = true;
                     let Some(summary) = crate::ui::delegated::summary(text) else {
                         continue;
                     };
@@ -394,7 +421,7 @@ impl Transcript {
                         .and_then(|task| by_task.get(&(summary.session_id.clone(), task)))
                         .or_else(|| by_session.get(&summary.session_id));
                     if let Some(&card) = card {
-                        absorbed[index] = true;
+                        settled.insert(card);
                         results.insert(card, text.clone());
                     }
                 }
@@ -480,11 +507,23 @@ impl Transcript {
             let final_run = segment + 1 == count;
             let live = end.is_none() && final_run;
             // While a run goes on everything in it folds, Agent cards and text
-            // included. Once it is done, text after its last tool call is its
-            // answer and stays visible; earlier text was a note.
+            // included. Once it is done, only the final assistant answer stays
+            // outside; all earlier steps, notes and thinking (including any
+            // thinking on that final response) fold into Worked.
             let last_call = blocks
                 .iter()
                 .rposition(|&index| matches!(self.blocks[index], Block::Tool(_)));
+            let last_answer = (!live)
+                .then(|| {
+                    blocks.iter().rposition(|&index| {
+                        matches!(
+                            &self.blocks[index],
+                            Block::Assistant { text, .. } if !text.trim().is_empty()
+                        )
+                    })
+                })
+                .flatten()
+                .filter(|&pos| last_call.is_none_or(|last| pos > last));
             let steps: Vec<usize> = blocks
                 .iter()
                 .enumerate()
@@ -495,29 +534,45 @@ impl Transcript {
                         text, reasoning, ..
                     } if text.trim().is_empty() && reasoning.trim().is_empty() => false,
                     block @ Block::Assistant { .. } => {
-                        live || is_step(block) || last_call.is_some_and(|last| position < last)
+                        live || is_step(block) || Some(position) != last_answer
                     }
                     _ => false,
                 })
                 .map(|(_, &index)| index)
                 .collect();
-            let agents = steps
-                .iter()
-                .filter(|&&index| matches!(&self.blocks[index], Block::Tool(call) if call.agent_card.is_some()))
-                .count();
             let tools = steps
                 .iter()
                 .filter(|&&index| matches!(self.blocks[index], Block::Tool(_)))
-                .count()
-                - agents;
-            // Live, the run folds from its first call: a plain answer streams
-            // in view. Done, a single step or a run without a call keeps its rows.
+                .count();
+            let agents = 0;
+            // Live, the run folds from its very first step (thinking, text or
+            // tool) so Working tracks progress immediately. Done, a run folds
+            // when it has multiple tool/agent steps or any thinking on the
+            // final answer.
+            let tail_block = last_answer.map(|pos| blocks[pos]);
+            let tail_thinking = tail_block.is_some_and(|index| {
+                matches!(
+                    &self.blocks[index],
+                    Block::Assistant { reasoning, .. } if !reasoning.trim().is_empty()
+                )
+            });
+            let has_thinking = tail_thinking
+                || steps.iter().any(|&index| {
+                    matches!(
+                        &self.blocks[index],
+                        Block::Assistant { reasoning, .. } if !reasoning.trim().is_empty()
+                    )
+                });
             let grouped = if live {
-                tools + agents >= 1
+                !steps.is_empty()
             } else {
-                steps.len() >= 2 && tools + agents >= 1
+                (steps.len() >= 2 && tools + agents >= 1) || has_thinking
             };
-            let open = steps.first().is_some_and(|&index| {
+            let head_index = steps
+                .first()
+                .copied()
+                .or(tail_block.filter(|_| tail_thinking));
+            let open = head_index.is_some_and(|index| {
                 let current = &self.metadata[index].grouping;
                 current.key() == Some((turn, segment)) && current.is_open()
             });
@@ -540,6 +595,16 @@ impl Transcript {
             };
             let summary = GroupSummary {
                 live,
+                thinking: steps.last().is_some_and(|&index| {
+                    matches!(
+                        &self.blocks[index],
+                        Block::Assistant {
+                            text,
+                            streaming: true,
+                            ..
+                        } if text.trim().is_empty()
+                    )
+                }),
                 duration,
                 tools,
                 agents,
@@ -563,6 +628,12 @@ impl Transcript {
                     Some(_) if grouped => Grouping::Member {
                         turn: turn.clone(),
                         segment,
+                        open,
+                    },
+                    _ if grouped && tail_thinking && Some(index) == tail_block => Grouping::Tail {
+                        turn: turn.clone(),
+                        segment,
+                        summary: steps.is_empty().then(|| summary.clone()),
                         open,
                     },
                     _ => Grouping::None,
@@ -590,6 +661,14 @@ impl Transcript {
         std::time::Duration::try_from(span).ok()
     }
 
+    /// Opens the group the step at `index` belongs to, if it is closed.
+    pub fn open_group(&mut self, index: usize) -> bool {
+        if self.grouping(index).is_open() {
+            return false;
+        }
+        self.toggle_group(index)
+    }
+
     /// Opens or closes the group the step at `index` belongs to.
     pub fn toggle_group(&mut self, index: usize) -> bool {
         let Some((turn, segment)) = self
@@ -602,7 +681,9 @@ impl Transcript {
         for at in 0..self.metadata.len() {
             if self.metadata[at].grouping.key() == Some((&turn, segment)) {
                 match &mut self.metadata[at].grouping {
-                    Grouping::Head { open, .. } | Grouping::Member { open, .. } => *open = !*open,
+                    Grouping::Head { open, .. }
+                    | Grouping::Member { open, .. }
+                    | Grouping::Tail { open, .. } => *open = !*open,
                     Grouping::None => {}
                 }
                 self.metadata[at].revision = next_revision();
@@ -866,6 +947,7 @@ mod tests {
             text: text.into(),
             kind: UserKind::Steering,
             at: None,
+            expanded: None,
         };
         transcript.push(user("go"));
         transcript.push(tool("a", ToolState::Succeeded)); // 1
@@ -955,6 +1037,76 @@ mod tests {
     }
 
     #[test]
+    fn live_run_folds_from_the_first_thinking_step_and_finishes_into_worked() {
+        let turn: TurnId = "00000000000000000001".parse().unwrap();
+        let mut transcript = Transcript::default();
+        transcript.push(Block::User {
+            text: "explain".into(),
+            kind: UserKind::Prompt,
+            at: None,
+            expanded: None,
+        });
+        transcript.push(Block::Assistant {
+            key: RequestKey::response(turn.clone(), 0),
+            reasoning: "**Planning answer**\nChecking details".into(),
+            text: String::new(),
+            streaming: true,
+            partial: false,
+            expanded: None,
+        });
+
+        // Live: even a single thinking block with zero tools starts Working immediately.
+        transcript.regroup(&turn);
+        let Grouping::Head { summary, open, .. } = transcript.grouping(1).clone() else {
+            panic!("expected Working head, got {:?}", transcript.grouping(1));
+        };
+        assert!(summary.live);
+        assert!(!open);
+        assert_eq!(summary.tools, 0);
+        assert_eq!(
+            summary.latest,
+            Some((StepKind::Thinking, "Checking details".into()))
+        );
+
+        // Once the answer arrives and the Turn finishes, thinking folds into Worked
+        // on the Tail block and only the final answer remains outside.
+        if let Some(Block::Assistant {
+            text, streaming, ..
+        }) = transcript.block_mut(1)
+        {
+            *text = "Here is the answer.".into();
+            *streaming = false;
+        }
+        transcript.push(Block::TurnEnd {
+            turn_id: turn.clone(),
+            outcome: minicore_host_protocol::TurnOutcome::Completed,
+            reason: None,
+            duration: Some(std::time::Duration::from_secs(4)),
+            requests: 1,
+            tool_rounds: 0,
+            usage: Default::default(),
+            changes: None,
+            saving: None,
+        });
+        transcript.regroup(&turn);
+        let Grouping::Tail {
+            summary: Some(summary),
+            open: false,
+            ..
+        } = transcript.grouping(1).clone()
+        else {
+            panic!(
+                "expected thinking-only Worked tail, got {:?}",
+                transcript.grouping(1)
+            );
+        };
+        assert!(!summary.live);
+        assert_eq!(summary.duration, Some(std::time::Duration::from_secs(4)));
+        assert!(transcript.toggle_group(1));
+        assert!(transcript.grouping(1).is_open());
+    }
+
+    #[test]
     fn a_childs_delivered_result_does_not_start_a_new_run() {
         let turn: TurnId = "00000000000000000001".parse().unwrap();
         let tool = |id: &str| {
@@ -973,12 +1125,14 @@ mod tests {
             text: "go".into(),
             kind: UserKind::Prompt,
             at: None,
+            expanded: None,
         });
         transcript.push(tool("a"));
         transcript.push(Block::User {
             text: "{}".into(),
             kind: UserKind::Delegated,
             at: None,
+            expanded: None,
         });
         transcript.push(tool("b"));
         transcript.regroup(&turn);
@@ -1006,6 +1160,7 @@ mod tests {
             text: "same".into(),
             kind: UserKind::Prompt,
             at: None,
+            expanded: None,
         };
         let mut first = Transcript::default();
         let mut second = Transcript::default();

@@ -180,8 +180,9 @@ async fn child_output_continues_in_original_cards_after_startup_and_parent_turn_
         block: index,
         offset: 0,
     };
-    // A running Agent folds into its run's Working group: open it, then click
-    // the Agent's own row rather than the group's summary row.
+    // A delegated dispatch folds into its run's Worked group as an immutable
+    // sync step: open the group, then click the agent row to open the Ctrl+B
+    // Async Tasks Inspector focused on that child.
     h.app
         .resident
         .current_mut()
@@ -198,7 +199,7 @@ async fn child_output_continues_in_original_cards_after_startup_and_parent_turn_
                 && h.app
                     .layout
                     .row_text(*row)
-                    .is_some_and(|text| text.trim_start().starts_with("● agent"))
+                    .is_some_and(|text| text.trim_start().starts_with("✓ agent"))
         })
         .unwrap();
     for kind in [
@@ -212,7 +213,45 @@ async fn child_output_continues_in_original_cards_after_startup_and_parent_turn_
             modifiers: KeyModifiers::NONE,
         });
     }
+    assert!(matches!(
+        h.app.overlay,
+        crate::app::Overlay::Delegations { .. }
+    ));
+    let inspector_wide = h.render_text(120, 24);
+    assert!(inspector_wide.contains("Async Tasks"), "{inspector_wide}");
+    assert!(inspector_wide.contains("Task alpha"), "{inspector_wide}");
+    assert!(inspector_wide.contains("Task beta"), "{inspector_wide}");
+    // Typing filters the Ctrl+B task list immediately; Ctrl+U clears it.
+    for ch in "beta".chars() {
+        h.app.on_key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char(ch),
+            KeyModifiers::NONE,
+        ));
+    }
+    let filtered_screen = h.render_text(120, 24);
+    assert!(filtered_screen.contains("showing 1/2"), "{filtered_screen}");
+    assert!(filtered_screen.contains("Task beta"), "{filtered_screen}");
+    assert!(!filtered_screen.contains("Task alpha"), "{filtered_screen}");
+    h.app.on_key(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Char('u'),
+        KeyModifiers::CONTROL,
+    ));
+    let cleared_screen = h.render_text(120, 24);
+    assert!(cleared_screen.contains("Task alpha"), "{cleared_screen}");
+    // Esc closes the inspector back to the main transcript.
+    h.app.on_key(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Esc,
+        KeyModifiers::NONE,
+    ));
+    assert!(h.app.overlay.is_none());
+
     h.app.composer.set_text("Parent draft 日本語");
+    // Anchor at the top of the transcript (above the tail) so the reader stays
+    // detached while children continue streaming in the background.
+    h.app.scroll = Scroll::Anchor {
+        block: 0,
+        offset: 0,
+    };
     h.screen(80, 22);
     h.app.selection = Some(crate::app::selection::Drag {
         from: (3, 3),
@@ -231,19 +270,13 @@ async fn child_output_continues_in_original_cards_after_startup_and_parent_turn_
     assert_eq!(h.app.composer.text(), "Parent draft 日本語");
     assert_eq!(h.app.scroll, scroll);
     assert_eq!(h.app.selection, selection);
-    assert!(
-        h.app
-            .resident
-            .current()
-            .unwrap()
-            .transcript
-            .tool_calls()
-            .find(|call| call.key.tool_call_id().as_str() == "start-a")
-            .unwrap()
-            .is_expanded(false)
-    );
     a.finish();
     b.fail("Controlled child provider failure");
+    for _ in 0..3 {
+        let retry = real_bounded(h.native.calls.recv()).await.unwrap();
+        retry.text("beta partial retained");
+        retry.fail("Controlled child provider failure");
+    }
     h.until(|app| {
         card(app, "start-a").is_some_and(|card| card.outcome() == Some(TurnOutcome::Completed))
             && card(app, "start-b").is_some_and(|card| card.outcome() == Some(TurnOutcome::Failed))
@@ -331,7 +364,11 @@ async fn followups_keep_one_card_and_a_reused_session_gets_a_new_frozen_boundary
     .await;
     let original = card(&h.app, "original").unwrap();
     assert_eq!(original.association.accepted_message_ids.len(), 2);
-    assert_eq!(original.association.inputs.len(), 2);
+    assert_eq!(original.association.inputs.len(), 1);
+    assert_eq!(
+        original.association.inputs[0].delegated_message_ids.len(),
+        2
+    );
     let old_key = original.key.clone();
     let old_answer = answer(&h.app, "original");
     let (parent, second) = launch(
@@ -408,6 +445,12 @@ async fn a_fast_released_memory_child_keeps_actual_partial_output_when_history_i
     child.reasoning("captured thought\nsecond thought");
     child.text("retained before failure\nlast real bytes");
     child.fail("Actual short-child failure");
+    for _ in 0..3 {
+        let retry = real_bounded(h.native.calls.recv()).await.unwrap();
+        retry.reasoning("captured thought\nsecond thought");
+        retry.text("retained before failure\nlast real bytes");
+        retry.fail("Actual short-child failure");
+    }
     real_bounded(async {
         loop {
             if let Some(ObservationNotification::Event(push)) = events.recv().await.unwrap()
@@ -556,5 +599,192 @@ async fn fresh_baselines_do_not_replay_trimmed_outputs_or_retain_finished_buffer
     parent.text("Long child work recorded");
     parent.finish();
     settle(&mut h).await;
+    h.finish().await;
+}
+
+#[tokio::test]
+async fn ctrl_b_inspector_loads_real_child_conversation_filters_scrolls_and_messages_directly() {
+    use crate::app::{Overlay, Panel, overlay::TaskFocus};
+    use crossterm::event::{KeyCode, KeyEvent};
+
+    let mut h = Harness::from_native(NativeHost::with_agent_tool().await).await;
+    let child = h.another_session().await;
+    let parent_target = h.native.target.clone();
+
+    h.app.composer.set_text("Delegate a check to child");
+    h.app.on_action(Action::Submit { follow: false });
+    let root = h.next_call().await;
+    let (parent, working) = launch(&mut h, root, &child, "start-1", "Check API routes").await;
+    working.text("Found 3 API routes in src/routes.rs");
+    working.finish();
+    parent.text("Delegated API route check.");
+    parent.finish();
+    real_bounded(async {
+        loop {
+            let parent = h.app.resident.current().unwrap();
+            let has_delegated = parent.transcript.blocks().iter().any(|b| {
+                matches!(
+                    b,
+                    Block::User {
+                        kind: crate::transcript::UserKind::Delegated,
+                        ..
+                    }
+                )
+            });
+            if has_delegated
+                && !parent.is_busy()
+                && parent.state.data.next_step.is_empty()
+                && parent.state.data.next_turn.is_empty()
+            {
+                break;
+            }
+            tokio::select! {
+                Some(message) = h.messages.recv() => h.app.on_msg(message),
+                Some(call) = h.native.calls.recv() => {
+                    call.text("Recorded child completion");
+                    call.finish();
+                }
+            }
+        }
+    })
+    .await;
+
+    // 1. Delegated arrival blocks are hidden from the main transcript.
+    let parent_session = h.app.resident.current().unwrap();
+    let delegated_indices: Vec<usize> = parent_session
+        .transcript
+        .blocks()
+        .iter()
+        .enumerate()
+        .filter_map(|(i, b)| {
+            matches!(
+                b,
+                Block::User {
+                    kind: crate::transcript::UserKind::Delegated,
+                    ..
+                }
+            )
+            .then_some(i)
+        })
+        .collect();
+    assert!(!delegated_indices.is_empty(), "expected delegated delivery");
+    for idx in delegated_indices {
+        assert!(
+            parent_session.transcript.absorbed(idx),
+            "agent completed banner must stay hidden from main transcript"
+        );
+    }
+
+    // 2. Keep a draft in parent composer to verify complete isolation.
+    h.app.composer.set_text("Parent draft stays intact");
+
+    // 3. Open Ctrl+B; child session loads in background without switching parent.
+    h.app.open_panel(Panel::Delegations);
+    assert!(matches!(
+        h.app.overlay,
+        Overlay::Delegations {
+            focus: TaskFocus::List,
+            ..
+        }
+    ));
+    h.until(|app| app.resident.find(&child).is_some()).await;
+    assert_eq!(
+        h.app.resident.current().unwrap().address(),
+        parent_target,
+        "opening Ctrl+B must not switch away from the parent session"
+    );
+    assert!(
+        h.app
+            .inspected_session()
+            .unwrap()
+            .transcript
+            .last_answer()
+            .unwrap_or("")
+            .contains("Found 3 API routes")
+    );
+
+    // 4. Filter by typing in List, then clear with Ctrl+U.
+    for ch in "routes".chars() {
+        h.app
+            .on_key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+    }
+    assert!(matches!(
+        &h.app.overlay,
+        Overlay::Delegations { filter, .. } if filter == "routes"
+    ));
+    h.app
+        .on_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+    assert!(matches!(
+        &h.app.overlay,
+        Overlay::Delegations { filter, .. } if filter.is_empty()
+    ));
+
+    // 5. Right focuses Detail; Esc returns to List; Enter focuses Composer.
+    h.app
+        .on_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+    assert!(matches!(
+        h.app.overlay,
+        Overlay::Delegations {
+            focus: TaskFocus::Detail,
+            ..
+        }
+    ));
+    h.app
+        .on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(matches!(
+        h.app.overlay,
+        Overlay::Delegations {
+            focus: TaskFocus::List,
+            ..
+        }
+    ));
+    h.app
+        .on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(matches!(
+        h.app.overlay,
+        Overlay::Delegations {
+            focus: TaskFocus::Composer,
+            ..
+        }
+    ));
+
+    // 6. Send a direct follow-up message from Ctrl+B bottom composer to child.
+    for ch in "Check auth too".chars() {
+        h.app
+            .on_key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+    }
+    assert_eq!(h.app.task_inspector.composer.text(), "Check auth too");
+    assert_eq!(h.app.composer.text(), "Parent draft stays intact");
+    h.app
+        .on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(h.app.task_inspector.composer.is_empty());
+
+    let child_followup = h.next_call().await;
+    assert!(
+        child_followup
+            .users()
+            .iter()
+            .any(|text| text.contains("Check auth too")),
+        "child must receive the message sent from Ctrl+B: {:?}",
+        child_followup.users()
+    );
+    child_followup.text("Auth middleware verified");
+    child_followup.finish();
+    h.until(|app| {
+        app.inspected_session().is_some_and(|session| {
+            !session.is_busy()
+                && session
+                    .transcript
+                    .last_answer()
+                    .unwrap_or("")
+                    .contains("Auth middleware verified")
+        })
+    })
+    .await;
+    assert_eq!(
+        h.app.composer.text(),
+        "Parent draft stays intact",
+        "parent draft must remain untouched after messaging child from Ctrl+B"
+    );
     h.finish().await;
 }

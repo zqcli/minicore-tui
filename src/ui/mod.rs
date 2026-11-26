@@ -4,6 +4,7 @@
 //! for copy are written.
 
 pub mod blocks;
+pub mod chrome;
 pub mod composer;
 pub mod delegated;
 pub mod markdown;
@@ -36,6 +37,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Option<Position> {
     // The terminal owns cursor visibility; this only says where the caret goes.
     let area = frame.area();
     app.composer_area = Rect::default();
+    app.sheet_hit = panel::SheetHitArea::default();
     if let Some(fatal) = &app.fatal
         && !matches!(app.overlay, crate::app::Overlay::Unconfirmed { .. })
     {
@@ -44,18 +46,24 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Option<Position> {
     }
     let styles = app.styles;
     // The transcript keeps a row and the footer its own; the rows above the
-    // slot give way first.
+    // slot give way first. Inline completion popups (`/` and `@`) float right
+    // above the pinned composer while keeping the Activity Line visible above them.
     let room = area.height.saturating_sub(2);
     let sheet = sheets::sheet(app, styles).filter(|_| !app.overlay.is_view());
+    let completion = sheets::completion_sheet(app, styles);
     let dock = status::dock(app, styles, area.width.saturating_sub(1), area.height);
     let slot = sheet
         .as_ref()
         .map_or(dock.editor.len() as u16, panel::Sheet::height)
         .min(room);
-    let above = (dock.above.len() as u16).min(room - slot);
+    let popup = completion
+        .as_ref()
+        .map_or(0, panel::Sheet::height)
+        .min(room.saturating_sub(slot));
+    let above = (dock.above.len() as u16).min(room.saturating_sub(slot + popup));
     let footer = area.height.min(1);
     let main = Rect {
-        height: area.height - above - slot - footer,
+        height: area.height - above - popup - slot - footer,
         ..area
     };
     let above_area = Rect {
@@ -63,8 +71,13 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Option<Position> {
         height: above,
         ..area
     };
-    let slot_area = Rect {
+    let popup_area = Rect {
         y: above_area.bottom(),
+        height: popup,
+        ..area
+    };
+    let slot_area = Rect {
+        y: popup_area.bottom(),
         height: slot,
         ..area
     };
@@ -78,6 +91,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Option<Position> {
     }
     let skip = dock.above.len() - usize::from(above);
     draw_rows(frame, gutter(above_area), &dock.above[skip..]);
+    if let Some(popup_sheet) = completion {
+        app.sheet_hit = panel::render_hit(frame, gutter(popup_area), styles, &popup_sheet);
+    }
     draw_rows(
         frame,
         gutter(footer_area),
@@ -85,17 +101,18 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Option<Position> {
     );
     let slot_area = gutter(slot_area);
     if let Some(sheet) = sheet {
-        panel::render(frame, slot_area, styles, &sheet);
+        app.sheet_hit = panel::render_hit(frame, slot_area, styles, &sheet);
         return None;
     }
     draw_rows(frame, slot_area, &dock.editor);
     // The composer has the keys while no view or picker does; a completion
-    // list is typed into through it.
+    // list is typed into through it, and Ctrl+B can focus its child reply box.
     if matches!(
         app.overlay,
         Overlay::None
             | Overlay::Palette { .. }
             | Overlay::Files { .. }
+            | Overlay::Delegations { .. }
             | Overlay::Unconfirmed {
                 mode: crate::app::unconfirmed::ReviewMode::Edit(_),
                 ..
@@ -107,10 +124,20 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Option<Position> {
             height: slot_area.height.min(dock.editor_rows),
             ..slot_area
         };
-        return Some(Position {
-            x: (slot_area.x + dock.cursor.1).min(area.right().saturating_sub(1)),
-            y: slot_area.y + dock.cursor.0.min(slot_area.height - 1),
-        });
+        let show_caret = !matches!(app.overlay, Overlay::Delegations { .. })
+            || (matches!(
+                app.overlay,
+                Overlay::Delegations {
+                    focus: crate::app::TaskFocus::Composer,
+                    ..
+                }
+            ) && app.inspected_can_send());
+        if show_caret {
+            return Some(Position {
+                x: (slot_area.x + dock.cursor.1).min(area.right().saturating_sub(1)),
+                y: slot_area.y + dock.cursor.0.min(slot_area.height - 1),
+            });
+        }
     }
     None
 }

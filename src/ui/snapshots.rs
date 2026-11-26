@@ -188,6 +188,7 @@ fn conversation(app: &mut App) {
         text: "Why does the parser re-parse the whole message on every delta?".into(),
         kind: UserKind::Prompt,
         at: None,
+        expanded: None,
     });
     transcript.push(Block::Assistant {
         key: RequestKey::response(turn_id(1), 0),
@@ -297,6 +298,7 @@ fn the_screen_shows_earlier_content_while_streaming() {
         text: "Now stream a longer answer.".into(),
         kind: UserKind::Prompt,
         at: stamp("2026-10-20T21:41:09Z"),
+        expanded: None,
     });
     session.transcript.push(Block::Assistant {
         key: RequestKey::response(turn_id(2), 0),
@@ -448,6 +450,7 @@ fn a_blank_row_separates_the_transcript_and_the_composer_band_is_full_width() {
                 text: format!("prompt {index}"),
                 kind: UserKind::Prompt,
                 at: None,
+                expanded: None,
             });
     }
     let backend = TestBackend::new(50, 14);
@@ -571,10 +574,10 @@ fn an_open_overlay_is_not_drawn_over_the_composer() {
 #[test]
 fn the_session_view_identifies_its_agent_and_native_storage_mode() {
     let mut app = app();
-    app.overlay = Overlay::SessionInfo;
+    app.overlay = Overlay::SessionInfo { scroll: 0 };
     let screen = render(&mut app, 100, 24);
     assert!(screen.contains("Coder"), "{screen}");
-    assert!(screen.contains("storage   memory"), "{screen}");
+    assert!(screen.contains("storage     memory"), "{screen}");
     assert!(!screen.contains("allowed"), "{screen}");
 }
 
@@ -662,6 +665,154 @@ fn a_paused_queue_says_how_to_go_on() {
     assert_eq!(
         hint_row(&render(&mut app, 70, 12)),
         Some("paused · enter sends  1 queued · alt+↑ edit")
+    );
+}
+
+#[test]
+fn delegated_result_notifications_stay_out_of_the_dock_queue_preview() {
+    let mut app = app();
+    let session = app.resident.current_mut().unwrap();
+    let child_agent = native_id(10);
+    let child_a = native_id(11);
+    let child_b = native_id(12);
+    let result_json = format!(
+        r#"{{"discarded_inputs":[],"results":[{{"outcome":"completed","output":["ok"]}}],"source":{{"agent_id":"{child_agent}","session_id":"{child_a}"}},"status":"ended"}}"#
+    );
+    let rows = vec![
+        json!({
+            "input": {"message_id": native_id(1), "text": "also check Wuhan", "mode": Steer},
+            "source": {"kind": "user"},
+            "queue": "next-step",
+            "order": 1
+        }),
+        json!({
+            "input": {"message_id": native_id(2), "text": result_json, "mode": Steer},
+            "source": {"kind": "agent", "source": {"agent_id": child_agent, "session_id": child_a}},
+            "queue": "next-step",
+            "order": 2
+        }),
+        json!({
+            "input": {"message_id": native_id(3), "text": result_json, "mode": Steer},
+            "source": {"kind": "agent", "source": {"agent_id": child_agent, "session_id": child_b}},
+            "queue": "next-step",
+            "order": 3
+        }),
+    ];
+    session.queue = Some(
+        serde_json::from_value(json!({
+            "host_id": session.state.host_id,
+            "host_incarnation": session.state.host_incarnation,
+            "agent_id": session.info.agent_id,
+            "session_id": session.info.id,
+            "controller_revision": 0,
+            "next_step": rows,
+            "next_turn": []
+        }))
+        .unwrap(),
+    );
+    session.state.data.scheduling = Scheduling::Paused;
+    let rendered = render(&mut app, 100, 14);
+    assert!(rendered.contains("also check Wuhan"), "{rendered}");
+    assert!(!rendered.contains("discarded_inputs"), "{rendered}");
+    assert!(!rendered.contains(&child_a), "{rendered}");
+    let hints = hint_row(&rendered).unwrap();
+    assert!(hints.contains("1 queued · alt+↑ edit"), "{hints}");
+    assert!(hints.contains("2 agent results"), "{hints}");
+}
+
+#[test]
+fn open_working_group_only_spins_actually_streaming_thinking_blocks() {
+    let mut app = app();
+    let turn: TurnId = native_id(1).parse().unwrap();
+    {
+        let session = app.resident.current_mut().unwrap();
+        let mut tool = ToolCall::new(
+            ToolCallRef {
+                turn_id: turn.clone(),
+                tool_call_id: "call-1".to_owned().into(),
+            },
+            "read",
+        );
+        tool.set_state(ToolState::Succeeded);
+        session.transcript.push(Block::User {
+            text: "check weather".into(),
+            kind: UserKind::Prompt,
+            at: None,
+            expanded: None,
+        });
+        session.transcript.push(Block::Assistant {
+            key: RequestKey::response(turn.clone(), 0),
+            reasoning: "Fetching weather".into(),
+            text: String::new(),
+            streaming: false,
+            partial: false,
+            expanded: None,
+        });
+        session.transcript.push(Block::Tool(Box::new(tool)));
+        session.transcript.push(Block::Assistant {
+            key: RequestKey::response(turn.clone(), 1),
+            reasoning: "Verifying sources".into(),
+            text: String::new(),
+            streaming: true,
+            partial: false,
+            expanded: None,
+        });
+        session.transcript.regroup(&turn);
+    }
+
+    // Closed Working: latest step is streaming thinking, so it spins.
+    let closed = render(&mut app, 80, 18);
+    let latest_line = closed
+        .lines()
+        .find(|line| line.contains("Verifying sources"))
+        .expect("latest thinking row");
+    assert!(
+        !latest_line.contains("∴ Verifying sources"),
+        "live thinking should spin while closed: {latest_line:?}"
+    );
+
+    // Open Working: Head block is finished (`streaming: false`), so it stays `∴`;
+    // only the bottom streaming block spins.
+    app.resident
+        .current_mut()
+        .unwrap()
+        .transcript
+        .toggle_group(1);
+    let open = render(&mut app, 80, 22);
+    let head_line = open
+        .lines()
+        .find(|line| line.contains("Fetching weather"))
+        .expect("head thinking row");
+    assert!(
+        head_line.contains("∴ Fetching weather"),
+        "finished head thinking must not spin when open: {head_line:?}"
+    );
+    let bottom_line = open
+        .lines()
+        .find(|line| line.contains("Verifying sources"))
+        .expect("bottom thinking row");
+    assert!(
+        !bottom_line.contains("∴ Verifying sources"),
+        "active bottom thinking should spin when open: {bottom_line:?}"
+    );
+
+    // Once the bottom thinking finishes (`streaming: false`), closed Working settles back to `∴`.
+    {
+        let session = app.resident.current_mut().unwrap();
+        session.transcript.toggle_group(1);
+        if let Some(Block::Assistant { streaming, .. }) = session.transcript.block_mut(3) {
+            *streaming = false;
+        }
+        session.transcript.regroup(&turn);
+    }
+    let settled = render(&mut app, 80, 18);
+    let settled_line = settled
+        .lines()
+        .find(|line| line.contains("Verifying sources"))
+        .expect("settled latest thinking row");
+    assert!(
+        settled_line.contains("∴ Verifying sources"),
+        "settled thinking must not spin while closed: {settled_line:?}"
     );
 }
 
@@ -776,7 +927,7 @@ fn clicking_a_hidden_lines_row_collapses_the_expanded_card_without_opening_an_ov
     assert!(expanded.contains("… 14 earlier lines"), "{expanded}");
     assert!(!app.tools_expanded, "only that card changed");
 
-    click(app, 10, row_of(&expanded, " ▎ … 14 earlier lines"));
+    click(app, 10, row_of(&expanded, "   ▎ … 14 earlier lines"));
     assert!(matches!(app.overlay, Overlay::None), "{:?}", app.overlay);
     let refolded = render(app, 70, 30);
     assert!(!refolded.contains("… 14 earlier lines"), "{refolded}");
@@ -784,7 +935,7 @@ fn clicking_a_hidden_lines_row_collapses_the_expanded_card_without_opening_an_ov
 
 #[test]
 fn clicking_the_body_or_the_footer_of_an_expanded_card_collapses_it() {
-    for prefix in [" ▎ test result: ok", " ▎ Took 4.2s"] {
+    for prefix in ["   ▎ test result: ok", "   ▎ Took 4.2s"] {
         let mut fixture = app();
         let _runtime = fixture._runtime.enter();
         let app = &mut fixture.app;
@@ -792,11 +943,11 @@ fn clicking_the_body_or_the_footer_of_an_expanded_card_collapses_it() {
         let folded = render(app, 70, 34);
         click(app, 10, row_of(&folded, " ✓ bash"));
         let open = render(app, 70, 34);
-        assert!(open.contains(" ▎ $ cargo test --lib"), "{open}");
+        assert!(open.contains("   ▎ $ cargo test --lib"), "{open}");
         click(app, 10, row_of(&open, prefix));
         let collapsed = render(app, 70, 34);
         assert!(
-            !collapsed.contains(" ▎ $ cargo test --lib"),
+            !collapsed.contains("   ▎ $ cargo test --lib"),
             "a click on {prefix:?} left the card open:\n{collapsed}"
         );
         assert!(matches!(app.overlay, Overlay::None), "{:?}", app.overlay);
@@ -814,14 +965,14 @@ fn a_drag_across_an_expanded_card_body_selects_and_leaves_it_open() {
     let folded = render(app, 70, 30);
     click(app, 10, row_of(&folded, " ✓ bash"));
     let open = render(app, 70, 30);
-    let body = row_of(&open, " ▎ running 131 tests");
-    left(app, Down, 4, body);
+    let body = row_of(&open, "   ▎ running 131 tests");
+    left(app, Down, 5, body);
     left(app, Drag, 12, body + 1);
     left(app, Up, 12, body + 1);
     assert!(app.selection.is_some());
     assert!(matches!(app.overlay, Overlay::None), "{:?}", app.overlay);
     let after = render(app, 70, 30);
-    assert!(after.contains(" ▎ $ cargo test --lib"), "{after}");
+    assert!(after.contains("   ▎ $ cargo test --lib"), "{after}");
 }
 
 #[test]
@@ -866,7 +1017,7 @@ fn a_card_opens_downward_from_its_header_by_click_or_ctrl_o() {
         };
         assert_eq!(top(&expanded), top(&folded), "{expanded}");
         if by_click {
-            let title = expanded.lines().nth(before + 1).unwrap_or_default();
+            let title = expanded.lines().nth(before + 2).unwrap_or_default();
             assert!(title.contains("$ cargo test --lib"), "{expanded}");
         }
     }
@@ -879,13 +1030,19 @@ fn collapsing_a_card_at_the_end_closes_in_place_until_the_view_scrolls() {
     let app = &mut fixture.app;
     conversation(app);
     let folded = render(app, 70, 16);
-    click(app, 10, row_of(&folded, " ✓ bash"));
+    let header = row_of(&folded, " ✓ bash");
+    click(app, 10, header);
     let open = render(app, 70, 16);
-    assert!(open.contains(" ▎ $ cargo test --lib"), "{open}");
-    // The card folds back toward its header; nothing above it moves, even
+    assert_eq!(row_of(&open, " ✓ bash"), header, "{open}");
+    assert!(
+        open.lines()
+            .nth(header as usize + 1)
+            .is_some_and(|line| line.starts_with("   ▎")),
+        "{open}"
+    );
+    // The card folds back toward its kept header; nothing above it moves, even
     // though the shorter transcript leaves rows free below.
-    let header = row_of(&open, " ▎ bash");
-    click(app, 10, row_of(&open, " ▎ $ cargo test --lib"));
+    click(app, 10, header);
     let collapsed = render(app, 70, 16);
     assert_eq!(
         open.lines().take(header as usize).collect::<Vec<_>>(),
@@ -893,6 +1050,13 @@ fn collapsing_a_card_at_the_end_closes_in_place_until_the_view_scrolls() {
         "{collapsed}"
     );
     assert_eq!(row_of(&collapsed, " ✓ bash"), header, "{collapsed}");
+    assert!(
+        !collapsed
+            .lines()
+            .nth(header as usize + 1)
+            .is_some_and(|line| line.starts_with("   ▎")),
+        "{collapsed}"
+    );
     // Scrolling to the end follows again with no blank rows.
     app.scroll_to(usize::MAX);
     let followed = render(app, 70, 16);
@@ -907,6 +1071,7 @@ fn failed_turn(app: &mut App, reason: &str) {
         text: "Summarise the changes".into(),
         kind: UserKind::Prompt,
         at: None,
+        expanded: None,
     });
     transcript.push(Block::TurnEnd {
         turn_id: turn_id(1),
@@ -1098,9 +1263,9 @@ fn a_click_on_a_card_in_block_0_maps_below_the_welcome_header() {
     let folded = render(app, 70, 30);
     click(app, 10, row_of(&folded, " ✓ bash"));
     let expanded = render(app, 70, 30);
-    assert!(expanded.contains(" ▎ $ cargo test --lib"), "{expanded}");
+    assert!(expanded.contains("   ▎ $ cargo test --lib"), "{expanded}");
 
-    click(app, 10, row_of(&expanded, " ▎ … 14 earlier lines"));
+    click(app, 10, row_of(&expanded, "   ▎ … 14 earlier lines"));
     assert!(matches!(app.overlay, Overlay::None), "{:?}", app.overlay);
     let refolded = render(app, 70, 30);
     assert!(!refolded.contains("… 14 earlier lines"), "{refolded}");
@@ -1473,7 +1638,7 @@ fn session_picker_keeps_ids_when_distinct_long_titles_clip_alike() {
     let first_row = session_picker_row(&current, "111111");
     let second_row = session_picker_row(&current, "122222");
     assert!(first_row.contains("running 0m"), "{current}");
-    assert!(first_row.trim_start().starts_with(['✓', '→']), "{current}");
+    assert!(first_row.trim_start().starts_with(['✓', '▎']), "{current}");
     assert!(second_row.contains("running 0m") && !second_row.contains('✓'));
     assert!(
         first_row.contains('…') && second_row.contains('…'),
@@ -1655,4 +1820,168 @@ fn session_rename_keeps_its_target_when_the_catalog_reorders() {
             title: "Cache the parser!".to_owned(),
         })
     );
+}
+
+#[test]
+fn rapid_second_click_on_a_foldable_row_toggles_instead_of_selecting_a_word() {
+    let mut fixture = app();
+    let _runtime = fixture._runtime.enter();
+    let app = &mut fixture.app;
+    conversation(app);
+    let folded = render(app, 70, 30);
+    let header = row_of(&folded, " ✓ bash");
+    click(app, 5, header);
+    let expanded = render(app, 70, 30);
+    assert!(expanded.contains(" ▎ $ cargo test --lib"), "{expanded}");
+    assert!(app.selection.is_none());
+    // Immediately clicking the same cell within DOUBLE_CLICK collapses again
+    // without triggering double-click word selection.
+    click(app, 5, header);
+    assert!(app.selection.is_none(), "toggle click must not select word");
+    let collapsed = render(app, 70, 30);
+    assert!(!collapsed.contains(" ▎ $ cargo test --lib"), "{collapsed}");
+}
+
+#[test]
+fn busy_child_session_shows_cancel_hint_alongside_esc_back() {
+    let mut app = app();
+    let parent = app.resident.current().unwrap().address();
+    let child = session(&app, 2, "Child worker");
+    let child_target = child.address();
+    app.resident.insert(child);
+    app.resident.select(Some(2));
+    app.return_to = Some((child_target, parent));
+    running_bash(&mut app);
+    let rendered = render(&mut app, 110, 14);
+    let activity = rendered
+        .lines()
+        .find(|line| line.contains("Working 0m"))
+        .unwrap_or_default();
+    assert!(activity.contains("↰ esc back"), "{activity}");
+    assert!(activity.contains("/cancel stop"), "{activity}");
+}
+
+#[test]
+fn find_opens_a_closed_work_group_to_reveal_its_match() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    let mut app = app();
+    let mut first = tool();
+    first.detail = "$ echo alpha_unique".into();
+    let mut second = tool();
+    second.key = crate::transcript::ToolKey::Call(ToolCallRef {
+        turn_id: turn_id(1),
+        tool_call_id: "call_2".to_owned().into(),
+    });
+    second.detail = "$ echo beta_step".into();
+    let transcript = &mut app.resident.current_mut().unwrap().transcript;
+    transcript.push(Block::Tool(Box::new(first)));
+    transcript.push(Block::Tool(Box::new(second)));
+    transcript.regroup(&turn_id(1));
+    assert!(!transcript.grouping(0).is_open());
+
+    app.open_panel(crate::app::Panel::Find);
+    for ch in "alpha_unique".chars() {
+        app.on_key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+    }
+    let transcript = &app.resident.current().unwrap().transcript;
+    assert!(
+        transcript.grouping(0).is_open(),
+        "Find must open the enclosing work group"
+    );
+}
+
+#[test]
+fn slash_popup_floats_above_composer_and_double_click_confirms_sheets() {
+    use crossterm::event::{
+        KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    };
+
+    let mut app = app();
+    app.composer.set_text("/tas");
+    app.overlay = Overlay::Palette { selected: 0 };
+    let screen = render(&mut app, 110, 24);
+    let lines: Vec<&str> = screen.lines().collect();
+    let popup_row = lines
+        .iter()
+        .position(|line| line.contains("─ Commands"))
+        .expect("floating Commands header");
+    let composer_row = lines
+        .iter()
+        .position(|line| line.contains("▎/tas"))
+        .expect("pinned composer row");
+    assert!(
+        popup_row < composer_row,
+        "slash popup must float above the pinned composer:\n{screen}"
+    );
+    assert!(
+        screen.contains("ctrl+b"),
+        "hotkey badge in palette:\n{screen}"
+    );
+
+    // Single click on row 1 of the Agents sheet highlights without closing;
+    // double-click on the same row confirms and closes the sheet.
+    app.overlay = Overlay::None;
+    app.composer.set_text("");
+    let second_agent = crate::ui::snapshots::agent(2, "Reviewer");
+    app.agents.push(second_agent);
+    app.open_panel(crate::app::Panel::Agents);
+    let _ = render(&mut app, 100, 20);
+    assert!(app.sheet_hit.list_rows >= 2, "expected agent rows");
+    let click_y = app.sheet_hit.list_y + 1;
+    let click_x = app.sheet_hit.area.x + 3;
+    app.on_mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: click_x,
+        row: click_y,
+        modifiers: KeyModifiers::NONE,
+    });
+    assert!(
+        matches!(app.overlay, Overlay::Agents { selected: 1, .. }),
+        "single click must select row 1 without dismissing"
+    );
+    app.on_mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: click_x,
+        row: click_y,
+        modifiers: KeyModifiers::NONE,
+    });
+    assert!(
+        app.overlay.is_none(),
+        "double click on the same sheet row must confirm and close"
+    );
+
+    // Unified /diff split view supports live filename filtering and detail focus.
+    let mut diff = crate::app::diff::DiffState::default();
+    diff.set_files(vec![
+        crate::app::diff::DiffFile {
+            path: "src/ui/chrome.rs".into(),
+            kind: minicore_host_workspace::ChangeKind::Added,
+            lines: Some((120, 0)),
+            failed: false,
+            change_refs: Vec::new(),
+        },
+        crate::app::diff::DiffFile {
+            path: "src/ui/views/diff.rs".into(),
+            kind: minicore_host_workspace::ChangeKind::Modified,
+            lines: Some((42, 18)),
+            failed: false,
+            change_refs: Vec::new(),
+        },
+    ]);
+    app.overlay = Overlay::Diff(diff);
+    let wide = render(&mut app, 110, 20);
+    assert!(wide.contains("Git diff · 2 files · +162 −18"), "{wide}");
+    for ch in "diff".chars() {
+        app.on_key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+    }
+    let filtered = render(&mut app, 110, 20);
+    assert!(filtered.contains("showing 1/2"), "{filtered}");
+    assert!(filtered.contains("src/ui/views/diff.rs"), "{filtered}");
+    app.on_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+    assert!(matches!(&app.overlay, Overlay::Diff(d) if d.filter.is_empty()));
+    app.on_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+    assert!(matches!(
+        &app.overlay,
+        Overlay::Diff(d) if d.focus == crate::ui::views::split::PaneFocus::Detail
+    ));
 }
