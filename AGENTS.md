@@ -42,6 +42,7 @@ Historical design notes are not the current interface specification.
 | `src/ui/perf_tests.rs` | Optional frame-cost checks |
 | `tests/built_in_host.rs` | Production provider/resource/persistence/shutdown integration |
 | `docs/` | Current architecture, configuration, keys, UI spec and migration design |
+| `docs/backlog.md` | Cross-repo feature roadmap and bug backlog (`host`, `tui`, `web`) with repro scenarios and tracking checkboxes |
 
 UI rendering performs no Host calls or filesystem I/O. `ui::draw` updates only
 presentation caches, selection resets and editor hit geometry.
@@ -147,7 +148,9 @@ A visible change follows [docs/ui-spec.md](docs/ui-spec.md) and updates the
 relevant guide, F1 help, README and changelog;
 module/contract changes also update architecture. Preserve released changelog
 entries. Remove obsolete active documentation instead of presenting it as a
-supported configuration path.
+supported configuration path. Track planned cross-repo features and verified
+session/code-review defects in [docs/backlog.md](docs/backlog.md) (keep this
+file version-free and update item checkboxes and status history as items land).
 
 ## CI, release and commits
 
