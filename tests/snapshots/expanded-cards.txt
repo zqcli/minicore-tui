@@ -1,26 +1,26 @@
 
-  ╭─ minicore-tui 0.12.11 ──────────────────────────────────────────╮
+  ╭─ minicore-tui 0.12.15 ──────────────────────────────────────────╮
   │ /work/minicore-tui                                              │
   │ f1 keys and commands · / commands · @ files                     │
   ╰─────────────────────────────────────────────────────────────────╯
 
- ▎ bash
- ▎ $ cargo test --lib
- ▎
- ▎ … 14 earlier lines
- ▎ running 131 tests
- ▎ test result: ok
- ▎
- ▎ Took 4.2s
- ▎
+ ✓ bash   cargo test --lib                                       4.2s
+   ▎
+   ▎ $ cargo test --lib
+   ▎
+   ▎ … 14 earlier lines
+   ▎ running 131 tests
+   ▎ test result: ok
+   ▎
+   ▎ Took 4.2s
+   ▎
 
- ▎ read
- ▎ src/main.rs:1-40
- ▎
- ▎ 1: fn main() {
- ▎ 2:     run();
- ▎ … 38 more lines
- ▎
+ ✓ read   src/main.rs:1-40                                   40 lines
+   ▎
+   ▎ 1: fn main() {
+   ▎ 2:     run();
+   ▎ … 38 more lines
+   ▎
 
 
 

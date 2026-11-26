@@ -8,7 +8,7 @@ and fix the inaccurate description.
 ## Project and boundaries
 
 `minicore-tui` is a Rust 2024 fullscreen terminal frontend using ratatui and
-crossterm. It embeds MiniCore Host 0.12.11 and calls its typed Rust client through
+crossterm. It embeds MiniCore Host 0.12.15 and calls its typed Rust client through
 `HostClient::in_process`. The executable contains the native resource builder,
 provider implementations and built-in tools. Host owns execution, credentials,
 Agents, Sessions, persistence, compaction and workspace operations. The TUI owns

@@ -1,17 +1,17 @@
 # minicore-tui
 
 `minicore-tui` is a fullscreen terminal frontend for
-[minicore-host](https://github.com/zqcli/minicore-host). Version 0.12.11 embeds
-Host 0.12.11 in the same executable and uses its typed Rust client through
+[minicore-host](https://github.com/zqcli/minicore-host). Version 0.12.15 embeds
+Host 0.12.15 in the same executable and uses its typed Rust client through
 `HostClient::in_process`. Host owns Agents, Sessions, execution, tools,
 credentials, history and persistence; the TUI owns terminal interaction and
 presentation.
 
 The backend is pinned to an immutable Git revision in `Cargo.toml`.
-`Cargo.lock` fixes the complete dependency graph. There is no Agent child
-process, stdio RPC adapter, Webpage server, browser client or phone protocol.
-This executable runs a local embedded Host; connecting to a separately deployed
-Host is outside this version's interface.
+`Cargo.lock` fixes the complete dependency graph. Run `/remote` (alias `/wss`)
+inside the TUI to expose the embedded Host over WSS (with configured PEM TLS
+files) or local WS (IPv4/IPv6, e.g. behind a reverse proxy or Cloudflare orange
+cloud) for `minicore-web` using a one-time in-memory access key.
 
 ## Build and first run
 
@@ -60,7 +60,7 @@ ownership, JSON examples and removed configuration paths.
 | `--config-dir <DIR>` | JSON configuration directory; defaults to `~/.minicore/config` |
 | `--data-root <DIR>` | Runtime storage; independently defaults to `~/.minicore/data` |
 | `--agent-id <ID>` | Select this existing Host Agent |
-| `--workspace <DIR>` | Workspace override for a newly created Session; defaults to the current directory |
+| `--workspace <DIR>`, `[WORKSPACE]` | Workspace override for a newly created Session (e.g. `minicore .`); defaults to the current directory |
 | `--session <ID>` | Open this Session; an explicit Agent must match its actual owner |
 | `--continue` | Open the most recently active Session in the workspace, respecting an explicit Agent selection |
 | `--model <REF>` | Full native model reference, applied once to the startup Session or used when creating one |
@@ -101,19 +101,33 @@ edits; Ctrl+Z and Ctrl+Y restore or replay them.
 - **Tools:** display complete arguments, progress, output, result, failures and
   native delegation references. Argument generation is not a separate progress
   phase. Expanded cards and `/diff` expose details without changing execution.
-  Folded tools are one row each (state glyph, name, subject, facts) and stack
-  without blank rows; each run of a Turn's work folds as it goes into
-  `▸ Working · N tools` / `▸ Worked …` with its newest step underneath.
+  Folded tools are one row each (state glyph, name, subject, facts) with one
+  blank row between every visible step; each run of a Turn's work folds as it
+  goes into `▸ Working · N tools` / `▸ Worked …` with its newest step underneath.
   Blank lines inside tool output remain intact. See
   [docs/ui-spec.md](docs/ui-spec.md) for the visual rules.
-- **Delegated Agent cards:** one card per delegation, on the call that started
-  it. Folded it is one row with the child's newest steps while it runs; opened
-  it shows the task, activity and the delivered result. Later sends and the
-  result are drawn inside it; a new delegation into the same Session gets a new
-  card. Click the row to open the card and its footer to open the child Session. Completion
-  comes from Host's settled delegation, not tool acceptance. Released child
-  history is explicitly unavailable; retained previews are not full histories.
-  Ctrl+B or `/children` lists the conversation's delegations and opens one.
+- **Unified popups, sheets and split workspaces:** `/` commands and `@` files
+  float directly above the pinned composer (keeping the Activity Line visible
+  during long runs) with structured argument hints, active-value/hotkey badges,
+  `PgUp`/`PgDn` paging and double-click confirmation. All pickers share one
+  bottom-sheet style (`▎` selection highlight, unified `/ ` filter with `Ctrl+U`
+  clear, single-click select / double-click confirm). `/diff` shares the exact
+  two-pane workspace engine as `Ctrl+B` (compact 1-line searchable file list,
+  `List ↔ Detail` focus, narrow-screen toggle, live `r`/`Ctrl+R` refresh,
+  scrollbar and dual-pane mouse support), and `F1` Help, `/error`, `/context`
+  and `/session` share one scrollable page layout.
+- **Async tasks and delegated Agents:** `agent` dispatch calls stay compact
+  single-line sync steps inside `Working`/`Worked`, while internal `agent completed`
+  banners stay hidden from the main conversation so the parent flow stays clean.
+  The single-line Activity Line above the editor reports live async counts
+  (`⚠ N needs input · M running · K failed · C completed · ctrl+b`). Press
+  `Ctrl+B` (`/tasks`, `/children`) or click any dispatch row to open the
+  full-screen searchable Async Tasks workspace (two-pane on wide terminals,
+  single-pane list ↔ conversation on narrow ones): filter tasks by typing or
+  pasting, scroll and fold the child's real `Working`/`Worked` conversation with
+  `→`/`Tab` and `↑↓`/`PgUp`/`PgDn`/`Ctrl+O`, message the selected child directly
+  from the isolated bottom composer (`Enter`), copy with `Ctrl+Y`, jump to
+  origin with `Ctrl+G`, or open the full child Session with `Ctrl+E`.
 - **Input:** Enter sends steering input; Alt+Enter or Ctrl+Enter queues a
   follow-up. Accepted `next_step` and `next_turn` entries come from Host. Esc
   cancels the captured Turn and preserves queued input; `/pause` prevents later
@@ -123,8 +137,10 @@ edits; Ctrl+Z and Ctrl+Y restore or replay them.
   the reading position; background failures name their originating Session.
 - **Questions:** approvals support allow once or deny. Tool questions support
   native text and single-choice answers. Each answer is bound to its original
-  Session, Load, Turn and interaction. Use `/approval ask|auto|read_only` for a
-  real Session execution policy; there is no fabricated per-tool allow cache.
+  Session, Load, Turn and interaction. Use `/approval ask|auto` for a
+  real Session execution policy; in `ask` mode mutating and outside-workspace
+  tool calls prompt for approval, while `auto` permits inside- and
+  outside-workspace calls directly. There is no fabricated per-tool allow cache.
 - **Agents and Sessions:** `/agents` selects a Host Agent, `/agent-new` copies
   its native configuration into a new dynamic Agent, and the Session picker shows
   actual owning Agents, lifecycle states and a stable short Session ID on every

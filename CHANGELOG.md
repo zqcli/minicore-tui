@@ -1,28 +1,157 @@
 # Changelog
 
-## Unreleased
+## 0.12.15 — 2026-11-26
+
+- Add on-demand `/remote` (alias `/wss`) remote Host access for `minicore-web`:
+  - Expose the embedded Host over direct WSS (reusing configured `remote.tls_cert`
+    and `remote.tls_key` PEM paths in `tui.json`) or authenticated local plain WS
+    over IPv4/IPv6 (e.g. `[::]:8443` fronted by a reverse proxy or Cloudflare
+    orange cloud -> `wss://`), with optional `remote.public_url`.
+  - Generate a one-time 24-character OS CSPRNG access key in memory (never written
+    to disk or logs), hand off Host operator control from the terminal to the
+    connecting Web client without dropping subscriptions, and preserve the active
+    runtime key across `host.reload`.
+  - Show a full-screen Remote overlay displaying address, listening mode, access
+    key, live connected/operating client status and current Host activity (`c` copy
+    key, `u` copy url, `s` show/hide key, `r` rotate key, `Esc`/`q` stop, revoke
+    remote clients and reclaim terminal control).
+- Embed MiniCore Host 0.12.15 (`serve_ws`, shared `load_tls_server_config`,
+  trusted local `release_operator`/`reclaim_operator`, live `NetworkStatus`
+  subscriptions and reload-safe runtime network key override).
+
+## 0.12.14 — 2026-11-25
+
+- Unify TUI popups, bottom sheets and full-screen views on shared UI modules
+  (`ui::chrome`, `ui::panel::Sheet`, `ui::views::{split, page}`):
+  - Float `/` slash command and `@` file semi-popups directly above the pinned
+    composer while keeping the Activity Line visible, displaying structured
+    arguments, active-value and hotkey badges, `PgUp`/`PgDn` paging and
+    zero-match hints.
+  - Align `/diff` with `Ctrl+B` on the shared two-pane split workspace (compact
+    1-line searchable file list, `Ctrl+U` clear, `List ↔ Detail` focus,
+    narrow-screen list ↔ detail toggle, live `Ctrl+R`/`r` refresh, scrollbar
+    and dual-pane mouse navigation).
+  - Preserve per-task unsent drafts in `Ctrl+B`, surface live elapsed durations
+    and prominent `⚠ Waiting for approval` banners, unify `▎` selection
+    highlights, `/ ` filter prompts and single-click select / double-click
+    confirm across all bottom sheets, and render `F1` Help, `/error`,
+    `/context` and `/session` via the shared scrollable page layout.
+- Decouple asynchronous `agent` delegations from inline `Working`/`Worked`
+  groups: keep dispatch calls as compact single-line sync steps, hide internal
+  `agent completed` banners from the main conversation, report live async status
+  (`⚠ N needs input · M running · K failed · C completed · ctrl+b`) on the
+  single Activity Line above the editor, and upgrade `Ctrl+B` (`/tasks`,
+  `/children`) into a full-screen searchable Async Tasks workspace where the
+  right pane loads and renders the selected child's real `Working`/`Worked`
+  conversation with full scrolling, in-place folding, and an isolated bottom
+  composer to message the child directly (`→`/`Tab` scroll, `Enter` message,
+  `Ctrl+E` full view, `Ctrl+G` goto, `Ctrl+Y` copy).
+- Accept an optional positional `[WORKSPACE]` argument (e.g. `minicore .` or
+  `minicore ./project`) as shorthand for `--workspace <DIR>`, and reject
+  non-directory workspace paths before fullscreen startup.
+- Catch misspelled single-line slash commands with arguments (e.g.
+  `/reanme title` → `did you mean /rename?`) before sending them as prompts.
+- Embed MiniCore Host 0.12.14:
+  - Route all `agent(send)` calls through `steer` (`next_step` when target is
+    busy, immediate new Turn when idle) so child-to-parent and peer messages
+    never get trapped in `next_turn` behind a long orchestration Turn, wake
+    `agent(wait)` promptly, and cannot arrive out of order after completion.
+  - Return structured, actionable diagnostics from `apply_patch` on syntax,
+    empty-hunk, header-mismatch, and ambiguous-match errors instead of an
+    opaque `tool invocation is invalid` failure.
+  - Simplify approval modes to `ask` and `auto` (removing `read_only`) and
+    support cross-workspace `read`, `write`, `edit`, `apply_patch` and
+    `bash(cwd)` paths: `ask` prompts before outside-workspace reads (`Medium`
+    risk) and outside-workspace writes/commands (`High` risk) while auto-allowing
+    workspace reads and spilled tool-output logs; `auto` permits both inside-
+    and outside-workspace calls directly.
+  - Bound `bash` stdout/stderr returned to the model to 8 KiB head + 8 KiB tail
+    (≤ 16 KiB per stream) on clean UTF-8/line boundaries and automatically spill
+    complete raw output to a temporary log file (`full_output_path`) when
+    truncated so the model can inspect any range via `read`.
+  - Expose configured `Available models` in system context for every Agent and
+    subagent, and list available model IDs on unconfigured-model errors.
+  - Batch consecutive queued `MessageSource::Agent` `follow_up` messages into a
+    single Turn instead of spawning one Turn per delayed child message.
+  - Bound default `agent(inspect, include_output: true)` Session history reads
+    to the latest tail (6 items, `provider_replay` stripped, 32 KiB cap) so
+    inspecting a child cannot flood parent context.
+  - Cap compaction utility reasoning effort to `low` (when supported) and enable
+    up to 3 retries so automatic compaction completes quickly and resiliently.
+  - Await in-flight `activity_only` metadata checkpoints in async Session
+    updates instead of rejecting self-updates with `SESSION_BUSY`.
+  - Allow partial `settings.execution` / `compaction` overrides in `agent`
+    tool calls, default omitted `agent(wait)` `timeout_ms` to 60s, and guide
+    delegated children not to spam parent progress `follow_up` messages.
+  - Allow non-terminal `output_item.done` `phase` updates and proxy reasoning
+    `status`/empty-`content` normalization in Responses SSE streaming, and attach
+    concrete diagnostic reasons to `InvalidProviderResponse` errors.
+
+## 0.12.13 — 2026-11-25
+
+- Unify expanded non-Agent tool cards (`bash`, `read`, `edit`, `write`,
+  `apply_patch`, etc.) with the Agent card layout: keep the collapsed step
+  header row intact on line 0 and unfold the detail card indented one level
+  (`  ▎`) directly underneath it, aligning its rail with the tool name and
+  running output rail.
+- Stop spinning finished thinking blocks in an open `▾ Working` group: only
+  blocks whose thinking is actually streaming (`streaming: true`) animate their
+  spinner, and a closed `▸ Working` group's latest thinking row settles back to
+  `∴` as soon as that thinking step finishes.
+- Keep internal child-Agent delegation result JSON notifications out of the
+  dock's queued-input preview above the composer, count only user-authored
+  queued messages in `N queued · alt+↑ edit` (showing pending delegation results
+  separately as `N agent results`), and restrict `Alt+↑` recall to
+  `MessageSource::User` inputs so child results are never removed or pasted as
+  JSON.
+- Reset unfinished streaming output buffers cleanly when a model request retries
+  from byte offset 0 after partial output.
+- Embed updated MiniCore Host retry and scheduling behavior: retry any model
+  error up to three times (four total attempts) before stopping cleanly, and
+  stop automatically pausing Sessions on Turn failure (`failure_paused`).
+
+## 0.12.12 — 2026-11-25
 
 - Redesign the conversation layout without changing the data model; the rules
   are written down in `docs/ui-spec.md`.
 - Show each folded tool as one row: state glyph (`●` `✓` `✗` `⊘`) in the
   rail column, real tool name in the content column, subject and right-aligned
   facts, so an opened card keeps the same left edge. A running tool shows its
-  last three output lines; a failure says `failed` and keeps its reason in the
-  opened card. Step rows stack without blank rows.
+  last three output lines; a failure says `failed` and wraps its full error
+  reason in the opened card. Every visible block and step row keeps one blank
+  separator row for consistent scanning and click targets.
 - Keep a delegation's whole life in one Agent card: one row folded (with the
-  child's newest steps while it runs), and opened, the task, facts, a
-  three-entry activity window, the delivered result and the way into the
-  child. The parent's sends, inspections, controls and waits for that child,
-  and its result, no longer add their own rows or cards.
-- Fold a Turn's work as it runs, one group per run between user messages (a
-  steer starts a new run, a child's result does not): `▸ Working · 6 tools · 2
-  agents`, later `▸ Worked 42s · 14 tools · 2 files changed · 1 failed`, with
-  the newest step under it changing as work goes on and a spinner while it
-  thinks. While a run goes on, tools, Agent cards, thinking and text all fold;
-  once done, the text that ends the run comes out as its answer. Open groups
-  show their steps one level in. Folded thinking and Agent rows keep a blank
-  row around them. Groups open into step rows, steps into cards; every fold
-  opens and closes in place. Grouping also applies to reopened history.
+  child's newest steps while it runs), and opened, keeping that header row
+  intact on line 0 with the detail card indented one level underneath it
+  (padded top and bottom with wrapped facts, a `Task` section when multi-line
+  or clipped, a three-entry activity window, the delivered Markdown result and
+  the way into the child). Backfill delegated task titles and dynamic Agent
+  names across history pages and late invocation reads; attribute parent `wait`
+  calls only to unsettled children, show `parent waiting` while a wait runs,
+  and restore saved tool durations from persisted timestamps on reopen.
+- Fold a Turn's work immediately from its very first step (thinking, text, tool
+  or Agent), one group per run between user messages (a steer starts a new run,
+  a child's result does not): `▸ Working · 6 tools · 2 agents` with its newest
+  step underneath while running (and a spinner while it thinks), settling to
+  the single summary row `▸ Worked 42s · 14 tools · 2 files changed · 1 failed`
+  once done. While a run goes on, thinking, tools, Agent cards and text all fold;
+  once done, only the final assistant answer stays outside `Worked` while every
+  other step (including thinking on the final response or a thinking-only Turn)
+  folds inside. Open groups show their steps one level in with uniform one-row
+  spacing. Opening a live `Working` group or running step while following keeps
+  `Scroll::Follow`. Fix `Ctrl+O` cache invalidation for pinned cards and notes
+  inside groups, prevent rapid clicks on foldable rows from triggering word
+  selection, and make `Ctrl+F` search Agent cards, skip absorbed blocks and
+  open closed groups.
+- Use neutral card surfaces and `⊘` glyphs for cancelled/denied tools, Agent
+  cards, standalone delegated results and `Ctrl+B` rows; reserve failure red
+  for actual failures. Standalone delegated result cards can be toggled by
+  click and offer a clickable footer to load earlier history; `Ctrl+B` notes
+  when earlier history is not yet loaded.
+- Support CommonMark CJK bold spans adjacent to fullwidth punctuation (such as
+  `**提示：**另有`) outside code blocks and inline code, fix singular
+  `1 earlier step` wording, and show `/cancel stop` alongside `↰ esc back` in
+  a busy child Session.
 - Fold thinking to one `∴` row with its newest heading; click it to open.
 - List queued steers and follow-ups under the activity line, and keep a blank
   row between the status and the editor.
@@ -31,10 +160,6 @@
   the keys that work now on the right (`N queued · alt+↑ edit`, `N delegated · ctrl+b`). The footer shows
   workspace, branch and Session title on the left and model, reasoning and
   approval on the right; response usage moved to `/context` and `/session`.
-- Settle spacing on one grid and rhythm: one blank row between blocks, none
-  between steps, one gap row above the editor; compaction and summary markers
-  are one divider row; Markdown tables rule only under the header unless a row
-  wraps.
 - Add Ctrl+B and `/children`: the conversation's delegations, newest first;
   Enter opens the child Session.
 - Give sheets one frame (title and count in the top rule, keys in the bottom

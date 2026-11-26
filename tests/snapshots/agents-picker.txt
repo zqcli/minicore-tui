@@ -1,5 +1,5 @@
 
-  ╭─ minicore-tui 0.12.11 ───────────────────────────────────────────────────╮
+  ╭─ minicore-tui 0.12.15 ───────────────────────────────────────────────────╮
   │ /work/minicore-tui                                                       │
   │ f1 keys and commands · / commands · @ files                              │
   ╰──────────────────────────────────────────────────────────────────────────╯
@@ -9,8 +9,8 @@
 
 
  ─ Select Agent ─────────────────────────────────────────────────────────────── 2 agents ─
-  >
- → ✓ Coder active · memory · 0 sessions
+  / type to filter…
+ ▎ ✓ Coder active · memory · 0 sessions
      Reviewer stopped · memory · 0 sessions
    Agent 00000000000000000001
    Default session: none

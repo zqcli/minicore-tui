@@ -1,6 +1,6 @@
 # Configuration
 
-Version 0.12.11 uses one JSON configuration directory for the embedded Host and
+Version 0.12.15 uses one JSON configuration directory for the embedded Host and
 terminal frontend. Host owns `host.json`, Agent declarations and reusable Roles.
 The TUI reads and writes only `tui.json`; it passes the resolved directory to
 Host's Rust startup API.
@@ -45,9 +45,25 @@ configuration. Files are not watched automatically.
   "ui": {
     "editor": ["code", "--wait"],
     "bell": true
+  },
+  "remote": {
+    "listen": "[::]:8443",
+    "public_url": "wss://mini.example.com/",
+    "tls_cert": "/path/to/fullchain.pem",
+    "tls_key": "/path/to/privkey.pem"
   }
 }
 ```
+
+The optional `remote` section configures on-demand `/remote` (`/wss`) access for
+`minicore-web`. `listen` accepts any IPv4 or IPv6 `host:port` (default
+`127.0.0.1:8443`). When both `tls_cert` and `tls_key` are configured, `/remote`
+serves direct TLS WebSockets (`wss://`). When both are omitted, `/remote` serves
+authenticated plain WebSockets (`ws://`) so a local reverse proxy or Cloudflare
+proxied origin (IPv4 or IPv6) can terminate TLS to `wss://`; set `public_url` to
+display the external `wss://` address in the overlay. Every connection still
+requires the one-time CSPRNG access key shown in the overlay (never written to
+disk or logs).
 
 The theme is `dark` or `light`. When it is omitted, as in the generated file,
 the palette follows the terminal background reported in `COLORFGBG` (light

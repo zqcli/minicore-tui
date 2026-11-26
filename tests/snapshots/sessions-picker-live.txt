@@ -1,5 +1,5 @@
 
-  ╭─ minicore-tui 0.12.11 ───────────────────────────────────────────────────╮
+  ╭─ minicore-tui 0.12.15 ───────────────────────────────────────────────────╮
   │ /work/minicore-tui                                                       │
   │ f1 keys and commands · / commands · @ files                              │
   ╰──────────────────────────────────────────────────────────────────────────╯
@@ -8,8 +8,8 @@
 
 
  ─ Resume Session ───────────────────────────────────────────────────────────────────── 5 sessions ─
-  >
- → Cache the parser                                                             000000 · Coder · now
+  / type to filter…
+ ▎ Cache the parser                                                             000000 · Coder · now
    Port the lexer                                                  000000 · Coder · running 0m · now
    Clean the build                                             000000 · Coder · needs approval · now
    Write the docs                                                         000000 · Coder · new · now
