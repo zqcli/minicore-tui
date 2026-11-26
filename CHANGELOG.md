@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.12.16 — 2026-11-26
+
+- Flatten Async Tasks (`Ctrl+B` / `/tasks`) across the entire root delegation
+  scope (direct L1 children and nested L2 grandchildren), hide automatically
+  delegated child Sessions from the `/sessions` picker, and display short task
+  names (`name` + short ID) alongside dispatcher attribution (`from main` /
+  `from <name> (<short_id>)`).
+- Embed MiniCore Host 0.12.16 (default max delegation depth 2, default `memory`
+  storage mode for delegated Sessions, optional task `name`, and immutable
+  `delegated_by`/`delegation_root` Session provenance).
+
 ## 0.12.15 — 2026-11-26
 
 - Add on-demand `/remote` (alias `/wss`) remote Host access for `minicore-web`:
