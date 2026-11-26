@@ -42,6 +42,8 @@ fn session(agent_id: &AgentId, workspace: &Path, activity: i64) -> SessionSummar
         metadata_fault: None,
         deletion: None,
         end_reason: None,
+        delegated_by: None,
+        delegation_root: None,
     }
 }
 

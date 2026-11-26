@@ -286,8 +286,17 @@ pub(crate) fn copy_text(card: &AgentCard) -> String {
 
 const TASK_ROWS: usize = 4;
 
-/// The card's one-line name: the task's first line.
+/// The card's one-line name: the explicit task name or the task's first line.
 pub(crate) fn task(card: &AgentCard) -> String {
+    if let Some(name) = card
+        .association
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+    {
+        return wrap::sanitize(name).into_owned();
+    }
     let first = card
         .task
         .lines()
@@ -625,8 +634,10 @@ mod tests {
             "00000000000000000005".parse().unwrap();
         let association = DelegationAssociation {
             parent,
+            root: None,
             origin: origin.clone(),
             child,
+            name: None,
             accepted_message_ids: vec![task_message_id.clone()],
             task_message_id,
             inputs: Vec::new(),

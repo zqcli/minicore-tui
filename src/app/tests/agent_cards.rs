@@ -788,3 +788,188 @@ async fn ctrl_b_inspector_loads_real_child_conversation_filters_scrolls_and_mess
     );
     h.finish().await;
 }
+
+#[tokio::test]
+async fn delegated_sessions_hide_from_sessions_picker_and_flatten_grandchildren_with_names() {
+    use crate::app::overlay::{async_tasks, matching_sessions};
+    use std::collections::HashMap;
+
+    let mut h = Harness::from_native(NativeHost::with_agent_tool().await).await;
+    let root_addr = h.native.target.clone();
+
+    h.app.composer.set_text("Coordinate nested work");
+    h.app.on_action(Action::Submit { follow: false });
+    let root_call = h.next_call().await;
+    let root_loop = root_call.context.loop_id;
+
+    // Root delegates to L1 child with an explicit short name.
+    root_call.tool(
+        "create-l1",
+        json!({
+            "action": "create",
+            "resource": "session",
+            "name": "worker-a",
+            "text": "Inspect repo and spawn helper"
+        }),
+    );
+    let first = h.next_call().await;
+    let second = h.next_call().await;
+    let (root_after_l1, l1_call) = if first.context.loop_id == root_loop {
+        (first, second)
+    } else {
+        (second, first)
+    };
+    let l1_loop = l1_call.context.loop_id;
+    let l1_result = root_after_l1.tool_result().unwrap();
+    let l1_session_id: minicore_host_protocol::SessionId = l1_result["session_id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("expected session_id in {l1_result}"))
+        .parse()
+        .unwrap();
+
+    // L1 delegates to L2 grandchild with an explicit short name.
+    l1_call.tool(
+        "create-l2",
+        json!({
+            "action": "create",
+            "resource": "session",
+            "name": "helper-b",
+            "text": "Check git log"
+        }),
+    );
+    let first2 = h.next_call().await;
+    let second2 = h.next_call().await;
+    let (l1_after_l2, l2_call) = if first2.context.loop_id == l1_loop {
+        (first2, second2)
+    } else {
+        (second2, first2)
+    };
+    let l2_result = l1_after_l2.tool_result().unwrap();
+    let l2_session_id: minicore_host_protocol::SessionId = l2_result["session_id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("expected session_id in {l2_result}"))
+        .parse()
+        .unwrap();
+
+    // Wait for Host catalog and root-scoped delegation events to land in TUI state.
+    h.app.refresh_catalogs();
+    h.until(|app| {
+        let tasks = async_tasks(app);
+        app.sessions.iter().any(|s| s.id == l1_session_id)
+            && app.sessions.iter().any(|s| s.id == l2_session_id)
+            && tasks
+                .iter()
+                .any(|t| t.session_id() == l1_session_id.as_str())
+            && tasks
+                .iter()
+                .any(|t| t.session_id() == l2_session_id.as_str())
+    })
+    .await;
+
+    // 1. Both delegated sessions have provenance and are hidden from `/sessions`.
+    let l1_summary = h
+        .app
+        .sessions
+        .iter()
+        .find(|s| s.id == l1_session_id)
+        .unwrap();
+    let l2_summary = h
+        .app
+        .sessions
+        .iter()
+        .find(|s| s.id == l2_session_id)
+        .unwrap();
+    assert_eq!(l1_summary.delegated_by.as_ref(), Some(&root_addr));
+    assert_eq!(l1_summary.delegation_root.as_ref(), Some(&root_addr));
+    assert_eq!(
+        l2_summary.delegated_by.as_ref().map(|r| &r.session_id),
+        Some(&l1_session_id)
+    );
+    assert_eq!(l2_summary.delegation_root.as_ref(), Some(&root_addr));
+    let visible = matching_sessions(&h.app.sessions, "");
+    assert!(visible.iter().any(|s| s.id == root_addr.session_id));
+    assert!(
+        visible.iter().all(|s| s.delegated_by.is_none()),
+        "delegated child/grandchild sessions must be hidden from /sessions"
+    );
+
+    // 2. Flat Async Tasks list contains both L1 and L2 with names and dispatcher attribution.
+    let tasks = async_tasks(&h.app);
+    let mut names: HashMap<String, String> = HashMap::new();
+    for item in &tasks {
+        if let Some(name) = item.task_name() {
+            names.insert(item.session_id().to_owned(), name.to_owned());
+        }
+    }
+    let l1_item = tasks
+        .iter()
+        .find(|t| t.session_id() == l1_session_id.as_str())
+        .unwrap();
+    let l2_item = tasks
+        .iter()
+        .find(|t| t.session_id() == l2_session_id.as_str())
+        .unwrap();
+    assert_eq!(l1_item.task_name(), Some("worker-a"));
+    assert_eq!(
+        l1_item.dispatched_by(Some(&root_addr), &names).as_deref(),
+        Some("from main")
+    );
+    assert_eq!(l2_item.task_name(), Some("helper-b"));
+    assert!(
+        l2_item
+            .dispatched_by(Some(&root_addr), &names)
+            .as_deref()
+            .is_some_and(|s| s.starts_with("from worker-a (")),
+        "expected dispatcher attribution for grandchild, got: {:?}",
+        l2_item.dispatched_by(Some(&root_addr), &names)
+    );
+
+    // Finish cleanly in bottom-up order: L2 finishes and delivers its completion
+    // to L1 while L1 is still active, then L1 finishes its turn and notifies root.
+    l2_call.text("git log clean");
+    l2_call.finish();
+    h.until(|app| {
+        async_tasks(app).iter().any(|item| {
+            item.session_id() == l2_session_id.as_str()
+                && matches!(
+                    item,
+                    crate::app::overlay::AsyncTaskItem::Agent(card)
+                        if card.association.completion.is_some()
+                )
+        })
+    })
+    .await;
+    l1_after_l2.text("helper finished");
+    l1_after_l2.finish();
+    let l1_followup = h.next_call().await;
+    assert_eq!(l1_followup.context.loop_id, l1_loop);
+    l1_followup.text("summarized helper output");
+    l1_followup.finish();
+    root_after_l1.text("all delegated");
+    root_after_l1.finish();
+    real_bounded(async {
+        loop {
+            let parent = h.app.resident.current().unwrap();
+            let tasks = async_tasks(&h.app);
+            let all_done = tasks
+                .iter()
+                .all(|item| matches!(item, crate::app::overlay::AsyncTaskItem::Agent(card) if card.association.completion.is_some()));
+            if !parent.is_busy()
+                && parent.state.data.next_step.is_empty()
+                && parent.state.data.next_turn.is_empty()
+                && all_done
+            {
+                break;
+            }
+            tokio::select! {
+                Some(message) = h.messages.recv() => h.app.on_msg(message),
+                Some(call) = h.native.calls.recv() => {
+                    call.text("Recorded completion");
+                    call.finish();
+                }
+            }
+        }
+    })
+    .await;
+    h.finish().await;
+}

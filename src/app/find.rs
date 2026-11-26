@@ -453,8 +453,10 @@ mod tests {
             "00000000000000000005".parse().unwrap();
         let association = DelegationAssociation {
             parent,
+            root: None,
             origin: origin.clone(),
             child,
+            name: None,
             accepted_message_ids: vec![task_message_id.clone()],
             task_message_id,
             inputs: Vec::new(),

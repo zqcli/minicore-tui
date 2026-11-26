@@ -177,9 +177,51 @@ impl<'a> AsyncTaskItem<'a> {
         short_session_id(self.session_id())
     }
 
+    pub fn task_name(&self) -> Option<&str> {
+        match self {
+            Self::Agent(card) => card
+                .association
+                .name
+                .as_deref()
+                .map(str::trim)
+                .filter(|name| !name.is_empty()),
+            Self::StandaloneDelegated { .. } => None,
+        }
+    }
+
+    pub fn parent_session(&self) -> Option<&SessionRef> {
+        match self {
+            Self::Agent(card) => Some(&card.association.parent),
+            Self::StandaloneDelegated { .. } => None,
+        }
+    }
+
+    pub fn dispatched_by(
+        &self,
+        root: Option<&SessionRef>,
+        names: &std::collections::HashMap<String, String>,
+    ) -> Option<String> {
+        let parent = self.parent_session()?;
+        if root.is_some_and(|r| r == parent) {
+            return Some("from main".to_owned());
+        }
+        let short = short_session_id(parent.session_id.as_str());
+        if let Some(name) = names.get(parent.session_id.as_str()) {
+            Some(format!("from {name} ({short})"))
+        } else {
+            Some(format!("from #{short}"))
+        }
+    }
+
     pub fn title(&self) -> String {
         match self {
-            Self::Agent(card) => crate::ui::agent_cards::task(card),
+            Self::Agent(card) => {
+                if let Some(name) = self.task_name() {
+                    crate::wrap::sanitize(name).into_owned()
+                } else {
+                    crate::ui::agent_cards::task(card)
+                }
+            }
             Self::StandaloneDelegated { summary, .. } => {
                 if let Some(answer) = summary
                     .answer
@@ -287,30 +329,42 @@ impl<'a> AsyncTaskItem<'a> {
         if query.is_empty() {
             return true;
         }
-        let haystack = match self {
-            Self::Agent(card) => format!(
-                "{} {} {} {} {} {}",
-                self.kind_label(),
-                card.task,
-                card.agent_name.as_deref().unwrap_or(""),
-                card.key.child.session_id,
-                card.key.child.agent_id,
-                crate::ui::agent_cards::status(card),
-            ),
+        let lower_q = query.to_lowercase();
+        match self {
+            Self::Agent(card) => {
+                let text = format!(
+                    "{} {} {} {} {}",
+                    self.kind_label(),
+                    card.association.name.as_deref().unwrap_or(""),
+                    card.task,
+                    card.agent_name.as_deref().unwrap_or(""),
+                    crate::ui::agent_cards::status(card),
+                );
+                let ids = format!(
+                    "{} {} {}",
+                    card.key.child.session_id,
+                    card.key.child.agent_id,
+                    card.association.parent.session_id,
+                );
+                text.to_lowercase().contains(&lower_q)
+                    || ids.to_lowercase().contains(&lower_q)
+                    || fuzzy_match(&text, query)
+            }
             Self::StandaloneDelegated {
                 session_id,
                 summary,
-            } => format!(
-                "{} {} {} {}",
-                self.kind_label(),
-                session_id,
-                summary.outcome,
-                summary.answer.as_deref().unwrap_or(""),
-            ),
-        };
-        let lower_hay = haystack.to_lowercase();
-        let lower_q = query.to_lowercase();
-        lower_hay.contains(&lower_q) || fuzzy_match(&haystack, query)
+            } => {
+                let text = format!(
+                    "{} {} {}",
+                    self.kind_label(),
+                    summary.outcome,
+                    summary.answer.as_deref().unwrap_or(""),
+                );
+                text.to_lowercase().contains(&lower_q)
+                    || session_id.to_lowercase().contains(&lower_q)
+                    || fuzzy_match(&text, query)
+            }
+        }
     }
 
     pub fn detail_lines(
@@ -360,6 +414,7 @@ pub fn async_tasks(app: &super::App) -> Vec<AsyncTaskItem<'_>> {
     let Some(session) = app.resident.current() else {
         return Vec::new();
     };
+    let root_addr = session.address();
     let mut seen_sessions = std::collections::HashSet::new();
     let mut items = Vec::new();
     for block in session.transcript.blocks().iter().rev() {
@@ -367,6 +422,11 @@ pub fn async_tasks(app: &super::App) -> Vec<AsyncTaskItem<'_>> {
             && let Some(card) = call.agent_card.as_deref()
         {
             seen_sessions.insert(card.key.child.session_id.to_string());
+            items.push(AsyncTaskItem::Agent(card));
+        }
+    }
+    for card in app.agent_cards.cards_for_root(&root_addr) {
+        if seen_sessions.insert(card.key.child.session_id.to_string()) {
             items.push(AsyncTaskItem::Agent(card));
         }
     }
@@ -497,11 +557,12 @@ pub fn matching_sessions<'a>(rows: &'a [SessionSummary], filter: &str) -> Vec<&'
     let filter = filter.trim();
     rows.iter()
         .filter(|info| {
-            filter.is_empty()
-                || fuzzy_match(session_label(info), filter)
-                || fuzzy_match(info.id.as_str(), filter)
-                || fuzzy_match(info.agent_id.as_str(), filter)
-                || workspace_name(info).is_some_and(|name| fuzzy_match(&name, filter))
+            info.delegated_by.is_none()
+                && (filter.is_empty()
+                    || fuzzy_match(session_label(info), filter)
+                    || fuzzy_match(info.id.as_str(), filter)
+                    || fuzzy_match(info.agent_id.as_str(), filter)
+                    || workspace_name(info).is_some_and(|name| fuzzy_match(&name, filter)))
         })
         .collect()
 }
@@ -901,7 +962,12 @@ impl App {
                 info.last_activity_at,
             )
         };
-        let mut rows = self.sessions.clone();
+        let mut rows: Vec<SessionSummary> = self
+            .sessions
+            .iter()
+            .filter(|info| info.delegated_by.is_none())
+            .cloned()
+            .collect();
         rows.sort_by_cached_key(|info| (live(info), std::cmp::Reverse(rank(info))));
         rows
     }

@@ -144,6 +144,8 @@ pub(super) fn catalog(session: &Session) -> SessionSummary {
         metadata_fault: None,
         deletion: None,
         end_reason: None,
+        delegated_by: info.delegated_by.clone(),
+        delegation_root: info.delegation_root.clone(),
     }
 }
 fn agent(index: u64, name: &str) -> AgentSummary {

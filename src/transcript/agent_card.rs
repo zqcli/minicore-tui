@@ -76,6 +76,12 @@ impl AgentCard {
     }
 
     pub fn merge(&mut self, newer: &DelegationAssociation) {
+        if self.association.root.is_none() {
+            self.association.root.clone_from(&newer.root);
+        }
+        if self.association.name.is_none() {
+            self.association.name.clone_from(&newer.name);
+        }
         for id in &newer.accepted_message_ids {
             if !self.association.accepted_message_ids.contains(id) {
                 self.association.accepted_message_ids.push(id.clone());

@@ -85,6 +85,15 @@ pub fn render(frame: &mut Frame, area: Rect, styles: Styles, app: &mut App) {
         }
         let title = format!("Async Tasks · {}", summary.join(" · "));
 
+        let root_ref = app.resident.current().map(|session| session.address());
+        let task_names: std::collections::HashMap<String, String> = all
+            .iter()
+            .filter_map(|item| {
+                item.task_name()
+                    .map(|name| (item.session_id().to_owned(), name.to_owned()))
+            })
+            .collect();
+
         let clamped = selected.min(matched.len().saturating_sub(1));
         let current = matched.get(clamped).copied();
 
@@ -93,6 +102,9 @@ pub fn render(frame: &mut Frame, area: Rect, styles: Styles, app: &mut App) {
             .map(|item| {
                 let (glyph, glyph_style) = item.glyph(styles);
                 let mut subtitle = item.subtitle();
+                if let Some(by) = item.dispatched_by(root_ref.as_ref(), &task_names) {
+                    subtitle = format!("{subtitle} · {by}");
+                }
                 if item.is_running()
                     && let Some((target, false)) = item.open_target()
                     && let Some(session) = app.resident.find(&target)
@@ -123,7 +135,8 @@ pub fn render(frame: &mut Frame, area: Rect, styles: Styles, app: &mut App) {
                 .is_some_and(crate::history::HistoryWindow::has_more)
         });
 
-        let header_line = current.map(|item| detail_header(item, focus, styles));
+        let header_line =
+            current.map(|item| detail_header(item, root_ref.as_ref(), &task_names, focus, styles));
         let target_ref = current.and_then(|item| item.open_target());
         let needs_input_banner = current.is_some_and(|item| item.needs_input());
         let fallback_lines = current.and_then(|item| match item {
@@ -314,14 +327,25 @@ pub fn render(frame: &mut Frame, area: Rect, styles: Styles, app: &mut App) {
     // Fallback while background open settles (~5ms) or for released/unloaded tasks.
     if let Some((target, _)) = &target_ref
         && let Some(parent) = app.resident.current()
-        && let Some(card) = parent.transcript.blocks().iter().rev().find_map(|block| {
-            let crate::transcript::Block::Tool(call) = block else {
-                return None;
-            };
-            call.agent_card
-                .as_deref()
-                .filter(|card| &card.key.child == target)
-        })
+        && let Some(card) = parent
+            .transcript
+            .blocks()
+            .iter()
+            .rev()
+            .find_map(|block| {
+                let crate::transcript::Block::Tool(call) = block else {
+                    return None;
+                };
+                call.agent_card
+                    .as_deref()
+                    .filter(|card| &card.key.child == target)
+            })
+            .or_else(|| {
+                app.agent_cards
+                    .cards_for_root(&parent.address())
+                    .into_iter()
+                    .find(|card| &card.key.child == target)
+            })
     {
         if !card.transcript.blocks().is_empty() {
             crate::ui::transcript::draw_embedded(
@@ -365,7 +389,13 @@ pub fn render(frame: &mut Frame, area: Rect, styles: Styles, app: &mut App) {
     }
 }
 
-fn detail_header(item: &AsyncTaskItem<'_>, focus: TaskFocus, styles: Styles) -> Line<'static> {
+fn detail_header(
+    item: &AsyncTaskItem<'_>,
+    root: Option<&minicore_host_protocol::SessionRef>,
+    names: &std::collections::HashMap<String, String>,
+    focus: TaskFocus,
+    styles: Styles,
+) -> Line<'static> {
     let (glyph, glyph_style) = item.glyph(styles);
     let focus_badge = match focus {
         TaskFocus::List => "",
@@ -381,14 +411,23 @@ fn detail_header(item: &AsyncTaskItem<'_>, focus: TaskFocus, styles: Styles) -> 
     } else {
         styles.accent()
     };
-    Line::from(vec![
+    let mut spans = vec![
         Span::styled(format!("{glyph} "), glyph_style),
         Span::styled(format!("[{}] ", item.kind_label()), styles.meta()),
         Span::styled(item.short_id().to_owned(), styles.bold()),
-        Span::styled(" · ", styles.meta()),
-        Span::styled(item.status_label(), status_style),
-        Span::styled(focus_badge.to_owned(), styles.accent()),
-    ])
+    ];
+    if let Some(name) = item.task_name() {
+        spans.push(Span::styled(" · ", styles.meta()));
+        spans.push(Span::styled(name.to_owned(), styles.bold()));
+    }
+    if let Some(by) = item.dispatched_by(root, names) {
+        spans.push(Span::styled(" · ", styles.meta()));
+        spans.push(Span::styled(by, styles.dim()));
+    }
+    spans.push(Span::styled(" · ", styles.meta()));
+    spans.push(Span::styled(item.status_label(), status_style));
+    spans.push(Span::styled(focus_badge.to_owned(), styles.accent()));
+    Line::from(spans)
 }
 
 struct ListRow {

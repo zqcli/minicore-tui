@@ -234,7 +234,7 @@ pub struct App {
     pub notifier: crate::title::Notifier,
     pub(super) notice_target: Option<SessionRef>,
     pub(super) pending_states: HashMap<SessionRef, SessionSnapshot>,
-    agent_cards: agent_cards::Cards,
+    pub(crate) agent_cards: agent_cards::Cards,
     pub(super) agent_location: Option<(SessionRef, ToolCallRef)>,
     pub task_inspector: TaskInspector,
     pub remote_config: crate::config::Remote,
@@ -547,7 +547,12 @@ impl App {
             self.project_catalog_state(&snapshot);
         }
         if let Overlay::Sessions { rows, .. } = &mut self.overlay {
-            *rows = self.sessions.clone();
+            *rows = self
+                .sessions
+                .iter()
+                .filter(|info| info.delegated_by.is_none())
+                .cloned()
+                .collect();
         }
         self.refresh_agent_names();
     }

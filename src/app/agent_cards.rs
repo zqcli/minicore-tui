@@ -18,9 +18,27 @@ const PENDING_CARDS: usize = 32;
 const OUTPUT_PAGE_BYTES: u64 = 16 * 1024;
 
 #[derive(Default)]
-pub(super) struct Cards {
+pub(crate) struct Cards {
     observers: HashMap<DelegationKey, Observer>,
     pending: VecDeque<DelegationKey>,
+}
+
+impl Cards {
+    /// Detached observer cards belonging to `root` (e.g. nested grandchildren
+    /// dispatched by an intermediate child Session).
+    pub(crate) fn cards_for_root(&self, root: &SessionRef) -> Vec<&AgentCard> {
+        self.observers
+            .values()
+            .filter_map(|observer| observer.card.as_deref())
+            .filter(|card| {
+                card.association
+                    .root
+                    .as_ref()
+                    .unwrap_or(&card.association.parent)
+                    == root
+            })
+            .collect()
+    }
 }
 
 struct Observer {
@@ -226,11 +244,12 @@ impl App {
     }
 
     pub(super) fn register_delegation(&mut self, association: &DelegationAssociation) {
-        let Some(epoch) = self
+        let root = association.root.as_ref().unwrap_or(&association.parent);
+        let direct_epoch = self
             .resident
             .find(&association.parent)
-            .map(|session| session.epoch)
-        else {
+            .map(|session| session.epoch);
+        let Some(epoch) = direct_epoch.or_else(|| self.resident.find(root).map(|s| s.epoch)) else {
             return;
         };
         let key = DelegationKey {
@@ -264,7 +283,9 @@ impl App {
                     finished_turns: Vec::new(),
                 },
             );
-            self.agent_cards.pending.push_back(key.clone());
+            if direct_epoch.is_some() {
+                self.agent_cards.pending.push_back(key.clone());
+            }
             let client = self.client.clone();
             let target = key.child.clone();
             let read_key = key.clone();
@@ -299,20 +320,28 @@ impl App {
         {
             card.agent_name = Some(name.trim().to_owned());
         }
-        if card.task.is_empty()
-            && let Some(text) = origin_args
+        if card.task.is_empty() {
+            if let Some(text) = origin_args
                 .as_ref()
                 .and_then(|args| args.get("text")?.as_str())
-        {
-            card.task = agent_card::head(text, 512).to_owned();
+            {
+                card.task = agent_card::head(text, 512).to_owned();
+            } else if let Some(name) = association
+                .name
+                .as_deref()
+                .filter(|name| !name.trim().is_empty())
+            {
+                card.task = name.trim().to_owned();
+            }
         }
         let was_complete = card.association.completion.is_some();
         card.merge(association);
-        if self
-            .session_mut(epoch)
-            .transcript
-            .find_tool(&association.origin)
-            .is_some()
+        if direct_epoch.is_some()
+            && self
+                .session_mut(epoch)
+                .transcript
+                .find_tool(&association.origin)
+                .is_some()
         {
             observer.location = Some((epoch, association.origin.clone()));
             self.agent_cards.pending.retain(|pending| pending != &key);
@@ -872,10 +901,15 @@ impl App {
                 Some((epoch, key)) => resident
                     .get(*epoch)
                     .is_some_and(|session| session.transcript.find_tool(key).is_some()),
-                None => observer
-                    .card
-                    .as_ref()
-                    .is_some_and(|card| resident.find(&card.association.parent).is_some()),
+                None => observer.card.as_ref().is_some_and(|card| {
+                    let root = card
+                        .association
+                        .root
+                        .as_ref()
+                        .unwrap_or(&card.association.parent);
+                    resident.find(&card.association.parent).is_some()
+                        || resident.find(root).is_some()
+                }),
             });
         self.agent_cards
             .pending
