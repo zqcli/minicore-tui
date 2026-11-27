@@ -233,7 +233,10 @@ buried in earlier collapsed runs when the user steers or starts later turns:
 - **Main transcript (clean parent flow):**
   - The originating `agent` tool call renders as a single-line sync dispatch
     step reflecting the dispatch RPC itself (`✓ agent  <task>   <agent · id · dur · ctrl+b>`),
-    matching normal tools inside `Working`/`Worked`. Clicking it opens the
+    matching normal tools inside `Working`/`Worked`. Narrow rows preserve the
+    tool/task subject and reduce right-hand metadata first. The short task name
+    stays separate from its bounded original prompt in the expanded details.
+    Clicking it opens the
     `Ctrl+B` Async Tasks workspace focused on that child; `Ctrl+O` unfolds its
     dispatch receipt card with an `Inspect live progress & result · click or ctrl+b` hint.
   - Internal `agent completed` delivery notices stay hidden from the main

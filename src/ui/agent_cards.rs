@@ -52,11 +52,28 @@ fn dispatch_row(call: &ToolCall, card: &AgentCard, styles: Styles, width: usize)
     } else if matches!(call.state, ToolState::Pending | ToolState::Running) {
         parts.push("dispatching".to_owned());
     }
-    let right = vec![
+    let mut right = vec![
         Span::styled(parts.join(" · "), styles.meta()),
         Span::styled(" · ", styles.meta()),
         Span::styled("ctrl+b", styles.accent()),
     ];
+    // Keep 20 columns for the tool and task before spending space on metadata.
+    let right_room = width.saturating_sub(1 + 2 + 20);
+    if super::status::spans_width(&right) > right_room {
+        right = vec![
+            Span::styled(
+                format!("{} · ", short(card.key.child.session_id.as_str())),
+                styles.meta(),
+            ),
+            Span::styled("ctrl+b", styles.accent()),
+        ];
+    }
+    if super::status::spans_width(&right) > right_room {
+        right = vec![Span::styled("ctrl+b", styles.accent())];
+    }
+    if super::status::spans_width(&right) > right_room {
+        right.clear();
+    }
     let left = vec![
         chrome_span(Span::styled(format!("{glyph} "), glyph_style)),
         Span::styled("agent  ", styles.tool_title()),
@@ -733,6 +750,39 @@ mod tests {
             done, running,
             "dispatch row never mutates in place across later runs"
         );
+    }
+
+    #[test]
+    fn narrow_dispatch_rows_keep_the_task_before_optional_metadata() {
+        for state in [
+            ToolState::Pending,
+            ToolState::Running,
+            ToolState::Succeeded,
+            ToolState::Failed,
+        ] {
+            let mut call = call();
+            call.state = state;
+            if matches!(state, ToolState::Succeeded | ToolState::Failed) {
+                call.duration = Some(std::time::Duration::from_millis(1200));
+            }
+            let card = call.agent_card.as_mut().unwrap();
+            card.agent_name = Some("Repository reviewer 日本語の名前".into());
+            card.task = "Review files and 日本語 documentation".into();
+            for width in [45, 8, 18, 25, 35, 80] {
+                let rows = render(&call, styles(), width, false, true);
+                assert_eq!(rows.len(), 1);
+                let row = rows[0].to_string();
+                assert!(!row.trim().is_empty(), "blank dispatch at {width}");
+                assert!(wrap::width(&row) < width, "{width}: {row:?}");
+                if width >= 35 {
+                    assert!(row.contains("agent  Review"), "{width}: {row:?}");
+                    assert!(row.ends_with("ctrl+b"), "{width}: {row:?}");
+                }
+                if width >= 45 {
+                    assert!(row.contains("000000"), "{width}: {row:?}");
+                }
+            }
+        }
     }
 
     #[test]

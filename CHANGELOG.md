@@ -16,6 +16,8 @@
 - Show untitled Sessions by their first user-prompt preview, distinct from manual
   titles and empty-session IDs, without renaming them or scanning history in the
   picker. Search includes the preview even after renaming.
+- Keep Agent dispatch subjects visible on narrow terminals by reducing metadata first.
+- Preserve named nested delegations’ actual task prompt previews in the details pane.
 
 ## 0.12.17 — 2026-11-27
 

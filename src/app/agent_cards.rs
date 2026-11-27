@@ -324,19 +324,13 @@ impl App {
         {
             card.agent_name = Some(name.trim().to_owned());
         }
-        if card.task.is_empty() {
-            if let Some(text) = origin_args
+        // The optional display name is not the task prompt.
+        if card.task.is_empty()
+            && let Some(text) = origin_args
                 .as_ref()
                 .and_then(|args| args.get("text")?.as_str())
-            {
-                card.task = agent_card::head(text, 512).to_owned();
-            } else if let Some(name) = association
-                .name
-                .as_deref()
-                .filter(|name| !name.trim().is_empty())
-            {
-                card.task = name.trim().to_owned();
-            }
+        {
+            card.task = agent_card::head(text, 512).to_owned();
         }
         let was_complete = card.association.completion.is_some();
         card.merge(association);

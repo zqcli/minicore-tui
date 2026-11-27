@@ -1232,6 +1232,8 @@ async fn delegated_sessions_hide_from_sessions_picker_and_flatten_grandchildren_
     })
     .await;
 
+    h.until(|app| !app.agent_cards.is_reading()).await;
+
     // 1. Both delegated sessions have provenance and are hidden from `/sessions`.
     let l1_summary = h
         .app
@@ -1281,6 +1283,10 @@ async fn delegated_sessions_hide_from_sessions_picker_and_flatten_grandchildren_
         Some("from main")
     );
     assert_eq!(l2_item.task_name(), Some("helper-b"));
+    let crate::app::overlay::AsyncTaskItem::Agent(l2_card) = l2_item else {
+        panic!("expected the observed grandchild card");
+    };
+    assert_eq!(l2_card.task, "Check git log");
     assert!(
         l2_item
             .dispatched_by(Some(&root_addr), &names)

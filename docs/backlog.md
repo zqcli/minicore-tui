@@ -353,16 +353,17 @@
   - **影响**：用户明确关闭远程后后台端口仍在监听。
   - **改进方案**：引入启动代际序号与取消标记；`/remote off` 置取消态，收到过期 `RemoteStarted` 时立即停止新监听且不移交控制权。
 
-- [ ] **`T8` [P2] 窄屏（约 `45 cols`）下 Agent 派发行可能整行折叠为空白**
+- [x] **`T8` [P2] 窄屏（约 `45 cols`）下 Agent 派发行可能整行折叠为空白**
   - **位置**：`minicore-tui/src/ui/blocks.rs`（`L863-L884`）、`minicore-tui/src/ui/agent_cards.rs`（`L46-L65`）
   - **发生场景**：在约 `45` 列宽的窄分屏终端查看含子任务派发记录的主对话流。
   - **现象与根因**：先为右侧徽章预留完整宽度把左侧压到 `0`，随后右侧又因放不下被丢弃，左右全空。
   - **影响**：派发卡片行变成整行空白。
-  - **改进方案**：左侧任务名保留最小可见宽度优先，右侧徽章按剩余空间降级或省略。
+  - **Resolution**: reserve the tool/task subject first; reduce right-hand metadata on narrow rows. Renderer regression covers 8–80 columns and pending/running/succeeded/failed dispatches.
 
 #### P3 备忘（低优先级细节优化）
 
-- [ ] **`T9` [P3]** `card.task` 短名称回填逻辑阻止完整任务提示文本回填（`src/app/agent_cards.rs:323-334`）——短名称先写入后阻断完整 prompt 回填，详情页看不到原任务描述。
+- [x] **`T9` [P3]** `card.task` 短名称回填逻辑阻止完整任务提示文本回填（`src/app/agent_cards.rs:323-334`）——短名称先写入后阻断完整 prompt 回填，详情页看不到原任务描述。
+  - **Resolution**: keep the short label in `association.name`; let task-message events/history fill the separate bounded task preview. Real nested Host delegation regression verifies both values.
 - [ ] **`T10` [P3]** 嵌套 Markdown 列表选中复制时丢失层级缩进（`src/ui/rails.rs:53-60`）——嵌套列表缩进被当 chrome 剥离，复制后拍平为一级。
 - [ ] **`T11` [P3]** 子任务详情视图中鼠标拖拽划词选择被忽略（`src/app/mouse.rs:137-145`）——子详情视图无法鼠标划词复制。
 - [x] **`T12` [P3]** 流式输出缺口回补后缺少 `regroup` 调用（`src/app/control.rs:930-944`）——缺口补齐后未重组相邻块，折叠组可能分裂。
