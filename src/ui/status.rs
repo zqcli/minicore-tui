@@ -439,9 +439,7 @@ fn inspector_activity_left(app: &App, styles: Styles) -> Option<Vec<Span<'static
     };
     let all = crate::app::overlay::async_tasks(app);
     let matched = crate::app::overlay::matching_async_tasks(&all, filter);
-    let item = matched
-        .get((*selected).min(matched.len().saturating_sub(1)))
-        .copied()?;
+    let item = matched[app.inspector_index(&matched, *selected)?];
     let short_id = item.short_id().to_owned();
     if let Some(child) = app.inspected_session()
         && child.is_busy()

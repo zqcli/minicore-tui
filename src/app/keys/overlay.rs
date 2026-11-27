@@ -271,6 +271,7 @@ impl App {
 
     /// Moves the selected row of the active overlay by `delta`.
     pub fn overlay_move(&mut self, delta: isize) {
+        self.sync_inspector_selection();
         let len = match &self.overlay {
             Overlay::Palette { .. } | Overlay::Files { .. } => self.completion_len(),
             Overlay::Sessions { rows, filter, .. } => matching_sessions(rows, filter).len(),
@@ -490,6 +491,9 @@ impl App {
         let Overlay::Delegations { focus, .. } = self.overlay else {
             return;
         };
+        if focus != TaskFocus::Composer {
+            self.sync_inspector_selection();
+        }
         match focus {
             TaskFocus::Composer => match key.code {
                 KeyCode::Enter if alt || ctrl => self.submit_inspector_composer(true),
@@ -637,11 +641,15 @@ impl App {
     }
 
     fn has_selected_delegation(&self) -> bool {
-        let Overlay::Delegations { filter, .. } = &self.overlay else {
+        let Overlay::Delegations {
+            filter, selected, ..
+        } = &self.overlay
+        else {
             return false;
         };
         let all = async_tasks(self);
-        !matching_async_tasks(&all, filter).is_empty()
+        self.inspector_index(&matching_async_tasks(&all, filter), *selected)
+            .is_some()
     }
 
     fn open_selected_delegation(&mut self) {
@@ -656,8 +664,8 @@ impl App {
         let picked = {
             let all = async_tasks(self);
             let matched = matching_async_tasks(&all, &filter);
-            let idx = selected.min(matched.len().saturating_sub(1));
-            matched.get(idx).and_then(|item| item.open_target())
+            self.inspector_index(&matched, selected)
+                .and_then(|idx| matched[idx].open_target())
         };
         self.overlay = Overlay::None;
         match picked {
@@ -685,8 +693,8 @@ impl App {
         let text = {
             let all = async_tasks(self);
             let matched = matching_async_tasks(&all, &filter);
-            let idx = selected.min(matched.len().saturating_sub(1));
-            matched.get(idx).map(|item| item.copy_text())
+            self.inspector_index(&matched, selected)
+                .map(|idx| matched[idx].copy_text())
         };
         if let Some(text) = text.filter(|t| !t.trim().is_empty()) {
             self.copy(text);
@@ -705,8 +713,8 @@ impl App {
         let origin = {
             let all = async_tasks(self);
             let matched = matching_async_tasks(&all, &filter);
-            let idx = selected.min(matched.len().saturating_sub(1));
-            matched.get(idx).and_then(|item| item.origin_target())
+            self.inspector_index(&matched, selected)
+                .and_then(|idx| matched[idx].origin_target())
         };
         if let Some((parent, origin_ref)) = origin {
             self.overlay = Overlay::None;
@@ -727,7 +735,8 @@ impl App {
                 let picked = {
                     let all = async_tasks(self);
                     let matched = matching_async_tasks(&all, &filter);
-                    matched.get(selected).and_then(|item| item.open_target())
+                    self.inspector_index(&matched, selected)
+                        .and_then(|idx| matched[idx].open_target())
                 };
                 match picked {
                     Some((_, true)) => self.notice(

@@ -606,6 +606,187 @@ async fn fresh_baselines_do_not_replay_trimmed_outputs_or_retain_finished_buffer
 }
 
 #[tokio::test]
+async fn tasks_draft_target_survives_live_reordering_and_late_receipts() {
+    use crate::app::{Overlay, overlay::TaskFocus};
+    use crossterm::event::KeyCode;
+    use minicore_host_protocol::MessageMode;
+
+    for follow in [false, true] {
+        let mut h = Harness::from_native(NativeHost::with_agent_tool().await).await;
+        let a = h.another_session().await;
+        let b = h.another_session().await;
+        h.app.composer.set_text("Coordinate two tasks");
+        h.app.on_action(Action::Submit { follow: false });
+        let root = h.next_call().await;
+        let (parent, working_b) = launch(&mut h, root, &b, "draft-b", "Task beta").await;
+        let (parent, working_a) = launch(&mut h, parent, &a, "draft-a", "Task alpha").await;
+        h.until(|app| card(app, "draft-a").is_some()).await;
+
+        // Preload both children so receipt delivery, not loading, controls this test.
+        h.app.open_delegation_for(b.session_id.as_str());
+        h.until(|app| app.resident.find(&b).is_some()).await;
+        h.app.open_delegation_for(a.session_id.as_str());
+        h.until(|app| app.resident.find(&a).is_some()).await;
+        h.press(KeyCode::Enter);
+        h.type_text("Continue alpha only");
+        assert_eq!(h.app.task_inspector.target.as_ref(), Some(&a));
+
+        // A finishes while the draft is open: running B now sorts above completed A.
+        working_a.text("Alpha completed");
+        working_a.finish();
+        h.until(|app| {
+            card(app, "draft-a").and_then(AgentCard::outcome) == Some(TurnOutcome::Completed)
+                && crate::app::overlay::async_tasks(app)[0].session_id() == b.session_id.as_str()
+        })
+        .await;
+        assert_eq!(h.app.inspected_target(), Some((a.clone(), false)));
+        assert_eq!(h.app.inspected_session().unwrap().address(), a);
+        h.screen(110, 24);
+        assert_eq!(h.app.task_inspector.composer.text(), "Continue alpha only");
+        h.key(
+            KeyCode::Enter,
+            if follow {
+                KeyModifiers::ALT
+            } else {
+                KeyModifiers::NONE
+            },
+        );
+        let pending = h.app.local_inputs.back().unwrap();
+        assert_eq!(pending.target.session, a);
+        assert_eq!(
+            pending.mode,
+            if follow {
+                MessageMode::FollowUp
+            } else {
+                MessageMode::Steer
+            }
+        );
+
+        // Before the send receipt is consumed, edit A again and move to B.
+        h.type_text("Next alpha draft");
+        h.press(KeyCode::Esc);
+        h.app.open_delegation_for(b.session_id.as_str());
+        h.press(KeyCode::Enter);
+        assert!(matches!(
+            h.app.overlay,
+            Overlay::Delegations {
+                focus: TaskFocus::Composer,
+                ..
+            }
+        ));
+        h.type_text("Beta draft");
+        let next_a = h.next_call().await;
+        assert!(
+            next_a
+                .users()
+                .iter()
+                .any(|text| text.ends_with("Continue alpha only"))
+        );
+        assert!(
+            next_a
+                .users()
+                .iter()
+                .any(|text| text.ends_with("Task alpha"))
+        );
+        assert!(
+            !next_a
+                .users()
+                .iter()
+                .any(|text| text.ends_with("Task beta"))
+        );
+        h.until(|app| app.local_inputs.is_empty()).await;
+        assert_eq!(h.app.task_inspector.target.as_ref(), Some(&b));
+        assert_eq!(h.app.task_inspector.composer.text(), "Beta draft");
+        h.app.open_delegation_for(a.session_id.as_str());
+        assert_eq!(h.app.task_inspector.composer.text(), "Next alpha draft");
+        assert_eq!(
+            h.app.task_inspector.drafts.get(&b).unwrap().text(),
+            "Beta draft"
+        );
+
+        next_a.text("Alpha follow-up completed");
+        next_a.finish();
+        working_b.text("Beta completed");
+        working_b.finish();
+        parent.text("Tasks recorded");
+        parent.finish();
+        settle(&mut h).await;
+        h.finish().await;
+    }
+}
+
+#[tokio::test]
+async fn tasks_unavailable_target_keeps_draft_without_falling_back_to_another_child() {
+    use crossterm::event::KeyCode;
+    use minicore_host_protocol::{CallOptions, OperationId, SessionCloseRequest, SessionLifecycle};
+
+    let mut h = Harness::from_native(NativeHost::with_agent_tool().await).await;
+    let a = h.another_session().await;
+    let b = h.another_session().await;
+    h.app.composer.set_text("Coordinate two tasks");
+    h.app.on_action(Action::Submit { follow: false });
+    let root = h.next_call().await;
+    let (parent, working_b) = launch(&mut h, root, &b, "draft-b", "Task beta").await;
+    let (parent, working_a) = launch(&mut h, parent, &a, "draft-a", "Task alpha").await;
+    h.until(|app| card(app, "draft-a").is_some()).await;
+    h.app.open_delegation_for(a.session_id.as_str());
+    h.until(|app| app.resident.find(&a).is_some()).await;
+    h.press(KeyCode::Enter);
+    h.type_text("Keep alpha draft");
+    working_a.text("Alpha completed");
+    working_a.finish();
+    h.until(|app| {
+        card(app, "draft-a").and_then(AgentCard::outcome) == Some(TurnOutcome::Completed)
+    })
+    .await;
+    h.native
+        .client
+        .session(a.clone())
+        .close(
+            SessionCloseRequest {
+                operation_id: OperationId::new().unwrap(),
+            },
+            CallOptions::default(),
+        )
+        .await
+        .unwrap();
+    h.until(|app| {
+        app.resident
+            .find(&a)
+            .is_none_or(|session| session.state.data.lifecycle == SessionLifecycle::Closed)
+    })
+    .await;
+    h.press(KeyCode::Enter);
+    assert!(h.app.local_inputs.is_empty());
+    assert_eq!(h.app.task_inspector.composer.text(), "Keep alpha draft");
+
+    // Losing the observed task must not make its numeric row refer to B.
+    let transcript = &mut h.app.resident.current_mut().unwrap().transcript;
+    let index = transcript.blocks().iter().position(|block| {
+        matches!(block, Block::Tool(call) if call.key.tool_call_id().as_str() == "draft-a")
+    }).unwrap();
+    let Block::Tool(call) = transcript.block_mut(index).unwrap() else {
+        unreachable!()
+    };
+    call.agent_card = None;
+    assert_eq!(h.app.inspected_target(), Some((a.clone(), true)));
+    assert!(
+        h.render_text(110, 24)
+            .contains("Selected child is unavailable")
+    );
+    h.key(KeyCode::Enter, KeyModifiers::ALT);
+    assert!(h.app.local_inputs.is_empty());
+    assert_eq!(h.app.task_inspector.composer.text(), "Keep alpha draft");
+
+    working_b.text("Beta completed");
+    working_b.finish();
+    parent.text("Tasks recorded");
+    parent.finish();
+    settle(&mut h).await;
+    h.finish().await;
+}
+
+#[tokio::test]
 async fn ctrl_b_inspector_loads_real_child_conversation_filters_scrolls_and_messages_directly() {
     use crate::app::{Overlay, Panel, overlay::TaskFocus};
     use crossterm::event::{KeyCode, KeyEvent};

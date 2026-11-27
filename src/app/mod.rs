@@ -726,7 +726,38 @@ impl App {
         &mut self.composer
     }
 
-    /// The `SessionRef` of the task currently highlighted inside `Ctrl+B`.
+    /// Locate the selected Session by identity, not its position in the live priority list.
+    pub(crate) fn inspector_index(
+        &self,
+        matched: &[&overlay::AsyncTaskItem<'_>],
+        selected: usize,
+    ) -> Option<usize> {
+        if let Some(target) = &self.task_inspector.target {
+            return matched.iter().position(|item| {
+                matches!(item, overlay::AsyncTaskItem::Agent(card) if &card.association.child == target)
+            });
+        }
+        (!matched.is_empty()).then(|| selected.min(matched.len() - 1))
+    }
+
+    pub(super) fn sync_inspector_selection(&mut self) {
+        let Overlay::Delegations {
+            filter, selected, ..
+        } = &self.overlay
+        else {
+            return;
+        };
+        let all = overlay::async_tasks(self);
+        let matched = overlay::matching_async_tasks(&all, filter);
+        let next = self.inspector_index(&matched, *selected);
+        if let Some(next) = next
+            && let Overlay::Delegations { selected, .. } = &mut self.overlay
+        {
+            *selected = next;
+        }
+    }
+
+    /// The child selected explicitly by the user; background reprioritization cannot retarget it.
     pub fn inspected_target(&self) -> Option<(SessionRef, bool)> {
         let Overlay::Delegations {
             filter, selected, ..
@@ -736,8 +767,14 @@ impl App {
         };
         let all = overlay::async_tasks(self);
         let matched = overlay::matching_async_tasks(&all, filter);
-        let idx = (*selected).min(matched.len().saturating_sub(1));
-        matched.get(idx).and_then(|item| item.open_target())
+        self.inspector_index(&matched, *selected)
+            .and_then(|idx| matched[idx].open_target())
+            .or_else(|| {
+                self.task_inspector
+                    .target
+                    .clone()
+                    .map(|target| (target, true))
+            })
     }
 
     /// Whether the currently selected `Ctrl+B` task can receive direct messages.
@@ -773,9 +810,19 @@ impl App {
     /// Ensures the currently selected `Ctrl+B` child Session is loaded into
     /// `self.resident` in the background without switching away from the parent.
     pub fn ensure_inspector_session(&mut self) {
-        let next = self
-            .inspected_target()
-            .and_then(|(target, unavailable)| (!unavailable).then_some(target));
+        let next = if let Overlay::Delegations {
+            filter, selected, ..
+        } = &self.overlay
+        {
+            let all = overlay::async_tasks(self);
+            let matched = overlay::matching_async_tasks(&all, filter);
+            matched
+                .get((*selected).min(matched.len().saturating_sub(1)))
+                .and_then(|item| item.open_target())
+                .map(|(target, _)| target)
+        } else {
+            None
+        };
         if self.task_inspector.target != next {
             if let Some(prev) = self.task_inspector.target.take() {
                 if self.task_inspector.composer.is_empty() {
@@ -800,6 +847,12 @@ impl App {
         let Some(target) = next else {
             return;
         };
+        if self
+            .inspected_target()
+            .is_some_and(|(_, unavailable)| unavailable)
+        {
+            return;
+        }
         if self.resident.find(&target).is_some() {
             self.load_inspector_usage(&target);
             return;
@@ -886,6 +939,7 @@ impl App {
                 session.is_busy(),
             )
         }) else {
+            self.sync_inspector_selection();
             self.ensure_inspector_session();
             self.notice(
                 NoticeLevel::Info,

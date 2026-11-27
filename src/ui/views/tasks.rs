@@ -47,6 +47,7 @@ pub fn render(frame: &mut Frame, area: Rect, styles: Styles, app: &mut App) {
     let (
         title,
         list_rows,
+        selected,
         total,
         needs_more,
         header_line,
@@ -97,8 +98,8 @@ pub fn render(frame: &mut Frame, area: Rect, styles: Styles, app: &mut App) {
             })
             .collect();
 
-        let clamped = selected.min(matched.len().saturating_sub(1));
-        let current = matched.get(clamped).copied();
+        let selected = app.inspector_index(&matched, selected);
+        let current = selected.map(|index| matched[index]);
 
         let rows: Vec<ListRow> = matched
             .iter()
@@ -165,6 +166,7 @@ pub fn render(frame: &mut Frame, area: Rect, styles: Styles, app: &mut App) {
         (
             title,
             rows,
+            selected,
             all.len(),
             has_more,
             header_line,
@@ -250,7 +252,9 @@ pub fn render(frame: &mut Frame, area: Rect, styles: Styles, app: &mut App) {
     }
 
     let Some(header) = header_line else {
-        let message = if !filter.trim().is_empty() {
+        let message = if app.task_inspector.target.is_some() {
+            "Selected child is unavailable; draft kept. Select another task to continue."
+        } else if !filter.trim().is_empty() {
             "No matching task selected."
         } else if needs_more {
             "No async task loaded yet. Press Esc and Home to load earlier history."
@@ -571,7 +575,7 @@ fn render_list(
     styles: Styles,
     items: &[ListRow],
     filter: &str,
-    selected: usize,
+    selected: Option<usize>,
     total: usize,
     has_more: bool,
     focused: bool,
@@ -609,12 +613,11 @@ fn render_list(
     }
 
     let (first, visible_slots) = split::list_window(
-        selected,
+        selected.unwrap_or(0),
         items.len(),
         usize::from(list_body.height),
         ITEM_HEIGHT,
     );
-    let selected = selected.min(items.len().saturating_sub(1));
     let width = usize::from(list_body.width);
 
     for (slot, (idx, item)) in items
@@ -628,7 +631,7 @@ fn render_list(
         if y >= list_body.bottom() {
             break;
         }
-        let is_selected = idx == selected;
+        let is_selected = Some(idx) == selected;
         let row_h = (list_body.bottom() - y).min(ITEM_HEIGHT as u16);
         if is_selected {
             chrome::paint_highlight_band(
