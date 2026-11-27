@@ -17,6 +17,7 @@ fn session(agent_id: &AgentId, workspace: &Path, activity: i64) -> SessionSummar
         id: SessionId::new().unwrap(),
         agent_id: agent_id.clone(),
         title: None,
+        first_user_preview: None,
         mode: StorageMode::Persistent,
         config_revision: ConfigRevision::default(),
         lifecycle: SessionLifecycle::Open,
