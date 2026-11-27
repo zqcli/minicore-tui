@@ -66,6 +66,7 @@ fn next_revision() -> u64 {
 pub struct Transcript {
     blocks: Vec<Block>,
     metadata: Vec<BlockMeta>,
+    latest_response: Option<(u64, minicore_host_runtime::model::Usage)>,
 }
 
 #[derive(Clone, Debug)]

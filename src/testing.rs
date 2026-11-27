@@ -125,6 +125,9 @@ impl ModelCall {
             )))
             .unwrap();
     }
+    pub fn usage(&self, usage: minicore_host_runtime::model::Usage) {
+        self.events.send(Ok(ModelEvent::Usage { usage })).unwrap();
+    }
     pub fn finish(self) {
         self.events
             .send(Ok(ModelEvent::Finish {

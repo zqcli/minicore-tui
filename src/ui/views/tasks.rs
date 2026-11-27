@@ -3,6 +3,8 @@
 //! scrolling, and direct child messaging from the bottom composer), built on
 //! the shared [`super::split`] two-pane engine.
 
+use minicore_host_protocol::{ReasoningPreference, Residency, StorageMode};
+use minicore_host_runtime::model::Usage;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
@@ -50,6 +52,8 @@ pub fn render(frame: &mut Frame, area: Rect, styles: Styles, app: &mut App) {
         needs_more,
         header_line,
         target_ref,
+        preview_usage,
+        preview_mode,
         needs_input_banner,
         fallback_lines,
     ) = {
@@ -138,6 +142,15 @@ pub fn render(frame: &mut Frame, area: Rect, styles: Styles, app: &mut App) {
         let header_line =
             current.map(|item| detail_header(item, root_ref.as_ref(), &task_names, focus, styles));
         let target_ref = current.and_then(|item| item.open_target());
+        let (preview_usage, preview_mode) = match current {
+            Some(AsyncTaskItem::Agent(card)) => (
+                card.transcript.latest_response_usage(),
+                card.state
+                    .as_ref()
+                    .map(|state| (state.data.mode, state.data.residency)),
+            ),
+            _ => (None, None),
+        };
         let needs_input_banner = current.is_some_and(|item| item.needs_input());
         let fallback_lines = current.and_then(|item| match item {
             AsyncTaskItem::StandaloneDelegated { summary, .. } => {
@@ -159,6 +172,8 @@ pub fn render(frame: &mut Frame, area: Rect, styles: Styles, app: &mut App) {
             has_more,
             header_line,
             target_ref,
+            preview_usage,
+            preview_mode,
             needs_input_banner,
             fallback_lines,
         )
@@ -262,6 +277,53 @@ pub fn render(frame: &mut Frame, area: Rect, styles: Styles, app: &mut App) {
     );
     if transcript_area.is_empty() {
         return;
+    }
+
+    let target = target_ref.as_ref().map(|(target, _)| target);
+    let child = target.and_then(|target| app.resident.find(target));
+    let catalog = target.and_then(|target| {
+        app.sessions
+            .iter()
+            .find(|session| session.agent_id == target.agent_id && session.id == target.session_id)
+    });
+    let config = child
+        .map(|session| {
+            (
+                session.info.config.model.as_str(),
+                session.info.config.reasoning,
+            )
+        })
+        .or_else(|| catalog.map(|session| (session.model.as_str(), session.reasoning)));
+    let usage = child
+        .and_then(|session| session.transcript.latest_response_usage())
+        .or(preview_usage)
+        .or_else(|| {
+            child?
+                .context
+                .as_ref()?
+                .data
+                .history
+                .as_ref()?
+                .latest_response
+                .as_ref()
+                .map(|response| response.usage)
+        });
+    let mode = child
+        .map(|session| (session.state.data.mode, session.state.data.residency))
+        .or_else(|| catalog.map(|session| (session.mode, session.residency)))
+        .or(preview_mode);
+    if transcript_area.height >= 4 + u16::from(needs_input_banner) {
+        let buffer = frame.buffer_mut();
+        for line in detail_facts(config, usage, mode, transcript_area.width, styles) {
+            buffer.set_line(
+                transcript_area.x,
+                transcript_area.y,
+                &line,
+                transcript_area.width,
+            );
+            transcript_area.y += 1;
+            transcript_area.height -= 1;
+        }
     }
 
     // Highlight pending approvals/questions prominently so stalled long tasks stand out.
@@ -387,6 +449,47 @@ pub fn render(frame: &mut Frame, area: Rect, styles: Styles, app: &mut App) {
             styles,
         );
     }
+}
+
+fn detail_facts(
+    config: Option<(&str, ReasoningPreference)>,
+    usage: Option<Usage>,
+    mode: Option<(StorageMode, Residency)>,
+    width: u16,
+    styles: Styles,
+) -> [Line<'static>; 3] {
+    let (model, reasoning) = config
+        .map(|(model, level)| (model, crate::ui::sheets::reasoning_label(level)))
+        .unwrap_or(("—", "—"));
+    let suffix = format!(" · Reasoning {reasoning}");
+    let model_width = usize::from(width).saturating_sub(wrap::width(&suffix));
+    let model = wrap::sanitize(model);
+    let model = wrap::truncate(&format!("Model {model}"), model_width);
+    let tokens = usage
+        .filter(|usage| *usage != Usage::default())
+        .map_or_else(
+            || "—".to_owned(),
+            |usage| super::context::usage_text(&usage),
+        );
+    let (storage, residency) = mode.map_or(("—", "—"), |(mode, residency)| {
+        (
+            crate::ui::sheets::storage_label(mode),
+            match residency {
+                Residency::Unloaded => "unloaded",
+                Residency::Loading => "loading",
+                Residency::Loaded => "loaded",
+                Residency::Unloading => "unloading",
+            },
+        )
+    });
+    [
+        Line::from(vec![
+            Span::styled(model, styles.text()),
+            Span::styled(suffix, styles.dim()),
+        ]),
+        Line::styled(format!("Storage {storage} · {residency}"), styles.dim()),
+        Line::styled(format!("Last response tokens: {tokens}"), styles.dim()),
+    ]
 }
 
 fn detail_header(

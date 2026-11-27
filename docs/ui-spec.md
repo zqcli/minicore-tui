@@ -239,8 +239,10 @@ buried in earlier collapsed runs when the user steers or starts later turns:
     message composer for that child; `Ctrl+E` opens the full-screen child
     Session; `Ctrl+G` jumps to the origin dispatch; `Ctrl+Y` copies the answer.
   - **Right pane (Detail focus):** loads the selected child `Session` in the
-    background without switching away from the parent and renders its real
-    conversation through the same `Working`/`Worked` transcript renderer
+    background without switching away from the parent. A pinned header shows the
+    selected child's model, reasoning level, storage mode and residency, then
+    the latest complete model response's reported tokens (not a task total). Missing facts
+    are not shown as zero. The pane renders the child's real conversation through the same `Working`/`Worked` transcript renderer
     (collapsible work groups, live thinking spinners, indented tool cards,
     Markdown, scrollbar and `Jump to latest message · End`). Scroll with
     `↑↓`/`j`/`k`/`PgUp`/`PgDn`/`Home`/`End` or mouse wheel; click `Working`,

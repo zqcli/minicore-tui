@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Show the selected child Session’s model, reasoning, storage, residency and latest response token usage in Async Tasks.
+
 ## 0.12.16 — 2026-11-26
 
 - Flatten Async Tasks (`Ctrl+B` / `/tasks`) across the entire root delegation

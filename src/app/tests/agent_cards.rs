@@ -619,6 +619,11 @@ async fn ctrl_b_inspector_loads_real_child_conversation_filters_scrolls_and_mess
     let root = h.next_call().await;
     let (parent, working) = launch(&mut h, root, &child, "start-1", "Check API routes").await;
     working.text("Found 3 API routes in src/routes.rs");
+    working.usage(minicore_host_runtime::model::Usage::from_optional(
+        Some(12300),
+        Some(850),
+        None,
+    ));
     working.finish();
     parent.text("Delegated API route check.");
     parent.finish();
@@ -705,6 +710,51 @@ async fn ctrl_b_inspector_loads_real_child_conversation_filters_scrolls_and_mess
             .unwrap_or("")
             .contains("Found 3 API routes")
     );
+
+    let selected = h.app.inspected_session().unwrap();
+    let expected_model = format!("Model {}", selected.info.config.model);
+    let expected_reasoning = format!(
+        "Reasoning {}",
+        crate::ui::sheets::reasoning_label(selected.info.config.reasoning)
+    );
+    let expected_mode = format!(
+        "Storage {}",
+        crate::ui::sheets::storage_label(selected.state.data.mode)
+    );
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(110, 24)).unwrap();
+    for (width, focus) in [(110, TaskFocus::List), (62, TaskFocus::Detail)] {
+        terminal.backend_mut().resize(width, 24);
+        if let Overlay::Delegations { focus: current, .. } = &mut h.app.overlay {
+            *current = focus;
+        }
+        terminal
+            .draw(|frame| {
+                crate::ui::draw(frame, &mut h.app);
+            })
+            .unwrap();
+        let screen = terminal.backend().buffer();
+        let lines: Vec<String> = screen
+            .content
+            .chunks(width as usize)
+            .map(|row| row.iter().map(|cell| cell.symbol()).collect())
+            .collect();
+        let facts = lines
+            .iter()
+            .position(|line| line.contains(&expected_model))
+            .unwrap();
+        assert!(lines[facts].contains(&expected_reasoning));
+        assert!(lines[facts + 1].contains(&expected_mode));
+        assert!(lines[facts + 2].contains("Last response tokens: ↑12.3k ↓850"));
+        assert!(
+            lines
+                .iter()
+                .skip(facts + 2)
+                .any(|line| line.contains("Found 3 API"))
+        );
+    }
+    if let Overlay::Delegations { focus, .. } = &mut h.app.overlay {
+        *focus = TaskFocus::List;
+    }
 
     // 4. Filter by typing in List, then clear with Ctrl+U.
     for ch in "routes".chars() {

@@ -62,6 +62,10 @@ impl Transcript {
         }
     }
 
+    pub fn latest_response_usage(&self) -> Option<Usage> {
+        self.latest_response.map(|(_, usage)| usage)
+    }
+
     fn install_records(&mut self, records: &[HistoryRecordData], preview: bool) {
         if records.is_empty() {
             return;
@@ -388,6 +392,13 @@ fn append_response(
     partial: bool,
     preview: bool,
 ) {
+    if let HistoryItemData::Assistant { response } = &record.item
+        && transcript
+            .latest_response
+            .is_none_or(|(position, _)| record.position >= position)
+    {
+        transcript.latest_response = Some((record.position, response.usage));
+    }
     let key = request_key(record);
     let mut text = if preview {
         preview_parts(content, false)
