@@ -234,7 +234,8 @@ impl App {
             return;
         }
         if self.composer.text()[..self.composer.cursor()].ends_with('@') {
-            self.composer.backspace();
+            self.composer
+                .extend_selection(|composer| composer.move_left());
         }
         self.insert_path_references(&[PathBuf::from(path)]);
     }

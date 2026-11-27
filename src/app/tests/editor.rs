@@ -282,14 +282,14 @@ async fn follow_up_alias_preserves_newlines_paste_and_focused_editors() {
         KeyModifiers::ALT | KeyModifiers::CONTROL,
     );
     #[cfg(unix)]
-    for (text, overlay) in [("/help", Overlay::Palette { selected: 0 })] {
-        h.app.composer.set_text(text);
-        h.app.overlay = overlay;
+    {
+        h.app.composer.set_text("/help");
+        h.app.overlay = Overlay::Palette { selected: 0 };
         assert!(matches!(
             h.app.on_key(legacy),
             Some(Action::Submit { follow: true })
         ));
-        assert_eq!(h.app.composer.text(), text);
+        assert_eq!(h.app.composer.text(), "/help");
     }
     h.app.composer.set_text("retained draft");
     for panel in [Panel::Help, Panel::Sessions, Panel::Find, Panel::Files] {
