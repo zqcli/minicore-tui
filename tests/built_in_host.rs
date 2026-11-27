@@ -29,6 +29,7 @@ use tokio::{
 };
 
 const KEY_NAME: &str = "MINICORE_TUI_EMBED_FIXTURE_KEY";
+const HOST_PROMPT: &str = "# Shared Host fixture";
 const ANSWER: &str = "Native in-process answer 🐈";
 const REASONING: &str =
     "**Preparing project inspection**\n**Preparing project inspection**\n检查 🐈";
@@ -101,6 +102,30 @@ async fn embedded_host_probe() {
     };
     let server = ScriptedServer::start(api).await;
     let home = fixture(&root, &server.endpoint, api);
+    if case == "chat" {
+        std::fs::create_dir(home.dir().join("prompt")).unwrap();
+        for (declaration, relative, text) in [
+            ("host.json", "prompt/host.md", HOST_PROMPT),
+            (
+                "roles/fixture.json",
+                "../prompt/role.md",
+                "Native Role fixture",
+            ),
+            (
+                "agents/fixture.json",
+                "../prompt/agent.md",
+                "Native Agent fixture",
+            ),
+        ] {
+            let path = home.dir().join(declaration);
+            std::fs::write(path.parent().unwrap().join(relative), text).unwrap();
+            let mut settings: Value =
+                serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            settings.as_object_mut().unwrap().remove("instructions");
+            settings["instructions_file"] = json!(relative);
+            std::fs::write(path, serde_json::to_vec(&settings).unwrap()).unwrap();
+        }
+    }
     let launch = launch(&home);
     let mut hosted = Hosted::open(&launch).await.unwrap();
     let client = hosted.client();
@@ -175,6 +200,21 @@ async fn embedded_host_probe() {
     let request = server.reached.await.unwrap();
     assert_eq!(request["model"], "fixture-provider-model");
     assert_eq!(request["stream"], true);
+    if case == "chat" {
+        let system: Vec<_> = request["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|message| message["role"] == "system")
+            .collect();
+        for (message, expected) in
+            system[..3]
+                .iter()
+                .zip([HOST_PROMPT, "Native Role fixture", "Native Agent fixture"])
+        {
+            assert_eq!(message["content"], expected);
+        }
+    }
     if api == OpenAiModelApi::Responses {
         assert_eq!(request["store"], false);
         assert!(request.get("input").is_some());
@@ -313,6 +353,10 @@ async fn reopen(root: &Path) {
     let renamed = home.dir().join("agents").join("renamed.json");
     let mut declaration: Value = serde_json::from_slice(&std::fs::read(&source).unwrap()).unwrap();
     declaration["name"] = "Renamed declared Agent".into();
+    declaration
+        .as_object_mut()
+        .unwrap()
+        .remove("instructions_file");
     declaration["instructions"] = "Instructions for future Sessions".into();
     std::fs::rename(source, &renamed).unwrap();
     std::fs::write(renamed, serde_json::to_vec(&declaration).unwrap()).unwrap();

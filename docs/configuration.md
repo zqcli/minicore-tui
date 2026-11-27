@@ -85,12 +85,16 @@ Edit the generated `host.json` using native Host configuration fields:
 | Field | Meaning |
 |---|---|
 | `name` | Human-readable Host name |
-| `framework_instructions` | Optional shared framework text; empty by default |
+| `instructions` | Optional shared prompt text; empty by default |
+| `instructions_file` | Optional Markdown file instead of shared inline text |
 | `models` | Explicit model resources and declared capabilities |
 | `tools` | Tool bindings available from this Host |
 | `workspace_roots` | Allowed workspace catalog roots |
 | `network` | Native network settings; embedded TUI requires `listen: null` |
 | `logging` | Diagnostic level and destination |
+
+For existing `host.json` files, rename `framework_instructions` to
+`instructions` (or remove the old key if empty). It is no longer accepted.
 
 Each model has a full reference, explicit API, complete endpoint, provider model
 name, credential source and declared capabilities. A model entry looks like:
@@ -131,7 +135,7 @@ Web deployment uses its own `web.json` and is independent of this TUI directory.
 ## Roles, Agents and Sessions
 
 Each `roles/<role>.json` contains `name`, `description` and optional
-`instructions`. Each Agent file contains:
+`instructions` or `instructions_file`. Each Agent file contains:
 
 | Field | Meaning |
 |---|---|
@@ -139,7 +143,15 @@ Each `roles/<role>.json` contains `name`, `description` and optional
 | `name` | Display name, such as `Coding assistant` |
 | `role` | Role filename stem, such as `coding` for `roles/coding.json` |
 | `instructions` | Optional Agent-specific text; empty by default |
+| `instructions_file` | Optional Markdown file instead of inline Agent text |
 | `session_defaults` | Complete native defaults for model, reasoning, tools, execution and workspace |
+
+For all three declarations, use inline text or a file, not both. With a
+`prompt/` directory next to `roles/` and `agents/`, set
+`"instructions_file": "prompt/host.md"` in `host.json` or
+`"instructions_file": "../prompt/lead.md"` in `roles/lead.json`. Agent paths
+work like Role paths. The embedded Host resolves paths relative to each JSON
+file, reads UTF-8 Markdown, and rejects paths outside the configuration directory.
 
 Retain the complete generated `session_defaults` object when editing values.
 `role` names exactly one file stem in `roles/`. It cannot contain a path.
@@ -167,7 +179,7 @@ Agent, add an Agent declaration and `/reload` first. `/new` creates a Session
 from the selected Agent's current defaults, with the current `--workspace`
 override. Opening an existing Session preserves its saved workspace.
 
-Host assembles nonempty prompt layers in order: framework, Role, Agent, workspace
+Host assembles nonempty prompt layers in order: Host, Role, Agent, workspace
 and history. Empty instruction strings add no placeholder prompt. Role name and
 description do not substitute for instructions. Updating Role or Agent files
 changes future Session defaults; existing Sessions and already running Turns
