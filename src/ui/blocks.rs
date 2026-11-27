@@ -174,9 +174,6 @@ fn group_row(summary: &GroupSummary, open: bool, styles: Styles, width: usize) -
     if summary.tools > 0 {
         parts.push(plural(summary.tools as u64, "tool"));
     }
-    if summary.agents > 0 {
-        parts.push(plural(summary.agents as u64, "agent"));
-    }
     if let Some(changes) = summary.changes.filter(|changes| !changes.is_empty()) {
         let files = format!("{} changed", plural(changes.files as u64, "file"));
         parts.push(match changes.lines {

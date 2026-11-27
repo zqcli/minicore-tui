@@ -93,7 +93,7 @@ impl Default for BlockMeta {
 /// How a Turn's work folds. Each run of work between two user messages (a
 /// steer splits a Turn) is one group: its tools, thinking and the notes the
 /// model wrote between tool calls. The text that ends the run is its answer
-/// and stays outside, as do Agent cards.
+/// and stays outside.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum Grouping {
     #[default]
@@ -152,7 +152,6 @@ pub struct GroupSummary {
     pub thinking: bool,
     pub duration: Option<std::time::Duration>,
     pub tools: usize,
-    pub agents: usize,
     pub failed: usize,
     pub changes: Option<ChangeSummary>,
     pub latest: Option<(StepKind, String)>,
@@ -167,18 +166,6 @@ pub enum StepKind {
     Stopped,
     Thinking,
     Note,
-}
-
-/// A step of a Turn's work: any tool call without a delegation, or thinking
-/// without text. Notes are found by position, see [`Transcript::regroup`].
-fn is_step(block: &Block) -> bool {
-    match block {
-        Block::Tool(call) => call.agent_card.is_none() && call.delegations.is_empty(),
-        Block::Assistant {
-            text, reasoning, ..
-        } => text.trim().is_empty() && !reasoning.trim().is_empty(),
-        _ => false,
-    }
 }
 
 fn failed(call: &ToolCall) -> bool {
@@ -467,12 +454,11 @@ impl Transcript {
                     .find_map(|source| source.turn_id.as_ref())
             })
         };
-        let members: Vec<usize> = (0..self.blocks.len())
-            .filter(|&index| turn_of(index) == Some(turn))
-            .collect();
-        let (Some(&first), Some(&last)) = (members.first(), members.last()) else {
+        let mut members = (0..self.blocks.len()).filter(|&index| turn_of(index) == Some(turn));
+        let Some(first) = members.next() else {
             return;
         };
+        let last = members.next_back().unwrap_or(first);
         let end = self.blocks[first..=last]
             .iter()
             .rev()
@@ -497,7 +483,7 @@ impl Transcript {
                 if !segments.last().is_some_and(Vec::is_empty) {
                     segments.push(Vec::new());
                 }
-            } else if members.binary_search(&index).is_ok() && !meta.absorbed {
+            } else if turn_of(index) == Some(turn) && !meta.absorbed {
                 segments.last_mut().expect("one segment").push(index);
             }
         }
@@ -533,9 +519,7 @@ impl Transcript {
                     Block::Assistant {
                         text, reasoning, ..
                     } if text.trim().is_empty() && reasoning.trim().is_empty() => false,
-                    block @ Block::Assistant { .. } => {
-                        live || is_step(block) || Some(position) != last_answer
-                    }
+                    Block::Assistant { .. } => Some(position) != last_answer,
                     _ => false,
                 })
                 .map(|(_, &index)| index)
@@ -544,7 +528,6 @@ impl Transcript {
                 .iter()
                 .filter(|&&index| matches!(self.blocks[index], Block::Tool(_)))
                 .count();
-            let agents = 0;
             // Live, the run folds from its very first step (thinking, text or
             // tool) so Working tracks progress immediately. Done, a run folds
             // when it has multiple tool/agent steps or any thinking on the
@@ -566,7 +549,7 @@ impl Transcript {
             let grouped = if live {
                 !steps.is_empty()
             } else {
-                (steps.len() >= 2 && tools + agents >= 1) || has_thinking
+                (steps.len() >= 2 && tools > 0) || has_thinking
             };
             let head_index = steps
                 .first()
@@ -607,7 +590,6 @@ impl Transcript {
                 }),
                 duration,
                 tools,
-                agents,
                 failed: steps
                     .iter()
                     .filter(
@@ -617,15 +599,16 @@ impl Transcript {
                 changes: end.filter(|_| final_run).and_then(|(_, changes)| changes),
                 latest: steps.last().and_then(|&index| latest(&self.blocks[index])),
             };
+            let mut members = steps.iter().copied().peekable();
             for &index in &blocks {
-                let grouping = match steps.iter().position(|&step| step == index) {
-                    Some(0) if grouped => Grouping::Head {
+                let grouping = match grouped && members.next_if_eq(&index).is_some() {
+                    true if Some(index) == head_index => Grouping::Head {
                         turn: turn.clone(),
                         segment,
                         summary: summary.clone(),
                         open,
                     },
-                    Some(_) if grouped => Grouping::Member {
+                    true => Grouping::Member {
                         turn: turn.clone(),
                         segment,
                         open,
