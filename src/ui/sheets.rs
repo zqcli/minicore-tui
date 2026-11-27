@@ -292,7 +292,7 @@ pub fn completion_sheet(app: &App, styles: Styles) -> Option<Sheet> {
             let status = if browser.pending.is_some() {
                 "Loading…".into()
             } else {
-                plural(rows.len() as u64, "entry")
+                plural(rows.len() as u64, "item")
             };
             let mut sheet = Sheet::new(
                 "Files",
