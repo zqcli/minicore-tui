@@ -1,14 +1,18 @@
 # Changelog
 
-## Unreleased
+## 0.12.18 — 2026-11-27
 
+- Embed MiniCore Host 0.12.18. Share connection settings across models through
+  named providers. Responses streams default to SSE; providers can opt into WSS.
+  Update older flat `models` entries as described in [Host resources](docs/configuration.md#host-resources).
+- Control upstream hosted web search with `/search` for the current Responses
+  Session and see its mode in the footer.
 - Browse prompt templates with `/command` or `/cmd`; selection fills the editor
   without sending. `/cmd <name>` avoids built-in command name collisions and
   expands templates for both steer and follow-up input.
 - Add explicit native clipboard paste (`Ctrl+V` / `Alt+V`): copied files insert
   path references; screenshot pixels are saved as temporary PNGs and referenced
   by path. Keep long-text paste chips and reject late replies to a changed editor.
-
 - Replace recursive `@` file completion with an on-demand Host directory browser:
   separate filter, authorized parent navigation, absolute path jumps, quoted
   relative/absolute references, and keyboard/mouse selection without reading or
@@ -18,6 +22,10 @@
   picker. Search includes the preview even after renaming.
 - Keep Agent dispatch subjects visible on narrow terminals by reducing metadata first.
 - Preserve named nested delegations’ actual task prompt previews in the details pane.
+- Keep child drafts and text selection in their own Tasks pane, preserve nested
+  task cards, and restore Working groups after recovering a streaming gap.
+- Keep diff paths and page navigation stable, preserve Markdown code and copied
+  list indentation, and let `/remote off` cancel a pending startup.
 
 ## 0.12.17 — 2026-11-27
 

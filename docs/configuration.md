@@ -1,6 +1,6 @@
 # Configuration
 
-Version 0.12.17 uses one JSON configuration directory for the embedded Host and
+Version 0.12.18 uses one JSON configuration directory for the embedded Host and
 terminal frontend. Host owns `host.json`, Agent declarations and reusable Roles.
 The TUI reads and writes only `tui.json`; it passes the resolved directory to
 Host's Rust startup API.
@@ -17,13 +17,13 @@ even if empty `agents/` or `roles/` directories already exist. These include one
 shared Host starter configuration, one Role, one Agent,
 `tui.json` and `commands/`. Setup prints the files and exits with status 1.
 The sample Agent records the absolute `--workspace` directory, or the current
-working directory, at initialization. Its example provider endpoint must be
+working directory, at initialization. Its example provider `baseurl` must be
 replaced before use. Argument and configuration failures exit with status 2
 before fullscreen startup.
 
 | Path | Owner and purpose |
 |---|---|
-| `<config-dir>/host.json` | Host resources, framework instructions, logging and network settings |
+| `<config-dir>/host.json` | Host resources, shared instructions, logging and network settings |
 | `<config-dir>/roles/*.json` | Reusable Role values referenced by Agent declarations |
 | `<config-dir>/agents/*.json` | Named Agent declarations with stable keys and Session defaults |
 | `<config-dir>/tui.json` | Local theme, editor and bell preferences |
@@ -87,7 +87,8 @@ Edit the generated `host.json` using native Host configuration fields:
 | `name` | Human-readable Host name |
 | `instructions` | Optional shared prompt text; empty by default |
 | `instructions_file` | Optional Markdown file instead of shared inline text |
-| `models` | Explicit model resources and declared capabilities |
+| `providers` | Named upstream connections, credentials and stream settings |
+| `models` | Selection names, provider references, upstream IDs and capabilities |
 | `tools` | Tool bindings available from this Host |
 | `workspace_roots` | Allowed workspace catalog roots |
 | `network` | Native network settings; embedded TUI requires `listen: null` |
@@ -96,28 +97,46 @@ Edit the generated `host.json` using native Host configuration fields:
 For existing `host.json` files, rename `framework_instructions` to
 `instructions` (or remove the old key if empty). It is no longer accepted.
 
-Each model has a full reference, explicit API, complete endpoint, provider model
-name, credential source and declared capabilities. A model entry looks like:
+One named provider can serve multiple models. Keep the connection and credentials
+under `providers`, and give each model a unique selection `name` and upstream
+`model` ID. For example, edit these two sections of the generated configuration:
 
 ```json
 {
-  "model": "provider/chat",
-  "api": "chat_completions",
-  "endpoint": "https://provider.example.invalid/v1/chat/completions",
-  "provider_model": "replace-with-provider-model",
-  "api_key_env": "MINICORE_MODEL_KEY",
-  "context_window": 128000,
-  "supported_reasoning": ["auto"],
-  "supports_tools": true,
-  "request_timeout_ms": 120000
+  "providers": {
+    "gateway": {
+      "baseurl": "https://provider.example.invalid/v1",
+      "api": "chat_completions",
+      "api_key": "$MINICORE_MODEL_KEY",
+      "request_timeout_ms": 120000
+    }
+  },
+  "models": [{
+    "name": "provider/chat",
+    "provider": "gateway",
+    "model": "replace-with-provider-model",
+    "context_window": 128000,
+    "reasoning": ["auto"],
+    "supports_tools": true
+  }]
 }
 ```
 
-For Responses select `"api": "responses"` and the provider's full Responses
-endpoint. Host does not infer the API from the endpoint or fall back to another
-protocol. `/model` and `/reasoning` use the Host catalog and its actual declared
-capabilities. `api_key_env` names an environment variable; it never contains the
-credential itself. Production resource preparation resolves that variable.
+Set `baseurl` to the API root, including any prefix such as `/v1`. Host appends
+`/chat/completions` or `/responses` according to `api`. Use HTTPS for remote
+providers; plain HTTP is limited to literal loopback addresses. Responses uses
+SSE unless the provider declares `"stream": "wss"`. WSS falls back to SSE on
+an unsupported upgrade or explicit pre-start WebSocket route rejection. An
+ambiguous or started request is not replayed. `api_key` accepts a literal or a complete
+`$VARIABLE_NAME` reference. Prefer the latter to keep credentials outside JSON.
+
+When upgrading an old flat `models` list, move API, credentials, timeout and
+address into a named provider, and remove the method suffix from `endpoint`
+to form `baseurl`. For old `wss://` endpoints use `https://` plus `"stream": "wss"`.
+Convert `api_key_env: "KEY"` to `api_key: "$KEY"`. In each model, move old
+`model` to `name`, `provider_model` to `model` and `supported_reasoning` to
+`reasoning`, and add the provider reference. Existing Session references remain
+valid when the new `name` matches the former model alias.
 
 The starter enables `read`, `write`, `edit`, `apply_patch`, `bash` and `agent`.
 Agent and Session configuration select tools and execution policy. Host owns
@@ -128,9 +147,8 @@ path; initialization creates its parent so diagnostics cannot corrupt the termin
 not target Host metadata or Session history. Stderr logging is accepted only
 when stderr is redirected away from the terminal.
 
-`network.listen` must be `null`. This executable runs one local embedded Host.
-It exposes no browser server, phone protocol or remote connection interface.
-Web deployment uses its own `web.json` and is independent of this TUI directory.
+`network.listen` must be `null` for the embedded Host. Use `/remote` and the
+TUI preferences above to expose it on demand. The TUI does not serve Web UI assets.
 
 ## Roles, Agents and Sessions
 

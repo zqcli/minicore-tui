@@ -8,17 +8,17 @@ and fix the inaccurate description.
 ## Project and boundaries
 
 `minicore-tui` is a Rust 2024 fullscreen terminal frontend using ratatui and
-crossterm. It embeds MiniCore Host 0.12.17 and calls its typed Rust client through
+crossterm. It embeds MiniCore Host 0.12.18 and calls its typed Rust client through
 `HostClient::in_process`. The executable contains the native resource builder,
 provider implementations and built-in tools. Host owns execution, credentials,
 Agents, Sessions, persistence, compaction and workspace operations. The TUI owns
 terminal interaction and presentation.
 
 There is no child Agent process, stdio RPC adapter, frontend protocol DTO layer,
-Webpage server, browser assets, phone protocol or remote-control mode. Do not
-restore them as compatibility shims. A backend defect belongs in Host, not in
-a frontend imitation of Host state. Only change a backend repository after
-confirming that is where the behavior belongs.
+embedded Web UI, or phone protocol. `/remote` uses the embedded Host's native
+transport. Do not restore removed layers as compatibility shims. A backend defect
+belongs in Host, not in a frontend imitation of Host state. Only change a backend
+repository after confirming that is where the behavior belongs.
 
 See [docs/design-host.md](docs/design-host.md) for this migration's contracts.
 Historical design notes are not the current interface specification.
@@ -90,7 +90,7 @@ frame counts/timings on exit.
   and test pure logic everywhere. Use `Path`/`join`, executable suffix constants
   and native path formatting. Do not add platform-specific latency elsewhere.
 - Never put credentials into config examples, logs, test fixtures or errors.
-  `api_key_env` names the source; production resource preparation reads it.
+  Use `"api_key": "$VARIABLE_NAME"` in examples; Host resolves the variable.
 
 ## Behavior contracts
 

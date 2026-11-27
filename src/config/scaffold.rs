@@ -49,9 +49,9 @@ pub(super) fn first_run_message(directory: &ConfigDirectory, created: &[PathBuf]
         .join("\n");
     format!(
         "Created initial JSON configuration:\n{files}\n\n\
-Edit {} with your provider's full endpoint, model and declared capabilities.\n\
-Set api to chat_completions or responses; the Host never guesses or falls back.\n\
-api_key_env names an environment variable: export the key there, never in JSON.\n\
+Edit {}: under providers, set baseurl to the API root (for example, https://provider.example/v1).\n\
+Set api to chat_completions or responses, and configure the model ID and capabilities under models.\n\
+For api_key, prefer an environment reference such as $MINICORE_MODEL_KEY. Export it before starting.\n\
 Edit agents/*.json for named Agents and Session defaults; roles/*.json holds reusable Roles.\n\
 The sample Agent uses the workspace selected during initialization.\n\
 Host loads this directory on every start and creates or updates declared Agents.\n\

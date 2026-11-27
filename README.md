@@ -1,8 +1,8 @@
 # minicore-tui
 
 `minicore-tui` is a fullscreen terminal frontend for
-[minicore-host](https://github.com/zqcli/minicore-host). Version 0.12.17 embeds
-Host 0.12.17 in the same executable and uses its typed Rust client through
+[minicore-host](https://github.com/zqcli/minicore-host). Version 0.12.18 embeds
+Host 0.12.18 in the same executable and uses its typed Rust client through
 `HostClient::in_process`. Host owns Agents, Sessions, execution, tools,
 credentials, history and persistence; the TUI owns terminal interaction and
 presentation.
@@ -29,11 +29,11 @@ target/release/minicore-tui --config-dir ./config --workspace ./project
 ```
 
 A fresh configuration directory gets JSON starter files and setup instructions, then
-exits. Edit the generated native Host model configuration with the provider's
-full endpoint, explicit `chat_completions` or `responses` API, model name and
-capabilities. Export the credential using the environment-variable name in
-`api_key_env`, then run the same command again. No live provider or credential
-is needed to run the automated tests.
+exits. In `host.json`, set the provider's `baseurl`, `api` (`chat_completions`
+or `responses`) and `api_key`, then set the upstream model and its capabilities
+in `models`. Prefer an environment reference such as `"$MINICORE_MODEL_KEY"`
+for `api_key` and export that variable before restarting. The [Host resource guide](docs/configuration.md#host-resources)
+covers the schema and migration. Tests need no live provider or credential.
 
 | File or directory | Owner and purpose |
 |---|---|

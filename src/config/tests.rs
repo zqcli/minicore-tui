@@ -14,6 +14,8 @@ fn first_run_uses_the_shared_host_skeleton_without_creating_runtime_records() {
         panic!("expected first-run instructions");
     };
     assert!(message.contains("chat_completions or responses"));
+    assert!(message.contains("under providers, set baseurl"));
+    assert!(message.contains("$MINICORE_MODEL_KEY"));
     let loaded = minicore_host_config::load_config_directory(directory.dir()).unwrap();
     assert_eq!(
         loaded.host.models[0].model,
