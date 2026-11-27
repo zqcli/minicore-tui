@@ -258,9 +258,7 @@ impl App {
         if self.has_interaction()
             || !matches!(
                 self.overlay,
-                crate::app::Overlay::None
-                    | crate::app::Overlay::Palette { .. }
-                    | crate::app::Overlay::Files { .. }
+                crate::app::Overlay::None | crate::app::Overlay::Palette { .. }
             )
         {
             return;

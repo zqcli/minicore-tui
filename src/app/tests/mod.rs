@@ -1,6 +1,7 @@
 mod agent_cards;
 mod editor;
 mod errors;
+mod files;
 mod harness;
 mod management;
 mod native;

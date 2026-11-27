@@ -116,7 +116,10 @@ edits; Ctrl+Z and Ctrl+Y restore or replay them.
 - **Unified popups, sheets and split workspaces:** `/` commands and `@` files
   float directly above the pinned composer (keeping the Activity Line visible
   during long runs) with structured argument hints, active-value/hotkey badges,
-  `PgUp`/`PgDn` paging and double-click confirmation. All pickers share one
+  `PgUp`/`PgDn` paging and double-click confirmation. `@` browses one Host-authorized
+  directory at a time, with a separate filter, parent navigation and absolute
+  path jumps. Selecting a file inserts a quoted path reference without reading
+  or attaching its contents. All pickers share one
   bottom-sheet style (`▎` selection highlight, unified `/ ` filter with `Ctrl+U`
   clear, single-click select / double-click confirm). `/diff` shares the exact
   two-pane workspace engine as `Ctrl+B` (compact 1-line searchable file list,

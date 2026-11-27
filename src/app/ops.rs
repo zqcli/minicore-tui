@@ -1,6 +1,6 @@
 //! Install results only into their captured resident Session.
 
-use super::{App, Overlay, Session, SessionOp, UsageHistory, tasks};
+use super::{App, Session, SessionOp, UsageHistory, tasks};
 use minicore_host_protocol::*;
 
 impl App {
@@ -365,19 +365,6 @@ impl App {
                 self.refresh_inputs(epoch);
                 self.refresh_control_for(epoch);
             }
-            SessionOp::Files(result) => {
-                if !self.resident.is_current(epoch) {
-                    return;
-                }
-                match result {
-                    Ok(paths) => {
-                        if let Overlay::Files { paths: current, .. } = &mut self.overlay {
-                            *current = paths;
-                        }
-                    }
-                    Err(error) => self.error(error),
-                }
-            }
             SessionOp::ChangeFiles(result) => {
                 if self.resident.is_current(epoch) {
                     self.on_change_files(result);
@@ -389,49 +376,5 @@ impl App {
                 }
             }
         }
-    }
-    pub(super) fn list_files(&self) {
-        let Some(session) = self.resident.current() else {
-            return;
-        };
-        let epoch = session.epoch;
-        let client = session.client.clone();
-        self.spawn_for(epoch, async move {
-            let result = async {
-                let mut cursor = None;
-                let mut paths = Vec::new();
-                loop {
-                    let page = client
-                        .workspace_files(
-                            minicore_host_workspace::FilesRequest {
-                                directory: String::new(),
-                                recursive: true,
-                                query: None,
-                                cursor,
-                                limit: 500,
-                            },
-                            tasks::options(),
-                        )
-                        .await
-                        .map_err(|e| e.to_string())?;
-                    paths.extend(
-                        page.data
-                            .entries
-                            .into_iter()
-                            .filter(|entry| {
-                                entry.kind != minicore_host_workspace::FileKind::Directory
-                            })
-                            .map(|entry| entry.path),
-                    );
-                    cursor = page.data.next_cursor;
-                    if cursor.is_none() {
-                        break;
-                    }
-                }
-                Ok(paths)
-            }
-            .await;
-            SessionOp::Files(result)
-        });
     }
 }

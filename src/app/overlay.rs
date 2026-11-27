@@ -72,10 +72,10 @@ pub enum Overlay {
         /// On narrow terminals (`< 96` cols), toggles between list and child conversation.
         detail_open: bool,
     },
-    /// The inline `@` file list; its filter is the composer's `@token`.
+    /// The inline Host file browser; its filter never edits the draft.
     Files {
         selected: usize,
-        paths: Vec<String>,
+        browser: super::files::FileBrowser,
     },
     Context {
         scroll: usize,
@@ -483,26 +483,6 @@ impl Panel {
     }
 }
 
-/// The workspace paths containing the typed filter, case-insensitively; a
-/// match in the file name ranks before one only in the directories.
-pub fn matching_paths<'a>(paths: &'a [String], filter: &str) -> Vec<&'a String> {
-    let filter = filter.to_lowercase();
-    let mut matches: Vec<&String> = paths
-        .iter()
-        .filter(|path| path.to_lowercase().contains(&filter))
-        .collect();
-    matches.sort_by_cached_key(|path| {
-        let name = file_name(path).to_lowercase();
-        (!name.starts_with(&filter), !name.contains(&filter))
-    });
-    matches
-}
-
-/// The last component of a workspace path.
-pub fn file_name(path: &str) -> &str {
-    path.rsplit('/').next().unwrap_or(path)
-}
-
 /// The models whose id fuzzy-matches `filter`, in catalog order.
 pub fn matching_models<'a>(
     models: &'a [ModelDescription],
@@ -596,10 +576,12 @@ impl App {
             self.open_unconfirmed();
             return;
         }
+        if panel == Panel::Files {
+            self.open_files();
+            return;
+        }
         if self.resident.current().is_none() {
-            // `workspace.files` needs a loaded session.
             let hint = match panel {
-                Panel::Files => Some("@ file completion needs a session: send a message first"),
                 _ if panel.needs_session() => Some("No session is open"),
                 _ => None,
             };
@@ -611,7 +593,7 @@ impl App {
             }
         }
         self.overlay = match panel {
-            Panel::Unconfirmed | Panel::AgentDelete => {
+            Panel::Unconfirmed | Panel::AgentDelete | Panel::Files => {
                 unreachable!("confirmation panels open before session panels")
             }
             Panel::Delegations => Overlay::Delegations {
@@ -646,13 +628,6 @@ impl App {
                         .iter()
                         .position(|level| Some(*level) == current)
                         .unwrap_or(0),
-                }
-            }
-            Panel::Files => {
-                self.list_files();
-                Overlay::Files {
-                    selected: 0,
-                    paths: Vec::new(),
                 }
             }
             Panel::Context => {
@@ -946,12 +921,6 @@ impl App {
             _ => {}
         }
         None
-    }
-
-    /// The `@token` that ends at the cursor, without its `@`.
-    pub fn mention_query(&self) -> Option<&str> {
-        let text = self.composer.text();
-        text[self.word_start()..self.composer.cursor()].strip_prefix('@')
     }
 
     /// Where the whitespace-delimited word before the cursor begins.

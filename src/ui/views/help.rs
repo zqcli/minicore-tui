@@ -86,7 +86,7 @@ const KEYS: &[KeyRow] = &[
     },
     KeyRow {
         keys: "@",
-        action: "file picker (at word start)",
+        action: "file browser: filter, folders or absolute path",
     },
     KeyRow {
         keys: "ctrl+r",

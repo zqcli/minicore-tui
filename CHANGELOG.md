@@ -5,6 +5,10 @@
 - Browse prompt templates with `/command` or `/cmd`; selection fills the editor
   without sending. `/cmd <name>` avoids built-in command name collisions and
   expands templates for both steer and follow-up input.
+- Replace recursive `@` file completion with an on-demand Host directory browser:
+  separate filter, authorized parent navigation, absolute path jumps, quoted
+  relative/absolute references, and keyboard/mouse selection without reading or
+  sending file contents.
 
 ## 0.12.17 — 2026-11-27
 

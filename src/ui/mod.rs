@@ -105,13 +105,12 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> Option<Position> {
         return None;
     }
     draw_rows(frame, slot_area, &dock.editor);
-    // The composer has the keys while no view or picker does; a completion
-    // list is typed into through it, and Ctrl+B can focus its child reply box.
+    // The command list edits the composer; the file browser has its own filter.
+    // Ctrl+B can focus its child reply box.
     if matches!(
         app.overlay,
         Overlay::None
             | Overlay::Palette { .. }
-            | Overlay::Files { .. }
             | Overlay::Delegations { .. }
             | Overlay::Unconfirmed {
                 mode: crate::app::unconfirmed::ReviewMode::Edit(_),

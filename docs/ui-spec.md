@@ -331,6 +331,11 @@ Defined in `ui/theme.rs` for dark and light; both palettes define every token.
   command and `@` file completion semi-popups.
 - `/` and `@` completion popups float directly **above the pinned composer**
   (and below the Activity Line so long-running task status stays visible).
+- `@` has its own filter, leaving the draft unchanged while browsing. Show the
+  current directory below the filter, folders with a trailing `/`, and an
+  authorized `../` row. Enter opens a folder or inserts a file reference; an
+  absolute path in the filter is resolved by Host. Loading and failures stay
+  in the popup. Esc closes it without submitting or changing the draft.
 - Title in the top rule, count or state at the right of the rule.
 - Unified `/ query▌` filter bar directly under the title when filterable (`Ctrl+U` clears).
 - Rows: `▎` accent bar + selection highlight surface on the selected row, `✓`

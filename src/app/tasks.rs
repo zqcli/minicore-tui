@@ -100,7 +100,6 @@ pub enum SessionOp {
         removed: Vec<QueuedInputRecord>,
         error: Option<String>,
     },
-    Files(Result<Vec<String>, String>),
     ChangeFiles(Result<Vec<minicore_host_workspace::ChangeRecord>, CallError>),
     DiffFile(
         super::diff::DiffQuery,

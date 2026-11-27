@@ -7,6 +7,7 @@ pub mod composer;
 mod control;
 pub mod diff;
 mod draft;
+pub mod files;
 pub mod find;
 pub mod keys;
 mod live;
@@ -101,6 +102,7 @@ pub enum Msg {
     AgentCreated(u64, Result<SessionRef, String>),
     Reloaded(Result<Box<Reloaded>, String>),
     Session(u64, Box<SessionOp>),
+    Files(u64, Result<DirectoryListResult, String>),
     LocalPushed(u64, Result<MessageAccepted, CallError>),
     Failed(String),
     Notice(NoticeLevel, String),
@@ -510,6 +512,7 @@ impl App {
                     self.with_notice_for(&target, |app| app.on_op(epoch, *op));
                 }
             }
+            Msg::Files(request, result) => self.on_files(request, result),
             Msg::Notice(level, text) => self.notice(level, text),
             Msg::DraftEdited(draft) => self.composer.restore_text(&draft),
             Msg::Flash(text) => self.flash = Some((text, tokio::time::Instant::now())),

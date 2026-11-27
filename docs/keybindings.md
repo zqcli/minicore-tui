@@ -129,7 +129,7 @@ confirmation in `F8` does not remove an accepted input from the Host queue.
 | `Ctrl+X` | Cut an editor selection; otherwise copy the last assistant answer. |
 | `Ctrl+G` | Open the external editor configured by `ui.editor` in `tui.json`, then `$VISUAL`, then `$EDITOR`. Failures preserve the original draft; if terminal restoration fails, the error names the retained edited file. |
 | `/` at draft start | Open the floating command semi-popup above the composer (shows args, active values and hotkeys; `↑↓`/`PgUp`/`PgDn`, `Tab` complete, `Enter` or double-click run). |
-| `@` at word start | Open the floating Host workspace file semi-popup above the composer (`↑↓`/`PgUp`/`PgDn`, `Tab`/`Enter` or double-click insert); an `@` within a word stays text. |
+| `@` at word start | Open the Host file browser at the current workspace. Type or paste into its separate filter; `↑↓`/`PgUp`/`PgDn` choose, `Enter`/`Tab` or double-click opens a folder or inserts a file reference. An `@` within a word stays text. |
 | `Home`, `End`, `Ctrl+A`, `Ctrl+E` | Move to the line start or end. `Home` with an empty draft and `End` also navigate the transcript as described below. |
 | `←`, `→` | Move by grapheme. |
 | `Ctrl+←`, `Ctrl+→`, `Alt+←`, `Alt+→` | Move by word. |
@@ -277,8 +277,15 @@ Session filter clears its pending delete confirmation.
 | Context (`/context`) | A full-screen view. Show configured and active model facts, native history/projection counts, queue counts, compaction and save state. `r` refreshes; `c` copies. |
 | Models | Filter model references; Enter selects one. The declared context window is model metadata. |
 | Reasoning | Enter applies the selected native preference. |
-| Files (`@`) | Filter the returned workspace paths. Enter or Tab inserts `@path `. Enter with no match does nothing. This inserts text, not an attachment. |
+| Files (`@`) | Filter names in the current directory; `Ctrl+U` clears. Enter/Tab or double-click on a folder or `..` navigates and clears the filter. Type or paste an absolute path (spaces allowed) and press Enter to open that folder or select that file. Files insert `@path `, with quotes when needed. Esc preserves the draft; failed navigation preserves the folder and filter. Nothing is read or sent. |
 | Find | Type a case-insensitive query. Enter, Down or Tab advances; Shift+Enter or Up goes back. Matching folded content opens. Esc leaves the transcript at the selected match. |
+
+File browsing uses Host `workspace.list`: the active Session workspace plus configured
+`workspace_roots` are the boundary. Parent navigation is offered only when Host
+authorizes it. A file inside the current workspace uses a relative reference;
+a permitted file outside uses its absolute path. Choosing a reference does not
+change the Session workspace or grant a tool access. With no Session, only
+configured Host roots can be browsed.
 
 The Context report does not display an invented current token total or
 percentage. Provider input/output/cache/reasoning counts belong to the latest

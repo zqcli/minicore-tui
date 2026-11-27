@@ -282,16 +282,7 @@ async fn follow_up_alias_preserves_newlines_paste_and_focused_editors() {
         KeyModifiers::ALT | KeyModifiers::CONTROL,
     );
     #[cfg(unix)]
-    for (text, overlay) in [
-        ("/help", Overlay::Palette { selected: 0 }),
-        (
-            "@src",
-            Overlay::Files {
-                selected: 0,
-                paths: vec!["src/main.rs".into()],
-            },
-        ),
-    ] {
+    for (text, overlay) in [("/help", Overlay::Palette { selected: 0 })] {
         h.app.composer.set_text(text);
         h.app.overlay = overlay;
         assert!(matches!(
@@ -301,7 +292,7 @@ async fn follow_up_alias_preserves_newlines_paste_and_focused_editors() {
         assert_eq!(h.app.composer.text(), text);
     }
     h.app.composer.set_text("retained draft");
-    for panel in [Panel::Help, Panel::Sessions, Panel::Find] {
+    for panel in [Panel::Help, Panel::Sessions, Panel::Find, Panel::Files] {
         h.app.open_panel(panel);
         assert!(h.app.on_key(legacy).is_none());
         assert!(!h.app.overlay.is_none());
@@ -551,11 +542,13 @@ async fn query_paste_dispatch_preserves_other_editors_and_read_only_boundaries()
     h.app.composer.set_text("@");
     h.app.overlay = Overlay::Files {
         selected: 1,
-        paths: vec!["src/main.rs".into()],
+        browser: Default::default(),
     };
     h.app.on_paste("src");
-    assert_eq!(h.app.composer.text(), "@src");
-    assert!(matches!(h.app.overlay, Overlay::Files { selected: 0, .. }));
+    assert_eq!(h.app.composer.text(), "@");
+    assert!(
+        matches!(&h.app.overlay, Overlay::Files { selected: 0, browser } if browser.filter == "src")
+    );
 
     h.app.overlay = Overlay::Unconfirmed {
         selected: 0,
@@ -563,7 +556,7 @@ async fn query_paste_dispatch_preserves_other_editors_and_read_only_boundaries()
     };
     h.app.on_paste("line one\r\nline two");
     assert_eq!(h.app.unconfirmed_editor.text(), "line one\nline two");
-    assert_eq!(h.app.composer.text(), "@src");
+    assert_eq!(h.app.composer.text(), "@");
     for panel in [
         Panel::Help,
         Panel::Error,
@@ -572,7 +565,7 @@ async fn query_paste_dispatch_preserves_other_editors_and_read_only_boundaries()
     ] {
         h.app.open_panel(panel);
         h.app.on_paste("/new\ny\n");
-        assert_eq!(h.app.composer.text(), "@src");
+        assert_eq!(h.app.composer.text(), "@");
     }
     h.app.open_panel(Panel::Sessions);
     h.ctrl(KeyCode::Char('n'));
@@ -594,7 +587,7 @@ async fn query_paste_dispatch_preserves_other_editors_and_read_only_boundaries()
     });
     h.app.on_paste("blocked query");
     assert_eq!(query_state(&h.app.overlay), ("", 0));
-    assert_eq!(h.app.composer.text(), "@src");
+    assert_eq!(h.app.composer.text(), "@");
     assert!(h.native.calls.try_recv().is_err());
     h.finish().await;
 }

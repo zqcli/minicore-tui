@@ -274,36 +274,54 @@ pub fn completion_sheet(app: &App, styles: Styles) -> Option<Sheet> {
             }
             Some(sheet)
         }
-        Overlay::Files { selected, paths } => {
-            let query = app.mention_query()?;
-            let shown = overlay::matching_paths(paths, query);
-            let rows: Vec<Row> = shown
-                .iter()
-                .map(|path| Row::new(overlay::file_name(path).to_owned(), (*path).clone()))
+        Overlay::Files { selected, browser } => {
+            let rows: Vec<Row> = browser
+                .rows()
+                .into_iter()
+                .map(|entry| {
+                    Row::new(
+                        if entry.is_file {
+                            entry.name.clone()
+                        } else {
+                            format!("{}/", entry.name)
+                        },
+                        if entry.is_file { "file" } else { "folder" },
+                    )
+                })
                 .collect();
-            let title = if query.is_empty() {
-                "Files".to_owned()
+            let status = if browser.pending.is_some() {
+                "Loading…".into()
             } else {
-                format!("Files · @{query}")
-            };
-            let status = if rows.len() == paths.len() {
-                plural(paths.len() as u64, "file")
-            } else {
-                format!("{} of {}", rows.len(), paths.len())
+                plural(rows.len() as u64, "entry")
             };
             let mut sheet = Sheet::new(
-                title,
-                "↑↓ select · tab/enter insert · pgup/pgdn · esc close",
+                "Files",
+                "↑↓ select · enter/tab open or insert · ctrl+u clear · esc close",
             )
             .kind(Kind::Column)
             .max_rows(COMPLETION_ROWS)
-            .status(status);
-            if rows.is_empty() {
-                sheet = sheet.notes(vec![Line::styled("  No matching files", styles.dim())]);
+            .status(status)
+            .search(&browser.filter)
+            .body(vec![Line::styled(
+                format!("  {}", crate::wrap::sanitize(&browser.directory)),
+                styles.dim(),
+            )]);
+            let note = if let Some(error) = &browser.error {
+                Some(error.as_str())
+            } else if std::path::Path::new(&browser.filter).is_absolute() {
+                Some("Enter to open this path")
+            } else if rows.is_empty() && browser.pending.is_none() {
+                Some("No matching entries · type an absolute path to jump")
             } else {
-                sheet = sheet.rows(rows).selected(Some(*selected));
+                None
+            };
+            if let Some(note) = note {
+                sheet = sheet.notes(vec![Line::styled(
+                    format!("  {}", crate::wrap::sanitize(note)),
+                    styles.dim(),
+                )]);
             }
-            Some(sheet)
+            Some(sheet.rows(rows).selected(Some(*selected)))
         }
         _ => None,
     }

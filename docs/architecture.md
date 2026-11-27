@@ -21,6 +21,7 @@ Agent, transport adapter, Webpage service or remote view layer.
 | `app/actions.rs`, `app/ops.rs` | Captured user intents and results installed into the original target |
 | `app/unconfirmed.rs` | Bounded local ownership of sends with pending or unknown acceptance |
 | `app/composer.rs`, `app/keys/`, `app/mouse.rs` | Editing, paste, key dispatch, selection and scrolling |
+| `app/files.rs` | On-demand `workspace.list` browsing and quoted path references; no local filesystem traversal |
 | `app/local_files.rs` | Serialized/coalesced preference and accepted-input history writes |
 | `history.rs`, `transcript/` | Native pagination/export, positioned records, tool cards, revisions and layout caching |
 | `ui/` | Terminal rendering, sheets and views; no execution owner |
@@ -33,6 +34,12 @@ registry. Configuration files name credential sources. The frontend neither
 owns a credential cache nor directly edits Host storage or workspace files.
 Its file operations are local preferences, prompt templates/history, external
 editor drafts and user-requested exports.
+
+The `@` browser calls Host `workspace.list` with `include_files` and the active
+`workspace_session`, pages only the selected directory, and follows only Host
+returned parent/entry paths. Replies carry a local operation ID so an old
+lookup cannot replace a reopened picker. Selection inserts a text reference;
+no file content is read, no workspace binding changes and no prompt is sent.
 
 ## Startup and lifetime
 

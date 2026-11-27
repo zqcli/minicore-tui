@@ -11,6 +11,10 @@ use crate::app::{Action, App, Overlay, find};
 
 impl App {
     pub(super) fn on_overlay_paste(&mut self, text: &str) -> bool {
+        if matches!(self.overlay, Overlay::Files { .. }) {
+            self.edit_file_filter(text);
+            return true;
+        }
         if let Overlay::Delegations { focus, .. } = self.overlay {
             match focus {
                 TaskFocus::Composer => {

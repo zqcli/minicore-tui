@@ -44,7 +44,6 @@ impl App {
                     self.overlay,
                     Overlay::None
                         | Overlay::Palette { .. }
-                        | Overlay::Files { .. }
                         | Overlay::Unconfirmed {
                             mode: super::unconfirmed::ReviewMode::Edit(_),
                             ..

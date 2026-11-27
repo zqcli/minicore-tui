@@ -4,7 +4,6 @@
 use crossterm::event::{KeyCode, KeyEvent};
 
 use crate::app::commands::{self, Executed};
-use crate::app::overlay::matching_paths;
 use crate::app::{Action, App, NoticeLevel, Overlay};
 
 impl App {
@@ -14,7 +13,7 @@ impl App {
     pub(super) fn sync_completion(&mut self, edited: bool, typed: bool) {
         let fits = match self.overlay {
             Overlay::Palette { .. } => self.palette_query().is_some(),
-            Overlay::Files { .. } => self.mention_query().is_some(),
+            Overlay::Files { .. } => return,
             Overlay::None => {
                 if typed
                     && (self.template_query().is_some()
@@ -28,7 +27,7 @@ impl App {
         };
         match &mut self.overlay {
             _ if !fits => self.overlay = Overlay::None,
-            Overlay::Palette { selected } | Overlay::Files { selected, .. } if edited => {
+            Overlay::Palette { selected } if edited => {
                 *selected = 0;
             }
             _ => {}
@@ -39,9 +38,7 @@ impl App {
     pub(super) fn completion_len(&self) -> usize {
         match &self.overlay {
             Overlay::Palette { .. } => self.palette_rows().len(),
-            Overlay::Files { paths, .. } => self
-                .mention_query()
-                .map_or(0, |query| matching_paths(paths, query).len()),
+            Overlay::Files { browser, .. } => browser.rows().len(),
             _ => 0,
         }
     }
@@ -49,6 +46,10 @@ impl App {
     /// Keys while the completion list is open. It takes the arrows, PageUp/PageDown,
     /// Tab, Enter and Esc while it has rows; every other key edits the draft that filters it.
     pub(super) fn on_completion_key(&mut self, key: KeyEvent) -> Option<Action> {
+        if matches!(self.overlay, Overlay::Files { .. }) {
+            self.on_files_key(key);
+            return None;
+        }
         let rows = self.completion_len();
         let plain = key.modifiers.is_empty();
         match key.code {
@@ -60,8 +61,6 @@ impl App {
             KeyCode::PageDown if plain && rows > 0 => self.overlay_move(8),
             KeyCode::Tab if plain && rows > 0 => self.apply_completion(),
             KeyCode::Enter if plain && rows > 0 => return self.accept_completion(),
-            // An `@` with no match never sends the draft by accident.
-            KeyCode::Enter if plain && matches!(self.overlay, Overlay::Files { .. }) => {}
             KeyCode::Enter if plain && self.template_query().is_some() => {}
             // No command matches: the line is a prompt.
             KeyCode::Enter if plain => {
@@ -73,23 +72,20 @@ impl App {
         None
     }
 
-    /// The selected command or path, if the list has one.
+    /// The selected command, if the list has one.
     fn selected_completion(&self) -> Option<String> {
         match &self.overlay {
             Overlay::Palette { selected } => self
                 .palette_rows()
                 .get(*selected)
                 .map(|(name, _)| name.clone()),
-            Overlay::Files { selected, paths } => matching_paths(paths, self.mention_query()?)
-                .get(*selected)
-                .map(|path| (*path).clone()),
             _ => None,
         }
     }
 
     /// Tab: puts the selected completion into the draft and closes the list.
     /// A command keeps the argument typed after it, an argument value replaces
-    /// the typed one; a path ends the `@` token.
+    /// the typed one.
     fn apply_completion(&mut self) {
         let Some(choice) = self.selected_completion() else {
             return;
@@ -97,26 +93,16 @@ impl App {
         if self.select_template(&choice) {
             return;
         }
-        match std::mem::replace(&mut self.overlay, Overlay::None) {
-            Overlay::Palette { .. } => {
-                let text = self.composer.text();
-                if let Some((command, _)) = self.palette_arg() {
-                    let completed = format!("/{command} {choice}");
-                    self.composer.restore_text(&completed);
-                    return;
-                }
-                let rest = &text[text.find(char::is_whitespace).unwrap_or(text.len())..];
-                let rest = if rest.trim().is_empty() { " " } else { rest };
-                self.composer.restore_text(&format!("/{choice}{rest}"));
-            }
-            _ => {
-                let start = self.word_start();
-                while self.composer.cursor() > start {
-                    self.composer.backspace();
-                }
-                self.composer.insert(&format!("@{choice} "));
-            }
+        self.overlay = Overlay::None;
+        let text = self.composer.text();
+        if let Some((command, _)) = self.palette_arg() {
+            let completed = format!("/{command} {choice}");
+            self.composer.restore_text(&completed);
+            return;
         }
+        let rest = &text[text.find(char::is_whitespace).unwrap_or(text.len())..];
+        let rest = if rest.trim().is_empty() { " " } else { rest };
+        self.composer.restore_text(&format!("/{choice}{rest}"));
     }
 
     fn select_template(&mut self, choice: &str) -> bool {
@@ -152,8 +138,8 @@ impl App {
     /// Enter: a command runs with the argument typed after its name, which
     /// may belong to another fuzzy match than the typed name; a path is inserted.
     pub(crate) fn accept_completion(&mut self) -> Option<Action> {
-        if !matches!(self.overlay, Overlay::Palette { .. }) {
-            self.apply_completion();
+        if matches!(self.overlay, Overlay::Files { .. }) {
+            self.accept_file();
             return None;
         }
         let choice = self.selected_completion()?;
