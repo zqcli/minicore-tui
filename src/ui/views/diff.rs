@@ -44,7 +44,6 @@ impl DiffRow {
 
 pub fn render(frame: &mut Frame, area: Rect, styles: Styles, diff: &mut DiffState) {
     diff.hit.reset(1);
-    diff.visible_rows = 0;
 
     let matched = diff.matching_indices();
     let title = {
@@ -327,7 +326,6 @@ fn render_hunks(frame: &mut Frame, area: Rect, styles: Styles, diff: &mut DiffSt
     if content.is_empty() {
         return;
     }
-    diff.visible_rows = usize::from(content.height);
 
     if diff.rows.is_empty() {
         let message = if diff.status.is_empty() {

@@ -196,7 +196,6 @@ pub struct DiffState {
     /// On narrow terminals (`< 96` cols), toggles between file list and hunks.
     pub detail_open: bool,
     pub scroll: usize,
-    pub visible_rows: usize,
     pub hit: crate::ui::views::split::SplitHitAreas,
     /// The selected file's diff; empty while it loads.
     pub rows: Vec<DiffRow>,
@@ -210,9 +209,17 @@ pub struct DiffState {
 
 impl DiffState {
     pub fn set_files(&mut self, files: Vec<DiffFile>) {
+        let selected_path = self.current().map(|file| file.path.clone());
         self.files = files;
-        let len = self.matching_indices().len();
-        self.selected = self.selected.min(len.saturating_sub(1));
+        let matched = self.matching_indices();
+        let selected = selected_path
+            .and_then(|path| {
+                matched
+                    .iter()
+                    .position(|&index| self.files[index].path == path)
+            })
+            .unwrap_or(self.selected.min(matched.len().saturating_sub(1)));
+        self.select(selected);
     }
 
     /// Indices into `self.files` that match the current `filter`.
@@ -251,13 +258,6 @@ impl DiffState {
         let matched = self.matching_indices();
         let idx = self.selected.min(matched.len().saturating_sub(1));
         matched.get(idx).and_then(|&real| self.files.get(real))
-    }
-
-    pub fn scroll_by(&mut self, delta: isize, rows: usize) {
-        let max = self.rows.len().saturating_sub(rows);
-        self.scroll = (self.scroll as isize)
-            .saturating_add(delta)
-            .clamp(0, max as isize) as usize;
     }
 }
 
@@ -311,25 +311,18 @@ impl App {
                 return;
             }
         };
-        // One row per path. A row keeps its counts only while its records are
-        // the same set.
-        let previous = std::mem::take(&mut diff.files);
+        // Workspace change references describe Git status, not content versions;
+        // refresh the counts and hunks even when those references are unchanged.
         let mut files: Vec<DiffFile> = Vec::new();
         for record in &list {
             match files.iter_mut().find(|file| file.path == record.path) {
                 Some(file) => file.change_refs.push(record.change_ref.clone()),
                 None => {
-                    let measured = previous
-                        .iter()
-                        .find(|file| file.path == record.path)
-                        .filter(|file| {
-                            file.change_refs.as_slice() == std::slice::from_ref(&record.change_ref)
-                        });
                     files.push(DiffFile {
                         path: record.path.clone(),
                         kind: record.kind,
-                        lines: measured.and_then(|file| file.lines),
-                        failed: measured.is_some_and(|file| file.failed),
+                        lines: None,
+                        failed: false,
                         change_refs: vec![record.change_ref.clone()],
                     });
                 }
@@ -353,11 +346,9 @@ impl App {
                 (query, file.change_refs.clone())
             })
             .collect();
+        // Paint the current selection first, then measure the remaining files.
+        self.load_selected_diff();
         self.measure_next_diff_row();
-        // Every file was already measured: the selected one still needs painting.
-        if matches!(&self.overlay, Overlay::Diff(diff) if diff.in_flight.is_none()) {
-            self.load_selected_diff();
-        }
     }
 
     /// Starts the next unmeasured file's read; one at a time keeps within the
@@ -629,20 +620,6 @@ mod tests {
         assert!(diff.rows.is_empty() && diff.scroll == 0);
         diff.set_files(Vec::new());
         assert_eq!((diff.current(), diff.selected), (None, 0));
-    }
-
-    #[test]
-    fn scrolling_stops_at_the_last_full_page() {
-        let mut diff = state();
-        diff.rows = (0..10)
-            .map(|index| DiffRow::Note(index.to_string()))
-            .collect();
-        diff.scroll_by(3, 4);
-        assert_eq!(diff.scroll, 3);
-        diff.scroll_by(99, 4);
-        assert_eq!(diff.scroll, 6, "the last page stays full");
-        diff.scroll_by(-99, 4);
-        assert_eq!(diff.scroll, 0);
     }
 
     fn fragmented_diff(text: &str, offset: usize, complete: bool) -> DiffResult {

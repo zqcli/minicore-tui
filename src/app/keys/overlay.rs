@@ -320,16 +320,8 @@ impl App {
 
     /// Scrolls the active view by `delta` rows, clamping at the ends.
     pub(crate) fn scroll_view(&mut self, delta: isize) {
-        let rows = self.viewport_rows().saturating_sub(2);
         match &mut self.overlay {
-            Overlay::Diff(diff) => {
-                let vis = if diff.visible_rows > 0 {
-                    diff.visible_rows
-                } else {
-                    rows
-                };
-                diff.scroll_by(delta, vis);
-            }
+            Overlay::Diff(diff) => diff.scroll = diff.scroll.saturating_add_signed(delta),
             Overlay::Error { scroll, .. }
             | Overlay::Help { scroll, .. }
             | Overlay::Context { scroll }

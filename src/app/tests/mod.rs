@@ -1,4 +1,5 @@
 mod agent_cards;
+mod diff;
 mod editor;
 mod errors;
 mod files;
