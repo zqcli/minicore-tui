@@ -425,7 +425,7 @@ pub fn async_tasks(app: &super::App) -> Vec<AsyncTaskItem<'_>> {
             items.push(AsyncTaskItem::Agent(card));
         }
     }
-    for card in app.agent_cards.cards_for_root(&root_addr) {
+    for card in app.agent_cards.cards_for_root(&root_addr, &app.resident) {
         if seen_sessions.insert(card.key.child.session_id.to_string()) {
             items.push(AsyncTaskItem::Agent(card));
         }

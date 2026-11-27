@@ -1263,6 +1263,44 @@ async fn delegated_sessions_hide_from_sessions_picker_and_flatten_grandchildren_
         l2_item.dispatched_by(Some(&root_addr), &names)
     );
 
+    // Opening L1 in the inspector moves L2's card from its detached observer
+    // into L1's resident transcript; the root Tasks list must retain the same card.
+    let crate::app::overlay::AsyncTaskItem::Agent(l2_card) = l2_item else {
+        panic!("expected native L2 card");
+    };
+    let l2_key = l2_card.key.clone();
+    h.app.open_delegation_for(l1_session_id.as_str());
+    h.until(|app| {
+        app.resident
+            .find(&minicore_host_protocol::SessionRef {
+                agent_id: root_addr.agent_id.clone(),
+                session_id: l1_session_id.clone(),
+            })
+            .is_some_and(|session| {
+                session.transcript.tool_calls().any(|call| {
+                    call.agent_card
+                        .as_ref()
+                        .is_some_and(|card| card.key == l2_key)
+                })
+            })
+    })
+    .await;
+    assert_eq!(h.app.resident.current().unwrap().address(), root_addr);
+    let tasks = async_tasks(&h.app);
+    assert_eq!(tasks.len(), 2);
+    assert_eq!(
+        tasks
+            .iter()
+            .filter(|item| matches!(item,
+                crate::app::overlay::AsyncTaskItem::Agent(card) if card.key == l2_key
+            ))
+            .count(),
+        1,
+        "L2 must remain exactly once after L1 becomes resident"
+    );
+    let inspector = h.render_text(120, 24);
+    assert!(inspector.contains("helper-b"), "{inspector}");
+
     // Finish cleanly in bottom-up order: L2 finishes and delivers its completion
     // to L1 while L1 is still active, then L1 finishes its turn and notifies root.
     l2_call.text("git log clean");

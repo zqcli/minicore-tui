@@ -8,6 +8,7 @@ use minicore_host_transport::{OutputBuffer, SessionClient};
 
 use super::{
     App, Msg,
+    resident::Sessions,
     tasks::{self, OutputRead},
 };
 use crate::history::{HistoryError, HistoryWindow};
@@ -24,12 +25,15 @@ pub(crate) struct Cards {
 }
 
 impl Cards {
-    /// Detached observer cards belonging to `root` (e.g. nested grandchildren
-    /// dispatched by an intermediate child Session).
-    pub(crate) fn cards_for_root(&self, root: &SessionRef) -> Vec<&AgentCard> {
+    /// Root-scoped cards keep their identity when attached to a resident parent.
+    pub(crate) fn cards_for_root<'a>(
+        &'a self,
+        root: &SessionRef,
+        resident: &'a Sessions,
+    ) -> Vec<&'a AgentCard> {
         self.observers
             .values()
-            .filter_map(|observer| observer.card.as_deref())
+            .filter_map(|observer| agent_card(resident, observer))
             .filter(|card| {
                 card.association
                     .root
@@ -97,7 +101,7 @@ impl App {
             .observers
             .iter()
             .filter_map(|(key, observer)| {
-                let card = self.agent_card(observer)?;
+                let card = agent_card(&self.resident, observer)?;
                 let name = &self
                     .agents
                     .iter()
@@ -209,7 +213,7 @@ impl App {
             .observers
             .iter()
             .filter_map(|(key, observer)| {
-                let card = self.agent_card(observer)?;
+                let card = agent_card(&self.resident, observer)?;
                 (card.observation_error.is_some()
                     && !card.history_unavailable
                     && !card.association.inputs.is_empty())
@@ -404,22 +408,9 @@ impl App {
                 {
                     return None;
                 }
-                let card = self.agent_card(observer)?;
+                let card = agent_card(&self.resident, observer)?;
                 card.contains_turn(source).then(|| key.clone())
             })
-    }
-
-    fn agent_card<'a>(&'a self, observer: &'a Observer) -> Option<&'a AgentCard> {
-        match &observer.location {
-            Some((epoch, key)) => self
-                .resident
-                .get(*epoch)?
-                .transcript
-                .find_tool(key)?
-                .agent_card
-                .as_deref(),
-            None => observer.card.as_deref(),
-        }
     }
 
     fn take_agent_card(&mut self, key: &DelegationKey) -> Option<(Observer, Box<AgentCard>)> {
@@ -914,6 +905,18 @@ impl App {
         self.agent_cards
             .pending
             .retain(|key| self.agent_cards.observers.contains_key(key));
+    }
+}
+
+fn agent_card<'a>(resident: &'a Sessions, observer: &'a Observer) -> Option<&'a AgentCard> {
+    match &observer.location {
+        Some((epoch, key)) => resident
+            .get(*epoch)?
+            .transcript
+            .find_tool(key)?
+            .agent_card
+            .as_deref(),
+        None => observer.card.as_deref(),
     }
 }
 

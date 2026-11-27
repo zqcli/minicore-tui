@@ -419,7 +419,7 @@ pub fn render(frame: &mut Frame, area: Rect, styles: Styles, app: &mut App) {
             })
             .or_else(|| {
                 app.agent_cards
-                    .cards_for_root(&parent.address())
+                    .cards_for_root(&parent.address(), &app.resident)
                     .into_iter()
                     .find(|card| &card.key.child == target)
             })
