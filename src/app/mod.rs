@@ -247,7 +247,7 @@ pub struct App {
     pub task_inspector: TaskInspector,
     pub remote_config: crate::config::Remote,
     pub remote: Option<crate::host::RemoteServer>,
-    pub(super) remote_start: actions::RemoteStartup,
+    remote_start: actions::RemoteStartup,
 }
 
 pub const NOTICE_TTL: Duration = Duration::from_secs(5);
