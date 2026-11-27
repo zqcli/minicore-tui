@@ -13,6 +13,9 @@
   separate filter, authorized parent navigation, absolute path jumps, quoted
   relative/absolute references, and keyboard/mouse selection without reading or
   sending file contents.
+- Show untitled Sessions by their first user-prompt preview, distinct from manual
+  titles and empty-session IDs, without renaming them or scanning history in the
+  picker. Search includes the preview even after renaming.
 
 ## 0.12.17 — 2026-11-27
 

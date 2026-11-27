@@ -730,7 +730,11 @@ impl App {
                     &session,
                     info.config_revision,
                     SessionUpdateChanges {
-                        title: NullablePatch::Set(title),
+                        title: if title.trim().is_empty() {
+                            NullablePatch::Clear
+                        } else {
+                            NullablePatch::Set(title)
+                        },
                         config: SessionConfigPatch::default(),
                     },
                 )

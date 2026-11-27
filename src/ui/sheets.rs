@@ -380,12 +380,7 @@ fn sessions_sheet(
                     .is_some_and(|value| value.path != workspace),
                 agent: Some(agent_label(app, &info.agent_id)),
             };
-            let row = session_row(info, &context, now);
-            if live.is_some_and(failed_unseen) {
-                row.tone(Tone::Failure)
-            } else {
-                row
-            }
+            session_row(info, &context, now)
         })
         .collect::<Vec<_>>();
     let hint = if filter.is_empty() {
@@ -395,7 +390,7 @@ fn sessions_sheet(
     };
     let notes = match shown.get(selected) {
         None => vec![Line::styled("  No sessions found", styles.dim())],
-        Some(info) => session_preview(app, info, styles),
+        Some(info) => session_preview(info, styles),
     };
     Sheet::new("Resume Session", hint)
         .status(status)
@@ -849,9 +844,18 @@ struct RowContext {
 
 /// Keep the short ID first in the detail column so clipped titles cannot hide it.
 fn session_row(info: &SessionSummary, context: &RowContext, now_seconds: i64) -> Row {
-    // An untitled row's label already is its short ID.
-    let titled = session_label(info) != short_session_id(info.id.as_str());
-    let mut parts: Vec<String> = titled
+    let tone = if overlay::session_title(info).is_some() {
+        Tone::Accent
+    } else if info
+        .first_user_preview
+        .as_deref()
+        .is_some_and(|text| !text.is_empty())
+    {
+        Tone::Dim
+    } else {
+        Tone::Faint
+    };
+    let mut parts: Vec<String> = (tone != Tone::Faint)
         .then(|| short_session_id(info.id.as_str()).to_owned())
         .into_iter()
         .collect();
@@ -865,12 +869,13 @@ fn session_row(info: &SessionSummary, context: &RowContext, now_seconds: i64) ->
     if !age.is_empty() {
         parts.push(age);
     }
-    Row::new(session_label(info), parts.join(" · ")).mark(context.current)
+    Row::new(session_label(info), parts.join(" · "))
+        .tone(tone)
+        .mark(context.current)
 }
 
-/// The selected session's details under the list: where it works, what runs
-/// it and, when its history is loaded, the request it started with.
-fn session_preview(app: &App, info: &SessionSummary, styles: Styles) -> Vec<Line<'static>> {
+/// The selected session's workspace, model and first user input from the catalog.
+fn session_preview(info: &SessionSummary, styles: Styles) -> Vec<Line<'static>> {
     let mut facts = Vec::new();
     if let Some(workspace) = &info.workspace {
         facts.push(
@@ -888,23 +893,9 @@ fn session_preview(app: &App, info: &SessionSummary, styles: Styles) -> Vec<Line
         Line::default(),
         Line::styled(format!("  {}", facts.join(" · ")), styles.meta()),
     ];
-    let first = app
-        .resident
-        .find(&overlay::session_target(info))
-        .and_then(|session| {
-            session
-                .transcript
-                .blocks()
-                .iter()
-                .find_map(|block| match block {
-                    Block::User { text, .. } => Some(text.clone()),
-                    _ => None,
-                })
-        });
-    if let Some(first) = first {
-        let text = crate::wrap::sanitize(&first.replace('\n', " ")).into_owned();
+    if let Some(first) = &info.first_user_preview {
         lines.push(Line::styled(
-            format!("  › {}", truncate(&text, 110)),
+            format!("  › {}", truncate(first, 110)),
             styles.dim(),
         ));
     }
@@ -1113,6 +1104,32 @@ mod tests {
         context.state = Some("running 0m".into());
         let row = session_row(&other, &context, now());
         assert_eq!(row.detail, "1acdef · Coder · running 0m · stockroom · 3h");
+    }
+
+    #[test]
+    fn session_labels_use_titles_then_user_previews_then_ids() {
+        let mut info = info();
+        info.first_user_preview = Some("Investigate network latency".into());
+        let row = session_row(&info, &context(false, false), now());
+        assert_eq!(row.label, "Fix the parser");
+        assert_eq!(row.tone, Tone::Accent);
+        let matches = |info: &SessionSummary, text: &str| {
+            !overlay::matching_sessions(std::slice::from_ref(info), text).is_empty()
+        };
+        assert!(matches(&info, "fix parser"));
+        assert!(matches(&info, "network latency"));
+        assert!(matches(&info, "1acdef"));
+        assert!(matches(&info, info.id.as_str()));
+        info.title = Some("  ".into());
+        let row = session_row(&info, &context(true, false), now());
+        assert_eq!(row.label, "Investigate network latency");
+        assert_eq!(row.tone, Tone::Dim);
+        assert!(row.detail.starts_with("1acdef"));
+        info.first_user_preview = None;
+        let row = session_row(&info, &context(true, false), now());
+        assert_eq!(row.label, "1acdef");
+        assert_eq!(row.tone, Tone::Faint);
+        assert!(!row.detail.contains("1acdef"));
     }
 
     #[test]

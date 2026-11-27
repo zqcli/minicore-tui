@@ -129,6 +129,7 @@ pub(super) fn catalog(session: &Session) -> SessionSummary {
         id: info.id.clone(),
         agent_id: info.agent_id.clone(),
         title: info.title.clone(),
+        first_user_preview: info.first_user_preview.clone(),
         mode: info.mode,
         config_revision: info.config_revision,
         lifecycle: state.lifecycle,

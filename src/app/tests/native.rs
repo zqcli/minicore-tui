@@ -339,6 +339,12 @@ async fn session_picker_names_stay_stable_after_opening_history() {
         h.open(&target).await;
         submit(&mut h, PROMPT, false);
         let call = h.next_call().await;
+        h.until(|app| {
+            app.sessions.iter().any(|s| {
+                s.id == target.session_id && s.first_user_preview.as_deref() == Some(PROMPT)
+            })
+        })
+        .await;
         call.text("Noted");
         call.finish();
         h.until(|app| terminal_count(app, &target) == 1).await;
@@ -349,12 +355,11 @@ async fn session_picker_names_stay_stable_after_opening_history() {
     let mut h = Harness::from_native(native).await;
     let sheet = |app: &App| crate::ui::sheets::sheet(app, app.styles).unwrap();
     let id = target.session_id.as_str();
-    let short = &id[..6];
     assert!(h.app.live(&target).is_none());
     h.app.composer.set_text("/sessions");
     h.press(KeyCode::Enter);
     h.app.on_paste(id);
-    assert_eq!(sheet(&h.app).rows[0].label, short);
+    assert_eq!(sheet(&h.app).rows[0].label, PROMPT);
     h.press(KeyCode::Enter);
     h.until(|app| app.live(&target).is_some()).await;
     let opened = h.app.resident.current().unwrap();
@@ -363,20 +368,21 @@ async fn session_picker_names_stay_stable_after_opening_history() {
     assert_eq!(opened.auto_title().as_deref(), Some(PROMPT));
 
     h.ctrl(KeyCode::Char('r'));
-    assert_eq!(sheet(&h.app).rows[0].label, short);
+    assert_eq!(sheet(&h.app).rows[0].label, PROMPT);
     h.app.on_paste(PROMPT);
-    assert!(sheet(&h.app).rows.is_empty());
+    assert_eq!(sheet(&h.app).rows[0].label, PROMPT);
     h.press(KeyCode::Esc);
     h.ctrl(KeyCode::Char('r'));
     h.ctrl(KeyCode::Char('d'));
     assert!(matches!(
         &h.app.overlay,
-        crate::app::Overlay::Confirm { lines, .. } if lines[0].starts_with(short)
+        crate::app::Overlay::Confirm { lines, .. } if lines[0].starts_with(PROMPT)
     ));
     h.press(KeyCode::Char('n'));
     h.ctrl(KeyCode::Char('r'));
     h.ctrl(KeyCode::Char('n'));
-    assert_eq!(sheet(&h.app).status.as_deref(), Some(short));
+    assert_eq!(sheet(&h.app).status.as_deref(), Some(PROMPT));
+    assert_eq!(sheet(&h.app).search.as_deref(), Some(""));
     h.type_text(TITLE);
     h.press(KeyCode::Enter);
     h.until(|app| {
@@ -387,6 +393,30 @@ async fn session_picker_names_stay_stable_after_opening_history() {
     .await;
     h.app.on_paste("prj mrc");
     assert_eq!(sheet(&h.app).rows[0].label, TITLE);
+    h.ctrl(KeyCode::Char('u'));
+    h.app.on_paste(PROMPT);
+    assert_eq!(sheet(&h.app).rows[0].label, TITLE);
+    h.press(KeyCode::Enter);
+    h.until(|app| {
+        app.resident
+            .current()
+            .is_some_and(|s| s.info.title.as_deref() == Some(TITLE))
+    })
+    .await;
+    h.ctrl(KeyCode::Char('r'));
+    h.ctrl(KeyCode::Char('n'));
+    assert_eq!(sheet(&h.app).search.as_deref(), Some(TITLE));
+    for _ in TITLE.chars() {
+        h.press(KeyCode::Backspace);
+    }
+    h.press(KeyCode::Enter);
+    h.until(|app| {
+        app.sessions
+            .iter()
+            .any(|s| s.id == target.session_id && s.title.is_none())
+    })
+    .await;
+    assert_eq!(sheet(&h.app).rows[0].label, PROMPT);
     h.finish().await;
 }
 

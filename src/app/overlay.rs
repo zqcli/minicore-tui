@@ -494,11 +494,20 @@ pub fn matching_models<'a>(
         .collect()
 }
 
-/// The picker names a Session from catalog metadata, not its loaded history.
-pub fn session_label(info: &SessionSummary) -> &str {
+pub fn session_title(info: &SessionSummary) -> Option<&str> {
     info.title
         .as_deref()
         .filter(|title| !title.trim().is_empty())
+}
+
+/// A preview is a display fallback, never a persisted or editable title.
+pub fn session_label(info: &SessionSummary) -> &str {
+    session_title(info)
+        .or_else(|| {
+            info.first_user_preview
+                .as_deref()
+                .filter(|text| !text.is_empty())
+        })
         .unwrap_or_else(|| short_session_id(info.id.as_str()))
 }
 
@@ -540,6 +549,10 @@ pub fn matching_sessions<'a>(rows: &'a [SessionSummary], filter: &str) -> Vec<&'
             info.delegated_by.is_none()
                 && (filter.is_empty()
                     || fuzzy_match(session_label(info), filter)
+                    || info
+                        .first_user_preview
+                        .as_deref()
+                        .is_some_and(|text| fuzzy_match(text, filter))
                     || fuzzy_match(info.id.as_str(), filter)
                     || fuzzy_match(info.agent_id.as_str(), filter)
                     || workspace_name(info).is_some_and(|name| fuzzy_match(&name, filter)))

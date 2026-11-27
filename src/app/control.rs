@@ -363,8 +363,17 @@ impl App {
             ObservationEvent::State(StateEvent::Toolcall { source, data }) => {
                 self.apply_tool_state(epoch, source, data)
             }
-            ObservationEvent::Activity(ActivityEvent::MessageAccepted { .. }) => {
-                self.refresh_inputs(epoch)
+            ObservationEvent::Activity(ActivityEvent::MessageAccepted { source, data, .. }) => {
+                self.refresh_inputs(epoch);
+                if data.source == MessageSource::User
+                    && self.sessions.iter().any(|row| {
+                        row.agent_id == source.agent_id
+                            && row.id == source.session_id
+                            && row.first_user_preview.is_none()
+                    })
+                {
+                    self.refresh_catalogs();
+                }
             }
             ObservationEvent::Activity(ActivityEvent::MessageBound {
                 source,

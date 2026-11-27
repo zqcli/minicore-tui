@@ -22,6 +22,9 @@ const POINTER: usize = 2;
 pub enum Tone {
     #[default]
     Plain,
+    Accent,
+    Dim,
+    Faint,
     Success,
     Failure,
     Warning,
@@ -343,30 +346,19 @@ impl Sheet {
             None => "",
         };
         let label_style = match row.tone {
-            Tone::Plain => {
-                let base = if current && !selected {
-                    styles.accent()
-                } else {
-                    styles.text()
-                };
-                if selected {
-                    base.add_modifier(Modifier::BOLD)
-                } else {
-                    base
-                }
-            }
-            tone => {
-                let base = match tone {
-                    Tone::Success => styles.success(),
-                    Tone::Failure => styles.failure(),
-                    _ => styles.warning(),
-                };
-                if selected {
-                    base.add_modifier(Modifier::BOLD)
-                } else {
-                    base
-                }
-            }
+            Tone::Plain if current && !selected => styles.accent(),
+            Tone::Plain => styles.text(),
+            Tone::Accent => styles.accent(),
+            Tone::Dim => styles.dim(),
+            Tone::Faint => styles.faint(),
+            Tone::Success => styles.success(),
+            Tone::Failure => styles.failure(),
+            Tone::Warning => styles.warning(),
+        };
+        let label_style = if selected {
+            label_style.add_modifier(Modifier::BOLD)
+        } else {
+            label_style
         };
         let detail_style = if selected {
             styles.text()
@@ -675,6 +667,47 @@ mod tests {
         let lines = sheet.lines(styles, 30, sheet.height());
         assert_eq!(lines[1].spans[2].style.fg, Some(palette.success));
         assert_eq!(lines[2].spans[2].style.fg, Some(palette.failure));
+    }
+
+    #[test]
+    fn session_label_tones_stay_distinct_when_current_or_selected() {
+        for palette in [Palette::dark(), Palette::light()] {
+            let styles = Styles::of(palette);
+            for current in [false, true] {
+                for selected in [None, Some(0), Some(1), Some(2)] {
+                    let sheet = Sheet::new("Sessions", "")
+                        .kind(Kind::Session)
+                        .rows(vec![
+                            Row::new("Manual title", "id001")
+                                .tone(Tone::Accent)
+                                .mark(current),
+                            Row::new("First prompt", "id002")
+                                .tone(Tone::Dim)
+                                .mark(current),
+                            Row::new("id003", "").tone(Tone::Faint).mark(current),
+                        ])
+                        .selected(selected);
+                    let mut terminal = Terminal::new(TestBackend::new(40, sheet.height())).unwrap();
+                    terminal
+                        .draw(|frame| render(frame, frame.area(), styles, &sheet))
+                        .unwrap();
+                    let buffer = terminal.backend().buffer();
+                    for (i, fg) in [palette.accent, palette.dim, palette.faint]
+                        .into_iter()
+                        .enumerate()
+                    {
+                        let label = &buffer[(2, i as u16 + 1)];
+                        assert_eq!(label.fg, fg);
+                        if selected == Some(i) {
+                            assert_eq!(label.bg, palette.selection_bg);
+                            assert!(label.modifier.contains(Modifier::BOLD));
+                        } else if current {
+                            assert_eq!(buffer[(0, i as u16 + 1)].symbol(), "✓");
+                        }
+                    }
+                }
+            }
+        }
     }
 
     #[test]

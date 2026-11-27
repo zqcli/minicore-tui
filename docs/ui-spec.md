@@ -85,6 +85,20 @@ Drawn once, in front of block 0, so it scrolls away with the history:
 It holds identity, the workspace and the three entry points. It does not list
 recent Sessions (Ctrl+R does).
 
+### Session picker
+
+`/sessions` / Ctrl+R uses the explicit nonblank title, then Host's bounded
+first-user-prompt preview, then the short ID. Manual titles use the theme accent;
+prompt previews use secondary text; empty Sessions' IDs are fainter. Selection
+adds its background and bold weight without replacing these label colors, and
+the current-session check remains a separate marker. State text (including
+`failed`) stays in the detail column, as does the short ID for titled/preview rows.
+
+The catalog provides the one-line preview; opening the picker never reads every
+Session's history. It ignores Agent/system/tool input and stays separate from
+`title`. Rename starts from the real title, and clearing it reveals the preview
+again. Filters match both the real title and preview, as well as Session IDs.
+
 ### Activity line
 
 One row directly above the editor, present only with content.

@@ -71,12 +71,13 @@ Session's workspace. The shared starter records the initialization workspace
 for its default Agent. Startup model/reasoning overrides are consumed once.
 Later navigation reads the selected Session's saved settings.
 
-The Session picker uses the catalog's nonblank title or the six-character native
-Session ID, never the loaded transcript. It also places the ID first in the
-detail column. The layout reserves that identity before clipping
-the title and optional details, so different long titles remain distinguishable
-by ID. Filtering and actions still use full native addresses; this display
-rule creates no title cache, collision registry or Host metadata.
+The Session picker uses only catalog metadata: a nonblank explicit title, the
+bounded first-user-input preview, or the six-character native Session ID. The
+preview is separate from rename data and is maintained by Host through its
+existing metadata checkpoints. Old records acquire it during normal history
+loading, not a picker-triggered per-Session scan. The ID leads the detail column
+so long clipped labels remain distinguishable. Search covers both title and
+preview, plus Session IDs. Opening history never promotes a preview into a title.
 
 The main loop owns the terminal guard and external-editor handoff. It restores
 the terminal before supervising shutdown. Graceful shutdown waits for the real
