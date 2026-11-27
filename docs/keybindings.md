@@ -154,7 +154,13 @@ selection and paste chips together.
 Command arguments are checked against the actual catalog before anything is sent: an unknown model or a reasoning level the model does not support shows the valid choices as a usage note and keeps the draft. The palette lists commands by use (session, context, model, session control, Agents, terminal) and shows the current model, reasoning, approval and theme. A bare unknown `/word` produces a suggestion before it is sent. Press `Enter`
 again to send it as text, or start with `//` to escape the initial slash.
 Paths such as `/usr/bin` and ordinary sentences remain prompts. Prompt
-templates appear alongside commands and expand before submission.
+templates live under `/command`. Choose that menu entry, or type `/cmd` to
+open the template list immediately. Enter or Tab fills `/cmd <name> ` without
+sending. Add arguments and press Enter to send, or Alt/Ctrl+Enter for a
+follow-up; both expand the template.
+`/rev` can find a nonconflicting template and fills the canonical `/cmd` form.
+Esc closes the list without clearing the draft. Built-ins such as `/model`
+remain distinct from templates such as `/cmd model`.
 
 ## Transcript and mouse
 

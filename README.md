@@ -41,7 +41,7 @@ is needed to run the automated tests.
 | `roles/*.json` | Reusable Role names, descriptions and instructions |
 | `agents/*.json` | Agent declarations with stable keys and Session defaults |
 | `data/` | Persistent Host data, including `tui/history.jsonl` for input recall |
-| `commands/*.md` | Local slash-command prompt templates |
+| `commands/*.md` | Local prompt templates selected with `/command` or `/cmd` |
 
 Host creates declared Agents and their default Sessions. Startup rereads the
 configuration directory while preserving existing Host/Agent identities,

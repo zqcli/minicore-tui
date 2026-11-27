@@ -744,7 +744,11 @@ impl App {
     /// Lookup mode for the canonical prefix and the menu entry. A space
     /// after a template name leaves lookup mode so the draft accepts arguments.
     pub fn template_query(&self) -> Option<&str> {
-        let rest = self.composer.text().strip_prefix('/')?;
+        let text = self.composer.text();
+        if !commands::is_command_line(text) {
+            return None;
+        }
+        let rest = text.strip_prefix('/')?;
         if rest == "cmd" {
             return Some("");
         }

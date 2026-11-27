@@ -80,10 +80,10 @@ impl App {
         }
         match key.code {
             // Ctrl+Enter is for terminals that cannot deliver Alt+Enter.
-            KeyCode::Enter if alt || ctrl => return Some(Action::Submit { follow: true }),
+            KeyCode::Enter if alt || ctrl => return self.submit_follow_up(),
             // Raw-mode crossterm decodes legacy ESC LF as Alt+Ctrl+J.
             #[cfg(unix)]
-            KeyCode::Char('j') if alt && ctrl => return Some(Action::Submit { follow: true }),
+            KeyCode::Char('j') if alt && ctrl => return self.submit_follow_up(),
             KeyCode::Enter if shift => self.composer.newline(),
             KeyCode::Enter => return self.submit_or_command(),
             KeyCode::Char('j') if ctrl => self.composer.newline(),
@@ -267,6 +267,15 @@ impl App {
         }
         self.composer.insert(text);
         self.sync_completion(true, true);
+    }
+
+    /// Prompt templates expand for either queue; other slash text keeps the
+    /// follow-up shortcut's existing literal-input behavior.
+    fn submit_follow_up(&mut self) -> Option<Action> {
+        if commands::parse(self.composer.text()).is_some_and(|(name, _)| name == "cmd") {
+            self.submit_or_command()?;
+        }
+        Some(Action::Submit { follow: true })
     }
 
     /// A draft is a command only when its first word names one; anything else

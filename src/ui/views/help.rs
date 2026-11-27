@@ -81,6 +81,10 @@ const KEYS: &[KeyRow] = &[
         action: "command palette (at draft start)",
     },
     KeyRow {
+        keys: "/command, /cmd",
+        action: "browse prompt templates; enter/tab fills /cmd name without sending",
+    },
+    KeyRow {
         keys: "@",
         action: "file picker (at word start)",
     },

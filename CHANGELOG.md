@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Browse prompt templates with `/command` or `/cmd`; selection fills the editor
+  without sending. `/cmd <name>` avoids built-in command name collisions and
+  expands templates for both steer and follow-up input.
+
 ## 0.12.17 — 2026-11-27
 
 - Show the selected child Session’s model, reasoning, storage, residency and cumulative token usage in Async Tasks. Output includes reasoning, and Cache counts reads only.

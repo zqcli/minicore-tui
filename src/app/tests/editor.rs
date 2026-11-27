@@ -807,7 +807,7 @@ async fn template_picker_fills_before_sending_and_namespaces_builtin_collisions(
     assert_eq!(h.app.template_query(), Some(""));
     assert!(h.app.palette_rows().iter().any(|(name, _)| name == "model"));
     h.press(KeyCode::Esc);
-    assert_eq!(h.app.composer.text(), "/command ");
+    assert_eq!(h.app.composer.text(), "/cmd ");
     h.app.composer.clear();
 
     h.type_text("/cmd");
@@ -820,7 +820,12 @@ async fn template_picker_fills_before_sending_and_namespaces_builtin_collisions(
     h.type_text(r#""src/main file.rs""#);
     h.press(KeyCode::Enter);
     let call = h.next_call().await;
-    assert_eq!(call.users(), ["Review src/main file.rs"]);
+    assert!(
+        call.users()
+            .last()
+            .unwrap()
+            .ends_with("\n\nReview src/main file.rs")
+    );
     call.finish();
 
     h.type_text("/model");
@@ -830,7 +835,88 @@ async fn template_picker_fills_before_sending_and_namespaces_builtin_collisions(
     h.type_text("/cmd model path");
     h.press(KeyCode::Enter);
     let call = h.next_call().await;
-    assert_eq!(call.users().last(), Some(&"Template for path"));
+    assert!(
+        call.users()
+            .last()
+            .unwrap()
+            .ends_with("\n\nTemplate for path")
+    );
     call.finish();
     h.finish().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn template_completion_preserves_arguments_and_escape_keeps_the_draft() {
+    use crate::app::templates::Template;
+    let mut h = Harness::opened().await;
+    h.app.templates = vec![Template::parse("review".into(), "Review $1")];
+
+    h.type_text("/command");
+    h.press(KeyCode::Tab);
+    assert_eq!(h.app.composer.text(), "/cmd ");
+    assert!(matches!(h.app.overlay, Overlay::Palette { .. }));
+    h.type_text("rev");
+    h.press(KeyCode::Tab);
+    assert_eq!(h.app.composer.text(), "/cmd review ");
+    assert!(h.app.overlay.is_none());
+    assert!(h.native.calls.try_recv().is_err());
+
+    h.app.composer.clear();
+    h.type_text(r#"/rev "src/main file.rs" extra"#);
+    h.press(KeyCode::Enter);
+    assert_eq!(
+        h.app.composer.text(),
+        r#"/cmd review "src/main file.rs" extra"#
+    );
+    assert!(h.native.calls.try_recv().is_err());
+
+    h.app.composer.clear();
+    h.type_text("/cmd missing");
+    h.press(KeyCode::Enter);
+    assert_eq!(h.app.composer.text(), "/cmd missing");
+    assert!(matches!(h.app.overlay, Overlay::Palette { .. }));
+    h.press(KeyCode::Esc);
+    assert!(h.app.overlay.is_none());
+    assert_eq!(h.app.composer.text(), "/cmd missing");
+    assert!(h.native.calls.try_recv().is_err());
+
+    h.app.composer.clear();
+    h.type_text("/cmd");
+    h.key(KeyCode::Enter, KeyModifiers::SHIFT);
+    h.type_text("review");
+    assert_eq!(h.app.template_query(), None);
+    assert!(h.app.overlay.is_none());
+    h.finish().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn template_follow_up_keys_expand_before_sending() {
+    use crate::app::templates::Template;
+    for (code, modifiers) in [
+        (KeyCode::Enter, KeyModifiers::ALT),
+        (KeyCode::Enter, KeyModifiers::CONTROL),
+        #[cfg(unix)]
+        (
+            KeyCode::Char('j'),
+            KeyModifiers::ALT | KeyModifiers::CONTROL,
+        ),
+    ] {
+        let mut h = Harness::opened().await;
+        h.app.templates = vec![Template::parse("review".into(), "Review $1")];
+        h.type_text(r#"/cmd review "src/main file.rs""#);
+        h.key(code, modifiers);
+        assert_eq!(
+            h.app.local_inputs[0].mode,
+            minicore_host_protocol::MessageMode::FollowUp
+        );
+        let call = h.next_call().await;
+        assert!(
+            call.users()
+                .last()
+                .unwrap()
+                .ends_with("\n\nReview src/main file.rs")
+        );
+        call.finish();
+        h.finish().await;
+    }
 }

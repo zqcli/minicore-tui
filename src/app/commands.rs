@@ -225,7 +225,7 @@ pub fn parse(input: &str) -> Option<(&str, &str)> {
 /// Resolves one command line to an action or a panel.
 pub fn execute(name: &str, arg: &str) -> Option<Executed> {
     Some(match name {
-        "command" => Executed::Prefill(format!("/command {arg}")),
+        "command" => Executed::Prefill(format!("/cmd {arg}")),
         "new" if arg.is_empty() => Executed::Action(Action::NewSession),
         "new" => Executed::Noop,
         "agents" => Executed::Panel(super::Panel::Agents),

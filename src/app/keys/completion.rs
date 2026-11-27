@@ -120,22 +120,29 @@ impl App {
     }
 
     fn select_template(&mut self, choice: &str) -> bool {
-        if !matches!(self.overlay, Overlay::Palette { .. })
-            || (self.template_query().is_none()
-                && (self.palette_arg().is_some()
-                    || commands::is_builtin(choice)
-                    || !self
-                        .templates
-                        .iter()
-                        .any(|template| template.name == choice)))
-        {
+        if !matches!(self.overlay, Overlay::Palette { .. }) || self.palette_arg().is_some() {
             return false;
         }
-        let args = if self.template_query().is_some() {
+        let querying = self.template_query().is_some();
+        let args = if querying {
             ""
         } else {
             commands::parse(self.composer.text()).map_or("", |(_, args)| args)
         };
+        if !querying && choice == "command" {
+            self.composer.restore_text(&format!("/cmd {args}"));
+            self.overlay = Overlay::Palette { selected: 0 };
+            return true;
+        }
+        if !querying
+            && (commands::is_builtin(choice)
+                || !self
+                    .templates
+                    .iter()
+                    .any(|template| template.name == choice))
+        {
+            return false;
+        }
         let text = format!("/cmd {choice} {args}");
         self.overlay = Overlay::None;
         self.composer.restore_text(&text);
