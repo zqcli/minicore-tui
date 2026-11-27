@@ -950,7 +950,9 @@ async fn ctrl_b_inspector_loads_real_child_conversation_filters_scrolls_and_mess
             Some("Found")
         );
         terminal
-            .draw(|frame| crate::ui::draw(frame, &mut h.app))
+            .draw(|frame| {
+                crate::ui::draw(frame, &mut h.app);
+            })
             .unwrap();
         assert!(
             terminal.backend().buffer()[(column, row)]
