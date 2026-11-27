@@ -620,7 +620,7 @@ async fn ctrl_b_inspector_loads_real_child_conversation_filters_scrolls_and_mess
     let (parent, working) = launch(&mut h, root, &child, "start-1", "Check API routes").await;
     working.text("Found 3 API routes in src/routes.rs");
     working.usage(
-        minicore_host_runtime::model::Usage::from_optional(Some(12300), Some(850), None)
+        minicore_host_runtime::model::Usage::from_optional(Some(12300), Some(850), Some(30))
             .with_cache_read_tokens(Some(640))
             .with_cache_write_tokens(Some(40)),
     );
@@ -744,8 +744,8 @@ async fn ctrl_b_inspector_loads_real_child_conversation_filters_scrolls_and_mess
             .unwrap();
         assert!(lines[facts].contains(&expected_reasoning));
         assert!(lines[facts + 1].contains(&expected_mode));
-        assert!(lines[facts + 2].contains("Tokens · In 12.3k · Out 850"));
-        assert!(lines[facts + 3].contains("Cache · Read 640 · Write 40"));
+        assert!(lines[facts + 2].contains("Tokens · In 12.3k · Out 880"));
+        assert!(lines[facts + 3].contains("Cache · 640"));
         assert!(
             lines
                 .iter()
@@ -828,12 +828,7 @@ async fn ctrl_b_inspector_loads_real_child_conversation_filters_scrolls_and_mess
             .with_cache_read_tokens(Some(60)),
     );
     child_followup.finish();
-    let counts = [
-        (Some(13000), false),
-        (Some(900), false),
-        (Some(700), false),
-        (Some(40), true),
-    ];
+    let counts = [(Some(13000), false), (Some(930), true), (Some(700), false)];
     h.until(|app| {
         app.inspected_session().is_some_and(|session| {
             !session.is_busy()

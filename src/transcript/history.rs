@@ -17,18 +17,21 @@ use super::{Block, HistorySource, RequestKey, ToolCall, ToolKey, Transcript, Use
 /// Session that switches providers.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct TokenTotals {
-    counts: [Option<u64>; 4],
-    missing: [bool; 4],
+    counts: [Option<u64>; 3],
+    missing: [bool; 3],
 }
 
 impl TokenTotals {
     fn add(&mut self, usage: Usage) {
-        let counts = [
-            usage.input_tokens(),
-            usage.output_tokens(),
-            usage.cache_read_tokens(),
-            usage.cache_write_tokens(),
-        ];
+        // Host usage separates generated text and reasoning. If only one is
+        // known, show its subtotal with the existing incomplete marker.
+        let output = usage.output_tokens();
+        let reasoning = usage.reasoning_tokens();
+        self.missing[1] |= output.is_none() || reasoning.is_none();
+        let generated = output
+            .or(reasoning)
+            .map(|_| output.unwrap_or(0).saturating_add(reasoning.unwrap_or(0)));
+        let counts = [usage.input_tokens(), generated, usage.cache_read_tokens()];
         for (index, count) in counts.into_iter().enumerate() {
             if let Some(count) = count {
                 self.counts[index] = Some(self.counts[index].unwrap_or(0).saturating_add(count));
@@ -38,7 +41,7 @@ impl TokenTotals {
         }
     }
 
-    pub fn counts(self) -> [(Option<u64>, bool); 4] {
+    pub fn counts(self) -> [(Option<u64>, bool); 3] {
         std::array::from_fn(|index| (self.counts[index], self.missing[index]))
     }
 }
@@ -748,6 +751,21 @@ mod tests {
             json!({"kind":"tool_result","tool_call_id":"call","name":"bash",
                 "result":{"outcome":"success","output":{"content":"done"}}}),
         )
+    }
+
+    #[test]
+    fn task_tokens_count_reasoning_without_inventing_unreported_counts() {
+        let mut totals = super::TokenTotals::default();
+        totals.add(Usage::from_optional(None, None, Some(30)).with_cache_write_tokens(Some(100)));
+        assert_eq!(
+            totals.counts(),
+            [(None, true), (Some(30), true), (None, true)]
+        );
+        totals.add(Usage::new(50, 70, 30).with_cache_read_tokens(Some(10)));
+        assert_eq!(
+            totals.counts(),
+            [(Some(50), true), (Some(130), true), (Some(10), true)]
+        );
     }
 
     #[test]

@@ -476,7 +476,7 @@ fn detail_facts(
     let model = wrap::sanitize(model);
     let model = wrap::truncate(&format!("Model {model}"), model_width);
     let (totals, usage_label) = usage;
-    let [input, output, read, write] = totals.counts().map(|(count, missing)| {
+    let [input, output, cache] = totals.counts().map(|(count, missing)| {
         count.map_or_else(
             || "—".to_owned(),
             |n| {
@@ -506,7 +506,7 @@ fn detail_facts(
             format!("{usage_label} · In {input} · Out {output}"),
             styles.dim(),
         ),
-        Line::styled(format!("Cache · Read {read} · Write {write}"), styles.dim()),
+        Line::styled(format!("Cache · {cache}"), styles.dim()),
     ]
 }
 

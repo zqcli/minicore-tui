@@ -241,8 +241,8 @@ buried in earlier collapsed runs when the user steers or starts later turns:
   - **Right pane (Detail focus):** loads the selected child `Session` in the
     background without switching away from the parent. A pinned header shows the
     selected child's model, reasoning level, storage mode and residency. It
-    totals reported input, output, cache-read and cache-write tokens for the
-    selected Session, not across children. Older pages are counted in the
+    totals reported input, output (including reasoning), and cache-read
+    tokens for the selected Session, not across children. Older pages are counted in the
     background without adding rows to the viewport. Incomplete history is
     labeled observed; a plus marks a count omitted by some responses. Missing
     facts are not shown as zero. The pane renders the child's real
