@@ -317,12 +317,13 @@
   - **影响**：未发送草稿静默丢失，F8 重发上下文损坏。
   - **改进方案**：LRU 淘汰优先跳过含草稿/未确认态的会话，或在卸载时将其转存独立按地址索引表并在重加载时无损恢复。
 
-- [ ] **`T3` [P2] 将 L1 加载到 `resident` 后，其 L2 孙任务从根 Tasks 列表中消失**
+- [x] **`T3` [P2] 将 L1 加载到 `resident` 后，其 L2 孙任务从根 Tasks 列表中消失**
   - **位置**：`minicore-tui/src/app/agent_cards.rs`（`L29-L32`）、`minicore-tui/src/app/overlay.rs`（`L420-L430`）
   - **发生场景**：存在三级委派时点开查看某个 L1 详情（加载进入 `resident`），再切回根会话打开 `Tasks` 列表。
   - **现象与根因**：`register_delegation` 将 L2 卡片从 detached `observer.card` 迁入 L1 transcript，而 `cards_for_root` 只扫描 detached `observer.card`。
   - **影响**：查看一次 L1 后，其下属所有 L2 孙任务从根 Tasks 列表凭空消失。
   - **改进方案**：`cards_for_root` 同时聚合 detached observer 与已加载常驻子会话 transcript 中的委派卡片并按 `SessionId` 去重。
+  - **Local verification (2026-11-27)**: `1e38b01d4cc7377df6c3c43e0883e6c5a93ee7ed` reuses the existing card resolver for both locations. The real-Host nested delegation test now opens L1 and checks that L2 keeps the same identity, appears exactly once in root Tasks, and remains visible. Pending integration; not pushed.
 
 - [ ] **`T4` [P2] Diff 视图原地刷新在文件列表清空或变化时保留陈旧文件与内容**
   - **位置**：`minicore-tui/src/app/diff.rs`（`L284-L359`）、`minicore-tui/src/ui/views/diff.rs`（`L332-L345`）
@@ -364,7 +365,8 @@
 - [ ] **`T9` [P3]** `card.task` 短名称回填逻辑阻止完整任务提示文本回填（`src/app/agent_cards.rs:323-334`）——短名称先写入后阻断完整 prompt 回填，详情页看不到原任务描述。
 - [ ] **`T10` [P3]** 嵌套 Markdown 列表选中复制时丢失层级缩进（`src/ui/rails.rs:53-60`）——嵌套列表缩进被当 chrome 剥离，复制后拍平为一级。
 - [ ] **`T11` [P3]** 子任务详情视图中鼠标拖拽划词选择被忽略（`src/app/mouse.rs:137-145`）——子详情视图无法鼠标划词复制。
-- [ ] **`T12` [P3]** 流式输出缺口回补后缺少 `regroup` 调用（`src/app/control.rs:930-944`）——缺口补齐后未重组相邻块，折叠组可能分裂。
+- [x] **`T12` [P3]** 流式输出缺口回补后缺少 `regroup` 调用（`src/app/control.rs:930-944`）——缺口补齐后未重组相邻块，折叠组可能分裂。
+  - **Local verification (2026-11-27)**: `e2d329caaf326770ac9c1c40dc76ab36a29562a6` regroups the recovered source Turn after `output_read_result`. The Unicode-gap test checks the live Working fold before another event arrives. Pending integration; not pushed.
 
 ---
 
@@ -390,3 +392,4 @@
 | 2026-11-26 | `W1`–`W6`, `H1`–`H6`, `T1`–`T12` | 新建 | 基于会话 `fjsg8pzmcz8g5dpgmt31` 实测与代码审查整理初稿 |
 | 2026-11-26 | `H7`–`H10` 及全部条目 | 补充细化 | 追加会话 `gg3933bnvh2vdsqm732m` 运行画像与 4 项新问题，补齐全部条目的场景/根因/影响/方案 |
 | 2026-11-26 | `F1`, `F2` | 升级为待开发功能清单 | 升级为研发待办清单，新增 `F1`（优化 `agent` action 体系）与 `F2`（`/usage` 跨会话统计功能及自上而下五层界面设计） |
+| 2026-11-27 | `T3`, `T12` | Locally fixed; pending integration | Both new assertions failed before the fixes. At `e2d329caaf326770ac9c1c40dc76ab36a29562a6`, `cargo test --locked --config profile.test.package.minicore-tui.codegen-units=17 --lib -- app::control::tests app::tests::agent_cards --nocapture` passed 17 tests. The isolated package profile prevents cross-worktree test artifact reuse. `cargo fmt --all -- --check`, `git diff --check`, and `cargo clippy --locked --lib --config profile.dev.package.minicore-tui.codegen-units=17 -- -D warnings` also passed. No live-model or platform CI claim. |
