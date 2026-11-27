@@ -29,6 +29,7 @@ pub fn render(
         &[
             ("↑↓/pgup/pgdn", "scroll"),
             ("c", "copy full message"),
+            ("r", "refresh view"),
             ("esc", "back"),
         ],
         None,

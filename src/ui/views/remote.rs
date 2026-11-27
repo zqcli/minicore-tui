@@ -1,4 +1,4 @@
-//! Full-screen `/remote` (`/wss`) connection and live status overlay.
+//! Full-screen `/remote` connection and live status overlay.
 
 use ratatui::Frame;
 use ratatui::layout::Rect;

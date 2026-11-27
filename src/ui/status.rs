@@ -306,7 +306,7 @@ fn right_keys(app: &App, styles: Styles) -> Vec<Vec<Span<'static>>> {
         keys.push(plain("enter steer · alt+enter follow-up".to_owned()));
     } else if session.is_busy() {
         if app.return_target().is_some() {
-            keys.push(plain("/cancel stop".to_owned()));
+            keys.push(plain("ctrl+b · stop in Tasks".to_owned()));
         } else {
             keys.push(plain("esc interrupt".to_owned()));
         }

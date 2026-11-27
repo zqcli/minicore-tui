@@ -77,7 +77,7 @@ happening now: the working spinner with whole minutes, the phase or running
 tool, retries and request counts; otherwise a fresh flash or the latest
 notice. Its right side lists only the keys that apply: `↰ esc back` in a
 child, `paused · enter resumes`, `enter steer · alt+enter follow-up` while
-drafting during a Turn, `/cancel stop` in a busy child, `esc interrupt`,
+drafting during a Turn, `ctrl+b · stop in Tasks` in a busy child, `esc interrupt`,
 `N queued · alt+↑ edit` and async status (`⚠ N needs input · M running · K failed · C completed · ctrl+b`). On a narrow terminal the key hints give way before
 the status text, the mode hint first.
 
@@ -97,17 +97,17 @@ key that was pressed. Internal child-Agent result notifications stay out of the
 preview and are shown separately as `N agent results` when pending. `Alt+↑`
 brings only user-authored queued text back for editing.
 
-`/pause` pauses input consumption; `/resume` asks the Host to resume. An empty
+`/pause` pauses input consumption; `/continue` asks the Host to resume. An empty
 `Enter` also resumes a paused Session. Sending a nonempty draft submits input;
 the displayed scheduling state determines whether consumption is paused.
-`/load` loads a Session without resuming paused input. `/unload` and `/close`
-are separate native operations. Host lifecycle or resource failures are shown
+In `/session`, `l` loads without resuming, `u` unloads an idle Session, and
+`x` reviews permanently closing it without deleting history. Host lifecycle or resource failures are shown
 as errors, without an automatic stop-and-retry sequence.
 
 Esc cancels the captured Turn and preserves accepted queued inputs. Cancellation
 does not imply that scheduling is paused: subsequent input follows the Host's
 actual scheduling state. Use `/pause` before cancelling when queued work must
-stay pending, then `/resume` when it should continue.
+stay pending, then `/continue` when it should continue.
 
 `Alt+↑` recalls queued inputs into an empty draft. Only records whose native
 removal succeeds are returned; an input already consumed by a Turn cannot be
@@ -121,7 +121,7 @@ confirmation in `F8` does not remove an accepted input from the Host queue.
 | `Enter` | Send a steer; with an empty draft, resume a paused Session. A recognized slash command runs instead of sending text. |
 | `Alt+Enter`, `Ctrl+Enter` | Send the draft as a follow-up; an empty draft does nothing. |
 | `Shift+Enter`, `Ctrl+J` | Insert a newline. |
-| `Esc` | Close a picker or view first. In the composer, clear a selection; with an empty draft in a child Session opened from its card or `/child`, return to the parent; otherwise interrupt the active Turn while preserving queued inputs, cancel manual compaction, or clear an idle draft (Ctrl+Z restores it). |
+| `Esc` | Close a picker or view first. In the composer, clear a selection; with an empty draft in a child Session opened from its card or Tasks, return to the parent; otherwise interrupt the active Turn while preserving queued inputs, cancel manual compaction, or clear an idle draft (Ctrl+Z restores it). |
 | `Ctrl+C` | Copy an editor selection; otherwise clear the draft. A second press within 500 ms quits. |
 | `Ctrl+D` | Quit with an empty draft; otherwise delete after the cursor. |
 | `↑`, `↓` | Move within a multiline draft, then browse prompt history at its first or last line. |
@@ -172,7 +172,7 @@ templates appear alongside commands and expand before submission.
 | `Ctrl+P`, `Shift+Ctrl+P` | Select the next or previous model when those modifiers are reported. |
 | `Shift+Tab` | Cycle the selected model's supported reasoning preferences, including auto. |
 | `F1` | Open help; type to filter its rows. |
-| `Ctrl+B` | Open the searchable Async Tasks workspace (`Ctrl+B`, `/tasks`, `/children`): type to filter, `→`/`Tab` scrolls the child's real `Working`/`Worked` conversation (`↑↓`/`j`/`k`/`PgUp`/`PgDn`, `Ctrl+O` fold), `Enter` focuses the bottom composer to message the child directly (`Esc` returns to list), `Ctrl+E` opens full child view, `Ctrl+Y` copies, `Ctrl+G` jumps to origin. |
+| `Ctrl+B` | Open the searchable Async Tasks workspace (`Ctrl+B`, `/tasks`): type to filter, `→`/`Tab` scrolls the child's real `Working`/`Worked` conversation (`↑↓`/`j`/`k`/`PgUp`/`PgDn`, `Ctrl+O` fold), `Enter` focuses the bottom composer to message the child directly (`Esc` returns to list), `Ctrl+E` opens full child view, `Ctrl+X` in detail stops the selected child Turn without clearing its queue, `Ctrl+Y` copies, `Ctrl+G` jumps to origin. |
 | `F8` | Review local input confirmations. |
 | `q`, `Esc` on the fatal screen | Quit. |
 | Wheel | Scroll one row, or five with Alt. Over a picker, move its selection; over a view, scroll that view. |
@@ -225,7 +225,7 @@ control, wait) and the result it delivers are drawn inside the card rather than
 as their own rows; failed calls keep their rows, and everything keeps its own
 block when the starting call is not loaded. Only Host's
 settled delegation marks completion. Click the opened card's footer or use
-`/child` to read the child Session and answer its approvals there; Esc
+`Ctrl+E` in Async Tasks to read the child Session and answer its approvals there; Esc
 returns to the parent. Child events do not redirect the parent's input or change its draft.
 If a temporary child has been released, the card keeps its observed preview
 and identifies the unavailable full history.
@@ -266,7 +266,7 @@ Session filter clears its pending delete confirmation.
 | Commands | Type to fuzzy-filter. Enter runs the selected command; Tab completes its name. Argument completion is available for model, reasoning, theme and approval. |
 | Agents | Filter by name or ID. Enter selects the Agent. Ctrl+D opens a confirmation with its name, ID and captured child Session list; only `y` deletes that set. Enter does not confirm. Sessions added after confirmation opens are not included. |
 | Sessions | Rows show the saved title or, if untitled, the short Session ID. Filter by title, Session ID, Agent ID or workspace folder, not message text. Enter opens the selected Session. Ctrl+N renames it; Enter saves and Esc cancels. Ctrl+D opens a confirmation naming that exact Session; only `y` deletes it. |
-| Async Tasks (`Ctrl+B`, `/tasks`, `/children`) | Full-screen two-pane inspector (`≥96` cols) or single-pane list ↔ detail (`<96` cols). Ordered by urgency (`needs input` → `running` → `failed` → settled). Type or paste to fuzzy-filter by task, kind, Agent, Session ID or status; `Ctrl+U` clears the filter. `↑`/`↓` selects, `PgUp`/`PgDn`/wheel scrolls the full Markdown detail pane, `Ctrl+Y` copies result text, `Ctrl+G` jumps to the origin dispatch call, and `Enter` opens the child Session (`Esc` returns). |
+| Async Tasks (`Ctrl+B`, `/tasks`) | Full-screen two-pane inspector (`≥96` cols) or single-pane list ↔ detail (`<96` cols). Ordered by urgency (`needs input` → `running` → `failed` → settled). Type or paste to fuzzy-filter by task, kind, Agent, Session ID or status; `Ctrl+U` clears the filter. `↑`/`↓` selects, `PgUp`/`PgDn`/wheel scrolls the full Markdown detail pane, `Ctrl+Y` copies result text, `Ctrl+G` jumps to the origin dispatch call, and `Enter` opens the child Session (`Esc` returns). |
 | Session (`/session`) | A full-screen view. Show Agent and Session IDs, title, workspace, storage, lifecycle, residency, scheduling, approval mode, model, reasoning, raw history count and latest response usage. Enter or `c` copies the Session ID. |
 | Context (`/context`) | A full-screen view. Show configured and active model facts, native history/projection counts, queue counts, compaction and save state. `r` refreshes; `c` copies. |
 | Models | Filter model references; Enter selects one. The declared context window is model metadata. |
@@ -335,14 +335,9 @@ composer says `view open · esc back`; unbound view keys do not edit it.
 | `/session` | Show the current Session and its owning Agent. |
 | `/default-session` | Make the current Session its Agent's default. |
 | `/rename [title]` | Rename the current Session and refresh its list and detail metadata, even after switching Sessions. Without a title, the draft becomes `/rename <current title>` to edit. |
-| `/tasks`, `/children` | Open the searchable Async Tasks Inspector (`Ctrl+B`). |
-| `/child [n]` | Open the latest delegated child Session of this conversation, or the nth latest. Esc with an empty draft returns to the parent. |
-| `/cancel` | Interrupt the running Turn and keep queued input; in a child opened from its card this is how to stop it. |
+| `/tasks` | Open the searchable Async Tasks Inspector (`Ctrl+B`). |
 | `/pause` | Pause input consumption in the current Session. |
-| `/resume` | Resume the current Session. |
-| `/load` | Load the current Session without resuming paused input. |
-| `/unload` | Request native unload of the current Session. |
-| `/close` | Review and confirm closing the current Session; only `y` closes it. A closed Session keeps its readable history and its composer says so. |
+| `/continue` | Resume the current Session. |
 | `/model [reference]` | Select an exact model reference or unique fuzzy match; with no argument, open the picker. |
 | `/reasoning [level]` | Apply a native reasoning preference; omit the argument to open the picker. Invalid values show the supported levels without changing the current value. |
 | `/approval [ask\|auto]` | Update the current Session's approval policy (`ask` prompts on mutating and outside-workspace calls; `auto` runs without asking) for subsequent Turns; without an argument, list the choices with the current one marked. |
@@ -353,8 +348,8 @@ composer says `view open · esc back`; unbound view keys do not edit it.
 | `/export [path]` | Export native history to Markdown; the default is `./minicore-<session>-<date>.md`. |
 | `/theme [dark\|light]` | Choose and save a palette; without an argument, list the choices. F4 toggles. |
 | `/reload` | Ask Host to reload its bound JSON directory; refresh actual catalogs and local templates after full or partial application. |
-| `/recover` | Refresh current Session state, history and observations without resending inputs. |
-| `/remote [on\|off\|key] [addr]`, `/wss` | Expose the embedded Host over WSS (when `remote.tls_cert`/`tls_key` are set in `tui.json`) or authenticated local WS (IPv4/IPv6, e.g. for reverse proxy / Cloudflare -> WSS), hand off operator control to `minicore-web`, and open the live Remote status overlay (`c` copy key, `u` copy url, `s` hide/show key, `r` rotate key, `Esc`/`q` stop & reclaim terminal control). |
+| `/error` or `/session`, then `r` | Refresh current Session state, history and observations; does not resend input. |
+| `/remote [on\|off\|key] [addr]` | Expose the embedded Host over WSS (when `remote.tls_cert`/`tls_key` are set in `tui.json`) or authenticated local WS (IPv4/IPv6, e.g. for reverse proxy / Cloudflare -> WSS), hand off operator control to `minicore-web`, and open the live Remote status overlay (`c` copy key, `u` copy url, `s` hide/show key, `r` rotate key, `Esc`/`q` stop & reclaim terminal control). |
 | `/unconfirmed` | Review local inputs whose acceptance is uncertain or was rejected. |
 | `/error` | Read or copy the last operation error in full after its notice disappears. |
 | `/help` | Open help. |

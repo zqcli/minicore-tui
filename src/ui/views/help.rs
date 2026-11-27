@@ -149,7 +149,7 @@ const KEYS: &[KeyRow] = &[
         action: "review retained local confirmations; edit separately, warn before resend, no automatic retry",
     },
     KeyRow {
-        keys: "ctrl+b, /tasks, /children",
+        keys: "ctrl+b, /tasks",
         action: "searchable async tasks workspace: type to filter, →/tab scroll real Working/Worked conversation, enter message child, ctrl+e full view, ctrl+g goto, ctrl+y copy",
     },
     KeyRow {
@@ -161,8 +161,8 @@ const KEYS: &[KeyRow] = &[
         action: "list a run's steps, then open a step's card; folds stay in place",
     },
     KeyRow {
-        keys: "agent card: /child [n]",
-        action: "open the latest (or nth) delegated child; esc comes back",
+        keys: "tasks: ctrl+x in detail",
+        action: "stop the selected child’s turn without clearing its queue",
     },
     KeyRow {
         keys: "f1",
@@ -189,7 +189,7 @@ const KEYS: &[KeyRow] = &[
         action: "review the selected Agent and its child sessions / delete that captured set",
     },
     KeyRow {
-        keys: "remote: /remote, /wss",
+        keys: "remote: /remote",
         action: "expose this Host over WSS/WS for minicore-web; c copy key · u copy url · s hide · r rotate · esc/q stop",
     },
 ];

@@ -94,7 +94,7 @@ pub enum Overlay {
         scroll: usize,
         visible_rows: usize,
     },
-    /// `/remote` (`/wss`): exposes the embedded Host over WSS/WS and displays
+    /// `/remote`: exposes the embedded Host over WSS/WS and displays
     /// live connection details while terminal control is handed off.
     Remote {
         show_key: bool,

@@ -1860,7 +1860,7 @@ fn busy_child_session_shows_cancel_hint_alongside_esc_back() {
         .find(|line| line.contains("Working 0m"))
         .unwrap_or_default();
     assert!(activity.contains("↰ esc back"), "{activity}");
-    assert!(activity.contains("/cancel stop"), "{activity}");
+    assert!(activity.contains("ctrl+b · stop in Tasks"), "{activity}");
 }
 
 #[test]

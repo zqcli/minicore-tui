@@ -199,6 +199,24 @@ impl App {
             KeyCode::Char('c') if matches!(self.overlay, Overlay::SessionInfo { .. }) => {
                 self.copy_session_id();
             }
+            KeyCode::Char('r')
+                if !ctrl
+                    && matches!(
+                        self.overlay,
+                        Overlay::Error { .. } | Overlay::SessionInfo { .. }
+                    ) =>
+            {
+                return Some(Action::RetryRecovery);
+            }
+            KeyCode::Char('l') if !ctrl && matches!(self.overlay, Overlay::SessionInfo { .. }) => {
+                return Some(Action::Load);
+            }
+            KeyCode::Char('u') if !ctrl && matches!(self.overlay, Overlay::SessionInfo { .. }) => {
+                return Some(Action::Unload);
+            }
+            KeyCode::Char('x') if !ctrl && matches!(self.overlay, Overlay::SessionInfo { .. }) => {
+                return Some(Action::ConfirmClose);
+            }
             KeyCode::Char('r') if matches!(self.overlay, Overlay::Context { .. }) => {
                 self.refresh_context();
             }
@@ -530,6 +548,11 @@ impl App {
                         && let Overlay::Delegations { focus, .. } = &mut self.overlay
                     {
                         *focus = TaskFocus::Composer;
+                    }
+                }
+                KeyCode::Char('x') if ctrl => {
+                    if let Some(epoch) = self.inspected_session().map(|session| session.epoch) {
+                        self.interrupt_session(epoch);
                     }
                 }
                 KeyCode::Char('e') if ctrl => self.open_selected_delegation(),

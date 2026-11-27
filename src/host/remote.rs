@@ -16,7 +16,7 @@ use crate::config::Remote;
 
 pub const DEFAULT_LISTEN: &str = "127.0.0.1:8443";
 
-/// Live remote listener started by `/remote` (`/wss`). Dropping stops the
+/// Live remote listener started by `/remote`. Dropping stops the
 /// listener and clears the runtime access key override on the embedded Host.
 pub struct RemoteServer {
     host: Arc<Host>,

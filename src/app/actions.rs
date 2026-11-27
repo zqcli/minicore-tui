@@ -50,7 +50,6 @@ pub enum Action {
     Load,
     Unload,
     CloseSession,
-    /// `/close`: states what closing means before `CloseSession` runs.
     ConfirmClose,
     StartAgent,
     StopAgent,
@@ -60,9 +59,6 @@ pub enum Action {
     },
     SetDefaultSession,
     SetApproval(ApprovalMode),
-    /// `/child [n]`: the nth latest delegated child of this conversation.
-    OpenChild(usize),
-    Interrupt,
     Quit,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -226,7 +222,6 @@ impl App {
                     );
                 }
             }
-            Action::OpenChild(nth) => self.open_nth_child(nth),
             Action::ConfirmClose => {
                 if let Some(session) = self.resident.current() {
                     let label = match &session.info.title {
@@ -242,13 +237,6 @@ impl App {
                         ],
                         action: Action::CloseSession,
                     };
-                }
-            }
-            Action::Interrupt => {
-                if self.is_busy() {
-                    self.interrupt();
-                } else {
-                    self.notice(NoticeLevel::Info, "Nothing is running");
                 }
             }
             Action::Quit => self.request_quit(),
@@ -608,11 +596,11 @@ impl App {
                 .map_err(|e| e.to_string())
         });
     }
-    pub(super) fn interrupt(&mut self) {
+    pub(super) fn interrupt_session(&mut self, epoch: u64) {
         if !self.require_control() {
             return;
         }
-        let Some(session) = self.resident.current_mut() else {
+        let Some(session) = self.resident.get_mut(epoch) else {
             return;
         };
         let Some(turn_id) = session.state.data.active_turn_id.clone() else {
@@ -646,16 +634,16 @@ impl App {
         });
     }
     pub fn escape(&mut self) {
-        // From a child opened through its card, Esc goes back rather than
-        // interrupting the child's delegated work; /cancel interrupts it.
+        // In a child opened through Tasks, Esc returns to the parent without
+        // stopping delegated work. Tasks has a separate stop shortcut.
         if self.composer.is_empty()
             && let Some(parent) = self.return_target().cloned()
         {
             self.open_session(parent);
             return;
         }
-        if self.is_busy() {
-            self.interrupt();
+        if let Some(session) = self.resident.current().filter(|session| session.is_busy()) {
+            self.interrupt_session(session.epoch);
             return;
         }
         let compact = self.resident.current().and_then(|s| {
@@ -702,7 +690,7 @@ impl App {
             // Host rejects it as SESSION_BUSY; say what to do instead.
             self.notice(
                 NoticeLevel::Usage,
-                "A turn is running; /compact after it finishes, or /cancel it first",
+                "A turn is running; /compact after it finishes, or stop it first",
             );
             return;
         }

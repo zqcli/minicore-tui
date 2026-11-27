@@ -1027,3 +1027,39 @@ async fn delegated_sessions_hide_from_sessions_picker_and_flatten_grandchildren_
     .await;
     h.finish().await;
 }
+
+#[tokio::test]
+async fn the_tasks_stop_shortcut_interrupts_the_child_not_its_parent() {
+    use crate::app::{Overlay, Panel, overlay::TaskFocus};
+    use crossterm::event::{KeyCode, KeyEvent};
+
+    let mut h = Harness::from_native(NativeHost::with_agent_tool().await).await;
+    let child = h.another_session().await;
+    h.app.composer.set_text("Coordinate a child");
+    h.app.on_action(Action::Submit { follow: false });
+    let root = h.next_call().await;
+    let (parent, _working) = launch(&mut h, root, &child, "stop-child", "Check routes").await;
+    h.until(|app| card(app, "stop-child").is_some()).await;
+    h.app.open_panel(Panel::Delegations);
+    h.until(|app| app.inspected_session().is_some_and(|s| s.is_busy()))
+        .await;
+
+    h.app
+        .on_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+    assert!(matches!(
+        h.app.overlay,
+        Overlay::Delegations {
+            focus: TaskFocus::Detail,
+            ..
+        }
+    ));
+    h.app
+        .on_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL));
+    h.until(|app| {
+        card(app, "stop-child").and_then(AgentCard::outcome) == Some(TurnOutcome::Cancelled)
+    })
+    .await;
+    assert!(h.app.resident.current().unwrap().is_busy());
+    parent.finish();
+    settle(&mut h).await;
+}

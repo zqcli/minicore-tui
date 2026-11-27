@@ -38,24 +38,9 @@ pub const COMMANDS: &[Command<'static>] = &[
         description: "Rename this session; omit the title to edit the current one",
     },
     Command {
-        name: "child",
-        args: "[n]",
-        description: "Open the latest delegated child session, or the nth latest",
-    },
-    Command {
         name: "tasks",
         args: "",
         description: "Inspect and search async tasks and delegated children",
-    },
-    Command {
-        name: "children",
-        args: "",
-        description: "Alias for /tasks: show every delegated child of this conversation",
-    },
-    Command {
-        name: "cancel",
-        args: "",
-        description: "Interrupt the running turn and keep queued input",
     },
     Command {
         name: "compact",
@@ -103,24 +88,9 @@ pub const COMMANDS: &[Command<'static>] = &[
         description: "Pause input consumption in this session",
     },
     Command {
-        name: "resume",
+        name: "continue",
         args: "",
         description: "Resume this session",
-    },
-    Command {
-        name: "load",
-        args: "",
-        description: "Load this session without resuming it",
-    },
-    Command {
-        name: "unload",
-        args: "",
-        description: "Unload this session",
-    },
-    Command {
-        name: "close",
-        args: "",
-        description: "Close this session",
     },
     Command {
         name: "default-session",
@@ -163,19 +133,9 @@ pub const COMMANDS: &[Command<'static>] = &[
         description: "Reload Host and Agent JSON from the bound configuration directory",
     },
     Command {
-        name: "recover",
-        args: "",
-        description: "Refresh the session state, history and observations",
-    },
-    Command {
         name: "remote",
         args: "[on|off|key] [addr]",
         description: "Expose this Host over WSS/WS for minicore-web and show connection info",
-    },
-    Command {
-        name: "wss",
-        args: "[on|off|key] [addr]",
-        description: "Alias for /remote: expose this Host over WSS/WS for minicore-web",
     },
     Command {
         name: "unconfirmed",
@@ -281,21 +241,10 @@ pub fn execute(name: &str, arg: &str) -> Option<Executed> {
         "session" => Executed::Panel(super::Panel::SessionInfo),
         "sessions" => Executed::Panel(super::Panel::Sessions),
         "pause" => Executed::Action(Action::Pause),
-        "resume" => Executed::Action(Action::Resume),
-        "load" => Executed::Action(Action::Load),
-        "unload" => Executed::Action(Action::Unload),
-        "close" => Executed::Action(Action::ConfirmClose),
+        "continue" => Executed::Action(Action::Resume),
         "rename" if !arg.is_empty() => Executed::Action(Action::Rename(arg.to_owned())),
         "rename" => Executed::Prefill("/rename ".into()),
-        "child" => match arg {
-            "" => Executed::Action(Action::OpenChild(1)),
-            arg => match arg.parse() {
-                Ok(nth) if nth > 0 => Executed::Action(Action::OpenChild(nth)),
-                _ => Executed::Noop,
-            },
-        },
-        "cancel" => Executed::Action(Action::Interrupt),
-        "tasks" | "children" => Executed::Panel(super::Panel::Delegations),
+        "tasks" => Executed::Panel(super::Panel::Delegations),
         "model" if arg.is_empty() => Executed::Panel(super::Panel::Models),
         "model" => Executed::Action(Action::SwitchModel(arg.to_owned())),
         "reasoning" if arg.is_empty() => Executed::Panel(super::Panel::Reasoning),
@@ -317,8 +266,7 @@ pub fn execute(name: &str, arg: &str) -> Option<Executed> {
             _ => Executed::Noop,
         },
         "reload" => Executed::Action(Action::ReloadHost),
-        "recover" => Executed::Action(Action::RetryRecovery),
-        "remote" | "wss" => match arg {
+        "remote" => match arg {
             "" | "on" => Executed::Action(Action::RemoteStart(None)),
             "off" => Executed::Action(Action::RemoteStop),
             "key" => Executed::Action(Action::RemoteRotateKey),
@@ -508,8 +456,8 @@ mod tests {
     fn exact_and_prefix_matches_rank_first() {
         let names = |input| -> Vec<&str> { filter(input, &[]).iter().map(|c| c.name).collect() };
         assert_eq!(names("mo")[0], "model");
-        assert_eq!(names("res")[0], "resume");
-        assert_eq!(names("re")[..3], ["rename", "reasoning", "resume"]);
+        assert_eq!(names("conti")[0], "continue");
+        assert_eq!(names("re")[..2], ["rename", "reasoning"]);
         assert_eq!(names("sess"), ["sessions", "session", "default-session"]);
         assert_eq!(names("new")[0], "new");
     }
@@ -646,12 +594,7 @@ mod tests {
             ("agent-stop", Action::StopAgent),
             ("default-session", Action::SetDefaultSession),
             ("pause", Action::Pause),
-            ("resume", Action::Resume),
-            ("load", Action::Load),
-            ("unload", Action::Unload),
-            ("close", Action::ConfirmClose),
-            ("cancel", Action::Interrupt),
-            ("child", Action::OpenChild(1)),
+            ("continue", Action::Resume),
         ] {
             assert_eq!(execute(name, ""), Some(Executed::Action(action)));
         }
@@ -672,17 +615,13 @@ mod tests {
             Some(Executed::Action(Action::RemoteStart(None)))
         );
         assert_eq!(
-            execute("wss", "on"),
-            Some(Executed::Action(Action::RemoteStart(None)))
-        );
-        assert_eq!(
             execute("remote", "on [::1]:8443"),
             Some(Executed::Action(Action::RemoteStart(Some(
                 "[::1]:8443".into()
             ))))
         );
         assert_eq!(
-            execute("wss", "[::]:8443"),
+            execute("remote", "[::]:8443"),
             Some(Executed::Action(Action::RemoteStart(Some(
                 "[::]:8443".into()
             ))))
@@ -696,6 +635,16 @@ mod tests {
             Some(Executed::Action(Action::RemoteRotateKey))
         );
         assert_eq!(execute("remote", "bogus"), Some(Executed::Noop));
+    }
+
+    #[test]
+    fn redundant_control_shortcuts_are_not_builtins() {
+        for removed in [
+            "children", "child", "resume", "cancel", "wss", "recover", "load", "unload", "close",
+        ] {
+            assert!(execute(removed, "").is_none(), "removed /{removed}");
+            assert!(COMMANDS.iter().all(|command| command.name != removed));
+        }
     }
 
     fn model(id: &str) -> ModelDescription {
@@ -727,7 +676,7 @@ mod tests {
             let found = filter(input, &templates);
             found.iter().map(|command| command.name).collect()
         };
-        assert_eq!(names("rev"), ["review", "recover"]);
+        assert_eq!(names("rev")[0], "review");
         let found = names("re");
         assert!(
             found.iter().position(|name| *name == "reload").unwrap()

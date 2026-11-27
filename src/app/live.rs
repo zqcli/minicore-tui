@@ -175,42 +175,6 @@ impl App {
         self.return_to = parent.map(|parent| (child, parent));
     }
 
-    /// `/child [n]`: the nth latest delegation card's child in this transcript.
-    pub(super) fn open_nth_child(&mut self, nth: usize) {
-        let mut children: Vec<(SessionRef, bool)> = Vec::new();
-        if let Some(session) = self.resident.current() {
-            for block in session.transcript.blocks().iter().rev() {
-                if let crate::transcript::Block::Tool(call) = block
-                    && let Some(card) = &call.agent_card
-                    && !children
-                        .iter()
-                        .any(|(child, _)| child == &card.association.child)
-                {
-                    children.push((card.association.child.clone(), card.history_unavailable));
-                }
-            }
-        }
-        match children.get(nth.saturating_sub(1)) {
-            // The same answer a click on the card's footer gives.
-            Some((_, true)) => self.notice(
-                NoticeLevel::Info,
-                "Child history is unavailable; this card retains the observed preview",
-            ),
-            Some((child, false)) => self.open_child(child.clone()),
-            None if children.is_empty() => self.notice(
-                super::NoticeLevel::Usage,
-                "No delegated child Session in this conversation",
-            ),
-            None => self.notice(
-                super::NoticeLevel::Usage,
-                format!(
-                    "This conversation has {} delegated child Sessions",
-                    children.len()
-                ),
-            ),
-        }
-    }
-
     /// The parent Esc returns to, while the child opened from it is current.
     pub fn return_target(&self) -> Option<&SessionRef> {
         let (child, parent) = self.return_to.as_ref()?;

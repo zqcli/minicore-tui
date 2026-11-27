@@ -96,7 +96,7 @@ One row directly above the editor, present only with content.
   content column.
 - **Right, keys that work now**, separated by two spaces, in this order:
   `↰ esc back`; one of `paused · enter resumes`,
-  `enter steer · alt+enter follow-up`, `/cancel stop` (when a child is busy) or
+  `enter steer · alt+enter follow-up`, `ctrl+b · stop in Tasks` (when a child is busy) or
   `esc interrupt`; `N queued · alt+↑ edit`; `N agent results` (when child
   delegation notifications wait in the queue); async task status
   (`⚠ N needs input · M running · ctrl+b` or `N running · ctrl+b`).
@@ -241,8 +241,9 @@ buried in earlier collapsed runs when the user steers or starts later turns:
   - **Right pane (Detail focus):** loads the selected child `Session` in the
     background without switching away from the parent. A pinned header shows the
     selected child's model, reasoning level, storage mode and residency, then
-    the latest complete model response's reported tokens (not a task total). Missing facts
-    are not shown as zero. The pane renders the child's real conversation through the same `Working`/`Worked` transcript renderer
+    reported tokens from the latest complete model response (not a task total).
+    Missing facts are not shown as zero. The pane renders the child's real
+    conversation through the same `Working`/`Worked` transcript renderer
     (collapsible work groups, live thinking spinners, indented tool cards,
     Markdown, scrollbar and `Jump to latest message · End`). Scroll with
     `↑↓`/`j`/`k`/`PgUp`/`PgDn`/`Home`/`End` or mouse wheel; click `Working`,
@@ -356,7 +357,7 @@ with `← Title`: the arrow says Esc goes back.
 
 ### Confirmations
 
-Destructive or irreversible actions (`/close`, Session or Agent deletion,
+Destructive or irreversible actions (closing from `/session`, Session or Agent deletion,
 resend, forget) open a confirmation sheet that names the exact target. Only `y`
 confirms; Enter, `n` and Esc cancel.
 

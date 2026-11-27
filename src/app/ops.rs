@@ -82,9 +82,9 @@ impl App {
                 if self.session_mut(epoch).subscription_generation != generation {
                     return;
                 }
-                self.session_mut(epoch).observation_error = error
-                    .clone()
-                    .or_else(|| Some("Observation ended; /recover to subscribe again".into()));
+                self.session_mut(epoch).observation_error = error.clone().or_else(|| {
+                    Some("Observation ended; open /session and press r to refresh".into())
+                });
                 if resync {
                     self.resubscribe(epoch);
                 } else if let Some(error) = error {

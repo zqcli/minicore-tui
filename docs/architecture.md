@@ -123,7 +123,7 @@ The App message channel is bounded. A slow terminal can backpressure the
 subscription reader instead of accumulating an unlimited frontend event queue.
 Host's own subscription overflow produces its native `ResyncRequired` signal.
 That signal starts a new subscription and reads fresh state/history. Manual
-`/recover` uses the same observation path. Replacing a subscription aborts and
+Refreshing the Session view uses the same observation path. Replacing a subscription aborts and
 drops the old frontend pump; it does not cancel a Turn.
 
 `OutputBuffer` is the native SDK implementation. It tracks source/channel byte

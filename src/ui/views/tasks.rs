@@ -197,6 +197,7 @@ pub fn render(frame: &mut Frame, area: Rect, styles: Styles, app: &mut App) {
             ("ctrl+o", "fold"),
             ("enter", "message"),
             ("ctrl+e", "full view"),
+            ("ctrl+x", "stop child"),
             ("ctrl+y", "copy"),
             ("←/esc", "list"),
         ],

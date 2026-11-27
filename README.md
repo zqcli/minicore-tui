@@ -8,7 +8,7 @@ credentials, history and persistence; the TUI owns terminal interaction and
 presentation.
 
 The backend is pinned to an immutable Git revision in `Cargo.toml`.
-`Cargo.lock` fixes the complete dependency graph. Run `/remote` (alias `/wss`)
+`Cargo.lock` fixes the complete dependency graph. Run `/remote`
 inside the TUI to expose the embedded Host over WSS (with configured PEM TLS
 files) or local WS (IPv4/IPv6, e.g. behind a reverse proxy or Cloudflare orange
 cloud) for `minicore-web` using a one-time in-memory access key.
@@ -121,7 +121,7 @@ edits; Ctrl+Z and Ctrl+Y restore or replay them.
   banners stay hidden from the main conversation so the parent flow stays clean.
   The single-line Activity Line above the editor reports live async counts
   (`⚠ N needs input · M running · K failed · C completed · ctrl+b`). Press
-  `Ctrl+B` (`/tasks`, `/children`) or click any dispatch row to open the
+  `Ctrl+B` (`/tasks`) or click any dispatch row to open the
   full-screen searchable Async Tasks workspace (two-pane on wide terminals,
   single-pane list ↔ conversation on narrow ones): filter tasks by typing or
   pasting, scroll and fold the child's real `Working`/`Worked` conversation with
@@ -131,7 +131,7 @@ edits; Ctrl+Z and Ctrl+Y restore or replay them.
 - **Input:** Enter sends steering input; Alt+Enter or Ctrl+Enter queues a
   follow-up. Accepted `next_step` and `next_turn` entries come from Host. Esc
   cancels the captured Turn and preserves queued input; `/pause` prevents later
-  queue execution and `/resume` allows it again. A mutation receipt alone never
+  queue execution and `/continue` allows it again. A mutation receipt alone never
   marks a Turn complete or a queue entry delivered. Asynchronous compaction
   failures show the native fault once in the conversation notice without moving
   the reading position; background failures name their originating Session.

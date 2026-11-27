@@ -55,7 +55,7 @@ configuration. Files are not watched automatically.
 }
 ```
 
-The optional `remote` section configures on-demand `/remote` (`/wss`) access for
+The optional `remote` section configures on-demand `/remote` access for
 `minicore-web`. `listen` accepts any IPv4 or IPv6 `host:port` (default
 `127.0.0.1:8443`). When both `tls_cert` and `tls_key` are configured, `/remote`
 serves direct TLS WebSockets (`wss://`). When both are omitted, `/remote` serves
