@@ -819,7 +819,16 @@ async fn template_picker_fills_before_sending_and_namespaces_builtin_collisions(
             .unwrap()
             .ends_with("\n\nReview src/main file.rs")
     );
+    call.text("Review complete.");
     call.finish();
+    h.until(|app| {
+        !app.is_busy()
+            && app
+                .transcript_blocks()
+                .iter()
+                .any(|block| matches!(block, crate::transcript::Block::TurnEnd { .. }))
+    })
+    .await;
 
     h.type_text("/model");
     h.press(KeyCode::Enter);
@@ -832,7 +841,9 @@ async fn template_picker_fills_before_sending_and_namespaces_builtin_collisions(
         call.users()
             .last()
             .unwrap()
-            .ends_with("\n\nTemplate for path")
+            .ends_with("\n\nTemplate for path"),
+        "{:?}",
+        call.users()
     );
     call.finish();
     h.finish().await;
