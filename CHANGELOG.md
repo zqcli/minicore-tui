@@ -1,10 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.12.17 — 2026-11-27
 
 - Show the selected child Session’s model, reasoning, storage, residency and cumulative token usage in Async Tasks. Output includes reasoning, and Cache counts reads only.
 - Simplify task and session commands; keep advanced controls in the Session view
   and stop the selected child from Tasks without changing Esc navigation.
+- Embed MiniCore Host 0.12.17.
 
 ## 0.12.16 — 2026-11-26
 
