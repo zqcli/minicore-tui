@@ -860,7 +860,10 @@ impl App {
                     "on",
                     "Start remote WSS/WS server and show connection overlay",
                 ),
-                ("off", "Stop remote server and reclaim terminal control"),
+                (
+                    "off",
+                    "Cancel startup or stop remote access and restore terminal control",
+                ),
                 ("key", "Generate a fresh one-time access key"),
             ]),
             _ => unreachable!(),

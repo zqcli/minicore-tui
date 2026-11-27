@@ -121,8 +121,8 @@ async fn remote_rejects_mismatched_tls_pair() {
 async fn remote_off_cancels_pending_start_before_handoff_and_key_replacement() {
     let mut h = Harness::opened().await;
     let host = h.app.client.host().unwrap();
-    h.app
-        .on_action(Action::RemoteStart(Some("127.0.0.1:0".into())));
+    h.type_text("/remote 127.0.0.1:0");
+    h.press(KeyCode::Enter);
     assert_eq!(h.app.remote_start, RemoteStartup::Pending);
 
     // Hold the completed loopback startup outside the reducer until after /remote off.
@@ -136,30 +136,34 @@ async fn remote_off_cancels_pending_start_before_handoff_and_key_replacement() {
     })
     .await;
     let cancelled_key = result.as_ref().unwrap().access_key.clone();
-    h.app.on_action(Action::RemoteStop);
+    h.type_text("/remote off");
+    h.press(KeyCode::Enter);
     assert_eq!(h.app.remote_start, RemoteStartup::Cancelling);
     assert!(h.app.remote.is_none());
     assert!(h.app.can_operate());
 
     // Do not overlap startups: dropping the old server revokes its Host key override.
-    h.app
-        .on_action(Action::RemoteStart(Some("127.0.0.1:0".into())));
+    h.type_text("/remote 127.0.0.1:0");
+    h.press(KeyCode::Enter);
     assert_eq!(h.app.remote_start, RemoteStartup::Cancelling);
+    h.press(KeyCode::F(1));
+    assert!(matches!(h.app.overlay, Overlay::Help { .. }));
     h.app.on_msg(Msg::RemoteStarted(result));
     assert_eq!(h.app.remote_start, RemoteStartup::Idle);
     assert!(h.app.remote.is_none());
-    assert!(!matches!(h.app.overlay, Overlay::Remote { .. }));
+    assert!(matches!(h.app.overlay, Overlay::Help { .. }));
     assert!(host.connect_network(&cancelled_key).is_err());
     h.another_session().await; // The actual Host still recognizes terminal operation rights.
 
-    h.app
-        .on_action(Action::RemoteStart(Some("127.0.0.1:0".into())));
+    h.press(KeyCode::Esc);
+    h.type_text("/remote 127.0.0.1:0");
+    h.press(KeyCode::Enter);
     h.until(|app| app.remote.is_some()).await;
     let fresh_key = h.app.remote.as_ref().unwrap().access_key.clone();
     assert_ne!(fresh_key, cancelled_key);
     let connection = host.connect_network(&fresh_key).unwrap();
     assert!(connection.initial_info().can_operate);
-    h.app.on_action(Action::RemoteStop);
+    h.press(KeyCode::Esc);
     assert!(host.connect_network(&fresh_key).is_err());
     h.another_session().await;
     h.finish().await;

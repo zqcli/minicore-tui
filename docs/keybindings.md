@@ -372,7 +372,7 @@ composer says `view open · esc back`; unbound view keys do not edit it.
 | `/theme [dark\|light]` | Choose and save a palette; without an argument, list the choices. F4 toggles. |
 | `/reload` | Ask Host to reload its bound JSON directory; refresh actual catalogs and local templates after full or partial application. |
 | `/error` or `/session`, then `r` | Refresh current Session state, history and observations; does not resend input. |
-| `/remote [on\|off\|key] [addr]` | Expose the embedded Host over WSS (when `remote.tls_cert`/`tls_key` are set in `tui.json`) or authenticated local WS (IPv4/IPv6, e.g. for reverse proxy / Cloudflare -> WSS), hand off operator control to `minicore-web`, and open the live Remote status overlay (`c` copy key, `u` copy url, `s` hide/show key, `r` rotate key, `Esc`/`q` stop & reclaim terminal control). |
+| `/remote [on\|off\|key] [addr]` | Expose the embedded Host over WSS (when `remote.tls_cert`/`tls_key` are set in `tui.json`) or authenticated local WS (IPv4/IPv6, e.g. for reverse proxy / Cloudflare -> WSS), hand off operator control to `minicore-web`, and open the live Remote status overlay (`c` copy key, `u` copy url, `s` hide/show key, `r` rotate key, `Esc`/`q` stop & reclaim terminal control). `/remote off` also cancels startup before control is handed off. |
 | `/unconfirmed` | Review local inputs whose acceptance is uncertain or was rejected. |
 | `/error` | Read or copy the last operation error in full after its notice disappears. |
 | `/help` | Open help. |

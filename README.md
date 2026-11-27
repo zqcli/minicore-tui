@@ -11,7 +11,8 @@ The backend is pinned to an immutable Git revision in `Cargo.toml`.
 `Cargo.lock` fixes the complete dependency graph. Run `/remote`
 inside the TUI to expose the embedded Host over WSS (with configured PEM TLS
 files) or local WS (IPv4/IPv6, e.g. behind a reverse proxy or Cloudflare orange
-cloud) for `minicore-web` using a one-time in-memory access key.
+cloud) for `minicore-web` using a one-time in-memory access key. Run
+`/remote off` to cancel a pending startup without handing off terminal control.
 
 ## Build and first run
 
