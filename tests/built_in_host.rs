@@ -346,7 +346,7 @@ async fn reopen(root: &Path) {
     loaded.host.name = "Directory configuration on reopen".into();
     std::fs::write(
         home.dir().join("host.json"),
-        serde_json::to_vec(&loaded.host).unwrap(),
+        serde_json::to_vec(&host_file(&loaded.host)).unwrap(),
     )
     .unwrap();
     let source = home.dir().join("agents").join("fixture.json");
@@ -533,13 +533,42 @@ fn fixture(root: &Path, endpoint: &str, api: OpenAiModelApi) -> ConfigDirectory 
     std::fs::write(home.ui_file(), r#"{"ui":{"bell":false}}"#).unwrap();
     std::fs::write(
         home.dir().join("host.json"),
-        serde_json::to_vec_pretty(&config).unwrap(),
+        serde_json::to_vec_pretty(&host_file(&config)).unwrap(),
     )
     .unwrap();
     write_agent(&home, &agent);
     std::fs::create_dir_all(root.join("session")).unwrap();
     std::fs::write(root.join("session/old-agent.data"), "not migrated").unwrap();
     home
+}
+
+// File declarations are provider-based; native HostConfig remains an effective runtime value.
+fn host_file(config: &HostConfig) -> Value {
+    let [model] = config.models.as_slice() else {
+        panic!("embedded fixture has exactly one model");
+    };
+    let suffix = match model.api {
+        OpenAiModelApi::ChatCompletions => "/chat/completions",
+        OpenAiModelApi::Responses => "/responses",
+    };
+    let mut file = serde_json::to_value(config).unwrap();
+    file["providers"] = json!({"fixture": {
+        "baseurl": model.endpoint.strip_suffix(suffix).unwrap(),
+        "api": model.api,
+        "api_key": format!("${}", model.api_key_env),
+        "stream": model.stream,
+        "request_timeout_ms": model.request_timeout_ms,
+    }});
+    file["models"] = json!([{
+        "name": model.model,
+        "provider": "fixture",
+        "model": model.provider_model,
+        "reasoning": model.supported_reasoning,
+        "context_window": model.context_window,
+        "supports_tools": model.supports_tools,
+        "web_search": model.web_search,
+    }]);
+    file
 }
 
 fn write_agent(directory: &ConfigDirectory, config: &AgentConfig) {
@@ -599,7 +628,7 @@ async fn reload_frontend(root: &Path) {
     defaults.instructions = "Reloaded Agent instructions".into();
     std::fs::write(
         home.dir().join("host.json"),
-        serde_json::to_vec(&candidate).unwrap(),
+        serde_json::to_vec(&host_file(&candidate)).unwrap(),
     )
     .unwrap();
     write_agent(&home, &defaults);
@@ -669,7 +698,7 @@ async fn reload_frontend(root: &Path) {
     write_agent(&home, &restart_defaults);
     std::fs::write(
         home.dir().join("host.json"),
-        serde_json::to_vec(&restart).unwrap(),
+        serde_json::to_vec(&host_file(&restart)).unwrap(),
     )
     .unwrap();
     assert!(matches!(
@@ -702,8 +731,8 @@ async fn reload_frontend(root: &Path) {
         defaults
     );
 
-    let mut failing = candidate.clone();
-    failing.models[0].endpoint = "not a provider URL".into();
+    let mut failing = host_file(&candidate);
+    failing["providers"]["fixture"]["baseurl"] = "not a provider URL".into();
     std::fs::write(
         home.dir().join("host.json"),
         serde_json::to_vec(&failing).unwrap(),
