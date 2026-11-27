@@ -425,7 +425,10 @@ async fn a_fast_released_memory_child_keeps_actual_partial_output_when_history_i
     let mut events = tasks::native_session_subscription(&h.native.client, parent_target.clone())
         .await
         .unwrap();
-    root.tool("memory-start", json!({"action":"create","resource":"session","target":{"host_id":h.native.client.initial_info().host_id,"agent_id":parent_target.agent_id},"mode":"memory","text":"short child task"}));
+    root.tool(
+        "memory-start",
+        json!({"action":"create","text":"short child task"}),
+    );
     // Deliberately do not reduce App messages until native source retirement.
     let first = real_bounded(h.native.calls.recv()).await.unwrap();
     let second = real_bounded(h.native.calls.recv()).await.unwrap();
@@ -802,13 +805,14 @@ async fn delegated_sessions_hide_from_sessions_picker_and_flatten_grandchildren_
     let root_call = h.next_call().await;
     let root_loop = root_call.context.loop_id;
 
-    // Root delegates to L1 child with an explicit short name.
+    // Root explicitly grants the L1 worker permission to launch a helper.
     root_call.tool(
         "create-l1",
         json!({
             "action": "create",
             "resource": "session",
             "name": "worker-a",
+            "allow_delegation": true,
             "text": "Inspect repo and spawn helper"
         }),
     );
