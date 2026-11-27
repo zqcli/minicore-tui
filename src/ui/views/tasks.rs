@@ -4,15 +4,14 @@
 //! the shared [`super::split`] two-pane engine.
 
 use minicore_host_protocol::{ReasoningPreference, Residency, StorageMode};
-use minicore_host_runtime::model::Usage;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
 use crate::app::overlay::{AsyncTaskItem, TaskFocus, async_tasks, matching_async_tasks};
-use crate::app::{App, Overlay};
-use crate::transcript::layout::Fold;
+use crate::app::{App, Overlay, UsageHistory};
+use crate::transcript::{TokenTotals, layout::Fold};
 use crate::ui::chrome;
 use crate::ui::panel::truncate;
 use crate::ui::theme::Styles;
@@ -144,12 +143,10 @@ pub fn render(frame: &mut Frame, area: Rect, styles: Styles, app: &mut App) {
         let target_ref = current.and_then(|item| item.open_target());
         let (preview_usage, preview_mode) = match current {
             Some(AsyncTaskItem::Agent(card)) => (
-                card.transcript.latest_response_usage(),
-                card.state
-                    .as_ref()
-                    .map(|state| (state.data.mode, state.data.residency)),
+                card.transcript.token_totals(),
+                card.state.as_ref().map(|state| state.data.mode),
             ),
-            _ => (None, None),
+            _ => (TokenTotals::default(), None),
         };
         let needs_input_banner = current.is_some_and(|item| item.needs_input());
         let fallback_lines = current.and_then(|item| match item {
@@ -280,7 +277,9 @@ pub fn render(frame: &mut Frame, area: Rect, styles: Styles, app: &mut App) {
         return;
     }
 
-    let target = target_ref.as_ref().map(|(target, _)| target);
+    let target = target_ref
+        .as_ref()
+        .and_then(|(target, unavailable)| (!unavailable).then_some(target));
     let child = target.and_then(|target| app.resident.find(target));
     let catalog = target.and_then(|target| {
         app.sessions
@@ -295,27 +294,37 @@ pub fn render(frame: &mut Frame, area: Rect, styles: Styles, app: &mut App) {
             )
         })
         .or_else(|| catalog.map(|session| (session.model.as_str(), session.reasoning)));
-    let usage = child
-        .and_then(|session| session.transcript.latest_response_usage())
-        .or(preview_usage)
-        .or_else(|| {
-            child?
-                .context
-                .as_ref()?
-                .data
-                .history
-                .as_ref()?
-                .latest_response
-                .as_ref()
-                .map(|response| response.usage)
-        });
-    let mode = child
+    let usage = child.map_or(preview_usage, |session| session.transcript.token_totals());
+    let usage_label = match child {
+        Some(session)
+            if session.observation_error.is_none()
+                && (session.usage_history == UsageHistory::Complete
+                    || session
+                        .history
+                        .as_ref()
+                        .is_some_and(|window| !window.has_more())) =>
+        {
+            "Tokens"
+        }
+        Some(session) if session.usage_history == UsageHistory::Reading => "Counting history",
+        _ => "Observed tokens",
+    };
+    let state = child
         .map(|session| (session.state.data.mode, session.state.data.residency))
-        .or_else(|| catalog.map(|session| (session.mode, session.residency)))
-        .or(preview_mode);
-    if transcript_area.height >= 4 + u16::from(needs_input_banner) {
+        .or_else(|| catalog.map(|session| (session.mode, session.residency)));
+    let mode = (
+        state.map(|(mode, _)| mode).or(preview_mode),
+        state.map(|(_, residency)| residency),
+    );
+    if transcript_area.height >= 5 + u16::from(needs_input_banner) {
         let buffer = frame.buffer_mut();
-        for line in detail_facts(config, usage, mode, transcript_area.width, styles) {
+        for line in detail_facts(
+            config,
+            (usage, usage_label),
+            mode,
+            transcript_area.width,
+            styles,
+        ) {
             buffer.set_line(
                 transcript_area.x,
                 transcript_area.y,
@@ -454,11 +463,11 @@ pub fn render(frame: &mut Frame, area: Rect, styles: Styles, app: &mut App) {
 
 fn detail_facts(
     config: Option<(&str, ReasoningPreference)>,
-    usage: Option<Usage>,
-    mode: Option<(StorageMode, Residency)>,
+    usage: (TokenTotals, &str),
+    mode: (Option<StorageMode>, Option<Residency>),
     width: u16,
     styles: Styles,
-) -> [Line<'static>; 3] {
+) -> [Line<'static>; 4] {
     let (model, reasoning) = config
         .map(|(model, level)| (model, crate::ui::sheets::reasoning_label(level)))
         .unwrap_or(("—", "—"));
@@ -466,30 +475,38 @@ fn detail_facts(
     let model_width = usize::from(width).saturating_sub(wrap::width(&suffix));
     let model = wrap::sanitize(model);
     let model = wrap::truncate(&format!("Model {model}"), model_width);
-    let tokens = usage
-        .filter(|usage| *usage != Usage::default())
-        .map_or_else(
+    let (totals, usage_label) = usage;
+    let [input, output, read, write] = totals.counts().map(|(count, missing)| {
+        count.map_or_else(
             || "—".to_owned(),
-            |usage| super::context::usage_text(&usage),
-        );
-    let (storage, residency) = mode.map_or(("—", "—"), |(mode, residency)| {
-        (
-            crate::ui::sheets::storage_label(mode),
-            match residency {
-                Residency::Unloaded => "unloaded",
-                Residency::Loading => "loading",
-                Residency::Loaded => "loaded",
-                Residency::Unloading => "unloading",
+            |n| {
+                let mut formatted = crate::ui::format_tokens(n);
+                if missing {
+                    formatted.push('+');
+                }
+                formatted
             },
         )
     });
+    let storage = mode.0.map_or("—", crate::ui::sheets::storage_label);
+    let residency = match mode.1 {
+        Some(Residency::Unloaded) => "unloaded",
+        Some(Residency::Loading) => "loading",
+        Some(Residency::Loaded) => "loaded",
+        Some(Residency::Unloading) => "unloading",
+        None => "—",
+    };
     [
         Line::from(vec![
             Span::styled(model, styles.text()),
             Span::styled(suffix, styles.dim()),
         ]),
         Line::styled(format!("Storage {storage} · {residency}"), styles.dim()),
-        Line::styled(format!("Last response tokens: {tokens}"), styles.dim()),
+        Line::styled(
+            format!("{usage_label} · In {input} · Out {output}"),
+            styles.dim(),
+        ),
+        Line::styled(format!("Cache · Read {read} · Write {write}"), styles.dim()),
     ]
 }
 

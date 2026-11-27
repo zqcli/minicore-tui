@@ -619,11 +619,11 @@ async fn ctrl_b_inspector_loads_real_child_conversation_filters_scrolls_and_mess
     let root = h.next_call().await;
     let (parent, working) = launch(&mut h, root, &child, "start-1", "Check API routes").await;
     working.text("Found 3 API routes in src/routes.rs");
-    working.usage(minicore_host_runtime::model::Usage::from_optional(
-        Some(12300),
-        Some(850),
-        None,
-    ));
+    working.usage(
+        minicore_host_runtime::model::Usage::from_optional(Some(12300), Some(850), None)
+            .with_cache_read_tokens(Some(640))
+            .with_cache_write_tokens(Some(40)),
+    );
     working.finish();
     parent.text("Delegated API route check.");
     parent.finish();
@@ -744,7 +744,8 @@ async fn ctrl_b_inspector_loads_real_child_conversation_filters_scrolls_and_mess
             .unwrap();
         assert!(lines[facts].contains(&expected_reasoning));
         assert!(lines[facts + 1].contains(&expected_mode));
-        assert!(lines[facts + 2].contains("Last response tokens: ↑12.3k ↓850"));
+        assert!(lines[facts + 2].contains("Tokens · In 12.3k · Out 850"));
+        assert!(lines[facts + 3].contains("Cache · Read 640 · Write 40"));
         assert!(
             lines
                 .iter()
@@ -822,10 +823,21 @@ async fn ctrl_b_inspector_loads_real_child_conversation_filters_scrolls_and_mess
         child_followup.users()
     );
     child_followup.text("Auth middleware verified");
+    child_followup.usage(
+        minicore_host_runtime::model::Usage::from_optional(Some(700), Some(50), None)
+            .with_cache_read_tokens(Some(60)),
+    );
     child_followup.finish();
+    let counts = [
+        (Some(13000), false),
+        (Some(900), false),
+        (Some(700), false),
+        (Some(40), true),
+    ];
     h.until(|app| {
         app.inspected_session().is_some_and(|session| {
             !session.is_busy()
+                && session.transcript.token_totals().counts() == counts
                 && session
                     .transcript
                     .last_answer()
@@ -839,6 +851,37 @@ async fn ctrl_b_inspector_loads_real_child_conversation_filters_scrolls_and_mess
         "Parent draft stays intact",
         "parent draft must remain untouched after messaging child from Ctrl+B"
     );
+    assert_eq!(
+        h.app
+            .inspected_session()
+            .unwrap()
+            .transcript
+            .token_totals()
+            .counts(),
+        counts
+    );
+
+    // A one-record viewport has not loaded either response yet. Counting
+    // through the real Host cursor must fill in totals without adding rows.
+    let child_client = h.native.client.session(child);
+    let mut window = crate::history::HistoryWindow::tail(&child_client, 1)
+        .await
+        .unwrap();
+    let records = std::mem::take(&mut window.items);
+    let session = h.app.inspected_session_mut().unwrap();
+    session.transcript = crate::transcript::Transcript::default();
+    session.transcript.install_history_records(&records);
+    let lower_bound = window.lower_bound;
+    session.history = Some(window);
+    h.app.ensure_inspector_session();
+    h.until(|app| {
+        app.inspected_session()
+            .is_some_and(|s| s.usage_history == crate::app::UsageHistory::Complete)
+    })
+    .await;
+    let session = h.app.inspected_session().unwrap();
+    assert_eq!(session.transcript.token_totals().counts(), counts);
+    assert_eq!(session.history.as_ref().unwrap().lower_bound, lower_bound);
     h.finish().await;
 }
 

@@ -13,6 +13,36 @@ use minicore_host_runtime::model::{AssistantPart, Usage};
 
 use super::{Block, HistorySource, RequestKey, ToolCall, ToolKey, Transcript, UserKind};
 
+/// Provider-reported counts. Missing fields are not zero, even within a
+/// Session that switches providers.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct TokenTotals {
+    counts: [Option<u64>; 4],
+    missing: [bool; 4],
+}
+
+impl TokenTotals {
+    fn add(&mut self, usage: Usage) {
+        let counts = [
+            usage.input_tokens(),
+            usage.output_tokens(),
+            usage.cache_read_tokens(),
+            usage.cache_write_tokens(),
+        ];
+        for (index, count) in counts.into_iter().enumerate() {
+            if let Some(count) = count {
+                self.counts[index] = Some(self.counts[index].unwrap_or(0).saturating_add(count));
+            } else {
+                self.missing[index] = true;
+            }
+        }
+    }
+
+    pub fn counts(self) -> [(Option<u64>, bool); 4] {
+        std::array::from_fn(|index| (self.counts[index], self.missing[index]))
+    }
+}
+
 impl Transcript {
     #[cfg(test)]
     pub fn from_history(records: &[HistoryRecordData]) -> Self {
@@ -62,8 +92,14 @@ impl Transcript {
         }
     }
 
-    pub fn latest_response_usage(&self) -> Option<Usage> {
-        self.latest_response.map(|(_, usage)| usage)
+    pub fn token_totals(&self) -> TokenTotals {
+        self.tokens
+    }
+
+    pub(crate) fn record_usage(&mut self, position: u64, usage: Usage) {
+        if self.usage_positions.insert(position) {
+            self.tokens.add(usage);
+        }
     }
 
     fn install_records(&mut self, records: &[HistoryRecordData], preview: bool) {
@@ -392,12 +428,18 @@ fn append_response(
     partial: bool,
     preview: bool,
 ) {
-    if let HistoryItemData::Assistant { response } = &record.item
-        && transcript
-            .latest_response
-            .is_none_or(|(position, _)| record.position >= position)
-    {
-        transcript.latest_response = Some((record.position, response.usage));
+    if let HistoryItemData::Assistant { response } = &record.item {
+        if !preview {
+            transcript.record_usage(record.position, response.usage);
+        } else if transcript
+            .last_preview_usage
+            .is_none_or(|position| record.position > position)
+        {
+            // A released child's preview may miss old events. Keep its
+            // observed counters bounded; never label them a full total.
+            transcript.last_preview_usage = Some(record.position);
+            transcript.tokens.add(response.usage);
+        }
     }
     let key = request_key(record);
     let mut text = if preview {

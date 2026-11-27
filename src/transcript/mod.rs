@@ -12,7 +12,7 @@ use minicore_host_protocol::{MessageId, Timestamp, ToolCallRef, TurnId};
 
 pub use agent_card::ParentActions;
 pub use block::{Block, ChangeSummary, RequestKey, UserKind};
-pub use history::{to_markdown, write_markdown};
+pub use history::{TokenTotals, to_markdown, write_markdown};
 pub use tool_call::{EXPANDED_ROWS, ToolCall, ToolKey, ToolState};
 
 /// Wall time between two Host timestamps; none if the clock went backwards.
@@ -66,7 +66,9 @@ fn next_revision() -> u64 {
 pub struct Transcript {
     blocks: Vec<Block>,
     metadata: Vec<BlockMeta>,
-    latest_response: Option<(u64, minicore_host_runtime::model::Usage)>,
+    tokens: TokenTotals,
+    usage_positions: std::collections::HashSet<u64>,
+    last_preview_usage: Option<u64>,
 }
 
 #[derive(Clone, Debug)]

@@ -1,6 +1,6 @@
 //! Install results only into their captured resident Session.
 
-use super::{App, Overlay, Session, SessionOp, tasks};
+use super::{App, Overlay, Session, SessionOp, UsageHistory, tasks};
 use minicore_host_protocol::*;
 
 impl App {
@@ -190,6 +190,17 @@ impl App {
                 } else if std::mem::take(&mut self.session_mut(epoch).workspace_due) {
                     self.refresh_workspace_for(epoch);
                 }
+            }
+            SessionOp::OlderUsage { usage, complete } => {
+                let session = self.session_mut(epoch);
+                for (position, usage) in usage {
+                    session.transcript.record_usage(position, usage);
+                }
+                session.usage_history = if complete {
+                    UsageHistory::Complete
+                } else {
+                    UsageHistory::Incomplete
+                };
             }
             SessionOp::History(result) => {
                 self.session_mut(epoch).history_refreshing = false;

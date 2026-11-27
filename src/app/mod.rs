@@ -46,7 +46,7 @@ use crate::ui::views;
 
 pub use actions::{Action, Answer};
 pub use overlay::{Overlay, Panel, TaskFocus};
-pub use session::{LiveStatus, LiveTurn, PendingInteraction, Session};
+pub use session::{LiveStatus, LiveTurn, PendingInteraction, Session, UsageHistory};
 pub use tasks::{MESSAGE_CAPACITY, SessionOp, Tx, bootstrap};
 
 /// State for the `Ctrl+B` Async Tasks Inspector: its own transcript layout cache,
@@ -382,6 +382,7 @@ impl App {
                                 .evict_idle_except(self.task_inspector.target.as_ref(), 8);
                         }
                         if self.task_inspector.target.as_ref() == Some(&target) {
+                            self.load_inspector_usage(&target);
                             self.task_inspector.layout.clear();
                         }
                     }
@@ -789,9 +790,11 @@ impl App {
         let Some(target) = next else {
             return;
         };
-        if self.resident.find(&target).is_some()
-            || self.task_inspector.loading.as_ref() == Some(&target)
-        {
+        if self.resident.find(&target).is_some() {
+            self.load_inspector_usage(&target);
+            return;
+        }
+        if self.task_inspector.loading.as_ref() == Some(&target) {
             return;
         }
         self.task_inspector.loading = Some(target.clone());

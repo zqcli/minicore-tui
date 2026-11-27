@@ -5,7 +5,7 @@ use minicore_host_protocol::*;
 use minicore_host_transport::{ClientSubscription, HostClient, SessionClient};
 use tokio::sync::mpsc;
 
-use super::{App, Msg, NoticeLevel, Ready};
+use super::{App, Msg, NoticeLevel, Ready, UsageHistory};
 use crate::history::HistoryWindow;
 
 pub type Tx = mpsc::Sender<Msg>;
@@ -67,6 +67,10 @@ pub enum SessionOp {
         result: Result<WorkspaceSnapshot<minicore_host_workspace::StatusResult>, String>,
     },
     History(Result<HistoryWindow, String>),
+    OlderUsage {
+        usage: Vec<(u64, minicore_host_runtime::model::Usage)>,
+        complete: bool,
+    },
     Older {
         window: HistoryWindow,
         result: Result<Vec<HistoryRecordData>, String>,
@@ -504,6 +508,47 @@ impl App {
             SessionOp::Inputs(client.inputs(options()).await.map_err(|e| e.to_string()))
         });
     }
+    pub(super) fn load_inspector_usage(&mut self, target: &SessionRef) {
+        let Some(session) = self.resident.find_mut(target) else {
+            return;
+        };
+        if session.usage_history != UsageHistory::Unread {
+            return;
+        }
+        let Some(mut window) = session
+            .history
+            .as_ref()
+            .filter(|window| window.has_more())
+            .cloned()
+        else {
+            return;
+        };
+        session.usage_history = UsageHistory::Reading;
+        let epoch = session.epoch;
+        let client = session.client.clone();
+        self.spawn_for(epoch, async move {
+            let mut usage = Vec::new();
+            while window.has_more() {
+                let Ok(page) = window.older(&client, PAGE).await else {
+                    return SessionOp::OlderUsage {
+                        usage,
+                        complete: false,
+                    };
+                };
+                usage.extend(page.into_iter().filter_map(|record| {
+                    let HistoryItemData::Assistant { response } = record.item else {
+                        return None;
+                    };
+                    Some((record.position, response.usage))
+                }));
+            }
+            SessionOp::OlderUsage {
+                usage,
+                complete: true,
+            }
+        });
+    }
+
     pub fn refresh_context(&mut self) {
         if let Some(epoch) = self.resident.current().map(|s| s.epoch) {
             self.refresh_context_for(epoch);

@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Show the selected child Session’s model, reasoning, storage, residency and latest response token usage in Async Tasks.
+- Show the selected child Session’s model, reasoning, storage, residency and cumulative input/output and cache token usage in Async Tasks.
 - Simplify task and session commands; keep advanced controls in the Session view
   and stop the selected child from Tasks without changing Esc navigation.
 

@@ -17,6 +17,15 @@ use crate::transcript::{Block, Transcript};
 
 pub const ARM_AFTER: Duration = Duration::from_millis(250);
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum UsageHistory {
+    #[default]
+    Unread,
+    Reading,
+    Complete,
+    Incomplete,
+}
+
 pub struct Session {
     pub info: SessionInfo,
     pub epoch: u64,
@@ -24,6 +33,7 @@ pub struct Session {
     pub state: SessionSnapshot,
     pub transcript: Transcript,
     pub history: Option<HistoryWindow>,
+    pub usage_history: UsageHistory,
     pub history_upper_bound: u64,
     pub loading_older: bool,
     pub history_refreshing: bool,
@@ -141,6 +151,7 @@ impl Session {
             client,
             transcript: Transcript::default(),
             history: None,
+            usage_history: UsageHistory::default(),
             history_upper_bound: 0,
             loading_older: false,
             history_refreshing: false,
