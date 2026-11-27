@@ -972,6 +972,33 @@ async fn ctrl_b_inspector_loads_real_child_conversation_filters_scrolls_and_mess
         assert_eq!(h.app.composer.text(), "Parent draft stays intact");
         h.app.selection = None;
         h.app.press = None;
+        if width == 62 {
+            // The narrow list must not hit-test the cached, now hidden transcript.
+            let (column, row) = h.app.task_inspector.layout.viewport.origin;
+            h.app
+                .on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+            terminal
+                .draw(|frame| {
+                    crate::ui::draw(frame, &mut h.app);
+                })
+                .unwrap();
+            assert!(h.app.task_inspector.hit.detail_area.is_empty());
+            assert!(h.app.task_inspector.hit.in_list(column, row));
+            assert!(h.app.on_mouse(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column,
+                row,
+                modifiers: KeyModifiers::NONE,
+            }));
+            assert!(matches!(
+                h.app.overlay,
+                Overlay::Delegations {
+                    focus: TaskFocus::List,
+                    ..
+                }
+            ));
+            assert!(h.app.press.is_none());
+        }
     }
     if let Overlay::Delegations { focus, .. } = &mut h.app.overlay {
         *focus = TaskFocus::List;

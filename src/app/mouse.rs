@@ -136,12 +136,13 @@ impl App {
             MouseEventKind::Down(MouseButton::Left)
                 if matches!(self.overlay, Overlay::Delegations { .. }) =>
             {
-                if self
-                    .task_inspector
-                    .layout
-                    .viewport
-                    .area()
-                    .contains(cell.into())
+                if self.task_inspector.hit.in_detail(cell.0, cell.1)
+                    && self
+                        .task_inspector
+                        .layout
+                        .viewport
+                        .area()
+                        .contains(cell.into())
                 {
                     if let Overlay::Delegations {
                         focus, detail_open, ..
@@ -162,10 +163,14 @@ impl App {
                 if matches!(self.overlay, Overlay::Delegations { .. })
                     && self.press.as_ref().is_some_and(|press| {
                         self.task_inspector
-                            .layout
-                            .viewport
-                            .area()
-                            .contains(press.cell.into())
+                            .hit
+                            .in_detail(press.cell.0, press.cell.1)
+                            && self
+                                .task_inspector
+                                .layout
+                                .viewport
+                                .area()
+                                .contains(press.cell.into())
                     }) =>
             {
                 self.extend_selection(cell);
