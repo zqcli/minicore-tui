@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use ratatui::Frame;
+use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -21,7 +22,7 @@ use crate::app::scrollbar::{JUMP_LABEL, jump_label, thumb};
 use crate::app::selection;
 use crate::app::{App, Overlay, Scroll, find};
 use crate::transcript::layout::{Fold, Layout, Rows, Viewport};
-use crate::transcript::{Block, Grouping, RequestKey};
+use crate::transcript::{Block, Grouping, RequestKey, StepKind, Transcript};
 
 /// Streaming markdown renderers of live assistant blocks, by request. Each
 /// caches its stable prefix, so a delta re-parses only the tail.
@@ -250,37 +251,8 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, styles: Styles) {
             .map(Cow::Borrowed)
             .collect()
     };
-    // Thinking that is still going turns its `∴` into the spinner. The rows are
-    // cached; this swaps one cell per frame, and an idle screen has no frames.
     if !blocks.is_empty() {
-        let frame = super::status::spinner(app.started.elapsed());
-        for (index, row) in rows.iter_mut().enumerate() {
-            let (block, _) = layout.anchor(top + index);
-            let thinking = match (transcript.grouping(block), blocks.get(block)) {
-                (Grouping::Head { summary, open, .. }, _) if !open && !fold.expanded => {
-                    summary.live
-                        && summary.thinking
-                        && matches!(
-                            summary.latest,
-                            Some((crate::transcript::StepKind::Thinking, _))
-                        )
-                }
-                (
-                    _,
-                    Some(Block::Assistant {
-                        text,
-                        streaming: true,
-                        ..
-                    }),
-                ) => text.trim().is_empty(),
-                _ => false,
-            };
-            if thinking && let Some(at) = row.spans.iter().position(|span| span.content == "∴ ") {
-                let mut line = row.clone().into_owned();
-                line.spans[at].content = format!("{frame} ").into();
-                *row = Cow::Owned(line);
-            }
-        }
+        animate_thinking(&mut rows, transcript, layout, fold, app.started.elapsed());
     }
     if let Some(drag) = app.selection {
         for (index, row) in rows.iter_mut().enumerate() {
@@ -308,41 +280,7 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, styles: Styles) {
         super::put_line(buffer, area, row);
     }
     if top + height < total && area.height > 0 {
-        // Clear the bottom row so the centered pill never sits over half a content row.
-        let bar = Rect {
-            y: area.bottom() - 1,
-            height: 1,
-            ..area
-        };
-        buffer.set_style(bar, Style::reset());
-        for x in bar.left()..bar.right() {
-            buffer[(x, bar.y)].set_symbol(" ");
-        }
-        let cells = jump_label(area.width);
-        let pill = if styles.composer().bg.is_none() {
-            Style::new().add_modifier(Modifier::REVERSED)
-        } else {
-            styles.composer()
-        };
-        let label_rect = Rect {
-            x: area.x + cells.start,
-            y: area.bottom() - 1,
-            width: cells.len() as u16,
-            height: 1,
-        };
-        buffer.set_style(label_rect, pill);
-        let line = if let Some((lead, rest)) = JUMP_LABEL.split_once("Jump")
-            && let Some((body, tail)) = rest.split_once(" · ")
-        {
-            Line::from(vec![
-                Span::styled(lead, pill.patch(styles.accent())),
-                Span::styled(format!("Jump{body}"), pill.patch(styles.text())),
-                Span::styled(format!(" · {tail}"), pill.patch(styles.meta())),
-            ])
-        } else {
-            Line::styled(JUMP_LABEL, pill.patch(styles.text()))
-        };
-        super::put_line(buffer, label_rect, &line);
+        draw_jump_label(buffer, area, styles);
     }
     if app.scrollbar_shown()
         && let Some((start, len)) = thumb(height, total, top)
@@ -369,7 +307,7 @@ pub fn draw_embedded(
     frame: &mut Frame,
     area: Rect,
     styles: Styles,
-    transcript: &crate::transcript::Transcript,
+    transcript: &Transcript,
     layout: &mut Layout<RenderState>,
     scroll: &mut Scroll,
     held: bool,
@@ -440,34 +378,7 @@ pub fn draw_embedded(
         .map(Cow::Borrowed)
         .collect();
     if !blocks.is_empty() {
-        let spinner_frame = super::status::spinner(elapsed);
-        for (index, row) in rows.iter_mut().enumerate() {
-            let (block, _) = layout.anchor(top + index);
-            let thinking = match (transcript.grouping(block), blocks.get(block)) {
-                (Grouping::Head { summary, open, .. }, _) if !open && !fold.expanded => {
-                    summary.live
-                        && summary.thinking
-                        && matches!(
-                            summary.latest,
-                            Some((crate::transcript::StepKind::Thinking, _))
-                        )
-                }
-                (
-                    _,
-                    Some(Block::Assistant {
-                        text,
-                        streaming: true,
-                        ..
-                    }),
-                ) => text.trim().is_empty(),
-                _ => false,
-            };
-            if thinking && let Some(at) = row.spans.iter().position(|span| span.content == "∴ ") {
-                let mut line = row.clone().into_owned();
-                line.spans[at].content = format!("{spinner_frame} ").into();
-                *row = Cow::Owned(line);
-            }
-        }
+        animate_thinking(&mut rows, transcript, layout, fold, elapsed);
     }
     let buffer = frame.buffer_mut();
     for (y, row) in (area.y..area.bottom()).zip(&rows) {
@@ -482,40 +393,7 @@ pub fn draw_embedded(
         );
     }
     if top + height < total && area.height > 0 {
-        let bar = Rect {
-            y: area.bottom() - 1,
-            height: 1,
-            ..area
-        };
-        buffer.set_style(bar, Style::reset());
-        for x in bar.left()..bar.right() {
-            buffer[(x, bar.y)].set_symbol(" ");
-        }
-        let cells = jump_label(area.width);
-        let pill = if styles.composer().bg.is_none() {
-            Style::new().add_modifier(Modifier::REVERSED)
-        } else {
-            styles.composer()
-        };
-        let label_rect = Rect {
-            x: area.x + cells.start,
-            y: area.bottom() - 1,
-            width: cells.len() as u16,
-            height: 1,
-        };
-        buffer.set_style(label_rect, pill);
-        let line = if let Some((lead, rest)) = JUMP_LABEL.split_once("Jump")
-            && let Some((body, tail)) = rest.split_once(" · ")
-        {
-            Line::from(vec![
-                Span::styled(lead, pill.patch(styles.accent())),
-                Span::styled(format!("Jump{body}"), pill.patch(styles.text())),
-                Span::styled(format!(" · {tail}"), pill.patch(styles.meta())),
-            ])
-        } else {
-            Line::styled(JUMP_LABEL, pill.patch(styles.text()))
-        };
-        super::put_line(buffer, label_rect, &line);
+        draw_jump_label(buffer, area, styles);
     }
     if (show_scrollbar || top + height < total || top > 0)
         && let Some((start, len)) = thumb(height, total, top)
@@ -530,10 +408,80 @@ pub fn draw_embedded(
     }
 }
 
-/// The welcome rows, each group set off by a blank row: name and version, the
-/// main bindings, the workspace.
-/// The welcome card: name, version and the workspace this view works in.
-/// Keys live in F1 and in the activity line, not here.
+// The cached rows keep the static glyph; only visible, live markers animate.
+fn animate_thinking(
+    rows: &mut [Cow<'_, Line<'static>>],
+    transcript: &Transcript,
+    layout: &Layout<RenderState>,
+    fold: Fold,
+    elapsed: std::time::Duration,
+) {
+    for (index, row) in rows.iter_mut().enumerate() {
+        let Some(at) = row.spans.iter().position(|span| span.content == "∴ ") else {
+            continue;
+        };
+        let (block, _) = layout.anchor(layout.viewport.top + index);
+        let thinking = match (transcript.grouping(block), transcript.blocks().get(block)) {
+            (Grouping::Head { summary, open, .. }, _) if !open && !fold.expanded => {
+                summary.live
+                    && summary.thinking
+                    && matches!(summary.latest, Some((StepKind::Thinking, _)))
+            }
+            (
+                _,
+                Some(Block::Assistant {
+                    text,
+                    streaming: true,
+                    ..
+                }),
+            ) => text.trim().is_empty(),
+            _ => false,
+        };
+        if thinking {
+            row.to_mut().spans[at].content = format!("{} ", super::status::spinner(elapsed)).into();
+        }
+    }
+}
+
+fn draw_jump_label(buffer: &mut Buffer, area: Rect, styles: Styles) {
+    // Clear the bottom row so the centered pill never sits over half a content row.
+    let bar = Rect {
+        y: area.bottom() - 1,
+        height: 1,
+        ..area
+    };
+    buffer.set_style(bar, Style::reset());
+    for x in bar.left()..bar.right() {
+        buffer[(x, bar.y)].set_symbol(" ");
+    }
+    let cells = jump_label(area.width);
+    let pill = if styles.composer().bg.is_none() {
+        Style::new().add_modifier(Modifier::REVERSED)
+    } else {
+        styles.composer()
+    };
+    let label_rect = Rect {
+        x: area.x + cells.start,
+        y: area.bottom() - 1,
+        width: cells.len() as u16,
+        height: 1,
+    };
+    buffer.set_style(label_rect, pill);
+    let line = if let Some((lead, rest)) = JUMP_LABEL.split_once("Jump")
+        && let Some((body, tail)) = rest.split_once(" · ")
+    {
+        Line::from(vec![
+            Span::styled(lead, pill.patch(styles.accent())),
+            Span::styled(format!("Jump{body}"), pill.patch(styles.text())),
+            Span::styled(format!(" · {tail}"), pill.patch(styles.meta())),
+        ])
+    } else {
+        Line::styled(JUMP_LABEL, pill.patch(styles.text()))
+    };
+    super::put_line(buffer, label_rect, &line);
+}
+
+/// The welcome card: name, version and current workspace.
 fn header(styles: Styles, width: u16, workspace: Option<&Path>) -> Vec<Line<'static>> {
     let card = (width as usize).saturating_sub(2).min(76);
     if card < 20 {
