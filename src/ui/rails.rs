@@ -47,11 +47,11 @@ pub fn fill(surface: Style, spans: Vec<Span<'static>>, width: usize) -> Vec<Span
     row
 }
 
-/// A rail-less line moved right by `columns`.
+/// Moves a line right by renderer-only padding, separate from source indentation.
 pub fn indent(line: Line<'static>, columns: usize) -> Line<'static> {
     let mut spans = line.spans;
     if let Some(first) = spans.first_mut()
-        && first.style == Style::default()
+        && first.style == CHROME
         && !first.content.is_empty()
         && first.content.trim().is_empty()
     {
@@ -59,7 +59,7 @@ pub fn indent(line: Line<'static>, columns: usize) -> Line<'static> {
         padded.push_str(&first.content);
         first.content = padded.into();
     } else {
-        spans.insert(0, Span::raw(" ".repeat(columns)));
+        spans.insert(0, chrome_span(Span::raw(" ".repeat(columns))));
     }
     Line {
         style: line.style,
@@ -157,6 +157,65 @@ fn clip(spans: Vec<Span<'static>>, width: usize) -> Vec<Span<'static>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn copy_markdown(source: &str, width: usize, grouped: bool) -> String {
+        use crate::app::selection::{self, Drag};
+        use crate::ui::theme::{Palette, Styles};
+        use ratatui::layout::Rect;
+
+        let styles = Styles::of(Palette::dark());
+        let rows: Vec<_> = crate::ui::markdown::render(source, width, &styles, styles.text())
+            .into_iter()
+            .map(|row| {
+                let row = indent(row, 2);
+                if grouped { indent(row, 2) } else { row }
+            })
+            .collect();
+        selection::text(
+            |row| {
+                let line = rows.get(usize::from(row))?;
+                Some((line.to_string(), content_cells(line)))
+            },
+            Rect::new(0, 0, 80, rows.len() as u16),
+            Drag {
+                from: (0, 0),
+                to: (79, rows.len() as u16 - 1),
+            },
+        )
+    }
+
+    #[test]
+    fn copying_nested_lists_keeps_nesting_and_wrapped_indentation() {
+        let source = "- parent\n  - alpha beta gamma\n    - child";
+        for grouped in [false, true] {
+            assert_eq!(
+                copy_markdown(source, 16, grouped),
+                "- parent\n    - alpha beta\n      gamma\n        - child"
+            );
+        }
+    }
+
+    #[test]
+    fn copying_code_excludes_the_leading_inset_and_keeps_nested_layout() {
+        for grouped in [false, true] {
+            assert_eq!(
+                copy_markdown("```\nroot()\n    child()\n```", 40, grouped),
+                "root()\n    child()"
+            );
+            assert_eq!(
+                copy_markdown("> ```\n> root()\n>     child()\n> ```", 40, grouped),
+                "│   root()\n│       child()"
+            );
+            assert_eq!(
+                copy_markdown(
+                    "- run:\n\n  ```\n  root()\n      child()\n  ```",
+                    40,
+                    grouped
+                ),
+                "- run:\n    root()\n        child()"
+            );
+        }
+    }
 
     #[test]
     fn a_surface_row_is_exactly_its_width_and_the_rail_has_no_surface() {

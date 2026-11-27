@@ -7,6 +7,7 @@ use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, T
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
+use super::rails::chrome_span;
 use super::theme::Styles;
 use crate::wrap;
 
@@ -498,15 +499,15 @@ impl Builder<'_> {
     }
 
     fn text(&mut self, text: &str) {
-        if let Some(code) = self.code.as_mut() {
-            code.text.push_str(text);
-            return;
-        }
         let cleaned: Cow<'_, str> = if self.strip_sentinel && text.contains(EMPHASIS_SENTINEL) {
             Cow::Owned(text.replace(EMPHASIS_SENTINEL, ""))
         } else {
             Cow::Borrowed(text)
         };
+        if let Some(code) = self.code.as_mut() {
+            code.text.push_str(&cleaned);
+            return;
+        }
         let style = self.inline_style();
         for (index, part) in cleaned.split('\n').enumerate() {
             if index > 0 {
@@ -611,8 +612,14 @@ impl Builder<'_> {
                 continue;
             }
             for chunk in wrap::char_breaks(line, width.saturating_sub(2)) {
+                let inset = Span::raw("  ");
+                let inset = if self.lists.is_empty() && self.quote == 0 {
+                    chrome_span(inset)
+                } else {
+                    inset
+                };
                 lines.push(Line::from(vec![
-                    Span::raw("  "),
+                    inset,
                     Span::styled(line[chunk].to_owned(), body),
                 ]));
             }
@@ -1110,5 +1117,27 @@ mod tests {
             ["Keep **提示：**另有 literal."]
         );
         assert_eq!(plain("```\n**提示：**另有\n```", 80), ["  **提示：**另有"]);
+    }
+
+    #[test]
+    fn cjk_emphasis_does_not_leak_markers_into_indented_code() {
+        assert_eq!(plain("    **提示：**另有", 80), ["  **提示：**另有"]);
+        assert_eq!(
+            plain("**提示：**正文\n\n    **提示：**代码", 80),
+            ["提示：正文", "", "  **提示：**代码"]
+        );
+    }
+
+    #[test]
+    fn literal_private_use_characters_remain_in_code_and_text() {
+        assert_eq!(plain("literal \u{E000}", 80), ["literal \u{E000}"]);
+        assert_eq!(
+            plain("    \u{E000} **提示：**代码", 80),
+            ["  \u{E000} **提示：**代码"]
+        );
+        assert_eq!(
+            plain("`\u{E000} **提示：**代码`", 80),
+            ["\u{E000} **提示：**代码"]
+        );
     }
 }
