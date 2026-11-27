@@ -5,6 +5,10 @@
 - Browse prompt templates with `/command` or `/cmd`; selection fills the editor
   without sending. `/cmd <name>` avoids built-in command name collisions and
   expands templates for both steer and follow-up input.
+- Add explicit native clipboard paste (`Ctrl+V` / `Alt+V`): copied files insert
+  path references; screenshot pixels are saved as temporary PNGs and referenced
+  by path. Keep long-text paste chips and reject late replies to a changed editor.
+
 - Replace recursive `@` file completion with an on-demand Host directory browser:
   separate filter, authorized parent navigation, absolute path jumps, quoted
   relative/absolute references, and keyboard/mouse selection without reading or

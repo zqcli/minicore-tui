@@ -85,6 +85,10 @@ const KEYS: &[KeyRow] = &[
         action: "browse prompt templates; enter/tab fills /cmd name without sending",
     },
     KeyRow {
+        keys: "ctrl+v, alt+v",
+        action: "paste clipboard text or file/image paths (never send)",
+    },
+    KeyRow {
         keys: "@",
         action: "file browser: filter, folders or absolute path",
     },

@@ -9,6 +9,7 @@ use super::{App, Msg, Overlay, Session, tasks};
 
 #[derive(Debug, Default)]
 pub struct FileBrowser {
+    pub id: u64,
     pub directory: String,
     pub filter: String,
     pub entries: Vec<DirectoryEntry>,
@@ -61,9 +62,11 @@ impl App {
     pub(super) fn open_files(&mut self) {
         self.composer.place_cursor(self.composer.cursor(), false);
         let directory = self.reference_workspace().to_string_lossy().into_owned();
+        let id = self.next_operation();
         self.overlay = Overlay::Files {
             selected: 0,
             browser: FileBrowser {
+                id,
                 directory: directory.clone(),
                 draft_version: self.composer.version(),
                 cursor: self.composer.cursor(),
@@ -177,6 +180,9 @@ impl App {
             KeyCode::PageUp => self.overlay_move(-8),
             KeyCode::PageDown => self.overlay_move(8),
             KeyCode::Enter | KeyCode::Tab if key.modifiers.is_empty() => self.accept_file(),
+            KeyCode::Char('v' | 'V') if ctrl || key.modifiers.contains(KeyModifiers::ALT) => {
+                self.paste_clipboard()
+            }
             KeyCode::Char(ch) if !ctrl && !key.modifiers.contains(KeyModifiers::ALT) => {
                 self.edit_file_filter(&ch.to_string())
             }

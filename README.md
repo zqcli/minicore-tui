@@ -81,6 +81,10 @@ layout cache, multiline editor, paste handling, prompt recall, external editor
 and light/dark themes remain available. Idle rendering has no periodic tick.
 `Ctrl+G` hands terminal input to the external editor and restores the edited draft
 on return. If terminal restoration fails, the error names the retained draft file.
+`Ctrl+V` / `Alt+V` explicitly pastes from the local system clipboard: files and
+screenshots become path references, with screenshot pixels saved as temporary
+PNGs. Text keeps its existing large-paste chips; nothing is sent automatically.
+
 Find and the Sessions, Models and Agents filters accept terminal paste without
 changing the draft. Forward Delete and nonempty Ctrl+D are separate undoable
 edits; Ctrl+Z and Ctrl+Y restore or replay them.

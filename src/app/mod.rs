@@ -16,6 +16,7 @@ mod mouse;
 mod notify;
 mod ops;
 pub mod overlay;
+pub mod paste;
 pub mod picker;
 pub(crate) mod resident;
 pub mod scrollbar;
@@ -103,6 +104,10 @@ pub enum Msg {
     Reloaded(Result<Box<Reloaded>, String>),
     Session(u64, Box<SessionOp>),
     Files(u64, Result<DirectoryListResult, String>),
+    ClipboardPasted(
+        paste::PasteTarget,
+        Result<crate::clipboard::PastePayload, String>,
+    ),
     LocalPushed(u64, Result<MessageAccepted, CallError>),
     Failed(String),
     Notice(NoticeLevel, String),
@@ -513,6 +518,7 @@ impl App {
                 }
             }
             Msg::Files(request, result) => self.on_files(request, result),
+            Msg::ClipboardPasted(target, result) => self.on_clipboard_pasted(target, result),
             Msg::Notice(level, text) => self.notice(level, text),
             Msg::DraftEdited(draft) => self.composer.restore_text(&draft),
             Msg::Flash(text) => self.flash = Some((text, tokio::time::Instant::now())),

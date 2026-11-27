@@ -112,6 +112,7 @@ impl App {
                 self.composer.delete();
             }
             KeyCode::Char('g') if ctrl => return Some(Action::EditDraft),
+            KeyCode::Char('v' | 'V') if ctrl || alt => self.paste_clipboard(),
             KeyCode::Char('x') if ctrl && self.composer.selection().is_some() => {
                 self.copy_draft_selection(true);
             }

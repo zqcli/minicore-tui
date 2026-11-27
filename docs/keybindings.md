@@ -138,7 +138,17 @@ confirmation in `F8` does not remove an accepted input from the Host queue.
 | `Alt+D`, `Alt+Delete` | Delete the next word. |
 | `Ctrl+U`, `Ctrl+K` | Delete to the line start or end. |
 | `Ctrl+Z`, `Ctrl+Y` | Undo or redo. |
-| Paste | Insert one edit. Newlines stay draft text; a large paste becomes a chip that expands on send. |
+| Terminal paste | Insert text as one edit. Newlines stay draft text; a paste over 10 lines or 1,000 characters becomes a chip that expands on send. |
+| `Ctrl+V`, `Alt+V` | Explicitly read the local system clipboard: insert copied files as path references, save screenshot pixels as a temporary PNG and insert its path, or paste text normally. In the file browser, paste one path into its filter. Never sends automatically. |
+
+Native clipboard reads happen only on those shortcuts. A delayed reply is
+discarded if its Session, draft, caret/selection or file browser changed. No
+clipboard watcher or image attachment is created. Temporary PNGs live in the
+system temp directory and are left for OS cleanup; their paths do not grant
+Host access outside configured roots. Over SSH, the native clipboard is on
+the machine running the TUI, not automatically on the local desktop. Terminal
+paste remains text and can be used for paths when native clipboard access is
+unavailable.
 
 Hold `Shift` with arrows, Home or End to extend an editor selection;
 Ctrl/Alt+Shift+Left/Right extends by word. Typing, paste or newline replaces the
