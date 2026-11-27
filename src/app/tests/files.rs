@@ -86,10 +86,9 @@ async fn file_browser_navigates_filters_and_inserts_reference_without_reading_or
     h.type_text("notes");
     h.press(KeyCode::Tab);
     assert!(h.app.overlay.is_none());
-    assert_eq!(
-        h.app.composer.text(),
-        "Review @\"source tree/design notes.md\" "
-    );
+    let reference = path_reference(&folder.join("design notes.md"), &root);
+    let expected = format!("Review {reference} ");
+    assert_eq!(h.app.composer.text(), expected);
     assert!(
         h.native.calls.try_recv().is_err(),
         "picking never submits a prompt"
@@ -97,17 +96,10 @@ async fn file_browser_navigates_filters_and_inserts_reference_without_reading_or
     h.ctrl(KeyCode::Char('z'));
     assert_eq!(h.app.composer.text(), "Review @");
     h.ctrl(KeyCode::Char('y'));
-    assert_eq!(
-        h.app.composer.text(),
-        "Review @\"source tree/design notes.md\" "
-    );
+    assert_eq!(h.app.composer.text(), expected);
     h.press(KeyCode::Enter);
     let call = h.next_call().await;
-    assert!(
-        call.users()
-            .iter()
-            .any(|text| text.contains("@\"source tree/design notes.md\""))
-    );
+    assert!(call.users().iter().any(|text| text.contains(&reference)));
     assert!(
         !call
             .users()
@@ -154,7 +146,10 @@ async fn absolute_file_paths_and_denied_paths_keep_browser_authority_and_draft()
     h.app.on_paste(file.to_str().unwrap());
     h.press(KeyCode::Enter);
     h.until(|app| app.overlay.is_none()).await;
-    assert_eq!(h.app.composer.text(), "Read @\"docs space/中文 notes.md\" ");
+    assert_eq!(
+        h.app.composer.text(),
+        format!("Read {} ", path_reference(&file, &root_path))
+    );
     h.finish().await;
 }
 
