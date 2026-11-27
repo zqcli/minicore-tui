@@ -136,7 +136,48 @@ impl App {
             MouseEventKind::Down(MouseButton::Left)
                 if matches!(self.overlay, Overlay::Delegations { .. }) =>
             {
-                self.click_task_inspector(cell)
+                if self
+                    .task_inspector
+                    .layout
+                    .viewport
+                    .area()
+                    .contains(cell.into())
+                {
+                    if let Overlay::Delegations {
+                        focus, detail_open, ..
+                    } = &mut self.overlay
+                    {
+                        *focus = super::overlay::TaskFocus::Detail;
+                        *detail_open = true;
+                    }
+                    self.press_at(cell);
+                    true
+                } else {
+                    self.press = None;
+                    self.selection = None;
+                    self.click_task_inspector(cell)
+                }
+            }
+            MouseEventKind::Drag(MouseButton::Left) | MouseEventKind::Up(MouseButton::Left)
+                if matches!(self.overlay, Overlay::Delegations { .. })
+                    && self.press.as_ref().is_some_and(|press| {
+                        self.task_inspector
+                            .layout
+                            .viewport
+                            .area()
+                            .contains(press.cell.into())
+                    }) =>
+            {
+                self.extend_selection(cell);
+                if matches!(mouse.kind, MouseEventKind::Up(_)) {
+                    if let Some(drag) = self.selection {
+                        self.copy_selection(drag);
+                    } else if self.press.as_ref().is_some_and(|press| press.clicks == 1) {
+                        self.click_task_inspector(cell);
+                        self.press = None;
+                    }
+                }
+                true
             }
             MouseEventKind::Down(MouseButton::Left) if matches!(self.overlay, Overlay::Diff(_)) => {
                 self.click_diff_view(cell)
@@ -216,8 +257,9 @@ impl App {
     /// A left press: a click, or the second or third of one on the same word,
     /// which selects the word or the whole row.
     fn press_at(&mut self, cell: (u16, u16)) {
-        let area = self.layout.viewport.area();
-        let text = self.layout.row_text(cell.1).unwrap_or_default();
+        let layout = self.selection_layout();
+        let area = layout.viewport.area();
+        let text = layout.row_text(cell.1).unwrap_or_default();
         let word = cell
             .0
             .checked_sub(area.x)

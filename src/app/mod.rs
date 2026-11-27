@@ -1016,14 +1016,23 @@ impl App {
         }
     }
 
-    /// The drag as text, from the rows the last frame drew.
+    fn selection_layout(&self) -> &Layout<RenderState> {
+        if matches!(self.overlay, Overlay::Delegations { .. }) {
+            &self.task_inspector.layout
+        } else {
+            &self.layout
+        }
+    }
+
+    /// The drag as text, from the rows the last frame drew on the visible surface.
     pub fn selected_text(&self, drag: selection::Drag) -> Option<String> {
+        let layout = self.selection_layout();
         let text = selection::text(
             |row| {
-                let line = self.layout.row_line(row)?;
+                let line = layout.row_line(row)?;
                 Some((line.to_string(), crate::ui::rails::content_cells(line)))
             },
-            self.layout.viewport.area(),
+            layout.viewport.area(),
             drag,
         );
         (!text.is_empty()).then_some(text)

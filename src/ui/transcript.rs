@@ -254,14 +254,7 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, styles: Styles) {
     if !blocks.is_empty() {
         animate_thinking(&mut rows, transcript, layout, fold, app.started.elapsed());
     }
-    if let Some(drag) = app.selection {
-        for (index, row) in rows.iter_mut().enumerate() {
-            let content = super::rails::content_cells(row);
-            if let Some(span) = selection::row_span(area.y + index as u16, drag, area, content) {
-                *row = Cow::Owned(highlight(row, span.start, span.end));
-            }
-        }
-    }
+    highlight_selection(&mut rows, area, app.selection);
     if let Overlay::Find { query, .. } = &app.overlay {
         let style = styles.amber().add_modifier(Modifier::REVERSED);
         for row in &mut rows {
@@ -310,6 +303,7 @@ pub fn draw_embedded(
     transcript: &Transcript,
     layout: &mut Layout<RenderState>,
     scroll: &mut Scroll,
+    selection: &mut Option<selection::Drag>,
     held: bool,
     fold: Fold,
     elapsed: std::time::Duration,
@@ -366,6 +360,9 @@ pub fn draw_embedded(
     if matches!(*scroll, Scroll::Anchor { .. }) && !held && top == total.saturating_sub(height) {
         *scroll = Scroll::Follow;
     }
+    if top != layout.viewport.top || area != layout.viewport.area() {
+        *selection = None;
+    }
     layout.viewport = Viewport {
         top,
         height,
@@ -380,6 +377,7 @@ pub fn draw_embedded(
     if !blocks.is_empty() {
         animate_thinking(&mut rows, transcript, layout, fold, elapsed);
     }
+    highlight_selection(&mut rows, area, *selection);
     let buffer = frame.buffer_mut();
     for (y, row) in (area.y..area.bottom()).zip(&rows) {
         super::put_line(
@@ -528,6 +526,21 @@ fn header(styles: Styles, width: u16, workspace: Option<&Path>) -> Vec<Line<'sta
 
 /// Reverses cells `[from, to)` of one row, splitting spans at the boundaries;
 /// a wide character is selected whole when any of its cells is.
+fn highlight_selection(
+    rows: &mut [Cow<'_, Line<'static>>],
+    area: Rect,
+    drag: Option<selection::Drag>,
+) {
+    if let Some(drag) = drag {
+        for (index, row) in rows.iter_mut().enumerate() {
+            let content = super::rails::content_cells(row);
+            if let Some(span) = selection::row_span(area.y + index as u16, drag, area, content) {
+                *row = Cow::Owned(highlight(row, span.start, span.end));
+            }
+        }
+    }
+}
+
 fn highlight(line: &Line<'static>, from: u16, to: u16) -> Line<'static> {
     let reversed = |style: Style| style.add_modifier(Modifier::REVERSED);
     let mut spans = Vec::with_capacity(line.spans.len() + 2);

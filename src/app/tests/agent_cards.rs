@@ -746,12 +746,49 @@ async fn ctrl_b_inspector_loads_real_child_conversation_filters_scrolls_and_mess
         assert!(lines[facts + 1].contains(&expected_mode));
         assert!(lines[facts + 2].contains("Tokens · In 12.3k · Out 880"));
         assert!(lines[facts + 3].contains("Cache · 640"));
-        assert!(
-            lines
-                .iter()
-                .skip(facts + 2)
-                .any(|line| line.contains("Found 3 API"))
+        let row = lines
+            .iter()
+            .position(|line| line.contains("Found 3 API"))
+            .unwrap();
+        let byte = lines[row].find("Found").unwrap();
+        let column = crate::wrap::width(&lines[row][..byte]) as u16;
+        let row = row as u16;
+        for (kind, x) in [
+            (MouseEventKind::Down(MouseButton::Left), column),
+            (MouseEventKind::Drag(MouseButton::Left), column + 4),
+        ] {
+            assert!(h.app.on_mouse(MouseEvent {
+                kind,
+                column: x,
+                row,
+                modifiers: KeyModifiers::NONE,
+            }));
+        }
+        assert_eq!(
+            h.app.selected_text(h.app.selection.unwrap()).as_deref(),
+            Some("Found")
         );
+        terminal
+            .draw(|frame| crate::ui::draw(frame, &mut h.app))
+            .unwrap();
+        assert!(
+            terminal.backend().buffer()[(column, row)]
+                .modifier
+                .contains(ratatui::style::Modifier::REVERSED)
+        );
+        assert!(h.app.on_mouse(MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: column + 4,
+            row,
+            modifiers: KeyModifiers::NONE,
+        }));
+        assert_eq!(
+            h.app.selected_text(h.app.selection.unwrap()).as_deref(),
+            Some("Found")
+        );
+        assert_eq!(h.app.composer.text(), "Parent draft stays intact");
+        h.app.selection = None;
+        h.app.press = None;
     }
     if let Overlay::Delegations { focus, .. } = &mut h.app.overlay {
         *focus = TaskFocus::List;
