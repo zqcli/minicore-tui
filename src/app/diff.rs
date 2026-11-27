@@ -196,6 +196,8 @@ pub struct DiffState {
     /// On narrow terminals (`< 96` cols), toggles between file list and hunks.
     pub detail_open: bool,
     pub scroll: usize,
+    /// Rendered hunk viewport height, used for PageUp/PageDown steps.
+    pub visible_rows: usize,
     pub hit: crate::ui::views::split::SplitHitAreas,
     /// The selected file's diff; empty while it loads.
     pub rows: Vec<DiffRow>,

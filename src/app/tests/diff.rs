@@ -114,6 +114,15 @@ async fn diff_end_and_home_reach_wrapped_content_in_a_narrow_viewport() {
     h.press(KeyCode::Tab);
     let top = h.render_text(48, 16);
     assert!(!top.contains("TAIL_MARKER"));
+    let Overlay::Diff(diff) = &h.app.overlay else {
+        unreachable!()
+    };
+    let page = diff.visible_rows.saturating_sub(2).max(1);
+    h.press(KeyCode::PageDown);
+    h.render_text(48, 16);
+    assert!(matches!(&h.app.overlay, Overlay::Diff(d) if d.scroll == page));
+    h.press(KeyCode::PageUp);
+    assert_eq!(h.render_text(48, 16), top);
     h.press(KeyCode::End);
     let end = h.render_text(48, 16);
     assert!(end.contains("TAIL_MARKER"), "{end}");

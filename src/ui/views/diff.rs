@@ -44,6 +44,7 @@ impl DiffRow {
 
 pub fn render(frame: &mut Frame, area: Rect, styles: Styles, diff: &mut DiffState) {
     diff.hit.reset(1);
+    diff.visible_rows = 0;
 
     let matched = diff.matching_indices();
     let title = {
@@ -323,6 +324,7 @@ fn render_hunks(frame: &mut Frame, area: Rect, styles: Styles, diff: &mut DiffSt
         diff.focus == PaneFocus::Detail,
         styles,
     );
+    diff.visible_rows = usize::from(content.height);
     if content.is_empty() {
         return;
     }
