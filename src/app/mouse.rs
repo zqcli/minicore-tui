@@ -156,7 +156,8 @@ impl App {
                 } else {
                     self.press = None;
                     self.selection = None;
-                    self.click_task_inspector(cell)
+                    self.click_task_inspector(cell);
+                    true
                 }
             }
             MouseEventKind::Drag(MouseButton::Left) | MouseEventKind::Up(MouseButton::Left)
@@ -177,8 +178,9 @@ impl App {
                 if matches!(mouse.kind, MouseEventKind::Up(_)) {
                     if let Some(drag) = self.selection {
                         self.copy_selection(drag);
-                    } else if self.press.as_ref().is_some_and(|press| press.clicks == 1) {
-                        self.click_task_inspector(cell);
+                    } else if self.press.as_ref().is_some_and(|press| press.clicks == 1)
+                        && self.click_task_inspector(cell)
+                    {
                         self.press = None;
                     }
                 }
@@ -639,6 +641,7 @@ impl App {
     /// Handles left clicks inside the `Ctrl+B` Async Tasks Inspector:
     /// selecting rows in the left list, focusing the right child conversation,
     /// jumping to tail, or toggling `Working`/`Worked`/tool/thinking folds.
+    /// Plain text returns false so successive clicks can select a word or row.
     fn click_task_inspector(&mut self, (column, row): (u16, u16)) -> bool {
         if self.task_inspector.hit.in_list(column, row) {
             let matched_len = if let Overlay::Delegations { filter, .. } = &self.overlay {
@@ -678,7 +681,7 @@ impl App {
             return true;
         }
         let Some((index, line)) = self.task_inspector.layout.hit(column, row) else {
-            return true;
+            return false;
         };
         let all_expanded = self.tools_expanded;
         let text = self
@@ -690,7 +693,7 @@ impl App {
             .to_owned();
         let following = matches!(self.task_inspector.scroll, Scroll::Follow);
         let Some(session) = self.inspected_session_mut() else {
-            return true;
+            return false;
         };
         match session.transcript.grouping(index) {
             crate::transcript::Grouping::Head { summary, open, .. }
@@ -720,6 +723,7 @@ impl App {
                 {
                     call.toggle_expanded(all_expanded);
                     self.inspector_pin_view();
+                    return true;
                 }
             }
             Some(Block::Assistant { .. })
@@ -730,11 +734,12 @@ impl App {
                     let open = !expanded.unwrap_or(all_expanded);
                     *expanded = (open != all_expanded).then_some(open);
                     self.inspector_pin_view();
+                    return true;
                 }
             }
             _ => {}
         }
-        true
+        false
     }
 
     fn on_inspector_jump_label(&self, (column, row): (u16, u16)) -> bool {

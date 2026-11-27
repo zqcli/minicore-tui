@@ -972,6 +972,33 @@ async fn ctrl_b_inspector_loads_real_child_conversation_filters_scrolls_and_mess
         assert_eq!(h.app.composer.text(), "Parent draft stays intact");
         h.app.selection = None;
         h.app.press = None;
+        for clicks in 1..=3 {
+            for kind in [
+                MouseEventKind::Down(MouseButton::Left),
+                MouseEventKind::Up(MouseButton::Left),
+            ] {
+                assert!(h.app.on_mouse(MouseEvent {
+                    kind,
+                    column,
+                    row,
+                    modifiers: KeyModifiers::NONE,
+                }));
+            }
+            match clicks {
+                1 => assert!(h.app.selection.is_none()),
+                2 => assert_eq!(
+                    h.app.selected_text(h.app.selection.unwrap()).as_deref(),
+                    Some("Found")
+                ),
+                _ => assert!(
+                    h.app
+                        .selected_text(h.app.selection.unwrap())
+                        .is_some_and(|text| text.contains("Found 3 API"))
+                ),
+            }
+        }
+        h.app.selection = None;
+        h.app.press = None;
         if width == 62 {
             // The narrow list must not hit-test the cached, now hidden transcript.
             let (column, row) = h.app.task_inspector.layout.viewport.origin;
