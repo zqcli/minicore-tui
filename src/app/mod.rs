@@ -247,7 +247,7 @@ pub struct App {
     pub task_inspector: TaskInspector,
     pub remote_config: crate::config::Remote,
     pub remote: Option<crate::host::RemoteServer>,
-    pub(super) remote_starting: bool,
+    pub(super) remote_start: actions::RemoteStartup,
 }
 
 pub const NOTICE_TTL: Duration = Duration::from_secs(5);
@@ -323,7 +323,7 @@ impl App {
             task_inspector: TaskInspector::default(),
             remote_config: crate::config::Remote::default(),
             remote: None,
-            remote_starting: false,
+            remote_start: actions::RemoteStartup::Idle,
         }
     }
     pub fn on_msg(&mut self, msg: Msg) {

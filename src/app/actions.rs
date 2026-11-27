@@ -11,6 +11,13 @@ use super::{App, Msg, NoticeLevel, Scroll, SessionOp, tasks};
 use crate::config::ThemeKind;
 use crate::ui::theme::{Palette, Styles};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum RemoteStartup {
+    Idle,
+    Pending,
+    Cancelling,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Action {
     Submit {
@@ -1003,7 +1010,13 @@ impl App {
             };
             return;
         }
-        if self.remote_starting {
+        if self.remote_start != RemoteStartup::Idle {
+            if self.remote_start == RemoteStartup::Cancelling {
+                self.notice(
+                    NoticeLevel::Info,
+                    "Remote startup is stopping; try again shortly",
+                );
+            }
             return;
         }
         let Some(host) = self.client.host() else {
@@ -1016,7 +1029,7 @@ impl App {
         if !self.require_control() {
             return;
         }
-        self.remote_starting = true;
+        self.remote_start = RemoteStartup::Pending;
         let config = self.remote_config.clone();
         let client = self.client.clone();
         let tx = self.tx.clone();
@@ -1042,7 +1055,11 @@ impl App {
         &mut self,
         result: Result<Box<crate::host::RemoteServer>, String>,
     ) {
-        self.remote_starting = false;
+        if std::mem::replace(&mut self.remote_start, RemoteStartup::Idle) != RemoteStartup::Pending
+        {
+            // Drop any cancelled server before another start can install a new access key.
+            return;
+        }
         match result {
             Ok(server) => {
                 if let Err(error) = self.client.release_operator() {
@@ -1074,6 +1091,11 @@ impl App {
         );
     }
     fn stop_remote(&mut self) {
+        if self.remote_start != RemoteStartup::Idle {
+            self.remote_start = RemoteStartup::Cancelling;
+            self.notice(NoticeLevel::Info, "Remote startup cancellation requested");
+            return;
+        }
         let Some(remote) = self.remote.take() else {
             self.notice(NoticeLevel::Info, "Remote access is not running");
             return;
