@@ -513,6 +513,8 @@ fn fixture(root: &Path, endpoint: &str, api: OpenAiModelApi) -> ConfigDirectory 
             supported_reasoning: vec![Default::default()],
             supports_tools: true,
             request_timeout_ms: None,
+            stream: None,
+            web_search: None,
         }],
         logging: LogSettings {
             output: LogOutput::File {

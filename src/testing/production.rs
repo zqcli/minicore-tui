@@ -185,6 +185,8 @@ async fn configured_host(
             supported_reasoning: vec![ReasoningPreference::Auto],
             supports_tools: true,
             request_timeout_ms: None,
+            stream: None,
+            web_search: None,
         }],
         tools: selection.clone(),
         ..HostConfig::default()

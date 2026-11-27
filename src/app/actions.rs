@@ -31,6 +31,7 @@ pub enum Action {
         forward: bool,
     },
     SetReasoning(ReasoningPreference),
+    SetWebSearch(Option<WebSearchMode>),
     Compact,
     CopyLastAnswer,
     Export(Option<String>),
@@ -167,6 +168,7 @@ impl App {
             }
             Action::CycleModel { forward } => self.cycle_model(forward),
             Action::SetReasoning(reasoning) => self.set_reasoning(reasoning),
+            Action::SetWebSearch(mode) => self.set_web_search(mode),
             Action::Compact => self.compact(),
             Action::CopyLastAnswer => self.copy_last_answer(),
             Action::Export(path) => {

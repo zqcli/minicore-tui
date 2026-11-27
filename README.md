@@ -91,6 +91,13 @@ edits; Ctrl+Z and Ctrl+Y restore or replay them.
   Model retry phase and attempt information come from Host. `/reasoning` opens
   the picker without an argument; an invalid explicit level reports an error
   and preserves the setting.
+- **Web search:** `/search` toggles upstream search for the current Responses
+  session. Use `/search live`, `/search cached` or `/search off` to select a
+  mode. The footer shows `SEARCH LIVE` or `SEARCH CACHED` and hides the marker
+  when disabled. Changes apply to subsequent turns. Cached mode disallows
+  external web access, and an enabled search is available to the model rather
+  than forced on every request. Without an override, the model supplies the
+  default.
 - **Errors:** failed Turns retain Host's upstream message in the conversation,
   reopened history and `/export`. `Ctrl+O` expands failure details; clicking a
   failure opens a scrollable view with `c` to copy the complete safe message.

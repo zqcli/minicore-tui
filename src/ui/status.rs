@@ -657,6 +657,13 @@ fn footer(app: &App, styles: Styles, width: u16) -> Line<'static> {
             styles.meta(),
         )]);
     }
+    if let Some(label) = match app.web_search() {
+        Some(minicore_host_protocol::WebSearchMode::Live) => Some("SEARCH LIVE"),
+        Some(minicore_host_protocol::WebSearchMode::Cached) => Some("SEARCH CACHED"),
+        _ => None,
+    } {
+        right_groups.push(vec![Span::styled(label, styles.meta())]);
+    }
     if let Some(session) = session {
         right_groups.push(vec![Span::styled(
             format!(

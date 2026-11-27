@@ -686,7 +686,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tower-service",
- "webpki-roots",
+ "webpki-roots 1.0.10",
 ]
 
 [[package]]
@@ -1050,7 +1050,7 @@ checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 [[package]]
 name = "minicore-host-compaction"
 version = "0.12.17"
-source = "git+https://github.com/zqcli/minicore-host?rev=d91157e737b8889f918948f476e099c3e4382df8#d91157e737b8889f918948f476e099c3e4382df8"
+source = "git+https://github.com/zqcli/minicore-host?rev=ce2733b15400761b2ccf379b5062e6547374f1ab#ce2733b15400761b2ccf379b5062e6547374f1ab"
 dependencies = [
  "minicore-host-protocol",
  "minicore-host-runtime",
@@ -1061,7 +1061,7 @@ dependencies = [
 [[package]]
 name = "minicore-host-config"
 version = "0.12.17"
-source = "git+https://github.com/zqcli/minicore-host?rev=d91157e737b8889f918948f476e099c3e4382df8#d91157e737b8889f918948f476e099c3e4382df8"
+source = "git+https://github.com/zqcli/minicore-host?rev=ce2733b15400761b2ccf379b5062e6547374f1ab#ce2733b15400761b2ccf379b5062e6547374f1ab"
 dependencies = [
  "minicore-host-protocol",
  "serde",
@@ -1071,7 +1071,7 @@ dependencies = [
 [[package]]
 name = "minicore-host-core"
 version = "0.12.17"
-source = "git+https://github.com/zqcli/minicore-host?rev=d91157e737b8889f918948f476e099c3e4382df8#d91157e737b8889f918948f476e099c3e4382df8"
+source = "git+https://github.com/zqcli/minicore-host?rev=ce2733b15400761b2ccf379b5062e6547374f1ab#ce2733b15400761b2ccf379b5062e6547374f1ab"
 dependencies = [
  "futures-util",
  "minicore-host-compaction",
@@ -1093,7 +1093,7 @@ dependencies = [
 [[package]]
 name = "minicore-host-diagnostics"
 version = "0.12.17"
-source = "git+https://github.com/zqcli/minicore-host?rev=d91157e737b8889f918948f476e099c3e4382df8#d91157e737b8889f918948f476e099c3e4382df8"
+source = "git+https://github.com/zqcli/minicore-host?rev=ce2733b15400761b2ccf379b5062e6547374f1ab#ce2733b15400761b2ccf379b5062e6547374f1ab"
 dependencies = [
  "minicore-host-protocol",
  "serde",
@@ -1106,7 +1106,7 @@ dependencies = [
 [[package]]
 name = "minicore-host-local-tools"
 version = "0.12.17"
-source = "git+https://github.com/zqcli/minicore-host?rev=d91157e737b8889f918948f476e099c3e4382df8#d91157e737b8889f918948f476e099c3e4382df8"
+source = "git+https://github.com/zqcli/minicore-host?rev=ce2733b15400761b2ccf379b5062e6547374f1ab#ce2733b15400761b2ccf379b5062e6547374f1ab"
 dependencies = [
  "minicore-host-runtime",
  "minicore-host-workspace",
@@ -1125,7 +1125,7 @@ dependencies = [
 [[package]]
 name = "minicore-host-protocol"
 version = "0.12.17"
-source = "git+https://github.com/zqcli/minicore-host?rev=d91157e737b8889f918948f476e099c3e4382df8#d91157e737b8889f918948f476e099c3e4382df8"
+source = "git+https://github.com/zqcli/minicore-host?rev=ce2733b15400761b2ccf379b5062e6547374f1ab#ce2733b15400761b2ccf379b5062e6547374f1ab"
 dependencies = [
  "getrandom 0.4.3",
  "serde",
@@ -1136,7 +1136,7 @@ dependencies = [
 [[package]]
 name = "minicore-host-provider"
 version = "0.12.17"
-source = "git+https://github.com/zqcli/minicore-host?rev=d91157e737b8889f918948f476e099c3e4382df8#d91157e737b8889f918948f476e099c3e4382df8"
+source = "git+https://github.com/zqcli/minicore-host?rev=ce2733b15400761b2ccf379b5062e6547374f1ab#ce2733b15400761b2ccf379b5062e6547374f1ab"
 dependencies = [
  "bytes",
  "futures-util",
@@ -1149,6 +1149,7 @@ dependencies = [
  "sha2",
  "thiserror",
  "tokio",
+ "tokio-tungstenite",
  "tokio-util",
  "tracing",
 ]
@@ -1156,7 +1157,7 @@ dependencies = [
 [[package]]
 name = "minicore-host-resources"
 version = "0.12.17"
-source = "git+https://github.com/zqcli/minicore-host?rev=d91157e737b8889f918948f476e099c3e4382df8#d91157e737b8889f918948f476e099c3e4382df8"
+source = "git+https://github.com/zqcli/minicore-host?rev=ce2733b15400761b2ccf379b5062e6547374f1ab#ce2733b15400761b2ccf379b5062e6547374f1ab"
 dependencies = [
  "minicore-host-core",
  "minicore-host-local-tools",
@@ -1172,7 +1173,7 @@ dependencies = [
 [[package]]
 name = "minicore-host-runtime"
 version = "0.12.17"
-source = "git+https://github.com/zqcli/minicore-host?rev=d91157e737b8889f918948f476e099c3e4382df8#d91157e737b8889f918948f476e099c3e4382df8"
+source = "git+https://github.com/zqcli/minicore-host?rev=ce2733b15400761b2ccf379b5062e6547374f1ab#ce2733b15400761b2ccf379b5062e6547374f1ab"
 dependencies = [
  "futures-util",
  "getrandom 0.4.3",
@@ -1186,7 +1187,7 @@ dependencies = [
 [[package]]
 name = "minicore-host-storage"
 version = "0.12.17"
-source = "git+https://github.com/zqcli/minicore-host?rev=d91157e737b8889f918948f476e099c3e4382df8#d91157e737b8889f918948f476e099c3e4382df8"
+source = "git+https://github.com/zqcli/minicore-host?rev=ce2733b15400761b2ccf379b5062e6547374f1ab#ce2733b15400761b2ccf379b5062e6547374f1ab"
 dependencies = [
  "minicore-host-protocol",
  "minicore-host-runtime",
@@ -1203,7 +1204,7 @@ dependencies = [
 [[package]]
 name = "minicore-host-tools"
 version = "0.12.17"
-source = "git+https://github.com/zqcli/minicore-host?rev=d91157e737b8889f918948f476e099c3e4382df8#d91157e737b8889f918948f476e099c3e4382df8"
+source = "git+https://github.com/zqcli/minicore-host?rev=ce2733b15400761b2ccf379b5062e6547374f1ab#ce2733b15400761b2ccf379b5062e6547374f1ab"
 dependencies = [
  "minicore-host-core",
  "minicore-host-local-tools",
@@ -1219,7 +1220,7 @@ dependencies = [
 [[package]]
 name = "minicore-host-transport"
 version = "0.12.17"
-source = "git+https://github.com/zqcli/minicore-host?rev=d91157e737b8889f918948f476e099c3e4382df8#d91157e737b8889f918948f476e099c3e4382df8"
+source = "git+https://github.com/zqcli/minicore-host?rev=ce2733b15400761b2ccf379b5062e6547374f1ab#ce2733b15400761b2ccf379b5062e6547374f1ab"
 dependencies = [
  "futures-util",
  "minicore-host-core",
@@ -1238,7 +1239,7 @@ dependencies = [
 [[package]]
 name = "minicore-host-workspace"
 version = "0.12.17"
-source = "git+https://github.com/zqcli/minicore-host?rev=d91157e737b8889f918948f476e099c3e4382df8#d91157e737b8889f918948f476e099c3e4382df8"
+source = "git+https://github.com/zqcli/minicore-host?rev=ce2733b15400761b2ccf379b5062e6547374f1ab#ce2733b15400761b2ccf379b5062e6547374f1ab"
 dependencies = [
  "ignore",
  "minicore-host-protocol",
@@ -1718,7 +1719,7 @@ dependencies = [
  "wasm-bindgen-futures",
  "wasm-streams",
  "web-sys",
- "webpki-roots",
+ "webpki-roots 1.0.10",
 ]
 
 [[package]]
@@ -2207,8 +2208,12 @@ checksum = "17a073bfed563fa236697a068031408a93cd9522e08abf9933ead3e73411bd71"
 dependencies = [
  "futures-util",
  "log",
+ "rustls",
+ "rustls-pki-types",
  "tokio",
+ "tokio-rustls",
  "tungstenite",
+ "webpki-roots 0.26.11",
 ]
 
 [[package]]
@@ -2330,6 +2335,8 @@ dependencies = [
  "httparse",
  "log",
  "rand",
+ "rustls",
+ "rustls-pki-types",
  "sha1",
  "thiserror",
 ]
@@ -2517,6 +2524,15 @@ checksum = "5a6580f308b1fad9207618087a65c04e7a10bc77e02c8e84e9b00dd4b12fa0bb"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "webpki-roots"
+version = "0.26.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "521bc38abb08001b01866da9f51eb7c5d647a19260e00054a8c7fd5f9e57f7a9"
+dependencies = [
+ "webpki-roots 1.0.10",
 ]
 
 [[package]]

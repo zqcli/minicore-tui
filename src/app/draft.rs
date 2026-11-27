@@ -17,9 +17,7 @@ impl App {
             .or(self.launch.reasoning)
     }
     pub fn reasoning_levels(&self) -> Vec<ReasoningPreference> {
-        self.models
-            .iter()
-            .find(|model| Some(model.model.as_str()) == self.model_id())
+        self.selected_model_description()
             .map(|model| model.supported_reasoning.clone())
             .unwrap_or_default()
     }
@@ -43,10 +41,62 @@ impl App {
             self.launch.reasoning = Some(reasoning);
         }
     }
+    pub fn web_search(&self) -> Option<WebSearchMode> {
+        use minicore_host_core::{OpenAiModelApi, OpenAiWebSearch};
+        let current = self.resident.current();
+        let model = self.selected_model_description();
+        if model.is_some_and(|model| model.api != OpenAiModelApi::Responses) {
+            return None;
+        }
+        current
+            .map_or(self.launch.web_search, |session| {
+                session.info.config.web_search
+            })
+            .or_else(|| {
+                model?.web_search.map(|mode| match mode {
+                    OpenAiWebSearch::Live => WebSearchMode::Live,
+                    OpenAiWebSearch::Cached => WebSearchMode::Cached,
+                })
+            })
+    }
+
+    fn selected_model_description(&self) -> Option<&minicore_host_core::ModelDescription> {
+        self.models
+            .iter()
+            .find(|model| Some(model.model.as_str()) == self.model_id())
+    }
+
+    pub(super) fn set_web_search(&mut self, mode: Option<WebSearchMode>) {
+        let mode = mode.unwrap_or_else(|| match self.web_search() {
+            Some(WebSearchMode::Live | WebSearchMode::Cached) => WebSearchMode::Off,
+            _ => WebSearchMode::Live,
+        });
+        if mode != WebSearchMode::Off
+            && self
+                .selected_model_description()
+                .is_some_and(|model| model.api != minicore_host_core::OpenAiModelApi::Responses)
+        {
+            self.notice(
+                super::NoticeLevel::Usage,
+                "Web search requires a Responses model",
+            );
+            return;
+        }
+        if self.resident.current().is_some() {
+            self.update_session(SessionConfigPatch {
+                web_search: Some(mode),
+                ..Default::default()
+            });
+        } else {
+            self.launch.web_search = Some(mode);
+        }
+    }
+
     pub(super) fn creation_overrides(&self) -> SessionOverrides {
         SessionOverrides(SessionConfigPatch {
             model: self.launch.model.clone(),
             reasoning: self.launch.reasoning,
+            web_search: self.launch.web_search,
             workspace: NullablePatch::Set(WorkspaceRef {
                 path: self.launch_workspace.to_string_lossy().into_owned(),
             }),

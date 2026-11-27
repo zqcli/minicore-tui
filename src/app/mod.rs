@@ -127,6 +127,7 @@ pub struct Reloaded {
 pub struct LaunchSettings {
     pub model: Option<ModelRef>,
     pub reasoning: Option<ReasoningPreference>,
+    pub web_search: Option<minicore_host_protocol::WebSearchMode>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

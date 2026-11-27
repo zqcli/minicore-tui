@@ -458,6 +458,7 @@ async fn agent_and_model_query_paste_only_selects_the_matching_native_values() {
             context_window: 8192,
             supported_reasoning: Vec::new(),
             supports_tools: true,
+            web_search: None,
         })
         .collect();
     h.app.open_panel(Panel::Models);

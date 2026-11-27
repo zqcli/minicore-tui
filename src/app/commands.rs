@@ -3,7 +3,7 @@
 use super::Action;
 use super::templates::Template;
 use minicore_host_core::ModelDescription;
-use minicore_host_protocol::{ApprovalMode, ReasoningPreference};
+use minicore_host_protocol::{ApprovalMode, ReasoningPreference, WebSearchMode};
 
 /// One palette entry: the command name, its argument hint and a one-line description.
 #[derive(Clone, Copy)]
@@ -76,6 +76,11 @@ pub const COMMANDS: &[Command<'static>] = &[
         name: "reasoning",
         args: "[level]",
         description: "Set a valid reasoning level; omit it to pick one",
+    },
+    Command {
+        name: "search",
+        args: "[live|cached|off]",
+        description: "Toggle provider web search or set its mode",
     },
     Command {
         name: "approval",
@@ -251,6 +256,13 @@ pub fn execute(name: &str, arg: &str) -> Option<Executed> {
         "reasoning" => match parse_reasoning(arg) {
             Some(level) => Executed::Action(Action::SetReasoning(level)),
             None => Executed::Noop,
+        },
+        "search" => match arg {
+            "" => Executed::Action(Action::SetWebSearch(None)),
+            "live" => Executed::Action(Action::SetWebSearch(Some(WebSearchMode::Live))),
+            "cached" => Executed::Action(Action::SetWebSearch(Some(WebSearchMode::Cached))),
+            "off" => Executed::Action(Action::SetWebSearch(Some(WebSearchMode::Off))),
+            _ => Executed::Noop,
         },
         "compact" => Executed::Action(Action::Compact),
         "diff" => Executed::Panel(super::Panel::Diff),

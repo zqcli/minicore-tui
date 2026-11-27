@@ -925,3 +925,26 @@ async fn accepted_prompt_recall_uses_the_overridden_data_root() {
     assert!(!config.join("data").exists());
     h.finish().await;
 }
+
+#[tokio::test(start_paused = true)]
+async fn search_slash_command_updates_only_the_selected_session_and_footer() {
+    use minicore_host_protocol::WebSearchMode;
+    let mut h = Harness::opened().await;
+    h.type_text("/search cached");
+    h.press(KeyCode::Enter);
+    h.until(|app| app.web_search() == Some(WebSearchMode::Cached))
+        .await;
+    assert!(h.render_text(100, 12).contains("SEARCH CACHED"));
+    let first = h.native.target.clone();
+    let second = h.another_session().await;
+    h.open(&second).await;
+    assert!(!h.render_text(100, 12).contains("SEARCH "));
+    h.open(&first).await;
+    assert!(h.render_text(100, 12).contains("SEARCH CACHED"));
+    h.type_text("/search");
+    h.press(KeyCode::Enter);
+    h.until(|app| app.web_search() == Some(WebSearchMode::Off))
+        .await;
+    assert!(!h.render_text(100, 12).contains("SEARCH "));
+    h.finish().await;
+}

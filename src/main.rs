@@ -256,6 +256,7 @@ async fn run() -> i32 {
 
     let mut app = App::new(client.clone(), msg_tx.clone(), workspace.clone());
     app.launch = minicore_tui::app::LaunchSettings {
+        web_search: None,
         model,
         reasoning: args.reasoning,
     };
