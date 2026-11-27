@@ -38,10 +38,11 @@ editor drafts, user-requested exports and explicit clipboard screenshots saved
 as system-temporary PNGs. Screenshot/file paste inserts paths, not attachments.
 
 The `@` browser calls Host `workspace.list` with `include_files` and the active
-`workspace_session`, pages only the selected directory, and follows only Host
-returned parent/entry paths. Replies carry a local operation ID so an old
-lookup cannot replace a reopened picker. Selection inserts a text reference;
-no file content is read, no workspace binding changes and no prompt is sent.
+`workspace_session` and pages only the selected directory. The Host validates
+parent/entry navigation and absolute path lookups. A local operation ID prevents
+stale replies from replacing a reopened picker. Selection inserts a text
+reference without reading file contents, changing the workspace or sending a
+prompt.
 
 ## Startup and lifetime
 

@@ -150,6 +150,16 @@ when stderr is redirected away from the terminal.
 `network.listen` must be `null` for the embedded Host. Use `/remote` and the
 TUI preferences above to expose it on demand. The TUI does not serve Web UI assets.
 
+### Hosted web search
+
+For a model whose Responses provider supports hosted search, put
+`"web_search": "live"` or `"web_search": "cached"` in its `models` entry to set
+its default. Omit the field to default to off. Cached mode tells the provider
+not to access the live web. The upstream provider performs search within its
+Responses request; there is no separate local search tool or `/v1/search` URL.
+The TUI's [`/search` command](keybindings.md#commands) overrides the model
+default for one Session, not for the provider or other Sessions.
+
 ## Roles, Agents and Sessions
 
 Each `roles/<role>.json` contains `name`, `description` and optional
@@ -225,25 +235,24 @@ configuration unchanged. UI preferences are independent of Host reload; edit
 
 ## Prompt templates
 
-Put Markdown in `<config-dir>/commands/`. Choose `/command` from the slash
-menu or type `/cmd` to open the same template list. Type to filter; Enter or
-Tab on a template fills `/cmd <name> ` into the editor without sending.
-Add arguments then submit, e.g. `/cmd review "src/main file.rs"`. Typing
-`/rev` can also find an unambiguous template and completes to `/cmd review `.
-A built-in `/model` and a user template `/cmd model` never override one another.
-Optional front matter gives
-`description` and `argument-hint`:
+Save a UTF-8 Markdown file in `<config-dir>/commands/`. Its filename without
+`.md` is the template name; use a name without spaces. For example, save this
+as `commands/review.md` under your configuration directory:
 
 ```markdown
 ---
-description: Review the selected change
-argument-hint: <area>
+description: Review a source file
+argument-hint: <path>
 ---
-Review $1 for correctness and tests. Additional instructions: $ARGUMENTS
+Review $1 for correctness and tests.
 ```
 
-`$1`, `$2`, `$@`, `$ARGUMENTS` and `${1:-default}` expand arguments as text.
-Templates load at startup and after full or partial Host application.
+Use the [template picker](keybindings.md#composer), then submit
+`/cmd review "src/main file.rs"`. The quoted path is one argument; the draft
+expands to `Review src/main file.rs for correctness and tests.` before sending.
+`$1`, `$2`, `$@`, `$ARGUMENTS` and `${1:-default}` substitute text, not shell
+commands or file contents. Front matter is optional. Templates load at startup
+and after `/reload` applies fully or partially.
 
 ## Removed configuration paths
 

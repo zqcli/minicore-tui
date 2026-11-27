@@ -82,9 +82,11 @@ layout cache, multiline editor, paste handling, prompt recall, external editor
 and light/dark themes remain available. Idle rendering has no periodic tick.
 `Ctrl+G` hands terminal input to the external editor and restores the edited draft
 on return. If terminal restoration fails, the error names the retained draft file.
-`Ctrl+V` / `Alt+V` explicitly pastes from the local system clipboard: files and
-screenshots become path references, with screenshot pixels saved as temporary
-PNGs. Text keeps its existing large-paste chips; nothing is sent automatically.
+Use `/command` or `/cmd` to fill a [prompt template](docs/configuration.md#prompt-templates).
+Use `@` to browse files, or `Ctrl+V` / `Alt+V` to paste from the system clipboard.
+The [file and clipboard guide](docs/keybindings.md#file-references-and-clipboard)
+shows how to insert paths; even a pasted screenshot is path text, not an attachment.
+These actions fill the draft without sending it.
 
 Find and the Sessions, Models and Agents filters accept terminal paste without
 changing the draft. Forward Delete and nonempty Ctrl+D are separate undoable
@@ -99,10 +101,10 @@ edits; Ctrl+Z and Ctrl+Y restore or replay them.
 - **Web search:** `/search` toggles upstream search for the current Responses
   session. Use `/search live`, `/search cached` or `/search off` to select a
   mode. The footer shows `SEARCH LIVE` or `SEARCH CACHED` and hides the marker
-  when disabled. Changes apply to subsequent turns. Cached mode disallows
-  external web access, and an enabled search is available to the model rather
-  than forced on every request. Without an override, the model supplies the
-  default.
+  when disabled. Changes apply to subsequent turns. Cached mode asks the
+  provider not to access the live web. Search is available to the model rather
+  than forced on every request. Without an override, use the
+  [model's configured default](docs/configuration.md#hosted-web-search).
 - **Errors:** failed Turns retain Host's upstream message in the conversation,
   reopened history and `/export`. `Ctrl+O` expands failure details; clicking a
   failure opens a scrollable view with `c` to copy the complete safe message.
@@ -121,10 +123,7 @@ edits; Ctrl+Z and Ctrl+Y restore or replay them.
 - **Unified popups, sheets and split workspaces:** `/` commands and `@` files
   float directly above the pinned composer (keeping the Activity Line visible
   during long runs) with structured argument hints, active-value/hotkey badges,
-  `PgUp`/`PgDn` paging and double-click confirmation. `@` browses one Host-authorized
-  directory at a time, with a separate filter, parent navigation and absolute
-  path jumps. Selecting a file inserts a quoted path reference without reading
-  or attaching its contents. All pickers share one
+  `PgUp`/`PgDn` paging and double-click confirmation. All pickers share one
   bottom-sheet style (`▎` selection highlight, unified `/ ` filter with `Ctrl+U`
   clear, single-click select / double-click confirm). `/diff` shares the exact
   two-pane workspace engine as `Ctrl+B` (compact 1-line searchable file list,
@@ -160,10 +159,11 @@ edits; Ctrl+Z and Ctrl+Y restore or replay them.
   its native configuration into a new dynamic Agent, and the Session picker shows
   actual owning Agents, lifecycle states and a stable short Session ID on every
   row. Labels use an explicit title (accent), otherwise the first user prompt
-  (subdued), or a quieter short ID before any user input. The preview is not a
-  saved title: reopening never renames a Session, and rename edits only the
-  explicit title. Search matches titles, first-prompt previews and IDs.
-  The ID remains visible when long labels are clipped.
+  (subdued), or a quieter short ID until a preview is available. The preview is
+  not a saved title: reopening never renames a Session, and rename edits only
+  the explicit title. Search matches titles, first-prompt previews and IDs.
+  The ID remains visible when long labels are clipped. For sessions created
+  before this release, see [Session picker notes](docs/keybindings.md#pickers-and-reports).
   Background Sessions keep running when terminal selection changes. Rename,
   close, delete, load, unload, pause and resume use native Host operations.
   Renaming refreshes the original Session's list and detail metadata even after

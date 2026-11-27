@@ -129,7 +129,7 @@ confirmation in `F8` does not remove an accepted input from the Host queue.
 | `Ctrl+X` | Cut an editor selection; otherwise copy the last assistant answer. |
 | `Ctrl+G` | Open the external editor configured by `ui.editor` in `tui.json`, then `$VISUAL`, then `$EDITOR`. Failures preserve the original draft; if terminal restoration fails, the error names the retained edited file. |
 | `/` at draft start | Open the floating command semi-popup above the composer (shows args, active values and hotkeys; `↑↓`/`PgUp`/`PgDn`, `Tab` complete, `Enter` or double-click run). |
-| `@` at word start | Open the Host file browser at the current workspace. Type or paste into its separate filter; `↑↓`/`PgUp`/`PgDn` choose, `Enter`/`Tab` or double-click opens a folder or inserts a file reference. An `@` within a word stays text. |
+| `@` at word start | Open the [Host file browser](#file-references-and-clipboard) at the current workspace. An `@` within a word stays text. |
 | `Home`, `End`, `Ctrl+A`, `Ctrl+E` | Move to the line start or end. `Home` with an empty draft and `End` also navigate the transcript as described below. |
 | `←`, `→` | Move by grapheme. |
 | `Ctrl+←`, `Ctrl+→`, `Alt+←`, `Alt+→` | Move by word. |
@@ -139,16 +139,7 @@ confirmation in `F8` does not remove an accepted input from the Host queue.
 | `Ctrl+U`, `Ctrl+K` | Delete to the line start or end. |
 | `Ctrl+Z`, `Ctrl+Y` | Undo or redo. |
 | Terminal paste | Insert text as one edit. Newlines stay draft text; a paste over 10 lines or 1,000 characters becomes a chip that expands on send. |
-| `Ctrl+V`, `Alt+V` | Explicitly read the local system clipboard: insert copied files as path references, save screenshot pixels as a temporary PNG and insert its path, or paste text normally. In the file browser, paste one path into its filter. Never sends automatically. |
-
-Native clipboard reads happen only on those shortcuts. A delayed reply is
-discarded if its Session, draft, caret/selection or file browser changed. No
-clipboard watcher or image attachment is created. Temporary PNGs live in the
-system temp directory and are left for OS cleanup; their paths do not grant
-Host access outside configured roots. Over SSH, the native clipboard is on
-the machine running the TUI, not automatically on the local desktop. Terminal
-paste remains text and can be used for paths when native clipboard access is
-unavailable.
+| `Ctrl+V`, `Alt+V` | Paste from the [system clipboard](#file-references-and-clipboard) without sending. |
 
 Hold `Shift` with arrows, Home or End to extend an editor selection;
 Ctrl/Alt+Shift+Left/Right extends by word. Typing, paste or newline replaces the
@@ -170,7 +161,34 @@ sending. Add arguments and press Enter to send, or Alt/Ctrl+Enter for a
 follow-up; both expand the template.
 `/rev` can find a nonconflicting template and fills the canonical `/cmd` form.
 Esc closes the list without clearing the draft. Built-ins such as `/model`
-remain distinct from templates such as `/cmd model`.
+remain distinct from templates such as `/cmd model`. See
+[template setup and a quoted argument example](configuration.md#prompt-templates).
+
+### File references and clipboard
+
+Type `@` to open the picker. Type a name to filter the current directory;
+`Ctrl+U` clears the filter. Use arrows or PageUp/PageDown to select, and Enter,
+Tab or double-click to open a folder or choose a file. Select `..` to move up
+when offered. To jump, type or paste an absolute path into the filter without
+quotes or `@`, then press Enter. A folder opens; a file inserts a reference.
+For example, choosing `/work/project/src/main file.rs` in the `/work/project`
+workspace inserts `@"src/main file.rs"`. An allowed file outside the workspace
+uses its absolute path. `Esc` closes the picker without sending the draft.
+
+The picker can browse only the current Session workspace and Host's configured
+`workspace_roots`. When no Session is open, only the configured roots apply.
+Selecting a file does not read its contents, change the workspace, grant access
+or attach it to the message.
+
+`Ctrl+V` or `Alt+V` tries clipboard files first, then screenshot pixels, then
+text. Files use the same references as the picker. Screenshot pixels are saved
+as a PNG in the system temp directory; the draft gets only its path. Submitting
+the reference sends **path text only**, not the image or file bytes. Tools still
+need their normal access to read the file; temporary PNGs are left for OS cleanup.
+Paste one path in the `@` filter, or multiple paths in the composer. A paste
+arriving after you change the destination is discarded. Over SSH, the native
+clipboard belongs to the machine running the TUI; normal terminal paste inserts
+text from the terminal instead.
 
 ## Transcript and mouse
 
@@ -266,8 +284,7 @@ line counts describe the complete result, not just the retained preview.
 Pickers use a bottom sheet framed by two rules: the title and count sit in the
 top rule and the keys in the bottom rule. `Esc` closes it. In selectable
 lists, arrows and Tab move one row and wrap; PageUp/PageDown move ten rows.
-The inline command and file lists stay below the editor and show five rows at
-a time.
+The inline command and file lists open above the composer.
 
 Find and the Sessions, Models and Agents query fields accept terminal paste
 and append it to existing text. Matches refresh and selection returns to the
@@ -281,21 +298,20 @@ Session filter clears its pending delete confirmation.
 |---|---|
 | Commands | Type to fuzzy-filter. Enter runs the selected command; Tab completes its name. Argument completion is available for model, reasoning, theme and approval. |
 | Agents | Filter by name or ID. Enter selects the Agent. Ctrl+D opens a confirmation with its name, ID and captured child Session list; only `y` deletes that set. Enter does not confirm. Sessions added after confirmation opens are not included. |
-| Sessions | Rows show the saved title or, if untitled, the short Session ID. Filter by title, Session ID, Agent ID or workspace folder, not message text. Enter opens the selected Session. Ctrl+N renames it; Enter saves and Esc cancels. Ctrl+D opens a confirmation naming that exact Session; only `y` deletes it. |
+| Sessions | Rows show the saved title, otherwise a first-user-prompt preview, otherwise the short ID. Filter by title, preview, Session ID, Agent ID or workspace folder. Enter opens the Session. Ctrl+N renames it; Enter saves and Esc cancels. Ctrl+D reviews deleting that exact Session; only `y` confirms. |
 | Async Tasks (`Ctrl+B`, `/tasks`) | Full-screen two-pane inspector (`≥96` cols) or single-pane list ↔ detail (`<96` cols). Ordered by urgency (`needs input` → `running` → `failed` → settled). Type or paste to fuzzy-filter by task, kind, Agent, Session ID or status; `Ctrl+U` clears the filter. `↑`/`↓` selects, `PgUp`/`PgDn`/wheel scrolls the full Markdown detail pane, `Ctrl+Y` copies result text, `Ctrl+G` jumps to the origin dispatch call, and `Enter` opens the child Session (`Esc` returns). |
 | Session (`/session`) | A full-screen view. Show Agent and Session IDs, title, workspace, storage, lifecycle, residency, scheduling, approval mode, model, reasoning, raw history count and latest response usage. Enter or `c` copies the Session ID. |
 | Context (`/context`) | A full-screen view. Show configured and active model facts, native history/projection counts, queue counts, compaction and save state. `r` refreshes; `c` copies. |
 | Models | Filter model references; Enter selects one. The declared context window is model metadata. |
 | Reasoning | Enter applies the selected native preference. |
-| Files (`@`) | Filter names in the current directory; `Ctrl+U` clears. Enter/Tab or double-click on a folder or `..` navigates and clears the filter. Type or paste an absolute path (spaces allowed) and press Enter to open that folder or select that file. Files insert `@path `, with quotes when needed. Esc preserves the draft; failed navigation preserves the folder and filter. Nothing is read or sent. |
+| Files (`@`) | [Browse directories or jump to an absolute path](#file-references-and-clipboard). A failed lookup leaves the current folder and filter intact. |
 | Find | Type a case-insensitive query. Enter, Down or Tab advances; Shift+Enter or Up goes back. Matching folded content opens. Esc leaves the transcript at the selected match. |
 
-File browsing uses Host `workspace.list`: the active Session workspace plus configured
-`workspace_roots` are the boundary. Parent navigation is offered only when Host
-authorizes it. A file inside the current workspace uses a relative reference;
-a permitted file outside uses its absolute path. Choosing a reference does not
-change the Session workspace or grant a tool access. With no Session, only
-configured Host roots can be browsed.
+An untitled Session created before 0.12.18 may show only its ID at first. Open
+it once to load its history, then reopen the picker. If it has an earlier user
+prompt, its preview can now appear without renaming the Session. The picker
+matches only the preview, not the full transcript; use `Ctrl+F` to find text
+within loaded history.
 
 The Context report does not display an invented current token total or
 percentage. Provider input/output/cache/reasoning counts belong to the latest
@@ -362,6 +378,8 @@ composer says `view open · esc back`; unbound view keys do not edit it.
 | `/pause` | Pause input consumption in the current Session. |
 | `/continue` | Resume the current Session. |
 | `/model [reference]` | Select an exact model reference or unique fuzzy match; with no argument, open the picker. |
+| `/search [live\|cached\|off]` | Set hosted search for the current Responses Session's subsequent Turns. With no argument, turn Live or Cached off, or turn Off on as Live. The footer labels enabled modes `SEARCH LIVE` or `SEARCH CACHED`. |
+| `/command`, `/cmd [name] [args]` | Browse prompt templates or submit the expanded prompt. Selecting a template fills the draft without sending. |
 | `/reasoning [level]` | Apply a native reasoning preference; omit the argument to open the picker. Invalid values show the supported levels without changing the current value. |
 | `/approval [ask\|auto]` | Update the current Session's approval policy (`ask` prompts on mutating and outside-workspace calls; `auto` runs without asking) for subsequent Turns; without an argument, list the choices with the current one marked. |
 | `/compact` | Request manual context compaction; acceptance is not completion. A terminal failure shows its native fault once in a conversation notice; `/context` retains the details. |
