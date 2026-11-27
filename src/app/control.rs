@@ -951,6 +951,9 @@ impl App {
             self.notice(NoticeLevel::Error, error);
         }
         self.advance_outputs(epoch);
+        self.session_mut(epoch)
+            .transcript
+            .regroup(&output_turn(&source).turn_id);
     }
 
     fn advance_outputs(&mut self, epoch: u64) {
@@ -1225,6 +1228,20 @@ mod tests {
     async fn canonical_completion_closes_streams_after_unicode_gap_recovery() {
         let mut app = app().await;
         let source = source(&app);
+        app.session_mut(1).state.data.active_turn_id = Some(source.turn.turn_id.clone());
+        app.on_session_event(
+            1,
+            ObservationEvent::State(StateEvent::Turn {
+                source: source.turn.clone(),
+                data: serde_json::from_value(serde_json::json!({
+                    "state":"running", "runner_revision":1, "config_revision":0,
+                    "outcome":null, "persistence":"not_applicable", "requests":1,
+                    "tool_rounds":0, "phase":"model", "model_retry":null,
+                    "model_attempts":[1], "fault":null, "persistence_fault":null
+                }))
+                .unwrap(),
+            }),
+        );
         app.on_session_event(1, delta(&source, 4, 8, "🙂"));
         assert!(app.session_mut(1).transcript.last_answer().is_none());
         app.output_read_result(
@@ -1245,6 +1262,13 @@ mod tests {
             })),
         );
         assert_eq!(app.session_mut(1).transcript.last_answer(), Some("αβ🙂"));
+        assert!(
+            matches!(
+                app.session_mut(1).transcript.grouping(0),
+                crate::transcript::Grouping::Head { summary, .. } if summary.live
+            ),
+            "a recovered stream must fold into Working without waiting for another live event"
+        );
         app.on_session_event(
             1,
             ObservationEvent::Activity(ActivityEvent::ModelFinished {
