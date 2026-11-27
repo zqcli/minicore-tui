@@ -68,6 +68,11 @@ pub const COMMANDS: &[Command<'static>] = &[
         description: "Export the conversation as Markdown",
     },
     Command {
+        name: "command",
+        args: "",
+        description: "Browse prompt templates",
+    },
+    Command {
         name: "model",
         args: "[id]",
         description: "Switch the model, or pick one",
@@ -187,25 +192,17 @@ impl super::App {
     }
 
     /// The rewrite of a line no built-in command claims: `//` escapes a leading
-    /// slash and a template expands; `Err` names a bare `/word` (or a single-line
+    /// slash; `Err` names a bare `/word` (or a single-line
     /// `/word arg` whose name is a close typo of a known command) that is neither.
     pub fn prompt_text<'a>(&self, text: &'a str) -> Result<Option<String>, &'a str> {
         if let Some(escaped) = text.strip_prefix('/').filter(|rest| rest.starts_with('/')) {
             return Ok(Some(escaped.to_owned()));
         }
-        if let Some(expanded) =
-            parse(text).and_then(|(name, argument)| self.expand_template(name, argument))
-        {
-            return Ok(Some(expanded));
-        }
         if let Some(word) = bare_word(text) {
             return Err(word);
         }
         if let Some(word) = command_word(text) {
-            let known = COMMANDS
-                .iter()
-                .map(|command| command.name)
-                .chain(self.templates.iter().map(|template| template.name.as_str()));
+            let known = COMMANDS.iter().map(|command| command.name);
             if closest(word, known).is_some() {
                 return Err(word);
             }
@@ -228,6 +225,7 @@ pub fn parse(input: &str) -> Option<(&str, &str)> {
 /// Resolves one command line to an action or a panel.
 pub fn execute(name: &str, arg: &str) -> Option<Executed> {
     Some(match name {
+        "command" => Executed::Prefill(format!("/command {arg}")),
         "new" if arg.is_empty() => Executed::Action(Action::NewSession),
         "new" => Executed::Noop,
         "agents" => Executed::Panel(super::Panel::Agents),
@@ -325,7 +323,26 @@ pub fn filter<'a>(input: &str, templates: &'a [Template]) -> Vec<Command<'a>> {
     let mut matches: Vec<Command<'a>> = COMMANDS
         .iter()
         .copied()
-        .chain(templates.iter().map(Template::command))
+        .chain(
+            templates
+                .iter()
+                .filter(|template| !input.is_empty() && !is_builtin(&template.name))
+                .map(Template::command),
+        )
+        .filter(|command| crate::app::picker::fuzzy_match(command.name, input))
+        .collect();
+    matches.sort_by_key(|command| (command.name != input, !command.name.starts_with(input)));
+    matches
+}
+
+pub fn is_builtin(name: &str) -> bool {
+    COMMANDS.iter().any(|command| command.name == name)
+}
+
+pub fn template_filter<'a>(templates: &'a [Template], input: &str) -> Vec<Command<'a>> {
+    let mut matches: Vec<_> = templates
+        .iter()
+        .map(Template::command)
         .filter(|command| crate::app::picker::fuzzy_match(command.name, input))
         .collect();
     matches.sort_by_key(|command| (command.name != input, !command.name.starts_with(input)));

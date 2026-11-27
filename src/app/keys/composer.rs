@@ -273,6 +273,24 @@ impl App {
     /// starting with `/` (a path, say) is a prompt.
     pub(super) fn submit_or_command(&mut self) -> Option<Action> {
         let text = self.composer.text().to_owned();
+        if let Some(("cmd", argument)) = commands::parse(&text) {
+            let (name, args) = argument
+                .split_once(char::is_whitespace)
+                .unwrap_or((argument, ""));
+            if name.is_empty() {
+                self.overlay = crate::app::Overlay::Palette { selected: 0 };
+                return None;
+            }
+            if let Some(expanded) = self.expand_template(name, args.trim()) {
+                self.composer.set_text(&expanded);
+                return Some(Action::Submit { follow: false });
+            }
+            self.notice(
+                NoticeLevel::Usage,
+                format!("Unknown prompt template: {name}"),
+            );
+            return None;
+        }
         let executed =
             commands::parse(&text).and_then(|(name, argument)| commands::execute(name, argument));
         if let Some(problem) = executed
@@ -297,7 +315,7 @@ impl App {
                 };
                 self.composer.set_text(&text);
                 // Offer the choices at once, as typing the space would.
-                if self.palette_arg().is_some() {
+                if self.palette_arg().is_some() || self.template_query().is_some() {
                     self.overlay = crate::app::Overlay::Palette { selected: 0 };
                 }
                 None
@@ -346,17 +364,14 @@ impl App {
         }
     }
 
-    /// A draft no built-in command claims: a template, a typo that Enter warns
+    /// A draft no built-in command claims: a typo that Enter warns
     /// about once, or a prompt. `//` escapes a leading slash.
     fn submit_line(&mut self, text: &str) -> Option<Action> {
         match self.prompt_text(text) {
             Ok(None) => {}
             Ok(Some(rewritten)) => self.composer.set_text(&rewritten),
             Err(name) if self.armed_unknown.as_deref() != Some(text.trim()) => {
-                let known = commands::COMMANDS
-                    .iter()
-                    .map(|command| command.name)
-                    .chain(self.templates.iter().map(|template| template.name.as_str()));
+                let known = commands::COMMANDS.iter().map(|command| command.name);
                 let notice = commands::unknown_notice(name, commands::closest(name, known));
                 self.armed_unknown = Some(text.trim().to_owned());
                 self.notice(NoticeLevel::Usage, notice);

@@ -1,9 +1,9 @@
-//! Prompt templates: `prompt/commands/*.md` in the configuration directory, each a
-//! `/name` that expands to the file's text before it is sent.
+//! Prompt templates: `commands/*.md` in the configuration directory, each a
+//! `/cmd name` that expands to the file's text before it is sent.
 
 use std::path::Path;
 
-use super::commands::{COMMANDS, Command};
+use super::commands::Command;
 
 pub struct Template {
     pub name: String,
@@ -67,8 +67,7 @@ fn load_from(dir: &Path) -> Vec<Template> {
             let path = entry.ok()?.path();
             let name = path.file_stem()?.to_str()?.to_owned();
             let usable = path.extension().is_some_and(|ext| ext == "md")
-                && !name.contains(char::is_whitespace)
-                && !COMMANDS.iter().any(|command| command.name == name);
+                && !name.contains(char::is_whitespace);
             let text = usable.then(|| std::fs::read_to_string(&path).ok())??;
             Some(Template::parse(name, &text))
         })
@@ -230,7 +229,7 @@ mod tests {
     }
 
     #[test]
-    fn the_directory_loads_markdown_files_that_do_not_shadow_commands() {
+    fn the_directory_keeps_templates_named_like_builtins() {
         let dir = std::env::temp_dir().join(format!("mct-templates-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("review.md"), "Review $1").unwrap();
@@ -238,6 +237,6 @@ mod tests {
         std::fs::write(dir.join("notes.txt"), "not markdown").unwrap();
         let names: Vec<String> = load_from(&dir).into_iter().map(|t| t.name).collect();
         std::fs::remove_dir_all(&dir).unwrap();
-        assert_eq!(names, ["review"]);
+        assert_eq!(names, ["model", "review"]);
     }
 }

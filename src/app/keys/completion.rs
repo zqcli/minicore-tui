@@ -16,7 +16,10 @@ impl App {
             Overlay::Palette { .. } => self.palette_query().is_some(),
             Overlay::Files { .. } => self.mention_query().is_some(),
             Overlay::None => {
-                if typed && self.palette_query().is_some() && self.word_start() == 0 {
+                if typed
+                    && (self.template_query().is_some()
+                        || (self.palette_query().is_some() && self.word_start() == 0))
+                {
                     self.overlay = Overlay::Palette { selected: 0 };
                 }
                 return;
@@ -59,6 +62,7 @@ impl App {
             KeyCode::Enter if plain && rows > 0 => return self.accept_completion(),
             // An `@` with no match never sends the draft by accident.
             KeyCode::Enter if plain && matches!(self.overlay, Overlay::Files { .. }) => {}
+            KeyCode::Enter if plain && self.template_query().is_some() => {}
             // No command matches: the line is a prompt.
             KeyCode::Enter if plain => {
                 self.overlay = Overlay::None;
@@ -90,6 +94,9 @@ impl App {
         let Some(choice) = self.selected_completion() else {
             return;
         };
+        if self.select_template(&choice) {
+            return;
+        }
         match std::mem::replace(&mut self.overlay, Overlay::None) {
             Overlay::Palette { .. } => {
                 let text = self.composer.text();
@@ -112,6 +119,29 @@ impl App {
         }
     }
 
+    fn select_template(&mut self, choice: &str) -> bool {
+        if !matches!(self.overlay, Overlay::Palette { .. })
+            || (self.template_query().is_none()
+                && (self.palette_arg().is_some()
+                    || commands::is_builtin(choice)
+                    || !self
+                        .templates
+                        .iter()
+                        .any(|template| template.name == choice)))
+        {
+            return false;
+        }
+        let args = if self.template_query().is_some() {
+            ""
+        } else {
+            commands::parse(self.composer.text()).map_or("", |(_, args)| args)
+        };
+        let text = format!("/cmd {choice} {args}");
+        self.overlay = Overlay::None;
+        self.composer.restore_text(&text);
+        true
+    }
+
     /// Enter: a command runs with the argument typed after its name, which
     /// may belong to another fuzzy match than the typed name; a path is inserted.
     pub(crate) fn accept_completion(&mut self) -> Option<Action> {
@@ -120,6 +150,9 @@ impl App {
             return None;
         }
         let choice = self.selected_completion()?;
+        if self.select_template(&choice) {
+            return None;
+        }
         // In an argument list the command is already typed and the row is its argument.
         let (name, arg) = match self.palette_arg() {
             Some((command, _)) => (command.to_owned(), choice),

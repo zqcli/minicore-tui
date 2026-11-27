@@ -178,6 +178,23 @@ fn command_hotkey(name: &str) -> Option<&'static str> {
 pub fn completion_sheet(app: &App, styles: Styles) -> Option<Sheet> {
     match &app.overlay {
         Overlay::Palette { selected } => {
+            if app.template_query().is_some() {
+                let rows: Vec<Row> = app
+                    .palette_rows()
+                    .into_iter()
+                    .map(|(name, detail)| Row::new(name, detail))
+                    .collect();
+                let sheet =
+                    Sheet::new("Prompt templates", "↑↓ select · tab/enter fill · esc close")
+                        .kind(Kind::Column)
+                        .max_rows(COMPLETION_ROWS)
+                        .status(plural(rows.len() as u64, "template"));
+                return Some(if rows.is_empty() {
+                    sheet.notes(vec![Line::styled("  No matching templates", styles.dim())])
+                } else {
+                    sheet.rows(rows).selected(Some(*selected))
+                });
+            }
             if let Some((cmd, _)) = app.palette_arg() {
                 let current = app.current_value(cmd);
                 let items = app.palette_rows();
@@ -209,7 +226,15 @@ pub fn completion_sheet(app: &App, styles: Styles) -> Option<Sheet> {
             }
             let query = app.palette_query()?;
             let matched = crate::app::commands::filter(query, &app.templates);
-            let total = COMMANDS.len() + app.templates.len();
+            let total = COMMANDS.len()
+                + if query.is_empty() {
+                    0
+                } else {
+                    app.templates
+                        .iter()
+                        .filter(|template| !crate::app::commands::is_builtin(&template.name))
+                        .count()
+                };
             let rows: Vec<Row> = matched
                 .into_iter()
                 .map(|command| {

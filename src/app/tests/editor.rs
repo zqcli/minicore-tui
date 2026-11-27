@@ -789,3 +789,48 @@ async fn a_drag_in_the_editor_copies_on_release_and_stays_selected() {
     assert_eq!(h.app.composer.selected_text(), Some("cop"));
     h.finish().await;
 }
+
+#[tokio::test(start_paused = true)]
+async fn template_picker_fills_before_sending_and_namespaces_builtin_collisions() {
+    use crate::app::templates::Template;
+    let mut h = Harness::opened().await;
+    h.app.templates = vec![
+        Template::parse("model".into(), "Template for $1"),
+        Template::parse("review".into(), "Review $1"),
+    ];
+    h.type_text("/");
+    let rows = h.app.palette_rows();
+    assert!(rows.iter().any(|(name, _)| name == "command"));
+    assert!(!rows.iter().any(|(name, _)| name == "review"));
+    h.type_text("command");
+    h.press(KeyCode::Enter);
+    assert_eq!(h.app.template_query(), Some(""));
+    assert!(h.app.palette_rows().iter().any(|(name, _)| name == "model"));
+    h.press(KeyCode::Esc);
+    assert_eq!(h.app.composer.text(), "/command ");
+    h.app.composer.clear();
+
+    h.type_text("/cmd");
+    assert_eq!(h.app.template_query(), Some(""));
+    assert_eq!(h.app.palette_rows().len(), 2);
+    h.type_text(" rev");
+    h.press(KeyCode::Enter);
+    assert_eq!(h.app.composer.text(), "/cmd review ");
+    assert!(h.native.calls.try_recv().is_err());
+    h.type_text(r#""src/main file.rs""#);
+    h.press(KeyCode::Enter);
+    let call = h.next_call().await;
+    assert_eq!(call.users(), ["Review src/main file.rs"]);
+    call.finish();
+
+    h.type_text("/model");
+    h.press(KeyCode::Enter);
+    assert!(matches!(h.app.overlay, crate::app::Overlay::Models { .. }));
+    h.press(KeyCode::Esc);
+    h.type_text("/cmd model path");
+    h.press(KeyCode::Enter);
+    let call = h.next_call().await;
+    assert_eq!(call.users().last(), Some(&"Template for path"));
+    call.finish();
+    h.finish().await;
+}

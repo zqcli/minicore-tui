@@ -731,9 +731,27 @@ impl App {
     /// The command name typed after `/` while the draft is a one-line command.
     pub fn palette_query(&self) -> Option<&str> {
         let text = self.composer.text();
-        commands::is_command_line(text)
-            .then(|| commands::parse(text).map(|(name, _)| name))
-            .flatten()
+        if !commands::is_command_line(text) {
+            return None;
+        }
+        let (name, _) = commands::parse(text)?;
+        if name == "cmd" && self.template_query().is_none() {
+            return None;
+        }
+        Some(name)
+    }
+
+    /// Lookup mode for the canonical prefix and the menu entry. A space
+    /// after a template name leaves lookup mode so the draft accepts arguments.
+    pub fn template_query(&self) -> Option<&str> {
+        let rest = self.composer.text().strip_prefix('/')?;
+        if rest == "cmd" {
+            return Some("");
+        }
+        let (prefix, tail) = rest.split_once(char::is_whitespace)?;
+        let query = tail.trim_start_matches([' ', '\t']);
+        (matches!(prefix, "cmd" | "command") && !query.contains(char::is_whitespace))
+            .then_some(query)
     }
 
     /// The command and the partial argument while the draft is `/name arg`
@@ -754,6 +772,19 @@ impl App {
     /// The command list's rows as `(name, description)`: the commands for the
     /// typed name, or the values the command accepts for its argument.
     pub fn palette_rows(&self) -> Vec<(String, String)> {
+        if let Some(query) = self.template_query() {
+            return commands::template_filter(&self.templates, query)
+                .into_iter()
+                .map(|entry| {
+                    (
+                        entry.name.to_owned(),
+                        format!("{} {}", entry.args, entry.description)
+                            .trim()
+                            .to_owned(),
+                    )
+                })
+                .collect();
+        }
         if let Some((name, filter)) = self.palette_arg() {
             return self.arg_rows(name, filter);
         }

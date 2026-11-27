@@ -207,8 +207,13 @@ configuration unchanged. UI preferences are independent of Host reload; edit
 
 ## Prompt templates
 
-Put Markdown in `<config-dir>/commands/`; each filename becomes a slash
-command. Built-in command names cannot be shadowed. Optional front matter gives
+Put Markdown in `<config-dir>/commands/`. Choose `/command` from the slash
+menu or type `/cmd` to open the same template list. Type to filter; Enter or
+Tab on a template fills `/cmd <name> ` into the editor without sending.
+Add arguments then submit, e.g. `/cmd review "src/main file.rs"`. Typing
+`/rev` can also find an unambiguous template and completes to `/cmd review `.
+A built-in `/model` and a user template `/cmd model` never override one another.
+Optional front matter gives
 `description` and `argument-hint`:
 
 ```markdown
