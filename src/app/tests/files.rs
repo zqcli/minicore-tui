@@ -213,3 +213,24 @@ fn references_quote_paths_and_keep_outside_paths_absolute() {
     };
     assert_eq!(Path::new(&decoded), outside);
 }
+
+#[cfg(windows)]
+#[test]
+fn ordinary_windows_paths_are_relative_to_the_matching_verbatim_workspace() {
+    for (file, workspace) in [
+        (r"C:\work\note.md", r"\\?\C:\work"),
+        (r"\\server\share\work\note.md", r"\\?\UNC\server\share\work"),
+    ] {
+        assert_eq!(
+            path_reference(Path::new(file), Path::new(workspace)),
+            "@note.md"
+        );
+    }
+
+    for file in [r"D:\work\note.md", r"C:\workspace\note.md"] {
+        assert_eq!(
+            path_reference(Path::new(file), Path::new(r"\\?\C:\work")),
+            path_reference(Path::new(file), Path::new(r"C:\work"))
+        );
+    }
+}

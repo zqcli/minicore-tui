@@ -32,10 +32,10 @@ impl FileBrowser {
 /// Paths are references, not shell arguments or attachments. Quote whitespace
 /// and escapes so a path with spaces remains visibly one reference.
 pub(crate) fn path_reference(path: &Path, workspace: &Path) -> String {
-    let path = path
-        .strip_prefix(workspace)
-        .unwrap_or(path)
-        .to_string_lossy();
+    let relative = path.strip_prefix(workspace).ok();
+    #[cfg(windows)]
+    let relative = relative.or_else(|| relative_to_verbatim_workspace(path, workspace));
+    let path = relative.unwrap_or(path).to_string_lossy();
     if path
         .chars()
         .any(|ch| ch.is_whitespace() || ch.is_control() || matches!(ch, '"' | '\\'))
@@ -47,6 +47,30 @@ pub(crate) fn path_reference(path: &Path, workspace: &Path) -> String {
     } else {
         format!("@{path}")
     }
+}
+
+#[cfg(windows)]
+fn relative_to_verbatim_workspace<'a>(path: &'a Path, workspace: &Path) -> Option<&'a Path> {
+    use std::path::{Component, Prefix};
+
+    // Host directory results use ordinary spelling when the path permits it,
+    // while the Session's workspace can retain its verbatim Windows prefix.
+    if !path.is_absolute() || !workspace.is_absolute() {
+        return None;
+    }
+    let mut path = path.components();
+    let mut workspace = workspace.components();
+    let (Some(Component::Prefix(path_prefix)), Some(Component::Prefix(workspace_prefix))) =
+        (path.next(), workspace.next())
+    else {
+        return None;
+    };
+    let same_root = match (path_prefix.kind(), workspace_prefix.kind()) {
+        (Prefix::Disk(a), Prefix::VerbatimDisk(b)) => a == b,
+        (Prefix::UNC(a, b), Prefix::VerbatimUNC(c, d)) => a == c && b == d,
+        _ => false,
+    };
+    (same_root && workspace.all(|part| path.next() == Some(part))).then_some(path.as_path())
 }
 
 impl App {
