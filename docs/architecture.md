@@ -125,7 +125,11 @@ available independently.
 
 Post-bootstrap catalog reads share one coalescing gate. Mutations and Agent
 progress request a refresh; requests arriving during a read coalesce into its
-successor. Automatic workspace status reads have a separate per-Session gate
+successor. Routine Agent/Session refreshes retain the model catalog. Models are
+read at bootstrap, after an applied Host reload, on Host resubscription and when
+terminal control returns from remote access. These full refreshes use the same
+gate, so an in-flight Agent-only read cannot discard a pending model refresh.
+Automatic workspace status reads have a separate per-Session gate
 and run on opening or switching, workspace changes and Turn completion.
 Unrelated scheduling and model controls do not start an idle status read. A
 pending result from a different configuration revision is retried after fresh

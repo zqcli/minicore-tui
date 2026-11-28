@@ -390,7 +390,7 @@ async fn stopping_agent_stays_stopping_until_its_owned_preparation_settles() {
     let (tx, mut messages) = mpsc::channel(tasks::MESSAGE_CAPACITY);
     let mut app = App::new(client.clone(), tx, std::env::temp_dir());
     app.on_msg(Msg::Ready(
-        tasks::catalogs(&client, Some(target.agent_id.clone())).await,
+        tasks::catalogs(&client, Some(target.agent_id.clone()), true).await,
     ));
     let message_id = MessageId::new().unwrap();
     client
@@ -518,6 +518,73 @@ async fn default_session_change_keeps_the_original_agent_after_navigation() {
     );
     assert_eq!(h.app.current_agent_id(), Some(&other.agent_id));
     h.finish().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn model_refresh_after_reload_or_resubscribe_survives_an_active_agent_catalog_read() {
+    use minicore_host_core::{ModelDescription, OpenAiModelApi};
+
+    for resubscribe in [false, true] {
+        let mut h = Harness::opened().await;
+        h.until(|app| !app.catalog_loading).await;
+        let cached = ModelDescription {
+            model: "fixture/cached".parse().unwrap(),
+            api: OpenAiModelApi::ChatCompletions,
+            context_window: 8192,
+            supported_reasoning: Vec::new(),
+            supports_tools: true,
+            web_search: None,
+        };
+        h.app.models = vec![cached.clone()];
+        h.app.refresh_catalogs();
+        let ordinary = real_bounded(async {
+            loop {
+                let message = h.messages.recv().await.unwrap();
+                if let Msg::Catalogs(result) = &message {
+                    assert!(result.as_ref().unwrap().models.is_none());
+                    break message;
+                }
+                h.app.on_msg(message);
+            }
+        })
+        .await;
+        if resubscribe {
+            let subscription = h
+                .native
+                .client
+                .subscribe(
+                    SubscribeRequest {
+                        scope: SubscriptionScope::Host {
+                            host_id: h.native.client.initial_info().host_id.clone(),
+                        },
+                        categories: [EventCategory::State].into(),
+                    },
+                    tasks::options(),
+                )
+                .await
+                .unwrap();
+            h.app
+                .on_msg(Msg::HostBaseline(subscription.result().clone()));
+        } else {
+            h.app
+                .on_msg(Msg::Reloaded(Ok(Box::new(crate::app::Reloaded {
+                    result: HostReloadResult::Applied {
+                        config_revision: ConfigRevision::default(),
+                        agents: Vec::new(),
+                    },
+                    templates: None,
+                }))));
+        }
+        h.app.on_msg(ordinary);
+        assert_eq!(h.app.models, [cached], "Agent-only reads retain models");
+        h.until(|app| !app.catalog_loading).await;
+        assert_eq!(
+            h.app.models,
+            h.native.client.models(tasks::options()).await.unwrap(),
+            "the pending full refresh must replace even a removed model"
+        );
+        h.finish().await;
+    }
 }
 
 #[tokio::test(start_paused = true)]
@@ -868,7 +935,7 @@ async fn agent_creation_opens_its_actual_default_and_late_results_preserve_navig
             .contains("Select an Agent to copy")
     );
     assert!(
-        tasks::catalogs(&client, None)
+        tasks::catalogs(&client, None, false)
             .await
             .unwrap()
             .agents
@@ -890,7 +957,7 @@ async fn agent_creation_opens_its_actual_default_and_late_results_preserve_navig
     .await
     .unwrap();
     app.on_msg(Msg::Catalogs(
-        tasks::catalogs(&client, Some(source.agent_id)).await,
+        tasks::catalogs(&client, Some(source.agent_id), false).await,
     ));
 
     app.on_action(Action::CreateAgent("First Agent".into()));

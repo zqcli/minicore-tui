@@ -1478,7 +1478,7 @@ mod tests {
         let original = app.session_mut(1).target();
         let client = app.session_mut(1).client.clone();
         let stale_catalog =
-            super::super::tasks::catalogs(&app.client, Some(target.agent_id.clone()))
+            super::super::tasks::catalogs(&app.client, Some(target.agent_id.clone()), false)
                 .await
                 .unwrap();
         let mut events = super::super::tasks::subscribe_session(&app.client, target.clone())

@@ -1132,7 +1132,7 @@ impl App {
         }
     }
     fn refresh_after_remote(&mut self) {
-        self.refresh_catalogs();
+        self.refresh_configuration_catalogs();
         if let Some(epoch) = self.resident.current().map(|session| session.epoch) {
             self.refresh_control_for(epoch);
             self.refresh_history(epoch);

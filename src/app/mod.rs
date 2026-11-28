@@ -118,7 +118,7 @@ pub enum Msg {
 }
 
 pub struct Ready {
-    pub models: Vec<ModelDescription>,
+    pub models: Option<Vec<ModelDescription>>,
     pub agents: Vec<AgentSummary>,
     pub selected_agent: Option<AgentId>,
 }
@@ -190,6 +190,7 @@ pub struct App {
     pub selected_agent: Option<AgentId>,
     pub(super) catalog_loading: bool,
     pub(super) catalog_due: bool,
+    pub(super) model_catalog_due: bool,
     pub models: Vec<ModelDescription>,
     pub launch: LaunchSettings,
     pub composer: composer::Composer,
@@ -269,6 +270,7 @@ impl App {
             selected_agent: None,
             catalog_loading: false,
             catalog_due: false,
+            model_catalog_due: false,
             models: Vec::new(),
             launch: LaunchSettings::default(),
             composer: composer::Composer::new(),
@@ -357,7 +359,12 @@ impl App {
                 self.refresh_catalogs();
             }
             Msg::HostObserved(event) => self.host_observed(*event),
-            Msg::HostBaseline(baseline) => self.host_baseline(baseline),
+            Msg::HostBaseline(baseline) => {
+                if self.ready {
+                    self.refresh_configuration_catalogs();
+                }
+                self.host_baseline(baseline);
+            }
             Msg::HostObservationError(error) => self.agent_observation_error(error),
             Msg::AgentCardRead(key, read) => self.agent_card_read(key, *read),
             Msg::Opened(generation, target, result) => {
@@ -449,7 +456,7 @@ impl App {
                             if let Some(templates) = reloaded.templates {
                                 self.templates = templates;
                             }
-                            self.refresh_catalogs();
+                            self.refresh_configuration_catalogs();
                             self.notice(NoticeLevel::Info, format!("Host configuration {config_revision} and declared Agents applied"));
                         }
                         HostReloadResult::PartiallyApplied {
@@ -459,7 +466,7 @@ impl App {
                             if let Some(templates) = reloaded.templates {
                                 self.templates = templates;
                             }
-                            self.refresh_catalogs();
+                            self.refresh_configuration_catalogs();
                             let failed = agents
                                 .iter()
                                 .filter_map(|result| match result {
@@ -530,7 +537,9 @@ impl App {
         self.resolve_agent_location();
     }
     fn install_catalogs(&mut self, ready: Ready) {
-        self.models = ready.models;
+        if let Some(models) = ready.models {
+            self.models = models;
+        }
         self.agents = ready.agents;
         if self
             .selected_agent

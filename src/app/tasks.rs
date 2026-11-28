@@ -121,8 +121,16 @@ pub(super) fn session_error(target: &SessionRef, error: impl std::fmt::Display) 
     )
 }
 
-pub async fn catalogs(client: &HostClient, selected: Option<AgentId>) -> Result<Ready, String> {
-    let models = client.models(options()).await.map_err(|e| e.to_string())?;
+pub async fn catalogs(
+    client: &HostClient,
+    selected: Option<AgentId>,
+    include_models: bool,
+) -> Result<Ready, String> {
+    let models = if include_models {
+        Some(client.models(options()).await.map_err(|e| e.to_string())?)
+    } else {
+        None
+    };
     let agents = client.agents(options()).await.map_err(|e| e.to_string())?;
     let selected_agent = selected.or_else(|| agents.first().map(|agent| agent.id.clone()));
     Ok(Ready {
@@ -134,7 +142,7 @@ pub async fn catalogs(client: &HostClient, selected: Option<AgentId>) -> Result<
 
 pub async fn bootstrap(client: HostClient, tx: Tx, selected: Option<AgentId>) {
     let result = async {
-        let ready = catalogs(&client, selected.clone()).await?;
+        let ready = catalogs(&client, selected.clone(), true).await?;
         if let Some(id) = selected.as_ref()
             && !ready.agents.iter().any(|agent| agent.id == *id)
         {
@@ -340,9 +348,16 @@ impl App {
             return;
         }
         self.catalog_loading = true;
+        let include_models = std::mem::take(&mut self.model_catalog_due);
         let client = self.client.clone();
         let selected = self.selected_agent.clone();
-        self.spawn_msg(async move { Msg::Catalogs(catalogs(&client, selected).await) });
+        self.spawn_msg(
+            async move { Msg::Catalogs(catalogs(&client, selected, include_models).await) },
+        );
+    }
+    pub(super) fn refresh_configuration_catalogs(&mut self) {
+        self.model_catalog_due = true;
+        self.refresh_catalogs();
     }
     pub(super) fn start_host_observation(&self) {
         let client = self.client.clone();
