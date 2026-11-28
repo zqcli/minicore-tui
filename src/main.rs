@@ -297,17 +297,9 @@ async fn run() -> i32 {
                 }
                 app.quit = true;
             }
-            message = msg_rx.recv() => {
-                match message {
-                    Some(message) => {
-                        app.on_msg(message);
-                        frames.mark(Cause::Event);
-                    }
-                    None => {
-                        failed = Some("application event channel closed".to_owned());
-                        break;
-                    }
-                }
+            Some(message) = msg_rx.recv() => {
+                app.on_msg(message);
+                frames.mark(Cause::Event);
             }
             maybe_event = term_rx.recv() => {
                 match maybe_event {

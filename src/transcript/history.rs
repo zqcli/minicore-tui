@@ -1,6 +1,6 @@
 //! Native accepted records as blocks and streaming Markdown.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
 
 use minicore_host_core::{
@@ -111,6 +111,7 @@ impl Transcript {
         }
         let mut index = HistoryIndex::new(self);
         let mut added = false;
+        let mut associations_changed = false;
         for record in records {
             if preview
                 && !matches!(
@@ -162,6 +163,7 @@ impl Transcript {
                         }
                     }
                     if call.delegations.len() != before {
+                        associations_changed = true;
                         self.bump(at);
                     }
                 }
@@ -169,17 +171,15 @@ impl Transcript {
         }
         if added {
             self.sort_history();
+        }
+        if added || associations_changed {
             self.link_delegations();
         }
         // A page can add steps to any Turn, including one already folded, and a
         // record replacing a live block brings the time a run is measured by.
-        {
-            let mut turns: Vec<&TurnId> = records
-                .iter()
-                .filter_map(|record| record.turn_id.as_ref())
-                .collect();
-            turns.dedup();
-            for turn in turns {
+        let mut seen = HashSet::new();
+        for turn in records.iter().filter_map(|record| record.turn_id.as_ref()) {
+            if seen.insert(turn) {
                 self.regroup(turn);
             }
         }
@@ -296,11 +296,7 @@ fn append_record(
             ..
         } => {
             let at = transcript.push(Block::User {
-                text: if preview {
-                    super::agent_card::tail(text, super::agent_card::PREVIEW_BYTES).to_owned()
-                } else {
-                    text.clone()
-                },
+                text: text.clone(),
                 kind: match mode {
                     _ if matches!(sender, Some(MessageSource::Agent { .. }))
                         && crate::ui::delegated::is_result(text) =>
@@ -417,7 +413,6 @@ fn append_record(
                     at
                 }
             };
-            transcript.regroup(turn_id);
             index.source(transcript, at, source(record, 0));
         }
     }
