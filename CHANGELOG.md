@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.13.2 — 2026-11-28
+
+- Embed Host 0.13.2.
+- Initialize Session views from the subscription's first state; preserve
+  subsequent updates without repeating the initial state query.
+- Refresh model choices when Host configuration can change, not during ordinary
+  Agent and Session catalog refreshes.
+
 ## 0.13.0 — 2026-11-28
 
 - Share transcript layout, scrolling and fold handling between the main view and
