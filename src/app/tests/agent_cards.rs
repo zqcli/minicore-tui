@@ -382,11 +382,19 @@ async fn followups_keep_one_card_and_a_reused_session_gets_a_new_frozen_boundary
     .await;
     let original = card(&h.app, "original").unwrap();
     assert_eq!(original.association.accepted_message_ids.len(), 2);
-    assert_eq!(original.association.inputs.len(), 1);
-    assert_eq!(
-        original.association.inputs[0].delegated_message_ids.len(),
-        2
-    );
+    let inputs = &original.association.inputs;
+    assert_eq!(inputs.len(), 2);
+    assert_ne!(inputs[0].turn, inputs[1].turn);
+    for (range, message_id) in inputs
+        .iter()
+        .zip(&original.association.accepted_message_ids)
+    {
+        assert_eq!(
+            range.delegated_message_ids.as_slice(),
+            std::slice::from_ref(message_id)
+        );
+    }
+    assert!(card(&h.app, "supplement").is_none());
     let old_key = original.key.clone();
     let old_answer = answer(&h.app, "original");
     let (parent, second) = launch(
