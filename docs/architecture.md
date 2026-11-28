@@ -117,6 +117,12 @@ the Host fault. Snapshot identity/revision merging and the previous compaction
 comparison suppress replay without changing the reading anchor or treating
 admission, successful completion, unchanged or cancellation as failure.
 
+Opening a Session uses the subscription's initial Session state rather than a
+second state query. The subscription remains active during history, input and
+context reads; its buffered events and already observed Host state merge by
+revision when the view is installed. Explicit state refresh and recovery remain
+available independently.
+
 Post-bootstrap catalog reads share one coalescing gate. Mutations and Agent
 progress request a refresh; requests arriving during a read coalesce into its
 successor. Automatic workspace status reads have a separate per-Session gate

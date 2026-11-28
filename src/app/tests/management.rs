@@ -20,6 +20,88 @@ fn assert_info_eq(
     );
 }
 
+#[tokio::test(start_paused = true)]
+async fn opening_from_subscription_baseline_preserves_newer_state_and_buffered_events() {
+    use minicore_host_core::{ObservationEvent, StateEvent};
+
+    for observed_before_install in [false, true] {
+        let native = crate::testing::NativeHost::new().await;
+        let target = native.target.clone();
+        let client = native.client.session(target.clone());
+        client
+            .pause(
+                SessionControlRequest {
+                    operation_id: OperationId::new().unwrap(),
+                },
+                tasks::options(),
+            )
+            .await
+            .unwrap();
+        let opened = tasks::open(native.client.clone(), target.clone(), Default::default())
+            .await
+            .unwrap();
+        assert_eq!(opened.state.data.scheduling, Scheduling::Paused);
+        assert!(
+            opened
+                .subscription
+                .result()
+                .initial_states
+                .iter()
+                .any(|state| {
+                    matches!(state, StateEvent::Session { source, data }
+                if source.session_id == target.session_id
+                    && data.controller_revision == opened.state.data.controller_revision)
+                })
+        );
+
+        client
+            .resume(
+                SessionControlRequest {
+                    operation_id: OperationId::new().unwrap(),
+                },
+                tasks::options(),
+            )
+            .await
+            .unwrap();
+        let latest = client.state(tasks::options()).await.unwrap();
+        assert!(latest.data.controller_revision > opened.state.data.controller_revision);
+        let (tx, messages) = mpsc::channel(tasks::MESSAGE_CAPACITY);
+        let mut app = App::new(native.client.clone(), tx, std::env::temp_dir());
+        if observed_before_install {
+            app.on_msg(Msg::HostObserved(Box::new(ObservationEvent::State(
+                StateEvent::Session {
+                    source: SessionIdentity {
+                        host_id: latest.host_id.clone(),
+                        host_incarnation: latest.host_incarnation.clone(),
+                        agent_id: target.agent_id.clone(),
+                        session_id: target.session_id.clone(),
+                    },
+                    data: latest.data.clone(),
+                },
+            ))));
+        }
+        let epoch = app.install_opened(*opened, true);
+        if observed_before_install {
+            assert!(
+                !app.session_mut(epoch).paused(),
+                "the older baseline cannot roll back Host state"
+            );
+        }
+        let mut h = Harness {
+            app,
+            native,
+            messages,
+        };
+        h.until(|app| {
+            let session = app.resident.current().unwrap();
+            !session.paused()
+                && session.state.data.controller_revision == latest.data.controller_revision
+        })
+        .await;
+        h.finish().await;
+    }
+}
+
 async fn rename_refreshes_metadata(navigate: bool) {
     let mut h = Harness::opened().await;
     let original = h.native.target.clone();

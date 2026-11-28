@@ -278,8 +278,23 @@ pub async fn open(
         .await?;
         info = session.info(options()).await.map_err(|e| e.to_string())?;
     }
-    let subscription = subscribe_session(&client, target).await?;
-    let state = session.state(options()).await.map_err(|e| e.to_string())?;
+    let subscription = subscribe_session(&client, target.clone()).await?;
+    let state = subscription
+        .result()
+        .initial_states
+        .iter()
+        .find_map(|state| match state {
+            StateEvent::Session { source, data }
+                if source.agent_id == target.agent_id && source.session_id == target.session_id =>
+            {
+                Some(super::control::session_snapshot(
+                    source.clone(),
+                    data.clone(),
+                ))
+            }
+            _ => None,
+        })
+        .ok_or_else(|| session_error(&target, "Session subscription has no initial state"))?;
     let history = HistoryWindow::tail(&session, PAGE)
         .await
         .map_err(|e| e.to_string())?;
