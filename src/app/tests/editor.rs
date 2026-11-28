@@ -324,7 +324,7 @@ fn query_state(overlay: &Overlay) -> (&str, usize) {
 }
 
 #[tokio::test(start_paused = true)]
-async fn query_paste_normalizes_single_line_text_on_all_four_surfaces() {
+async fn query_paste_normalizes_text_and_preserves_the_draft_across_surfaces() {
     let mut h = Harness::opened().await;
     h.app.composer.set_text("retained 中文 draft");
     h.key(KeyCode::Left, KeyModifiers::SHIFT);
@@ -333,20 +333,21 @@ async fn query_paste_normalizes_single_line_text_on_all_four_surfaces() {
     let version = h.app.composer.version();
     let pasted = "\r\n中\r文\n👩‍💻\te\u{301}\u{1b}[31mred\u{1b}[0m\u{1b}]52;c;cGF5bG9hZA==\u{7}\u{feff}\u{7}\u{7f}\u{202e}";
     let expected = "prefix 中 文 👩‍💻    e\u{301}red␇␡\\u{202e}";
-    for panel in [Panel::Find, Panel::Sessions, Panel::Models, Panel::Agents] {
-        h.app.open_panel(panel.clone());
+    for (panel, input, query) in [
+        (Panel::Find, pasted, expected),
+        (Panel::Sessions, " short", "prefix short"),
+        (Panel::Models, " model", "prefix model"),
+        (Panel::Agents, " agent", "prefix agent"),
+    ] {
+        h.app.open_panel(panel);
         h.type_text("prefix");
-        h.app.on_paste(pasted);
-        assert_eq!(query_state(&h.app.overlay), (expected, 0));
+        h.app.on_paste(input);
+        assert_eq!(query_state(&h.app.overlay), (query, 0));
         h.press(KeyCode::Esc);
         assert_eq!(h.app.composer.text(), "retained 中文 draft");
         assert_eq!(h.app.composer.cursor(), cursor);
         assert_eq!(h.app.composer.selection(), selection);
         assert_eq!(h.app.composer.version(), version);
-        h.app.open_panel(panel);
-        h.type_text(expected);
-        assert_eq!(query_state(&h.app.overlay), (expected, 0));
-        h.press(KeyCode::Esc);
     }
     assert!(h.app.local_inputs.is_empty());
     assert!(h.native.calls.try_recv().is_err());

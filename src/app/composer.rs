@@ -63,7 +63,10 @@ impl<'a> Projection<'a> {
 
     /// The displayed text: payloads replaced by their tokens.
     pub fn text(&self) -> String {
-        let mut out = String::with_capacity(self.text.len());
+        if self.pastes.is_empty() {
+            return self.text.to_owned();
+        }
+        let mut out = String::new();
         let mut at = 0;
         for (index, paste) in self.pastes.iter().enumerate() {
             out.push_str(&self.text[at..paste.range.start]);
@@ -336,15 +339,6 @@ impl Composer {
     /// Cursor offset in the displayed text.
     pub fn display_cursor(&self) -> usize {
         self.projection().display(self.cursor)
-    }
-
-    /// Line and cell column of the cursor in the displayed text.
-    pub fn cursor_position(&self) -> (usize, usize) {
-        let display = self.display();
-        let cursor = self.display_cursor();
-        let line = display[..cursor].matches('\n').count();
-        let start = display[..cursor].rfind('\n').map_or(0, |at| at + 1);
-        (line, wrap::width(&display[start..cursor]))
     }
 
     // ---- draft lifecycle ----------------------------------------------
@@ -667,41 +661,25 @@ impl Composer {
 
     pub fn move_home(&mut self) {
         self.anchor = None;
-        self.cursor = self.line_start(self.cursor_position().0);
+        self.cursor = self.line_edge(false);
         self.column = None;
     }
 
     pub fn move_end(&mut self) {
         self.anchor = None;
-        self.cursor = self.line_end(self.cursor_position().0);
+        self.cursor = self.line_edge(true);
         self.column = None;
     }
 
     /// Moves one logical line up. False on the first line, where the caller
     /// may switch to prompt recall.
     pub fn move_up(&mut self) -> bool {
-        self.anchor = None;
-        let line = self.cursor_position().0;
-        if line == 0 {
-            return false;
-        }
-        let column = self.column.unwrap_or_else(|| self.cursor_position().1);
-        self.cursor = self.offset_at_column(line - 1, column);
-        self.column = Some(column);
-        true
+        self.move_row(false)
     }
 
     /// Moves one logical line down. False on the last line.
     pub fn move_down(&mut self) -> bool {
-        self.anchor = None;
-        let line = self.cursor_position().0;
-        if line + 1 >= self.display().split('\n').count() {
-            return false;
-        }
-        let column = self.column.unwrap_or_else(|| self.cursor_position().1);
-        self.cursor = self.offset_at_column(line + 1, column);
-        self.column = Some(column);
-        true
+        self.move_row(true)
     }
 
     pub fn move_word_left(&mut self) {
@@ -855,7 +833,7 @@ impl Composer {
         }
         self.commit();
         let end = self.cursor;
-        let start = self.line_start(self.cursor_position().0);
+        let start = self.line_edge(false);
         self.cursor = end;
         self.delete_range(start..end, true);
     }
@@ -866,7 +844,7 @@ impl Composer {
         }
         self.commit();
         let start = self.cursor;
-        let end = self.line_end(self.cursor_position().0);
+        let end = self.line_edge(true);
         self.cursor = start;
         self.delete_range(start..end, true);
     }
@@ -965,50 +943,48 @@ impl Composer {
 
     // ---- line geometry ------------------------------------------------
 
-    /// Buffer offset where the display line `line` starts.
-    fn line_start(&self, line: usize) -> usize {
-        let display = self.display();
-        let offset: usize = display
-            .split('\n')
-            .take(line)
-            .map(|part| part.len() + 1)
-            .sum();
-        self.projection().raw(offset.min(display.len()))
+    /// Visible row around the projected caret, with paste chips already folded.
+    fn projected_row(&self, display: &str) -> (usize, Range<usize>) {
+        let cursor = self.display_cursor();
+        let start = display[..cursor].rfind('\n').map_or(0, |at| at + 1);
+        let end = display[cursor..].find('\n').map_or(display.len(), |at| cursor + at);
+        (cursor, start..end)
     }
 
-    /// Buffer offset where the display line `line` ends.
-    fn line_end(&self, line: usize) -> usize {
-        let display = self.display();
-        let offset: usize = display
-            .split('\n')
-            .take(line)
-            .map(|part| part.len() + 1)
-            .sum();
-        let end = display[offset..]
-            .find('\n')
-            .map_or(display.len(), |at| offset + at);
-        self.projection().raw(end)
+    fn line_edge(&self, end: bool) -> usize {
+        let (_, row) = self.projected_row(&self.display());
+        self.projection().raw(if end { row.end } else { row.start })
     }
 
-    /// The buffer offset on display line `line` closest to `column` cells.
-    fn offset_at_column(&self, line: usize, column: usize) -> usize {
+    fn move_row(&mut self, down: bool) -> bool {
+        self.anchor = None;
         let display = self.display();
-        let start: usize = display
-            .split('\n')
-            .take(line)
-            .map(|part| part.len() + 1)
-            .sum();
-        let row = display[start..].split('\n').next().unwrap_or_default();
-        let mut used = 0;
-        for (at, grapheme) in row.grapheme_indices(true) {
-            let cells = wrap::width(grapheme);
-            if used + cells > column {
-                return self.projection().raw(start + at);
+        let (cursor, row) = self.projected_row(&display);
+        let (start, next) = if down {
+            let start = row.end + 1;
+            let Some(rest) = display.get(start..) else {
+                return false;
+            };
+            (start, rest.split('\n').next().unwrap_or_default())
+        } else {
+            if row.start == 0 {
+                return false;
             }
-            used += cells;
-        }
-        self.projection().raw(start + row.len())
+            let previous = &display[..row.start - 1];
+            let start = previous.rfind('\n').map_or(0, |at| at + 1);
+            (start, &previous[start..])
+        };
+        let column = self.column.unwrap_or_else(|| wrap::width(&display[row.start..cursor]));
+        let mut used = 0;
+        let offset = next.grapheme_indices(true).find_map(|(at, grapheme)| {
+            used += wrap::width(grapheme);
+            (used > column).then_some(at)
+        });
+        self.cursor = self.projection().raw(start + offset.unwrap_or(next.len()));
+        self.column = Some(column);
+        true
     }
+
 }
 
 fn prev_grapheme(text: &str, cursor: usize) -> usize {
@@ -1330,7 +1306,7 @@ mod tests {
         c.move_right();
         c.move_right();
         c.move_right();
-        assert_eq!(c.cursor_position().1, 3);
+        assert_eq!(c.cursor(), 3);
         assert!(c.move_down());
         assert_eq!(c.cursor(), 9, "the short line ends at column 2");
         assert!(c.move_down());
@@ -1679,13 +1655,14 @@ mod tests {
     }
 
     #[test]
-    fn cursor_position_reports_line_and_cell_column() {
-        let mut c = composer("ab\nc中");
-        assert_eq!(c.cursor_position(), (1, 3));
-        c.move_up();
-        assert_eq!(c.cursor_position(), (0, 2));
+    fn vertical_motion_never_splits_a_wide_character() {
+        let mut c = composer("ab中d\nc中");
+        assert!(c.move_up());
+        assert_eq!(c.cursor(), 2);
+        assert!(c.move_down());
+        assert_eq!(c.cursor(), c.text().len());
         c.move_home();
-        assert_eq!(c.cursor_position(), (0, 0));
+        assert_eq!(&c.text()[c.cursor()..], "c中");
     }
 
     #[test]
