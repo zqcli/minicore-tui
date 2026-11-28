@@ -124,21 +124,10 @@ pub(super) fn session_error(target: &SessionRef, error: impl std::fmt::Display) 
 pub async fn catalogs(client: &HostClient, selected: Option<AgentId>) -> Result<Ready, String> {
     let models = client.models(options()).await.map_err(|e| e.to_string())?;
     let agents = client.agents(options()).await.map_err(|e| e.to_string())?;
-    let mut sessions: Vec<_> = agents
-        .iter()
-        .flat_map(|agent| agent.sessions.iter().cloned())
-        .collect();
-    sessions.sort_by(|a, b| {
-        b.last_activity_at
-            .cmp(&a.last_activity_at)
-            .then_with(|| a.agent_id.cmp(&b.agent_id))
-            .then_with(|| a.id.cmp(&b.id))
-    });
     let selected_agent = selected.or_else(|| agents.first().map(|agent| agent.id.clone()));
     Ok(Ready {
         models,
         agents,
-        sessions,
         selected_agent,
     })
 }

@@ -54,7 +54,7 @@ impl App {
                         let snapshot = self.pending_states[&target].clone();
                         self.project_catalog_state(&snapshot);
                         if old_catalog.as_ref() != Some(&catalog_facts(&snapshot))
-                            || !self.sessions.iter().any(|session| {
+                            || !self.sessions().any(|session| {
                                 session.agent_id == target.agent_id
                                     && session.id == target.session_id
                             })
@@ -189,7 +189,6 @@ impl App {
             let keep = |row: &SessionSummary| {
                 row.agent_id != snapshot.agent_id || row.id != snapshot.session_id
             };
-            self.sessions.retain(keep);
             for agent in &mut self.agents {
                 agent.sessions.retain(keep);
             }
@@ -200,7 +199,9 @@ impl App {
                 ..
             } = &mut self.overlay
             {
-                rows.retain(keep);
+                rows.retain(|row| {
+                    row.agent_id != snapshot.agent_id || row.session_id != snapshot.session_id
+                });
                 *selected = (*selected).min(rows.len().saturating_sub(1));
                 let target = SessionRef {
                     agent_id: snapshot.agent_id.clone(),
@@ -234,16 +235,8 @@ impl App {
                 .as_ref()
                 .map(|deletion| deletion.data.clone());
         };
-        for row in &mut self.sessions {
-            apply(row);
-        }
         for agent in &mut self.agents {
             for row in &mut agent.sessions {
-                apply(row);
-            }
-        }
-        if let Overlay::Sessions { rows, .. } = &mut self.overlay {
-            for row in rows {
                 apply(row);
             }
         }
@@ -366,7 +359,7 @@ impl App {
             ObservationEvent::Activity(ActivityEvent::MessageAccepted { source, data, .. }) => {
                 self.refresh_inputs(epoch);
                 if data.source == MessageSource::User
-                    && self.sessions.iter().any(|row| {
+                    && self.sessions().any(|row| {
                         row.agent_id == source.agent_id
                             && row.id == source.session_id
                             && row.first_user_preview.is_none()
@@ -534,7 +527,6 @@ impl App {
                             .iter()
                             .find(|tool| tool.state == ToolCallState::Running)
                             .map(|tool| tool.name.clone()),
-                        start: session.transcript.len(),
                         interrupting: data.state == TurnState::Cancelling,
                     })
                 }
@@ -783,14 +775,6 @@ impl App {
             {
                 session.completed.insert(turn.clone());
             }
-        }
-        if let Some(live) = &mut session.live {
-            live.start = session
-                .transcript
-                .blocks()
-                .iter()
-                .position(|block| block.turn_id() == Some(&live.turn_id))
-                .unwrap_or(session.transcript.len());
         }
         if let Some((anchor, offset)) = anchor
             && let Some(block) = find_anchor(&session.transcript, &anchor)
@@ -1545,7 +1529,6 @@ mod tests {
             super::super::unconfirmed::Status::Unconfirmed
         );
         app.on_msg(super::super::Msg::Catalogs(Ok(stale_catalog)));
-        assert!(!app.sessions.iter().any(|row| row.id == target.session_id));
         assert!(
             !app.agents
                 .iter()

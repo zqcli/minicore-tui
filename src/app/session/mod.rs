@@ -86,7 +86,6 @@ pub struct LiveTurn {
     pub state: TurnStateData,
     pub started: tokio::time::Instant,
     pub running_tool: Option<String>,
-    pub start: usize,
     pub interrupting: bool,
 }
 

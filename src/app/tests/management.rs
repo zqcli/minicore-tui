@@ -58,7 +58,7 @@ async fn rename_refreshes_metadata(navigate: bool) {
         old_info.title
     );
     h.until(|app| {
-        app.sessions.iter().any(|session| {
+        app.sessions().any(|session| {
             session.id == original.session_id && session.title.as_deref() == Some("Updated title")
         }) && app.resident.find(&original).unwrap().info.title.as_deref() == Some("Updated title")
     })
@@ -524,8 +524,9 @@ async fn catalog_mutations_share_one_reader_and_final_metadata_cannot_roll_back(
                 );
                 assert_eq!(
                     catalog
-                        .sessions
+                        .agents
                         .iter()
+                        .flat_map(|agent| &agent.sessions)
                         .find(|row| row.id == target.session_id && row.agent_id == target.agent_id)
                         .unwrap()
                         .title
@@ -543,8 +544,7 @@ async fn catalog_mutations_share_one_reader_and_final_metadata_cannot_roll_back(
     .await;
     assert_eq!(
         h.app
-            .sessions
-            .iter()
+            .sessions()
             .find(|row| row.id == target.session_id && row.agent_id == target.agent_id)
             .unwrap()
             .title

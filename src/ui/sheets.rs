@@ -337,7 +337,7 @@ struct SessionsState<'a> {
 
 fn sessions_sheet(
     app: &App,
-    rows: &[SessionSummary],
+    rows: &[minicore_host_protocol::SessionRef],
     state: &SessionsState,
     styles: Styles,
 ) -> Sheet {
@@ -349,16 +349,15 @@ fn sessions_sheet(
     let foreground = app.resident.current().map(Session::address);
     let now = jiff::Timestamp::now().as_second();
     if let Some((target, title)) = renaming {
-        let name = rows
-            .iter()
-            .find(|info| overlay::session_target(info) == *target)
+        let name = app
+            .session_summary(target)
             .map(session_label)
             .unwrap_or_else(|| short_session_id(target.session_id.as_str()));
         return Sheet::new("Rename Session", "enter save · esc cancel")
             .status(name)
             .search(title);
     }
-    let shown = overlay::matching_sessions(rows, filter);
+    let shown = app.picker_sessions(rows, filter);
     let workspace = app.workspace.to_string_lossy();
     let status = if shown.len() == rows.len() {
         plural(rows.len() as u64, "session")

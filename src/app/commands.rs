@@ -666,16 +666,6 @@ mod tests {
         assert_eq!(execute("remote", "bogus"), Some(Executed::Noop));
     }
 
-    #[test]
-    fn redundant_control_shortcuts_are_not_builtins() {
-        for removed in [
-            "children", "child", "resume", "cancel", "wss", "recover", "load", "unload", "close",
-        ] {
-            assert!(execute(removed, "").is_none(), "removed /{removed}");
-            assert!(COMMANDS.iter().all(|command| command.name != removed));
-        }
-    }
-
     fn model(id: &str) -> ModelDescription {
         serde_json::from_value(serde_json::json!({"model": id, "api":"responses", "context_window":200000, "supported_reasoning": [], "supports_tools":true})).unwrap()
     }

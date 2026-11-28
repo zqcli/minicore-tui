@@ -43,7 +43,7 @@ impl App {
                 }
             }
         }
-        for row in &self.sessions {
+        for row in self.sessions() {
             if residents.contains(&(&row.agent_id, &row.id)) {
                 continue;
             }

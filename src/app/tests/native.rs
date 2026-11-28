@@ -340,7 +340,7 @@ async fn session_picker_names_stay_stable_after_opening_history() {
         submit(&mut h, PROMPT, false);
         let call = h.next_call().await;
         h.until(|app| {
-            app.sessions.iter().any(|s| {
+            app.sessions().any(|s| {
                 s.id == target.session_id && s.first_user_preview.as_deref() == Some(PROMPT)
             })
         })
@@ -386,8 +386,7 @@ async fn session_picker_names_stay_stable_after_opening_history() {
     h.type_text(TITLE);
     h.press(KeyCode::Enter);
     h.until(|app| {
-        app.sessions
-            .iter()
+        app.sessions()
             .any(|s| s.id == target.session_id && s.title.as_deref() == Some(TITLE))
     })
     .await;
@@ -411,8 +410,7 @@ async fn session_picker_names_stay_stable_after_opening_history() {
     }
     h.press(KeyCode::Enter);
     h.until(|app| {
-        app.sessions
-            .iter()
+        app.sessions()
             .any(|s| s.id == target.session_id && s.title.is_none())
     })
     .await;

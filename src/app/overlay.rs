@@ -2,6 +2,7 @@
 //! variant, so closing it drops everything it held.
 
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::path::Path;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -42,7 +43,7 @@ pub enum Overlay {
         filter: String,
         selected: usize,
         /// Display order, fixed when the picker opens.
-        rows: Vec<SessionSummary>,
+        rows: Vec<SessionRef>,
         /// The new title being typed for the selected session.
         renaming: Option<(SessionRef, String)>,
     },
@@ -367,22 +368,6 @@ impl<'a> AsyncTaskItem<'a> {
         }
     }
 
-    pub fn detail_lines(
-        &self,
-        styles: crate::ui::theme::Styles,
-        width: usize,
-        reasoning: bool,
-    ) -> Vec<ratatui::text::Line<'static>> {
-        match self {
-            Self::Agent(card) => {
-                crate::ui::agent_cards::detail_lines(card, styles, width, reasoning)
-            }
-            Self::StandaloneDelegated { summary, .. } => {
-                crate::ui::delegated::detail_lines(summary, styles, width)
-            }
-        }
-    }
-
     pub fn copy_text(&self) -> String {
         match self {
             Self::Agent(card) => crate::ui::agent_cards::copy_text(card),
@@ -459,23 +444,6 @@ pub fn matching_async_tasks<'a>(
         .collect()
 }
 
-/// One delegated child for the overview: its card, newest first.
-pub fn delegations(app: &super::App) -> Vec<&crate::transcript::agent_card::AgentCard> {
-    let Some(session) = app.resident.current() else {
-        return Vec::new();
-    };
-    session
-        .transcript
-        .blocks()
-        .iter()
-        .rev()
-        .filter_map(|block| match block {
-            crate::transcript::Block::Tool(call) => call.agent_card.as_deref(),
-            _ => None,
-        })
-        .collect()
-}
-
 impl Panel {
     /// Whether the panel reads a session, so a draft has nothing to show in it.
     fn needs_session(&self) -> bool {
@@ -542,9 +510,12 @@ pub fn matching_agents<'a>(agents: &'a [AgentSummary], filter: &str) -> Vec<&'a 
         .collect()
 }
 
-pub fn matching_sessions<'a>(rows: &'a [SessionSummary], filter: &str) -> Vec<&'a SessionSummary> {
+pub fn matching_sessions<'a>(
+    rows: impl IntoIterator<Item = &'a SessionSummary>,
+    filter: &str,
+) -> Vec<&'a SessionSummary> {
     let filter = filter.trim();
-    rows.iter()
+    rows.into_iter()
         .filter(|info| {
             info.delegated_by.is_none()
                 && (filter.is_empty()
@@ -561,6 +532,53 @@ pub fn matching_sessions<'a>(rows: &'a [SessionSummary], filter: &str) -> Vec<&'
 }
 
 impl App {
+    /// Native Agent catalogs are the sole owner of Session summaries.
+    pub fn sessions(&self) -> impl Iterator<Item = &SessionSummary> {
+        self.agents.iter().flat_map(|agent| &agent.sessions)
+    }
+
+    pub fn session_summary(&self, target: &SessionRef) -> Option<&SessionSummary> {
+        self.agents
+            .iter()
+            .find(|agent| agent.id == target.agent_id)?
+            .sessions
+            .iter()
+            .find(|session| session.id == target.session_id)
+    }
+
+    pub(crate) fn picker_sessions(
+        &self,
+        rows: &[SessionRef],
+        filter: &str,
+    ) -> Vec<&SessionSummary> {
+        let catalog: HashMap<_, _> = self
+            .sessions()
+            .map(|info| ((&info.agent_id, &info.id), info))
+            .collect();
+        matching_sessions(
+            rows.iter().filter_map(|target| {
+                catalog
+                    .get(&(&target.agent_id, &target.session_id))
+                    .copied()
+            }),
+            filter,
+        )
+    }
+
+    pub(super) fn session_order(&self) -> Vec<&SessionSummary> {
+        let mut rows = self
+            .sessions()
+            .filter(|info| info.delegated_by.is_none())
+            .collect::<Vec<_>>();
+        rows.sort_by(|a, b| {
+            b.last_activity_at
+                .cmp(&a.last_activity_at)
+                .then_with(|| a.agent_id.cmp(&b.agent_id))
+                .then_with(|| a.id.cmp(&b.id))
+        });
+        rows
+    }
+
     /// The row the open sessions picker has selected.
     pub(super) fn selected_session(&self) -> Option<&SessionSummary> {
         let Overlay::Sessions {
@@ -572,7 +590,7 @@ impl App {
         else {
             return None;
         };
-        matching_sessions(rows, filter).get(*selected).copied()
+        self.picker_sessions(rows, filter).get(*selected).copied()
     }
 
     /// Opens a picker or view, seeding it from the current state.
@@ -756,7 +774,7 @@ impl App {
         let (name, rest) = text.strip_prefix('/')?.split_once(char::is_whitespace)?;
         matches!(
             name,
-            "model" | "reasoning" | "theme" | "approval" | "remote" | "wss"
+            "model" | "reasoning" | "theme" | "approval" | "remote"
         )
         .then_some((name, rest.trim()))
     }
@@ -855,7 +873,7 @@ impl App {
                     "Run inside- and outside-workspace tool calls without asking",
                 ),
             ]),
-            "remote" | "wss" => described(&[
+            "remote" => described(&[
                 (
                     "on",
                     "Start remote WSS/WS server and show connection overlay",
@@ -958,7 +976,7 @@ impl App {
 
     /// The known sessions: the live ones first (on screen, then the most
     /// recently left), then the current workspace's, then newest first.
-    fn session_rows(&self) -> Vec<SessionSummary> {
+    fn session_rows(&self) -> Vec<SessionRef> {
         let workspace = self.workspace.to_string_lossy();
         let live = |info: &SessionSummary| match self.resident.current() {
             Some(session)
@@ -982,14 +1000,9 @@ impl App {
                 info.last_activity_at,
             )
         };
-        let mut rows: Vec<SessionSummary> = self
-            .sessions
-            .iter()
-            .filter(|info| info.delegated_by.is_none())
-            .cloned()
-            .collect();
+        let mut rows = self.session_order();
         rows.sort_by_cached_key(|info| (live(info), std::cmp::Reverse(rank(info))));
-        rows
+        rows.into_iter().map(session_target).collect()
     }
 }
 

@@ -3,8 +3,8 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::app::overlay::{
-    TaskFocus, async_tasks, matching_agents, matching_async_tasks, matching_models,
-    matching_sessions, session_label, session_target,
+    TaskFocus, async_tasks, matching_agents, matching_async_tasks, matching_models, session_label,
+    session_target,
 };
 use crate::app::picker;
 use crate::app::{Action, App, Overlay, find};
@@ -274,7 +274,9 @@ impl App {
         self.sync_inspector_selection();
         let len = match &self.overlay {
             Overlay::Palette { .. } | Overlay::Files { .. } => self.completion_len(),
-            Overlay::Sessions { rows, filter, .. } => matching_sessions(rows, filter).len(),
+            Overlay::Sessions { rows, filter, .. } => {
+                self.picker_sessions(rows, filter).len()
+            }
             Overlay::Models { filter, .. } => matching_models(&self.models, filter).len(),
             Overlay::Agents { filter, .. } => matching_agents(&self.agents, filter).len(),
             Overlay::Reasoning { .. } => self.reasoning_levels().len(),
@@ -729,28 +731,6 @@ impl App {
 
     pub(crate) fn on_overlay_accept(&mut self) -> Option<Action> {
         match std::mem::replace(&mut self.overlay, Overlay::None) {
-            Overlay::Delegations {
-                filter, selected, ..
-            } => {
-                let picked = {
-                    let all = async_tasks(self);
-                    let matched = matching_async_tasks(&all, &filter);
-                    self.inspector_index(&matched, selected)
-                        .and_then(|idx| matched[idx].open_target())
-                };
-                match picked {
-                    Some((_, true)) => self.notice(
-                        crate::app::NoticeLevel::Info,
-                        "Child history is unavailable; its observed preview remains in Ctrl+B",
-                    ),
-                    Some((child, false)) => self.open_child(child),
-                    None => self.notice(
-                        crate::app::NoticeLevel::Info,
-                        "Origin Session is in earlier unloaded history; press Home to load it",
-                    ),
-                }
-                None
-            }
             review @ (Overlay::Unconfirmed { .. }
             | Overlay::AgentDelete { .. }
             | Overlay::Confirm { .. }) => {
@@ -762,7 +742,7 @@ impl App {
                 filter,
                 rows,
                 ..
-            } => matching_sessions(&rows, &filter)
+            } => self.picker_sessions(&rows, &filter)
                 .get(selected)
                 .map(|info| Action::OpenSession(session_target(info))),
             find @ Overlay::Find { .. } => {
@@ -785,6 +765,7 @@ impl App {
                 None
             }
             Overlay::Palette { .. }
+            | Overlay::Delegations { .. }
             | Overlay::Files { .. }
             | Overlay::Context { .. }
             | Overlay::Help { .. }

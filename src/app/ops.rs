@@ -31,7 +31,6 @@ impl App {
         session.context = Some(opened.context);
         let records = std::mem::take(&mut opened.history.items);
         session.history = Some(opened.history);
-        session.sync_interaction();
         if let Some(newer) = self.pending_states.remove(&target) {
             session.apply_state(newer);
         }
@@ -214,9 +213,6 @@ impl App {
                         let session = self.session_mut(epoch);
                         session.history_upper_bound =
                             session.history_upper_bound.max(window.upper_bound);
-                        if session.history.is_none() && !session.loading_older {
-                            session.history = Some(window);
-                        }
                     }
                     Err(error) => {
                         self.session_mut(epoch).observation_error = Some(error.clone());

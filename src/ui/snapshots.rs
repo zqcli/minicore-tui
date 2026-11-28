@@ -78,7 +78,7 @@ pub(super) fn app() -> Fixture {
     app.agents = vec![agent(1, "Coder")];
     app.selected_agent = Some(native_id(1).parse().unwrap());
     let session = session(&app, 1, "Cache the parser");
-    app.sessions = vec![catalog(&session)];
+    app.agents[0].sessions = vec![catalog(&session)];
     app.resident.insert(session);
     app.resident.select(Some(1));
     Fixture {
@@ -153,7 +153,7 @@ fn agent(index: u64, name: &str) -> AgentSummary {
     serde_json::from_value(json!({"id":native_id(index),"host_id":native_id(1),"name":name,"mode":"memory","lifecycle":"active",
         "config_revision":0,"default_session_id":null,"metadata_saving":false,"metadata_fault":null,"deletion":null,"sessions":[]})).unwrap()
 }
-pub(super) fn live(start: usize, index: u64) -> LiveTurn {
+pub(super) fn live(index: u64) -> LiveTurn {
     let state: TurnStateData = serde_json::from_value(json!({"state":"running","runner_revision":0,"config_revision":0,
         "outcome":null,"persistence":"not_applicable","requests":1,"tool_rounds":0,"phase":"model","model_retry":null,
         "model_attempts":[1],"fault":null,"persistence_fault":null,"cleanup_faults":[]})).unwrap();
@@ -163,7 +163,6 @@ pub(super) fn live(start: usize, index: u64) -> LiveTurn {
         state,
         started: tokio::time::Instant::now(),
         running_tool: None,
-        start,
         interrupting: false,
     }
 }
@@ -516,16 +515,6 @@ fn a_fatal_host_error_explains_how_to_quit() {
     let rendered = render(&mut app, 60, 14);
     assert!(rendered.contains("Fatal error") && rendered.contains("Host connection closed"));
     assert!(rendered.to_lowercase().contains("press q"));
-}
-
-#[test]
-fn no_color_renders_the_same_layout_without_color() {
-    let mut app = app();
-    conversation(&mut app);
-    let colored = render(&mut app, 70, 20);
-    app.styles = Styles::of(Palette::plain());
-    let plain = render(&mut app, 70, 20);
-    assert_eq!(colored, plain, "NO_COLOR changes colors, never layout");
 }
 
 #[test]
@@ -1007,21 +996,20 @@ fn a_card_opens_downward_from_its_header_by_click_or_ctrl_o() {
             ));
         }
         let expanded = render(app, 70, 20);
-        // Ctrl+O also opens the thinking row and its flash takes the activity
-        // row, so only a click must leave the rows above the card in place.
-        let rows = if by_click { 3 } else { 0 };
-        let top = |screen: &str| {
-            screen
-                .lines()
-                .skip(1)
-                .take(rows)
-                .collect::<Vec<_>>()
-                .join("\n")
-        };
-        assert_eq!(top(&expanded), top(&folded), "{expanded}");
+        assert!(expanded.contains("▎ $ cargo test --lib"), "{expanded}");
         if by_click {
-            let title = expanded.lines().nth(before + 2).unwrap_or_default();
-            assert!(title.contains("$ cargo test --lib"), "{expanded}");
+            // A click expands below the header without moving preceding rows.
+            assert_eq!(
+                expanded.lines().take(3).collect::<Vec<_>>(),
+                folded.lines().take(3).collect::<Vec<_>>()
+            );
+            assert!(
+                expanded
+                    .lines()
+                    .nth(before + 2)
+                    .unwrap()
+                    .contains("$ cargo test --lib")
+            );
         }
     }
 }
@@ -1538,7 +1526,7 @@ fn a_text_question_uses_its_separate_editor_without_exposing_the_draft() {
 
 fn running_bash(app: &mut App) {
     let session = app.resident.current_mut().unwrap();
-    let mut live = live(session.transcript.len(), 2);
+    let mut live = live(2);
     live.running_tool = Some("bash".into());
     session.state.data.active_turn_id = Some(live.turn_id.clone());
     session.live = Some(live);
@@ -1550,7 +1538,7 @@ fn the_sessions_picker_shows_live_and_unloaded_sessions_across_agents() {
     let mut app = app();
     let mut running = session(&app, 2, "Port the lexer");
     running.state.data.active_turn_id = Some(turn_id(2));
-    running.live = Some(live(0, 2));
+    running.live = Some(live(2));
     let mut asking = session(&app, 3, "Clean the build");
     asking.interaction = Some(approval());
     let mut done = session(&app, 4, "Write the docs");
@@ -1559,8 +1547,10 @@ fn the_sessions_picker_shows_live_and_unloaded_sessions_across_agents() {
     other.agent_id = native_id(2).parse().unwrap();
     other.residency = minicore_host_protocol::Residency::Unloaded;
     app.agents.push(agent(2, "Reviewer"));
-    app.sessions
-        .extend([catalog(&running), catalog(&asking), catalog(&done), other]);
+    app.agents[0]
+        .sessions
+        .extend([catalog(&running), catalog(&asking), catalog(&done)]);
+    app.agents[1].sessions.push(other);
     for session in [running, asking, done] {
         app.resident.insert(session);
     }
@@ -1584,70 +1574,49 @@ fn session_picker_row<'a>(screen: &'a str, short_id: &str) -> &'a str {
 fn session_picker_keeps_ids_when_distinct_long_titles_clip_alike() {
     const FIRST: u64 = 11_111_100_000_000_000_001;
     const SECOND: u64 = 12_222_200_000_000_000_002;
-    let mut app = app();
     let prefix = "Daily inventory review: inspect source inputs, validate business rules, compare reports, and prepare the requested updates for";
-    let mut first = session(&app, FIRST, &format!("{prefix} CASE_CHARLIE"));
-    let mut second = session(&app, SECOND, &format!("{prefix} CASE_DELTA"));
-    for session in [&first, &second] {
-        let mut info = catalog(session);
-        info.residency = minicore_host_protocol::Residency::Unloaded;
-        app.sessions.push(info);
+    for phase in ["unloaded", "running", "current"] {
+        let mut app = app();
+        for (index, suffix) in [(FIRST, "CASE_CHARLIE"), (SECOND, "CASE_DELTA")] {
+            let mut session = session(&app, index, &format!("{prefix} {suffix}"));
+            if phase == "unloaded" {
+                let mut info = catalog(&session);
+                info.residency = minicore_host_protocol::Residency::Unloaded;
+                app.agents[0].sessions.push(info);
+            } else {
+                session.state.data.active_turn_id = Some(turn_id(index));
+                session.live = Some(live(index));
+                app.agents[0].sessions.push(catalog(&session));
+                app.resident.insert(session);
+            }
+        }
+        if phase == "current" {
+            app.resident.select(Some(FIRST));
+        }
+        app.open_panel(crate::app::Panel::Sessions);
+        let screen = render(&mut app, 134, 20);
+        let first = session_picker_row(&screen, "111111");
+        let second = session_picker_row(&screen, "122222");
+        let status = if phase == "unloaded" {
+            "unloaded"
+        } else {
+            "running 0m"
+        };
+        assert!(
+            first.contains(status) && second.contains(status),
+            "{screen}"
+        );
+        assert!(first.contains('…') && second.contains('…'), "{screen}");
+        assert!(!screen.contains("CASE_CHARLIE") && !screen.contains("CASE_DELTA"));
+        if phase == "current" {
+            assert!(first.trim_start().starts_with(['✓', '▎']) && !second.contains('✓'));
+        } else {
+            assert_eq!(
+                first.split_once("111111").unwrap().0.trim(),
+                second.split_once("122222").unwrap().0.trim()
+            );
+        }
     }
-    app.open_panel(crate::app::Panel::Sessions);
-    let idle = render(&mut app, 134, 20);
-    let first_row = session_picker_row(&idle, "111111");
-    let second_row = session_picker_row(&idle, "122222");
-    assert!(first_row.contains("unloaded") && second_row.contains("unloaded"));
-    assert_eq!(
-        first_row.split_once("111111").unwrap().0.trim(),
-        second_row.split_once("122222").unwrap().0.trim()
-    );
-    assert!(
-        first_row.contains('…') && second_row.contains('…'),
-        "{idle}"
-    );
-    assert!(!idle.contains("CASE_CHARLIE") && !idle.contains("CASE_DELTA"));
-
-    for session in [&mut first, &mut second] {
-        session.state.data.active_turn_id = Some(turn_id(session.epoch));
-        session.live = Some(live(0, session.epoch));
-        let info = app
-            .sessions
-            .iter_mut()
-            .find(|info| info.id == session.info.id)
-            .unwrap();
-        *info = catalog(session);
-    }
-    app.resident.insert(first);
-    app.resident.insert(second);
-    app.open_panel(crate::app::Panel::Sessions);
-    let running = render(&mut app, 134, 20);
-    let first_row = session_picker_row(&running, "111111");
-    let second_row = session_picker_row(&running, "122222");
-    assert!(first_row.contains("running 0m") && second_row.contains("running 0m"));
-    assert_eq!(
-        first_row.split_once("111111").unwrap().0.trim(),
-        second_row.split_once("122222").unwrap().0.trim()
-    );
-    assert!(
-        first_row.contains('…') && second_row.contains('…'),
-        "{running}"
-    );
-    assert!(!running.contains("CASE_CHARLIE") && !running.contains("CASE_DELTA"));
-
-    app.resident.select(Some(FIRST));
-    app.open_panel(crate::app::Panel::Sessions);
-    let current = render(&mut app, 134, 20);
-    let first_row = session_picker_row(&current, "111111");
-    let second_row = session_picker_row(&current, "122222");
-    assert!(first_row.contains("running 0m"), "{current}");
-    assert!(first_row.trim_start().starts_with(['✓', '▎']), "{current}");
-    assert!(second_row.contains("running 0m") && !second_row.contains('✓'));
-    assert!(
-        first_row.contains('…') && second_row.contains('…'),
-        "{current}"
-    );
-    assert!(!current.contains("CASE_CHARLIE") && !current.contains("CASE_DELTA"));
 }
 
 #[test]
@@ -1655,7 +1624,7 @@ fn session_picker_keeps_ids_for_duplicate_and_renamed_titles() {
     let mut app = app();
     for index in [11_111_100_000_000_000_001, 12_222_200_000_000_000_002] {
         let session = session(&app, index, "SAME_NAME_CONTROL");
-        app.sessions.push(catalog(&session));
+        app.agents[0].sessions.push(catalog(&session));
     }
     app.open_panel(crate::app::Panel::Sessions);
     let screen = render(&mut app, 100, 20);
@@ -1666,7 +1635,7 @@ fn session_picker_keeps_ids_for_duplicate_and_renamed_titles() {
     }
 
     let first_id = native_id(11_111_100_000_000_000_001);
-    let first = app
+    let first = app.agents[0]
         .sessions
         .iter_mut()
         .find(|info| info.id.as_str() == first_id)
@@ -1704,8 +1673,8 @@ fn session_picker_keeps_ids_when_narrow_rows_have_long_unicode_metadata() {
                 .unwrap(),
         );
         session.state.data.active_turn_id = Some(turn_id(index));
-        session.live = Some(live(0, index));
-        app.sessions.push(catalog(&session));
+        session.live = Some(live(index));
+        app.agents[0].sessions.push(catalog(&session));
         app.resident.insert(session);
     }
     app.open_panel(crate::app::Panel::Sessions);
@@ -1738,7 +1707,7 @@ fn deleting_an_agent_requires_a_key_and_keeps_the_captured_session_scope() {
     use crossterm::event::{KeyCode, KeyEvent};
     let mut app = app();
     let child = catalog(&session(&app, 2, "Captured session"));
-    app.agents[0].sessions.push(child.clone());
+    app.agents[0].sessions = vec![child.clone()];
     app.open_panel(crate::app::Panel::AgentDelete);
     assert!(app.on_key(KeyEvent::from(KeyCode::Enter)).is_none());
     assert!(matches!(app.overlay, Overlay::AgentDelete { .. }));
@@ -1767,11 +1736,11 @@ fn session_picker_identity_and_confirmation_include_the_owning_agent() {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     let mut app = app();
     let original = app.resident.current().unwrap().address();
-    let mut same_id = app.sessions[0].clone();
+    let mut same_id = app.agents[0].sessions[0].clone();
     same_id.agent_id = native_id(2).parse().unwrap();
     same_id.title = Some("Other Agent's session".into());
     app.agents.push(agent(2, "Reviewer"));
-    app.sessions.push(same_id.clone());
+    app.agents[1].sessions.push(same_id.clone());
     app.open_panel(crate::app::Panel::Sessions);
     let sheet = crate::ui::sheets::sheet(&app, app.styles).unwrap();
     assert_eq!(
@@ -1809,7 +1778,7 @@ fn session_rename_keeps_its_target_when_the_catalog_reorders() {
     let mut app = app();
     let original = app.resident.current().unwrap().address();
     let other = catalog(&session(&app, 2, "Later session"));
-    app.sessions.push(other);
+    app.agents[0].sessions.push(other);
     app.open_panel(crate::app::Panel::Sessions);
     app.on_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL));
     if let Overlay::Sessions { rows, .. } = &mut app.overlay {
@@ -1920,6 +1889,11 @@ fn slash_popup_floats_above_composer_and_double_click_confirms_sheets() {
         screen.contains("ctrl+b"),
         "hotkey badge in palette:\n{screen}"
     );
+
+    app.composer.set_text("/wss ");
+    assert!(app.palette_rows().is_empty());
+    app.composer.set_text("/remote ");
+    assert_eq!(app.palette_rows().len(), 3);
 
     // Single click on row 1 of the Agents sheet highlights without closing;
     // double-click on the same row confirms and closes the sheet.

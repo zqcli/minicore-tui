@@ -34,7 +34,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use minicore_host_core::{
-    AgentSummary, ModelDescription, ObservationEvent, SessionSnapshot, SessionSummary, StateEvent,
+    AgentSummary, ModelDescription, ObservationEvent, SessionSnapshot, StateEvent,
 };
 use minicore_host_protocol::*;
 use minicore_host_transport::HostClient;
@@ -88,7 +88,6 @@ pub enum Msg {
     Catalogs(Result<Ready, String>),
     RefreshCatalogs(Result<(), String>),
     SessionRenamed(SessionRef, Result<(), String>),
-    HostState(Box<StateEvent>),
     HostObserved(Box<ObservationEvent>),
     HostBaseline(SubscribeResult<StateEvent>),
     HostObservationError(String),
@@ -121,7 +120,6 @@ pub enum Msg {
 pub struct Ready {
     pub models: Vec<ModelDescription>,
     pub agents: Vec<AgentSummary>,
-    pub sessions: Vec<SessionSummary>,
     pub selected_agent: Option<AgentId>,
 }
 
@@ -188,7 +186,6 @@ pub struct App {
     pub resident: resident::Sessions,
     pub draft_text: String,
     pub ring: bool,
-    pub sessions: Vec<SessionSummary>,
     pub agents: Vec<AgentSummary>,
     pub selected_agent: Option<AgentId>,
     pub(super) catalog_loading: bool,
@@ -268,7 +265,6 @@ impl App {
             resident: resident::Sessions::default(),
             draft_text: String::new(),
             ring: false,
-            sessions: Vec::new(),
             agents: Vec::new(),
             selected_agent: None,
             catalog_loading: false,
@@ -360,7 +356,6 @@ impl App {
                 }
                 self.refresh_catalogs();
             }
-            Msg::HostState(state) => self.on_host_state(*state),
             Msg::HostObserved(event) => self.host_observed(*event),
             Msg::HostBaseline(baseline) => self.host_baseline(baseline),
             Msg::HostObservationError(error) => self.agent_observation_error(error),
@@ -537,7 +532,6 @@ impl App {
     fn install_catalogs(&mut self, ready: Ready) {
         self.models = ready.models;
         self.agents = ready.agents;
-        self.sessions = ready.sessions;
         if self
             .selected_agent
             .as_ref()
@@ -557,13 +551,15 @@ impl App {
         for snapshot in observed {
             self.project_catalog_state(&snapshot);
         }
-        if let Overlay::Sessions { rows, .. } = &mut self.overlay {
-            *rows = self
-                .sessions
-                .iter()
-                .filter(|info| info.delegated_by.is_none())
-                .cloned()
+        if matches!(self.overlay, Overlay::Sessions { .. }) {
+            let order = self
+                .session_order()
+                .into_iter()
+                .map(overlay::session_target)
                 .collect();
+            if let Overlay::Sessions { rows, .. } = &mut self.overlay {
+                *rows = order;
+            }
         }
         self.refresh_agent_names();
     }
