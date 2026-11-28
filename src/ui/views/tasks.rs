@@ -367,7 +367,6 @@ pub fn render(frame: &mut Frame, area: Rect, styles: Styles, app: &mut App) {
         show_reasoning: app.show_reasoning,
     };
     let elapsed = app.started.elapsed();
-    let show_scrollbar = app.scrollbar_shown();
 
     // Prefer the real live resident child Session so Working/Worked, tool cards,
     // follow-up turns and full history render identically to the main conversation.
@@ -385,19 +384,16 @@ pub fn render(frame: &mut Frame, area: Rect, styles: Styles, app: &mut App) {
             );
             return;
         }
-        crate::ui::transcript::draw_embedded(
-            frame,
-            transcript_area,
-            styles,
+        crate::ui::transcript::Pane {
             transcript,
-            &mut app.task_inspector.layout,
-            &mut app.task_inspector.scroll,
-            &mut app.selection,
-            app.task_inspector.held,
+            layout: &mut app.task_inspector.layout,
+            scroll: &mut app.task_inspector.scroll,
+            selection: &mut app.selection,
+            held: app.task_inspector.held,
             fold,
             elapsed,
-            show_scrollbar,
-        );
+        }
+        .draw_embedded(frame, transcript_area, styles);
         return;
     }
 
@@ -425,19 +421,16 @@ pub fn render(frame: &mut Frame, area: Rect, styles: Styles, app: &mut App) {
             })
     {
         if !card.transcript.blocks().is_empty() {
-            crate::ui::transcript::draw_embedded(
-                frame,
-                transcript_area,
-                styles,
-                &card.transcript,
-                &mut app.task_inspector.layout,
-                &mut app.task_inspector.scroll,
-                &mut app.selection,
-                app.task_inspector.held,
+            crate::ui::transcript::Pane {
+                transcript: &card.transcript,
+                layout: &mut app.task_inspector.layout,
+                scroll: &mut app.task_inspector.scroll,
+                selection: &mut app.selection,
+                held: app.task_inspector.held,
                 fold,
                 elapsed,
-                show_scrollbar,
-            );
+            }
+            .draw_embedded(frame, transcript_area, styles);
             return;
         }
         let lines = crate::ui::agent_cards::detail_lines(

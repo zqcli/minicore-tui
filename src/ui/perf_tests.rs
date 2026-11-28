@@ -341,3 +341,42 @@ fn busy_frame() {
         .collect();
     report("event frame", &mut events);
 }
+
+/// Live regrouping is the production route into an expanded Working block.
+#[test]
+#[ignore]
+fn grouped_stream() {
+    let text = long_answer();
+    for preceding_tool in [false, true] {
+        let mut bench = Bench::new();
+        bench.app.tools_expanded = true;
+        bench.transcript().push(user(90000));
+        if preceding_tool {
+            bench.transcript().push(tool(90000));
+        }
+        let key = RequestKey::response(turn_id(90000), 1);
+        let mut frames = Vec::new();
+        let mut updates = Vec::new();
+        for delta in text.as_bytes().chunks(text.len().div_ceil(200)) {
+            let started = Instant::now();
+            if let Block::Assistant { text, .. } = bench.transcript().assistant_mut(&key) {
+                text.push_str(std::str::from_utf8(delta).expect("ascii"));
+            }
+            bench.transcript().regroup(&turn_id(90000));
+            frames.push(bench.draw());
+            updates.push(started.elapsed());
+        }
+        println!(
+            "expanded Working, preceding_tool={preceding_tool}, {} bytes, {} deltas",
+            text.len(),
+            frames.len()
+        );
+        println!(
+            "draw first 5 {:.0}us, last 5 {:.0}us",
+            mean_micros(&frames[..5]),
+            mean_micros(&frames[frames.len() - 5..])
+        );
+        report("draw", &mut frames);
+        report("update + regroup + draw", &mut updates);
+    }
+}

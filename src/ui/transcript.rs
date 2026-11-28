@@ -36,8 +36,20 @@ pub struct RenderState {
 }
 
 struct Stream {
+    width: u16,
     text: StreamRenderer,
     reasoning: StreamRenderer,
+}
+
+impl Stream {
+    fn new(width: u16, inset: usize, styles: Styles) -> Self {
+        let inner = blocks::text_width(width as usize);
+        Self {
+            width,
+            text: StreamRenderer::new(inner, styles.text()).inset(blocks::INSET + inset),
+            reasoning: StreamRenderer::new(inner, blocks::thinking_style(styles)),
+        }
+    }
 }
 
 impl RenderState {
@@ -54,29 +66,44 @@ impl RenderState {
         });
     }
 
-    fn render(&mut self, block: &Block, (width, fold, styles): (u16, Fold, Styles)) -> Rows {
+    fn render(
+        &mut self,
+        block: &Block,
+        grouping: &Grouping,
+        (width, fold, styles): (u16, Fold, Styles),
+    ) -> Rows {
+        let inset = match grouping {
+            Grouping::None => 0,
+            Grouping::Head { open, .. } | Grouping::Member { open, .. }
+                if *open || fold.expanded =>
+            {
+                blocks::GROUP_INDENT
+            }
+            _ => return blocks::render_with(block, grouping, styles, width, fold).into(),
+        };
+        let inner = width.saturating_sub(inset as u16);
         let Block::Assistant {
             key,
             reasoning,
             text,
             streaming: true,
             expanded,
+            partial,
             ..
         } = block
         else {
-            return blocks::render(block, styles, width, fold).into();
+            return blocks::render_with(block, grouping, styles, width, fold).into();
         };
-        if (width as usize) < blocks::MIN_WIDTH
-            && reasoning.trim().is_empty()
-            && text.trim().is_empty()
-        {
-            return blocks::render(block, styles, width, fold).into();
+        if (inner as usize) < blocks::MIN_WIDTH || *partial {
+            return blocks::render_with(block, grouping, styles, width, fold).into();
         }
-        let inner = blocks::text_width(width as usize);
-        let stream = self.streams.entry(key.clone()).or_insert_with(|| Stream {
-            text: StreamRenderer::new(inner, styles.text()).inset(blocks::INSET),
-            reasoning: StreamRenderer::new(inner, blocks::thinking_style(styles)),
-        });
+        let stream = self
+            .streams
+            .entry(key.clone())
+            .or_insert_with(|| Stream::new(inner, inset, styles));
+        if stream.width != inner {
+            *stream = Stream::new(inner, inset, styles);
+        }
         stream.text.reset(text);
         stream.reasoning.reset(&blocks::reasoning_source(reasoning));
         let thinking: Vec<&Line<'static>> = stream
@@ -90,15 +117,32 @@ impl RenderState {
             expanded.unwrap_or(fold.expanded),
             fold.show_reasoning,
             styles,
-            width as usize,
+            inner as usize,
         );
         let reply = stream.text.rows(&styles);
         if !head.is_empty() && !reply.is_empty() {
             head.push(Line::default());
         }
-        let mut rows = Rows::from(head);
+        let mut rows = Rows::from(
+            head.into_iter()
+                .map(|line| {
+                    if inset == 0 {
+                        line
+                    } else {
+                        super::rails::indent(line, inset)
+                    }
+                })
+                .collect::<Vec<_>>(),
+        );
         for chunk in reply {
             rows.push(chunk.clone());
+        }
+        if let Grouping::Head { summary, .. } = grouping {
+            let mut header = vec![blocks::group_row(summary, true, styles, width.into())];
+            if rows.iter_from(0).next().is_some() {
+                header.push(super::rails::chrome(Line::default()));
+            }
+            rows.prepend(header);
         }
         rows
     }
@@ -157,251 +201,195 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, styles: Styles) {
         frame.render_widget(Paragraph::new(lines), area);
         return;
     };
-    // Block renderers subtract their inset from the width.
-    let width = area.width.max(blocks::INSET as u16 + 1);
-    let fold = Fold {
-        expanded: app.tools_expanded,
-        show_reasoning: app.show_reasoning,
+    let scrollbar = app
+        .scrollbar_shown()
+        .then_some(if app.scrollbar_grab.is_some() {
+            "█"
+        } else {
+            "┃"
+        });
+    let find = match &app.overlay {
+        Overlay::Find { query, .. } => Some(query.as_str()),
+        _ => None,
     };
-    let key = (width, fold, styles);
-    let layout = &mut app.layout;
-    let blocks = session.transcript.blocks();
-    layout.state.prepare((width, styles), blocks);
-    // The header rides in front of block 0, so it scrolls and anchors with the
-    // transcript without being a block.
-    let transcript = &session.transcript;
-    let mut render = |state: &mut RenderState, index: usize, block: &Block| {
-        let mut rows = match transcript.grouping(index) {
-            // Drawn inside the Agent card it belongs to.
-            _ if transcript.absorbed(index) => Vec::new().into(),
-            Grouping::None => state.render(block, key),
-            // Steps are finished blocks; they need no streaming state.
-            grouping => blocks::render_with(block, grouping, styles, width, fold).into(),
-        };
-        if index == 0 {
-            let header = welcome();
-            state.header_rows = header.len();
-            rows.prepend(header);
-        }
-        rows
-    };
-    layout.prepare(
-        blocks,
-        session.transcript.revisions(),
-        |index| !matches!(transcript.grouping(index), Grouping::None),
-        width,
-        fold,
-        &mut render,
-    );
-    let height = area.height as usize;
-    // The dock grows and shrinks under an anchored view; its bottom row stays
-    // put, so the tail the user is reading is never covered.
-    let drawn = layout.viewport.height;
-    if let Scroll::Anchor { block, offset } = app.scroll
-        && drawn > 0
-        && drawn != height
-    {
-        let bottom = (layout.anchor_row(block, offset) + drawn).min(layout.total_rows());
-        let (block, offset) = layout.anchor(bottom.saturating_sub(height));
-        app.scroll = Scroll::Anchor { block, offset };
+    Pane {
+        transcript: &session.transcript,
+        layout: &mut app.layout,
+        scroll: &mut app.scroll,
+        selection: &mut app.selection,
+        held: app.held,
+        fold: Fold {
+            expanded: app.tools_expanded,
+            show_reasoning: app.show_reasoning,
+        },
+        elapsed: app.started.elapsed(),
     }
-    let scroll = app.scroll;
-    let held = app.held;
-    let resolve = |layout: &Layout<RenderState>| {
-        let max_top = layout.total_rows().saturating_sub(height);
-        match scroll {
-            Scroll::Follow => max_top,
-            // A fold keeps the row it was clicked at, even if the shorter
-            // transcript then leaves blank rows below; scrolling ends that.
-            Scroll::Anchor { block, offset } if held => layout
-                .anchor_row(block, offset)
-                .min(layout.total_rows().saturating_sub(1)),
-            // An anchor is resolved against the current layout, so content
-            // growing below it does not move the view; shrinking cannot blank it.
-            Scroll::Anchor { block, offset } => layout.anchor_row(block, offset).min(max_top),
-        }
-    };
-    let mut top = resolve(layout);
-    while layout.settle(blocks, top, height, &mut render) {
-        top = resolve(layout);
-    }
-    let total = layout.total_rows();
-    // An anchor a shrink pushed to the end follows again, as in `scroll_to`.
-    if matches!(app.scroll, Scroll::Anchor { .. }) && !held && top == total.saturating_sub(height) {
-        app.scroll = Scroll::Follow;
-    }
-    // A selection marks screen cells, so it means nothing once the rows move.
-    if top != layout.viewport.top {
-        app.selection = None;
-    }
-    layout.viewport = Viewport {
-        top,
-        height,
-        width: area.width,
-        origin: (area.x, area.y),
-    };
-    let mut rows: Vec<Cow<Line>> = if blocks.is_empty() {
-        let header = welcome();
-        layout.state.header_rows = header.len();
-        header.into_iter().map(Cow::Owned).collect()
-    } else {
-        layout
-            .visible(top, height)
-            .into_iter()
-            .map(Cow::Borrowed)
-            .collect()
-    };
-    if !blocks.is_empty() {
-        animate_thinking(&mut rows, transcript, layout, fold, app.started.elapsed());
-    }
-    highlight_selection(&mut rows, area, app.selection);
-    if let Overlay::Find { query, .. } = &app.overlay {
-        let style = styles.amber().add_modifier(Modifier::REVERSED);
-        for row in &mut rows {
-            if let Some(marked) = find::mark(row, query, style) {
-                *row = Cow::Owned(marked);
-            }
-        }
-    }
-    let buffer = frame.buffer_mut();
-    for (y, row) in (area.y..area.bottom()).zip(&rows) {
-        let area = Rect {
-            y,
-            height: 1,
-            ..area
-        };
-        super::put_line(buffer, area, row);
-    }
-    if top + height < total && area.height > 0 {
-        draw_jump_label(buffer, area, styles);
-    }
-    if app.scrollbar_shown()
-        && let Some((start, len)) = thumb(height, total, top)
-    {
-        let glyph = match app.scrollbar_grab {
-            Some(_) => "█",
-            None => "┃",
-        };
-        for row in 0..height {
-            let cell = &mut buffer[(area.right() - 1, area.y + row as u16)];
-            match (start..start + len).contains(&row) {
-                true => cell.set_symbol(glyph).set_style(styles.text()),
-                false => cell.set_symbol("│").set_style(styles.faint()),
-            };
-        }
-    }
+    .draw(frame, area, styles, Some(&welcome), find, scrollbar);
 }
 
-/// Draws any `Transcript` (such as a child Session inside `Ctrl+B`) using the
-/// exact same incremental layout cache, `Working`/`Worked` folding, live
-/// thinking spinner, scrollbar and jump pill as the main conversation.
-#[allow(clippy::too_many_arguments)]
-pub fn draw_embedded(
-    frame: &mut Frame,
-    area: Rect,
-    styles: Styles,
-    transcript: &Transcript,
-    layout: &mut Layout<RenderState>,
-    scroll: &mut Scroll,
-    selection: &mut Option<selection::Drag>,
-    held: bool,
-    fold: Fold,
-    elapsed: std::time::Duration,
-    show_scrollbar: bool,
-) {
-    if area.is_empty() {
-        return;
-    }
-    let width = area.width.max(blocks::INSET as u16 + 1);
-    let key = (width, fold, styles);
-    let blocks = transcript.blocks();
-    layout.state.prepare((width, styles), blocks);
-    layout.state.header_rows = 0;
-    let mut render =
-        |state: &mut RenderState, index: usize, block: &Block| match transcript.grouping(index) {
-            _ if transcript.absorbed(index) => Vec::new().into(),
-            Grouping::None => state.render(block, key),
-            grouping => blocks::render_with(block, grouping, styles, width, fold).into(),
-        };
-    layout.prepare(
-        blocks,
-        transcript.revisions(),
-        |index| !matches!(transcript.grouping(index), Grouping::None),
-        width,
-        fold,
-        &mut render,
-    );
-    let height = area.height as usize;
-    let drawn = layout.viewport.height;
-    if let Scroll::Anchor { block, offset } = *scroll
-        && drawn > 0
-        && drawn != height
-    {
-        let bottom = (layout.anchor_row(block, offset) + drawn).min(layout.total_rows());
-        let (block, offset) = layout.anchor(bottom.saturating_sub(height));
-        *scroll = Scroll::Anchor { block, offset };
-    }
-    let current_scroll = *scroll;
-    let resolve = |layout: &Layout<RenderState>| {
-        let max_top = layout.total_rows().saturating_sub(height);
-        match current_scroll {
-            Scroll::Follow => max_top,
-            Scroll::Anchor { block, offset } if held => layout
-                .anchor_row(block, offset)
-                .min(layout.total_rows().saturating_sub(1)),
-            Scroll::Anchor { block, offset } => layout.anchor_row(block, offset).min(max_top),
+pub(super) struct Pane<'a> {
+    pub transcript: &'a Transcript,
+    pub layout: &'a mut Layout<RenderState>,
+    pub scroll: &'a mut Scroll,
+    pub selection: &'a mut Option<selection::Drag>,
+    pub held: bool,
+    pub fold: Fold,
+    pub elapsed: std::time::Duration,
+}
+
+impl Pane<'_> {
+    /// A child conversation has no welcome header or Find highlights; its
+    /// scrollbar stays visible and resizing clears its screen-cell selection.
+    pub(super) fn draw_embedded(self, frame: &mut Frame, area: Rect, styles: Styles) {
+        if !area.is_empty() {
+            self.draw(frame, area, styles, None, None, Some("┃"));
         }
-    };
-    let mut top = resolve(layout);
-    while layout.settle(blocks, top, height, &mut render) {
-        top = resolve(layout);
     }
-    let total = layout.total_rows();
-    if matches!(*scroll, Scroll::Anchor { .. }) && !held && top == total.saturating_sub(height) {
-        *scroll = Scroll::Follow;
-    }
-    if top != layout.viewport.top || area != layout.viewport.area() {
-        *selection = None;
-    }
-    layout.viewport = Viewport {
-        top,
-        height,
-        width: area.width,
-        origin: (area.x, area.y),
-    };
-    let mut rows: Vec<Cow<Line>> = layout
-        .visible(top, height)
-        .into_iter()
-        .map(Cow::Borrowed)
-        .collect();
-    if !blocks.is_empty() {
-        animate_thinking(&mut rows, transcript, layout, fold, elapsed);
-    }
-    highlight_selection(&mut rows, area, *selection);
-    let buffer = frame.buffer_mut();
-    for (y, row) in (area.y..area.bottom()).zip(&rows) {
-        super::put_line(
-            buffer,
-            Rect {
+
+    fn draw(
+        self,
+        frame: &mut Frame,
+        area: Rect,
+        styles: Styles,
+        welcome: Option<&dyn Fn() -> Vec<Line<'static>>>,
+        find: Option<&str>,
+        scrollbar: Option<&str>,
+    ) {
+        let Self {
+            transcript,
+            layout,
+            scroll,
+            selection,
+            held,
+            fold,
+            elapsed,
+        } = self;
+        let width = area.width.max(blocks::INSET as u16 + 1);
+        let key = (width, fold, styles);
+        let blocks = transcript.blocks();
+        layout.state.prepare((width, styles), blocks);
+        if welcome.is_none() {
+            layout.state.header_rows = 0;
+        }
+        // The header rides in front of block 0, so it scrolls and anchors with the
+        // transcript without being a block.
+        let mut render = |state: &mut RenderState, index: usize, block: &Block| {
+            let mut rows = if transcript.absorbed(index) {
+                Rows::default()
+            } else {
+                state.render(block, transcript.grouping(index), key)
+            };
+            if index == 0
+                && let Some(welcome) = welcome
+            {
+                let header = welcome();
+                state.header_rows = header.len();
+                rows.prepend(header);
+            }
+            rows
+        };
+        layout.prepare(
+            blocks,
+            transcript.revisions(),
+            |index| !matches!(transcript.grouping(index), Grouping::None),
+            width,
+            fold,
+            &mut render,
+        );
+        let height = area.height as usize;
+        // The dock grows and shrinks under an anchored view; its bottom row stays
+        // put, so the tail the user is reading is never covered.
+        let drawn = layout.viewport.height;
+        if let Scroll::Anchor { block, offset } = *scroll
+            && drawn > 0
+            && drawn != height
+        {
+            let bottom = (layout.anchor_row(block, offset) + drawn).min(layout.total_rows());
+            let (block, offset) = layout.anchor(bottom.saturating_sub(height));
+            *scroll = Scroll::Anchor { block, offset };
+        }
+        let current_scroll = *scroll;
+        let resolve = |layout: &Layout<RenderState>| {
+            let max_top = layout.total_rows().saturating_sub(height);
+            match current_scroll {
+                Scroll::Follow => max_top,
+                // A fold keeps the row it was clicked at, even if the shorter
+                // transcript then leaves blank rows below; scrolling ends that.
+                Scroll::Anchor { block, offset } if held => layout
+                    .anchor_row(block, offset)
+                    .min(layout.total_rows().saturating_sub(1)),
+                // An anchor is resolved against the current layout, so content
+                // growing below it does not move the view; shrinking cannot blank it.
+                Scroll::Anchor { block, offset } => layout.anchor_row(block, offset).min(max_top),
+            }
+        };
+        let mut top = resolve(layout);
+        while layout.settle(blocks, top, height, &mut render) {
+            top = resolve(layout);
+        }
+        let total = layout.total_rows();
+        // An anchor a shrink pushed to the end follows again, as in `scroll_to`.
+        if matches!(*scroll, Scroll::Anchor { .. }) && !held && top == total.saturating_sub(height)
+        {
+            *scroll = Scroll::Follow;
+        }
+        // A selection marks screen cells, so it means nothing once the rows move.
+        if top != layout.viewport.top || (welcome.is_none() && area != layout.viewport.area()) {
+            *selection = None;
+        }
+        layout.viewport = Viewport {
+            top,
+            height,
+            width: area.width,
+            origin: (area.x, area.y),
+        };
+        let mut rows: Vec<Cow<Line>> = if blocks.is_empty()
+            && let Some(welcome) = welcome
+        {
+            let header = welcome();
+            layout.state.header_rows = header.len();
+            header.into_iter().map(Cow::Owned).collect()
+        } else {
+            layout
+                .visible(top, height)
+                .into_iter()
+                .map(Cow::Borrowed)
+                .collect()
+        };
+        if !blocks.is_empty() {
+            animate_thinking(&mut rows, transcript, layout, fold, elapsed);
+        }
+        highlight_selection(&mut rows, area, *selection);
+        if let Some(query) = find {
+            let style = styles.amber().add_modifier(Modifier::REVERSED);
+            for row in &mut rows {
+                if let Some(marked) = find::mark(row, query, style) {
+                    *row = Cow::Owned(marked);
+                }
+            }
+        }
+        let buffer = frame.buffer_mut();
+        for (y, row) in (area.y..area.bottom()).zip(&rows) {
+            let area = Rect {
                 y,
                 height: 1,
                 ..area
-            },
-            row,
-        );
-    }
-    if top + height < total && area.height > 0 {
-        draw_jump_label(buffer, area, styles);
-    }
-    if (show_scrollbar || top + height < total || top > 0)
-        && let Some((start, len)) = thumb(height, total, top)
-    {
-        for row in 0..height {
-            let cell = &mut buffer[(area.right() - 1, area.y + row as u16)];
-            match (start..start + len).contains(&row) {
-                true => cell.set_symbol("┃").set_style(styles.text()),
-                false => cell.set_symbol("│").set_style(styles.faint()),
             };
+            super::put_line(buffer, area, row);
+        }
+        if top + height < total && area.height > 0 {
+            draw_jump_label(buffer, area, styles);
+        }
+        if let Some(glyph) = scrollbar
+            && let Some((start, len)) = thumb(height, total, top)
+        {
+            for row in 0..height {
+                let cell = &mut buffer[(area.right() - 1, area.y + row as u16)];
+                match (start..start + len).contains(&row) {
+                    true => cell.set_symbol(glyph).set_style(styles.text()),
+                    false => cell.set_symbol("│").set_style(styles.faint()),
+                };
+            }
         }
     }
 }
@@ -668,11 +656,8 @@ mod tests {
         let styles = Styles::of(Palette::dark());
         let blocks = transcript.blocks();
         layout.state.prepare((width, styles), blocks);
-        let mut render = |state: &mut RenderState, index: usize, block: &Block| match transcript
-            .grouping(index)
-        {
-            Grouping::None => state.render(block, (width, fold, styles)),
-            grouping => blocks::render_with(block, grouping, styles, width, fold).into(),
+        let mut render = |state: &mut RenderState, index: usize, block: &Block| {
+            state.render(block, transcript.grouping(index), (width, fold, styles))
         };
         layout.prepare(
             blocks,
@@ -704,7 +689,8 @@ mod tests {
                 for streaming in [true, false] {
                     let block = assistant(0, blank, blank, streaming);
                     let mut state = RenderState::default();
-                    let rows = state.render(&block, (width, Fold::default(), styles));
+                    let rows =
+                        state.render(&block, &Grouping::None, (width, Fold::default(), styles));
                     assert_eq!(
                         rows.iter_from(0).count(),
                         0,
@@ -886,10 +872,10 @@ mod tests {
         let second = live(1, "beta");
         let mut state = RenderState::default();
         state.prepare((key.0, key.2), &[first.clone(), second.clone()]);
-        state.render(&first, key);
-        state.render(&second, key);
+        state.render(&first, &Grouping::None, key);
+        state.render(&second, &Grouping::None, key);
         state.prepare((key.0, key.2), std::slice::from_ref(&second));
-        let rendered = state.render(&second, key);
+        let rendered = state.render(&second, &Grouping::None, key);
         let rows: Vec<String> = rendered.iter_from(0).map(Line::to_string).collect();
         let want: Vec<String> = blocks::render(&second, key.2, 60, fold)
             .iter()
@@ -914,31 +900,57 @@ mod tests {
             expanded: None,
         };
         let styles = Styles::of(Palette::dark());
-        let width = 60;
-        let mut state = RenderState::default();
-        state.prepare((width, styles), std::slice::from_ref(&block));
-        state.render(&block, (width, Fold::default(), styles));
-        let stream = state.streams.get_mut(&request).unwrap();
-        let reply = stream.text.rows(&styles)[0].clone();
-        let reasoning = stream.reasoning.rows(&styles)[0].clone();
-        for (expanded, show_reasoning) in
-            [(true, true), (false, true), (false, false), (true, false)]
-        {
-            let fold = Fold {
-                expanded,
-                show_reasoning,
-            };
-            state.prepare((width, styles), std::slice::from_ref(&block));
-            let rendered = state.render(&block, (width, fold, styles));
-            let expected = blocks::render(&block, styles, width, fold);
-            assert_eq!(
-                rendered.iter_from(0).collect::<Vec<_>>(),
-                expected.iter().collect::<Vec<_>>(),
-                "fold {fold:?}"
-            );
-            let stream = state.streams.get_mut(&request).unwrap();
-            assert!(Arc::ptr_eq(&reply, &stream.text.rows(&styles)[0]));
-            assert!(Arc::ptr_eq(&reasoning, &stream.reasoning.rows(&styles)[0]));
+        for shape in 0..3 {
+            let mut transcript = Transcript::default();
+            if shape == 2 {
+                transcript.push(Transcript::from_history(&tool_history()).blocks()[1].clone());
+            }
+            transcript.push(block.clone());
+            let index = transcript.len() - 1;
+            if shape != 0 {
+                transcript.regroup(request.turn_id().unwrap());
+            }
+            let block = &transcript.blocks()[index];
+            let grouping = transcript.grouping(index);
+            for width in [8, 24, 60] {
+                let mut state = RenderState::default();
+                state.prepare((width, styles), transcript.blocks());
+                // The first delta can turn an ungrouped response into a member.
+                state.render(block, &Grouping::None, (width, Fold::default(), styles));
+                let mut prefix = None;
+                for (expanded, show_reasoning) in
+                    [(true, true), (false, true), (false, false), (true, false)]
+                {
+                    let fold = Fold {
+                        expanded,
+                        show_reasoning,
+                    };
+                    let rendered = state.render(block, grouping, (width, fold, styles));
+                    let expected = blocks::render_with(block, grouping, styles, width, fold);
+                    assert_eq!(
+                        rendered.iter_from(0).collect::<Vec<_>>(),
+                        expected.iter().collect::<Vec<_>>(),
+                        "shape {shape}, width {width}, fold {fold:?}"
+                    );
+                    if let Some(stream) = state.streams.get_mut(&request) {
+                        let current = (
+                            stream.text.rows(&styles)[0].clone(),
+                            stream.reasoning.rows(&styles)[0].clone(),
+                        );
+                        if let Some((reply, reasoning)) = &prefix {
+                            assert!(Arc::ptr_eq(reply, &current.0));
+                            assert!(Arc::ptr_eq(reasoning, &current.1));
+                        }
+                        prefix = Some(current);
+                    }
+                }
+                if width >= 24 {
+                    assert!(
+                        prefix.is_some(),
+                        "grouped assistants must use the stream cache"
+                    );
+                }
+            }
         }
     }
 

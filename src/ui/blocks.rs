@@ -161,11 +161,11 @@ fn member(block: &Block, styles: Styles, width: u16, fold: Fold) -> Vec<Line<'st
 }
 
 /// How far an open group's steps sit in from its summary row.
-const GROUP_INDENT: usize = 2;
+pub(super) const GROUP_INDENT: usize = 2;
 
 /// `▸ Worked 2m 14s · 18 tools · 3 files changed (+142 −37) · 1 failed`, or
 /// `▸ Working · 6 tools` while the run goes on.
-fn group_row(summary: &GroupSummary, open: bool, styles: Styles, width: usize) -> Line<'static> {
+pub(super) fn group_row(summary: &GroupSummary, open: bool, styles: Styles, width: usize) -> Line<'static> {
     let mut parts = vec![match summary.duration {
         _ if summary.live => "Working".to_owned(),
         Some(duration) => format!("Worked {}", format_duration(duration)),
@@ -581,7 +581,7 @@ pub(super) fn tool(
     let row =
         |spans: Vec<Span<'static>>| indent(surface_row(rail, surface, spans, card_width), INSET);
     let inner = text_width(card_width);
-    let body = card_body(call, true);
+    let body = card_body(call);
     // A bash call can take seconds to print anything; say it is alive.
     let waiting = call.is_running() && body.lines.is_empty() && body.hidden == 0;
     let running_row = || chrome(row(padded(vec![Span::styled("running…", styles.meta())])));
@@ -782,7 +782,7 @@ const LIVE_ROWS: usize = 3;
 fn tool_header_row(call: &ToolCall, styles: Styles, width: usize) -> Line<'static> {
     let (glyph, glyph_style) = tool_glyph(call, styles);
     let subject = one_line(call.header_detail().trim_start_matches("$ "));
-    let mut right = meta(call, styles, true);
+    let mut right = meta(call, styles);
     if call.state == ToolState::Succeeded
         && call.line_changes().is_none()
         && let Some(lines) = call.output_lines.filter(|lines| *lines > 0)
@@ -897,10 +897,10 @@ fn expanded_title(call: &ToolCall) -> String {
 /// What a card adds right of its title: completed duration, an unusual end, a
 /// failing exit code and the size of a change. Running cards have no spinner or
 /// timer. An expanded `bash` card puts duration and exit code in its footer.
-fn meta(call: &ToolCall, styles: Styles, facts: bool) -> Vec<Span<'static>> {
+fn meta(call: &ToolCall, styles: Styles) -> Vec<Span<'static>> {
     let mut items: Vec<Vec<Span<'static>>> = Vec::new();
     // "0.0s" says nothing, so instant tools show no time.
-    if facts && let Some(duration) = call.duration.filter(|d| d.as_millis() >= 50) {
+    if let Some(duration) = call.duration.filter(|d| d.as_millis() >= 50) {
         items.push(vec![Span::styled(format_duration(duration), styles.meta())]);
     }
     match call.state {
@@ -911,7 +911,7 @@ fn meta(call: &ToolCall, styles: Styles, facts: bool) -> Vec<Span<'static>> {
         }
         _ => {}
     }
-    if facts && let Some(code) = call.exit_code.filter(|code| *code != 0) {
+    if let Some(code) = call.exit_code.filter(|code| *code != 0) {
         items.push(vec![Span::styled(format!("exit {code}"), styles.failure())]);
     }
     // A change that did not apply is not counted as one.
@@ -957,8 +957,8 @@ struct Body<'a> {
 
 /// `bash` shows its output tail; `edit`, `apply_patch` and `write` the head of
 /// their input; `read`, failed and other tools the head of their result.
-fn card_body(call: &ToolCall, expanded: bool) -> Body<'_> {
-    let limit = if expanded { EXPANDED_ROWS } else { 0 };
+fn card_body(call: &ToolCall) -> Body<'_> {
+    let limit = EXPANDED_ROWS;
     let failed = call.state == ToolState::Failed || call.result_error.is_some();
     let tail = call.name == "bash";
     // A failed change explains itself in its result, not in its input.
@@ -1450,37 +1450,6 @@ mod tests {
     }
 
     #[test]
-    fn a_card_that_has_not_started_says_nothing_running() {
-        for mode in [fold(), expanded()] {
-            let body = card(quiet(ToolState::Pending), mode).join("\n");
-            assert!(!body.contains("running…"), "{body}");
-        }
-        assert_eq!(card(quiet(ToolState::Pending), fold()).len(), 1);
-        assert!(
-            card(quiet(ToolState::Running), fold())
-                .join("\n")
-                .contains("running")
-        );
-    }
-
-    #[test]
-    fn a_finished_card_says_nothing_running() {
-        for state in [
-            ToolState::Succeeded,
-            ToolState::Failed,
-            ToolState::Denied,
-            ToolState::Cancelled,
-        ] {
-            for mode in [fold(), expanded()] {
-                let mut finished = quiet(state);
-                finished.started_at = Some(std::time::Instant::now());
-                let body = card(finished, mode).join("\n");
-                assert!(!body.contains("running…"), "{state:?}: {body}");
-            }
-        }
-    }
-
-    #[test]
     fn an_expanded_started_card_without_output_says_running_as_its_body() {
         let body = card(started(), expanded());
         assert!(
@@ -1719,10 +1688,7 @@ mod tests {
         patch.set_arguments(&serde_json::json!({"patch":format!(
             "*** Begin Patch\n{}*** End Patch\n", "+line\n@@\n".repeat(10_000)
         )}));
-        let collapsed = card_body(&patch, false);
-        assert_eq!(collapsed.lines.capacity(), 0);
-        assert_eq!(collapsed.hidden, 10_000);
-        let expanded = card_body(&patch, true);
+        let expanded = card_body(&patch);
         assert_eq!(expanded.lines, vec!["+line"; EXPANDED_ROWS]);
         assert_eq!(expanded.hidden, 10_000 - EXPANDED_ROWS);
     }
@@ -1916,29 +1882,37 @@ mod tests {
     }
 
     #[test]
-    fn running_cards_have_no_spinner_or_elapsed_time() {
+    fn tool_lifecycle_only_labels_running_work_and_has_no_live_timer() {
         for name in ["bash", "read", "apply_patch"] {
-            for state in [ToolState::Pending, ToolState::Running] {
+            for state in [
+                ToolState::Pending,
+                ToolState::Running,
+                ToolState::Succeeded,
+                ToolState::Failed,
+                ToolState::Denied,
+                ToolState::Cancelled,
+            ] {
                 for mode in [fold(), expanded()] {
-                    let mut running = call();
-                    running.name = name.into();
-                    running.state = state;
-                    running.duration = None;
-                    running.exit_code = None;
-                    running.started_at = Some(std::time::Instant::now());
-                    assert!(meta(&running, styles(), true).is_empty());
-                    let body = card(running, mode).join("\n");
-                    assert!(!body.chars().any(|ch| "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏".contains(ch)), "{body}");
+                    let mut call = quiet(state);
+                    call.name = name.into();
+                    call.started_at = Some(std::time::Instant::now());
+                    let body = card(call, mode).join("\n");
+                    assert_eq!(
+                        body.contains("running…"),
+                        state == ToolState::Running && mode.expanded,
+                        "{name} {state:?} {mode:?}: {body}"
+                    );
+                    assert!(
+                        !body.chars().any(|ch| "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏".contains(ch)),
+                        "{body}"
+                    );
+                    assert!(!body.contains("0.0s"), "{body}");
                 }
             }
         }
-        let mut waiting = call();
-        waiting.state = ToolState::Pending;
-        waiting.duration = None;
         assert_eq!(
-            card(waiting, fold())[0],
-            "● bash   python3 -m unittest",
-            "not started: no timer"
+            card(quiet(ToolState::Pending), fold()),
+            ["● bash   python3 -m unittest"]
         );
     }
 
