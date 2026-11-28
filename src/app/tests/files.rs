@@ -33,11 +33,15 @@ async fn loaded(h: &mut Harness) {
     .await;
 }
 
-fn directory(h: &Harness) -> &str {
+fn assert_directory(h: &Harness, expected: &Path) {
     let Overlay::Files { browser, .. } = &h.app.overlay else {
         panic!("file browser closed")
     };
-    &browser.directory
+    // Host presents normal Windows paths; canonicalize may add the verbatim prefix.
+    assert_eq!(
+        Path::new(&browser.directory).canonicalize().unwrap(),
+        expected.canonicalize().unwrap()
+    );
 }
 
 #[tokio::test(start_paused = true)]
@@ -55,7 +59,7 @@ async fn file_browser_navigates_filters_and_inserts_reference_without_reading_or
     let mut h = opened(&root).await;
     h.type_text("Review @");
     loaded(&mut h).await;
-    assert_eq!(directory(&h), root.to_str().unwrap());
+    assert_directory(&h, &root);
     let screen = h.render_text(100, 28);
     assert!(screen.contains("source tree/"), "{screen}");
     assert!(screen.contains("README.md"), "{screen}");
@@ -63,13 +67,13 @@ async fn file_browser_navigates_filters_and_inserts_reference_without_reading_or
     assert_eq!(h.app.composer.text(), "Review @");
     h.press(KeyCode::Enter);
     loaded(&mut h).await;
-    assert_eq!(directory(&h), folder.to_str().unwrap());
+    assert_directory(&h, &folder);
     assert!(matches!(&h.app.overlay, Overlay::Files { browser, .. } if browser.filter.is_empty()));
 
     h.type_text("..");
     h.press(KeyCode::Enter);
     loaded(&mut h).await;
-    assert_eq!(directory(&h), root.to_str().unwrap());
+    assert_directory(&h, &root);
     h.type_text("source");
     h.screen(100, 28);
     let hit = h.app.sheet_hit;
@@ -82,7 +86,7 @@ async fn file_browser_navigates_filters_and_inserts_reference_without_reading_or
         }));
     }
     loaded(&mut h).await;
-    assert_eq!(directory(&h), folder.to_str().unwrap());
+    assert_directory(&h, &folder);
     h.type_text("notes");
     h.press(KeyCode::Tab);
     assert!(h.app.overlay.is_none());
@@ -128,11 +132,11 @@ async fn absolute_file_paths_and_denied_paths_keep_browser_authority_and_draft()
     assert_eq!(h.app.composer.text(), "Read @");
     h.press(KeyCode::Enter);
     loaded(&mut h).await;
-    assert_eq!(directory(&h), folder.to_str().unwrap());
+    assert_directory(&h, &folder);
     h.app.on_paste(outside.path().to_str().unwrap());
     h.press(KeyCode::Enter);
     loaded(&mut h).await;
-    assert_eq!(directory(&h), folder.to_str().unwrap());
+    assert_directory(&h, &folder);
     assert!(
         matches!(&h.app.overlay, Overlay::Files { browser, .. } if browser.error.is_some() && browser.filter == outside.path().to_str().unwrap())
     );
