@@ -111,25 +111,21 @@ impl App {
             })
             .collect();
         for (key, name) in changed {
-            if let Some((observer, mut card)) = self.take_agent_card(&key) {
-                card.agent_name = Some(name);
-                self.put_agent_card(key, observer, card);
-            }
+            self.edit_agent_card(&key, |_, _, card| card.agent_name = Some(name));
         }
     }
 
     pub(super) fn agent_observation_error(&mut self, error: String) {
         let keys: Vec<_> = self.agent_cards.observers.keys().cloned().collect();
         for key in keys {
-            if let Some((observer, mut card)) = self.take_agent_card(&key) {
+            self.edit_agent_card(&key, |_, observer, card| {
                 if card.association.completion.is_none()
                     || !observer.outputs.is_empty()
                     || observer.history_reading
                 {
                     card.observation_error = Some(error.clone());
                 }
-                self.put_agent_card(key, observer, card);
-            }
+            });
         }
         self.notice(super::NoticeLevel::Error, error);
     }
@@ -195,18 +191,16 @@ impl App {
             let Some(key) = self.agent_key(source) else {
                 continue;
             };
-            let Some((mut observer, mut card)) = self.take_agent_card(&key) else {
-                continue;
-            };
-            if !closed(&observer, &position.source, &position.channel)
-                && !canonical(&card, &position.source)
-            {
-                output(&mut observer, &position.source, &position.channel)
-                    .buffer
-                    .position(&position);
-            }
-            self.advance_agent_outputs(&key, &mut observer, &mut card);
-            self.put_agent_card(key, observer, card);
+            self.edit_agent_card(&key, |app, observer, card| {
+                if !closed(observer, &position.source, &position.channel)
+                    && !canonical(card, &position.source)
+                {
+                    output(observer, &position.source, &position.channel)
+                        .buffer
+                        .position(&position);
+                }
+                app.advance_agent_outputs(&key, observer, card);
+            });
         }
         let recovery: Vec<_> = self
             .agent_cards
@@ -221,10 +215,9 @@ impl App {
             })
             .collect();
         for key in recovery {
-            if let Some((mut observer, card)) = self.take_agent_card(&key) {
-                self.read_agent_history(&key, &mut observer, &card);
-                self.put_agent_card(key, observer, card);
-            }
+            self.edit_agent_card(&key, |app, observer, card| {
+                app.read_agent_history(&key, observer, card);
+            });
         }
         self.ready = true;
     }
@@ -311,46 +304,44 @@ impl App {
         let origin_args = self
             .origin_arguments(&association.parent, &association.origin)
             .cloned();
-        let Some((mut observer, mut card)) = self.take_agent_card(&key) else {
-            return;
-        };
-        if let Some(name) = catalog_name {
-            card.agent_name = Some(name);
-        } else if card.agent_name.is_none()
-            && let Some(name) = origin_args
-                .as_ref()
-                .and_then(|args| args.get("name")?.as_str())
-                .filter(|name| !name.trim().is_empty())
-        {
-            card.agent_name = Some(name.trim().to_owned());
-        }
-        // The optional display name is not the task prompt.
-        if card.task.is_empty()
-            && let Some(text) = origin_args
-                .as_ref()
-                .and_then(|args| args.get("text")?.as_str())
-        {
-            card.task = agent_card::head(text, 512).to_owned();
-        }
-        let was_complete = card.association.completion.is_some();
-        card.merge(association);
-        if direct_epoch.is_some()
-            && self
-                .session_mut(epoch)
-                .transcript
-                .find_tool(&association.origin)
-                .is_some()
-        {
-            observer.location = Some((epoch, association.origin.clone()));
-            self.agent_cards.pending.retain(|pending| pending != &key);
-        }
-        if !card.association.inputs.is_empty()
-            && (!observer.history_loaded
-                || (!was_complete && card.association.completion.is_some()))
-        {
-            self.read_agent_history(&key, &mut observer, &card);
-        }
-        self.put_agent_card(key, observer, card);
+        self.edit_agent_card(&key, |app, observer, card| {
+            if let Some(name) = catalog_name {
+                card.agent_name = Some(name);
+            } else if card.agent_name.is_none()
+                && let Some(name) = origin_args
+                    .as_ref()
+                    .and_then(|args| args.get("name")?.as_str())
+                    .filter(|name| !name.trim().is_empty())
+            {
+                card.agent_name = Some(name.trim().to_owned());
+            }
+            // The optional display name is not the task prompt.
+            if card.task.is_empty()
+                && let Some(text) = origin_args
+                    .as_ref()
+                    .and_then(|args| args.get("text")?.as_str())
+            {
+                card.task = agent_card::head(text, 512).to_owned();
+            }
+            let was_complete = card.association.completion.is_some();
+            card.merge(association);
+            if direct_epoch.is_some()
+                && app
+                    .session_mut(epoch)
+                    .transcript
+                    .find_tool(&association.origin)
+                    .is_some()
+            {
+                observer.location = Some((epoch, association.origin.clone()));
+                app.agent_cards.pending.retain(|pending| pending != &key);
+            }
+            if !card.association.inputs.is_empty()
+                && (!observer.history_loaded
+                    || (!was_complete && card.association.completion.is_some()))
+            {
+                app.read_agent_history(&key, observer, card);
+            }
+        });
         while self.agent_cards.pending.len() > PENDING_CARDS {
             if let Some(expired) = self.agent_cards.pending.pop_front() {
                 self.agent_cards.observers.remove(&expired);
@@ -407,38 +398,55 @@ impl App {
             })
     }
 
-    fn take_agent_card(&mut self, key: &DelegationKey) -> Option<(Observer, Box<AgentCard>)> {
-        let mut observer = self.agent_cards.observers.remove(key)?;
+    fn edit_agent_card(
+        &mut self,
+        key: &DelegationKey,
+        edit: impl FnOnce(&mut Self, &mut Observer, &mut AgentCard),
+    ) {
+        let Some(mut observer) = self.agent_cards.observers.remove(key) else {
+            return;
+        };
         let card = match &observer.location {
             Some((epoch, origin)) => self
                 .resident
-                .get_mut(*epoch)?
-                .transcript
-                .find_tool_mut(origin)?
-                .agent_card
-                .take()?,
-            None => observer.card.take()?,
+                .get_mut(*epoch)
+                .and_then(|session| session.transcript.swap_agent_card(origin, None, false)),
+            None => observer.card.take(),
         };
-        Some((observer, card))
-    }
-
-    fn put_agent_card(&mut self, key: DelegationKey, mut observer: Observer, card: Box<AgentCard>) {
+        let Some(mut card) = card else {
+            return;
+        };
+        let location = observer.location.clone();
+        let step = (card.task.clone(), card.outcome());
+        let label = (card.agent_name.clone(), card.association.name.clone());
+        let rounds = card.turn.as_ref().map(|(_, turn)| turn.tool_rounds);
+        edit(self, &mut observer, &mut card);
+        let regroup = step.0 != card.task || step.1 != card.outcome();
+        let visible_change = step.0 != card.task
+            || label.0 != card.agent_name
+            || label.1 != card.association.name
+            || rounds != card.turn.as_ref().map(|(_, turn)| turn.tool_rounds);
         match &observer.location {
             Some((epoch, origin)) => {
                 let Some(session) = self.resident.get_mut(*epoch) else {
                     return;
                 };
-                let Some(call) = session.transcript.find_tool_mut(origin) else {
-                    return;
-                };
-                call.agent_card = Some(card);
-                session.transcript.link_delegations();
-                // The card may be its run's newest step.
-                session.transcript.regroup(&origin.turn_id);
+                // Parent actions and delivered results only need relinking when
+                // a card attaches; child tokens do not change those relationships.
+                let attached = location != observer.location;
+                session
+                    .transcript
+                    .swap_agent_card(origin, Some(card), attached || visible_change);
+                if attached {
+                    session.transcript.link_delegations();
+                }
+                if attached || regroup {
+                    session.transcript.regroup(&origin.turn_id);
+                }
             }
             None => observer.card = Some(card),
         }
-        self.agent_cards.observers.insert(key, observer);
+        self.agent_cards.observers.insert(key.clone(), observer);
     }
 
     fn observe_agent_event(&mut self, event: &ObservationEvent) {
@@ -458,7 +466,7 @@ impl App {
                 child: association.child.clone(),
                 task_message_id: association.task_message_id.clone(),
             };
-            if let Some((observer, mut card)) = self.take_agent_card(&key) {
+            self.edit_agent_card(&key, |_, _, card| {
                 let snapshot = super::control::session_snapshot(source.clone(), data.clone());
                 if card.association.completion.is_none() {
                     card.historical = false;
@@ -469,8 +477,7 @@ impl App {
                         None => card.state = Some(snapshot),
                     }
                 }
-                self.put_agent_card(key, observer, card);
-            }
+            });
         }
         if let ObservationEvent::Activity(
             ActivityEvent::MessageAccepted { data, .. } | ActivityEvent::MessageBound { data, .. },
@@ -486,143 +493,141 @@ impl App {
         let Some(key) = self.agent_key(source) else {
             return;
         };
-        let Some((mut observer, mut card)) = self.take_agent_card(&key) else {
-            return;
-        };
-        match event {
-            ObservationEvent::State(StateEvent::Turn { source, data })
-            | ObservationEvent::Activity(ActivityEvent::TurnFinished { source, data }) => {
-                if data.state == TurnState::Finished
-                    && !observer.finished_turns.contains(&source.turn_id)
-                {
-                    observer.finished_turns.push(source.turn_id.clone());
-                }
-                if newer(
-                    &mut observer.turn_revisions,
-                    source.turn_id.clone(),
-                    &source.load_id,
-                    data.runner_revision,
-                ) {
-                    if let Some(last) = data.requests.checked_sub(1) {
-                        advance_model_floor(&mut observer, &source.turn_id, last);
+        self.edit_agent_card(&key, |app, observer, card| {
+            match event {
+                ObservationEvent::State(StateEvent::Turn { source, data })
+                | ObservationEvent::Activity(ActivityEvent::TurnFinished { source, data }) => {
+                    if data.state == TurnState::Finished
+                        && !observer.finished_turns.contains(&source.turn_id)
+                    {
+                        observer.finished_turns.push(source.turn_id.clone());
                     }
-                    card.turn = Some((source.clone(), data.clone()));
-                    if data.state == TurnState::Finished {
-                        if data.outcome != Some(TurnOutcome::Completed) {
-                            for index in 0..card.transcript.len() {
-                                if matches!(&card.transcript.blocks()[index], Block::Assistant { key, streaming: true, .. } if key.turn_id() == Some(&source.turn_id))
-                                    && let Some(Block::Assistant {
-                                        streaming, partial, ..
-                                    }) = card.transcript.block_mut(index)
-                                {
-                                    *streaming = false;
-                                    *partial = true;
+                    if newer(
+                        &mut observer.turn_revisions,
+                        source.turn_id.clone(),
+                        &source.load_id,
+                        data.runner_revision,
+                    ) {
+                        if let Some(last) = data.requests.checked_sub(1) {
+                            advance_model_floor(observer, &source.turn_id, last);
+                        }
+                        card.turn = Some((source.clone(), data.clone()));
+                        if data.state == TurnState::Finished {
+                            if data.outcome != Some(TurnOutcome::Completed) {
+                                for index in 0..card.transcript.len() {
+                                    if matches!(&card.transcript.blocks()[index], Block::Assistant { key, streaming: true, .. } if key.turn_id() == Some(&source.turn_id))
+                                        && let Some(Block::Assistant {
+                                            streaming, partial, ..
+                                        }) = card.transcript.block_mut(index)
+                                    {
+                                        *streaming = false;
+                                        *partial = true;
+                                    }
                                 }
                             }
+                            app.read_agent_history(&key, observer, card);
                         }
-                        self.read_agent_history(&key, &mut observer, &card);
                     }
                 }
-            }
-            ObservationEvent::State(StateEvent::Toolcall { source, data }) => {
-                let tool = tool_ref(source);
-                if newer(
-                    &mut observer.tool_revisions,
-                    tool.clone(),
-                    &source.turn.load_id,
-                    data.runner_revision,
-                ) && (data.state != ToolCallState::Finished
-                    || card.transcript.find_tool(&tool).is_some())
-                {
-                    ensure_tool(&mut card, &tool, &data.name).apply_state(data);
-                }
-            }
-            ObservationEvent::Activity(ActivityEvent::MessageBound {
-                message_id, data, ..
-            }) => {
-                if message_id == &key.task_message_id && card.task.is_empty() {
-                    card.task = agent_card::head(&data.text, 512).to_owned();
-                }
-            }
-            ObservationEvent::Activity(ActivityEvent::ToolStarted { source, data }) => {
-                let call = ensure_tool(&mut card, &tool_ref(source), &data.name);
-                call.set_preview_arguments(&data.arguments);
-                call.set_state(crate::transcript::ToolState::Running);
-            }
-            ObservationEvent::Activity(ActivityEvent::ModelFinished { source, data }) => {
-                advance_model_floor(
-                    &mut observer,
-                    &source.turn.turn_id,
-                    source.response_index.saturating_add(1),
-                );
-                card.transcript.install_preview_response(source, data);
-            }
-            ObservationEvent::Activity(ActivityEvent::ToolFinished { source, data }) => {
-                let call = ensure_tool(&mut card, &tool_ref(source), "tool");
-                call.apply_preview_result(&data.result);
-                close_output(
-                    &mut observer,
-                    OutputSource::Toolcall {
-                        source: source.clone(),
-                    },
-                );
-            }
-            ObservationEvent::Activity(ActivityEvent::ModelOutput { source, data }) => {
-                let output_source = OutputSource::Model {
-                    source: source.clone(),
-                };
-                if data.start == 0
-                    && observer.outputs.iter().any(|output| {
-                        output.buffer.source() == &output_source
-                            && output.channel == data.channel
-                            && (output.rendered > 0 || !output.buffer.text().is_empty())
-                    })
-                {
-                    observer.outputs.retain(|output| {
-                        !(output.buffer.source() == &output_source
-                            && output.channel == data.channel)
-                    });
-                    observer.closed.retain(|(closed, channel)| {
-                        !(closed == &output_source && channel == &data.channel)
-                    });
-                    let response =
-                        RequestKey::response(source.turn.turn_id.clone(), source.response_index);
-                    if !card.transcript.has_canonical_response(&response)
-                        && let Block::Assistant {
-                            reasoning,
-                            text,
-                            streaming: true,
-                            ..
-                        } = card.transcript.assistant_mut(&response)
+                ObservationEvent::State(StateEvent::Toolcall { source, data }) => {
+                    let tool = tool_ref(source);
+                    if newer(
+                        &mut observer.tool_revisions,
+                        tool.clone(),
+                        &source.turn.load_id,
+                        data.runner_revision,
+                    ) && (data.state != ToolCallState::Finished
+                        || card.transcript.find_tool(&tool).is_some())
                     {
-                        match data.channel.as_str() {
-                            "text" => text.clear(),
-                            "reasoning" => reasoning.clear(),
-                            _ => {}
-                        }
+                        ensure_tool(card, &tool, &data.name).apply_state(data);
                     }
                 }
-                observe_output(
-                    &mut observer,
-                    &mut card,
-                    output_source,
-                    &data.channel,
-                    event,
-                );
+                ObservationEvent::Activity(ActivityEvent::MessageBound {
+                    message_id, data, ..
+                }) => {
+                    if message_id == &key.task_message_id && card.task.is_empty() {
+                        card.task = agent_card::head(&data.text, 512).to_owned();
+                    }
+                }
+                ObservationEvent::Activity(ActivityEvent::ToolStarted { source, data }) => {
+                    let call = ensure_tool(card, &tool_ref(source), &data.name);
+                    call.set_preview_arguments(&data.arguments);
+                    call.set_state(crate::transcript::ToolState::Running);
+                }
+                ObservationEvent::Activity(ActivityEvent::ModelFinished { source, data }) => {
+                    advance_model_floor(
+                        observer,
+                        &source.turn.turn_id,
+                        source.response_index.saturating_add(1),
+                    );
+                    card.transcript.install_preview_response(source, data);
+                }
+                ObservationEvent::Activity(ActivityEvent::ToolFinished { source, data }) => {
+                    let call = ensure_tool(card, &tool_ref(source), "tool");
+                    call.apply_preview_result(&data.result);
+                    close_output(
+                        observer,
+                        OutputSource::Toolcall {
+                            source: source.clone(),
+                        },
+                    );
+                }
+                ObservationEvent::Activity(ActivityEvent::ModelOutput { source, data }) => {
+                    let output_source = OutputSource::Model {
+                        source: source.clone(),
+                    };
+                    if data.start == 0
+                        && observer.outputs.iter().any(|output| {
+                            output.buffer.source() == &output_source
+                                && output.channel == data.channel
+                                && (output.rendered > 0 || !output.buffer.text().is_empty())
+                        })
+                    {
+                        observer.outputs.retain(|output| {
+                            !(output.buffer.source() == &output_source
+                                && output.channel == data.channel)
+                        });
+                        observer.closed.retain(|(closed, channel)| {
+                            !(closed == &output_source && channel == &data.channel)
+                        });
+                        let response =
+                            RequestKey::response(source.turn.turn_id.clone(), source.response_index);
+                        if !card.transcript.has_canonical_response(&response)
+                            && let Block::Assistant {
+                                reasoning,
+                                text,
+                                streaming: true,
+                                ..
+                            } = card.transcript.assistant_mut(&response)
+                        {
+                            match data.channel.as_str() {
+                                "text" => text.clear(),
+                                "reasoning" => reasoning.clear(),
+                                _ => {}
+                            }
+                        }
+                    }
+                    observe_output(
+                        observer,
+                        card,
+                        output_source,
+                        &data.channel,
+                        event,
+                    );
+                }
+                ObservationEvent::Activity(ActivityEvent::ToolOutput { source, data }) => {
+                    let key = tool_ref(source);
+                    ensure_tool(card, &key, "tool");
+                    let source = OutputSource::Toolcall {
+                        source: source.clone(),
+                    };
+                    observe_output(observer, card, source, &data.channel, event);
+                }
+                _ => {}
             }
-            ObservationEvent::Activity(ActivityEvent::ToolOutput { source, data }) => {
-                let key = tool_ref(source);
-                ensure_tool(&mut card, &key, "tool");
-                let source = OutputSource::Toolcall {
-                    source: source.clone(),
-                };
-                observe_output(&mut observer, &mut card, source, &data.channel, event);
-            }
-            _ => {}
-        }
-        self.advance_agent_outputs(&key, &mut observer, &mut card);
-        card.trim();
-        self.put_agent_card(key, observer, card);
+            app.advance_agent_outputs(&key, observer, card);
+            card.trim();
+        });
     }
 
     fn advance_agent_outputs(
@@ -751,91 +756,89 @@ impl App {
             self.agent_baseline(key, result);
             return;
         }
-        let Some((mut observer, mut card)) = self.take_agent_card(&key) else {
-            return;
-        };
-        match read {
-            Read::Baseline(_) => unreachable!("baseline handled above"),
-            Read::History(result) => {
-                observer.history_reading = false;
-                match result {
-                    Ok(window) if window.source.host_incarnation == key.incarnation => {
-                        if !window.items.is_empty()
-                            && observer
-                                .outputs
-                                .iter()
-                                .all(|output| canonical(&card, output.buffer.source()))
-                        {
-                            card.observation_error = None;
-                            card.history_unavailable = false;
-                        }
-                        for record in &window.items {
-                            if let (Some(turn), Some(response)) =
-                                (&record.turn_id, record.response_index)
-                                && matches!(
-                                    record.item,
-                                    HistoryItemData::Assistant { .. }
-                                        | HistoryItemData::Partial { .. }
-                                        | HistoryItemData::ToolResult { .. }
-                                )
+        self.edit_agent_card(&key, |app, observer, card| {
+            match read {
+                Read::Baseline(_) => unreachable!("baseline handled above"),
+                Read::History(result) => {
+                    observer.history_reading = false;
+                    match result {
+                        Ok(window) if window.source.host_incarnation == key.incarnation => {
+                            if !window.items.is_empty()
+                                && observer
+                                    .outputs
+                                    .iter()
+                                    .all(|output| canonical(card, output.buffer.source()))
                             {
-                                advance_model_floor(
-                                    &mut observer,
-                                    turn,
-                                    response.saturating_add(1),
-                                );
+                                card.observation_error = None;
+                                card.history_unavailable = false;
                             }
-                            if let HistoryItemData::User {
-                                message_id: Some(message_id),
-                                text,
-                                ..
-                            } = &record.item
-                                && message_id == &key.task_message_id
-                                && card.task.is_empty()
-                            {
-                                card.task = agent_card::head(text, 512).to_owned();
+                            for record in &window.items {
+                                if let (Some(turn), Some(response)) =
+                                    (&record.turn_id, record.response_index)
+                                    && matches!(
+                                        record.item,
+                                        HistoryItemData::Assistant { .. }
+                                            | HistoryItemData::Partial { .. }
+                                            | HistoryItemData::ToolResult { .. }
+                                    )
+                                {
+                                    advance_model_floor(
+                                        observer,
+                                        turn,
+                                        response.saturating_add(1),
+                                    );
+                                }
+                                if let HistoryItemData::User {
+                                    message_id: Some(message_id),
+                                    text,
+                                    ..
+                                } = &record.item
+                                    && message_id == &key.task_message_id
+                                    && card.task.is_empty()
+                                {
+                                    card.task = agent_card::head(text, 512).to_owned();
+                                }
                             }
+                            card.transcript.install_preview_records(&window.items);
                         }
-                        card.transcript.install_preview_records(&window.items);
+                        Ok(_) => {}
+                        Err(error) => {
+                            card.history_unavailable = matches!(&error, HistoryError::Host(CallError::Business(fault)) if fault.kind() == Some(FaultKind::AgentSessionNotFound));
+                            card.observation_error = Some(error.to_string());
+                        }
                     }
-                    Ok(_) => {}
-                    Err(error) => {
-                        card.history_unavailable = matches!(&error, HistoryError::Host(CallError::Business(fault)) if fault.kind() == Some(FaultKind::AgentSessionNotFound));
-                        card.observation_error = Some(error.to_string());
+                    if std::mem::take(&mut observer.history_due) {
+                        app.read_agent_history(&key, observer, card);
                     }
                 }
-                if std::mem::take(&mut observer.history_due) {
-                    self.read_agent_history(&key, &mut observer, &card);
+                Read::Output {
+                    source,
+                    channel,
+                    result,
+                } => {
+                    if let Some(output) = observer
+                        .outputs
+                        .iter_mut()
+                        .find(|output| output.buffer.source() == &source && output.channel == channel)
+                    {
+                        output.reading = false;
+                        let result = (*result).and_then(|read| {
+                            match read {
+                                OutputRead::Model(read) => output.buffer.model_read(&read),
+                                OutputRead::Tool(read) => output.buffer.tool_read(&read),
+                            }
+                            .map_err(|error| error.to_string())
+                        });
+                        if let Err(error) = result {
+                            output.failed = true;
+                            card.observation_error = Some(error);
+                        }
+                    }
                 }
             }
-            Read::Output {
-                source,
-                channel,
-                result,
-            } => {
-                if let Some(output) = observer
-                    .outputs
-                    .iter_mut()
-                    .find(|output| output.buffer.source() == &source && output.channel == channel)
-                {
-                    output.reading = false;
-                    let result = (*result).and_then(|read| {
-                        match read {
-                            OutputRead::Model(read) => output.buffer.model_read(&read),
-                            OutputRead::Tool(read) => output.buffer.tool_read(&read),
-                        }
-                        .map_err(|error| error.to_string())
-                    });
-                    if let Err(error) = result {
-                        output.failed = true;
-                        card.observation_error = Some(error);
-                    }
-                }
-            }
-        }
-        self.advance_agent_outputs(&key, &mut observer, &mut card);
-        card.trim();
-        self.put_agent_card(key, observer, card);
+            app.advance_agent_outputs(&key, observer, card);
+            card.trim();
+        });
     }
 
     fn agent_baseline(
@@ -843,39 +846,36 @@ impl App {
         key: DelegationKey,
         result: Result<SubscribeResult<StateEvent>, CallError>,
     ) {
-        let Some((observer, mut card)) = self.take_agent_card(&key) else {
-            return;
-        };
         let baseline = match result {
             Ok(baseline) => baseline,
             Err(error) => {
-                card.history_unavailable = matches!(&error, CallError::Business(fault) if fault.kind() == Some(FaultKind::AgentSessionNotFound));
-                card.observation_error = Some(error.to_string());
-                self.put_agent_card(key, observer, card);
+                self.edit_agent_card(&key, |_, _, card| {
+                    card.history_unavailable = matches!(&error, CallError::Business(fault) if fault.kind() == Some(FaultKind::AgentSessionNotFound));
+                    card.observation_error = Some(error.to_string());
+                });
                 return;
             }
         };
-        card.historical = !baseline.initial_states.iter().any(|event| matches!(event, StateEvent::Session { data, .. } if data.delegation.as_ref().is_some_and(|current| current.task_message_id == key.task_message_id && current.parent == card.association.parent)));
+        self.edit_agent_card(&key, |_, _, card| {
+            card.historical = !baseline.initial_states.iter().any(|event| matches!(event, StateEvent::Session { data, .. } if data.delegation.as_ref().is_some_and(|current| current.task_message_id == key.task_message_id && current.parent == card.association.parent)));
+        });
         let positions = live_positions(&baseline);
-        self.put_agent_card(key.clone(), observer, card);
         for state in baseline.initial_states {
             self.host_observed(ObservationEvent::State(state));
         }
-        let Some((mut observer, mut card)) = self.take_agent_card(&key) else {
-            return;
-        };
-        for position in positions {
-            if card.contains_turn(output_turn(&position.source))
-                && !closed(&observer, &position.source, &position.channel)
-                && !canonical(&card, &position.source)
-            {
-                output(&mut observer, &position.source, &position.channel)
-                    .buffer
-                    .position(&position);
+        self.edit_agent_card(&key, |app, observer, card| {
+            for position in positions {
+                if card.contains_turn(output_turn(&position.source))
+                    && !closed(observer, &position.source, &position.channel)
+                    && !canonical(card, &position.source)
+                {
+                    output(observer, &position.source, &position.channel)
+                        .buffer
+                        .position(&position);
+                }
             }
-        }
-        self.advance_agent_outputs(&key, &mut observer, &mut card);
-        self.put_agent_card(key, observer, card);
+            app.advance_agent_outputs(&key, observer, card);
+        });
     }
 
     pub(super) fn retire_agent_observers(&mut self) {

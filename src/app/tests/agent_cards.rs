@@ -259,6 +259,14 @@ async fn child_output_continues_in_original_cards_after_startup_and_parent_turn_
     });
     let selection = h.app.selection;
     let scroll = h.app.scroll;
+    let parent_revisions: Vec<_> = h
+        .app
+        .resident
+        .current()
+        .unwrap()
+        .transcript
+        .revisions()
+        .collect();
     a.text("\nalpha final line");
     b.text("\nbeta partial retained");
     h.until(|app| {
@@ -270,6 +278,17 @@ async fn child_output_continues_in_original_cards_after_startup_and_parent_turn_
     assert_eq!(h.app.composer.text(), "Parent draft 日本語");
     assert_eq!(h.app.scroll, scroll);
     assert_eq!(h.app.selection, selection);
+    assert_eq!(
+        h.app
+            .resident
+            .current()
+            .unwrap()
+            .transcript
+            .revisions()
+            .collect::<Vec<_>>(),
+        parent_revisions,
+        "child tokens update the inspector, not immutable parent dispatch rows",
+    );
     a.finish();
     b.fail("Controlled child provider failure");
     for _ in 0..3 {

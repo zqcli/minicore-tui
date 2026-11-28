@@ -769,6 +769,26 @@ impl Transcript {
         }
     }
 
+    /// Move the observer-owned card without invalidating its immutable dispatch
+    /// row unless the edit changes that row's visible facts.
+    pub(crate) fn swap_agent_card(
+        &mut self,
+        key: &ToolCallRef,
+        card: Option<Box<agent_card::AgentCard>>,
+        visible_change: bool,
+    ) -> Option<Box<agent_card::AgentCard>> {
+        let at = self.blocks.iter().rposition(
+            |block| matches!(block, Block::Tool(call) if call.key.call_ref() == Some(key)),
+        )?;
+        if visible_change {
+            self.bump(at);
+        }
+        let Block::Tool(call) = &mut self.blocks[at] else {
+            unreachable!()
+        };
+        std::mem::replace(&mut call.agent_card, card)
+    }
+
     pub fn assistant_mut(&mut self, key: &RequestKey) -> &mut Block {
         let at = self
             .blocks
