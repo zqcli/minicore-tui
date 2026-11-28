@@ -5,7 +5,7 @@ use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
 use super::{App, DOUBLE_CLICK, Overlay, Panel, Press, Scroll};
 use super::{scrollbar, selection};
-use crate::transcript::Block;
+use crate::transcript::{Block, Grouping, Transcript};
 
 impl App {
     /// Mouse: wheel scrolling, the scrollbar, click-to-open, and drag, word or
@@ -435,56 +435,25 @@ impl App {
         let Some(session) = self.resident.current_mut() else {
             return false;
         };
-        // A group's summary row is its first row: a click opens or closes it;
-        // while Working is closed, the newest-step row under it opens it too.
-        match session.transcript.grouping(index) {
-            crate::transcript::Grouping::Head { summary, open, .. }
-                if line == header || (!open && !all_expanded && summary.live) =>
-            {
-                let keep_follow = following && summary.live && !*open;
-                session.transcript.toggle_group(index);
-                if !keep_follow {
-                    self.pin_view();
-                }
-                return true;
-            }
-            crate::transcript::Grouping::Tail {
-                summary: Some(_), ..
-            } if line == header => {
-                session.transcript.toggle_group(index);
+        if let Some(keep_follow) = toggle_fold(
+            &mut session.transcript,
+            index,
+            line == header,
+            &text,
+            all_expanded,
+            following,
+        ) {
+            if !keep_follow {
                 self.pin_view();
-                return true;
             }
-            _ => {}
+            return true;
         }
         match session.transcript.blocks().get(index) {
-            Some(Block::Tool(call)) => {
-                let expanded = call.is_expanded(all_expanded);
-                if (expanded || !text.is_empty())
-                    && let Some(Block::Tool(call)) = session.transcript.block_mut(index)
-                {
-                    call.toggle_expanded(all_expanded);
-                    self.pin_view();
-                    return true;
-                }
-            }
             Some(Block::User {
                 kind: crate::transcript::UserKind::Delegated,
                 ..
             }) => {
                 if let Some(Block::User { expanded, .. }) = session.transcript.block_mut(index) {
-                    let open = !expanded.unwrap_or(all_expanded);
-                    *expanded = (open != all_expanded).then_some(open);
-                    self.pin_view();
-                    return true;
-                }
-            }
-            // The open thinking rail or its folded `∴` row, not the answer.
-            Some(Block::Assistant { .. })
-                if text.starts_with(crate::ui::rails::RAIL) || text.starts_with('∴') =>
-            {
-                if let Some(Block::Assistant { expanded, .. }) = session.transcript.block_mut(index)
-                {
                     let open = !expanded.unwrap_or(all_expanded);
                     *expanded = (open != all_expanded).then_some(open);
                     self.pin_view();
@@ -695,49 +664,18 @@ impl App {
         let Some(session) = self.inspected_session_mut() else {
             return false;
         };
-        match session.transcript.grouping(index) {
-            crate::transcript::Grouping::Head { summary, open, .. }
-                if line == 0 || (!open && !all_expanded && summary.live) =>
-            {
-                let keep_follow = following && summary.live && !*open;
-                session.transcript.toggle_group(index);
-                if !keep_follow {
-                    self.inspector_pin_view();
-                }
-                return true;
-            }
-            crate::transcript::Grouping::Tail {
-                summary: Some(_), ..
-            } if line == 0 => {
-                session.transcript.toggle_group(index);
+        if let Some(keep_follow) = toggle_fold(
+            &mut session.transcript,
+            index,
+            line == 0,
+            &text,
+            all_expanded,
+            following,
+        ) {
+            if !keep_follow {
                 self.inspector_pin_view();
-                return true;
             }
-            _ => {}
-        }
-        match session.transcript.blocks().get(index) {
-            Some(Block::Tool(call)) => {
-                let expanded = call.is_expanded(all_expanded);
-                if (expanded || !text.is_empty())
-                    && let Some(Block::Tool(call)) = session.transcript.block_mut(index)
-                {
-                    call.toggle_expanded(all_expanded);
-                    self.inspector_pin_view();
-                    return true;
-                }
-            }
-            Some(Block::Assistant { .. })
-                if text.starts_with(crate::ui::rails::RAIL) || text.starts_with('∴') =>
-            {
-                if let Some(Block::Assistant { expanded, .. }) = session.transcript.block_mut(index)
-                {
-                    let open = !expanded.unwrap_or(all_expanded);
-                    *expanded = (open != all_expanded).then_some(open);
-                    self.inspector_pin_view();
-                    return true;
-                }
-            }
-            _ => {}
+            return true;
         }
         false
     }
@@ -751,4 +689,50 @@ impl App {
                 .checked_sub(area.x)
                 .is_some_and(|col| scrollbar::jump_label(area.width).contains(&col))
     }
+}
+
+/// The pane decides whether to pin its view; the transcript owns the fold.
+fn toggle_fold(
+    transcript: &mut Transcript,
+    index: usize,
+    header: bool,
+    text: &str,
+    all_expanded: bool,
+    following: bool,
+) -> Option<bool> {
+    match transcript.grouping(index) {
+        Grouping::Head { summary, open, .. }
+            if header || (!open && !all_expanded && summary.live) =>
+        {
+            let keep_follow = following && summary.live && !*open;
+            transcript.toggle_group(index);
+            return Some(keep_follow);
+        }
+        Grouping::Tail {
+            summary: Some(_), ..
+        } if header => {
+            transcript.toggle_group(index);
+            return Some(false);
+        }
+        _ => {}
+    }
+    match transcript.blocks().get(index) {
+        Some(Block::Tool(call)) if call.is_expanded(all_expanded) || !text.is_empty() => {
+            if let Some(Block::Tool(call)) = transcript.block_mut(index) {
+                call.toggle_expanded(all_expanded);
+                return Some(false);
+            }
+        }
+        Some(Block::Assistant { .. })
+            if text.starts_with(crate::ui::rails::RAIL) || text.starts_with('∴') =>
+        {
+            if let Some(Block::Assistant { expanded, .. }) = transcript.block_mut(index) {
+                let open = !expanded.unwrap_or(all_expanded);
+                *expanded = (open != all_expanded).then_some(open);
+                return Some(false);
+            }
+        }
+        _ => {}
+    }
+    None
 }
