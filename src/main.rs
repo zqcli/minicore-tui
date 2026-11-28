@@ -368,7 +368,6 @@ async fn run() -> i32 {
         if app.ready && startup {
             startup = false;
             match startup_session(
-                &app.sessions,
                 &app.agents,
                 app.selected_agent.as_ref(),
                 selected_agent.as_ref(),
@@ -508,7 +507,6 @@ async fn finish_host(hosted: &mut Hosted) -> Result<(), String> {
 }
 
 fn startup_session(
-    sessions: &[SessionSummary],
     agents: &[AgentSummary],
     selected_agent: Option<&AgentId>,
     explicit_agent: Option<&AgentId>,
@@ -516,13 +514,18 @@ fn startup_session(
     continue_recent: bool,
     workspace: &Path,
 ) -> Result<Option<SessionRef>, String> {
+    let sessions = agents.iter().flat_map(|agent| &agent.sessions);
     let selected = if let Some(requested) = requested {
         Some(
             sessions
-                .iter()
-                .find(|session| {
+                .filter(|session| {
                     &session.id == requested
                         && explicit_agent.is_none_or(|agent| &session.agent_id == agent)
+                })
+                .max_by(|a, b| {
+                    a.last_activity_at
+                        .cmp(&b.last_activity_at)
+                        .then_with(|| b.agent_id.cmp(&a.agent_id))
                 })
                 .ok_or_else(|| {
                     format!("session {requested} is not available under the selected Host/Agent")
@@ -535,9 +538,10 @@ fn startup_session(
     {
         let default = match &agent.default_session_id {
             Some(id) => Some(
-                sessions
+                agent
+                    .sessions
                     .iter()
-                    .find(|session| &session.id == id && session.agent_id == agent.id)
+                    .find(|session| &session.id == id)
                     .ok_or_else(|| {
                         format!("Agent {} default Session {id} is unavailable", agent.id)
                     })?,
@@ -554,7 +558,7 @@ fn startup_session(
                     .as_ref()
                     .is_none_or(|bound| Path::new(&bound.path) == workspace)
             })
-            .or_else(|| pick_recent(sessions, Some(&agent.id), workspace))
+            .or_else(|| pick_recent(&agent.sessions, Some(&agent.id), workspace))
     } else {
         None
     };
@@ -565,12 +569,12 @@ fn startup_session(
 }
 
 fn pick_recent<'a>(
-    sessions: &'a [SessionSummary],
+    sessions: impl IntoIterator<Item = &'a SessionSummary>,
     agent: Option<&AgentId>,
     workspace: &Path,
 ) -> Option<&'a SessionSummary> {
     sessions
-        .iter()
+        .into_iter()
         .filter(|session| agent.is_none_or(|id| &session.agent_id == id))
         .filter(|session| {
             session
@@ -578,7 +582,12 @@ fn pick_recent<'a>(
                 .as_ref()
                 .is_some_and(|bound| Path::new(&bound.path) == workspace)
         })
-        .max_by(|left, right| left.last_activity_at.cmp(&right.last_activity_at))
+        .max_by(|left, right| {
+            left.last_activity_at
+                .cmp(&right.last_activity_at)
+                .then_with(|| left.agent_id.cmp(&right.agent_id))
+                .then_with(|| left.id.cmp(&right.id))
+        })
 }
 
 #[cfg(test)]

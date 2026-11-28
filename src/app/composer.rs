@@ -947,7 +947,9 @@ impl Composer {
     fn projected_row(&self, display: &str) -> (usize, Range<usize>) {
         let cursor = self.display_cursor();
         let start = display[..cursor].rfind('\n').map_or(0, |at| at + 1);
-        let end = display[cursor..].find('\n').map_or(display.len(), |at| cursor + at);
+        let end = display[cursor..]
+            .find('\n')
+            .map_or(display.len(), |at| cursor + at);
         (cursor, start..end)
     }
 
@@ -974,7 +976,9 @@ impl Composer {
             let start = previous.rfind('\n').map_or(0, |at| at + 1);
             (start, &previous[start..])
         };
-        let column = self.column.unwrap_or_else(|| wrap::width(&display[row.start..cursor]));
+        let column = self
+            .column
+            .unwrap_or_else(|| wrap::width(&display[row.start..cursor]));
         let mut used = 0;
         let offset = next.grapheme_indices(true).find_map(|(at, grapheme)| {
             used += wrap::width(grapheme);
@@ -984,7 +988,6 @@ impl Composer {
         self.column = Some(column);
         true
     }
-
 }
 
 fn prev_grapheme(text: &str, cursor: usize) -> usize {

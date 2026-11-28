@@ -285,11 +285,7 @@ pub fn render(frame: &mut Frame, area: Rect, styles: Styles, app: &mut App) {
         .as_ref()
         .and_then(|(target, unavailable)| (!unavailable).then_some(target));
     let child = target.and_then(|target| app.resident.find(target));
-    let catalog = target.and_then(|target| {
-        app.sessions
-            .iter()
-            .find(|session| session.agent_id == target.agent_id && session.id == target.session_id)
-    });
+    let catalog = target.and_then(|target| app.session_summary(target));
     let config = child
         .map(|session| {
             (
@@ -433,12 +429,8 @@ pub fn render(frame: &mut Frame, area: Rect, styles: Styles, app: &mut App) {
             .draw_embedded(frame, transcript_area, styles);
             return;
         }
-        let lines = crate::ui::agent_cards::detail_lines(
-            card,
-            styles,
-            usize::from(transcript_area.width),
-            app.show_reasoning,
-        );
+        let lines =
+            crate::ui::agent_cards::detail_lines(card, styles, usize::from(transcript_area.width));
         app.task_inspector.fallback_scroll = chrome::render_scrollable_lines(
             frame,
             transcript_area,

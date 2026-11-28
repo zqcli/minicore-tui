@@ -274,7 +274,6 @@ fn busy_session() -> Bench {
         transcript.push(tool(turn * 2 + 1));
         transcript.push(turn_end(turn));
     }
-    let start = transcript.len();
     transcript.push(user(30));
     let mut running = tool(60);
     if let Block::Tool(call) = &mut running {
@@ -293,7 +292,7 @@ fn busy_session() -> Bench {
         *reasoning = "Compare the two paths.\nThe cache key is the problem.".into();
         text.push_str(&long_answer()[..3000]);
     }
-    let mut live = snapshots::live(start, 90000);
+    let mut live = snapshots::live(90000);
     live.state.phase = Some(TurnPhase::Model);
     live.state.requests = 2;
     live.running_tool = Some("bash".into());

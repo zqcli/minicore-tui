@@ -48,7 +48,11 @@ fn session(agent_id: &AgentId, workspace: &Path, activity: i64) -> SessionSummar
     }
 }
 
-fn agent(id: &AgentId, default_session_id: Option<SessionId>) -> AgentSummary {
+fn agent(
+    id: &AgentId,
+    default_session_id: Option<SessionId>,
+    sessions: Vec<SessionSummary>,
+) -> AgentSummary {
     AgentSummary {
         id: id.clone(),
         host_id: HostId::new().unwrap(),
@@ -60,7 +64,7 @@ fn agent(id: &AgentId, default_session_id: Option<SessionId>) -> AgentSummary {
         metadata_saving: false,
         metadata_fault: None,
         deletion: None,
-        sessions: Vec::new(),
+        sessions,
     }
 }
 
@@ -88,26 +92,19 @@ fn explicit_session_keeps_its_real_owner_and_rejects_a_conflicting_agent() {
     let owner = AgentId::new().unwrap();
     let other = AgentId::new().unwrap();
     let workspace = Path::new("work");
-    let sessions = vec![session(&owner, workspace, 10)];
-    let result = startup_session(
-        &sessions,
-        &[],
-        Some(&other),
-        None,
-        Some(&sessions[0].id),
-        false,
-        workspace,
-    )
-    .unwrap()
-    .unwrap();
+    let session = session(&owner, workspace, 10);
+    let id = session.id.clone();
+    let agents = [agent(&owner, None, vec![session])];
+    let result = startup_session(&agents, Some(&other), None, Some(&id), false, workspace)
+        .unwrap()
+        .unwrap();
     assert_eq!(result.agent_id, owner);
     assert!(
         startup_session(
-            &sessions,
-            &[],
+            &agents,
             Some(&other),
             Some(&other),
-            Some(&sessions[0].id),
+            Some(&id),
             false,
             workspace
         )
@@ -120,33 +117,22 @@ fn missing_saved_default_is_visible_and_never_replaced_with_another_session() {
     let selected = AgentId::new().unwrap();
     let workspace = Path::new("work");
     let sessions = vec![session(&selected, workspace, 10)];
-    let agents = vec![agent(&selected, Some(SessionId::new().unwrap()))];
-    assert!(
-        startup_session(
-            &sessions,
-            &agents,
-            Some(&selected),
-            None,
-            None,
-            false,
-            workspace
-        )
-        .is_err()
-    );
-    let agents = vec![agent(&selected, Some(sessions[0].id.clone()))];
+    let agents = [agent(
+        &selected,
+        Some(SessionId::new().unwrap()),
+        sessions.clone(),
+    )];
+    assert!(startup_session(&agents, Some(&selected), None, None, false, workspace).is_err());
+    let agents = [agent(
+        &selected,
+        Some(sessions[0].id.clone()),
+        sessions.clone(),
+    )];
     assert_eq!(
-        startup_session(
-            &sessions,
-            &agents,
-            Some(&selected),
-            None,
-            None,
-            false,
-            workspace
-        )
-        .unwrap()
-        .unwrap()
-        .session_id,
+        startup_session(&agents, Some(&selected), None, None, false, workspace)
+            .unwrap()
+            .unwrap()
+            .session_id,
         sessions[0].id
     );
 }
@@ -157,19 +143,15 @@ fn starting_in_another_workspace_never_opens_the_default_sessions_project() {
     let default_dir = Path::new("project-a");
     let here = Path::new("project-b");
     let default = session(&selected, default_dir, 50);
-    let agents = vec![agent(&selected, Some(default.id.clone()))];
     let open = |sessions: &[SessionSummary], workspace: &Path| {
-        startup_session(
-            sessions,
-            &agents,
-            Some(&selected),
-            None,
-            None,
-            false,
-            workspace,
-        )
-        .unwrap()
-        .map(|target| target.session_id)
+        let agents = [agent(
+            &selected,
+            Some(default.id.clone()),
+            sessions.to_vec(),
+        )];
+        startup_session(&agents, Some(&selected), None, None, false, workspace)
+            .unwrap()
+            .map(|target| target.session_id)
     };
     // Same directory: the default opens as before.
     assert_eq!(
@@ -180,5 +162,8 @@ fn starting_in_another_workspace_never_opens_the_default_sessions_project() {
     assert_eq!(open(std::slice::from_ref(&default), here), None);
     // Unless that directory already has recent work, which resumes instead.
     let local = session(&selected, here, 20);
-    assert_eq!(open(&[default, local.clone()], here), Some(local.id));
+    assert_eq!(
+        open(&[default.clone(), local.clone()], here),
+        Some(local.id)
+    );
 }

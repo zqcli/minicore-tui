@@ -10,7 +10,7 @@
 
  ─ Select Agent ─────────────────────────────────────────────────────────────── 2 agents ─
   / type to filter…
- ▎ ✓ Coder active · memory · 0 sessions
+ ▎ ✓ Coder active · memory · 1 session
      Reviewer stopped · memory · 0 sessions
    Agent 00000000000000000001
    Default session: none

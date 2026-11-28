@@ -259,14 +259,19 @@ async fn child_output_continues_in_original_cards_after_startup_and_parent_turn_
     });
     let selection = h.app.selection;
     let scroll = h.app.scroll;
-    let parent_revisions: Vec<_> = h
-        .app
-        .resident
-        .current()
-        .unwrap()
-        .transcript
-        .revisions()
-        .collect();
+    let dispatch_revisions = |app: &crate::app::App| {
+        let transcript = &app.resident.current().unwrap().transcript;
+        transcript
+            .blocks()
+            .iter()
+            .zip(transcript.revisions())
+            .filter_map(|(block, revision)| match block {
+                Block::Tool(call) if call.agent_card.is_some() => Some(revision),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let parent_revisions = dispatch_revisions(&h.app);
     a.text("\nalpha final line");
     b.text("\nbeta partial retained");
     h.until(|app| {
@@ -279,13 +284,7 @@ async fn child_output_continues_in_original_cards_after_startup_and_parent_turn_
     assert_eq!(h.app.scroll, scroll);
     assert_eq!(h.app.selection, selection);
     assert_eq!(
-        h.app
-            .resident
-            .current()
-            .unwrap()
-            .transcript
-            .revisions()
-            .collect::<Vec<_>>(),
+        dispatch_revisions(&h.app),
         parent_revisions,
         "child tokens update the inspector, not immutable parent dispatch rows",
     );
@@ -1240,8 +1239,8 @@ async fn delegated_sessions_hide_from_sessions_picker_and_flatten_grandchildren_
     h.app.refresh_catalogs();
     h.until(|app| {
         let tasks = async_tasks(app);
-        app.sessions.iter().any(|s| s.id == l1_session_id)
-            && app.sessions.iter().any(|s| s.id == l2_session_id)
+        app.sessions().any(|s| s.id == l1_session_id)
+            && app.sessions().any(|s| s.id == l2_session_id)
             && tasks
                 .iter()
                 .any(|t| t.session_id() == l1_session_id.as_str())
@@ -1254,18 +1253,8 @@ async fn delegated_sessions_hide_from_sessions_picker_and_flatten_grandchildren_
     h.until(|app| !app.agent_cards.is_reading()).await;
 
     // 1. Both delegated sessions have provenance and are hidden from `/sessions`.
-    let l1_summary = h
-        .app
-        .sessions
-        .iter()
-        .find(|s| s.id == l1_session_id)
-        .unwrap();
-    let l2_summary = h
-        .app
-        .sessions
-        .iter()
-        .find(|s| s.id == l2_session_id)
-        .unwrap();
+    let l1_summary = h.app.sessions().find(|s| s.id == l1_session_id).unwrap();
+    let l2_summary = h.app.sessions().find(|s| s.id == l2_session_id).unwrap();
     assert_eq!(l1_summary.delegated_by.as_ref(), Some(&root_addr));
     assert_eq!(l1_summary.delegation_root.as_ref(), Some(&root_addr));
     assert_eq!(
@@ -1273,7 +1262,7 @@ async fn delegated_sessions_hide_from_sessions_picker_and_flatten_grandchildren_
         Some(&l1_session_id)
     );
     assert_eq!(l2_summary.delegation_root.as_ref(), Some(&root_addr));
-    let visible = matching_sessions(&h.app.sessions, "");
+    let visible = matching_sessions(h.app.sessions(), "");
     assert!(visible.iter().any(|s| s.id == root_addr.session_id));
     assert!(
         visible.iter().all(|s| s.delegated_by.is_none()),

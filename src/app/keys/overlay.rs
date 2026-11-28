@@ -274,9 +274,7 @@ impl App {
         self.sync_inspector_selection();
         let len = match &self.overlay {
             Overlay::Palette { .. } | Overlay::Files { .. } => self.completion_len(),
-            Overlay::Sessions { rows, filter, .. } => {
-                self.picker_sessions(rows, filter).len()
-            }
+            Overlay::Sessions { rows, filter, .. } => self.picker_sessions(rows, filter).len(),
             Overlay::Models { filter, .. } => matching_models(&self.models, filter).len(),
             Overlay::Agents { filter, .. } => matching_agents(&self.agents, filter).len(),
             Overlay::Reasoning { .. } => self.reasoning_levels().len(),
@@ -742,7 +740,8 @@ impl App {
                 filter,
                 rows,
                 ..
-            } => self.picker_sessions(&rows, &filter)
+            } => self
+                .picker_sessions(&rows, &filter)
                 .get(selected)
                 .map(|info| Action::OpenSession(session_target(info))),
             find @ Overlay::Find { .. } => {

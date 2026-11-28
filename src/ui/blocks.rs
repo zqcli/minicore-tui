@@ -165,7 +165,12 @@ pub(super) const GROUP_INDENT: usize = 2;
 
 /// `▸ Worked 2m 14s · 18 tools · 3 files changed (+142 −37) · 1 failed`, or
 /// `▸ Working · 6 tools` while the run goes on.
-pub(super) fn group_row(summary: &GroupSummary, open: bool, styles: Styles, width: usize) -> Line<'static> {
+pub(super) fn group_row(
+    summary: &GroupSummary,
+    open: bool,
+    styles: Styles,
+    width: usize,
+) -> Line<'static> {
     let mut parts = vec![match summary.duration {
         _ if summary.live => "Working".to_owned(),
         Some(duration) => format!("Worked {}", format_duration(duration)),
@@ -303,13 +308,9 @@ fn render_block(block: &Block, styles: Styles, width: u16, fold: Fold) -> Vec<Li
             }
             rows
         }
-        Block::Tool(call) if call.agent_card.is_some() => super::agent_cards::render(
-            call,
-            styles,
-            width,
-            call.is_expanded(fold.expanded),
-            fold.show_reasoning,
-        ),
+        Block::Tool(call) if call.agent_card.is_some() => {
+            super::agent_cards::render(call, styles, width, call.is_expanded(fold.expanded))
+        }
         Block::Tool(call) if call.is_delegation_receipt() => {
             super::agent_cards::receipt(call, styles, width, call.is_expanded(fold.expanded))
         }
@@ -1902,10 +1903,7 @@ mod tests {
                         state == ToolState::Running && mode.expanded,
                         "{name} {state:?} {mode:?}: {body}"
                     );
-                    assert!(
-                        !body.chars().any(|ch| "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏".contains(ch)),
-                        "{body}"
-                    );
+                    assert!(!body.chars().any(|ch| "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏".contains(ch)), "{body}");
                     assert!(!body.contains("0.0s"), "{body}");
                 }
             }

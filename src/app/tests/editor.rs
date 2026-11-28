@@ -360,7 +360,7 @@ async fn session_query_paste_targets_native_identity_and_delete_confirms_that_ta
     let mut h = Harness::opened().await;
     h.another_session().await;
     h.app.refresh_catalogs();
-    h.until(|app| app.sessions.len() == 2).await;
+    h.until(|app| app.sessions().count() == 2).await;
     h.app.composer.set_text("keep this draft");
     h.ctrl(KeyCode::Char('r'));
     h.press(KeyCode::Down);
