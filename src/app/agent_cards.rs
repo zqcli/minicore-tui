@@ -351,6 +351,7 @@ impl App {
 
     pub(super) fn install_delegation_records(&mut self, epoch: u64, records: &[HistoryRecordData]) {
         let parent = self.session_mut(epoch).address();
+        let mut changed_turns = Vec::new();
         for association in records.iter().flat_map(|record| &record.delegations) {
             if association.parent != parent {
                 continue;
@@ -365,6 +366,9 @@ impl App {
                 })
             {
                 call.delegations.push(association.clone());
+                if !changed_turns.contains(&association.origin.turn_id) {
+                    changed_turns.push(association.origin.turn_id.clone());
+                }
             }
             self.register_delegation(association);
         }
@@ -380,6 +384,13 @@ impl App {
             .collect();
         for association in pending {
             self.register_delegation(&association);
+        }
+        if !changed_turns.is_empty() {
+            let transcript = &mut self.session_mut(epoch).transcript;
+            transcript.link_delegations();
+            for turn in changed_turns {
+                transcript.regroup(&turn);
+            }
         }
     }
 
