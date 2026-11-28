@@ -1407,7 +1407,7 @@ dependencies = [
 
 [[package]]
 name = "minicore-tui"
-version = "0.12.18"
+version = "0.13.0"
 dependencies = [
  "arboard",
  "base64 0.22.1",

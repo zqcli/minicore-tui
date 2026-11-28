@@ -1,6 +1,6 @@
 [package]
 name = "minicore-tui"
-version = "0.12.18"
+version = "0.13.0"
 edition = "2024"
 description = "A pi-style coding agent TUI with an embedded MiniCore Host"
 license = "MIT OR Apache-2.0"
