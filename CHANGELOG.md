@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.13.0 — 2026-11-28
+
+- Share transcript layout, scrolling and fold handling between the main view and
+  Tasks. Reuse incremental Markdown rendering in expanded Working groups.
+- Keep one source of Session catalog metadata. Reduce Agent card and history
+  updates that do not change the visible parent conversation.
+- Remove obsolete Tasks activity rendering and the retired `/wss` completion.
+  Keep `/remote` and the existing Tasks interactions.
+- Reuse the projected editor row for cursor motion, including long paste chips.
+- Simplify regression fixtures and compare directory identity in file-picker tests.
+
 ## 0.12.18 — 2026-11-27
 
 - Embed MiniCore Host 0.12.18. Share connection settings across models through

@@ -72,7 +72,9 @@ Session's workspace. The shared starter records the initialization workspace
 for its default Agent. Startup model/reasoning overrides are consumed once.
 Later navigation reads the selected Session's saved settings.
 
-The Session picker uses only catalog metadata: a nonblank explicit title, the
+The native Agent catalog owns Session summaries. The picker keeps its ordered
+Session identities and reads the corresponding summaries from that catalog;
+resident execution state is separate. Titles use a nonblank explicit title, the
 bounded first-user-input preview, or the six-character native Session ID. The
 preview is separate from rename data and is maintained by Host through its
 existing metadata checkpoints. Old records acquire it during normal history
@@ -194,7 +196,9 @@ Responses reasoning boundaries are emitted by Host's provider and retained in
 native canonical text. Markdown rendering preserves those newlines as hard
 breaks. The frontend does not infer boundaries from fragments or headings.
 
-Rendering uses per-block revisions and visible-row layout caches. One
+The main view and Tasks use the same transcript layout and visible-row
+rendering. Expanded Working groups reuse incremental rendering at their
+indented width. Rendering uses per-block revisions and layout caches. One
 separator row belongs between visible blocks, except between two adjacent step
 rows (folded tools and thinking-only responses), which stack. Zero-row entries
 consume no height or separator, but retain canonical identities for late-output
@@ -206,8 +210,9 @@ blocks carry their Turn on the record source, so grouping also applies after
 reopening and after an older page fills in a Turn. Likewise, `link_delegations` marks later
 sends into a child and the result it delivers as drawn inside the Agent card
 that started the delegation (matched by child Session and task message), and
-copies the result and send count onto that card; it runs after history
-installation and whenever a card is updated. The
+copies the result and send count onto that card. Parent events, installed
+history and newly attached cards update these links. Child output updates the
+preview without invalidating the parent card. The
 cache stores body rows independently of separators so changes in neighboring
 visibility preserve unchanged bodies. Internal tool/code whitespace remains
 content; anchors, hits and selection use the resulting visible geometry.
