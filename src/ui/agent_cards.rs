@@ -1,4 +1,4 @@
-//! Fixed-height recent transcript windows inside the original native tool rail.
+//! Dispatch cards and fallback task summaries; child transcripts use the shared viewport.
 
 use minicore_host_core::InteractionRequestData;
 use minicore_host_protocol::{Scheduling, TurnOutcome, TurnPhase, TurnState};
@@ -10,16 +10,10 @@ use super::{
     theme::Styles,
 };
 use crate::transcript::agent_card::AgentCard;
-use crate::transcript::{Block, ToolCall, ToolState};
+use crate::transcript::{ToolCall, ToolState};
 use crate::wrap;
 
-pub fn render(
-    call: &ToolCall,
-    styles: Styles,
-    width: usize,
-    expanded: bool,
-    _reasoning: bool,
-) -> Vec<Line<'static>> {
+pub fn render(call: &ToolCall, styles: Styles, width: usize, expanded: bool) -> Vec<Line<'static>> {
     let Some(card) = call.agent_card.as_deref() else {
         return receipt(call, styles, width, expanded);
     };
@@ -118,7 +112,7 @@ fn dispatch_card_rows(
 
     lines.push(blank());
     lines.push(chrome(row(vec![Span::styled(
-        wrap::truncate(&facts(card, true), inner),
+        wrap::truncate(&facts(card), inner),
         styles.meta(),
     )])));
     let raw_task = card.task.trim();
@@ -156,13 +150,8 @@ fn dispatch_card_rows(
     lines
 }
 
-/// Full scrollable detail lines for the `Ctrl+B` Async Tasks Inspector right pane.
-pub(crate) fn detail_lines(
-    card: &AgentCard,
-    styles: Styles,
-    width: usize,
-    reasoning: bool,
-) -> Vec<Line<'static>> {
+/// Summary shown until the Tasks inspector has a child transcript, or after release.
+pub(crate) fn detail_lines(card: &AgentCard, styles: Styles, width: usize) -> Vec<Line<'static>> {
     let width = width.max(12);
     let mut lines = Vec::new();
     let (glyph_str, glyph_style) = glyph(card, styles);
@@ -177,7 +166,7 @@ pub(crate) fn detail_lines(
         ),
     ]));
     lines.push(Line::from(vec![
-        Span::styled(facts(card, true), styles.meta()),
+        Span::styled(facts(card), styles.meta()),
         Span::styled(" · ", styles.meta()),
         Span::styled(state_label, state_style(card, styles)),
     ]));
@@ -225,28 +214,12 @@ pub(crate) fn detail_lines(
         ));
     }
 
-    let activity = activity_rows(card, styles);
-    if !activity.is_empty() || card.truncated {
+    if card.truncated {
         lines.push(Line::raw(""));
-        lines.push(Line::styled(
-            format!("Activity ({})", activity.len()),
-            styles.heading(),
-        ));
-        if card.truncated {
-            lines.push(Line::styled("… earlier steps truncated", styles.faint()));
-        }
-        for (glyph_str, glyph_style, text) in &activity {
-            lines.push(Line::from(vec![
-                Span::styled(format!("{glyph_str} "), *glyph_style),
-                Span::styled(
-                    wrap::truncate(text, width.saturating_sub(2)),
-                    styles.tool_output(),
-                ),
-            ]));
-        }
+        lines.push(Line::styled("… earlier steps truncated", styles.faint()));
     }
 
-    let (heading, body) = answer(card, width, reasoning, styles);
+    let (heading, body) = answer(card, width, styles);
     if !body.is_empty() {
         lines.push(Line::raw(""));
         lines.push(Line::styled(heading, styles.heading()));
@@ -326,46 +299,41 @@ pub(crate) fn task(card: &AgentCard) -> String {
     }
 }
 
-/// `Assistant · 2 tool rounds`, and in the open card also the Session and
-/// later sends.
-fn facts(card: &AgentCard, full: bool) -> String {
+/// Child identity, native tool rounds and the parent's later actions.
+fn facts(card: &AgentCard) -> String {
     let label = card
         .agent_name
         .as_deref()
         .map(str::to_owned)
         .unwrap_or_else(|| short(card.key.child.agent_id.as_str()));
     let mut facts = vec![wrap::truncate(&wrap::sanitize(&label), 20)];
-    if full {
-        facts.push(format!(
-            "Session {}",
-            short(card.key.child.session_id.as_str())
-        ));
-    }
+    facts.push(format!(
+        "Session {}",
+        short(card.key.child.session_id.as_str())
+    ));
     if let Some((_, turn)) = &card.turn
         && turn.tool_rounds > 0
     {
         facts.push(blocks::plural(turn.tool_rounds, "tool round"));
     }
-    if full {
-        let parent = &card.parent;
-        if parent.sends > 0 {
-            facts.push(blocks::plural(parent.sends as u64, "later send"));
-        }
-        if parent.inspections > 0 {
-            facts.push(blocks::plural(parent.inspections as u64, "inspection"));
-        }
-        if parent.changes > 0 {
-            facts.push(blocks::plural(parent.changes as u64, "control"));
-        }
-        if parent.waiting {
-            facts.push("parent waiting".to_owned());
-        } else if parent.waits > 0 {
-            facts.push(if parent.waited.is_zero() {
-                "parent waited".to_owned()
-            } else {
-                format!("parent waited {}", blocks::format_duration(parent.waited))
-            });
-        }
+    let parent = &card.parent;
+    if parent.sends > 0 {
+        facts.push(blocks::plural(parent.sends as u64, "later send"));
+    }
+    if parent.inspections > 0 {
+        facts.push(blocks::plural(parent.inspections as u64, "inspection"));
+    }
+    if parent.changes > 0 {
+        facts.push(blocks::plural(parent.changes as u64, "control"));
+    }
+    if parent.waiting {
+        facts.push("parent waiting".to_owned());
+    } else if parent.waits > 0 {
+        facts.push(if parent.waited.is_zero() {
+            "parent waited".to_owned()
+        } else {
+            format!("parent waited {}", blocks::format_duration(parent.waited))
+        });
     }
     facts.join(" · ")
 }
@@ -395,61 +363,8 @@ pub(crate) fn needs_input(card: &AgentCard) -> bool {
         .is_some_and(|state| !state.data.pending_interactions.is_empty())
 }
 
-/// One entry per child tool call, oldest first: its glyph and `name subject`.
-fn activity_rows(
-    card: &AgentCard,
-    styles: Styles,
-) -> Vec<(&'static str, ratatui::style::Style, String)> {
-    let blocks = card.transcript.blocks();
-    // Settled, the last response is the Result; it is not activity too.
-    let answer = (card.outcome().is_some() || card.result.is_some())
-        .then(|| {
-            blocks.iter().rposition(
-                |block| matches!(block, Block::Assistant { text, .. } if !text.trim().is_empty()),
-            )
-        })
-        .flatten();
-    let line = |text: &str| {
-        text.lines()
-            .map(|line| line.trim().trim_start_matches('#').trim().replace("**", ""))
-            .find(|line| !line.is_empty())
-            .unwrap_or_default()
-    };
-    blocks
-        .iter()
-        .enumerate()
-        .filter_map(|(index, block)| match block {
-            Block::Tool(call) => {
-                let (glyph, style) = blocks::tool_glyph(call, styles);
-                Some((glyph, style, blocks::one_line(&activity(call))))
-            }
-            Block::Assistant { text, .. } if !text.trim().is_empty() && Some(index) != answer => {
-                Some(("›", styles.meta(), wrap::sanitize(&line(text)).into_owned()))
-            }
-            Block::Assistant {
-                reasoning, text, ..
-            } if text.trim().is_empty() && !reasoning.trim().is_empty() => {
-                let heading = reasoning
-                    .lines()
-                    .rev()
-                    .map(|line| line.trim().replace("**", ""))
-                    .find(|line| !line.is_empty())
-                    .unwrap_or_default();
-                Some(("∴", styles.meta(), wrap::sanitize(&heading).into_owned()))
-            }
-            _ => None,
-        })
-        .collect()
-}
-
-/// The child's answer: the delivered result when the parent has it, else the
-/// latest response it observed; a failure leads with its reason.
-fn answer(
-    card: &AgentCard,
-    width: usize,
-    reasoning: bool,
-    styles: Styles,
-) -> (&'static str, Vec<Line<'static>>) {
+/// Delivered result and actual fault when no child transcript is available.
+fn answer(card: &AgentCard, width: usize, styles: Styles) -> (&'static str, Vec<Line<'static>>) {
     let mut body = Vec::new();
     let delivered = card.result.as_deref().and_then(super::delegated::summary);
     let fault = delivered
@@ -464,9 +379,7 @@ fn answer(
         ));
     }
     let settled = card.outcome().is_some() || delivered.is_some();
-    let text = delivered
-        .and_then(|summary| summary.answer)
-        .or_else(|| card.transcript.last_answer().map(str::to_owned));
+    let text = delivered.and_then(|summary| summary.answer);
     // Not being able to watch the child matters only while nothing else is known.
     if text.is_none()
         && body.is_empty()
@@ -480,19 +393,8 @@ fn answer(
     }
     if let Some(text) = text {
         body.extend(markdown::render(&text, width, &styles, styles.text()));
-    } else if reasoning
-        && !settled
-        && let Some(Block::Assistant { reasoning, .. }) = card.transcript.blocks().last()
-        && !reasoning.trim().is_empty()
-    {
-        body.extend(markdown::render(
-            &blocks::reasoning_source(reasoning),
-            width,
-            &styles,
-            blocks::thinking_style(styles),
-        ));
-        return ("Thinking", body);
     }
+
     (if settled { "Result" } else { "Latest response" }, body)
 }
 
@@ -534,16 +436,6 @@ pub fn receipt(
         lines.push(row("Locate original Agent card".into()));
     }
     lines
-}
-
-/// `bash node --test`, `read src/store.js`: the tool and its main argument.
-fn activity(call: &ToolCall) -> String {
-    let detail = call.detail.lines().next().unwrap_or("").trim();
-    if detail.is_empty() {
-        call.name.clone()
-    } else {
-        format!("{} {detail}", call.name)
-    }
 }
 
 fn short(id: &str) -> String {
@@ -623,7 +515,7 @@ pub(crate) fn status(card: &AgentCard) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::transcript::RequestKey;
+    use crate::transcript::Block;
     use crate::ui::theme::Palette;
     use minicore_host_protocol::{
         DelegationAssociation, DelegationTerminalData, DelegationTurnOutcome, SessionRef,
@@ -669,17 +561,6 @@ mod tests {
         call
     }
 
-    fn response(card: &mut AgentCard, text: String) {
-        card.transcript.push(Block::Assistant {
-            key: RequestKey::response("00000000000000000007".parse().unwrap(), 0),
-            text,
-            reasoning: String::new(),
-            streaming: false,
-            partial: false,
-            expanded: None,
-        });
-    }
-
     fn completed(card: &mut AgentCard) {
         card.association.completion = Some(DelegationTerminalData {
             turns: vec![DelegationTurnOutcome {
@@ -710,7 +591,7 @@ mod tests {
         let card = call.agent_card.as_mut().unwrap();
         card.history_unavailable = true;
         assert_eq!(status(card), "history unavailable");
-        let rows = detail_lines(card, styles(), 80, true);
+        let rows = detail_lines(card, styles(), 80);
         assert!(
             rows.iter()
                 .any(|row| row.to_string().contains("Child history unavailable"))
@@ -732,7 +613,7 @@ mod tests {
             tool.set_state(ToolState::Succeeded);
             card.transcript.push(Block::Tool(Box::new(tool)));
         }
-        let running = text(&render(&call, styles(), 80, false, true));
+        let running = text(&render(&call, styles(), 80, false));
         assert_eq!(
             running.len(),
             1,
@@ -745,7 +626,7 @@ mod tests {
         assert!(running[0].ends_with("000000 · ctrl+b"), "{running:?}");
 
         completed(call.agent_card.as_mut().unwrap());
-        let done = text(&render(&call, styles(), 80, false, true));
+        let done = text(&render(&call, styles(), 80, false));
         assert_eq!(
             done, running,
             "dispatch row never mutates in place across later runs"
@@ -769,7 +650,7 @@ mod tests {
             card.agent_name = Some("Repository reviewer 日本語の名前".into());
             card.task = "Review files and 日本語 documentation".into();
             for width in [45, 8, 18, 25, 35, 80] {
-                let rows = render(&call, styles(), width, false, true);
+                let rows = render(&call, styles(), width, false);
                 assert_eq!(rows.len(), 1);
                 let row = rows[0].to_string();
                 assert!(!row.trim().is_empty(), "blank dispatch at {width}");
@@ -786,10 +667,9 @@ mod tests {
     }
 
     #[test]
-    fn detail_lines_hold_full_activity_and_delivered_result_for_ctrl_b_inspector() {
+    fn released_task_keeps_delivered_result_without_a_transcript() {
         let mut call = call();
         let card = call.agent_card.as_mut().unwrap();
-        response(card, "seen while running".into());
         completed(card);
         card.parent.sends = 1;
         card.result = Some(format!(
@@ -800,7 +680,7 @@ mod tests {
                 .join("\\n\\n")
         ));
         for width in [8, 20, 80] {
-            let rows = render(&call, styles(), width, true, true);
+            let rows = render(&call, styles(), width, true);
             assert!(
                 wrap::width(&rows[0].to_string()) <= width,
                 "header fits width {width}: {:?}",
@@ -822,7 +702,6 @@ mod tests {
             call.agent_card.as_ref().unwrap(),
             styles(),
             80,
-            true,
         ));
         assert!(
             detail
@@ -833,28 +712,6 @@ mod tests {
         assert!(detail.iter().any(|row| row == "Result"), "{detail:?}");
         assert!(detail.iter().any(|row| row.contains("answer 0")));
         assert!(detail.iter().any(|row| row.contains("answer 39")));
-        assert!(!detail.iter().any(|row| row.contains("seen while running")));
-    }
-
-    #[test]
-    fn activity_lists_steps_without_output_or_escapes() {
-        let mut call = call();
-        let card = call.agent_card.as_mut().unwrap();
-        let mut tool = ToolCall::new(
-            ToolCallRef {
-                turn_id: "00000000000000000007".parse().unwrap(),
-                tool_call_id: "read".to_owned().into(),
-            },
-            "bash\u{1b}[31m",
-        );
-        tool.set_state(ToolState::Succeeded);
-        tool.push_output("first\n\nlast");
-        card.transcript.push(Block::Tool(Box::new(tool)));
-        let detail = text(&detail_lines(card, styles(), 80, true));
-        assert!(detail.iter().any(|row| row == "Activity (1)"), "{detail:?}");
-        assert!(detail.iter().any(|row| row.starts_with("✓ bash")));
-        assert!(detail.iter().all(|row| !row.contains("first")));
-        assert!(detail.iter().all(|row| !row.contains('\u{1b}')));
     }
 
     #[test]
@@ -961,7 +818,6 @@ mod tests {
             card.agent_card.as_ref().unwrap(),
             styles(),
             100,
-            true,
         ));
         assert!(
             detail
@@ -987,14 +843,13 @@ mod tests {
             discarded_inputs: Vec::new(),
         });
         card.parent.waiting = true;
-        let rendered = render(&call, styles(), 80, true, true);
+        let rendered = render(&call, styles(), 80, true);
         assert_eq!(rendered[1].spans[2].style.bg, styles().card().bg);
         assert_ne!(rendered[1].spans[2].style.bg, styles().card_failure().bg);
         let detail = text(&detail_lines(
             call.agent_card.as_ref().unwrap(),
             styles(),
             80,
-            true,
         ));
         assert!(detail.iter().any(|row| row.contains("parent waiting")));
         assert!(detail.iter().any(|row| row.contains("cancelled")));
@@ -1005,7 +860,7 @@ mod tests {
         let mut multiline = call();
         multiline.agent_card.as_mut().unwrap().task =
             "Check Tokyo weather\nInclude UTC timestamp and wind speed".into();
-        let multi_rows = text(&render(&multiline, styles(), 90, true, true));
+        let multi_rows = text(&render(&multiline, styles(), 90, true));
         assert!(
             multi_rows.iter().any(|row| row == "  ▎ Task"),
             "task should expand inside dispatch card: {multi_rows:?}"
