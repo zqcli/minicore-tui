@@ -1201,8 +1201,8 @@ checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
 name = "minicore-host-compaction"
-version = "0.12.18"
-source = "git+https://github.com/zqcli/minicore-host?rev=3edc6aad5f07d7ed6a37c95b72cf39b2aaf30ead#3edc6aad5f07d7ed6a37c95b72cf39b2aaf30ead"
+version = "0.13.0"
+source = "git+https://github.com/zqcli/minicore-host?rev=fdc07b97618504b81a4fb536caf36dcbd4bf456a#fdc07b97618504b81a4fb536caf36dcbd4bf456a"
 dependencies = [
  "minicore-host-protocol",
  "minicore-host-runtime",
@@ -1212,8 +1212,8 @@ dependencies = [
 
 [[package]]
 name = "minicore-host-config"
-version = "0.12.18"
-source = "git+https://github.com/zqcli/minicore-host?rev=3edc6aad5f07d7ed6a37c95b72cf39b2aaf30ead#3edc6aad5f07d7ed6a37c95b72cf39b2aaf30ead"
+version = "0.13.0"
+source = "git+https://github.com/zqcli/minicore-host?rev=fdc07b97618504b81a4fb536caf36dcbd4bf456a#fdc07b97618504b81a4fb536caf36dcbd4bf456a"
 dependencies = [
  "minicore-host-protocol",
  "serde",
@@ -1223,8 +1223,8 @@ dependencies = [
 
 [[package]]
 name = "minicore-host-core"
-version = "0.12.18"
-source = "git+https://github.com/zqcli/minicore-host?rev=3edc6aad5f07d7ed6a37c95b72cf39b2aaf30ead#3edc6aad5f07d7ed6a37c95b72cf39b2aaf30ead"
+version = "0.13.0"
+source = "git+https://github.com/zqcli/minicore-host?rev=fdc07b97618504b81a4fb536caf36dcbd4bf456a#fdc07b97618504b81a4fb536caf36dcbd4bf456a"
 dependencies = [
  "futures-util",
  "minicore-host-compaction",
@@ -1245,8 +1245,8 @@ dependencies = [
 
 [[package]]
 name = "minicore-host-diagnostics"
-version = "0.12.18"
-source = "git+https://github.com/zqcli/minicore-host?rev=3edc6aad5f07d7ed6a37c95b72cf39b2aaf30ead#3edc6aad5f07d7ed6a37c95b72cf39b2aaf30ead"
+version = "0.13.0"
+source = "git+https://github.com/zqcli/minicore-host?rev=fdc07b97618504b81a4fb536caf36dcbd4bf456a#fdc07b97618504b81a4fb536caf36dcbd4bf456a"
 dependencies = [
  "minicore-host-protocol",
  "serde",
@@ -1258,8 +1258,8 @@ dependencies = [
 
 [[package]]
 name = "minicore-host-local-tools"
-version = "0.12.18"
-source = "git+https://github.com/zqcli/minicore-host?rev=3edc6aad5f07d7ed6a37c95b72cf39b2aaf30ead#3edc6aad5f07d7ed6a37c95b72cf39b2aaf30ead"
+version = "0.13.0"
+source = "git+https://github.com/zqcli/minicore-host?rev=fdc07b97618504b81a4fb536caf36dcbd4bf456a#fdc07b97618504b81a4fb536caf36dcbd4bf456a"
 dependencies = [
  "minicore-host-runtime",
  "minicore-host-workspace",
@@ -1277,8 +1277,8 @@ dependencies = [
 
 [[package]]
 name = "minicore-host-protocol"
-version = "0.12.18"
-source = "git+https://github.com/zqcli/minicore-host?rev=3edc6aad5f07d7ed6a37c95b72cf39b2aaf30ead#3edc6aad5f07d7ed6a37c95b72cf39b2aaf30ead"
+version = "0.13.0"
+source = "git+https://github.com/zqcli/minicore-host?rev=fdc07b97618504b81a4fb536caf36dcbd4bf456a#fdc07b97618504b81a4fb536caf36dcbd4bf456a"
 dependencies = [
  "getrandom 0.4.3",
  "serde",
@@ -1288,8 +1288,8 @@ dependencies = [
 
 [[package]]
 name = "minicore-host-provider"
-version = "0.12.18"
-source = "git+https://github.com/zqcli/minicore-host?rev=3edc6aad5f07d7ed6a37c95b72cf39b2aaf30ead#3edc6aad5f07d7ed6a37c95b72cf39b2aaf30ead"
+version = "0.13.0"
+source = "git+https://github.com/zqcli/minicore-host?rev=fdc07b97618504b81a4fb536caf36dcbd4bf456a#fdc07b97618504b81a4fb536caf36dcbd4bf456a"
 dependencies = [
  "bytes",
  "futures-util",
@@ -1309,8 +1309,8 @@ dependencies = [
 
 [[package]]
 name = "minicore-host-resources"
-version = "0.12.18"
-source = "git+https://github.com/zqcli/minicore-host?rev=3edc6aad5f07d7ed6a37c95b72cf39b2aaf30ead#3edc6aad5f07d7ed6a37c95b72cf39b2aaf30ead"
+version = "0.13.0"
+source = "git+https://github.com/zqcli/minicore-host?rev=fdc07b97618504b81a4fb536caf36dcbd4bf456a#fdc07b97618504b81a4fb536caf36dcbd4bf456a"
 dependencies = [
  "minicore-host-core",
  "minicore-host-local-tools",
@@ -1325,8 +1325,8 @@ dependencies = [
 
 [[package]]
 name = "minicore-host-runtime"
-version = "0.12.18"
-source = "git+https://github.com/zqcli/minicore-host?rev=3edc6aad5f07d7ed6a37c95b72cf39b2aaf30ead#3edc6aad5f07d7ed6a37c95b72cf39b2aaf30ead"
+version = "0.13.0"
+source = "git+https://github.com/zqcli/minicore-host?rev=fdc07b97618504b81a4fb536caf36dcbd4bf456a#fdc07b97618504b81a4fb536caf36dcbd4bf456a"
 dependencies = [
  "futures-util",
  "getrandom 0.4.3",
@@ -1339,8 +1339,8 @@ dependencies = [
 
 [[package]]
 name = "minicore-host-storage"
-version = "0.12.18"
-source = "git+https://github.com/zqcli/minicore-host?rev=3edc6aad5f07d7ed6a37c95b72cf39b2aaf30ead#3edc6aad5f07d7ed6a37c95b72cf39b2aaf30ead"
+version = "0.13.0"
+source = "git+https://github.com/zqcli/minicore-host?rev=fdc07b97618504b81a4fb536caf36dcbd4bf456a#fdc07b97618504b81a4fb536caf36dcbd4bf456a"
 dependencies = [
  "minicore-host-protocol",
  "minicore-host-runtime",
@@ -1356,8 +1356,8 @@ dependencies = [
 
 [[package]]
 name = "minicore-host-tools"
-version = "0.12.18"
-source = "git+https://github.com/zqcli/minicore-host?rev=3edc6aad5f07d7ed6a37c95b72cf39b2aaf30ead#3edc6aad5f07d7ed6a37c95b72cf39b2aaf30ead"
+version = "0.13.0"
+source = "git+https://github.com/zqcli/minicore-host?rev=fdc07b97618504b81a4fb536caf36dcbd4bf456a#fdc07b97618504b81a4fb536caf36dcbd4bf456a"
 dependencies = [
  "minicore-host-core",
  "minicore-host-local-tools",
@@ -1372,8 +1372,8 @@ dependencies = [
 
 [[package]]
 name = "minicore-host-transport"
-version = "0.12.18"
-source = "git+https://github.com/zqcli/minicore-host?rev=3edc6aad5f07d7ed6a37c95b72cf39b2aaf30ead#3edc6aad5f07d7ed6a37c95b72cf39b2aaf30ead"
+version = "0.13.0"
+source = "git+https://github.com/zqcli/minicore-host?rev=fdc07b97618504b81a4fb536caf36dcbd4bf456a#fdc07b97618504b81a4fb536caf36dcbd4bf456a"
 dependencies = [
  "futures-util",
  "minicore-host-core",
@@ -1391,8 +1391,8 @@ dependencies = [
 
 [[package]]
 name = "minicore-host-workspace"
-version = "0.12.18"
-source = "git+https://github.com/zqcli/minicore-host?rev=3edc6aad5f07d7ed6a37c95b72cf39b2aaf30ead#3edc6aad5f07d7ed6a37c95b72cf39b2aaf30ead"
+version = "0.13.0"
+source = "git+https://github.com/zqcli/minicore-host?rev=fdc07b97618504b81a4fb536caf36dcbd4bf456a#fdc07b97618504b81a4fb536caf36dcbd4bf456a"
 dependencies = [
  "ignore",
  "minicore-host-protocol",
